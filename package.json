@@ -1,0 +1,37 @@
+{
+	"name": "@shirudo/ddd-kit",
+	"version": "0.8.8",
+	"description": "Composable TypeScript toolkit for tactical DDD",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest",
+		"clean": "rm -rf dist",
+		"lint": "biome lint .",
+		"format": "pnpm exec biome format --write . && pnpm exec biome lint --write . && pnpm exec biome check --write .",
+		"typecheck": "tsc --noEmit"
+	},
+	"keywords": [
+		"ddd",
+		"domain",
+		"typescript",
+		"toolkit"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@biomejs/biome": "2.1.4",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4"
+	}
+}

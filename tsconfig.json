@@ -1,0 +1,41 @@
+{
+	"compilerOptions": {
+		// TARGET AND OUTPUT CONFIGURATION
+		// Specifies the ECMAScript target version for the compiled output. "ES2022" ensures compatibility with modern browsers and Node.js (16+), using features like top-level await and Array.at().
+		"target": "ES2022",
+		// Sets the module system for the compiled output. "ES2022" uses modern ES module syntax (import/export), suitable for environments supporting ES modules.
+		"module": "ES2022",
+		// Configures module resolution strategy. "bundler" optimizes for modern bundlers (e.g., Vite, Webpack, esbuild), allowing flexible import paths (e.g., omitting .js extensions).
+		"moduleResolution": "bundler",
+		// Generates declaration files (.d.ts) for type definitions, enabling type-sharing with other projects or libraries.
+		"declaration": true,
+		// Disables source map generation for .d.ts files, reducing build artifacts and compilation time when source maps are not needed.
+		"declarationMap": false,
+		// Controls whether to emit compiled JavaScript files. Set to false to allow emitting both .js and .d.ts files, managed by the bundler or build process.
+		"emitDeclarationOnly": false,
+		// Specifies the output directory for compiled .js and .d.ts files. All output is written to the "dist" folder, keeping the project organized.
+		"outDir": "dist",
+		// Defines the root directory for resolving relative paths. Setting to "src" ensures only files in the src folder are considered for compilation input.
+		"rootDir": "src",
+
+		// TYPE-CHECKING AND SAFETY
+		// Enables all strict type-checking options (e.g., noImplicitAny, strictNullChecks). Enforces rigorous type safety to catch errors early, but may require more explicit type annotations.
+		"strict": true,
+		// Enables interoperability between CommonJS and ES modules. Simplifies importing CommonJS modules (e.g., Node.js libraries) as ES modules, adding necessary runtime helpers.
+		"esModuleInterop": true,
+		// Skips type-checking of declaration files (.d.ts) in libraries (e.g., node_modules). Improves compilation performance by assuming third-party types are correct.
+		"skipLibCheck": true,
+		// Enforces consistent casing in file names across platforms (e.g., Linux vs. Windows). Prevents case-sensitivity issues in file imports.
+		"forceConsistentCasingInFileNames": true,
+		// Treats each file as an isolated module, enabling compatibility with single-file transpilers (e.g., Babel, esbuild). Restricts features like const enums that require global context.
+		"isolatedModules": true,
+		// Enforces strict module syntax, requiring explicit import/export statements for a file to be treated as a module. Prevents ambiguous global/module behavior.
+		"verbatimModuleSyntax": true,
+		// Treats indexed access (e.g., obj[key]) as potentially undefined, requiring explicit checks. Enhances type safety but may require additional type guards.
+		"noUncheckedIndexedAccess": true
+	},
+
+	// FILE INCLUSION
+	// Specifies which files to include in compilation. Only files in the "src" directory (and its subdirectories) are processed, ensuring a clean project scope.
+	"include": ["src"]
+}
