@@ -1,5 +1,6 @@
 import type { Id } from "../../src/core/id";
-import { AggregateBase } from "../../src/entity/aggregate-base";
+import { AggregateEventSourced } from "../../src/aggregate/aggregate-event-sourced";
+import { createDomainEvent } from "../../src/aggregate/aggregate";
 import type {
 	ConversionScored,
 	MatchFinished,
@@ -33,7 +34,7 @@ export type MatchState = {
 	scoringPlays: ScoringPlay[];
 };
 
-export class RugbyMatch extends AggregateBase<
+export class RugbyMatch extends AggregateEventSourced<
 	MatchState,
 	RugbyMatchEvent,
 	MatchId
@@ -54,36 +55,65 @@ export class RugbyMatch extends AggregateBase<
 			scoringPlays: [],
 		};
 		const match = new RugbyMatch(id, initialState);
-		match.apply({
-			type: "MatchScheduled",
-			payload: { homeTeam, awayTeam, date },
-		} as MatchScheduled);
+		const result = match.apply(
+			createDomainEvent("MatchScheduled", {
+				homeTeam,
+				awayTeam,
+				date,
+			}) as MatchScheduled,
+		);
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
 		return match;
 	}
 
 	scoreTry(teamId: string, playerName: string): void {
-		this.apply({
-			type: "TryScored",
-			payload: { teamId, playerName, points: 5 },
-		} as TryScored);
+		const result = this.apply(
+			createDomainEvent("TryScored", {
+				teamId,
+				playerName,
+				points: 5,
+			}) as TryScored,
+		);
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
 	}
 
 	scoreConversion(teamId: string, playerName: string): void {
-		this.apply({
-			type: "ConversionScored",
-			payload: { teamId, playerName, points: 2 },
-		} as ConversionScored);
+		const result = this.apply(
+			createDomainEvent("ConversionScored", {
+				teamId,
+				playerName,
+				points: 2,
+			}) as ConversionScored,
+		);
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
 	}
 
 	scorePenaltyGoal(teamId: string, playerName: string): void {
-		this.apply({
-			type: "PenaltyGoalScored",
-			payload: { teamId, playerName, points: 3 },
-		} as PenaltyGoalScored);
+		const result = this.apply(
+			createDomainEvent("PenaltyGoalScored", {
+				teamId,
+				playerName,
+				points: 3,
+			}) as PenaltyGoalScored,
+		);
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
 	}
 
 	finish(): void {
-		this.apply({ type: "MatchFinished" } as MatchFinished);
+		const result = this.apply(
+			createDomainEvent("MatchFinished", {}) as MatchFinished,
+		);
+		if (!result.ok) {
+			throw new Error(result.error);
+		}
 	}
 
 	protected readonly handlers = {

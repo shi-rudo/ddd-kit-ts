@@ -141,3 +141,19 @@ vite.config.ts.timestamp-*
 # Env
 .env
 .env.*
+
+# AI Tools and IDE assistants
+.cursor/
+.copilot/
+.ai/
+.claude/
+.aider/
+.github/copilot/
+*.ai.md
+*.copilot.*
+.cursorrules
+.aiderignore
+*.ai.*
+.vscode/settings.json
+.idea/
+*.iml

@@ -1,4 +1,4 @@
-import type { DomainEvent } from "../../src/entity/aggregate";
+import type { DomainEvent } from "../../src/aggregate/aggregate";
 import type { Team } from "./rugby-match";
 
 export type MatchScheduled = DomainEvent<

@@ -1,5 +1,5 @@
 import type { Id } from "../core/id";
-import type { Aggregate, DomainEvent } from "../entity/aggregate";
+import type { Aggregate, DomainEvent } from "../aggregate/aggregate";
 import type { ISpecification } from "./spec";
 
 /**
