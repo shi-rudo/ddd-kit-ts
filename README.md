@@ -852,47 +852,80 @@ console.log(order.version); // 3 (one for each operation)
 
 ### Using Result Type for Error Handling
 
+The `Result<T, E>` type provides composition utilities to avoid repetitive `if (isErr)` checks:
+
 ```typescript
-import { ok, err, isOk, isErr, type Result, guard } from "@shirudo/ddd-kit";
+import { 
+  ok, 
+  err, 
+  isOk, 
+  isErr, 
+  andThen, 
+  map, 
+  mapErr, 
+  unwrapOr, 
+  unwrapOrElse, 
+  match,
+  type Result, 
+  guard 
+} from "@shirudo/ddd-kit";
 
 type UserId = string;
 
 function validateUserId(id: string): Result<UserId, string> {
-  const validation = guard(id.length > 0, "User ID cannot be empty");
-  if (isErr(validation)) {
-    return err(validation.error);
-  }
-  return ok(id as UserId);
+  return id.length > 0 ? ok(id as UserId) : err("User ID cannot be empty");
 }
 
-function createUser(id: string): Result<{ id: UserId; name: string }, string> {
-  const userIdResult = validateUserId(id);
-  if (isErr(userIdResult)) {
-    return err(userIdResult.error);
-  }
-
-  return ok({
-    id: userIdResult.value,
-    name: "John Doe",
-  });
+function validateEmail(email: string): Result<string, string> {
+  return email.includes("@") ? ok(email) : err("Invalid email");
 }
 
-// Usage with type guards (recommended)
-const result = createUser("user-123");
-if (isOk(result)) {
-  console.log("User created:", result.value); // TypeScript knows result is Ok
-} else {
-  console.error("Error:", result.error); // TypeScript knows result is Err
+// Chaining operations with andThen (avoids if-checks)
+function createUser(id: string, email: string): Result<{ id: UserId; email: string }, string> {
+  return andThen(validateUserId(id), (userId) =>
+    map(validateEmail(email), (email) => ({
+      id: userId,
+      email,
+    }))
+  );
 }
 
-// Usage with ok property (also works)
-const result2 = createUser("user-123");
-if (result2.ok) {
+// Using map for transformations
+const result = ok(5);
+const doubled = map(result, x => x * 2); // Ok<10>
+
+// Using mapErr to transform errors
+const errorResult = err("not found");
+const mappedError = mapErr(errorResult, e => `Error: ${e}`); // Err<"Error: not found">
+
+// Using unwrapOr for defaults
+const userId = unwrapOr(validateUserId(""), "default-id");
+
+// Using unwrapOrElse for computed defaults
+const userId2 = unwrapOrElse(validateUserId(""), err => `fallback-${Date.now()}`);
+
+// Using match for pattern matching
+const message = match(createUser("user-123", "test@example.com"),
+  user => `User created: ${user.id}`,
+  error => `Error: ${error}`
+);
+
+// Usage with type guards (still works)
+const result2 = createUser("user-123", "test@example.com");
+if (isOk(result2)) {
   console.log("User created:", result2.value);
 } else {
   console.error("Error:", result2.error);
 }
 ```
+
+**Available Composition Utilities:**
+- `andThen<T, E, U>(result, fn)` - Chains Result operations (flatMap/bind). If Ok, applies function; if Err, returns error unchanged.
+- `map<T, E, U>(result, fn)` - Transforms Ok value. If Err, returns error unchanged.
+- `mapErr<T, E, F>(result, fn)` - Transforms Err value. If Ok, returns value unchanged.
+- `unwrapOr<T, E>(result, defaultValue)` - Returns value if Ok, otherwise returns default.
+- `unwrapOrElse<T, E>(result, fn)` - Returns value if Ok, otherwise computes default from error.
+- `match<T, E, R>(result, onOk, onErr)` - Pattern matching. Applies one function if Ok, another if Err.
 
 ## API Documentation
 
@@ -920,7 +953,9 @@ Key exports include:
 - `EventHandler<Evt>` - Event handler function type
 - `EventBus.subscribe()` - Subscribe handlers to event types
 - `EventBus.publish()` - Publish events to all subscribers
-- `Result<T, E>`, `ok()`, `err()`, `isOk()`, `isErr()` - Result type and helpers
+- `Result<T, E>`, `ok()`, `err()`, `isOk()`, `isErr()` - Result type and type guards
+- `andThen()`, `map()`, `mapErr()` - Result composition utilities
+- `unwrapOr()`, `unwrapOrElse()`, `match()` - Result unwrapping and pattern matching
 - `Id<Tag>` - Branded ID type
 - `IRepository<TState, TEvent, TAgg, TId>` - Repository interface
 - `ISpecification<T>` - Specification interface
