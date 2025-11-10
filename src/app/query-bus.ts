@@ -49,6 +49,12 @@ export interface IQueryBus {
 }
 
 /**
+ * Type map for query types to their return types.
+ * Used to improve type inference in QueryBus.
+ */
+type QueryTypeMap = Record<string, unknown>;
+
+/**
  * Simple in-memory query bus implementation.
  * Handlers are stored in a Map and dispatched based on query type.
  *
@@ -74,7 +80,9 @@ export interface IQueryBus {
  * const order = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */
-export class QueryBus implements IQueryBus {
+export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
+	implements IQueryBus
+{
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private readonly handlers = new Map<string, QueryHandler<any, any>>();
 
@@ -85,6 +93,10 @@ export class QueryBus implements IQueryBus {
 		this.handlers.set(queryType, handler);
 	}
 
+	async execute<Q extends Query & { type: keyof TMap }>(
+		query: Q,
+	): Promise<Result<TMap[Q["type"]], string>>;
+	async execute<Q extends Query, R>(query: Q): Promise<Result<R, string>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, string>> {
 		const handler = this.handlers.get(query.type);
 		if (!handler) {
