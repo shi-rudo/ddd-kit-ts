@@ -62,17 +62,43 @@ Value Objects are immutable objects that are defined by their attributes rather 
 
 ### Entities
 
-Entities are objects with unique identity that are defined by their ID rather than their attributes. The optional `Entity<TId>` interface can be used for nested entities within aggregates or entities that are not aggregate roots. Helper functions like `sameEntity()`, `findEntityById()`, and `hasEntityId()` provide utilities for working with entity collections.
+In Domain-Driven Design, there are two types of entities:
+
+1. **Aggregate Root Entity**: The parent Entity of an aggregate.
+   - Has identity (id) and version for optimistic concurrency control
+   - Represents the aggregate externally
+   - Loaded/saved through repositories
+   - Created by extending `AggregateBase` or `AggregateEventSourced`
+   - Implements `AggregateRoot<TId>`
+
+2. **Child Entities**: Entities within an aggregate.
+   - Have identity (id), but no own version
+   - Exist only within the aggregate boundary
+   - Versioned through the Aggregate Root
+   - Cannot be referenced directly from outside the aggregate
+   - Use the `Entity<TId>` interface for type safety
+
+The `Entity<TId>` interface is used for child entities within aggregates. Helper functions like `sameEntity()`, `findEntityById()`, `hasEntityId()`, `updateEntityById()`, and `removeEntityById()` provide utilities for working with child entity collections.
 
 ### Aggregates
 
-Aggregates are clusters of entities and value objects that form a consistency boundary. The library provides two aggregate base classes:
+Aggregates are clusters of entities and value objects that form a consistency boundary. An aggregate consists of:
 
-- **`AggregateBase<TState, TId>`** - For aggregates without Event Sourcing. Provides ID and version management, state management, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with optimistic concurrency control.
+- **One Aggregate Root** (Entity with id + version)
+- **Optional child entities** (Entities with id, but no own version)
+- **Optional value objects** (immutable objects)
 
-- **`AggregateEventSourced<TState, TEvent, TId>`** - For Event-Sourced aggregates. Extends `AggregateBase` with event tracking, event handlers, event validation, and history replay capabilities. Use this when you want full Event Sourcing with event tracking and replay.
+The Aggregate Root is an Entity (the parent Entity of the aggregate) that represents the aggregate externally. All changes to child entities are versioned through the Aggregate Root. The version applies to the entire aggregate, including all child entities.
 
-Both classes support automatic versioning (configurable), snapshot creation/restoration, and optimistic concurrency control.
+The library provides:
+
+- **`AggregateRoot<TId>`** - Marker interface for Aggregate Root Entities. The Aggregate Root is an Entity with identity (id) and version for optimistic concurrency control. It represents the aggregate externally and is the only object that can be loaded/saved through repositories.
+
+- **`AggregateBase<TState, TId>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `AggregateRoot<TId>`. The aggregate state (`TState`) contains child entities and value objects. Provides ID and version management, state management, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with versioning and state management.
+
+- **`AggregateEventSourced<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Root Entities. Extends `AggregateBase` (and thus implements `AggregateRoot<TId>`). Adds event tracking, event handlers, event validation, and history replay capabilities. Use this when you want full Event Sourcing with event tracking and replay.
+
+Both classes support automatic versioning (configurable), snapshot creation/restoration, and optimistic concurrency control. The version applies to the entire aggregate, including all child entities.
 
 ### CQRS (Command Query Responsibility Segregation)
 
@@ -150,6 +176,7 @@ voEquals(money1, money2); // true (value equality, not reference)
 ```typescript
 import {
   AggregateBase,
+  type AggregateRoot,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -163,7 +190,7 @@ type OrderState = {
   status: "pending" | "confirmed" | "shipped";
 };
 
-class Order extends AggregateBase<OrderState, OrderId> {
+class Order extends AggregateBase<OrderState, OrderId> implements AggregateRoot<OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
@@ -221,6 +248,7 @@ console.log(order.state.status); // "shipped"
 import {
   AggregateEventSourced,
   createDomainEvent,
+  type AggregateRoot,
   type Id,
   type DomainEvent,
 } from "@shirudo/ddd-kit";
@@ -240,7 +268,7 @@ type OrderShipped = DomainEvent<"OrderShipped", { trackingNumber: string }>;
 
 type OrderEvent = OrderCreated | OrderConfirmed | OrderShipped;
 
-class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> {
+class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> implements AggregateRoot<OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
@@ -359,6 +387,7 @@ import {
   createDomainEvent,
   err,
   ok,
+  type AggregateRoot,
   type Id,
   type DomainEvent,
   type Result,
@@ -369,7 +398,7 @@ type OrderState = { id: OrderId; status: "pending" | "confirmed" | "shipped" };
 type OrderShipped = DomainEvent<"OrderShipped", { trackingNumber: string }>;
 type OrderEvent = OrderShipped;
 
-class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> {
+class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> implements AggregateRoot<OrderId> {
   // Event validation
   protected validateEvent(event: OrderEvent): Result<true, string> {
     if (event.type === "OrderShipped" && this.state.status !== "confirmed") {
@@ -707,114 +736,118 @@ const eventV2 = createDomainEvent(
 );
 ```
 
-### Working with Nested Entities
+### Working with Child Entities
+
+An Aggregate Root Entity can contain multiple child entities. Child entities have identity (id) but no own version - they are versioned through the Aggregate Root.
 
 ```typescript
 import {
   AggregateBase,
-  createDomainEvent,
   Entity,
   findEntityById,
   hasEntityId,
   removeEntityById,
+  updateEntityById,
   sameEntity,
+  type AggregateRoot,
   type Id,
-  type DomainEvent,
 } from "@shirudo/ddd-kit";
 
 type OrderId = Id<"OrderId">;
 type ItemId = Id<"ItemId">;
 
-// Define nested entity
+// Child Entity within the aggregate (has id, but no own version)
 type OrderItem = Entity<ItemId> & {
   productId: string;
   quantity: number;
   price: number;
 };
 
+// Aggregate state contains child entities
 type OrderState = {
   id: OrderId;
   customerId: string;
-  items: OrderItem[];
+  items: OrderItem[]; // Child entities
   total: number;
 };
 
-type ItemAdded = DomainEvent<"ItemAdded", { item: OrderItem }>;
-type ItemRemoved = DomainEvent<"ItemRemoved", { itemId: ItemId }>;
-type OrderEvent = ItemAdded | ItemRemoved;
-
-class Order extends AggregateBase<OrderState, OrderEvent, OrderId> {
+// Order is the Aggregate Root (an Entity with id + version)
+class Order extends AggregateBase<OrderState, OrderId> 
+  implements AggregateRoot<OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
       customerId,
-      items: [],
+      items: [], // Child entities
       total: 0,
     };
-    const order = new Order(id, initialState);
-    const result = order.apply(createDomainEvent("OrderCreated", { customerId }) as any);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-    return order;
+    return new Order(id, initialState);
   }
 
-  addItem(item: OrderItem): void {
-    if (hasEntityId(this.state.items, item.id)) {
-      throw new Error("Item already exists");
+  // Operations on child entities are versioned through the Aggregate Root
+  addItem(productId: string, quantity: number, price: number): ItemId {
+    const itemId = `item-${Date.now()}` as ItemId;
+    const item: OrderItem = {
+      id: itemId,
+      productId,
+      quantity,
+      price,
+    };
+
+    this._state = {
+      ...this._state,
+      items: [...this._state.items, item],
+      total: this._state.total + price * quantity,
+    };
+    this.bumpVersion(); // Versions the entire aggregate (including child entities)
+    return itemId;
+  }
+
+  updateItemQuantity(itemId: ItemId, newQuantity: number): void {
+    const item = findEntityById(this._state.items, itemId);
+    if (!item) {
+      throw new Error("Item not found");
     }
-    const result = this.apply(createDomainEvent("ItemAdded", { item }) as ItemAdded);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+
+    this._state = {
+      ...this._state,
+      items: updateEntityById(
+        this._state.items,
+        itemId,
+        (i) => ({ ...i, quantity: newQuantity })
+      ),
+      total: this._state.total - item.price * item.quantity + item.price * newQuantity,
+    };
+    this.bumpVersion(); // Versions the entire aggregate
   }
 
   removeItem(itemId: ItemId): void {
-    if (!hasEntityId(this.state.items, itemId)) {
+    const item = findEntityById(this._state.items, itemId);
+    if (!item) {
       throw new Error("Item not found");
     }
-    const result = this.apply(createDomainEvent("ItemRemoved", { itemId }) as ItemRemoved);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+
+    this._state = {
+      ...this._state,
+      items: removeEntityById(this._state.items, itemId),
+      total: this._state.total - item.price * item.quantity,
+    };
+    this.bumpVersion(); // Versions the entire aggregate
   }
 
   getItem(itemId: ItemId): OrderItem | undefined {
-    return findEntityById(this.state.items, itemId);
+    return findEntityById(this._state.items, itemId);
   }
-
-  protected readonly handlers = {
-    ItemAdded: (state: OrderState, event: ItemAdded): OrderState => ({
-      ...state,
-      items: [...state.items, event.payload.item],
-      total: state.total + event.payload.item.price * event.payload.item.quantity,
-    }),
-    ItemRemoved: (state: OrderState, event: ItemRemoved): OrderState => {
-      const item = findEntityById(state.items, event.payload.itemId);
-      if (!item) return state;
-      return {
-        ...state,
-        items: removeEntityById(state.items, event.payload.itemId),
-        total: state.total - item.price * item.quantity,
-      };
-    },
-  };
 }
 
 // Usage
-const orderId = "order-123" as OrderId;
-const order = Order.create(orderId, "customer-456");
+const order = Order.create("order-123" as OrderId, "customer-456");
+const itemId = order.addItem("product-1", 2, 10.0); // Adds child entity
+order.updateItemQuantity(itemId, 3); // Updates child entity
+order.removeItem(itemId); // Removes child entity
 
-const item: OrderItem = {
-  id: "item-1" as ItemId,
-  productId: "prod-123",
-  quantity: 2,
-  price: 10.99,
-};
-
-order.addItem(item);
-const foundItem = order.getItem(item.id);
-console.log(sameEntity(item, foundItem!)); // true
+// All changes version the Aggregate Root (order.version increments)
+console.log(order.version); // 3 (one for each operation)
 ```
 
 ### Using Result Type for Error Handling
@@ -867,8 +900,9 @@ This package is written in TypeScript and provides full type definitions. All ty
 
 Key exports include:
 - `vo()`, `voEquals()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
-- `AggregateBase<TState, TId>` - Base class for aggregates without Event Sourcing
-- `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced aggregates
+- `AggregateRoot<TId>` - Marker interface for Aggregate Root Entities
+- `AggregateBase<TState, TId>` - Base class for creating Aggregate Root Entities without Event Sourcing (implements `AggregateRoot<TId>`)
+- `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateBase`, implements `AggregateRoot<TId>`)
 - `AggregateConfig`, `AggregateEventSourcedConfig` - Configuration interfaces
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
 - `sameAggregate()` - Aggregate equality helper

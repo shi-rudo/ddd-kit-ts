@@ -1,16 +1,40 @@
 /**
- * Optional interface for entities with identity.
- * Use this when you need explicit entity types for nested entities
- * within aggregates or for entities that are not aggregate roots.
+ * Interface for entities with identity.
+ * 
+ * In Domain-Driven Design, there are two types of entities:
+ * 
+ * 1. **Aggregate Root Entity**: The parent Entity of an aggregate.
+ *    - Has identity (id) and version
+ *    - Implemented by classes extending `AggregateBase` or `AggregateEventSourced`
+ *    - Represents the aggregate externally
+ *    - Loaded/saved through repositories
+ * 
+ * 2. **Child Entities**: Entities within an aggregate.
+ *    - Have identity (id), but no own version
+ *    - Exist only within the aggregate boundary
+ *    - Versioned through the Aggregate Root
+ *    - Cannot be referenced directly from outside the aggregate
+ * 
+ * This interface is used for child entities within aggregates. The Aggregate Root
+ * also implements this interface (through `AggregateRoot<TId>`), but additionally
+ * has version management.
  *
  * @template TId - The type of the entity identifier
  *
  * @example
  * ```typescript
+ * // Child Entity within an aggregate
  * type OrderItem = Entity<ItemId> & {
  *   productId: string;
  *   quantity: number;
  * };
+ * 
+ * // Aggregate Root (also an Entity, but with version)
+ * class Order extends AggregateBase<OrderState, OrderId> 
+ *   implements AggregateRoot<OrderId> {
+ *   // Order is an Entity (the Aggregate Root)
+ *   // OrderState contains OrderItem (child entities)
+ * }
  * ```
  */
 export interface Entity<TId> {

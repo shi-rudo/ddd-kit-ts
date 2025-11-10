@@ -21,7 +21,18 @@ export interface AggregateEventSourcedConfig extends AggregateConfig {
 }
 
 /**
- * Base class for Event-Sourced Aggregates.
+ * Base class for Event-Sourced Aggregate Roots (Entities).
+ * 
+ * Extends `AggregateBase` to create an Aggregate Root Entity with Event Sourcing capabilities.
+ * The Aggregate Root is the parent Entity of the aggregate and represents it externally.
+ * 
+ * The aggregate state (`TState`) contains:
+ * - Child entities (Entities with id, but no own version)
+ * - Value objects (immutable objects)
+ * 
+ * All changes to child entities are versioned through the Aggregate Root. The version
+ * applies to the entire aggregate, including all child entities.
+ * 
  * Extends `AggregateBase` with Event Sourcing capabilities:
  * - Event tracking (pendingEvents)
  * - Event handlers for state transitions
@@ -31,12 +42,13 @@ export interface AggregateEventSourcedConfig extends AggregateConfig {
  * Use this class when you want Event Sourcing with full event tracking
  * and replay capabilities.
  *
- * @template TState - The type of the aggregate state
+ * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TEvent - The union type of all domain events
- * @template TId - The type of the aggregate identifier
+ * @template TId - The type of the aggregate root identifier
  *
  * @example
  * ```typescript
+ * // Order is an Aggregate Root (an Entity) with Event Sourcing
  * class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> {
  *   confirm(): void {
  *     this.apply(createDomainEvent("OrderConfirmed", {}));

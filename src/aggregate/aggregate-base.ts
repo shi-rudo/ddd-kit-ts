@@ -1,5 +1,9 @@
 import type { Id } from "../core/id";
-import type { AggregateSnapshot, Version } from "./aggregate";
+import type {
+	AggregateRoot,
+	AggregateSnapshot,
+	Version,
+} from "./aggregate";
 
 /**
  * Configuration options for AggregateBase behavior.
@@ -13,33 +17,50 @@ export interface AggregateConfig {
 }
 
 /**
- * Base class for Aggregates without Event Sourcing.
- * Provides core functionality for aggregates:
+ * Base class for creating Aggregate Roots (Entities) without Event Sourcing.
+ * 
+ * This class creates an Entity that serves as the Aggregate Root. The Aggregate Root
+ * is the parent Entity of the aggregate and represents it externally. It has identity
+ * (id) and version for optimistic concurrency control.
+ * 
+ * The aggregate state (`TState`) contains:
+ * - Child entities (Entities with id, but no own version)
+ * - Value objects (immutable objects)
+ * 
+ * All changes to child entities are versioned through the Aggregate Root. The version
+ * applies to the entire aggregate, including all child entities.
+ * 
+ * Provides core functionality:
  * - ID and Version management (for Optimistic Concurrency Control)
- * - State management
+ * - State management (containing child entities and value objects)
  * - Snapshot support for performance optimization
+ *
+ * Implements `AggregateRoot<TId>` to mark this as an Aggregate Root Entity.
  *
  * Use this class when you don't need Event Sourcing but still want
  * aggregate patterns with versioning and state management.
  *
- * @template TState - The type of the aggregate state
- * @template TId - The type of the aggregate identifier
+ * @template TState - The type of the aggregate state (contains child entities and value objects)
+ * @template TId - The type of the aggregate root identifier
  *
  * @example
  * ```typescript
- * class Order extends AggregateBase<OrderState, OrderId> {
+ * // Order is an Aggregate Root (an Entity)
+ * class Order extends AggregateBase<OrderState, OrderId> implements AggregateRoot<OrderId> {
  *   constructor(id: OrderId, initialState: OrderState) {
  *     super(id, initialState);
  *   }
  *
  *   confirm(): void {
  *     this._state = { ...this._state, status: "confirmed" };
- *     this.bumpVersion();
+ *     this.bumpVersion(); // Versions the entire aggregate
  *   }
  * }
  * ```
  */
-export abstract class AggregateBase<TState, TId extends Id<string>> {
+export abstract class AggregateBase<TState, TId extends Id<string>>
+	implements AggregateRoot<TId>
+{
 	public readonly id: TId;
 	public version: Version = 0 as Version;
 

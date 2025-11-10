@@ -72,6 +72,54 @@ export interface DomainEvent<T extends string, P> {
 	metadata?: EventMetadata;
 }
 
+/**
+ * Marker interface for Aggregate Roots.
+ * 
+ * In Domain-Driven Design, an Aggregate Root is an Entity (the parent Entity of the aggregate).
+ * It represents the aggregate externally and is the only object that external code
+ * is allowed to hold references to. All access to child entities within the aggregate
+ * must go through the Aggregate Root.
+ * 
+ * An Aggregate consists of:
+ * - One Aggregate Root (Entity with id + version)
+ * - Optional child entities (Entities with id, but no own version)
+ * - Optional value objects
+ * 
+ * The Aggregate Root has identity (id) and version for optimistic concurrency control.
+ * Child entities exist only within the aggregate boundary and are versioned through
+ * the Aggregate Root.
+ *
+ * @template TId - The type of the aggregate root identifier
+ *
+ * @example
+ * ```typescript
+ * class Order extends AggregateBase<OrderState, OrderId> implements AggregateRoot<OrderId> {
+ *   // Order is an Aggregate Root (an Entity)
+ *   // OrderState contains child entities (e.g., OrderItem) and value objects
+ * }
+ * ```
+ */
+export interface AggregateRoot<TId extends Id<string>> {
+	/**
+	 * Unique identifier of the aggregate root entity.
+	 */
+	readonly id: TId;
+
+	/**
+	 * Version number for optimistic concurrency control.
+	 * Incremented on each state change to detect concurrent modifications.
+	 * This version applies to the entire aggregate, including all child entities.
+	 */
+	readonly version: Version;
+}
+
+/**
+ * Structural interface representing an aggregate with state and events.
+ * Used for type constraints in repositories and other infrastructure code.
+ *
+ * @template State - The type of the aggregate state
+ * @template Evt - The union type of all domain events
+ */
 export interface Aggregate<State, Evt extends DomainEvent<string, unknown>> {
 	state: Readonly<State>;
 	version: Version;
