@@ -319,3 +319,140 @@ export async function matchAsync<T, E, R>(
 		: onOkOrHandlers.err(result.error);
 }
 
+/**
+ * Pipes a Result through multiple operations.
+ * Each function receives the previous Result and returns a new Result.
+ * Stops on first error.
+ *
+ * @param initial - The initial Result value
+ * @param fns - Array of functions that take the previous Result and return a new Result
+ * @returns The final Result after all operations
+ *
+ * @example
+ * ```typescript
+ * // Instead of nested andThen calls:
+ * andThen(
+ *   updateCountryCode(code),
+ *   () => andThen(updateCurrencyCode(currency), () => updateLanguageCode(lang))
+ * )
+ *
+ * // Use pipe (cleaner and more readable):
+ * pipe(
+ *   updateCountryCode(code),
+ *   () => updateCurrencyCode(currency),
+ *   () => updateLanguageCode(lang)
+ * )
+ * ```
+ *
+ * @example With void results
+ * ```typescript
+ * setInitialData(initialData: JobConfigProps["initialData"]): Result<void, JobDomainError> {
+ *   return pipe(
+ *     this.updateCountryCode(initialData.countryCode),
+ *     () => this.updateCurrencyCode(initialData.currencyCode),
+ *     () => this.updateLanguageCode(initialData.languageCode)
+ *   );
+ * }
+ * ```
+ */
+export function pipe<T, E>(
+	initial: Result<T, E>,
+	...fns: Array<(prev: Result<T, E>) => Result<T, E>>
+): Result<T, E> {
+	let current = initial;
+	for (const fn of fns) {
+		current = fn(current);
+		if (!current.ok) {
+			return current;
+		}
+	}
+	return current;
+}
+
+/**
+ * Wraps a function that may throw exceptions into a Result type.
+ * Catches any thrown exceptions and converts them to Err results.
+ *
+ * @param fn - Function that may throw exceptions
+ * @param errorMapper - Optional function to transform the caught error
+ * @returns A Result containing the function's return value or error
+ *
+ * @example
+ * ```typescript
+ * function riskyOperation(): string {
+ *   if (Math.random() > 0.5) {
+ *     throw new Error("Something went wrong");
+ *   }
+ *   return "success";
+ * }
+ *
+ * const result = tryCatch(() => riskyOperation());
+ * if (result.ok) {
+ *   console.log(result.value); // "success"
+ * } else {
+ *   console.error(result.error.message); // "Something went wrong"
+ * }
+ * ```
+ *
+ * @example With custom error mapper
+ * ```typescript
+ * const result = tryCatch(
+ *   () => riskyOperation(),
+ *   (error) => `Custom: ${error instanceof Error ? error.message : String(error)}`
+ * );
+ * ```
+ */
+export function tryCatch<T, E = Error>(
+	fn: () => T,
+	errorMapper?: (error: unknown) => E,
+): Result<T, E> {
+	try {
+		return ok(fn());
+	} catch (error) {
+		if (errorMapper) {
+			return err(errorMapper(error));
+		}
+		return err((error instanceof Error ? error : new Error(String(error))) as E);
+	}
+}
+
+/**
+ * Wraps an async function that may throw exceptions into a Promise<Result>.
+ * Catches any thrown exceptions and converts them to Err results.
+ *
+ * @param fn - Async function that may throw exceptions
+ * @param errorMapper - Optional function to transform the caught error
+ * @returns A Promise resolving to a Result containing the function's return value or error
+ *
+ * @example
+ * ```typescript
+ * async function riskyAsyncOperation(): Promise<string> {
+ *   if (Math.random() > 0.5) {
+ *     throw new Error("Something went wrong");
+ *   }
+ *   return "success";
+ * }
+ *
+ * const result = await tryCatchAsync(() => riskyAsyncOperation());
+ * if (result.ok) {
+ *   console.log(result.value); // "success"
+ * } else {
+ *   console.error(result.error.message); // "Something went wrong"
+ * }
+ * ```
+ */
+export async function tryCatchAsync<T, E = Error>(
+	fn: () => Promise<T>,
+	errorMapper?: (error: unknown) => E,
+): Promise<Result<T, E>> {
+	try {
+		const value = await fn();
+		return ok(value);
+	} catch (error) {
+		if (errorMapper) {
+			return err(errorMapper(error));
+		}
+		return err((error instanceof Error ? error : new Error(String(error))) as E);
+	}
+}
+

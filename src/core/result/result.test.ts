@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-	andThen,
-	err,
-	isErr,
-	isOk,
-	map,
-	mapErr,
-	match,
-	matchAsync,
-	ok,
-	type Result,
-	unwrapOr,
-	unwrapOrElse,
+    andThen,
+    err,
+    isErr,
+    isOk,
+    map,
+    mapErr,
+    match,
+    matchAsync,
+    ok,
+    pipe,
+    type Result,
+    tryCatch,
+    tryCatchAsync,
+    unwrapOr,
+    unwrapOrElse,
 } from "./result";
 
 describe("Result composition utilities", () => {
@@ -255,6 +258,128 @@ describe("Result composition utilities", () => {
 		});
 	});
 
+	describe("pipe", () => {
+		it("should pipe through multiple operations", () => {
+			const result = pipe(
+				ok(5),
+				(prev: Result<number, never>) => andThen(prev, (v: number) => ok(v * 2)),
+				(prev: Result<number, never>) => andThen(prev, (v: number) => ok(v + 3)),
+			);
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe(13);
+			}
+		});
+
+		it("should stop on first error", () => {
+			const result = pipe(
+				ok(5),
+				(prev) => andThen(prev, () => err("first error")),
+				(prev) => andThen(prev, (v: number) => ok(v + 3)), // Should not be called
+			);
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("first error");
+			}
+		});
+
+		it("should work with void results", () => {
+			const result = pipe(
+				ok(undefined),
+				() => ok(undefined),
+				() => ok(undefined),
+			);
+			expect(isOk(result)).toBe(true);
+		});
+
+		it("should handle multiple validation operations", () => {
+			function validateId(id: string): Result<string, string> {
+				return id.length > 0 ? ok(id) : err("ID cannot be empty");
+			}
+
+			function validateEmail(email: string): Result<string, string> {
+				return email.includes("@") ? ok(email) : err("Invalid email");
+			}
+
+			const result = pipe(
+				validateId("user-123"),
+				() => validateEmail("test@example.com"),
+			);
+
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe("test@example.com");
+			}
+		});
+
+		it("should stop on first validation error", () => {
+			function validateId(id: string): Result<string, string> {
+				return id.length > 0 ? ok(id) : err("ID cannot be empty");
+			}
+
+			function validateEmail(email: string): Result<string, string> {
+				return email.includes("@") ? ok(email) : err("Invalid email");
+			}
+
+			const result = pipe(
+				validateId(""), // This will fail
+				(prev) => {
+					// This should not be called if prev is an error
+					if (!prev.ok) {
+						return prev;
+					}
+					return validateEmail("test@example.com");
+				},
+			);
+
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("ID cannot be empty");
+			}
+		});
+
+		it("should handle up to 10 items in pipe", () => {
+			const result = pipe(
+				ok(1),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+			);
+
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe(11); // 1 + 10 operations
+			}
+		});
+
+		it("should stop at error in middle of 10-item pipe", () => {
+			const result = pipe(
+				ok(1),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, (v) => ok(v + 1)),
+				(prev) => andThen(prev, () => err("error at step 4")),
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+				(prev) => andThen(prev, (v) => ok(v + 1)), // Should not be called
+			);
+
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("error at step 4");
+			}
+		});
+	});
+
 	describe("composition examples", () => {
 		it("should chain validation operations", () => {
 			function validateId(id: string): Result<string, string> {
@@ -298,6 +423,146 @@ describe("Result composition utilities", () => {
 			expect(isErr(result)).toBe(true);
 			if (isErr(result)) {
 				expect(result.error).toBe("ID cannot be empty");
+			}
+		});
+	});
+
+	describe("tryCatch", () => {
+		it("should return Ok when function succeeds", () => {
+			const result = tryCatch(() => "success");
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe("success");
+			}
+		});
+
+		it("should return Err when function throws Error", () => {
+			const error = new Error("Something went wrong");
+			const result = tryCatch(() => {
+				throw error;
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe(error);
+			}
+		});
+
+		it("should return Err when function throws non-Error", () => {
+			const result = tryCatch(() => {
+				throw "string error";
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBeInstanceOf(Error);
+				expect(result.error.message).toBe("string error");
+			}
+		});
+
+		it("should use error mapper when provided", () => {
+			const result = tryCatch(
+				() => {
+					throw "original error";
+				},
+				(error) => `Mapped: ${String(error)}`,
+			);
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("Mapped: original error");
+			}
+		});
+
+		it("should preserve Error instance when error mapper not provided", () => {
+			const customError = new Error("Custom error");
+			const result = tryCatch(() => {
+				throw customError;
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe(customError);
+			}
+		});
+
+		it("should work with functions returning different types", () => {
+			const numberResult = tryCatch(() => 42);
+			expect(isOk(numberResult)).toBe(true);
+			if (isOk(numberResult)) {
+				expect(numberResult.value).toBe(42);
+			}
+
+			const objectResult = tryCatch(() => ({ key: "value" }));
+			expect(isOk(objectResult)).toBe(true);
+			if (isOk(objectResult)) {
+				expect(objectResult.value).toEqual({ key: "value" });
+			}
+		});
+	});
+
+	describe("tryCatchAsync", () => {
+		it("should return Ok when async function succeeds", async () => {
+			const result = await tryCatchAsync(async () => "success");
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe("success");
+			}
+		});
+
+		it("should return Err when async function throws Error", async () => {
+			const error = new Error("Something went wrong");
+			const result = await tryCatchAsync(async () => {
+				throw error;
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe(error);
+			}
+		});
+
+		it("should return Err when async function throws non-Error", async () => {
+			const result = await tryCatchAsync(async () => {
+				throw "string error";
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBeInstanceOf(Error);
+				expect(result.error.message).toBe("string error");
+			}
+		});
+
+		it("should use error mapper when provided", async () => {
+			const result = await tryCatchAsync(
+				async () => {
+					throw "original error";
+				},
+				(error) => `Mapped: ${String(error)}`,
+			);
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("Mapped: original error");
+			}
+		});
+
+		it("should handle Promise rejections", async () => {
+			const error = new Error("Promise rejected");
+			const result = await tryCatchAsync(async () => {
+				return Promise.reject(error);
+			});
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe(error);
+			}
+		});
+
+		it("should work with async functions returning different types", async () => {
+			const numberResult = await tryCatchAsync(async () => 42);
+			expect(isOk(numberResult)).toBe(true);
+			if (isOk(numberResult)) {
+				expect(numberResult.value).toBe(42);
+			}
+
+			const objectResult = await tryCatchAsync(async () => ({ key: "value" }));
+			expect(isOk(objectResult)).toBe(true);
+			if (isOk(objectResult)) {
+				expect(objectResult.value).toEqual({ key: "value" });
 			}
 		});
 	});

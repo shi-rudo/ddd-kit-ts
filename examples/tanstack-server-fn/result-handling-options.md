@@ -5,8 +5,7 @@ This document demonstrates different idiomatic ways to handle `Result` types whe
 ## Setup
 
 ```typescript
-import { Outcome } from "@shirudo/ddd-kit/core/result";
-import { isOk } from "@shirudo/ddd-kit/core/result";
+import { Outcome, isOk } from "@shirudo/ddd-kit/result";
 
 const query = jobContainer.get('getJobOccupationQuery');
 const authContext = await getAuthContextFromRequest();
@@ -89,7 +88,7 @@ export const getJobOccupationServerFn = createServerFn({
 **Best for:** When you prefer functional style without class-based API.
 
 ```typescript
-import { isOk } from "@shirudo/ddd-kit/core/result"
+import { isOk } from "@shirudo/ddd-kit/result"
 
 export const getJobOccupationServerFn = createServerFn({
   method: 'GET',

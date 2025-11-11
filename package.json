@@ -1,6 +1,6 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "0.9.3",
+	"version": "0.9.5",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
@@ -13,6 +13,10 @@
 		".": {
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
+		},
+		"./result": {
+			"import": "./dist/result.js",
+			"types": "./dist/result.d.ts"
 		}
 	},
 	"files": [

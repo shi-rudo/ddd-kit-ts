@@ -1,7 +1,10 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-	entry: ["src/index.ts"],
+	entry: {
+		index: "src/index.ts",
+		result: "src/result.ts",
+	},
 	format: ["esm"], // ES Modules only (wie aktuell)
 	dts: true, // Generate .d.ts files
 	splitting: false, // Library sollte nicht gesplittet werden

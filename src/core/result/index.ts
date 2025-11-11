@@ -10,6 +10,9 @@ export {
 	match,
 	matchAsync,
 	ok,
+	pipe,
+	tryCatch,
+	tryCatchAsync,
 	unwrapOr,
 	unwrapOrElse,
 } from "./result";

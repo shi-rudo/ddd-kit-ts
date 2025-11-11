@@ -854,6 +854,8 @@ console.log(order.version); // 3 (one for each operation)
 
 The `Result<T, E>` type provides composition utilities to avoid repetitive `if (isErr)` checks:
 
+**Import Result utilities from the dedicated export path:**
+
 ```typescript
 import { 
   ok, 
@@ -866,9 +868,15 @@ import {
   unwrapOr, 
   unwrapOrElse, 
   match,
-  type Result, 
-  guard 
-} from "@shirudo/ddd-kit";
+  matchAsync,
+  pipe,
+  tryCatch,
+  tryCatchAsync,
+  type Result,
+  Outcome,
+  Success,
+  Erroneous
+} from "@shirudo/ddd-kit/result";
 
 type UserId = string;
 
@@ -917,6 +925,35 @@ if (isOk(result2)) {
 } else {
   console.error("Error:", result2.error);
 }
+
+// Using tryCatch to wrap functions that throw exceptions
+function riskyOperation(): string {
+  if (Math.random() > 0.5) {
+    throw new Error("Something went wrong");
+  }
+  return "success";
+}
+
+const result3 = tryCatch(() => riskyOperation());
+if (result3.ok) {
+  console.log(result3.value); // "success"
+} else {
+  console.error(result3.error.message); // "Something went wrong"
+}
+
+// Using tryCatchAsync for async operations
+async function riskyAsyncOperation(): Promise<string> {
+  if (Math.random() > 0.5) {
+    throw new Error("Async error");
+  }
+  return "async success";
+}
+
+const result4 = await tryCatchAsync(() => riskyAsyncOperation());
+match(result4,
+  (value) => console.log("Success:", value),
+  (error) => console.error("Error:", error.message)
+);
 ```
 
 **Available Composition Utilities:**
@@ -925,7 +962,16 @@ if (isOk(result2)) {
 - `mapErr<T, E, F>(result, fn)` - Transforms Err value. If Ok, returns value unchanged.
 - `unwrapOr<T, E>(result, defaultValue)` - Returns value if Ok, otherwise returns default.
 - `unwrapOrElse<T, E>(result, fn)` - Returns value if Ok, otherwise computes default from error.
-- `match<T, E, R>(result, onOk, onErr)` - Pattern matching. Applies one function if Ok, another if Err.
+- `match<T, E, R>(result, onOk, onErr)` - Pattern matching. Applies one function if Ok, another if Err. Supports both function and object syntax.
+- `matchAsync<T, E, R>(result, onOk, onErr)` - Asynchronous pattern matching. Applies async functions for Ok/Err cases. Supports both function and object syntax.
+- `pipe<T, E>(initial, ...fns)` - Pipes a Result through multiple operations. Stops on first error. Cleaner alternative to nested `andThen` calls.
+- `tryCatch<T, E>(fn, errorMapper?)` - Wraps a function that may throw exceptions into a Result type. Catches exceptions and converts them to Err results.
+- `tryCatchAsync<T, E>(fn, errorMapper?)` - Wraps an async function that may throw exceptions into a Promise<Result>. Catches exceptions and Promise rejections.
+
+**Class-based API (for method chaining):**
+- `Outcome<T, E>` - Wrapper class for Result with method chaining support
+- `Success<T>` - Class representing successful results (created via `Ok()` factory)
+- `Erroneous<E>` - Class representing error results (created via `Err()` factory)
 
 ## API Documentation
 
