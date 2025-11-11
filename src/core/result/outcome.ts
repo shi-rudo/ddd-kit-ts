@@ -6,6 +6,7 @@ import {
     map,
     mapErr,
     match,
+    matchAsync,
     ok,
     type Result,
     unwrapOr,
@@ -57,9 +58,77 @@ abstract class ResultBase<T, E> {
 	/**
 	 * Pattern matching for Result.
 	 * Applies one function if Ok, another if Err.
+	 *
+	 * @example
+	 * ```typescript
+	 * outcome.match(
+	 *   value => `Success: ${value}`,
+	 *   error => `Error: ${error}`
+	 * );
+	 * ```
+	 *
+	 * @example Using object syntax
+	 * ```typescript
+	 * outcome.match({
+	 *   ok: value => `Success: ${value}`,
+	 *   err: error => `Error: ${error}`
+	 * });
+	 * ```
 	 */
-	match<R>(onOk: (value: T) => R, onErr: (error: E) => R): R {
-		return match(this._result, onOk, onErr);
+	match<R>(
+		onOk: (value: T) => R,
+		onErr: (error: E) => R,
+	): R;
+	match<R>(
+		handlers: { ok: (value: T) => R; err: (error: E) => R },
+	): R;
+	match<R>(
+		onOkOrHandlers: ((value: T) => R) | { ok: (value: T) => R; err: (error: E) => R },
+		onErr?: (error: E) => R,
+	): R {
+		if (typeof onOkOrHandlers === "function") {
+			return match(this._result, onOkOrHandlers, onErr!);
+		}
+		return match(this._result, onOkOrHandlers);
+	}
+
+	/**
+	 * Async pattern matching for Result.
+	 * Applies one async function if Ok, another if Err.
+	 *
+	 * @example
+	 * ```typescript
+	 * await outcome.matchAsync(
+	 *   async (value) => `Success: ${value}`,
+	 *   async (error) => `Error: ${error}`
+	 * );
+	 * ```
+	 *
+	 * @example Using object syntax
+	 * ```typescript
+	 * await outcome.matchAsync({
+	 *   ok: async (value) => `Success: ${value}`,
+	 *   err: async (error) => `Error: ${error}`
+	 * });
+	 * ```
+	 */
+	matchAsync<R>(
+		onOk: (value: T) => Promise<R>,
+		onErr: (error: E) => Promise<R>,
+	): Promise<R>;
+	matchAsync<R>(
+		handlers: { ok: (value: T) => Promise<R>; err: (error: E) => Promise<R> },
+	): Promise<R>;
+	async matchAsync<R>(
+		onOkOrHandlers:
+			| ((value: T) => Promise<R>)
+			| { ok: (value: T) => Promise<R>; err: (error: E) => Promise<R> },
+		onErr?: (error: E) => Promise<R>,
+	): Promise<R> {
+		if (typeof onOkOrHandlers === "function") {
+			return matchAsync(this._result, onOkOrHandlers, onErr!);
+		}
+		return matchAsync(this._result, onOkOrHandlers);
 	}
 
 	/**

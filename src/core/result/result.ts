@@ -232,12 +232,90 @@ export function unwrapOrElse<T, E>(
  *   error => `Error: ${error}`
  * );
  * ```
+ *
+ * @example Using object syntax
+ * ```typescript
+ * const message = match(result, {
+ *   ok: value => `Success: ${value}`,
+ *   err: error => `Error: ${error}`
+ * });
+ * ```
  */
 export function match<T, E, R>(
 	result: Result<T, E>,
 	onOk: (value: T) => R,
 	onErr: (error: E) => R,
+): R;
+export function match<T, E, R>(
+	result: Result<T, E>,
+	handlers: { ok: (value: T) => R; err: (error: E) => R },
+): R;
+export function match<T, E, R>(
+	result: Result<T, E>,
+	onOkOrHandlers: ((value: T) => R) | { ok: (value: T) => R; err: (error: E) => R },
+	onErr?: (error: E) => R,
 ): R {
-	return result.ok ? onOk(result.value) : onErr(result.error);
+	if (typeof onOkOrHandlers === "function") {
+		// Function syntax: match(result, onOk, onErr)
+		return result.ok ? onOkOrHandlers(result.value) : onErr!(result.error);
+	}
+	// Object syntax: match(result, { ok: ..., err: ... })
+	return result.ok
+		? onOkOrHandlers.ok(result.value)
+		: onOkOrHandlers.err(result.error);
+}
+
+/**
+ * Async pattern matching for Result.
+ * Applies one async function if Ok, another if Err.
+ * Both handlers must return Promises.
+ *
+ * @param result - The result to match
+ * @param onOk - Async function to apply if Ok
+ * @param onErr - Async function to apply if Err
+ * @returns Promise resolving to the result of applying the appropriate function
+ *
+ * @example
+ * ```typescript
+ * const message = await matchAsync(result,
+ *   async (value) => `Success: ${value}`,
+ *   async (error) => `Error: ${error}`
+ * );
+ * ```
+ *
+ * @example Using object syntax
+ * ```typescript
+ * const message = await matchAsync(result, {
+ *   ok: async (value) => `Success: ${value}`,
+ *   err: async (error) => `Error: ${error}`
+ * });
+ * ```
+ */
+export async function matchAsync<T, E, R>(
+	result: Result<T, E>,
+	onOk: (value: T) => Promise<R>,
+	onErr: (error: E) => Promise<R>,
+): Promise<R>;
+export async function matchAsync<T, E, R>(
+	result: Result<T, E>,
+	handlers: { ok: (value: T) => Promise<R>; err: (error: E) => Promise<R> },
+): Promise<R>;
+export async function matchAsync<T, E, R>(
+	result: Result<T, E>,
+	onOkOrHandlers:
+		| ((value: T) => Promise<R>)
+		| { ok: (value: T) => Promise<R>; err: (error: E) => Promise<R> },
+	onErr?: (error: E) => Promise<R>,
+): Promise<R> {
+	if (typeof onOkOrHandlers === "function") {
+		// Function syntax: matchAsync(result, onOk, onErr)
+		return result.ok
+			? onOkOrHandlers(result.value)
+			: onErr!(result.error);
+	}
+	// Object syntax: matchAsync(result, { ok: ..., err: ... })
+	return result.ok
+		? onOkOrHandlers.ok(result.value)
+		: onOkOrHandlers.err(result.error);
 }
 

@@ -8,6 +8,7 @@ export {
 	map,
 	mapErr,
 	match,
+	matchAsync,
 	ok,
 	unwrapOr,
 	unwrapOrElse,

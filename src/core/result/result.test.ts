@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-    andThen,
-    err,
-    isErr,
-    isOk,
-    map,
-    mapErr,
-    match,
-    ok,
-    type Result,
-    unwrapOr,
-    unwrapOrElse,
+	andThen,
+	err,
+	isErr,
+	isOk,
+	map,
+	mapErr,
+	match,
+	matchAsync,
+	ok,
+	type Result,
+	unwrapOr,
+	unwrapOrElse,
 } from "./result";
 
 describe("Result composition utilities", () => {
@@ -165,6 +166,92 @@ describe("Result composition utilities", () => {
 
 			expect(okValue).toBe(10);
 			expect(errValue).toBe(0);
+		});
+
+		it("should support object syntax", () => {
+			const okResult = ok(5);
+			const errResult = err("error");
+
+			const okValue = match(okResult, {
+				ok: (v: number) => `Success: ${v}`,
+				err: () => "Error",
+			});
+			const errValue = match(errResult, {
+				ok: () => "Success",
+				err: (e) => `Error: ${e}`,
+			});
+
+			expect(okValue).toBe("Success: 5");
+			expect(errValue).toBe("Error: error");
+		});
+
+		it("should handle different return types with object syntax", () => {
+			const okResult = ok(5);
+			const errResult = err("error");
+
+			const okValue = match(okResult, {
+				ok: (v: number) => v * 2,
+				err: () => 0,
+			});
+			const errValue = match(errResult, {
+				ok: () => 0,
+				err: () => 0,
+			});
+
+			expect(okValue).toBe(10);
+			expect(errValue).toBe(0);
+		});
+	});
+
+	describe("matchAsync", () => {
+		it("should apply async onOk function for Ok result", async () => {
+			const result = ok(5);
+			const value = await matchAsync(
+				result,
+				async (value) => `Success: ${value}`,
+				async (error) => `Error: ${error}`,
+			);
+			expect(value).toBe("Success: 5");
+		});
+
+		it("should apply async onErr function for Err result", async () => {
+			const result = err("error");
+			const value = await matchAsync(
+				result,
+				async (value) => `Success: ${value}`,
+				async (error) => `Error: ${error}`,
+			);
+			expect(value).toBe("Error: error");
+		});
+
+		it("should support object syntax", async () => {
+			const okResult = ok(5);
+			const errResult = err("error");
+
+			const okValue = await matchAsync(okResult, {
+				ok: async (v: number) => `Success: ${v}`,
+				err: async () => "Error",
+			});
+			const errValue = await matchAsync(errResult, {
+				ok: async () => "Success",
+				err: async (e) => `Error: ${e}`,
+			});
+
+			expect(okValue).toBe("Success: 5");
+			expect(errValue).toBe("Error: error");
+		});
+
+		it("should handle async operations", async () => {
+			const result = ok(5);
+			const value = await matchAsync(
+				result,
+				async (value) => {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+					return value * 2;
+				},
+				async () => 0,
+			);
+			expect(value).toBe(10);
 		});
 	});
 

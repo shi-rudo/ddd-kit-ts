@@ -152,5 +152,60 @@ describe("Outcome - Class-based API", () => {
 			}
 		});
 	});
+
+	describe("match with object syntax", () => {
+		it("should support object syntax", () => {
+			const outcome = Outcome.ok(42);
+			const value = outcome.match({
+				ok: (v: number) => `Success: ${v}`,
+				err: () => "Error",
+			});
+			expect(value).toBe("Success: 42");
+		});
+
+		it("should handle errors with object syntax", () => {
+			const outcome = Outcome.err("error");
+			const value = outcome.match({
+				ok: () => "Success",
+				err: (e) => `Error: ${e}`,
+			});
+			expect(value).toBe("Error: error");
+		});
+	});
+
+	describe("matchAsync", () => {
+		it("should support async operations", async () => {
+			const outcome = Outcome.ok(42);
+			const value = await outcome.matchAsync(
+				async (v: number) => {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+					return `Success: ${v}`;
+				},
+				async () => "Error",
+			);
+			expect(value).toBe("Success: 42");
+		});
+
+		it("should support object syntax with async", async () => {
+			const outcome = Outcome.ok(42);
+			const value = await outcome.matchAsync({
+				ok: async (v: number) => {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+					return `Success: ${v}`;
+				},
+				err: async () => "Error",
+			});
+			expect(value).toBe("Success: 42");
+		});
+
+		it("should handle errors with async", async () => {
+			const outcome = Outcome.err("error");
+			const value = await outcome.matchAsync({
+				ok: async () => "Success",
+				err: async (e) => `Error: ${e}`,
+			});
+			expect(value).toBe("Error: error");
+		});
+	});
 });
 
