@@ -26,4 +26,6 @@ export * from "./repo/spec";
 export * from "./repo/uow";
 // Value Objects
 export * from "./value-object/value-object";
+// Utils
+export * from "./utils";
 
