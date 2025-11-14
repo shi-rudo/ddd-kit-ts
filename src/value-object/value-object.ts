@@ -1,4 +1,9 @@
 import { err, ok, type Result } from "../core/result";
+import { deepEqual } from "../utils/array/deep-equal";
+import {
+    deepEqualExcept,
+    type DeepEqualExceptOptions,
+} from "../utils/array/deep-equal-except";
 
 export type ValueObject<T> = Readonly<T>;
 
@@ -60,10 +65,13 @@ export function vo<T>(t: T): ValueObject<T> {
 
 /**
  * Compares two value objects for equality based on their values.
- * Uses deep equality comparison by serializing both objects to JSON.
- *
- * Note: This is a simple implementation. For production use with complex objects,
- * consider using a more robust deep equality library or implementing custom equality logic.
+ * Uses deep equality comparison that handles:
+ * - Nested objects and arrays
+ * - Primitives (including NaN)
+ * - Dates, Maps, Sets, RegExp
+ * - TypedArrays and DataView
+ * - Symbol keys
+ * - Circular references
  *
  * @param a - First value object
  * @param b - Second value object
@@ -74,10 +82,65 @@ export function vo<T>(t: T): ValueObject<T> {
  * const money1 = vo({ amount: 100, currency: "USD" });
  * const money2 = vo({ amount: 100, currency: "USD" });
  * voEquals(money1, money2); // true
+ *
+ * const address1 = vo({
+ *   street: "Main St",
+ *   coordinates: { lat: 52.5, lng: 13.4 }
+ * });
+ * const address2 = vo({
+ *   street: "Main St",
+ *   coordinates: { lat: 52.5, lng: 13.4 }
+ * });
+ * voEquals(address1, address2); // true
  * ```
  */
 export function voEquals<T>(a: ValueObject<T>, b: ValueObject<T>): boolean {
-	return JSON.stringify(a) === JSON.stringify(b);
+	return deepEqual(a, b);
+}
+
+/**
+ * Compares two value objects for equality while ignoring specified keys.
+ * Useful for comparing value objects that contain metadata or optional fields
+ * that should not affect equality comparison.
+ *
+ * @param a - First value object
+ * @param b - Second value object
+ * @param options - Options specifying which keys to ignore during comparison
+ * @returns true if both objects have the same values (after ignoring specified keys), false otherwise
+ *
+ * @example
+ * ```typescript
+ * // Value object with metadata
+ * const address1 = vo({
+ *   street: "Main St",
+ *   city: "Berlin",
+ *   metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" }
+ * });
+ *
+ * const address2 = vo({
+ *   street: "Main St",
+ *   city: "Berlin",
+ *   metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" }
+ * });
+ *
+ * // Compare ignoring metadata timestamps
+ * voEqualsExcept(address1, address2, {
+ *   ignoreKeys: ["updatedAt"],
+ *   ignoreKeyPredicate: (key, path) => path.includes("metadata")
+ * }); // true
+ *
+ * // Compare ignoring all metadata
+ * voEqualsExcept(address1, address2, {
+ *   ignoreKeyPredicate: (key, path) => path.includes("metadata")
+ * }); // true
+ * ```
+ */
+export function voEqualsExcept<T>(
+	a: ValueObject<T>,
+	b: ValueObject<T>,
+	options: DeepEqualExceptOptions,
+): boolean {
+	return deepEqualExcept(a, b, options);
 }
 
 /**

@@ -58,7 +58,7 @@ const email = createEmail("user@example.com");
 
 ### Value Objects
 
-Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voWithValidation()` for creating validated value objects (returns Result), and `voWithValidationUnsafe()` for the exception-throwing variant.
+Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voEqualsExcept()` for comparing while ignoring specified keys (useful for metadata), `voWithValidation()` for creating validated value objects (returns Result), and `voWithValidationUnsafe()` for the exception-throwing variant.
 
 ### Entities
 
@@ -125,7 +125,7 @@ The `Result<T, E>` type provides functional error handling without exceptions. I
 ### Creating a Value Object
 
 ```typescript
-import { vo, voEquals, voWithValidation, type ValueObject } from "@shirudo/ddd-kit";
+import { vo, voEquals, voEqualsExcept, voWithValidation, type ValueObject } from "@shirudo/ddd-kit";
 
 // Simple value object
 type Money = ValueObject<{
@@ -169,6 +169,22 @@ const address = vo({
 const money1 = vo({ amount: 100, currency: "USD" });
 const money2 = vo({ amount: 100, currency: "USD" });
 voEquals(money1, money2); // true (value equality, not reference)
+
+// Equality comparison ignoring metadata
+const address1 = vo({
+  street: "Main St",
+  city: "Berlin",
+  metadata: { updatedAt: "2024-01-02" }
+});
+const address2 = vo({
+  street: "Main St",
+  city: "Berlin",
+  metadata: { updatedAt: "2024-01-03" }
+});
+voEquals(address1, address2); // false (different metadata)
+voEqualsExcept(address1, address2, {
+  ignoreKeyPredicate: (key, path) => path.includes("metadata")
+}); // true (metadata ignored)
 ```
 
 ### Creating an Aggregate WITHOUT Event Sourcing
@@ -978,7 +994,7 @@ match(result4,
 This package is written in TypeScript and provides full type definitions. All types and functions are exported from the main entry point. You can explore the available APIs through your IDE's autocomplete or by examining the type definitions in `node_modules/@shirudo/ddd-kit/dist/index.d.ts`.
 
 Key exports include:
-- `vo()`, `voEquals()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
+- `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
 - `AggregateRoot<TId>` - Marker interface for Aggregate Root Entities
 - `AggregateBase<TState, TId>` - Base class for creating Aggregate Root Entities without Event Sourcing (implements `AggregateRoot<TId>`)
 - `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateBase`, implements `AggregateRoot<TId>`)

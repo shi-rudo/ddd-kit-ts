@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	vo,
 	voEquals,
+	voEqualsExcept,
 	voWithValidation,
 	voWithValidationUnsafe,
 	type ValueObject,
@@ -227,16 +228,16 @@ describe("ValueObject", () => {
 			expect(voEquals(obj1 as any, obj3 as any)).toBe(false);
 		});
 
-		it("should handle objects with undefined values", () => {
-			const obj1 = vo({ value: undefined, other: "test" });
-			const obj2 = vo({ value: undefined, other: "test" });
-			const obj3 = vo({ other: "test" }); // Missing property
+	it("should handle objects with undefined values", () => {
+		const obj1 = vo({ value: undefined, other: "test" });
+		const obj2 = vo({ value: undefined, other: "test" });
+		const obj3 = vo({ other: "test" }); // Missing property
 
-			expect(voEquals(obj1, obj2)).toBe(true);
-			// Note: JSON.stringify removes undefined properties, so obj1 and obj3 are equal
-			// This is expected behavior of JSON.stringify
-			expect(voEquals(obj1, obj3)).toBe(true);
-		});
+		expect(voEquals(obj1, obj2)).toBe(true);
+		// deepEqual correctly distinguishes between undefined property and missing property
+		// This is more accurate than JSON.stringify which removes undefined properties
+		expect(voEquals(obj1, obj3)).toBe(false);
+	});
 
 		it("should return false when comparing reference equality", () => {
 			const money1 = vo({ amount: 100, currency: "USD" });
@@ -244,6 +245,93 @@ describe("ValueObject", () => {
 
 			expect(money1 === money2).toBe(true); // Reference equality
 			expect(voEquals(money1, money2)).toBe(true); // Value equality
+		});
+	});
+
+	describe("voEqualsExcept()", () => {
+		it("should compare value objects ignoring specified keys", () => {
+			const address1 = vo({
+				street: "Main St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" },
+			});
+			const address2 = vo({
+				street: "Main St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" },
+			});
+
+			// Without except: different updatedAt makes them unequal
+			expect(voEquals(address1, address2)).toBe(false);
+
+			// With except: ignoring updatedAt makes them equal
+			expect(
+				voEqualsExcept(address1, address2, {
+					ignoreKeys: ["updatedAt"],
+				}),
+			).toBe(true);
+		});
+
+		it("should compare value objects ignoring nested metadata", () => {
+			const address1 = vo({
+				street: "Main St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-02" },
+			});
+			const address2 = vo({
+				street: "Main St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01", updatedAt: "2024-01-03" },
+			});
+
+			// Ignore all metadata
+			expect(
+				voEqualsExcept(address1, address2, {
+					ignoreKeyPredicate: (key, path) => path.includes("metadata"),
+				}),
+			).toBe(true);
+		});
+
+		it("should still detect differences in non-ignored fields", () => {
+			const address1 = vo({
+				street: "Main St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01" },
+			});
+			const address2 = vo({
+				street: "Different St",
+				city: "Berlin",
+				metadata: { createdAt: "2024-01-01" },
+			});
+
+			// Even with metadata ignored, different street makes them unequal
+			expect(
+				voEqualsExcept(address1, address2, {
+					ignoreKeyPredicate: (key, path) => path.includes("metadata"),
+				}),
+			).toBe(false);
+		});
+
+		it("should handle arrays with ignored keys", () => {
+			const list1 = vo({
+				items: [
+					{ id: 1, value: "a", timestamp: "2024-01-01" },
+					{ id: 2, value: "b", timestamp: "2024-01-02" },
+				],
+			});
+			const list2 = vo({
+				items: [
+					{ id: 1, value: "a", timestamp: "2024-01-03" },
+					{ id: 2, value: "b", timestamp: "2024-01-04" },
+				],
+			});
+
+			// Ignore timestamps in nested items
+			expect(
+				voEqualsExcept(list1, list2, {
+					ignoreKeyPredicate: (key, path) => key === "timestamp",
+				}),
+			).toBe(true);
 		});
 	});
 
