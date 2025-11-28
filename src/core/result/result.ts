@@ -370,6 +370,120 @@ export function pipe<T, E>(
 }
 
 /**
+ * Async version of andThen. Chains Result operations with async functions.
+ * If the result is Ok, applies the async function to the value.
+ * If Err, returns the error unchanged.
+ *
+ * @param result - The result to chain
+ * @param fn - Async function that takes the Ok value and returns a Promise<Result>
+ * @returns A Promise resolving to a new Result
+ *
+ * @example
+ * ```typescript
+ * const result = await andThenAsync(
+ *   ok(userId),
+ *   async (id) => {
+ *     const user = await fetchUser(id);
+ *     return user ? ok(user) : err("User not found");
+ *   }
+ * );
+ * ```
+ */
+export async function andThenAsync<T, E, U>(
+	result: Result<T, E>,
+	fn: (value: T) => Promise<Result<U, E>>,
+): Promise<Result<U, E>> {
+	if (result.ok) {
+		return fn(result.value);
+	}
+	return result;
+}
+
+/**
+ * Async version of map. Transforms the Ok value using an async function.
+ * If the result is Err, returns the error unchanged.
+ *
+ * @param result - The result to transform
+ * @param fn - Async function to transform the Ok value
+ * @returns A Promise resolving to a new Result with transformed value
+ *
+ * @example
+ * ```typescript
+ * const result = await mapAsync(
+ *   ok(userId),
+ *   async (id) => await enrichUserData(id)
+ * );
+ * ```
+ */
+export async function mapAsync<T, E, U>(
+	result: Result<T, E>,
+	fn: (value: T) => Promise<U>,
+): Promise<Result<U, E>> {
+	if (result.ok) {
+		return ok(await fn(result.value));
+	}
+	return result;
+}
+
+/**
+ * Async version of mapErr. Transforms the Err value using an async function.
+ * If the result is Ok, returns the value unchanged.
+ *
+ * @param result - The result to transform
+ * @param fn - Async function to transform the Err value
+ * @returns A Promise resolving to a new Result with transformed error
+ *
+ * @example
+ * ```typescript
+ * const result = await mapErrAsync(
+ *   err("error-code"),
+ *   async (code) => await translateErrorCode(code)
+ * );
+ * ```
+ */
+export async function mapErrAsync<T, E, F>(
+	result: Result<T, E>,
+	fn: (error: E) => Promise<F>,
+): Promise<Result<T, F>> {
+	if (result.ok) {
+		return result;
+	}
+	return err(await fn(result.error));
+}
+
+/**
+ * Async version of pipe. Pipes a Result through multiple async operations.
+ * Each function receives the previous Result and returns a Promise<Result>.
+ * Stops on first error.
+ *
+ * @param initial - The initial Result value
+ * @param fns - Array of async functions that take the previous Result and return a Promise<Result>
+ * @returns A Promise resolving to the final Result after all operations
+ *
+ * @example
+ * ```typescript
+ * const result = await pipeAsync(
+ *   ok(initialData),
+ *   async (prev) => andThenAsync(prev, async (data) => await validateAsync(data)),
+ *   async (prev) => andThenAsync(prev, async (data) => await saveAsync(data))
+ * );
+ * ```
+ */
+export async function pipeAsync<T, E>(
+	initial: Result<T, E>,
+	...fns: Array<(prev: Result<T, E>) => Promise<Result<T, E>>>
+): Promise<Result<T, E>> {
+	let current = initial;
+	for (const fn of fns) {
+		current = await fn(current);
+		if (!current.ok) {
+			return current;
+		}
+	}
+	return current;
+}
+
+/**
  * Wraps a function that may throw exceptions into a Result type.
  * Catches any thrown exceptions and converts them to Err results.
  *

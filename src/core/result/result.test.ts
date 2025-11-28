@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
     andThen,
+    andThenAsync,
     err,
     isErr,
     isOk,
     map,
+    mapAsync,
     mapErr,
+    mapErrAsync,
     match,
     matchAsync,
     ok,
     pipe,
+    pipeAsync,
     type Result,
     tryCatch,
     tryCatchAsync,
@@ -563,6 +567,196 @@ describe("Result composition utilities", () => {
 			expect(isOk(objectResult)).toBe(true);
 			if (isOk(objectResult)) {
 				expect(objectResult.value).toEqual({ key: "value" });
+			}
+		});
+	});
+
+	describe("andThenAsync", () => {
+		it("should chain Ok results with async function", async () => {
+			const result = ok(5);
+			const chained = await andThenAsync(result, async (value: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return ok(value * 2);
+			});
+			expect(isOk(chained)).toBe(true);
+			if (isOk(chained)) {
+				expect(chained.value).toBe(10);
+			}
+		});
+
+		it("should return error if first result is Err", async () => {
+			const result = err("error");
+			const chained = await andThenAsync(result, async (_value: number) => ok(0));
+			expect(isErr(chained)).toBe(true);
+			if (isErr(chained)) {
+				expect(chained.error).toBe("error");
+			}
+		});
+
+		it("should return error if chained async function returns Err", async () => {
+			const result = ok(5);
+			const chained = await andThenAsync(result, async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return err("async chained error");
+			});
+			expect(isErr(chained)).toBe(true);
+			if (isErr(chained)) {
+				expect(chained.error).toBe("async chained error");
+			}
+		});
+
+		it("should chain multiple async operations", async () => {
+			const result = ok(5);
+			const chained = await andThenAsync(
+				await andThenAsync(result, async (value) => ok(value * 2)),
+				async (value) => ok(value + 3),
+			);
+			expect(isOk(chained)).toBe(true);
+			if (isOk(chained)) {
+				expect(chained.value).toBe(13);
+			}
+		});
+	});
+
+	describe("mapAsync", () => {
+		it("should transform Ok value with async function", async () => {
+			const result = ok(5);
+			const mapped = await mapAsync(result, async (value: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return value * 2;
+			});
+			expect(isOk(mapped)).toBe(true);
+			if (isOk(mapped)) {
+				expect(mapped.value).toBe(10);
+			}
+		});
+
+		it("should return error unchanged", async () => {
+			const result = err("error");
+			const mapped = await mapAsync(result, async (_value: number) => 0);
+			expect(isErr(mapped)).toBe(true);
+			if (isErr(mapped)) {
+				expect(mapped.error).toBe("error");
+			}
+		});
+
+		it("should change value type", async () => {
+			const result = ok(5);
+			const mapped = await mapAsync(result, async (value) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return `value: ${value}`;
+			});
+			expect(isOk(mapped)).toBe(true);
+			if (isOk(mapped)) {
+				expect(mapped.value).toBe("value: 5");
+			}
+		});
+	});
+
+	describe("mapErrAsync", () => {
+		it("should transform error value with async function", async () => {
+			const result = err("error");
+			const mapped = await mapErrAsync(result, async (error) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return `Error: ${error}`;
+			});
+			expect(isErr(mapped)).toBe(true);
+			if (isErr(mapped)) {
+				expect(mapped.error).toBe("Error: error");
+			}
+		});
+
+		it("should return Ok value unchanged", async () => {
+			const result = ok(5);
+			const mapped = await mapErrAsync(result, async (error) => `Error: ${error}`);
+			expect(isOk(mapped)).toBe(true);
+			if (isOk(mapped)) {
+				expect(mapped.value).toBe(5);
+			}
+		});
+	});
+
+	describe("pipeAsync", () => {
+		it("should pipe through multiple async operations", async () => {
+			const result = await pipeAsync(
+				ok(5),
+				async (prev: Result<number, never>) => andThenAsync(prev, async (v: number) => ok(v * 2)),
+				async (prev: Result<number, never>) => andThenAsync(prev, async (v: number) => ok(v + 3)),
+			);
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe(13);
+			}
+		});
+
+		it("should stop on first error", async () => {
+			const result = await pipeAsync(
+				ok(5),
+				async (prev) => andThenAsync(prev, async () => err("first error")),
+				async (prev) => andThenAsync(prev, async (v: number) => ok(v + 3)), // Should not be called
+			);
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("first error");
+			}
+		});
+
+		it("should work with void results", async () => {
+			const result = await pipeAsync(
+				ok(undefined),
+				async () => ok(undefined),
+				async () => ok(undefined),
+			);
+			expect(isOk(result)).toBe(true);
+		});
+
+		it("should handle multiple async validation operations", async () => {
+			async function validateIdAsync(id: string): Promise<Result<string, string>> {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return id.length > 0 ? ok(id) : err("ID cannot be empty");
+			}
+
+			async function validateEmailAsync(email: string): Promise<Result<string, string>> {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return email.includes("@") ? ok(email) : err("Invalid email");
+			}
+
+			const result = await pipeAsync(
+				await validateIdAsync("user-123"),
+				async () => await validateEmailAsync("test@example.com"),
+			);
+
+			expect(isOk(result)).toBe(true);
+			if (isOk(result)) {
+				expect(result.value).toBe("test@example.com");
+			}
+		});
+
+		it("should stop on first async validation error", async () => {
+			async function validateIdAsync(id: string): Promise<Result<string, string>> {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return id.length > 0 ? ok(id) : err("ID cannot be empty");
+			}
+
+			async function validateEmailAsync(email: string): Promise<Result<string, string>> {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return email.includes("@") ? ok(email) : err("Invalid email");
+			}
+
+			const result = await pipeAsync(
+				await validateIdAsync(""), // This will fail
+				async (prev) => {
+					// This should not be called if prev is an error
+					if (!prev.ok) {
+						return prev;
+					}
+					return await validateEmailAsync("test@example.com");
+				},
+			);
+
+			expect(isErr(result)).toBe(true);
+			if (isErr(result)) {
+				expect(result.error).toBe("ID cannot be empty");
 			}
 		});
 	});
