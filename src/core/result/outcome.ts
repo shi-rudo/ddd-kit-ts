@@ -240,8 +240,8 @@ class Success<T> extends ResultBase<T, never> {
 		if (result.ok) {
 			return new Success(result.value);
 		}
-		// This should never happen for Success, but TypeScript needs it
-		throw new Error("Unexpected error in Success.mapAsync");
+		// Unreachable: Success.mapAsync should always return Ok
+		throw new Error("Unreachable code: Success.mapAsync should always return Ok");
 	}
 
 	/**
@@ -338,8 +338,8 @@ class Erroneous<E> extends ResultBase<never, E> {
 		if (!result.ok) {
 			return new Erroneous(result.error);
 		}
-		// This should never happen for Erroneous, but TypeScript needs it
-		throw new Error("Unexpected ok in Erroneous.mapErrAsync");
+		// Unreachable: Erroneous.mapErrAsync should always return Err
+		throw new Error("Unreachable code: Erroneous.mapErrAsync should always return Err");
 	}
 }
 
