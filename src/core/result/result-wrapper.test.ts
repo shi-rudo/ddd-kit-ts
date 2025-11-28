@@ -107,6 +107,75 @@ describe("Ok/Err Classes - Method Chaining", () => {
 			expect(() => result.unwrap()).toThrow("string error");
 		});
 	});
+
+	describe("Ok.andThenAsync", () => {
+		it("should chain async andThen operations", async () => {
+			const okResult = Ok(1);
+			const result = await okResult.andThenAsync(async (num: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return ok(num + 1);
+			});
+			expect(result.unwrap()).toBe(2);
+		});
+
+		it("should propagate error from async andThen", async () => {
+			const okResult = Ok(1);
+			const result = await okResult.andThenAsync(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return err("async error");
+			});
+			expect(() => result.unwrap()).toThrow("async error");
+		});
+	});
+
+	describe("Ok.mapAsync", () => {
+		it("should chain async map operations", async () => {
+			const okResult = Ok(1);
+			const result = await okResult.mapAsync(async (num: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return num + 1;
+			});
+			expect(result.unwrap()).toBe(2);
+		});
+	});
+
+	describe("Ok.mapErrAsync", () => {
+		it("should return the same Success", async () => {
+			const okResult = Ok(1);
+			const result = await okResult.mapErrAsync(async (_err: never) => "mapped");
+			expect(result.unwrap()).toBe(1);
+		});
+	});
+
+	describe("Err.andThenAsync", () => {
+		it("should stop on first error", async () => {
+			const errResult = Err(new Error("something went wrong"));
+			const result = await errResult.andThenAsync(async (_num: never) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return ok(1);
+			});
+			expect(() => result.unwrap()).toThrow("something went wrong");
+		});
+	});
+
+	describe("Err.mapAsync", () => {
+		it("should return the same Erroneous", async () => {
+			const errResult = Err(new Error("error"));
+			const result = await errResult.mapAsync(async (_num: never) => 1);
+			expect(() => result.unwrap()).toThrow("error");
+		});
+	});
+
+	describe("Err.mapErrAsync", () => {
+		it("should transform error with async function", async () => {
+			const errResult = Err("original");
+			const result = await errResult.mapErrAsync(async (e) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return `Mapped: ${e}`;
+			});
+			expect(() => result.unwrap()).toThrow("Mapped: original");
+		});
+	});
 });
 
 describe("Outcome - Class-based API", () => {
@@ -205,6 +274,69 @@ describe("Outcome - Class-based API", () => {
 				err: async (e) => `Error: ${e}`,
 			});
 			expect(value).toBe("Error: error");
+		});
+	});
+
+	describe("andThenAsync", () => {
+		it("should chain async andThen operations", async () => {
+			const outcome = Outcome.from(ok(1));
+			const result = await outcome.andThenAsync(async (num: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return ok(num + 1);
+			});
+			expect(result.unwrap()).toBe(2);
+		});
+
+		it("should propagate error from async andThen", async () => {
+			const outcome = Outcome.from(ok(1));
+			const result = await outcome.andThenAsync(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return err("async error");
+			});
+			expect(() => result.unwrap()).toThrow("async error");
+		});
+
+		it("should stop on first error in Err outcome", async () => {
+			const outcome = Outcome.from(err("first error"));
+			const result = await outcome.andThenAsync(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return ok(1);
+			});
+			expect(() => result.unwrap()).toThrow("first error");
+		});
+	});
+
+	describe("mapAsync", () => {
+		it("should transform Ok value with async function", async () => {
+			const outcome = Outcome.from(ok(5));
+			const result = await outcome.mapAsync(async (value: number) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return value * 2;
+			});
+			expect(result.unwrap()).toBe(10);
+		});
+
+		it("should return error unchanged", async () => {
+			const outcome = Outcome.from(err("error"));
+			const result = await outcome.mapAsync(async (_value: number) => 0);
+			expect(() => result.unwrap()).toThrow("error");
+		});
+	});
+
+	describe("mapErrAsync", () => {
+		it("should transform Err value with async function", async () => {
+			const outcome = Outcome.from(err("error"));
+			const result = await outcome.mapErrAsync(async (e) => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return `Mapped: ${e}`;
+			});
+			expect(() => result.unwrap()).toThrow("Mapped: error");
+		});
+
+		it("should return Ok value unchanged", async () => {
+			const outcome = Outcome.from(ok(5));
+			const result = await outcome.mapErrAsync(async (e) => `Mapped: ${e}`);
+			expect(result.unwrap()).toBe(5);
 		});
 	});
 });

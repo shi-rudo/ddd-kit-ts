@@ -1,10 +1,13 @@
 import {
     andThen,
+    andThenAsync,
     err,
     isErr,
     isOk,
     map,
+    mapAsync,
     mapErr,
+    mapErrAsync,
     match,
     matchAsync,
     ok,
@@ -214,6 +217,40 @@ class Success<T> extends ResultBase<T, never> {
 	mapErr<F>(_fn: (error: never) => F): Success<T> {
 		return this;
 	}
+
+	/**
+	 * Async version of andThen. Chains Result operations with async functions.
+	 * If the result is Ok, applies the async function to the value.
+	 * If Err, returns the error unchanged.
+	 */
+	async andThenAsync<U, E>(fn: (value: T) => Promise<Result<U, E>>): Promise<Success<U> | Erroneous<E>> {
+		const result = await andThenAsync(this._result, fn);
+		if (result.ok) {
+			return new Success(result.value);
+		}
+		return new Erroneous(result.error);
+	}
+
+	/**
+	 * Async version of map. Transforms the Ok value using an async function.
+	 * If the result is Err, returns the error unchanged.
+	 */
+	async mapAsync<U>(fn: (value: T) => Promise<U>): Promise<Success<U>> {
+		const result = await mapAsync(this._result, fn);
+		if (result.ok) {
+			return new Success(result.value);
+		}
+		// This should never happen for Success, but TypeScript needs it
+		throw new Error("Unexpected error in Success.mapAsync");
+	}
+
+	/**
+	 * Async version of mapErr. Transforms the Err value using an async function.
+	 * If the result is Ok, returns the value unchanged.
+	 */
+	async mapErrAsync<F>(_fn: (error: never) => Promise<F>): Promise<Success<T>> {
+		return this;
+	}
 }
 
 export { Success };
@@ -273,6 +310,36 @@ class Erroneous<E> extends ResultBase<never, E> {
 		}
 		// This should never happen for Erroneous, but TypeScript needs it
 		throw new Error("Unexpected ok in Erroneous.mapErr");
+	}
+
+	/**
+	 * Async version of andThen. Chains Result operations with async functions.
+	 * If the result is Ok, applies the async function to the value.
+	 * If Err, returns the error unchanged.
+	 */
+	async andThenAsync<U>(_fn: (value: never) => Promise<Result<U, E>>): Promise<Erroneous<E>> {
+		return this;
+	}
+
+	/**
+	 * Async version of map. Transforms the Ok value using an async function.
+	 * If the result is Err, returns the error unchanged.
+	 */
+	async mapAsync<U>(_fn: (value: never) => Promise<U>): Promise<Erroneous<E>> {
+		return this;
+	}
+
+	/**
+	 * Async version of mapErr. Transforms the Err value using an async function.
+	 * If the result is Ok, returns the value unchanged.
+	 */
+	async mapErrAsync<F>(fn: (error: E) => Promise<F>): Promise<Erroneous<F>> {
+		const result = await mapErrAsync(this._result, fn);
+		if (!result.ok) {
+			return new Erroneous(result.error);
+		}
+		// This should never happen for Erroneous, but TypeScript needs it
+		throw new Error("Unexpected ok in Erroneous.mapErrAsync");
 	}
 }
 
@@ -348,6 +415,31 @@ export class Outcome<T, E> extends ResultBase<T, E> {
 
 	mapErr<F>(fn: (error: E) => F): Outcome<T, F> {
 		return Outcome.from(mapErr(this._result, fn));
+	}
+
+	/**
+	 * Async version of andThen. Chains Result operations with async functions.
+	 * If the result is Ok, applies the async function to the value.
+	 * If Err, returns the error unchanged.
+	 */
+	async andThenAsync<U>(fn: (value: T) => Promise<Result<U, E>>): Promise<Outcome<U, E>> {
+		return Outcome.from(await andThenAsync(this._result, fn));
+	}
+
+	/**
+	 * Async version of map. Transforms the Ok value using an async function.
+	 * If the result is Err, returns the error unchanged.
+	 */
+	async mapAsync<U>(fn: (value: T) => Promise<U>): Promise<Outcome<U, E>> {
+		return Outcome.from(await mapAsync(this._result, fn));
+	}
+
+	/**
+	 * Async version of mapErr. Transforms the Err value using an async function.
+	 * If the result is Ok, returns the value unchanged.
+	 */
+	async mapErrAsync<F>(fn: (error: E) => Promise<F>): Promise<Outcome<T, F>> {
+		return Outcome.from(await mapErrAsync(this._result, fn));
 	}
 }
 
