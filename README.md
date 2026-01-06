@@ -1197,6 +1197,280 @@ Key exports include:
 - `UnitOfWork` - Unit of Work interface
 - `guard()` - Guard/validation helper
 
+## Concurrency & Thread Safety
+
+### Understanding "Operations" in Different Contexts
+
+When we talk about **operations** or **executions**, we mean:
+
+1. **HTTP Request** - In a web API: One incoming HTTP request (GET, POST, etc.)
+2. **Command Execution** - In CQRS: Execution of a single command (CreateOrder, UpdateQuantity, etc.)
+3. **Query Execution** - In CQRS: Execution of a single query (GetOrder, ListOrders, etc.)
+4. **Background Job** - Asynchronous task processing (email sending, report generation, etc.)
+5. **Event Handler** - Processing of a single domain event
+
+**Key principle**: Each operation should load fresh aggregate instances, make changes, and save them. Never share aggregate instances across operations.
+
+### The Problem: Race Conditions with Shared State
+
+JavaScript is single-threaded, but `async/await` creates concurrency risks:
+
+```typescript
+// ❌ DANGEROUS - Race Condition!
+class OrderService {
+  private cachedOrder: Order; // NEVER cache aggregates!
+
+  async updateQuantity(itemId: ItemId, quantity: number) {
+    // Request 1 reads quantity = 5
+    const item = this.cachedOrder.getItem(itemId);
+    const oldQty = item.state.quantity; // 5
+
+    await someAsyncOperation(); // ⚠️ Context switch here!
+
+    // Request 2 updates quantity to 10 while we wait
+    // Request 1 continues with stale data
+    item.updateQuantity(oldQty + 1); // Writes 6, should be 11!
+  }
+}
+```
+
+**Why this happens:**
+- `await` yields control to event loop
+- Other async operations can run
+- Your aggregate instance has stale data
+- Last write wins (data loss!)
+
+### ✅ Solution 1: Operation-Scoped Aggregates (Recommended)
+
+**Pattern**: Each operation gets its own aggregate instance. Load → Mutate → Save → Discard.
+
+```typescript
+// ✅ SAFE - Fresh instance per operation
+async function updateOrderQuantity(
+  orderId: OrderId,
+  itemId: ItemId,
+  quantity: number
+) {
+  // 1. Load fresh from database
+  const order = await repository.getById(orderId);
+
+  // 2. Make ALL changes synchronously (no await!)
+  const item = order.getItem(itemId);
+  item.updateQuantity(quantity);
+  order.recalculateTotal();
+
+  // 3. Save with optimistic locking
+  await repository.save(order); // Throws if version mismatch
+
+  // 4. Instance is garbage collected (no shared state)
+}
+
+// ✅ SAFE - Command Handler pattern
+async function createOrderHandler(cmd: CreateOrderCommand) {
+  const orderId = generateId() as OrderId;
+  const order = Order.create(orderId, cmd.customerId);
+
+  // All mutations synchronous
+  for (const item of cmd.items) {
+    order.addItem(item.productId, item.quantity, item.price);
+  }
+  order.confirm();
+
+  await repository.save(order);
+  return order.id;
+}
+```
+
+**Rules for safe aggregate usage:**
+1. ✅ Load aggregate at start of operation
+2. ✅ All mutations synchronous (no `await` between state changes)
+3. ✅ Save at end of operation
+4. ✅ Let garbage collector clean up
+5. ❌ Never store aggregates in class fields
+6. ❌ Never cache aggregates between operations
+7. ❌ Never pass aggregates between operations
+
+### ✅ Solution 2: Optimistic Locking (Already Built-in!)
+
+Your `AggregateRoot` includes a `version` field for Optimistic Concurrency Control:
+
+```typescript
+// Repository implementation with optimistic locking
+class OrderRepository {
+  async save(order: Order): Promise<void> {
+    const current = await db.orders.findOne({ id: order.id });
+
+    // Check if someone else modified it
+    if (current && current.version !== order.version) {
+      throw new ConcurrencyError(
+        `Order ${order.id} was modified by another operation. ` +
+        `Expected version ${order.version}, but found ${current.version}`
+      );
+    }
+
+    // Save with incremented version
+    await db.orders.update({
+      id: order.id,
+      ...order.state,
+      version: order.version + 1 // Increment version
+    });
+  }
+}
+
+// Usage - retry on conflict
+async function updateOrderWithRetry(orderId: OrderId, itemId: ItemId, qty: number) {
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const order = await repository.getById(orderId);
+      order.updateItemQuantity(itemId, qty);
+      await repository.save(order);
+      return; // Success!
+    } catch (error) {
+      if (error instanceof ConcurrencyError && attempt < maxRetries - 1) {
+        // Retry with fresh data
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+```
+
+### ✅ Solution 3: Unit of Work Pattern
+
+Use transactions to ensure consistency:
+
+```typescript
+import { withCommit } from "@shirudo/ddd-kit";
+
+async function createOrderCommand(cmd: CreateOrderCommand) {
+  return await withCommit({ uow, eventBus, outbox }, async () => {
+    const orderId = generateId() as OrderId;
+    const order = Order.create(orderId, cmd.customerId);
+
+    // All synchronous mutations within transaction
+    for (const item of cmd.items) {
+      order.addItem(item.productId, item.quantity, item.price);
+    }
+
+    await repository.save(order);
+
+    return {
+      result: order.id,
+      events: order.pendingEvents // Published atomically
+    };
+  }); // Commits or rollbacks everything
+}
+```
+
+### Safe Async Patterns
+
+```typescript
+// ✅ SAFE - Async I/O BEFORE mutations
+async function processOrder(orderId: OrderId) {
+  // 1. Do all async I/O first
+  const order = await repository.getById(orderId);
+  const pricing = await pricingService.getPrices(order.state.items);
+  const inventory = await inventoryService.check(order.state.items);
+
+  // 2. Then do all mutations synchronously
+  if (inventory.available) {
+    order.confirm();
+    for (const [itemId, price] of pricing) {
+      order.updateItemPrice(itemId, price);
+    }
+  } else {
+    order.cancel();
+  }
+
+  // 3. Single save at end
+  await repository.save(order);
+}
+
+// ❌ DANGEROUS - Interleaved async/mutations
+async function processOrderWrong(orderId: OrderId) {
+  const order = await repository.getById(orderId);
+
+  order.confirm(); // Mutation
+  await inventoryService.reserve(order.id); // ⚠️ Yield point!
+  order.addItem(...); // Another operation might have modified order!
+
+  await repository.save(order);
+}
+```
+
+### Stateless Services Pattern
+
+```typescript
+// ✅ SAFE - Stateless service, aggregates are local
+class OrderService {
+  constructor(
+    private readonly repository: OrderRepository,
+    private readonly eventBus: EventBus
+  ) {}
+
+  async createOrder(cmd: CreateOrderCommand): Promise<Result<OrderId, string>> {
+    // Fresh instance per call
+    const order = Order.create(generateId(), cmd.customerId);
+
+    for (const item of cmd.items) {
+      order.addItem(item.productId, item.quantity, item.price);
+    }
+
+    await this.repository.save(order);
+    await this.eventBus.publish(order.pendingEvents);
+
+    return ok(order.id);
+    // order is garbage collected here
+  }
+}
+
+// ❌ DANGEROUS - Stateful service
+class OrderServiceBad {
+  private orders = new Map<OrderId, Order>(); // NEVER!
+
+  async updateOrder(orderId: OrderId) {
+    const order = this.orders.get(orderId); // Shared mutable state!
+    // Race conditions everywhere!
+  }
+}
+```
+
+### Multi-Tenant Considerations
+
+Even in single-threaded JavaScript, concurrent operations are real:
+
+```typescript
+// Scenario: Two users updating same order simultaneously
+// Time  | Request A (User 1)           | Request B (User 2)
+// ------|------------------------------|---------------------------
+// T1    | order = load(id) v=1         |
+// T2    |                              | order = load(id) v=1
+// T3    | order.addItem(...)           |
+// T4    |                              | order.updateQty(...)
+// T5    | save(order) → v=2 ✅         |
+// T6    |                              | save(order) → v=1 ❌ Error!
+
+// With optimistic locking:
+// Request B fails with ConcurrencyError
+// Client retries with fresh data
+```
+
+### Summary: Concurrency Best Practices
+
+| ✅ DO | ❌ DON'T |
+|-------|----------|
+| Load aggregate per operation | Cache aggregates in memory |
+| All mutations synchronous | Mix async I/O with mutations |
+| Use optimistic locking | Assume single-threaded = safe |
+| Operation-scoped instances | Share instances across operations |
+| Stateless services | Stateful services with aggregates |
+| Retry on concurrency errors | Ignore version conflicts |
+
+**Remember**: JavaScript's single thread doesn't mean you're safe from race conditions. `async/await` creates concurrency, and multiple operations can be "in flight" simultaneously. Always treat aggregates as operation-scoped, use optimistic locking, and keep mutations synchronous.
+
 ## TypeScript Support
 
 This package is built with TypeScript and provides comprehensive type safety. All APIs are fully typed, leveraging TypeScript's type system to ensure correctness at compile time. The package requires TypeScript 5.9.2 or higher and takes advantage of advanced TypeScript features like branded types, conditional types, and mapped types to provide a type-safe DDD experience.
