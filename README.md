@@ -1244,6 +1244,10 @@ class OrderService {
 
 **Pattern**: Each operation gets its own aggregate instance. Load → Mutate → Save → Discard.
 
+This works the **SAME** for both function handlers and class-based handlers!
+
+#### Approach A: Function-Based Handlers (Simple)
+
 ```typescript
 // ✅ SAFE - Fresh instance per operation
 async function updateOrderQuantity(
@@ -1265,7 +1269,7 @@ async function updateOrderQuantity(
   // 4. Instance is garbage collected (no shared state)
 }
 
-// ✅ SAFE - Command Handler pattern
+// ✅ SAFE - Command Handler function
 async function createOrderHandler(cmd: CreateOrderCommand) {
   const orderId = generateId() as OrderId;
   const order = Order.create(orderId, cmd.customerId);
@@ -1281,12 +1285,108 @@ async function createOrderHandler(cmd: CreateOrderCommand) {
 }
 ```
 
-**Rules for safe aggregate usage:**
-1. ✅ Load aggregate at start of operation
+#### Approach B: Class-Based Handlers (MUST be Stateless!)
+
+The key difference with classes: **Dependencies in constructor, aggregates in methods**.
+
+```typescript
+// ✅ SAFE - Stateless handler class
+class CreateOrderHandler implements CommandHandler<CreateOrderCommand, OrderId> {
+  constructor(
+    private readonly repository: OrderRepository,
+    private readonly eventBus: EventBus
+  ) {
+    // ✅ Only infrastructure dependencies here!
+    // ❌ NEVER store aggregates here!
+  }
+
+  async execute(cmd: CreateOrderCommand): Promise<Result<OrderId, string>> {
+    // 1. Aggregate is LOCAL to this method call
+    const orderId = generateId() as OrderId;
+    const order = Order.create(orderId, cmd.customerId);
+
+    // 2. All mutations synchronous
+    for (const item of cmd.items) {
+      order.addItem(item.productId, item.quantity, item.price);
+    }
+    order.confirm();
+
+    // 3. Save
+    await this.repository.save(order);
+    await this.eventBus.publish(order.pendingEvents);
+
+    return ok(order.id);
+    // 4. Aggregate is garbage collected when method returns
+  }
+}
+
+// ✅ SAFE - Another handler instance
+class UpdateOrderQuantityHandler {
+  constructor(private readonly repository: OrderRepository) {}
+
+  async execute(cmd: UpdateQuantityCommand): Promise<Result<void, string>> {
+    // Fresh load per call
+    const order = await this.repository.getById(cmd.orderId);
+
+    order.updateItemQuantity(cmd.itemId, cmd.quantity);
+
+    await this.repository.save(order);
+    return ok(undefined);
+  }
+}
+
+// Usage - Handler instances are singletons, but aggregates are not!
+const handler = new CreateOrderHandler(repository, eventBus);
+
+// Each call gets fresh aggregate
+await handler.execute(cmd1); // order1 created and discarded
+await handler.execute(cmd2); // order2 created and discarded
+await handler.execute(cmd3); // order3 created and discarded
+```
+
+#### ❌ DANGEROUS: Stateful Handler Class
+
+```typescript
+// ❌ DANGEROUS - Storing aggregates in class fields!
+class OrderService {
+  private currentOrder: Order; // NEVER DO THIS!
+  private orderCache = new Map<OrderId, Order>(); // NEVER!
+
+  constructor(private readonly repository: OrderRepository) {}
+
+  async loadOrder(orderId: OrderId) {
+    this.currentOrder = await this.repository.getById(orderId);
+    // ❌ Stored in instance field - shared across operations!
+  }
+
+  async updateQuantity(itemId: ItemId, quantity: number) {
+    // ❌ Using shared state from previous operation
+    this.currentOrder.updateItemQuantity(itemId, quantity);
+    // Race condition if another request called loadOrder()!
+  }
+}
+```
+
+#### The Key Difference
+
+| | Function Handlers | Class Handlers |
+|---|---|---|
+| **Handler Instance** | Created per call | Singleton (DI container) |
+| **Aggregate Instance** | Local variable | MUST be local variable in method |
+| **Dependencies** | Parameters | Constructor injection |
+| **Risk** | Low (naturally scoped) | Medium (tempting to store in fields) |
+
+**Important**:
+- ✅ Handler **class** can be singleton
+- ❌ Aggregate **instance** must NEVER be stored in handler class
+- ✅ Aggregates are **always** local to method execution
+
+**Rules for safe aggregate usage (applies to BOTH):**
+1. ✅ Load aggregate at start of operation (method call)
 2. ✅ All mutations synchronous (no `await` between state changes)
 3. ✅ Save at end of operation
 4. ✅ Let garbage collector clean up
-5. ❌ Never store aggregates in class fields
+5. ❌ Never store aggregates in class fields (if using classes)
 6. ❌ Never cache aggregates between operations
 7. ❌ Never pass aggregates between operations
 
