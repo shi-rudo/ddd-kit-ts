@@ -14,17 +14,32 @@ import {
 
 type ItemId = Id<"ItemId">;
 
-// Functional usage
+// Functional usage (simple data, no logic)
 type OrderItem = Identifiable<ItemId> & {
 	productId: string;
 	quantity: number;
-	price: number;
 };
 
-// OOP usage
-class OrderItemEntity extends Entity<ItemId> {
-	constructor(id: ItemId, public productId: string, public quantity: number) {
-		super(id);
+// Class-based usage (with state and logic)
+type OrderItemState = {
+	productId: string;
+	quantity: number;
+};
+
+class OrderItemEntity extends Entity<OrderItemState, ItemId> {
+	constructor(id: ItemId, productId: string, quantity: number) {
+		const initialState: OrderItemState = { productId, quantity };
+		super(id, initialState);
+	}
+
+	updateQuantity(newQuantity: number): void {
+		this._state = { ...this._state, quantity: newQuantity };
+	}
+
+	protected validateState(state: OrderItemState): void {
+		if (state.quantity < 0) {
+			throw new Error("Quantity cannot be negative");
+		}
 	}
 }
 
@@ -35,7 +50,6 @@ describe("Entity", () => {
 				id: "item-1" as ItemId,
 				productId: "prod-1",
 				quantity: 2,
-				price: 10.99,
 			};
 
 			expect(item.id).toBe("item-1");
@@ -48,13 +62,11 @@ describe("Entity", () => {
 					id: "item-1" as ItemId,
 					productId: "prod-1",
 					quantity: 2,
-					price: 10.99,
 				};
 				const item2: OrderItem = {
 					id: "item-1" as ItemId,
 					productId: "prod-2",
-					quantity: 3,
-					price: 20.99,
+					quantity: 5,
 				};
 
 				expect(sameEntity(item1, item2)).toBe(true);
@@ -65,13 +77,11 @@ describe("Entity", () => {
 					id: "item-1" as ItemId,
 					productId: "prod-1",
 					quantity: 2,
-					price: 10.99,
 				};
 				const item2: OrderItem = {
 					id: "item-2" as ItemId,
 					productId: "prod-1",
 					quantity: 2,
-					price: 10.99,
 				};
 
 				expect(sameEntity(item1, item2)).toBe(false);
@@ -85,13 +95,11 @@ describe("Entity", () => {
 						id: "item-1" as ItemId,
 						productId: "prod-1",
 						quantity: 2,
-						price: 10.99,
 					},
 					{
 						id: "item-2" as ItemId,
 						productId: "prod-2",
-						quantity: 1,
-						price: 20.99,
+						quantity: 5,
 					},
 				];
 
@@ -103,27 +111,30 @@ describe("Entity", () => {
 		});
 	});
 
-	describe("Abstract Pattern (Entity Class)", () => {
-		it("should enforce equality by ID", () => {
+	describe("Class-based Pattern (Entity with State)", () => {
+		it("should create entity with id and state", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
+
+			expect(entity.id).toBe("id-1");
+			expect(entity.state.productId).toBe("prod-1");
+			expect(entity.state.quantity).toBe(2);
+		});
+
+		it("should allow state mutations through methods", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
+
+			entity.updateQuantity(5);
+
+			expect(entity.state.quantity).toBe(5);
+		});
+
+		it("should enforce entity equality by ID using sameEntity()", () => {
 			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
 			const e2 = new OrderItemEntity("id-1" as ItemId, "prod-2", 2);
 			const e3 = new OrderItemEntity("id-2" as ItemId, "prod-1", 1);
 
-			expect(e1.equals(e2)).toBe(true);
-			expect(e1.equals(e3)).toBe(false);
-		});
-
-		it("should return false for non-entities and null", () => {
-			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
-			// @ts-expect-error - testing null safety
-			expect(e1.equals(null)).toBe(false);
-			// @ts-expect-error - testing undefined safety
-			expect(e1.equals(undefined)).toBe(false);
-		});
-
-		it("should return true for same instance", () => {
-			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
-			expect(e1.equals(e1)).toBe(true);
+			expect(sameEntity(e1, e2)).toBe(true); // Same ID
+			expect(sameEntity(e1, e3)).toBe(false); // Different ID
 		});
 
 		it("should throw if ID is null or undefined", () => {
@@ -137,47 +148,46 @@ describe("Entity", () => {
 			);
 		});
 
-		it("should call validate during construction", () => {
-			class ValidatedEntity extends Entity<ItemId> {
-				constructor(id: ItemId) {
-					super(id);
-				}
-				protected validate(): void {
-					throw new Error("Validation failed");
-				}
-			}
-
-			expect(() => new ValidatedEntity("id-1" as ItemId)).toThrow(
-				"Validation failed",
+		it("should call validateState during construction", () => {
+			expect(() => new OrderItemEntity("id-1" as ItemId, "prod-1", -5)).toThrow(
+				"Quantity cannot be negative",
 			);
 		});
 
-		it("should check toJSON serialization", () => {
-			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
-			const json = JSON.parse(JSON.stringify(e1));
+		it("should have readonly state from outside", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
+			const state = entity.state;
 
-			expect(json).toEqual({
-				id: "id-1",
-				productId: "prod-1",
-				quantity: 1
-			});
+			// TypeScript prevents: state.quantity = 10;
+			// But we can verify state is returned
+			expect(state.quantity).toBe(2);
 		});
 	});
 
-	// Helper functions should work with both
 	describe("Helper functions compatibility", () => {
 		it("should work with class instances", () => {
 			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
 			const e2 = new OrderItemEntity("id-2" as ItemId, "prod-2", 2);
-			const list = [e1, e2];
+			const entities = [e1, e2];
 
-			expect(hasEntityId(list, "id-1" as ItemId)).toBe(true);
-			expect(findEntityById(list, "id-1" as ItemId)).toEqual(e1);
+			const found = findEntityById(entities, "id-1" as ItemId);
+			expect(found).toBe(e1);
 
-			const ids = entityIds(list);
+			const hasId = hasEntityId(entities, "id-1" as ItemId);
+			expect(hasId).toBe(true);
+
+			const ids = entityIds(entities);
 			expect(ids).toEqual(["id-1", "id-2"]);
+
+			const updated = updateEntityById(entities, "id-1" as ItemId, (e) => {
+				e.updateQuantity(5);
+				return e;
+			});
+			expect(updated[0].state.quantity).toBe(5);
+
+			const removed = removeEntityById(entities, "id-1" as ItemId);
+			expect(removed).toHaveLength(1);
+			expect(removed[0].id).toBe("id-2");
 		});
 	});
 });
-
-

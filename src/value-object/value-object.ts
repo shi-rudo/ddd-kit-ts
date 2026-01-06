@@ -338,4 +338,6 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
     public toJSON(): Readonly<T> {
         return this.props;
     }
+
+
 }

@@ -1,5 +1,5 @@
 import type { Id } from "../core/id";
-import type { Identifiable } from "../entity/entity";
+import { Entity } from "../entity/entity";
 import type {
 	AggregateSnapshot,
 	Version,
@@ -7,18 +7,18 @@ import type {
 
 /**
  * Marker interface for Aggregate Roots.
- * 
+ *
  * In Domain-Driven Design, an Aggregate Root is an Entity (the parent Entity of the aggregate).
  * It represents the aggregate externally and is the only object that external code
  * is allowed to hold references to. All access to child entities within the aggregate
  * must go through the Aggregate Root.
- * 
+ *
  * An Aggregate consists of:
  * - One Aggregate Root (Entity with id + version)
- * - Optional child entities (Entities with id, but no own version)
+ * - Optional child entities (Entities with id + state, but no own version)
  * - Optional value objects
- * 
- * The Aggregate Root has identity (id) and version for optimistic concurrency control.
+ *
+ * The Aggregate Root has identity (id), state, and version for optimistic concurrency control.
  * Child entities exist only within the aggregate boundary and are versioned through
  * the Aggregate Root.
  *
@@ -27,12 +27,12 @@ import type {
  * @example
  * ```typescript
  * class Order extends AggregateRoot<OrderState, OrderId> implements IAggregateRoot<OrderId> {
- *   // Order is an Aggregate Root (an Entity)
+ *   // Order is an Aggregate Root (an Entity with version)
  *   // OrderState contains child entities (e.g., OrderItem) and value objects
  * }
  * ```
  */
-export interface IAggregateRoot<TId extends Id<string>> extends Identifiable<TId> {
+export interface IAggregateRoot<TId extends Id<string>> {
 	/**
 	 * Unique identifier of the aggregate root entity.
 	 */
@@ -59,22 +59,27 @@ export interface AggregateConfig {
 
 /**
  * Base class for creating Aggregate Roots (Entities) without Event Sourcing.
- * 
+ *
  * This class creates an Entity that serves as the Aggregate Root. The Aggregate Root
  * is the parent Entity of the aggregate and represents it externally. It has identity
- * (id) and version for optimistic concurrency control.
- * 
+ * (id), state, and version for optimistic concurrency control.
+ *
+ * Extends `Entity<TState, TId>` to inherit:
+ * - Identity (id)
+ * - State management
+ * - State validation
+ *
+ * Adds Aggregate Root specific functionality:
+ * - Version management (for Optimistic Concurrency Control)
+ * - Domain events tracking
+ * - Snapshot support for performance optimization
+ *
  * The aggregate state (`TState`) contains:
- * - Child entities (Entities with id, but no own version)
+ * - Child entities (Entities with id + state, but no own version)
  * - Value objects (immutable objects)
- * 
+ *
  * All changes to child entities are versioned through the Aggregate Root. The version
  * applies to the entire aggregate, including all child entities.
- * 
- * Provides core functionality:
- * - ID and Version management (for Optimistic Concurrency Control)
- * - State management (containing child entities and value objects)
- * - Snapshot support for performance optimization
  *
  * Implements `IAggregateRoot<TId>` to mark this as an Aggregate Root Entity.
  *
@@ -86,7 +91,7 @@ export interface AggregateConfig {
  *
  * @example
  * ```typescript
- * // Order is an Aggregate Root (an Entity)
+ * // Order is an Aggregate Root (an Entity with version)
  * class Order extends AggregateRoot<OrderState, OrderId> {
  *   constructor(id: OrderId, initialState: OrderState) {
  *     super(id, initialState);
@@ -100,17 +105,13 @@ export interface AggregateConfig {
  * ```
  */
 export abstract class AggregateRoot<TState, TId extends Id<string>>
+	extends Entity<TState, TId>
 	implements IAggregateRoot<TId> {
-	public readonly id: TId;
 	public version: Version = 0 as Version;
 
 	private readonly _config: AggregateConfig;
 	private readonly _autoVersionBump: boolean;
 	private _domainEvents: unknown[] = [];
-
-	public get state(): TState {
-		return this._state;
-	}
 
 	/**
 	 * Returns a read-only list of domain events recorded by this aggregate.
@@ -128,37 +129,14 @@ export abstract class AggregateRoot<TState, TId extends Id<string>>
 		this._domainEvents = [];
 	}
 
-	/**
-	 * The state is 'protected' so that only the subclass can change it.
-	 * Subclasses can mutate this directly or use helper methods.
-	 */
-	protected _state: TState;
-
 	protected constructor(
 		id: TId,
 		initialState: TState,
 		config?: AggregateConfig,
 	) {
-		if (id === null || id === undefined) {
-			throw new Error("Aggregate ID cannot be null or undefined");
-		}
-		this.id = id;
-		this._state = initialState;
+		super(id, initialState);
 		this._config = config ?? {};
 		this._autoVersionBump = this._config.autoVersionBump ?? false;
-		this.validateState(this._state);
-	}
-
-	/**
-	 * Optional validation hook to ensure state invariants.
-	 * Called during construction, setState, and snapshot restoration.
-	 * Override this method to implement validation logic.
-	 *
-	 * @param state - The state to validate
-	 * @throws Error if validation fails
-	 */
-	protected validateState(_state: TState): void {
-		// Default implementation does nothing
 	}
 
 	/**
@@ -186,6 +164,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>>
 	 * Sets the state and optionally bumps the version automatically.
 	 * This is a convenience method for state mutations.
 	 * Automatically validates the newState using `validateState()`.
+	 * Overrides Entity.setState to add version bumping.
 	 *
 	 * @param newState - The new state
 	 * @param bumpVersion - Whether to bump the version (defaults to autoVersionBump config)
@@ -194,8 +173,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>>
 		newState: TState,
 		bumpVersion?: boolean,
 	): void {
-		this.validateState(newState);
-		this._state = newState;
+		super.setState(newState);
 		const shouldBump = bumpVersion ?? this._autoVersionBump;
 		if (shouldBump) {
 			this.bumpVersion();

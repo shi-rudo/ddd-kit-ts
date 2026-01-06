@@ -200,9 +200,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should throw if ID is null or undefined", () => {
 			const state = { value: 10, status: "inactive" as const };
 			// @ts-expect-error - testing invalid input
-			expect(() => new TestAggregate(null, state)).toThrow("Aggregate ID cannot be null or undefined");
+			expect(() => new TestAggregate(null, state)).toThrow("ID cannot be null or undefined");
 			// @ts-expect-error - testing invalid input
-			expect(() => new TestAggregate(undefined, state)).toThrow("Aggregate ID cannot be null or undefined");
+			expect(() => new TestAggregate(undefined, state)).toThrow("ID cannot be null or undefined");
 		});
 
 		it("should validate state changes", () => {

@@ -66,23 +66,30 @@ Value Objects are immutable objects that are defined by their attributes rather 
 
 ### Entities
 
-In Domain-Driven Design, there are two types of entities:
+In Domain-Driven Design, Entities are objects with identity and state. Unlike Value Objects (compared by value), Entities are compared by identity (id). There are two types of entities:
 
 1. **Aggregate Root Entity**: The parent Entity of an aggregate.
-   - Has identity (id) and version for optimistic concurrency control
+   - Has identity (id), state, and version for optimistic concurrency control
    - Represents the aggregate externally
    - Loaded/saved through repositories
-   - Created by extending `AggregateBase` or `AggregateEventSourced`
-   - Implements `AggregateRoot<TId>`
+   - Created by extending `AggregateRoot` or `AggregateEventSourced`
+   - Implements `IAggregateRoot<TId>`
 
 2. **Child Entities**: Entities within an aggregate.
-   - Have identity (id), but no own version
+   - Have identity (id) and state, but no own version
+   - Can have business logic (methods) specific to the entity
    - Exist only within the aggregate boundary
    - Versioned through the Aggregate Root
    - Cannot be referenced directly from outside the aggregate
-   - Use the `Entity<TId>` interface for type safety
+   - **Two approaches**:
+     - **Class-based** (recommended for entities with logic): Extend `Entity<TState, TId>`
+     - **Functional-style** (for simple data): Use `Identifiable<TId> & TProps`
 
-The `Entity<TId>` interface is used for child entities within aggregates. Helper functions like `sameEntity()`, `findEntityById()`, `hasEntityId()`, `updateEntityById()`, and `removeEntityById()` provide utilities for working with child entity collections.
+The library provides:
+- **`Entity<TState, TId>`** - Base class for entities with state and business logic
+- **`Entity<TId>`** - Simple class for entities without state management
+- **`Identifiable<TId>`** - Minimal interface for objects with id
+- Helper functions like `sameEntity()`, `findEntityById()`, `hasEntityId()`, `updateEntityById()`, and `removeEntityById()` for working with entity collections
 
 ### Aggregates
 
@@ -795,26 +802,27 @@ const eventV2 = createDomainEvent(
 
 ### Working with Child Entities
 
-An Aggregate Root Entity can contain multiple child entities. Child entities have identity (id) but no own version - they are versioned through the Aggregate Root.
+An Aggregate Root Entity can contain multiple child entities. Child entities have identity (id) and state, but no own version - they are versioned through the Aggregate Root.
+
+#### Approach 1: Functional-Style Child Entities (Simple Data)
+
+For simple child entities without business logic, use the functional approach with intersection types:
 
 ```typescript
 import {
-  AggregateBase,
-  Entity,
+  AggregateRoot,
+  Identifiable,
   findEntityById,
-  hasEntityId,
-  removeEntityById,
   updateEntityById,
-  sameEntity,
-  type AggregateRoot,
+  type IAggregateRoot,
   type Id,
 } from "@shirudo/ddd-kit";
 
 type OrderId = Id<"OrderId">;
 type ItemId = Id<"ItemId">;
 
-// Child Entity within the aggregate (has id, but no own version)
-type OrderItem = Entity<ItemId> & {
+// Functional-style child entity (simple data, no logic)
+type OrderItem = Identifiable<ItemId> & {
   productId: string;
   quantity: number;
   price: number;
@@ -824,13 +832,13 @@ type OrderItem = Entity<ItemId> & {
 type OrderState = {
   id: OrderId;
   customerId: string;
-  items: OrderItem[]; // Child entities
+  items: OrderItem[];
   total: number;
 };
 
 // Order is the Aggregate Root (an Entity with id + version)
-class Order extends AggregateBase<OrderState, OrderId> 
-  implements AggregateRoot<OrderId> {
+class Order extends AggregateRoot<OrderState, OrderId>
+  implements IAggregateRoot<OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
@@ -905,6 +913,128 @@ order.removeItem(itemId); // Removes child entity
 
 // All changes version the Aggregate Root (order.version increments)
 console.log(order.version); // 3 (one for each operation)
+```
+
+#### Approach 2: Class-Based Child Entities (With Business Logic)
+
+For child entities that need business logic, extend `Entity<TState, TId>`:
+
+```typescript
+import {
+  AggregateRoot,
+  Entity,
+  findEntityById,
+  type IAggregateRoot,
+  type Id,
+} from "@shirudo/ddd-kit";
+
+type OrderId = Id<"OrderId">;
+type ItemId = Id<"ItemId">;
+
+// State of OrderItem
+type OrderItemState = {
+  productId: string;
+  quantity: number;
+  price: number;
+};
+
+// Class-based child entity with business logic
+class OrderItem extends Entity<OrderItemState, ItemId> {
+  constructor(id: ItemId, productId: string, quantity: number, price: number) {
+    const initialState: OrderItemState = { productId, quantity, price };
+    super(id, initialState);
+  }
+
+  // Entity-specific business logic
+  updateQuantity(newQuantity: number): void {
+    if (newQuantity <= 0) {
+      throw new Error("Quantity must be greater than 0");
+    }
+    this._state = { ...this._state, quantity: newQuantity };
+  }
+
+  calculateSubtotal(): number {
+    return this._state.price * this._state.quantity;
+  }
+
+  isForProduct(productId: string): boolean {
+    return this._state.productId === productId;
+  }
+
+  protected validateState(state: OrderItemState): void {
+    if (state.quantity <= 0) throw new Error("Quantity must be greater than 0");
+    if (state.price < 0) throw new Error("Price cannot be negative");
+    if (!state.productId) throw new Error("Product ID is required");
+  }
+}
+
+// Aggregate state contains child entity instances
+type OrderState = {
+  id: OrderId;
+  customerId: string;
+  items: OrderItem[]; // Child entities with logic
+  status: "pending" | "confirmed";
+};
+
+// Aggregate Root
+class Order extends AggregateRoot<OrderState, OrderId>
+  implements IAggregateRoot<OrderId> {
+  private itemCounter = 0;
+
+  static create(id: OrderId, customerId: string): Order {
+    const initialState: OrderState = {
+      id,
+      customerId,
+      items: [],
+      status: "pending",
+    };
+    return new Order(id, initialState);
+  }
+
+  addItem(productId: string, quantity: number, price: number): ItemId {
+    const itemId = `item-${++this.itemCounter}` as ItemId;
+    const item = new OrderItem(itemId, productId, quantity, price);
+
+    this._state = {
+      ...this._state,
+      items: [...this._state.items, item],
+    };
+    this.bumpVersion();
+    return itemId;
+  }
+
+  // Delegate to entity's business logic
+  updateItemQuantity(itemId: ItemId, newQuantity: number): void {
+    const item = findEntityById(this._state.items, itemId);
+    if (!item) throw new Error("Item not found");
+
+    item.updateQuantity(newQuantity); // Uses entity's logic
+    this.bumpVersion();
+  }
+
+  // Use entity's business logic
+  calculateTotal(): number {
+    return this._state.items.reduce(
+      (total, item) => total + item.calculateSubtotal(),
+      0
+    );
+  }
+
+  confirm(): void {
+    if (this._state.items.length === 0) {
+      throw new Error("Cannot confirm an order without items");
+    }
+    this._state = { ...this._state, status: "confirmed" };
+    this.bumpVersion();
+  }
+}
+
+// Usage
+const order = Order.create("order-1" as OrderId, "customer-1");
+const itemId = order.addItem("product-1", 2, 10.0);
+order.updateItemQuantity(itemId, 3); // Uses entity's validation
+const total = order.calculateTotal(); // Uses entity's calculateSubtotal()
+console.log(total); // 30.0
 ```
 
 ### Using Result Type for Error Handling
@@ -1036,14 +1166,16 @@ This package is written in TypeScript and provides full type definitions. All ty
 
 Key exports include:
 - `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
-- `AggregateRoot<TId>` - Marker interface for Aggregate Root Entities
-- `AggregateBase<TState, TId>` - Base class for creating Aggregate Root Entities without Event Sourcing (implements `AggregateRoot<TId>`)
-- `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateBase`, implements `AggregateRoot<TId>`)
+- `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
+- `AggregateRoot<TState, TId>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`)
+- `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateRoot`, implements `IAggregateEventSourced<TId, TEvent>`)
 - `AggregateConfig`, `AggregateEventSourcedConfig` - Configuration interfaces
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
 - `sameAggregate()` - Aggregate equality helper
-- `Entity<TId>` - Optional interface for entities with identity
-- `sameEntity()`, `findEntityById()`, `hasEntityId()`, `removeEntityById()` - Entity helpers
+- `Entity<TState, TId>` - Base class for entities with state and business logic
+- `IEntity<TId, TState>` - Entity interface
+- `Identifiable<TId>` - Minimal interface for objects with id
+- `sameEntity()`, `findEntityById()`, `hasEntityId()`, `removeEntityById()`, `updateEntityById()`, `replaceEntityById()`, `entityIds()` - Entity helper functions
 - `Command`, `CommandHandler<C, R>` - Command interface and handler type for CQRS
 - `Query`, `QueryHandler<Q, R>` - Query interface and handler type for CQRS
 - `CommandBus`, `ICommandBus` - Command bus for centralized command execution
