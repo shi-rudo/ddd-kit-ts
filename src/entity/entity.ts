@@ -5,7 +5,7 @@
  * 
  * 1. **Aggregate Root Entity**: The parent Entity of an aggregate.
  *    - Has identity (id) and version
- *    - Implemented by classes extending `AggregateBase` or `AggregateEventSourced`
+ *    - Implemented by classes extending `AggregateRoot` or `AggregateEventSourced`
  *    - Represents the aggregate externally
  *    - Loaded/saved through repositories
  * 
@@ -30,16 +30,108 @@
  * };
  * 
  * // Aggregate Root (also an Entity, but with version)
- * class Order extends AggregateBase<OrderState, OrderId> 
+ * class Order extends AggregateRoot<OrderState, OrderId> 
  *   implements AggregateRoot<OrderId> {
  *   // Order is an Entity (the Aggregate Root)
  *   // OrderState contains OrderItem (child entities)
  * }
  * ```
  */
-export interface Entity<TId> {
+import { deepEqual } from "../utils/array/deep-equal";
+
+/**
+ * Functional definition of an Entity via its capability.
+ * An object is identifiable if it has an id.
+ */
+export type Identifiable<TId> = {
 	readonly id: TId;
+};
+
+/**
+ * Interface for Entities.
+ * Extends Identifiable and adds equality comparison behavior.
+ *
+ * @template TId - The type of the entity identifier
+ */
+export interface IEntity<TId> extends Identifiable<TId> {
+	/**
+	 * Checks if this entity is equal to another.
+	 * Two entities are equal if they have the same ID.
+	 *
+	 * @param other - The other entity to compare
+	 * @returns true if IDs are equal
+	 */
+	equals(other: Identifiable<TId>): boolean;
 }
+
+/**
+ * Abstract base class for Entities.
+ * Provides identity equality and common behavior.
+ * 
+ * @template TId - The type of the entity identifier
+ */
+export abstract class Entity<TId> implements IEntity<TId> {
+	public readonly id: TId;
+
+	constructor(id: TId) {
+		if (id === null || id === undefined) {
+			throw new Error("Entity ID cannot be null or undefined");
+		}
+		this.id = id;
+		this.validate();
+	}
+
+	/**
+	 * Optional validation hook that can be overridden by subclasses.
+	 * Should throw an error if validation fails.
+	 */
+	protected validate(): void {
+		// Default implementation does nothing
+	}
+
+	/**
+	 * Serializes the entity to a plain object.
+	 * Default implementation returns the entity as is (since it's an object with properties).
+	 * Subclasses can override this to control JSON serialization.
+	 */
+	public toJSON(): unknown {
+		return {
+			...this,
+			id: this.id, // Ensure ID is present
+		};
+	}
+
+	/**
+	 * Checks if this entity is equal to another.
+	 * Two entities are equal if they have the same ID.
+	 * 
+	 * @param other - The other entity to compare
+	 * @returns true if IDs are equal
+	 */
+	public equals(other: Identifiable<TId>): boolean {
+		if (other === null || other === undefined) {
+			return false;
+		}
+
+		if (this === other) {
+			return true;
+		}
+
+		if (!isEntity(other)) {
+			return false;
+		}
+
+		return sameEntity(this, other);
+	}
+}
+
+/**
+ * Type guard to check if an object is an Entity.
+ */
+function isEntity(obj: unknown): obj is Identifiable<unknown> {
+	return typeof obj === "object" && obj !== null && "id" in obj;
+}
+
 
 /**
  * Checks if two entities have the same ID.
@@ -58,8 +150,8 @@ export interface Entity<TId> {
  * sameEntity(item1, item1); // true
  * ```
  */
-export function sameEntity<TId>(a: { id: TId }, b: { id: TId }): boolean {
-	return a.id === b.id;
+export function sameEntity<TId>(a: Identifiable<TId>, b: Identifiable<TId>): boolean {
+	return deepEqual(a.id, b.id);
 }
 
 /**
@@ -81,11 +173,11 @@ export function sameEntity<TId>(a: { id: TId }, b: { id: TId }): boolean {
  * // item is { id: itemId1, productId: "prod-1", quantity: 2 }
  * ```
  */
-export function findEntityById<TId, T extends { id: TId }>(
+export function findEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T | undefined {
-	return entities.find((entity) => entity.id === id);
+	return entities.find((entity) => deepEqual(entity.id, id));
 }
 
 /**
@@ -105,11 +197,11 @@ export function findEntityById<TId, T extends { id: TId }>(
  * hasEntityId(items, itemId2); // false
  * ```
  */
-export function hasEntityId<TId, T extends { id: TId }>(
+export function hasEntityId<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): boolean {
-	return entities.some((entity) => entity.id === id);
+	return entities.some((entity) => deepEqual(entity.id, id));
 }
 
 /**
@@ -131,11 +223,11 @@ export function hasEntityId<TId, T extends { id: TId }>(
  * // updated is [{ id: itemId2, productId: "prod-2", quantity: 1 }]
  * ```
  */
-export function removeEntityById<TId, T extends { id: TId }>(
+export function removeEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T[] {
-	return entities.filter((entity) => entity.id !== id);
+	return entities.filter((entity) => !deepEqual(entity.id, id));
 }
 
 /**
@@ -161,12 +253,12 @@ export function removeEntityById<TId, T extends { id: TId }>(
  * // updated is [{ id: itemId1, productId: "prod-1", quantity: 3 }]
  * ```
  */
-export function updateEntityById<TId, T extends { id: TId }>(
+export function updateEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 	updater: (entity: T) => T,
 ): T[] {
-	return entities.map((entity) => (entity.id === id ? updater(entity) : entity));
+	return entities.map((entity) => (deepEqual(entity.id, id) ? updater(entity) : entity));
 }
 
 /**
@@ -192,12 +284,12 @@ export function updateEntityById<TId, T extends { id: TId }>(
  * });
  * ```
  */
-export function replaceEntityById<TId, T extends { id: TId }>(
+export function replaceEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 	replacement: T,
 ): T[] {
-	return entities.map((entity) => (entity.id === id ? replacement : entity));
+	return entities.map((entity) => (deepEqual(entity.id, id) ? replacement : entity));
 }
 
 /**
@@ -217,7 +309,7 @@ export function replaceEntityById<TId, T extends { id: TId }>(
  * // ids is [itemId1, itemId2]
  * ```
  */
-export function entityIds<TId, T extends { id: TId }>(entities: T[]): TId[] {
+export function entityIds<TId, T extends Identifiable<TId>>(entities: T[]): TId[] {
 	return entities.map((entity) => entity.id);
 }
 

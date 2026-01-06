@@ -1,11 +1,55 @@
 import { err, ok, type Result } from "../core/result";
 import type { Id } from "../core/id";
-import { AggregateBase, type AggregateConfig } from "./aggregate-base";
+import { AggregateRoot, type AggregateConfig, type IAggregateRoot } from "./aggregate-root";
 import type {
 	AggregateSnapshot,
 	DomainEvent,
 	Version,
 } from "./aggregate";
+
+/**
+ * Interface for Event-Sourced Aggregate Roots.
+ * Defines the contract for aggregates that manage state changes via event sourcing.
+ *
+ * @template TId - The type of the aggregate root identifier
+ * @template TEvent - The union type of all domain events
+ */
+export interface IAggregateEventSourced<
+	TId extends Id<string>,
+	TEvent extends DomainEvent<string, unknown>,
+> extends IAggregateRoot<TId> {
+	/**
+	 * Returns a read-only list of new, not-yet-persisted events.
+	 */
+	readonly pendingEvents: ReadonlyArray<TEvent>;
+
+	/**
+	 * Reconstitutes the aggregate from an event history.
+	 *
+	 * @param history - An ordered list of past events
+	 */
+	loadFromHistory(history: TEvent[]): Result<void, string>;
+
+	/**
+	 * Clears the list of pending events.
+	 */
+	clearPendingEvents(): void;
+
+	/**
+	 * Checks if the aggregate has any pending events.
+	 */
+	hasPendingEvents(): boolean;
+
+	/**
+	 * Returns the number of pending events.
+	 */
+	getEventCount(): number;
+
+	/**
+	 * Returns the latest pending event, if any.
+	 */
+	getLatestEvent(): TEvent | undefined;
+}
 
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
@@ -23,7 +67,7 @@ export interface AggregateEventSourcedConfig extends AggregateConfig {
 /**
  * Base class for Event-Sourced Aggregate Roots (Entities).
  * 
- * Extends `AggregateBase` to create an Aggregate Root Entity with Event Sourcing capabilities.
+ * Extends `AggregateRoot` to create an Aggregate Root Entity with Event Sourcing capabilities.
  * The Aggregate Root is the parent Entity of the aggregate and represents it externally.
  * 
  * The aggregate state (`TState`) contains:
@@ -33,7 +77,7 @@ export interface AggregateEventSourcedConfig extends AggregateConfig {
  * All changes to child entities are versioned through the Aggregate Root. The version
  * applies to the entire aggregate, including all child entities.
  * 
- * Extends `AggregateBase` with Event Sourcing capabilities:
+ * Extends `AggregateRoot` with Event Sourcing capabilities:
  * - Event tracking (pendingEvents)
  * - Event handlers for state transitions
  * - Event validation
@@ -67,11 +111,10 @@ export abstract class AggregateEventSourced<
 	TState,
 	TEvent extends DomainEvent<string, unknown>,
 	TId extends Id<string>,
-> extends AggregateBase<TState, TId> {
+> extends AggregateRoot<TState, TId>
+	implements IAggregateEventSourced<TId, TEvent> {
 	private readonly _eventConfig: AggregateEventSourcedConfig;
 	private readonly _eventAutoVersionBump: boolean;
-
-	private readonly _pendingEvents: TEvent[] = [];
 
 	protected constructor(
 		id: TId,
@@ -87,7 +130,7 @@ export abstract class AggregateEventSourced<
 	 * Returns a read-only list of new, not-yet-persisted events.
 	 */
 	public get pendingEvents(): ReadonlyArray<TEvent> {
-		return this._pendingEvents;
+		return this.domainEvents as ReadonlyArray<TEvent>;
 	}
 
 	/**
@@ -95,7 +138,7 @@ export abstract class AggregateEventSourced<
 	 * Typically called after the events have been persisted.
 	 */
 	public clearPendingEvents(): void {
-		this._pendingEvents.length = 0;
+		this.clearDomainEvents();
 	}
 
 	/**
@@ -152,7 +195,7 @@ export abstract class AggregateEventSourced<
 
 		// Then (if new) add the event to the list and bump version
 		if (isNew) {
-			this._pendingEvents.push(event);
+			this.addDomainEvent(event);
 			if (this._eventAutoVersionBump) {
 				this.version = (this.version + 1) as Version;
 			}
@@ -193,7 +236,7 @@ export abstract class AggregateEventSourced<
 
 		// Then (if new) add the event to the list and bump version
 		if (isNew) {
-			this._pendingEvents.push(event);
+			this.addDomainEvent(event);
 			if (this._eventAutoVersionBump) {
 				this.version = (this.version + 1) as Version;
 			}
@@ -232,7 +275,7 @@ export abstract class AggregateEventSourced<
 	 * @returns true if there are pending events, false otherwise
 	 */
 	public hasPendingEvents(): boolean {
-		return this._pendingEvents.length > 0;
+		return this.domainEvents.length > 0;
 	}
 
 	/**
@@ -241,7 +284,7 @@ export abstract class AggregateEventSourced<
 	 * @returns The count of pending events
 	 */
 	public getEventCount(): number {
-		return this._pendingEvents.length;
+		return this.domainEvents.length;
 	}
 
 	/**
@@ -250,7 +293,8 @@ export abstract class AggregateEventSourced<
 	 * @returns The most recent event or undefined if no events exist
 	 */
 	public getLatestEvent(): TEvent | undefined {
-		return this._pendingEvents[this._pendingEvents.length - 1];
+		const events = this.domainEvents;
+		return events[events.length - 1] as TEvent | undefined;
 	}
 
 	/**

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import {
-	AggregateBase,
+	AggregateRoot,
 	type AggregateConfig,
-} from "./aggregate-base";
+} from "./aggregate-root";
 import type { Version } from "./aggregate";
 
 type TestId = Id<"TestId">;
@@ -13,7 +13,7 @@ type TestState = {
 	status: "active" | "inactive";
 };
 
-class TestAggregate extends AggregateBase<TestState, TestId> {
+class TestAggregate extends AggregateRoot<TestState, TestId> {
 	constructor(
 		id: TestId,
 		initialState: TestState,
@@ -50,7 +50,7 @@ class TestAggregate extends AggregateBase<TestState, TestId> {
 	}
 }
 
-describe("AggregateBase (without Event Sourcing)", () => {
+describe("AggregateRoot (without Event Sourcing)", () => {
 	describe("Basic functionality", () => {
 		it("should create aggregate with id and initial state", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
@@ -93,7 +93,7 @@ describe("AggregateBase (without Event Sourcing)", () => {
 		});
 
 		it("should support automatic version bumping with config", () => {
-			class AutoVersionAggregate extends AggregateBase<TestState, TestId> {
+			class AutoVersionAggregate extends AggregateRoot<TestState, TestId> {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, { autoVersionBump: true });
 				}
@@ -111,7 +111,7 @@ describe("AggregateBase (without Event Sourcing)", () => {
 		});
 
 		it("should not auto-bump when disabled", () => {
-			class ManualVersionAggregate extends AggregateBase<TestState, TestId> {
+			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, { autoVersionBump: false });
 				}
@@ -193,6 +193,57 @@ describe("AggregateBase (without Event Sourcing)", () => {
 			aggregate.updateValue(20);
 
 			expect(aggregate.state.value).toBe(20);
+		});
+	});
+
+	describe("Enhancements", () => {
+		it("should throw if ID is null or undefined", () => {
+			const state = { value: 10, status: "inactive" as const };
+			// @ts-expect-error - testing invalid input
+			expect(() => new TestAggregate(null, state)).toThrow("Aggregate ID cannot be null or undefined");
+			// @ts-expect-error - testing invalid input
+			expect(() => new TestAggregate(undefined, state)).toThrow("Aggregate ID cannot be null or undefined");
+		});
+
+		it("should validate state changes", () => {
+			class ValidatedAggregate extends AggregateRoot<TestState, TestId> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+				protected validateState(state: TestState): void {
+					if (state.value < 0) {
+						throw new Error("Value cannot be negative");
+					}
+				}
+				public update(value: number) {
+					this.setState({ ...this._state, value });
+				}
+			}
+
+			const agg = new ValidatedAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+
+			expect(() => agg.update(-5)).toThrow("Value cannot be negative");
+		});
+
+		it("should manage domain events", () => {
+			class EventAggregate extends AggregateRoot<TestState, TestId> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+				public doSomething() {
+					this.addDomainEvent({ type: "SomethingHappened" });
+				}
+			}
+
+			const agg = new EventAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+
+			expect(agg.domainEvents).toHaveLength(0);
+			agg.doSomething();
+			expect(agg.domainEvents).toHaveLength(1);
+			expect(agg.domainEvents[0]).toEqual({ type: "SomethingHappened" });
+
+			agg.clearDomainEvents();
+			expect(agg.domainEvents).toHaveLength(0);
 		});
 	});
 });

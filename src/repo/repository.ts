@@ -1,7 +1,7 @@
 import type { Id } from "../core/id";
+import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type {
 	Aggregate,
-	AggregateRoot,
 	DomainEvent,
 } from "../aggregate/aggregate";
 import type { ISpecification } from "./spec";
@@ -28,7 +28,7 @@ import type { ISpecification } from "./spec";
 export interface IRepository<
 	TState,
 	TEvent extends DomainEvent<string, unknown>,
-	TAgg extends AggregateRoot<TId> & Aggregate<TState, TEvent>,
+	TAgg extends IAggregateRoot<TId> & Aggregate<TState, TEvent>,
 	TId extends Id<string>,
 > {
 	getById(id: TId): Promise<TAgg | null>;

@@ -1,11 +1,11 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "0.9.7",
+	"version": "0.11.0",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/shi-rudo/ddd-kit-ts.git"
+		"url": "git+https://github.com/shi-rudo/ddd-kit-ts.git"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

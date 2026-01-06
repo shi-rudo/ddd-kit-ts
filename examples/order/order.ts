@@ -1,5 +1,5 @@
 import type { Id } from "../../src/core/id";
-import { AggregateBase } from "../../src/aggregate/aggregate-base";
+import { AggregateRoot } from "../../src/aggregate/aggregate-root";
 
 export type OrderId = Id<"OrderId">;
 
@@ -19,7 +19,7 @@ export type OrderState = {
  * Example of an Aggregate WITHOUT Event Sourcing.
  * This aggregate uses direct state mutation instead of events.
  */
-export class Order extends AggregateBase<OrderState, OrderId> {
+export class Order extends AggregateRoot<OrderState, OrderId> {
 	static create(id: OrderId, customerId: string): Order {
 		const initialState: OrderState = {
 			id,

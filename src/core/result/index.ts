@@ -9,6 +9,7 @@ export {
 	mapErr,
 	match,
 	matchAsync,
+	matchResult,
 	ok,
 	pipe,
 	tryCatch,

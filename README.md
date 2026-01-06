@@ -2,6 +2,10 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design.
 
+> **⚠️ BETA WARNING**
+>
+> This library is currently in beta. The API is subject to change until a stable 1.0.0 release. Breaking changes may occur in minor versions during the beta phase. Please pin your dependencies to specific versions.
+
 ## Badges
 
 ![npm version](https://img.shields.io/npm/v/@shirudo/ddd-kit)
@@ -37,9 +41,9 @@ pnpm add @shirudo/ddd-kit
 Here's a minimal example showing how to create and use a Value Object:
 
 ```typescript
-import { vo, type ValueObject } from "@shirudo/ddd-kit";
+import { vo, type VO } from "@shirudo/ddd-kit";
 
-type EmailAddress = ValueObject<{
+type EmailAddress = VO<{
   value: string;
 }>;
 
@@ -125,16 +129,32 @@ The `Result<T, E>` type provides functional error handling without exceptions. I
 ### Creating a Value Object
 
 ```typescript
-import { vo, voEquals, voEqualsExcept, voWithValidation, type ValueObject } from "@shirudo/ddd-kit";
+import { vo, voEquals, voEqualsExcept, voWithValidation, type VO } from "@shirudo/ddd-kit";
 
-// Simple value object
-type Money = ValueObject<{
+// Simple value object (Functional Style)
+type Money = VO<{
   amount: number;
   currency: string;
 }>;
 
 const price = vo({ amount: 99.99, currency: "USD" });
 // price is deeply immutable - nested objects and arrays are also frozen
+
+// Class-based Value Object (OOP Style)
+import { ValueObject } from "@shirudo/ddd-kit";
+
+class Address extends ValueObject<{ street: string; city: string }> {
+  constructor(props: { street: string; city: string }) {
+    super(props);
+  }
+
+  get street(): string {
+    return this.props.street;
+  }
+}
+
+const address = new Address({ street: "Main St", city: "New York" });
+// address.props is immutable
 
 // Value object with validation (returns Result)
 const result = voWithValidation(
@@ -458,7 +478,7 @@ import {
 type CreateOrderCommand = Command & {
   type: "CreateOrder";
   customerId: string;
-  items: Array<{ productId: string; quantity: number }>;
+  items: Array<{ productId: string; quantity: number; price: number }>;
 };
 
 // Create a command handler
@@ -471,7 +491,14 @@ const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (
   }
 
   // Perform business logic
-  const order = Order.create(cmd.customerId, cmd.items);
+  const orderId = `order-${Date.now()}` as OrderId;
+  const order = Order.create(orderId, cmd.customerId);
+
+  // Add items to the order
+  for (const item of cmd.items) {
+    order.addItem(item.productId, item.quantity, item.price);
+  }
+
   await repository.save(order);
 
   return ok(order.id);
@@ -481,7 +508,7 @@ const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (
 const result = await createOrderHandler({
   type: "CreateOrder",
   customerId: "customer-123",
-  items: [{ productId: "product-1", quantity: 2 }],
+  items: [{ productId: "product-1", quantity: 2, price: 10.0 }],
 });
 
 if (result.ok) {
@@ -498,7 +525,7 @@ commandBus.register("CreateOrder", createOrderHandler);
 const busResult = await commandBus.execute({
   type: "CreateOrder",
   customerId: "customer-123",
-  items: [{ productId: "product-1", quantity: 2 }],
+  items: [{ productId: "product-1", quantity: 2, price: 10.0 }],
 });
 ```
 
@@ -568,7 +595,14 @@ const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (
   return await withCommit(
     { outbox, bus, uow },
     async () => {
-      const order = Order.create(cmd.customerId, cmd.items);
+      const orderId = `order-${Date.now()}` as OrderId;
+      const order = Order.create(orderId, cmd.customerId);
+
+      // Add items to the order
+      for (const item of cmd.items) {
+        order.addItem(item.productId, item.quantity, item.price);
+      }
+
       await repository.save(order);
 
       return {
@@ -606,7 +640,7 @@ import {
 type CreateOrderCommand = Command & {
   type: "CreateOrder";
   customerId: string;
-  items: OrderItem[];
+  items: Array<{ productId: string; quantity: number; price: number }>;
 };
 
 type GetOrderQuery = Query & {
@@ -618,7 +652,14 @@ type GetOrderQuery = Query & {
 const createOrderHandler: CommandHandler<CreateOrderCommand, OrderId> = async (
   cmd
 ) => {
-  const order = Order.create(cmd.customerId, cmd.items);
+  const orderId = `order-${Date.now()}` as OrderId;
+  const order = Order.create(orderId, cmd.customerId);
+
+  // Add items to the order
+  for (const item of cmd.items) {
+    order.addItem(item.productId, item.quantity, item.price);
+  }
+
   await repository.save(order);
   return ok(order.id);
 };

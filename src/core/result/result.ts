@@ -75,7 +75,7 @@ export function err<E>(error?: E): Err<E> {
  * ```typescript
  * const result = voWithValidation(data, validator);
  * if (isOk(result)) {
- *   // TypeScript knows result is Ok<ValueObject<T>>
+ *   // TypeScript knows result is Ok<VO<T>>
  *   console.log(result.value);
  * }
  * ```
@@ -314,6 +314,51 @@ export async function matchAsync<T, E, R>(
 			: onErr!(result.error);
 	}
 	// Object syntax: matchAsync(result, { ok: ..., err: ... })
+	return result.ok
+		? onOkOrHandlers.ok(result.value)
+		: onOkOrHandlers.err(result.error);
+}
+
+/**
+ * Pattern matching for Result that returns a Result.
+ * Both handlers must return a Result, allowing you to transform
+ * both the success and error cases while staying in Result context.
+ *
+ * @param result - The result to match
+ * @param handlers - Object with ok and err handlers, both returning Result
+ * @returns A new Result from the appropriate handler
+ *
+ * @example
+ * ```typescript
+ * const result = await fetchUser(id);
+ * return matchResult(result, {
+ *   ok: (user) => ok(transformUser(user)),
+ *   err: (error) => err(mapToAppError(error))
+ * });
+ * ```
+ */
+export function matchResult<T, E, U, F>(
+	result: Result<T, E>,
+	handlers: {
+		ok: (value: T) => Result<U, F>;
+		err: (error: E) => Result<U, F>;
+	},
+): Result<U, F>;
+export function matchResult<T, E, U, F>(
+	result: Result<T, E>,
+	onOk: (value: T) => Result<U, F>,
+	onErr: (error: E) => Result<U, F>,
+): Result<U, F>;
+export function matchResult<T, E, U, F>(
+	result: Result<T, E>,
+	onOkOrHandlers:
+		| ((value: T) => Result<U, F>)
+		| { ok: (value: T) => Result<U, F>; err: (error: E) => Result<U, F> },
+	onErr?: (error: E) => Result<U, F>,
+): Result<U, F> {
+	if (typeof onOkOrHandlers === "function") {
+		return result.ok ? onOkOrHandlers(result.value) : onErr!(result.error);
+	}
 	return result.ok
 		? onOkOrHandlers.ok(result.value)
 		: onOkOrHandlers.err(result.error);

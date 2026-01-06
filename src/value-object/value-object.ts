@@ -1,45 +1,49 @@
-import { err, ok, type Result } from "../core/result";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
     deepEqualExcept,
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
+import { err, ok, type Result } from "../core/result";
 
-export type ValueObject<T> = Readonly<T>;
+// ============================================================================
+// Functional Value Object API
+// ============================================================================
+
+export type VO<T> = Readonly<T>;
 
 /**
  * Deep freezes an object and all its nested properties recursively.
  * This ensures true immutability for value objects with nested structures.
  * Handles circular references by tracking visited objects.
  */
-function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
-	// Handle null and non-objects
-	if (obj === null || typeof obj !== "object") {
-		return obj as Readonly<T>;
-	}
+export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
+    // Handle null and non-objects
+    if (obj === null || typeof obj !== "object") {
+        return obj as Readonly<T>;
+    }
 
-	// Handle circular references
-	if (visited.has(obj as object)) {
-		return obj as Readonly<T>;
-	}
+    // Handle circular references
+    if (visited.has(obj as object)) {
+        return obj as Readonly<T>;
+    }
 
-	// Mark as visited
-	visited.add(obj as object);
+    // Mark as visited
+    visited.add(obj as object);
 
-	// Retrieve the property names defined on obj
-	const propNames = Object.getOwnPropertyNames(obj);
+    // Retrieve the property names defined on obj
+    const propNames = Object.getOwnPropertyNames(obj);
 
-	// Freeze properties before freezing self
-	for (const name of propNames) {
-		const value = (obj as Record<string, unknown>)[name];
+    // Freeze properties before freezing self
+    for (const name of propNames) {
+        const value = (obj as Record<string, unknown>)[name];
 
-		// Freeze value if it is an object or array
-		if (value && (typeof value === "object" || Array.isArray(value))) {
-			deepFreeze(value, visited);
-		}
-	}
+        // Freeze value if it is an object or array
+        if (value && (typeof value === "object" || Array.isArray(value))) {
+            deepFreeze(value, visited);
+        }
+    }
 
-	return Object.freeze(obj) as Readonly<T>;
+    return Object.freeze(obj) as Readonly<T>;
 }
 
 /**
@@ -59,8 +63,8 @@ function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
  * // address.coordinates.lat = 99; // ❌ Error: Cannot assign to read-only property
  * ```
  */
-export function vo<T>(t: T): ValueObject<T> {
-	return deepFreeze({ ...t });
+export function vo<T>(t: T): VO<T> {
+    return deepFreeze({ ...t });
 }
 
 /**
@@ -94,8 +98,8 @@ export function vo<T>(t: T): ValueObject<T> {
  * voEquals(address1, address2); // true
  * ```
  */
-export function voEquals<T>(a: ValueObject<T>, b: ValueObject<T>): boolean {
-	return deepEqual(a, b);
+export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
+    return deepEqual(a, b);
 }
 
 /**
@@ -136,11 +140,11 @@ export function voEquals<T>(a: ValueObject<T>, b: ValueObject<T>): boolean {
  * ```
  */
 export function voEqualsExcept<T>(
-	a: ValueObject<T>,
-	b: ValueObject<T>,
-	options: DeepEqualExceptOptions,
+    a: VO<T>,
+    b: VO<T>,
+    options: DeepEqualExceptOptions,
 ): boolean {
-	return deepEqualExcept(a, b, options);
+    return deepEqualExcept(a, b, options);
 }
 
 /**
@@ -168,16 +172,16 @@ export function voEqualsExcept<T>(
  * ```
  */
 export function voWithValidation<T>(
-	t: T,
-	validate: (value: T) => boolean,
-	errorMessage?: string,
-): Result<ValueObject<T>, string> {
-	if (!validate(t)) {
-		return err(
-			errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
-		);
-	}
-	return ok(vo(t));
+    t: T,
+    validate: (value: T) => boolean,
+    errorMessage?: string,
+): Result<VO<T>, string> {
+    if (!validate(t)) {
+        return err(
+            errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
+        );
+    }
+    return ok(vo(t));
 }
 
 /**
@@ -200,14 +204,138 @@ export function voWithValidation<T>(
  * ```
  */
 export function voWithValidationUnsafe<T>(
-	t: T,
-	validate: (value: T) => boolean,
-	errorMessage?: string,
-): ValueObject<T> {
-	if (!validate(t)) {
-		throw new Error(
-			errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
-		);
-	}
-	return vo(t);
+    t: T,
+    validate: (value: T) => boolean,
+    errorMessage?: string,
+): VO<T> {
+    if (!validate(t)) {
+        throw new Error(
+            errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
+        );
+    }
+    return vo(t);
+}
+
+// ============================================================================
+// Class-based Value Object API
+// ============================================================================
+
+/**
+ * Interface for Value Objects.
+ * Value Objects are immutable and defined by their properties.
+ *
+ * @template T - The shape of the value object's properties
+ */
+export interface IValueObject<T extends object> {
+    /**
+     * The immutable properties of the value object.
+     */
+    readonly props: Readonly<T>;
+
+    /**
+     * Checks if this value object is equal to another.
+     * Uses deep equality comparison on the properties.
+     *
+     * @param other - The other value object to compare
+     * @returns true if the properties are deeply equal
+     */
+    equals(other: IValueObject<T>): boolean;
+
+    /**
+     * Creates a clone of the value object with optional property overrides.
+     *
+     * @param props - Optional properties to override
+     * @returns A new instance of the value object
+     */
+    clone(props?: Partial<T>): IValueObject<T>;
+
+    /**
+     * Serializes the value object to its raw properties for JSON operations.
+     *
+     * @returns The raw properties object
+     */
+    toJSON(): Readonly<T>;
+}
+
+/**
+ * Abstract base class for creating Value Objects.
+ * Value Objects are immutable and defined by their properties.
+ *
+ * @template T - The shape of the value object's properties
+ */
+export abstract class ValueObject<T extends object> implements IValueObject<T> {
+    public readonly props: Readonly<T>;
+
+    /**
+     * Creates a new ValueObject.
+     * The properties are deeply frozen to ensure immutability.
+     *
+     * @param props - The properties of the value object
+     * @example
+     * ```ts
+     * class Money extends ValueObject<{ amount: number; currency: string }> {
+     *   constructor(props: { amount: number; currency: string }) {
+     *     super(props);
+     *   }
+     *
+     *   protected validate(props: { amount: number; currency: string }): void {
+     *     if (props.amount < 0) throw new Error("Amount cannot be negative");
+     *   }
+     * }
+     * ```
+     */
+    constructor(props: T) {
+        this.validate(props);
+        this.props = deepFreeze({ ...props });
+    }
+
+    /**
+     * Optional validation hook that can be overridden by subclasses.
+     * Should throw an error if validation fails.
+     *
+     * @param props - The properties to validate
+     * @throws Error if validation fails
+     */
+    protected validate(props: T): void {
+        // Default implementation does nothing
+    }
+
+    /**
+     * Checks if this value object is equal to another.
+     * Uses deep equality comparison on the properties and checks for constructor equality.
+     *
+     * @param other - The other value object to compare
+     * @returns true if the properties are deeply equal and constructors match
+     */
+    public equals(other: ValueObject<T>): boolean {
+        if (other === null || other === undefined) {
+            return false;
+        }
+
+        if (this.constructor !== other.constructor) {
+            return false;
+        }
+
+        return deepEqual(this.props, other.props);
+    }
+
+    /**
+     * Creates a clone of the value object with optional property overrides.
+     *
+     * @param props - Optional properties to override
+     * @returns A new instance of the value object
+     */
+    public clone(props?: Partial<T>): this {
+        const Constructor = this.constructor as new (props: T) => this;
+        return new Constructor({ ...this.props, ...(props || {}) });
+    }
+
+    /**
+     * Serializes the value object to its raw properties for JSON operations.
+     *
+     * @returns The raw properties object
+     */
+    public toJSON(): Readonly<T> {
+        return this.props;
+    }
 }

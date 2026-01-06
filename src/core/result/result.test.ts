@@ -1,20 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
-    andThen,
-    err,
-    isErr,
-    isOk,
-    map,
-    mapErr,
-    match,
-    matchAsync,
-    ok,
-    pipe,
-    type Result,
-    tryCatch,
-    tryCatchAsync,
-    unwrapOr,
-    unwrapOrElse,
+	andThen,
+	err,
+	isErr,
+	isOk,
+	map,
+	mapErr,
+	match,
+	matchAsync,
+	matchResult,
+	ok,
+	pipe,
+	type Result,
+	tryCatch,
+	tryCatchAsync,
+	unwrapOr,
+	unwrapOrElse,
 } from "./result";
 
 describe("Result composition utilities", () => {
@@ -255,6 +256,71 @@ describe("Result composition utilities", () => {
 				async () => 0,
 			);
 			expect(value).toBe(10);
+		});
+	});
+
+	describe("matchResult", () => {
+		it("should apply onOk function for Ok result", () => {
+			const result = ok(5);
+			const value = matchResult(
+				result,
+				(value) => ok(`Success: ${value}`),
+				(error) => err(`Error: ${error}`),
+			);
+			expect(isOk(value)).toBe(true);
+			if (isOk(value)) {
+				expect(value.value).toBe("Success: 5");
+			}
+		});
+
+		it("should apply onErr function for Err result", () => {
+			const result = err("error");
+			const value = matchResult(
+				result,
+				(value) => ok(`Success: ${value}`),
+				(error) => err(`Error: ${error}`),
+			);
+			expect(isErr(value)).toBe(true);
+			if (isErr(value)) {
+				expect(value.error).toBe("Error: error");
+			}
+		});
+
+		it("should support object syntax", () => {
+			const okResult = ok(5);
+			const errResult = err("error");
+
+			const okValue = matchResult(okResult, {
+				ok: (v: number) => ok(`Success: ${v}`),
+				err: () => err("Error"),
+			});
+			const errValue = matchResult(errResult, {
+				ok: () => ok("Success"),
+				err: (e) => err(`Error: ${e}`),
+			});
+
+			expect(isOk(okValue)).toBe(true);
+			if (isOk(okValue)) {
+				expect(okValue.value).toBe("Success: 5");
+			}
+
+			expect(isErr(errValue)).toBe(true);
+			if (isErr(errValue)) {
+				expect(errValue.error).toBe("Error: error");
+			}
+		});
+
+		it("should allow transforming types", () => {
+			const result = ok(5);
+			const value = matchResult(
+				result,
+				(v) => ok(v.toString()),
+				() => err(0),
+			);
+			expect(isOk(value)).toBe(true);
+			if (isOk(value)) {
+				expect(value.value).toBe("5");
+			}
 		});
 	});
 

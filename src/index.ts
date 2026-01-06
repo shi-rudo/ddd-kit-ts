@@ -3,7 +3,7 @@
 
 // Aggregates
 export * from "./aggregate/aggregate";
-export * from "./aggregate/aggregate-base";
+export * from "./aggregate/aggregate-root";
 export * from "./aggregate/aggregate-event-sourced";
 // CQRS - Commands and Queries
 export * from "./app/command";

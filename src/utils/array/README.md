@@ -194,9 +194,9 @@ Value Objects should be compared by their attributes, not identity:
 
 ```ts
 import { deepEqual } from '@shirudo/ddd-kit/utils/array';
-import { vo, type ValueObject } from '@shirudo/ddd-kit';
+import { vo, type VO } from '@shirudo/ddd-kit';
 
-type Money = ValueObject<{
+type Money = VO<{
   amount: number;
   currency: string;
 }>;
@@ -208,7 +208,7 @@ const price2 = vo({ amount: 100, currency: "USD" });
 deepEqual(price1, price2); // true
 
 // Works with nested value objects
-type Address = ValueObject<{
+type Address = VO<{
   street: string;
   city: string;
   country: string;
