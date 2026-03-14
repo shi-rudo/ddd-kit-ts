@@ -111,7 +111,7 @@ export abstract class AggregateEventSourced<
 	TState,
 	TEvent extends DomainEvent<string, unknown>,
 	TId extends Id<string>,
-> extends AggregateRoot<TState, TId>
+> extends AggregateRoot<TState, TId, TEvent>
 	implements IAggregateEventSourced<TId, TEvent> {
 	private readonly _eventConfig: AggregateEventSourcedConfig;
 	private readonly _eventAutoVersionBump: boolean;
@@ -130,7 +130,7 @@ export abstract class AggregateEventSourced<
 	 * Returns a read-only list of new, not-yet-persisted events.
 	 */
 	public get pendingEvents(): ReadonlyArray<TEvent> {
-		return this.domainEvents as ReadonlyArray<TEvent>;
+		return this.domainEvents;
 	}
 
 	/**
@@ -294,7 +294,7 @@ export abstract class AggregateEventSourced<
 	 */
 	public getLatestEvent(): TEvent | undefined {
 		const events = this.domainEvents;
-		return events[events.length - 1] as TEvent | undefined;
+		return events[events.length - 1];
 	}
 
 	/**

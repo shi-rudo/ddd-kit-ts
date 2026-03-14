@@ -88,6 +88,7 @@ export interface AggregateConfig {
  *
  * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TId - The type of the aggregate root identifier
+ * @template TEvent - The type of domain events recorded by this aggregate (defaults to unknown)
  *
  * @example
  * ```typescript
@@ -104,20 +105,20 @@ export interface AggregateConfig {
  * }
  * ```
  */
-export abstract class AggregateRoot<TState, TId extends Id<string>>
+export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unknown>
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId> {
 	public version: Version = 0 as Version;
 
 	private readonly _config: AggregateConfig;
 	private readonly _autoVersionBump: boolean;
-	private _domainEvents: unknown[] = [];
+	private _domainEvents: TEvent[] = [];
 
 	/**
 	 * Returns a read-only list of domain events recorded by this aggregate.
 	 * These events are side-effects of state changes.
 	 */
-	public get domainEvents(): ReadonlyArray<unknown> {
+	public get domainEvents(): ReadonlyArray<TEvent> {
 		return this._domainEvents;
 	}
 
@@ -145,7 +146,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>>
 	 *
 	 * @param event - The domain event to add
 	 */
-	protected addDomainEvent(event: unknown): void {
+	protected addDomainEvent(event: TEvent): void {
 		this._domainEvents.push(event);
 	}
 

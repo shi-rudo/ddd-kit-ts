@@ -245,5 +245,62 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			agg.clearDomainEvents();
 			expect(agg.domainEvents).toHaveLength(0);
 		});
+
+		it("should support typed domain events via TEvent parameter", () => {
+			type TestEvent =
+				| { type: "ValueUpdated"; newValue: number }
+				| { type: "Activated" };
+
+			class TypedEventAggregate extends AggregateRoot<TestState, TestId, TestEvent> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+				public updateValue(newValue: number) {
+					this._state = { ...this._state, value: newValue };
+					this.addDomainEvent({ type: "ValueUpdated", newValue });
+					this.bumpVersion();
+				}
+				public activate() {
+					this._state = { ...this._state, status: "active" };
+					this.addDomainEvent({ type: "Activated" });
+					this.bumpVersion();
+				}
+			}
+
+			const agg = new TypedEventAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+
+			agg.updateValue(42);
+			agg.activate();
+
+			expect(agg.domainEvents).toHaveLength(2);
+			expect(agg.domainEvents[0]).toEqual({ type: "ValueUpdated", newValue: 42 });
+			expect(agg.domainEvents[1]).toEqual({ type: "Activated" });
+
+			// domainEvents is typed — access event-specific fields without cast
+			const firstEvent = agg.domainEvents[0];
+			expect(firstEvent.type).toBe("ValueUpdated");
+		});
+
+		it("should reject wrong event types at compile time with TEvent", () => {
+			type StrictEvent = { type: "OnlyThis"; data: string };
+
+			class StrictAggregate extends AggregateRoot<TestState, TestId, StrictEvent> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+				public doCorrect() {
+					this.addDomainEvent({ type: "OnlyThis", data: "hello" });
+				}
+				public doWrong() {
+					// @ts-expect-error - wrong event type is rejected by TEvent constraint
+					this.addDomainEvent({ type: "WrongEvent" });
+				}
+			}
+
+			const agg = new StrictAggregate("id-1" as TestId, { value: 1, status: "inactive" });
+			agg.doCorrect();
+			expect(agg.domainEvents).toHaveLength(1);
+			expect(agg.domainEvents[0]).toEqual({ type: "OnlyThis", data: "hello" });
+		});
 	});
 });
