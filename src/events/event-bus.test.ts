@@ -233,5 +233,41 @@ describe("EventBusImpl", () => {
 			await expect(bus.publish([event])).rejects.toThrow("Multiple event handlers failed");
 		});
 	});
+
+	describe("once", () => {
+		it("should resolve with the event on next publish", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			const promise = bus.once<OrderCreated>("OrderCreated");
+
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "order-123",
+			}) as OrderCreated;
+
+			await bus.publish([event]);
+
+			const received = await promise;
+			expect(received.payload.orderId).toBe("order-123");
+		});
+
+		it("should automatically unsubscribe after first event", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			const promise = bus.once<OrderCreated>("OrderCreated");
+
+			const event1 = createDomainEvent("OrderCreated", {
+				orderId: "order-1",
+			}) as OrderCreated;
+			const event2 = createDomainEvent("OrderCreated", {
+				orderId: "order-2",
+			}) as OrderCreated;
+
+			await bus.publish([event1]);
+			await bus.publish([event2]);
+
+			const received = await promise;
+			expect(received.payload.orderId).toBe("order-1");
+		});
+	});
 });
 

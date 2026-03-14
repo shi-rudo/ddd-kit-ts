@@ -49,6 +49,15 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 		};
 	}
 
+	once<T extends Evt>(eventType: string): Promise<T> {
+		return new Promise<T>((resolve) => {
+			const unsubscribe = this.subscribe<T>(eventType, ((event: T) => {
+				unsubscribe();
+				resolve(event);
+			}) as EventHandler<T>);
+		});
+	}
+
 	async publish(events: ReadonlyArray<Evt>): Promise<void> {
 		const errors: Error[] = [];
 

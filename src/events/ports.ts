@@ -59,6 +59,22 @@ export interface EventBus<Evt> {
 		eventType: string,
 		handler: EventHandler<T>,
 	) => () => void;
+
+	/**
+	 * Subscribes to the next occurrence of an event type.
+	 * Returns a Promise that resolves with the event data.
+	 * Automatically unsubscribes after the first event.
+	 *
+	 * @param eventType - The event type to wait for
+	 * @returns A Promise that resolves with the event
+	 *
+	 * @example
+	 * ```typescript
+	 * const event = await bus.once("OrderCreated");
+	 * console.log("Order created:", event.payload.orderId);
+	 * ```
+	 */
+	once: <T extends Evt>(eventType: string) => Promise<T>;
 }
 export interface Outbox<Evt> {
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
