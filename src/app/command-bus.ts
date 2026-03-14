@@ -1,5 +1,5 @@
 import type { Result } from "../core/result";
-import { err } from "../core/result";
+import { err, ok } from "../core/result";
 import type { Command, CommandHandler } from "./command";
 
 /**
@@ -84,7 +84,13 @@ export class CommandBus implements ICommandBus {
 		if (!handler) {
 			return err(`No handler registered for command type: ${command.type}`);
 		}
-		return handler(command);
+		try {
+			return await handler(command);
+		} catch (error) {
+			return err(
+				error instanceof Error ? error.message : String(error),
+			);
+		}
 	}
 }
 

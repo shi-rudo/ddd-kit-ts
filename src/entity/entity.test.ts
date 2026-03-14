@@ -183,11 +183,11 @@ describe("Entity", () => {
 				e.updateQuantity(5);
 				return e;
 			});
-			expect(updated[0].state.quantity).toBe(5);
+			expect(updated[0]!.state.quantity).toBe(5);
 
 			const removed = removeEntityById(entities, "id-1" as ItemId);
 			expect(removed).toHaveLength(1);
-			expect(removed[0].id).toBe("id-2");
+			expect(removed[0]!.id).toBe("id-2");
 		});
 	});
 });

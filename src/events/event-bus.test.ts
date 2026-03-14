@@ -195,7 +195,7 @@ describe("EventBusImpl", () => {
 			expect(results).toHaveLength(2);
 		});
 
-		it("should handle errors in handlers gracefully", async () => {
+		it("should run all handlers even if one fails", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			let handler2Called = false;
 
@@ -211,10 +211,26 @@ describe("EventBusImpl", () => {
 				orderId: "order-123",
 			}) as OrderCreated;
 
-			// Promise.all will reject if any handler fails, but all handlers are called
 			await expect(bus.publish([event])).rejects.toThrow("Handler 1 error");
-			// Note: handler2Called might be true because Promise.all executes all promises
-			// before rejecting. This is expected behavior for parallel execution.
+			expect(handler2Called).toBe(true);
+		});
+
+		it("should throw AggregateError when multiple handlers fail", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			bus.subscribe("OrderCreated", async () => {
+				throw new Error("Handler 1 error");
+			});
+
+			bus.subscribe("OrderCreated", async () => {
+				throw new Error("Handler 2 error");
+			});
+
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "order-123",
+			}) as OrderCreated;
+
+			await expect(bus.publish([event])).rejects.toThrow("Multiple event handlers failed");
 		});
 	});
 });

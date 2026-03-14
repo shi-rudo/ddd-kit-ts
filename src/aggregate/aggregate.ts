@@ -43,7 +43,7 @@ export interface EventMetadata {
  * @template T - The event type name (e.g., "OrderCreated")
  * @template P - The event payload type
  */
-export interface DomainEvent<T extends string, P> {
+export interface DomainEvent<T extends string, P = void> {
 	/**
 	 * The type of the event, used for routing and handling.
 	 */
@@ -51,6 +51,7 @@ export interface DomainEvent<T extends string, P> {
 
 	/**
 	 * The event payload containing the domain data.
+	 * Omitted when P is void (events without payload).
 	 */
 	payload: P;
 
@@ -123,6 +124,15 @@ export function bump<S, E extends DomainEvent<string, unknown>>(
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
+export function createDomainEvent<T extends string>(
+	type: T,
+	payload?: undefined,
+	options?: {
+		occurredAt?: Date;
+		version?: number;
+		metadata?: EventMetadata;
+	},
+): DomainEvent<T, void>;
 export function createDomainEvent<T extends string, P>(
 	type: T,
 	payload: P,
@@ -131,10 +141,19 @@ export function createDomainEvent<T extends string, P>(
 		version?: number;
 		metadata?: EventMetadata;
 	},
+): DomainEvent<T, P>;
+export function createDomainEvent<T extends string, P>(
+	type: T,
+	payload?: P,
+	options?: {
+		occurredAt?: Date;
+		version?: number;
+		metadata?: EventMetadata;
+	},
 ): DomainEvent<T, P> {
 	return {
 		type,
-		payload,
+		payload: payload as P,
 		occurredAt: options?.occurredAt ?? new Date(),
 		version: options?.version ?? 1,
 		metadata: options?.metadata,

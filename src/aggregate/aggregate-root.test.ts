@@ -277,7 +277,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.domainEvents[1]).toEqual({ type: "Activated" });
 
 			// domainEvents is typed — access event-specific fields without cast
-			const firstEvent = agg.domainEvents[0];
+			const firstEvent = agg.domainEvents[0]!;
 			expect(firstEvent.type).toBe("ValueUpdated");
 		});
 

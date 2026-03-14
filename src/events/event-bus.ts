@@ -50,14 +50,31 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	}
 
 	async publish(events: ReadonlyArray<Evt>): Promise<void> {
+		const errors: Error[] = [];
+
 		for (const event of events) {
 			const handlersForType = this.handlers.get(event.type);
 			if (handlersForType) {
-				// Call all handlers for this event type
-				await Promise.all(
+				const results = await Promise.allSettled(
 					Array.from(handlersForType).map((handler) => handler(event)),
 				);
+				for (const result of results) {
+					if (result.status === "rejected") {
+						errors.push(
+							result.reason instanceof Error
+								? result.reason
+								: new Error(String(result.reason)),
+						);
+					}
+				}
 			}
+		}
+
+		if (errors.length === 1) {
+			throw errors[0];
+		}
+		if (errors.length > 1) {
+			throw new AggregateError(errors, "Multiple event handlers failed");
 		}
 	}
 }
