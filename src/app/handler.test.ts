@@ -132,7 +132,7 @@ describe("withCommit", () => {
 				{ outbox, uow: createMockUow() },
 				async () => ({
 					result: "ok",
-					events: [{ type: "OrderCreated", orderId: "order-1" }],
+					events: [{ type: "OrderCreated", orderId: "order-1" }] as TestEvent[],
 				}),
 			),
 		).rejects.toThrow("Outbox failed");

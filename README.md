@@ -103,11 +103,11 @@ The Aggregate Root is an Entity (the parent Entity of the aggregate) that repres
 
 The library provides:
 
-- **`AggregateRoot<TId>`** - Marker interface for Aggregate Root Entities. The Aggregate Root is an Entity with identity (id) and version for optimistic concurrency control. It represents the aggregate externally and is the only object that can be loaded/saved through repositories.
+- **`IAggregateRoot<TId>`** - Marker interface for Aggregate Root Entities. The Aggregate Root is an Entity with identity (id) and version for optimistic concurrency control. It represents the aggregate externally and is the only object that can be loaded/saved through repositories.
 
-- **`AggregateBase<TState, TId>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `AggregateRoot<TId>`. The aggregate state (`TState`) contains child entities and value objects. Provides ID and version management, state management, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with versioning and state management.
+- **`AggregateRoot<TState, TId, TEvent?>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `IAggregateRoot<TId>`. The optional `TEvent` parameter (defaults to `unknown`) enables type-safe domain events — only aggregates that specify it get compile-time event validation. Provides ID and version management, state management, domain event tracking, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with versioning and state management.
 
-- **`AggregateEventSourced<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Root Entities. Extends `AggregateBase` (and thus implements `AggregateRoot<TId>`). Adds event tracking, event handlers, event validation, and history replay capabilities. Use this when you want full Event Sourcing with event tracking and replay.
+- **`AggregateEventSourced<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Root Entities. Extends `AggregateRoot` (and thus implements `IAggregateRoot<TId>`). Adds event tracking, event handlers, event validation, and history replay capabilities. Use this when you want full Event Sourcing with event tracking and replay.
 
 Both classes support automatic versioning (configurable), snapshot creation/restoration, and optimistic concurrency control. The version applies to the entire aggregate, including all child entities.
 
@@ -218,8 +218,8 @@ voEqualsExcept(address1, address2, {
 
 ```typescript
 import {
-  AggregateBase,
-  type AggregateRoot,
+  AggregateRoot,
+  type IAggregateRoot,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -233,7 +233,8 @@ type OrderState = {
   status: "pending" | "confirmed" | "shipped";
 };
 
-class Order extends AggregateBase<OrderState, OrderId> implements AggregateRoot<OrderId> {
+// Without typed events (TEvent defaults to unknown)
+class Order extends AggregateRoot<OrderState, OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
@@ -285,6 +286,33 @@ console.log(order.version); // 3 (manually bumped)
 console.log(order.state.status); // "shipped"
 ```
 
+#### With Typed Domain Events
+
+Use the optional third type parameter to get compile-time event validation:
+
+```typescript
+type OrderDomainEvent =
+  | { type: "OrderConfirmed" }
+  | { type: "OrderShipped"; trackingNumber: string };
+
+class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
+  confirm(): void {
+    this._state = { ...this._state, status: "confirmed" };
+    this.addDomainEvent({ type: "OrderConfirmed" }); // type-safe
+    this.bumpVersion();
+  }
+
+  ship(trackingNumber: string): void {
+    this._state = { ...this._state, status: "shipped" };
+    this.addDomainEvent({ type: "OrderShipped", trackingNumber }); // type-safe
+    this.bumpVersion();
+  }
+}
+
+// order.domainEvents is ReadonlyArray<OrderDomainEvent> — no cast needed
+// order.addDomainEvent({ type: "WrongEvent" }) → compile error
+```
+
 ### Creating an Aggregate WITH Event Sourcing
 
 ```typescript
@@ -306,7 +334,7 @@ type OrderState = {
 };
 
 type OrderCreated = DomainEvent<"OrderCreated", { customerId: string }>;
-type OrderConfirmed = DomainEvent<"OrderConfirmed", {}>;
+type OrderConfirmed = DomainEvent<"OrderConfirmed">;
 type OrderShipped = DomainEvent<"OrderShipped", { trackingNumber: string }>;
 
 type OrderEvent = OrderCreated | OrderConfirmed | OrderShipped;
@@ -328,7 +356,7 @@ class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> imple
 
   confirm(): void {
     const result = this.apply(
-      createDomainEvent("OrderConfirmed", {}) as OrderConfirmed
+      createDomainEvent("OrderConfirmed") as OrderConfirmed
     );
     if (!result.ok) {
       throw new Error(result.error);
@@ -347,7 +375,7 @@ class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> imple
   // Or use unsafe variant (throws exception directly)
   confirmUnsafe(): void {
     this.applyUnsafe(
-      createDomainEvent("OrderConfirmed", {}) as OrderConfirmed
+      createDomainEvent("OrderConfirmed") as OrderConfirmed
     );
   }
 
@@ -388,7 +416,7 @@ console.log(order.version); // 3 (automatically bumped)
 
 ```typescript
 import {
-  AggregateBase,
+  AggregateRoot,
   AggregateEventSourced,
   sameAggregate,
   type Id,
@@ -756,6 +784,11 @@ const orderCreated = createDomainEvent("OrderCreated", {
 
 await eventBus.publish([orderCreated]);
 // Both email and logging handlers will be called
+
+// Wait for the next event of a given type (useful for tests and workflows)
+const event = await eventBus.once<OrderCreated>("OrderCreated");
+console.log("Order created:", event.payload.orderId);
+// Automatically unsubscribes after the first event
 ```
 
 ### Creating Events with Metadata for Traceability
@@ -1167,7 +1200,7 @@ This package is written in TypeScript and provides full type definitions. All ty
 Key exports include:
 - `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
-- `AggregateRoot<TState, TId>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`)
+- `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`). Optional `TEvent` parameter enables type-safe domain events
 - `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateRoot`, implements `IAggregateEventSourced<TId, TEvent>`)
 - `AggregateConfig`, `AggregateEventSourcedConfig` - Configuration interfaces
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
@@ -1181,13 +1214,16 @@ Key exports include:
 - `CommandBus`, `ICommandBus` - Command bus for centralized command execution
 - `QueryBus`, `IQueryBus` - Query bus for centralized query execution (with `execute()` returning Result and `executeUnsafe()` throwing exceptions)
 - `withCommit()` - Helper for transactional command execution with events
-- `DomainEvent<T, P>`, `EventMetadata` - Domain event interfaces
-- `createDomainEvent()`, `createDomainEventWithMetadata()` - Event creation helpers
+- `DomainEvent<T, P?>` - Domain event interface (`P` defaults to `void` for payload-less events)
+- `EventMetadata` - Event metadata interface for traceability
+- `createDomainEvent()` - Event creation helper (payload is optional for payload-less events)
+- `createDomainEventWithMetadata()` - Event creation with metadata
 - `copyMetadata()`, `mergeMetadata()` - Metadata utilities
 - `EventBus<Evt>`, `EventBusImpl<Evt>` - Event bus interface and implementation for pub/sub pattern
 - `EventHandler<Evt>` - Event handler function type
 - `EventBus.subscribe()` - Subscribe handlers to event types
-- `EventBus.publish()` - Publish events to all subscribers
+- `EventBus.publish()` - Publish events to all subscribers (uses `Promise.allSettled` — all handlers run even if one fails)
+- `EventBus.once()` - Wait for the next event of a given type (returns Promise, auto-unsubscribes)
 - `Result<T, E>`, `ok()`, `err()`, `isOk()`, `isErr()` - Result type and type guards
 - `andThen()`, `map()`, `mapErr()` - Result composition utilities
 - `unwrapOr()`, `unwrapOrElse()`, `match()` - Result unwrapping and pattern matching
