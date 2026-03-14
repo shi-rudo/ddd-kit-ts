@@ -1,0 +1,48 @@
+.DS_Store
+
+# Development sources
+src/
+test/
+tests/
+docs/
+images/
+examples/
+
+# Build reports and logs
+coverage/
+*.log
+
+# Editor and linting configs
+.vscode/
+.idea/
+.eslint*
+.prettier*
+
+# VCS and CI folders
+.git/
+.github/
+.gitignore
+.husky/
+
+# Tooling
+biome.json
+vite.config.ts
+
+# AI
+.agents
+.claude
+skills/
+bin/
+
+# Issues
+.beads
+
+# ────────────────
+# Ai files
+# ────────────────
+.agents
+.claude
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
