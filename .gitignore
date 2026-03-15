@@ -160,3 +160,7 @@ vite.config.ts.timestamp-*
 .vscode/settings.json
 .idea/
 *.iml
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
