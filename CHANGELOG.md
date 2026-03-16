@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0-rc.1] - YYYY-MM-DD
+## [1.0.0-rc.1] - 2026-03-16
 
 First Release Candidate. The API is considered stable.
 
