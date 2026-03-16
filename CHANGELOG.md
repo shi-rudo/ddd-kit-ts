@@ -17,7 +17,7 @@ First Release Candidate. The API is considered stable.
 - **Value Objects (class-based)** — `ValueObject<T>` base class with `equals()`, `clone()`, `toJSON()`
 - **Entities** — `Entity<TState, TId>` base class, `Identifiable<TId>` interface, and collection helpers (`findEntityById`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, `entityIds`)
 - **Aggregate Roots** — `AggregateRoot<TState, TId, TEvent>` with version management, domain events, and snapshot support
-- **Event-Sourced Aggregates** — `AggregateEventSourced<TState, TEvent, TId>` with event handlers, history replay, snapshot+events restore, and event validation
+- **Event-Sourced Aggregates** — `EventSourcedAggregate<TState, TEvent, TId>` with event handlers, history replay, snapshot+events restore, and event validation
 - **Functional Aggregates** — `aggregate()`, `bump()` for lightweight state+version patterns without classes
 - **Domain Events** — `DomainEvent<T, P>` with versioning and `EventMetadata` (correlationId, causationId, userId, source). Helpers: `createDomainEvent()`, `createDomainEventWithMetadata()`, `copyMetadata()`, `mergeMetadata()`
 - **Event Bus** — `EventBusImpl<Evt>` with pub/sub, `subscribe()` (returns unsubscribe fn), `once()`, and `AggregateError` on multiple handler failures
@@ -45,15 +45,16 @@ First Release Candidate. The API is considered stable.
 - **`AggregateRoot.version`** — Now encapsulated (`private` + `get version()`). External code can read but not set the version
 - **`DomainEvent.version`** — Now required (`number` instead of `number?`). Essential for schema evolution in event sourcing
 - **`sameAggregate()` → `sameVersion()`** — Renamed to reflect actual semantics (concurrency check, not identity check)
-- **`IRepository`** — Simplified from `<TState, TEvent, TAgg, TId>` to `<TAgg, TId>`. Works with both `AggregateRoot` and `AggregateEventSourced`
+- **`IRepository`** — Simplified from `<TState, TEvent, TAgg, TId>` to `<TAgg, TId>`. Works with both `AggregateRoot` and `EventSourcedAggregate`
 - **`createSnapshot()`** — Now uses `structuredClone()` for deep copy. Snapshots are fully isolated from the aggregate
-- **Functional API** — `AggregateState` is now state+version only (no `pendingEvents`). Event sourcing is exclusively class-based via `AggregateEventSourced`
+- **`AggregateEventSourced` → `EventSourcedAggregate`** — Renamed to match Vernon's IDDD terminology. Now extends `Entity` directly (not `AggregateRoot`), so `setState()` and `addDomainEvent()` are not available — state changes can only happen through event handlers
+- **Functional API** — `AggregateState` is now state+version only (no `pendingEvents`). Event sourcing is exclusively class-based via `EventSourcedAggregate`
 
 ### Removed (since 0.x beta)
 
 - **`AggregateBase`** — Removed dead code (`entity/aggregate-base.ts`). Use `AggregateRoot` instead
 - **`Clock` interface** — Removed unused interface from `ports.ts`
-- **`withEvent()`** — Removed from functional API. It appended events without applying state changes, which is not event sourcing. Use `AggregateEventSourced` for proper ES
+- **`withEvent()`** — Removed from functional API. It appended events without applying state changes, which is not event sourcing. Use `EventSourcedAggregate` for proper ES
 - **`sameAggregate()`** — Replaced by `sameVersion()` with correct semantics
 - **Minified output** — Library now ships unminified for better debugging and consumer bundler compatibility
 
