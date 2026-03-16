@@ -5,7 +5,7 @@ import {
 	createDomainEventWithMetadata,
 	copyMetadata,
 	mergeMetadata,
-	sameAggregate,
+	sameVersion,
 	type DomainEvent,
 	type EventMetadata,
 	type Version,
@@ -324,46 +324,21 @@ describe("Domain Events", () => {
 	});
 
 	describe("DomainEvent interface", () => {
-		it("should support events without version and metadata (backward compatible)", () => {
+		it("should require version for schema evolution", () => {
 			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
+				version: 1,
 			};
 
 			expect(event.type).toBe("OrderCreated");
 			expect(event.payload).toEqual({ orderId: "123" });
-			expect(event.version).toBeUndefined();
+			expect(event.version).toBe(1);
 			expect(event.metadata).toBeUndefined();
 		});
 
-		it("should support events with version only", () => {
-			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
-				type: "OrderCreated",
-				payload: { orderId: "123" },
-				occurredAt: new Date(),
-				version: 2,
-			};
-
-			expect(event.version).toBe(2);
-			expect(event.metadata).toBeUndefined();
-		});
-
-		it("should support events with metadata only", () => {
-			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
-				type: "OrderCreated",
-				payload: { orderId: "123" },
-				occurredAt: new Date(),
-				metadata: {
-					correlationId: "corr-123",
-				},
-			};
-
-			expect(event.metadata?.correlationId).toBe("corr-123");
-			expect(event.version).toBeUndefined();
-		});
-
-		it("should support events with both version and metadata", () => {
+		it("should support events with version and metadata", () => {
 			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
 				type: "OrderCreated",
 				payload: { orderId: "123" },
@@ -430,7 +405,7 @@ describe("Domain Events", () => {
 		});
 	});
 
-	describe("sameAggregate()", () => {
+	describe("sameVersion()", () => {
 		type OrderId = Id<"OrderId">;
 
 		it("should return true for aggregates with same ID and version", () => {
@@ -443,7 +418,7 @@ describe("Domain Events", () => {
 				version: 5 as Version,
 			};
 
-			expect(sameAggregate(agg1, agg2)).toBe(true);
+			expect(sameVersion(agg1, agg2)).toBe(true);
 		});
 
 		it("should return false for aggregates with different IDs", () => {
@@ -456,7 +431,7 @@ describe("Domain Events", () => {
 				version: 5 as Version,
 			};
 
-			expect(sameAggregate(agg1, agg2)).toBe(false);
+			expect(sameVersion(agg1, agg2)).toBe(false);
 		});
 
 		it("should return false for aggregates with different versions", () => {
@@ -469,7 +444,7 @@ describe("Domain Events", () => {
 				version: 6 as Version,
 			};
 
-			expect(sameAggregate(agg1, agg2)).toBe(false);
+			expect(sameVersion(agg1, agg2)).toBe(false);
 		});
 
 		it("should return false for aggregates with different ID and version", () => {
@@ -482,7 +457,7 @@ describe("Domain Events", () => {
 				version: 6 as Version,
 			};
 
-			expect(sameAggregate(agg1, agg2)).toBe(false);
+			expect(sameVersion(agg1, agg2)).toBe(false);
 		});
 	});
 });

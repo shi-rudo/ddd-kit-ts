@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { Result } from "../core/result";
 import type { Query } from "./query";
 import { QueryBus } from "./query-bus";
 
@@ -220,5 +221,60 @@ describe("QueryBus", () => {
 			expect(result).toBeNull();
 		});
 	});
-});
 
+	describe("type inference with TMap", () => {
+		it("should infer return type from type map via execute", async () => {
+			type Order = { id: string; status: string };
+			type Queries = {
+				GetOrder: Order | null;
+				ListOrders: Order[];
+			};
+
+			const bus = new QueryBus<Queries>();
+
+			bus.register("GetOrder", async () => ({ id: "o-1", status: "open" }));
+			bus.register("ListOrders", async () => []);
+
+			const getResult = await bus.execute({
+				type: "GetOrder" as const,
+				orderId: "o-1",
+			});
+
+			expectTypeOf(getResult).toEqualTypeOf<Result<Order | null, string>>();
+
+			const listResult = await bus.execute({
+				type: "ListOrders" as const,
+			});
+
+			expectTypeOf(listResult).toEqualTypeOf<Result<Order[], string>>();
+		});
+
+		it("should infer return type from type map via executeUnsafe", async () => {
+			type Order = { id: string };
+			type Queries = {
+				GetOrder: Order | null;
+			};
+
+			const bus = new QueryBus<Queries>();
+
+			bus.register("GetOrder", async () => ({ id: "o-1" }));
+
+			const result = await bus.executeUnsafe({
+				type: "GetOrder" as const,
+				orderId: "o-1",
+			});
+
+			expectTypeOf(result).toEqualTypeOf<Order | null>();
+		});
+
+		it("should return Result<unknown, string> without type map", async () => {
+			const bus = new QueryBus();
+
+			bus.register("GetOrder", async () => ({ id: "o-1" }));
+
+			const result = await bus.execute({ type: "GetOrder" });
+
+			expectTypeOf(result).toEqualTypeOf<Result<unknown, string>>();
+		});
+	});
+});

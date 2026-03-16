@@ -2,9 +2,9 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design.
 
-> **⚠️ BETA WARNING**
+> **Release Candidate**
 >
-> This library is currently in beta. The API is subject to change until a stable 1.0.0 release. Breaking changes may occur in minor versions during the beta phase. Please pin your dependencies to specific versions.
+> This library is in Release Candidate phase. The API is considered stable and ready for production evaluation. Please report any issues before the final 1.0.0 release.
 
 ## Badges
 
@@ -20,7 +20,7 @@ Composable TypeScript toolkit for tactical Domain-Driven Design.
 - **Repositories** - Persistence abstraction layer for aggregates with specification pattern support
 - **Specifications** - Reusable query specifications for complex domain queries
 - **Unit of Work** - Transaction management for maintaining consistency across operations
-- **Result Type** - Functional error handling with `Result<T, E>` type for explicit success/failure states
+- **Result Type** - Functional error handling with `Result<T, E>` type for explicit success/failure states. For advanced error handling with typed error hierarchies, see [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error)
 
 ## Installation
 
@@ -72,7 +72,7 @@ In Domain-Driven Design, Entities are objects with identity and state. Unlike Va
    - Has identity (id), state, and version for optimistic concurrency control
    - Represents the aggregate externally
    - Loaded/saved through repositories
-   - Created by extending `AggregateRoot` or `AggregateEventSourced`
+   - Created by extending `AggregateRoot` (state-based) or `EventSourcedAggregate` (event-sourced)
    - Implements `IAggregateRoot<TId>`
 
 2. **Child Entities**: Entities within an aggregate.
@@ -107,7 +107,7 @@ The library provides:
 
 - **`AggregateRoot<TState, TId, TEvent?>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `IAggregateRoot<TId>`. The optional `TEvent` parameter (defaults to `unknown`) enables type-safe domain events — only aggregates that specify it get compile-time event validation. Provides ID and version management, state management, domain event tracking, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with versioning and state management.
 
-- **`AggregateEventSourced<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Root Entities. Extends `AggregateRoot` (and thus implements `IAggregateRoot<TId>`). Adds event tracking, event handlers, event validation, and history replay capabilities. Use this when you want full Event Sourcing with event tracking and replay.
+- **`EventSourcedAggregate<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Roots. Extends `Entity` directly (not `AggregateRoot`) so that state changes can only happen through event handlers via `apply()`. Provides event tracking, event validation, history replay, and snapshot support.
 
 Both classes support automatic versioning (configurable), snapshot creation/restoration, and optimistic concurrency control. The version applies to the entire aggregate, including all child entities.
 
@@ -117,7 +117,7 @@ CQRS separates read operations (Queries) from write operations (Commands), provi
 
 ### Domain Events
 
-Domain Events represent something meaningful that happened in your domain. They are immutable records with a type, payload, timestamp, optional version for schema evolution, and metadata for traceability. Events support versioning for handling schema changes over time and include metadata fields like `correlationId`, `causationId`, `userId`, and `source` for tracking event flow in distributed systems. Events are automatically tracked by aggregates and can be published to event buses or stored in outboxes for eventual consistency.
+Domain Events represent something meaningful that happened in your domain. They are immutable records with a type, payload, timestamp, version for schema evolution, and optional metadata for traceability. Events support versioning for handling schema changes over time and include metadata fields like `correlationId`, `causationId`, `userId`, and `source` for tracking event flow in distributed systems. Events are automatically tracked by aggregates and can be published to event buses or stored in outboxes for eventual consistency.
 
 ### Repositories
 
@@ -247,32 +247,29 @@ class Order extends AggregateRoot<OrderState, OrderId> {
   }
 
   addItem(productId: string, quantity: number, price: number): void {
-    if (this._state.status !== "pending") {
+    if (this.state.status !== "pending") {
       throw new Error("Cannot add items to a non-pending order");
     }
 
-    this._state = {
-      ...this._state,
-      items: [...this._state.items, { productId, quantity, price }],
-      total: this._state.total + quantity * price,
-    };
-    this.bumpVersion(); // Manual version bump for optimistic concurrency control
+    this.setState({
+      ...this.state,
+      items: [...this.state.items, { productId, quantity, price }],
+      total: this.state.total + quantity * price,
+    }, true); // true = bump version for optimistic concurrency control
   }
 
   confirm(): void {
-    if (this._state.status !== "pending") {
+    if (this.state.status !== "pending") {
       throw new Error("Only pending orders can be confirmed");
     }
-    this._state = { ...this._state, status: "confirmed" };
-    this.bumpVersion();
+    this.setState({ ...this.state, status: "confirmed" }, true);
   }
 
   ship(): void {
-    if (this._state.status !== "confirmed") {
+    if (this.state.status !== "confirmed") {
       throw new Error("Only confirmed orders can be shipped");
     }
-    this._state = { ...this._state, status: "shipped" };
-    this.bumpVersion();
+    this.setState({ ...this.state, status: "shipped" }, true);
   }
 }
 
@@ -297,15 +294,13 @@ type OrderDomainEvent =
 
 class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
   confirm(): void {
-    this._state = { ...this._state, status: "confirmed" };
+    this.setState({ ...this.state, status: "confirmed" }, true);
     this.addDomainEvent({ type: "OrderConfirmed" }); // type-safe
-    this.bumpVersion();
   }
 
   ship(trackingNumber: string): void {
-    this._state = { ...this._state, status: "shipped" };
+    this.setState({ ...this.state, status: "shipped" }, true);
     this.addDomainEvent({ type: "OrderShipped", trackingNumber }); // type-safe
-    this.bumpVersion();
   }
 }
 
@@ -317,7 +312,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
 
 ```typescript
 import {
-  AggregateEventSourced,
+  EventSourcedAggregate,
   createDomainEvent,
   type AggregateRoot,
   type Id,
@@ -339,7 +334,7 @@ type OrderShipped = DomainEvent<"OrderShipped", { trackingNumber: string }>;
 
 type OrderEvent = OrderCreated | OrderConfirmed | OrderShipped;
 
-class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> implements AggregateRoot<OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
   static create(id: OrderId, customerId: string): Order {
     const initialState: OrderState = {
       id,
@@ -417,8 +412,8 @@ console.log(order.version); // 3 (automatically bumped)
 ```typescript
 import {
   AggregateRoot,
-  AggregateEventSourced,
-  sameAggregate,
+  EventSourcedAggregate,
+  sameVersion,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -441,11 +436,11 @@ const eventSourcedOrder = EventSourcedOrder.create("order-123" as OrderId, "cust
 const eventsAfterSnapshot = [/* events that occurred after snapshot */];
 eventSourcedOrder.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot);
 
-// Aggregate equality check
+// Optimistic concurrency check
 const order1 = await repository.getById(id);
 // ... some operations ...
 const order2 = await repository.getById(id);
-if (!sameAggregate(order1, order2)) {
+if (!sameVersion(order1, order2)) {
   throw new Error("Aggregate was modified by another process");
 }
 ```
@@ -454,7 +449,7 @@ if (!sameAggregate(order1, order2)) {
 
 ```typescript
 import {
-  AggregateEventSourced,
+  EventSourcedAggregate,
   createDomainEvent,
   err,
   ok,
@@ -469,7 +464,7 @@ type OrderState = { id: OrderId; status: "pending" | "confirmed" | "shipped" };
 type OrderShipped = DomainEvent<"OrderShipped", { trackingNumber: string }>;
 type OrderEvent = OrderShipped;
 
-class Order extends AggregateEventSourced<OrderState, OrderEvent, OrderId> implements AggregateRoot<OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
   // Event validation
   protected validateEvent(event: OrderEvent): Result<true, string> {
     if (event.type === "OrderShipped" && this.state.status !== "confirmed") {
@@ -892,49 +887,42 @@ class Order extends AggregateRoot<OrderState, OrderId>
       price,
     };
 
-    this._state = {
-      ...this._state,
-      items: [...this._state.items, item],
-      total: this._state.total + price * quantity,
-    };
-    this.bumpVersion(); // Versions the entire aggregate (including child entities)
+    this.setState({
+      ...this.state,
+      items: [...this.state.items, item],
+      total: this.state.total + price * quantity,
+    }, true); // true = bump version (versions the entire aggregate including child entities)
     return itemId;
   }
 
   updateItemQuantity(itemId: ItemId, newQuantity: number): void {
-    const item = findEntityById(this._state.items, itemId);
+    const item = findEntityById(this.state.items, itemId);
     if (!item) {
       throw new Error("Item not found");
     }
 
-    this._state = {
-      ...this._state,
-      items: updateEntityById(
-        this._state.items,
-        itemId,
-        (i) => ({ ...i, quantity: newQuantity })
-      ),
-      total: this._state.total - item.price * item.quantity + item.price * newQuantity,
-    };
-    this.bumpVersion(); // Versions the entire aggregate
+    this.setState({
+      ...this.state,
+      items: updateEntityById(this.state.items, itemId, (i) => ({ ...i, quantity: newQuantity })),
+      total: this.state.total - item.price * item.quantity + item.price * newQuantity,
+    }, true);
   }
 
   removeItem(itemId: ItemId): void {
-    const item = findEntityById(this._state.items, itemId);
+    const item = findEntityById(this.state.items, itemId);
     if (!item) {
       throw new Error("Item not found");
     }
 
-    this._state = {
-      ...this._state,
-      items: removeEntityById(this._state.items, itemId),
-      total: this._state.total - item.price * item.quantity,
-    };
-    this.bumpVersion(); // Versions the entire aggregate
+    this.setState({
+      ...this.state,
+      items: removeEntityById(this.state.items, itemId),
+      total: this.state.total - item.price * item.quantity,
+    }, true);
   }
 
   getItem(itemId: ItemId): OrderItem | undefined {
-    return findEntityById(this._state.items, itemId);
+    return findEntityById(this.state.items, itemId);
   }
 }
 
@@ -983,15 +971,15 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
     if (newQuantity <= 0) {
       throw new Error("Quantity must be greater than 0");
     }
-    this._state = { ...this._state, quantity: newQuantity };
+    this.setState({ ...this.state, quantity: newQuantity });
   }
 
   calculateSubtotal(): number {
-    return this._state.price * this._state.quantity;
+    return this.state.price * this.state.quantity;
   }
 
   isForProduct(productId: string): boolean {
-    return this._state.productId === productId;
+    return this.state.productId === productId;
   }
 
   protected validateState(state: OrderItemState): void {
@@ -1028,17 +1016,16 @@ class Order extends AggregateRoot<OrderState, OrderId>
     const itemId = `item-${++this.itemCounter}` as ItemId;
     const item = new OrderItem(itemId, productId, quantity, price);
 
-    this._state = {
-      ...this._state,
-      items: [...this._state.items, item],
-    };
-    this.bumpVersion();
+    this.setState({
+      ...this.state,
+      items: [...this.state.items, item],
+    }, true);
     return itemId;
   }
 
   // Delegate to entity's business logic
   updateItemQuantity(itemId: ItemId, newQuantity: number): void {
-    const item = findEntityById(this._state.items, itemId);
+    const item = findEntityById(this.state.items, itemId);
     if (!item) throw new Error("Item not found");
 
     item.updateQuantity(newQuantity); // Uses entity's logic
@@ -1047,18 +1034,17 @@ class Order extends AggregateRoot<OrderState, OrderId>
 
   // Use entity's business logic
   calculateTotal(): number {
-    return this._state.items.reduce(
+    return this.state.items.reduce(
       (total, item) => total + item.calculateSubtotal(),
       0
     );
   }
 
   confirm(): void {
-    if (this._state.items.length === 0) {
+    if (this.state.items.length === 0) {
       throw new Error("Cannot confirm an order without items");
     }
-    this._state = { ...this._state, status: "confirmed" };
-    this.bumpVersion();
+    this.setState({ ...this.state, status: "confirmed" }, true);
   }
 }
 
@@ -1201,10 +1187,10 @@ Key exports include:
 - `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
 - `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`). Optional `TEvent` parameter enables type-safe domain events
-- `AggregateEventSourced<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Root Entities (extends `AggregateRoot`, implements `IAggregateEventSourced<TId, TEvent>`)
-- `AggregateConfig`, `AggregateEventSourcedConfig` - Configuration interfaces
+- `EventSourcedAggregate<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Roots (extends `Entity`, implements `IEventSourcedAggregate<TId, TEvent>`)
+- `AggregateConfig`, `EventSourcedAggregateConfig` - Configuration interfaces
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
-- `sameAggregate()` - Aggregate equality helper
+- `sameVersion()` - Optimistic concurrency check (same ID and version)
 - `Entity<TState, TId>` - Base class for entities with state and business logic
 - `IEntity<TId, TState>` - Entity interface
 - `Identifiable<TId>` - Minimal interface for objects with id
@@ -1228,7 +1214,7 @@ Key exports include:
 - `andThen()`, `map()`, `mapErr()` - Result composition utilities
 - `unwrapOr()`, `unwrapOrElse()`, `match()` - Result unwrapping and pattern matching
 - `Id<Tag>` - Branded ID type
-- `IRepository<TState, TEvent, TAgg, TId>` - Repository interface
+- `IRepository<TAgg, TId>` - Repository interface
 - `ISpecification<T>` - Specification interface
 - `UnitOfWork` - Unit of Work interface
 - `guard()` - Guard/validation helper
@@ -1349,7 +1335,7 @@ class CreateOrderHandler implements CommandHandler<CreateOrderCommand, OrderId> 
 
     // 3. Save
     await this.repository.save(order);
-    await this.eventBus.publish(order.pendingEvents);
+    await this.eventBus.publish(order.domainEvents);
 
     return ok(order.id);
     // 4. Aggregate is garbage collected when method returns
@@ -1556,7 +1542,7 @@ class OrderService {
     }
 
     await this.repository.save(order);
-    await this.eventBus.publish(order.pendingEvents);
+    await this.eventBus.publish(order.domainEvents);
 
     return ok(order.id);
     // order is garbage collected here

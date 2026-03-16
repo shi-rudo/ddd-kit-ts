@@ -1,4 +1,4 @@
-import type { DomainEvent } from "../aggregate/aggregate";
+import type { DomainEvent } from "../aggregate/domain-event";
 import type { EventBus, EventHandler } from "./ports";
 
 /**
@@ -30,7 +30,7 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	private readonly handlers = new Map<string, Set<EventHandler<any>>>();
 
 	subscribe<T extends Evt>(
-		eventType: string,
+		eventType: Evt["type"],
 		handler: EventHandler<T>,
 	): () => void {
 		const type = eventType;
@@ -49,7 +49,7 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 		};
 	}
 
-	once<T extends Evt>(eventType: string): Promise<T> {
+	once<T extends Evt>(eventType: Evt["type"]): Promise<T> {
 		return new Promise<T>((resolve) => {
 			const unsubscribe = this.subscribe<T>(eventType, ((event: T) => {
 				unsubscribe();

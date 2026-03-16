@@ -1,9 +1,12 @@
+declare const __specBrand: unique symbol;
+
 /**
  * A Specification is a named, standalone object that represents a business rule for a query.
  * It is "translatable" into a concrete database query.
+ *
+ * Uses a branded type to carry the generic parameter without requiring
+ * implementors to add a runtime field.
  */
 export interface ISpecification<T> {
-	// A marker interface to ensure type safety.
-	// Concrete implementations add methods for translation.
-	readonly _type: T; // For typing only, has no runtime value
+	readonly [__specBrand]?: T;
 }

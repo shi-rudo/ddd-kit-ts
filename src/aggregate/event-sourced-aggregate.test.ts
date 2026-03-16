@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { err, ok } from "../core/result";
 import type { Id } from "../core/id";
 import {
-	AggregateEventSourced,
-	type AggregateEventSourcedConfig,
-} from "./aggregate-event-sourced";
+	EventSourcedAggregate,
+	type EventSourcedAggregateConfig,
+} from "./event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -31,7 +31,7 @@ type TestEvent =
 	| TestEventDeactivated
 	| TestEventInvalid;
 
-class TestAggregateEventSourced extends AggregateEventSourced<
+class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
 	TestEvent,
 	TestId
@@ -39,17 +39,17 @@ class TestAggregateEventSourced extends AggregateEventSourced<
 	constructor(
 		id: TestId,
 		initialState: TestState,
-		config?: AggregateEventSourcedConfig,
+		config?: EventSourcedAggregateConfig,
 	) {
 		super(id, initialState, config);
 	}
 
-	static create(id: TestId, value: number): TestAggregateEventSourced {
+	static create(id: TestId, value: number): TestEventSourcedAggregate {
 		const initialState: TestState = {
 			value,
 			status: "inactive",
 		};
-		const aggregate = new TestAggregateEventSourced(id, initialState);
+		const aggregate = new TestEventSourcedAggregate(id, initialState);
 		const result = aggregate.apply(
 			createDomainEvent("TestEventCreated", { value }) as TestEventCreated,
 		);
@@ -110,7 +110,7 @@ class TestAggregateEventSourced extends AggregateEventSourced<
 	};
 }
 
-class ValidatingAggregate extends AggregateEventSourced<
+class ValidatingAggregate extends EventSourcedAggregate<
 	TestState,
 	TestEvent,
 	TestId
@@ -120,7 +120,7 @@ class ValidatingAggregate extends AggregateEventSourced<
 	}
 
 	protected validateEvent(event: TestEvent): ReturnType<
-		AggregateEventSourced<TestState, TestEvent, TestId>["validateEvent"]
+		EventSourcedAggregate<TestState, TestEvent, TestId>["validateEvent"]
 	> {
 		if (event.type === "TestEventInvalid") {
 			return err("Invalid event type");
@@ -152,10 +152,10 @@ class ValidatingAggregate extends AggregateEventSourced<
 	};
 }
 
-describe("AggregateEventSourced", () => {
+describe("EventSourcedAggregate", () => {
 	describe("Automatic version bumping", () => {
 		it("should automatically bump version when applying new events", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 
 			expect(aggregate.version).toBe(1); // After creation event
 
@@ -167,7 +167,7 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should not bump version when autoVersionBump is disabled", () => {
-			class ManualVersionAggregate extends TestAggregateEventSourced {
+			class ManualVersionAggregate extends TestEventSourcedAggregate {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, { autoVersionBump: false });
 				}
@@ -188,7 +188,7 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should not bump version when loading from history", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			const initialVersion = aggregate.version;
 
 			const history: TestEvent[] = [
@@ -206,7 +206,7 @@ describe("AggregateEventSourced", () => {
 
 	describe("Event validation", () => {
 		it("should apply events when validation passes", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 
 			aggregate.updateValue(20);
 
@@ -251,7 +251,7 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should allow custom validation logic", () => {
-			class CustomValidatingAggregate extends AggregateEventSourced<
+			class CustomValidatingAggregate extends EventSourcedAggregate<
 				TestState,
 				TestEvent,
 				TestId
@@ -261,7 +261,7 @@ describe("AggregateEventSourced", () => {
 				}
 
 				protected validateEvent(event: TestEvent): ReturnType<
-					AggregateEventSourced<TestState, TestEvent, TestId>["validateEvent"]
+					EventSourcedAggregate<TestState, TestEvent, TestId>["validateEvent"]
 				> {
 					if (
 						event.type === "TestEventActivated" &&
@@ -333,7 +333,7 @@ describe("AggregateEventSourced", () => {
 	describe("loadFromHistory", () => {
 		it("should set version to history length", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestAggregateEventSourced("test-1" as TestId, initialState);
+			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
 			const history: TestEvent[] = [
 				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
@@ -351,7 +351,7 @@ describe("AggregateEventSourced", () => {
 
 		it("should handle empty history", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestAggregateEventSourced("test-1" as TestId, initialState);
+			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
 			const result = aggregate.loadFromHistory([]);
 
@@ -362,7 +362,7 @@ describe("AggregateEventSourced", () => {
 
 	describe("Helper methods", () => {
 		it("should check if aggregate has pending events", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 
 			expect(aggregate.hasPendingEvents()).toBe(true);
 			expect(aggregate.getEventCount()).toBe(1);
@@ -374,7 +374,7 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should get latest event", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 
 			const latest = aggregate.getLatestEvent();
 			expect(latest).toBeDefined();
@@ -388,7 +388,7 @@ describe("AggregateEventSourced", () => {
 
 		it("should return undefined for latest event when no events exist", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestAggregateEventSourced("test-1" as TestId, initialState);
+			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
 			expect(aggregate.getLatestEvent()).toBeUndefined();
 		});
@@ -396,7 +396,7 @@ describe("AggregateEventSourced", () => {
 
 	describe("Snapshots", () => {
 		it("should create snapshot with current state and version", () => {
-			const aggregate = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			aggregate.updateValue(20);
 			aggregate.activate();
 
@@ -409,7 +409,7 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should restore from snapshot with events", () => {
-			const aggregate1 = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate1 = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			aggregate1.updateValue(20);
 			aggregate1.activate();
 
@@ -417,7 +417,7 @@ describe("AggregateEventSourced", () => {
 
 			// Create new aggregate and restore from snapshot
 			const initialState: TestState = { value: 0, status: "inactive" };
-			const aggregate2 = new TestAggregateEventSourced("test-1" as TestId, initialState);
+			const aggregate2 = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
 			const eventsAfterSnapshot: TestEvent[] = [
 				createDomainEvent("TestEventUpdated", { newValue: 30 }) as TestEventUpdated,
@@ -432,13 +432,13 @@ describe("AggregateEventSourced", () => {
 		});
 
 		it("should restore from snapshot with no events after", () => {
-			const aggregate1 = TestAggregateEventSourced.create("test-1" as TestId, 10);
+			const aggregate1 = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			aggregate1.updateValue(20);
 
 			const snapshot = aggregate1.createSnapshot();
 
 			const initialState: TestState = { value: 0, status: "inactive" };
-			const aggregate2 = new TestAggregateEventSourced("test-1" as TestId, initialState);
+			const aggregate2 = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
 			const result = aggregate2.restoreFromSnapshotWithEvents(snapshot, []);
 

@@ -31,22 +31,19 @@ class TestAggregate extends AggregateRoot<TestState, TestId> {
 	}
 
 	updateValue(newValue: number): void {
-		this._state = { ...this._state, value: newValue };
-		this.bumpVersion();
+		this.setState({ ...this.state, value: newValue }, true);
 	}
 
 	activate(): void {
-		this._state = { ...this._state, status: "active" };
-		this.bumpVersion();
+		this.setState({ ...this.state, status: "active" }, true);
 	}
 
 	deactivate(): void {
-		this._state = { ...this._state, status: "inactive" };
-		this.bumpVersion();
+		this.setState({ ...this.state, status: "inactive" }, true);
 	}
 
 	updateWithSetState(newValue: number): void {
-		this.setState({ ...this._state, value: newValue }, true);
+		this.setState({ ...this.state, value: newValue }, true);
 	}
 }
 
@@ -80,6 +77,23 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("Version management", () => {
+		it("version should not be externally assignable", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+			// Version should be readable
+			expect(aggregate.version).toBe(0);
+
+			// After domain operation, version should increase
+			aggregate.updateValue(20);
+			expect(aggregate.version).toBe(1);
+
+			// Direct assignment should not be possible at runtime
+			// (TypeScript readonly prevents compile-time, but we verify runtime encapsulation)
+			expect(() => {
+				(aggregate as any).version = 99;
+			}).toThrow();
+		});
+
 		it("should manually bump version", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
@@ -99,7 +113,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 
 				public updateValue(newValue: number): void {
-					this.setState({ ...this._state, value: newValue });
+					this.setState({ ...this.state, value: newValue });
 				}
 			}
 
@@ -121,7 +135,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 
 				public updateValue(newValue: number): void {
-					this.setState({ ...this._state, value: newValue }, false);
+					this.setState({ ...this.state, value: newValue }, false);
 				}
 			}
 
@@ -176,6 +190,32 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			expect(aggregate.state.value).toBe(10); // Original unchanged
 		});
+
+		it("should deep copy nested state in snapshot — no shared references", () => {
+			type StateWithChildren = {
+				items: { id: string; qty: number }[];
+				status: string;
+			};
+
+			class AggWithChildren extends AggregateRoot<StateWithChildren, TestId> {
+				constructor(id: TestId, state: StateWithChildren) {
+					super(id, state);
+				}
+				addItem(item: { id: string; qty: number }) {
+					this.setState({ ...this.state, items: [...this._state.items, item] });
+				}
+			}
+
+			const agg = new AggWithChildren("a-1" as TestId, { items: [{ id: "i1", qty: 2 }], status: "open" });
+			const snapshot = agg.createSnapshot();
+
+			// Mutate aggregate after snapshot
+			agg.addItem({ id: "i2", qty: 5 });
+
+			// Snapshot must be isolated
+			expect(snapshot.state.items).toHaveLength(1);
+			expect(agg.state.items).toHaveLength(2);
+		});
 	});
 
 	describe("State immutability", () => {
@@ -216,7 +256,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					}
 				}
 				public update(value: number) {
-					this.setState({ ...this._state, value });
+					this.setState({ ...this.state, value });
 				}
 			}
 
@@ -256,14 +296,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					super(id, initialState);
 				}
 				public updateValue(newValue: number) {
-					this._state = { ...this._state, value: newValue };
+					this.setState({ ...this.state, value: newValue }, true);
 					this.addDomainEvent({ type: "ValueUpdated", newValue });
-					this.bumpVersion();
 				}
 				public activate() {
-					this._state = { ...this._state, status: "active" };
+					this.setState({ ...this.state, status: "active" }, true);
 					this.addDomainEvent({ type: "Activated" });
-					this.bumpVersion();
 				}
 			}
 

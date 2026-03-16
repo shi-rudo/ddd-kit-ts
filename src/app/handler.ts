@@ -24,7 +24,7 @@ import type { UnitOfWork } from "../repo/uow";
  * );
  * ```
  */
-export function withCommit<Evt, R>(
+export function withCommit<Evt extends { type: string }, R>(
 	deps: {
 		outbox: Outbox<Evt>;
 		bus?: EventBus<Evt>;

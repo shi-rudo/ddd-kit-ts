@@ -41,7 +41,7 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 		if (newQuantity <= 0) {
 			throw new Error("Quantity must be greater than 0");
 		}
-		this._state = { ...this._state, quantity: newQuantity };
+		this.setState({ ...this.state, quantity: newQuantity });
 	}
 
 	/**
@@ -49,14 +49,14 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 	 * This is domain logic that belongs to the entity.
 	 */
 	calculateSubtotal(): number {
-		return this._state.price * this._state.quantity;
+		return this.state.price * this.state.quantity;
 	}
 
 	/**
 	 * Checks if this item is for a specific product.
 	 */
 	isForProduct(productId: string): boolean {
-		return this._state.productId === productId;
+		return this.state.productId === productId;
 	}
 
 	/**

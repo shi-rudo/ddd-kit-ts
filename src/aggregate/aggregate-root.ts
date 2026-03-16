@@ -58,33 +58,24 @@ export interface AggregateConfig {
 }
 
 /**
- * Base class for creating Aggregate Roots (Entities) without Event Sourcing.
+ * Base class for Aggregate Roots without Event Sourcing.
  *
- * This class creates an Entity that serves as the Aggregate Root. The Aggregate Root
- * is the parent Entity of the aggregate and represents it externally. It has identity
- * (id), state, and version for optimistic concurrency control.
+ * In DDD (Evans), an Aggregate is a cluster of objects — root entity, child entities,
+ * and value objects — treated as a unit for consistency. The **Aggregate Root** is the
+ * root entity that represents the aggregate externally and is the only entry point
+ * for external code. This class serves as both: it IS the root entity and it contains
+ * the aggregate state (`TState`) which holds child entities and value objects.
  *
- * Extends `Entity<TState, TId>` to inherit:
- * - Identity (id)
- * - State management
- * - State validation
- *
- * Adds Aggregate Root specific functionality:
- * - Version management (for Optimistic Concurrency Control)
- * - Domain events tracking
+ * Provides:
+ * - Identity (id) and state management (via `Entity`)
+ * - Version management for optimistic concurrency control
+ * - Domain event tracking for side-effects
  * - Snapshot support for performance optimization
  *
- * The aggregate state (`TState`) contains:
- * - Child entities (Entities with id + state, but no own version)
- * - Value objects (immutable objects)
+ * All changes to child entities within `TState` are versioned through this root.
+ * Use `setState()` for state mutations to ensure invariant validation.
  *
- * All changes to child entities are versioned through the Aggregate Root. The version
- * applies to the entire aggregate, including all child entities.
- *
- * Implements `IAggregateRoot<TId>` to mark this as an Aggregate Root Entity.
- *
- * Use this class when you don't need Event Sourcing but still want
- * aggregate patterns with versioning and state management.
+ * For event sourcing, use `EventSourcedAggregate` instead.
  *
  * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TId - The type of the aggregate root identifier
@@ -99,8 +90,7 @@ export interface AggregateConfig {
  *   }
  *
  *   confirm(): void {
- *     this._state = { ...this._state, status: "confirmed" };
- *     this.bumpVersion(); // Versions the entire aggregate
+ *     this.setState({ ...this.state, status: "confirmed" }, true);
  *   }
  * }
  * ```
@@ -108,7 +98,15 @@ export interface AggregateConfig {
 export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unknown>
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId> {
-	public version: Version = 0 as Version;
+	private _version: Version = 0 as Version;
+
+	public get version(): Version {
+		return this._version;
+	}
+
+	protected setVersion(version: Version): void {
+		this._version = version;
+	}
 
 	private readonly _config: AggregateConfig;
 	private readonly _autoVersionBump: boolean;
@@ -158,7 +156,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 	 * when using `setState()`.
 	 */
 	protected bumpVersion(): void {
-		this.version = (this.version + 1) as Version;
+		this.setVersion((this._version + 1) as Version);
 	}
 
 	/**
@@ -195,7 +193,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 	 */
 	public createSnapshot(): AggregateSnapshot<TState> {
 		return {
-			state: { ...this._state } as TState,
+			state: structuredClone(this._state),
 			version: this.version,
 			snapshotAt: new Date(),
 		};
@@ -218,6 +216,6 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 	public restoreFromSnapshot(snapshot: AggregateSnapshot<TState>): void {
 		this.validateState(snapshot.state);
 		this._state = snapshot.state;
-		this.version = snapshot.version;
+		this.setVersion(snapshot.version);
 	}
 }

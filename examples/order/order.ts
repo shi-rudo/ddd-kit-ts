@@ -17,7 +17,7 @@ export type OrderState = {
 
 /**
  * Example of an Aggregate WITHOUT Event Sourcing.
- * This aggregate uses direct state mutation instead of events.
+ * This aggregate uses direct state mutation via setState().
  */
 export class Order extends AggregateRoot<OrderState, OrderId> {
 	static create(id: OrderId, customerId: string): Order {
@@ -32,49 +32,44 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	}
 
 	addItem(productId: string, quantity: number, price: number): void {
-		if (this._state.status !== "pending") {
+		if (this.state.status !== "pending") {
 			throw new Error("Cannot add items to a non-pending order");
 		}
 
 		const newItem = { productId, quantity, price };
-		const newTotal = this._state.total + quantity * price;
+		const newTotal = this.state.total + quantity * price;
 
-		this._state = {
-			...this._state,
-			items: [...this._state.items, newItem],
+		this.setState({
+			...this.state,
+			items: [...this.state.items, newItem],
 			total: newTotal,
-		};
-		this.bumpVersion();
+		}, true);
 	}
 
 	confirm(): void {
-		if (this._state.status !== "pending") {
+		if (this.state.status !== "pending") {
 			throw new Error("Only pending orders can be confirmed");
 		}
-		if (this._state.items.length === 0) {
+		if (this.state.items.length === 0) {
 			throw new Error("Cannot confirm an order without items");
 		}
 
-		this._state = { ...this._state, status: "confirmed" };
-		this.bumpVersion();
+		this.setState({ ...this.state, status: "confirmed" }, true);
 	}
 
 	ship(): void {
-		if (this._state.status !== "confirmed") {
+		if (this.state.status !== "confirmed") {
 			throw new Error("Only confirmed orders can be shipped");
 		}
 
-		this._state = { ...this._state, status: "shipped" };
-		this.bumpVersion();
+		this.setState({ ...this.state, status: "shipped" }, true);
 	}
 
 	cancel(): void {
-		if (this._state.status === "shipped") {
+		if (this.state.status === "shipped") {
 			throw new Error("Cannot cancel a shipped order");
 		}
 
-		this._state = { ...this._state, status: "cancelled" };
-		this.bumpVersion();
+		this.setState({ ...this.state, status: "cancelled" }, true);
 	}
 }
-

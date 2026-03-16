@@ -2,28 +2,57 @@ import { err, ok, type Result } from "../core/result";
 import type { Query, QueryHandler } from "./query";
 
 /**
- * Query Bus interface for dispatching queries to their handlers.
- * Provides a centralized way to execute queries with handler registration.
+ * Type map for query types to their return types.
+ * Used to improve type inference in QueryBus.
  *
  * @example
  * ```typescript
- * const bus = new QueryBus();
- * bus.register("GetOrder", getOrderHandler);
+ * type MyQueryMap = {
+ *   GetOrder: Order | null;
+ *   ListOrders: Order[];
+ * };
  *
- * const order = await bus.execute({
- *   type: "GetOrder",
- *   orderId: "123"
- * });
+ * const bus = new QueryBus<MyQueryMap>();
+ * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
+ * // result: Result<Order | null, string>  ← automatically inferred
  * ```
  */
-export interface IQueryBus {
+type QueryTypeMap = Record<string, unknown>;
+
+/**
+ * Query Bus interface for dispatching queries to their handlers.
+ * Provides a centralized way to execute queries with handler registration.
+ *
+ * Supports an optional type map (`TMap`) for automatic return type inference.
+ * Without a type map, the return type must be specified manually or defaults to `unknown`.
+ *
+ * @template TMap - Optional mapping from query type strings to return types
+ *
+ * @example
+ * ```typescript
+ * // With type map (recommended) – return type is inferred
+ * type MyQueries = { GetOrder: Order | null; ListOrders: Order[] };
+ * const bus = new QueryBus<MyQueries>();
+ * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
+ * // result: Result<Order | null, string>
+ *
+ * // Without type map – works like before
+ * const bus = new QueryBus();
+ * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
+ * // result: Result<unknown, string>
+ * ```
+ */
+export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
 	/**
 	 * Executes a query by dispatching it to the registered handler.
-	 * Returns a Result type instead of throwing an error.
+	 * When a type map is provided, the return type is inferred from the query type.
 	 *
 	 * @param query - The query to execute
-	 * @returns Result containing the query result if successful, or an error message if no handler is registered
+	 * @returns Result containing the query result if successful, or an error message
 	 */
+	execute<Q extends Query & { type: keyof TMap & string }>(
+		query: Q,
+	): Promise<Result<TMap[Q["type"]], string>>;
 	execute<Q extends Query, R>(query: Q): Promise<Result<R, string>>;
 
 	/**
@@ -34,6 +63,9 @@ export interface IQueryBus {
 	 * @returns The query result
 	 * @throws Error if no handler is registered for the query type
 	 */
+	executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
+		query: Q,
+	): Promise<TMap[Q["type"]]>;
 	executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
 
 	/**
@@ -49,14 +81,12 @@ export interface IQueryBus {
 }
 
 /**
- * Type map for query types to their return types.
- * Used to improve type inference in QueryBus.
- */
-type QueryTypeMap = Record<string, unknown>;
-
-/**
  * Simple in-memory query bus implementation.
  * Handlers are stored in a Map and dispatched based on query type.
+ *
+ * Supports an optional type map (`TMap`) for automatic return type inference.
+ * When `TMap` is provided, `execute()` and `executeUnsafe()` infer the result type from the query type.
+ * Without `TMap`, it works like before (return type defaults to `unknown` or can be specified manually).
  *
  * **Note:** This is a basic implementation suitable for development and simple use cases.
  * For production environments, consider implementing or using a more feature-rich bus that includes:
@@ -70,18 +100,24 @@ type QueryTypeMap = Record<string, unknown>;
  * The `QueryHandler` type can still be used with external production-grade buses
  * (e.g., RabbitMQ, AWS SQS) while maintaining type safety.
  *
+ * @template TMap - Optional mapping from query type strings to return types
+ *
  * @example
  * ```typescript
- * const bus = new QueryBus();
- * bus.register("GetOrder", async (query) => {
- *   return await repository.getById(query.orderId);
- * });
+ * // With type map – full inference
+ * type Queries = { GetOrder: Order | null; ListOrders: Order[] };
+ * const bus = new QueryBus<Queries>();
+ * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
+ * // result: Result<Order | null, string>
  *
- * const order = await bus.execute({ type: "GetOrder", orderId: "123" });
+ * // Without type map – same as before
+ * const bus = new QueryBus();
+ * bus.register("GetOrder", async (query) => repository.getById(query.orderId));
+ * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */
 export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
-	implements IQueryBus
+	implements IQueryBus<TMap>
 {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private readonly handlers = new Map<string, QueryHandler<any, any>>();
@@ -93,7 +129,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		this.handlers.set(queryType, handler);
 	}
 
-	async execute<Q extends Query & { type: keyof TMap }>(
+	async execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
 	): Promise<Result<TMap[Q["type"]], string>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, string>>;
@@ -112,6 +148,10 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		}
 	}
 
+	async executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
+		query: Q,
+	): Promise<TMap[Q["type"]]>;
+	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
 		const handler = this.handlers.get(query.type);
 		if (!handler) {
@@ -120,4 +160,3 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		return handler(query);
 	}
 }
-

@@ -28,7 +28,7 @@ export type EventHandler<Evt> = (event: Evt) => Promise<void> | void;
  * await bus.publish([orderCreatedEvent, orderShippedEvent]);
  * ```
  */
-export interface EventBus<Evt> {
+export interface EventBus<Evt extends { type: string }> {
 	/**
 	 * Publishes events to all subscribed handlers.
 	 * All handlers for each event type will be called.
@@ -56,7 +56,7 @@ export interface EventBus<Evt> {
 	 * ```
 	 */
 	subscribe: <T extends Evt>(
-		eventType: string,
+		eventType: Evt["type"],
 		handler: EventHandler<T>,
 	) => () => void;
 
@@ -74,11 +74,8 @@ export interface EventBus<Evt> {
 	 * console.log("Order created:", event.payload.orderId);
 	 * ```
 	 */
-	once: <T extends Evt>(eventType: string) => Promise<T>;
+	once: <T extends Evt>(eventType: Evt["type"]) => Promise<T>;
 }
 export interface Outbox<Evt> {
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
-}
-export interface Clock {
-	now: () => Date;
 }

@@ -5,7 +5,7 @@
  *
  * 1. **Aggregate Root Entity**: The parent Entity of an aggregate.
  *    - Has identity (id), state, and version
- *    - Implemented by classes extending `AggregateRoot` or `AggregateEventSourced`
+ *    - Implemented by classes extending `AggregateRoot` or `EventSourcedAggregate`
  *    - Represents the aggregate externally
  *    - Loaded/saved through repositories
  *

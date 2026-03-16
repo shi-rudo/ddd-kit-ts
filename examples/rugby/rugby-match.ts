@@ -1,5 +1,5 @@
 import type { Id } from "../../src/core/id";
-import { AggregateEventSourced } from "../../src/aggregate/aggregate-event-sourced";
+import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
 import { createDomainEvent } from "../../src/aggregate/aggregate";
 import type {
 	ConversionScored,
@@ -34,7 +34,7 @@ export type MatchState = {
 	scoringPlays: ScoringPlay[];
 };
 
-export class RugbyMatch extends AggregateEventSourced<
+export class RugbyMatch extends EventSourcedAggregate<
 	MatchState,
 	RugbyMatchEvent,
 	MatchId

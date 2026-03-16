@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { err, ok } from "../core/result";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { err, ok, type Result } from "../core/result";
 import type { Command } from "./command";
 import { CommandBus } from "./command-bus";
 
@@ -139,6 +139,43 @@ describe("CommandBus", () => {
 			if (updateResult.ok) {
 				expect(updateResult.value).toBe("updated-order-1");
 			}
+		});
+	});
+
+	describe("type inference with TMap", () => {
+		it("should infer return type from type map", async () => {
+			type Commands = {
+				CreateOrder: string;
+				CancelOrder: void;
+			};
+
+			const bus = new CommandBus<Commands>();
+
+			bus.register("CreateOrder", async () => ok("order-123"));
+			bus.register("CancelOrder", async () => ok(undefined as void));
+
+			const createResult = await bus.execute({
+				type: "CreateOrder" as const,
+				customerId: "c-1",
+			});
+
+			expectTypeOf(createResult).toEqualTypeOf<Result<string, string>>();
+
+			const cancelResult = await bus.execute({
+				type: "CancelOrder" as const,
+			});
+
+			expectTypeOf(cancelResult).toEqualTypeOf<Result<void, string>>();
+		});
+
+		it("should return Result<unknown, string> without type map", async () => {
+			const bus = new CommandBus();
+
+			bus.register("CreateOrder", async () => ok("order-123"));
+
+			const result = await bus.execute({ type: "CreateOrder" });
+
+			expectTypeOf(result).toEqualTypeOf<Result<unknown, string>>();
 		});
 	});
 });
