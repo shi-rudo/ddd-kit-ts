@@ -184,38 +184,6 @@ export function voWithValidation<T>(
     return ok(vo(t));
 }
 
-/**
- * Creates a value object with optional validation.
- * Throws an error if validation fails.
- *
- * @param t - The data to convert into a value object
- * @param validate - Validation function that returns true if valid
- * @param errorMessage - Optional custom error message if validation fails
- * @returns A deeply frozen, immutable value object
- * @throws Error if validation fails
- *
- * @example
- * ```typescript
- * const money = voWithValidationUnsafe(
- *   { amount: 100, currency: "USD" },
- *   (m) => m.amount >= 0 && m.currency.length === 3,
- *   "Invalid money: amount must be non-negative and currency must be 3 characters"
- * );
- * ```
- */
-export function voWithValidationUnsafe<T>(
-    t: T,
-    validate: (value: T) => boolean,
-    errorMessage?: string,
-): VO<T> {
-    if (!validate(t)) {
-        throw new Error(
-            errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
-        );
-    }
-    return vo(t);
-}
-
 // ============================================================================
 // Class-based Value Object API
 // ============================================================================

@@ -25,6 +25,13 @@ export interface IRepository<
 > {
 	getById(id: TId): Promise<TAgg | null>;
 
+	/**
+	 * Loads an aggregate by id and throws `AggregateNotFoundError` if it
+	 * does not exist. Use this when "not found" is a programming/contract
+	 * error in the calling Use Case; use `getById` when null is a valid outcome.
+	 */
+	getByIdOrFail(id: TId): Promise<TAgg>;
+
 	findOne(spec: ISpecification<TAgg>): Promise<TAgg | null>;
 
 	find(spec: ISpecification<TAgg>): Promise<TAgg[]>;

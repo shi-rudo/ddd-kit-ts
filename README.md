@@ -62,7 +62,7 @@ const email = createEmail("user@example.com");
 
 ### Value Objects
 
-Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voEqualsExcept()` for comparing while ignoring specified keys (useful for metadata), `voWithValidation()` for creating validated value objects (returns Result), and `voWithValidationUnsafe()` for the exception-throwing variant.
+Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voEqualsExcept()` for comparing while ignoring specified keys (useful for metadata), and `voWithValidation()` for creating validated value objects at the App-Service boundary (returns Result). For Domain construction, prefer the `ValueObject` base class — its constructor throws on invariant violation via the `validate()` hook.
 
 ### Entities
 
@@ -177,12 +177,9 @@ if (result.isOk()) {
   console.error(result.error);
 }
 
-// Or use unsafe variant (throws exception)
-const validMoneyUnsafe = voWithValidationUnsafe(
-  { amount: 100, currency: "USD" },
-  (m) => m.amount >= 0 && m.currency.length === 3,
-  "Amount must be non-negative and currency must be 3 characters"
-);
+// For Domain construction, use the `ValueObject` base class — its constructor
+// throws via the `validate()` hook, so Domain code keeps a throw-based contract.
+// Reserve `voWithValidation` for parsing untrusted input at the App boundary.
 
 // Value object with nested structures (deep freeze)
 const address = vo({
@@ -350,28 +347,22 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
   }
 
   confirm(): void {
-    const result = this.apply(
-      createDomainEvent("OrderConfirmed") as OrderConfirmed
-    );
-    if (result.isErr()) {
-      throw new Error(result.error);
-    }
+    this.apply(createDomainEvent("OrderConfirmed") as OrderConfirmed);
   }
 
   ship(trackingNumber: string): void {
-    const result = this.apply(
+    this.apply(
       createDomainEvent("OrderShipped", { trackingNumber }) as OrderShipped
     );
-    if (result.isErr()) {
-      throw new Error(result.error);
-    }
   }
 
-  // Or use unsafe variant (throws exception directly)
-  confirmUnsafe(): void {
-    this.applyUnsafe(
-      createDomainEvent("OrderConfirmed") as OrderConfirmed
-    );
+  // Override `validateEvent` to throw a DomainError subclass when an invariant
+  // is violated (e.g. confirming an already-confirmed order). `apply()` itself
+  // throws `MissingHandlerError` when no handler is registered for the event.
+  protected validateEvent(event: OrderEvent): void {
+    if (event.type === "OrderConfirmed" && this.state.status === "confirmed") {
+      throw new OrderAlreadyConfirmedError(this.id);
+    }
   }
 
   protected readonly handlers = {
@@ -1079,14 +1070,21 @@ if (result.isOk()) {
 pnpm add @shirudo/result
 ```
 
-For composition utilities (`map`, `flatMap`, `mapErr`, `match`, `unwrapOr`, `pipe`, `tryCatch`, async variants, etc.), refer to the [`@shirudo/result` documentation](https://www.npmjs.com/package/@shirudo/result). All `ddd-kit` APIs that return `Result` — `voWithValidation`, `EventSourcedAggregate.apply()`, `CommandBus.execute()`, `QueryBus.execute()`, `guard()` — work seamlessly with the full operator set.
+For composition utilities (`map`, `flatMap`, `mapErr`, `match`, `unwrapOr`, `pipe`, `tryCatch`, async variants, etc.), refer to the [`@shirudo/result` documentation](https://www.npmjs.com/package/@shirudo/result).
+
+**Where `ddd-kit` uses `Result` vs `throw`:**
+
+- **Domain layer throws** `DomainError`-derived exceptions. `EventSourcedAggregate.apply()`, the `validateEvent()` hook, and the `ValueObject` constructor all throw. Subclass `DomainError` for your aggregate-specific errors (e.g. `OrderAlreadyShippedError`) and catch via `instanceof`.
+- **Infrastructure boundary returns `Result`** where corruption is an expected recoverable failure: `EventSourcedAggregate.loadFromHistory()`, `restoreFromSnapshotWithEvents()`.
+- **App-Service boundary returns `Result`**: `CommandBus.execute()`, `QueryBus.execute()`, `CommandHandler<C,R>`, `QueryHandler<Q,R>`, `withCommit()`. This is where you map errors to HTTP statuses, logs, etc.
+- **`voWithValidation`** is the explicit Result variant for parsing untrusted input at the App boundary. For Domain construction, use the `ValueObject` base class (constructor throws via `validate()`).
 
 ## API Documentation
 
 This package is written in TypeScript and provides full type definitions. All types and functions are exported from the main entry point. You can explore the available APIs through your IDE's autocomplete or by examining the type definitions in `node_modules/@shirudo/ddd-kit/dist/index.d.ts`.
 
 Key exports include:
-- `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voWithValidationUnsafe()` - Value Object utilities
+- `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()` - Value Object utilities (`voWithValidation` is for the App-Service boundary; Domain construction goes through the `ValueObject` base class which throws via `validate()`)
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
 - `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`). Optional `TEvent` parameter enables type-safe domain events
 - `EventSourcedAggregate<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Roots (extends `Entity`, implements `IEventSourcedAggregate<TId, TEvent>`)
@@ -1116,7 +1114,8 @@ Key exports include:
 - `IRepository<TAgg, TId>` - Repository interface
 - `ISpecification<T>` - Specification interface
 - `UnitOfWork` - Unit of Work interface
-- `guard()` - Guard/validation helper
+- `DomainError` - Abstract base for domain exceptions (Consumer subclasses for their aggregate-specific errors)
+- `MissingHandlerError`, `AggregateNotFoundError` - Concrete library-internal `DomainError` subclasses
 
 ## Concurrency & Thread Safety
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { err, ok } from "@shirudo/result";
 import type { Id } from "../core/id";
+import { DomainError, MissingHandlerError } from "../core/errors";
 import {
 	EventSourcedAggregate,
 	type EventSourcedAggregateConfig,
@@ -8,7 +8,6 @@ import {
 import {
 	createDomainEvent,
 	type DomainEvent,
-	type Version,
 } from "./aggregate";
 
 type TestId = Id<"TestId">;
@@ -31,6 +30,18 @@ type TestEvent =
 	| TestEventDeactivated
 	| TestEventInvalid;
 
+class InvalidTestEventError extends DomainError {
+	constructor(reason: string) {
+		super(`Invalid test event: ${reason}`);
+	}
+}
+
+class AlreadyActiveError extends DomainError {
+	constructor() {
+		super("Already active");
+	}
+}
+
 class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
 	TestEvent,
@@ -50,40 +61,28 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 			status: "inactive",
 		};
 		const aggregate = new TestEventSourcedAggregate(id, initialState);
-		const result = aggregate.apply(
+		aggregate.apply(
 			createDomainEvent("TestEventCreated", { value }) as TestEventCreated,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 		return aggregate;
 	}
 
 	updateValue(newValue: number): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	activate(): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	deactivate(): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("TestEventDeactivated", {}) as TestEventDeactivated,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	protected readonly handlers = {
@@ -119,13 +118,10 @@ class ValidatingAggregate extends EventSourcedAggregate<
 		super(id, initialState);
 	}
 
-	protected validateEvent(event: TestEvent): ReturnType<
-		EventSourcedAggregate<TestState, TestEvent, TestId>["validateEvent"]
-	> {
+	protected validateEvent(event: TestEvent): void {
 		if (event.type === "TestEventInvalid") {
-			return err("Invalid event type");
+			throw new InvalidTestEventError("forbidden event type");
 		}
-		return ok(true);
 	}
 
 	protected readonly handlers = {
@@ -213,44 +209,27 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.state.value).toBe(20);
 		});
 
-		it("should return error result when validation fails", () => {
+		it("should throw the subclass's DomainError when validation fails", () => {
 			class TestValidatingAggregate extends ValidatingAggregate {
-				public testApply(event: TestEvent) {
-					return this.apply(event);
+				public testApply(event: TestEvent): void {
+					this.apply(event);
 				}
 			}
 
 			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestValidatingAggregate("test-1" as TestId, initialState);
-
-			const result = aggregate.testApply(
-				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			const aggregate = new TestValidatingAggregate(
+				"test-1" as TestId,
+				initialState,
 			);
 
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toContain("Event validation failed");
-			}
-		});
-
-		it("should throw error when validation fails with applyUnsafe", () => {
-			class TestValidatingAggregate extends ValidatingAggregate {
-				public testApplyUnsafe(event: TestEvent): void {
-					this.applyUnsafe(event);
-				}
-			}
-
-			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestValidatingAggregate("test-1" as TestId, initialState);
-
 			expect(() => {
-				aggregate.testApplyUnsafe(
+				aggregate.testApply(
 					createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
 				);
-			}).toThrow(/Event validation failed/);
+			}).toThrow(InvalidTestEventError);
 		});
 
-		it("should allow custom validation logic", () => {
+		it("should allow custom validation logic that throws DomainError", () => {
 			class CustomValidatingAggregate extends EventSourcedAggregate<
 				TestState,
 				TestEvent,
@@ -260,24 +239,17 @@ describe("EventSourcedAggregate", () => {
 					super(id, initialState);
 				}
 
-				protected validateEvent(event: TestEvent): ReturnType<
-					EventSourcedAggregate<TestState, TestEvent, TestId>["validateEvent"]
-				> {
+				protected validateEvent(event: TestEvent): void {
 					if (
 						event.type === "TestEventActivated" &&
 						this.state.status === "active"
 					) {
-						return err("Already active");
+						throw new AlreadyActiveError();
 					}
-					return ok(true);
 				}
 
-				public testApply(event: TestEvent) {
-					return this.apply(event);
-				}
-
-				public testApplyUnsafe(event: TestEvent): void {
-					this.applyUnsafe(event);
+				public testApply(event: TestEvent): void {
+					this.apply(event);
 				}
 
 				protected readonly handlers = {
@@ -313,20 +285,102 @@ describe("EventSourcedAggregate", () => {
 				initialState,
 			);
 
-			const result = aggregate.testApply(
-				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
-			);
-
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toContain("Already active");
-			}
-
 			expect(() => {
-				aggregate.testApplyUnsafe(
+				aggregate.testApply(
 					createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 				);
-			}).toThrow(/Already active/);
+			}).toThrow(AlreadyActiveError);
+		});
+
+		it("should throw MissingHandlerError when no handler is registered", () => {
+			class HandlerlessAggregate extends EventSourcedAggregate<
+				TestState,
+				TestEvent,
+				TestId
+			> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+
+				public testApply(event: TestEvent): void {
+					this.apply(event);
+				}
+
+				// Intentionally missing handler for TestEventUpdated
+				protected readonly handlers = {
+					TestEventCreated: (s: TestState): TestState => s,
+				} as unknown as Record<
+					TestEvent["type"],
+					(s: TestState, e: TestEvent) => TestState
+				>;
+			}
+
+			const aggregate = new HandlerlessAggregate("test-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+
+			expect(() => {
+				aggregate.testApply(
+					createDomainEvent("TestEventUpdated", {
+						newValue: 1,
+					}) as TestEventUpdated,
+				);
+			}).toThrow(MissingHandlerError);
+		});
+
+		it("should not mutate state if handler throws", () => {
+			class ThrowingHandlerAggregate extends EventSourcedAggregate<
+				TestState,
+				TestEvent,
+				TestId
+			> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+
+				public testApply(event: TestEvent): void {
+					this.apply(event);
+				}
+
+				public stateSnapshot(): TestState {
+					return this.state;
+				}
+
+				public versionSnapshot(): number {
+					return this.version;
+				}
+
+				protected readonly handlers = {
+					TestEventCreated: (state: TestState): TestState => state,
+					TestEventUpdated: (): TestState => {
+						throw new Error("handler boom");
+					},
+					TestEventActivated: (state: TestState): TestState => state,
+					TestEventDeactivated: (state: TestState): TestState => state,
+					TestEventInvalid: (state: TestState): TestState => state,
+				};
+			}
+
+			const aggregate = new ThrowingHandlerAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			const before = aggregate.stateSnapshot();
+			const versionBefore = aggregate.versionSnapshot();
+
+			expect(() =>
+				aggregate.testApply(
+					createDomainEvent("TestEventUpdated", {
+						newValue: 99,
+					}) as TestEventUpdated,
+				),
+			).toThrow("handler boom");
+
+			// State and version unchanged — no pending event added
+			expect(aggregate.stateSnapshot()).toEqual(before);
+			expect(aggregate.versionSnapshot()).toBe(versionBefore);
+			expect(aggregate.hasPendingEvents()).toBe(false);
 		});
 	});
 
@@ -357,6 +411,25 @@ describe("EventSourcedAggregate", () => {
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(0);
+		});
+
+		it("should return Err containing the DomainError on validation failure", () => {
+			const initialState: TestState = { value: 10, status: "inactive" };
+			const aggregate = new ValidatingAggregate(
+				"test-1" as TestId,
+				initialState,
+			);
+
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			];
+
+			const result = aggregate.loadFromHistory(history);
+
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
+				expect(result.error).toBeInstanceOf(InvalidTestEventError);
+			}
 		});
 	});
 
@@ -448,4 +521,3 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 });
-

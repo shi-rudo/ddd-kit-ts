@@ -1,5 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
+import { DomainError, MissingHandlerError } from "../core/errors";
 import { Entity } from "../entity/entity";
 import type { IAggregateRoot } from "./aggregate-root";
 import type { DomainEvent } from "./domain-event";
@@ -25,11 +26,13 @@ export interface IEventSourcedAggregate<
 	readonly pendingEvents: ReadonlyArray<TEvent>;
 
 	/**
-	 * Reconstitutes the aggregate from an event history.
+	 * Reconstitutes the aggregate from an event history. Returns `Result`
+	 * because event-stream corruption is an expected recoverable failure
+	 * at the infrastructure boundary.
 	 *
 	 * @param history - An ordered list of past events
 	 */
-	loadFromHistory(history: TEvent[]): Result<void, string>;
+	loadFromHistory(history: TEvent[]): Result<void, DomainError>;
 
 	/**
 	 * Clears the list of pending events.
@@ -76,15 +79,33 @@ export interface EventSourcedAggregateConfig {
  * `addDomainEvent()` are not available. This enforces the event sourcing pattern
  * at the type level — there is no way to mutate state without going through an event handler.
  *
+ * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions on
+ * invariant violations. Subclasses override `validateEvent()` to throw their
+ * own concrete subclasses (e.g. `OrderAlreadyConfirmedError`). Only the
+ * infrastructure-boundary methods (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) return `Result` — they catch `DomainError`
+ * during replay so callers can react to corrupted event streams without
+ * try/catch.
+ *
  * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TEvent - The union type of all domain events
  * @template TId - The type of the aggregate root identifier
  *
  * @example
  * ```typescript
+ * class OrderAlreadyConfirmedError extends DomainError {
+ *   constructor(id: OrderId) { super(`Order ${id} is already confirmed`); }
+ * }
+ *
  * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
  *   confirm(): void {
  *     this.apply(createDomainEvent("OrderConfirmed", {}));
+ *   }
+ *
+ *   protected validateEvent(event: OrderEvent): void {
+ *     if (event.type === "OrderConfirmed" && this.state.status === "confirmed") {
+ *       throw new OrderAlreadyConfirmedError(this.id);
+ *     }
  *   }
  *
  *   protected readonly handlers = {
@@ -140,71 +161,42 @@ export abstract class EventSourcedAggregate<
 	// --- Event application ---
 
 	/**
-	 * Validates an event before it is applied.
-	 * Override this method to add custom validation logic.
-	 * Return `ok(true)` if the event is valid, `err(message)` otherwise.
+	 * Validates an event before it is applied. Default is no-op.
+	 * Subclasses override to throw a concrete `DomainError` subclass when
+	 * the event violates an invariant in the current state.
 	 */
-	protected validateEvent(_event: TEvent): Result<true, string> {
-		return ok(true);
+	protected validateEvent(_event: TEvent): void {
+		// no-op by default
 	}
 
 	/**
-	 * Applies an event to change the state and adds it to pending events.
-	 * Returns a Result type instead of throwing an error.
+	 * Applies an event: validates, locates the handler, computes the next
+	 * state, then commits state + pending event + version bump atomically.
+	 *
+	 * Throws `DomainError` (or a subclass) on validation failure.
+	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
+	 *
+	 * State is not mutated if any step throws — the handler is invoked into
+	 * a local and only assigned to `_state` once all checks pass.
 	 *
 	 * @param event - The domain event to apply
-	 * @param isNew - Whether the event is new (needs persisting) or from history replay
+	 * @param isNew - Whether the event is new (needs persisting) or replayed from history
 	 */
-	protected apply(event: TEvent, isNew = true): Result<void, string> {
-		const validation = this.validateEvent(event);
-		if (validation.isErr()) {
-			return err(
-				`Event validation failed for ${event.type}: ${validation.error}`,
-			);
-		}
+	protected apply(event: TEvent, isNew = true): void {
+		this.validateEvent(event);
 
 		const handler = this.handlers[event.type as keyof typeof this.handlers];
 		if (!handler) {
-			return err(`Missing handler for event type: ${event.type}`);
+			throw new MissingHandlerError(event.type);
 		}
 
-		this._state = handler(
+		const nextState = handler(
 			this._state,
 			event as Extract<TEvent, { type: TEvent["type"] }>,
 		);
 
-		if (isNew) {
-			this._pendingEvents.push(event);
-			if (this._autoVersionBump) {
-				this.setVersion((this._version + 1) as Version);
-			}
-		}
-
-		return ok();
-	}
-
-	/**
-	 * Applies an event to change the state and adds it to pending events.
-	 * Throws an error if validation fails or handler is missing.
-	 */
-	protected applyUnsafe(event: TEvent, isNew = true): void {
-		const validation = this.validateEvent(event);
-		if (validation.isErr()) {
-			throw new Error(
-				`Event validation failed for ${event.type}: ${validation.error}`,
-			);
-		}
-
-		const handler = this.handlers[event.type as keyof typeof this.handlers];
-		if (!handler) {
-			throw new Error(`Missing handler for event type: ${event.type}`);
-		}
-
-		this._state = handler(
-			this._state,
-			event as Extract<TEvent, { type: TEvent["type"] }>,
-		);
-
+		// Atomic commit: nothing above this line mutated aggregate state.
+		this._state = nextState;
 		if (isNew) {
 			this._pendingEvents.push(event);
 			if (this._autoVersionBump) {
@@ -224,14 +216,19 @@ export abstract class EventSourcedAggregate<
 	// --- History & Snapshots ---
 
 	/**
-	 * Reconstitutes the aggregate from an event history.
-	 * Sets the version to the number of events in the history.
+	 * Reconstitutes the aggregate from an event history. Catches `DomainError`
+	 * thrown by `apply()` during replay and returns it as an `Err` — this is
+	 * the infrastructure boundary, where event-stream corruption is an
+	 * expected recoverable failure. Unexpected (non-DomainError) throws
+	 * propagate.
 	 */
-	public loadFromHistory(history: TEvent[]): Result<void, string> {
+	public loadFromHistory(history: TEvent[]): Result<void, DomainError> {
 		for (const event of history) {
-			const result = this.apply(event, false);
-			if (result.isErr()) {
-				return result;
+			try {
+				this.apply(event, false);
+			} catch (e) {
+				if (e instanceof DomainError) return err(e);
+				throw e;
 			}
 		}
 		this.setVersion(history.length as Version);
@@ -263,18 +260,22 @@ export abstract class EventSourcedAggregate<
 
 	/**
 	 * Restores the aggregate from a snapshot and applies events that occurred after.
+	 * Same infrastructure-boundary semantics as `loadFromHistory`: catches
+	 * `DomainError` and returns it as an `Err`; non-domain throws propagate.
 	 */
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TState>,
 		eventsAfterSnapshot: TEvent[],
-	): Result<void, string> {
+	): Result<void, DomainError> {
 		this._state = snapshot.state;
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {
-			const result = this.apply(event, false);
-			if (result.isErr()) {
-				return result;
+			try {
+				this.apply(event, false);
+			} catch (e) {
+				if (e instanceof DomainError) return err(e);
+				throw e;
 			}
 		}
 

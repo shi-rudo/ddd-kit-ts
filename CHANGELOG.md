@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### BREAKING CHANGES
+### BREAKING CHANGES — DDD compliance
+
+- **Domain layer now throws, no longer returns Result.** Per Evans/Vernon convention, domain methods enforce invariants by throwing typed domain exceptions. Result is reserved for the App-Service boundary (Buses, Handlers, `withCommit`) and the Infrastructure boundary where stream corruption is recoverable (`loadFromHistory`, `restoreFromSnapshotWithEvents`).
+- **`EventSourcedAggregate.apply()`** is now `protected apply(event, isNew?): void`. It throws `DomainError`-derived exceptions on validation failure and `MissingHandlerError` when no handler is registered. State, pending events, and version are committed atomically — if the handler or `validateEvent` throws, no mutation occurs.
+- **`EventSourcedAggregate.applyUnsafe()` removed.** `apply()` already throws.
+- **`validateEvent(event)`** is now `protected validateEvent(event): void` (was `Result<true, string>`). Subclasses override to throw a concrete `DomainError` subclass.
+- **`loadFromHistory()` / `restoreFromSnapshotWithEvents()`** now return `Result<void, DomainError>` (was `Result<void, string>`). They catch `DomainError` thrown by `apply()` during replay; non-domain throws propagate.
+- **`guard()` removed.** Use inline `if (!cond) throw new YourDomainError(...)`. No replacement helper.
+- **`voWithValidationUnsafe()` removed.** Redundant with the `ValueObject` base class constructor which already throws via `validate()`.
+- **New `DomainError` base + library-internal subclasses.** `abstract class DomainError extends Error` is the consumer extension point; `MissingHandlerError` and `AggregateNotFoundError` are the library's own concrete subclasses.
+- **`IRepository.getByIdOrFail(id)` added.** Throws `AggregateNotFoundError` when the aggregate does not exist. Use `getById` when null is a valid outcome.
+
+### BREAKING CHANGES — Result migration
 
 - **Result type extracted to `@shirudo/result`** — the internal `Result<T, E>` and the class-based `Outcome` / `Success` / `Erroneous` API have been removed. Add `@shirudo/result` as a dependency in your app (now declared as a `peerDependency`) and import `ok`, `err`, `Result`, `isOk`, `isErr`, etc. from there. The shape changed: the discriminator is now `_tag: 'Ok' | 'Err'` instead of `ok: boolean`, and type guards are methods (`result.isOk()`, `result.isErr()`) — pure-function variants `isOk(result)` and `isErr(result)` are also available. `andThen` was renamed to `flatMap` and is curried for pipe-style composition.
 - **`@shirudo/ddd-kit/result` subpath export removed** — there is nothing to re-export. Import Result directly from `@shirudo/result`.

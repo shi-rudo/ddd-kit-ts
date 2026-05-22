@@ -12,7 +12,7 @@ export * from "./app/command-bus";
 export * from "./app/handler";
 export * from "./app/query";
 export * from "./app/query-bus";
-export * from "./core/guard";
+export * from "./core/errors";
 export * from "./core/id";
 // Result types come from the peer dependency `@shirudo/result` — import directly from there.
 // Entities

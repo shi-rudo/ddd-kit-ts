@@ -4,7 +4,6 @@ import {
 	voEquals,
 	voEqualsExcept,
 	voWithValidation,
-	voWithValidationUnsafe,
 	type VO,
 } from "./value-object";
 
@@ -480,131 +479,6 @@ describe("VO", () => {
 			if (result.isOk()) {
 				expect(result.value.value).toBe("user@example.com");
 			}
-		});
-	});
-
-	describe("voWithValidationUnsafe()", () => {
-		it("should create value object when validation passes", () => {
-			const money = voWithValidationUnsafe(
-				{ amount: 100, currency: "USD" },
-				(m) => m.amount >= 0 && m.currency.length === 3,
-			);
-
-			expect(money.amount).toBe(100);
-			expect(money.currency).toBe("USD");
-		});
-
-		it("should throw error when validation fails", () => {
-			expect(() => {
-				voWithValidationUnsafe(
-					{ amount: -100, currency: "USD" },
-					(m) => m.amount >= 0 && m.currency.length === 3,
-				);
-			}).toThrow();
-		});
-
-		it("should use custom error message when validation fails", () => {
-			const customMessage = "Amount must be non-negative";
-
-			expect(() => {
-				voWithValidationUnsafe(
-					{ amount: -100, currency: "USD" },
-					(m) => m.amount >= 0 && m.currency.length === 3,
-					customMessage,
-				);
-			}).toThrow(customMessage);
-		});
-
-		it("should use default error message when no custom message provided", () => {
-			expect(() => {
-				voWithValidationUnsafe(
-					{ amount: -100, currency: "USD" },
-					(m) => m.amount >= 0 && m.currency.length === 3,
-				);
-			}).toThrow(/Validation failed for value object/);
-		});
-
-		it("should validate nested structures", () => {
-			const address = voWithValidationUnsafe(
-				{
-					street: "Main St",
-					city: "Berlin",
-					coordinates: { lat: 52.5, lng: 13.4 },
-				},
-				(a) =>
-					a.street.length > 0 &&
-					a.city.length > 0 &&
-					a.coordinates.lat >= -90 &&
-					a.coordinates.lat <= 90 &&
-					a.coordinates.lng >= -180 &&
-					a.coordinates.lng <= 180,
-			);
-
-			expect(address.street).toBe("Main St");
-			expect(address.coordinates.lat).toBe(52.5);
-		});
-
-		it("should reject invalid nested structures", () => {
-			expect(() => {
-				voWithValidationUnsafe(
-					{
-						street: "Main St",
-						city: "Berlin",
-						coordinates: { lat: 999, lng: 13.4 }, // Invalid lat
-					},
-					(a) =>
-						a.street.length > 0 &&
-						a.city.length > 0 &&
-						a.coordinates.lat >= -90 &&
-						a.coordinates.lat <= 90 &&
-						a.coordinates.lng >= -180 &&
-						a.coordinates.lng <= 180,
-					// @ts-ignore
-				);
-			}).toThrow();
-		});
-
-		it("should create deeply frozen value object after validation", () => {
-			const money = voWithValidationUnsafe(
-				{ amount: 100, currency: "USD" },
-				(m) => m.amount >= 0 && m.currency.length === 3,
-			);
-
-			expect(() => {
-				(money as any).amount = 200;
-			}).toThrow();
-		});
-
-		it("should validate arrays", () => {
-			const list = voWithValidationUnsafe(
-				{ items: [1, 2, 3] },
-				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
-			);
-
-			expect(list.items).toEqual([1, 2, 3]);
-		});
-
-		it("should reject invalid arrays", () => {
-			expect(() => {
-				voWithValidationUnsafe(
-					{ items: [-1, 2, 3] }, // Contains negative number
-					(l) => l.items.length > 0 && l.items.every((i) => i > 0),
-				);
-			}).toThrow();
-		});
-
-		it("should handle complex validation logic", () => {
-			type EmailData = { value: string };
-			const email = voWithValidationUnsafe(
-				{ value: "user@example.com" },
-				(e: EmailData) => {
-					const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-					return emailRegex.test(e.value);
-				},
-				"Invalid email format",
-			);
-
-			expect(email.value).toBe("user@example.com");
 		});
 	});
 

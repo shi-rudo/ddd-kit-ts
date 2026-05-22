@@ -55,65 +55,50 @@ export class RugbyMatch extends EventSourcedAggregate<
 			scoringPlays: [],
 		};
 		const match = new RugbyMatch(id, initialState);
-		const result = match.apply(
+		match.apply(
 			createDomainEvent("MatchScheduled", {
 				homeTeam,
 				awayTeam,
 				date,
 			}) as MatchScheduled,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 		return match;
 	}
 
 	scoreTry(teamId: string, playerName: string): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("TryScored", {
 				teamId,
 				playerName,
 				points: 5,
 			}) as TryScored,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	scoreConversion(teamId: string, playerName: string): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("ConversionScored", {
 				teamId,
 				playerName,
 				points: 2,
 			}) as ConversionScored,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	scorePenaltyGoal(teamId: string, playerName: string): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("PenaltyGoalScored", {
 				teamId,
 				playerName,
 				points: 3,
 			}) as PenaltyGoalScored,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	finish(): void {
-		const result = this.apply(
+		this.apply(
 			createDomainEvent("MatchFinished", {}) as MatchFinished,
 		);
-		if (result.isErr()) {
-			throw new Error(result.error);
-		}
 	}
 
 	protected readonly handlers = {
