@@ -62,7 +62,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 				date,
 			}) as MatchScheduled,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 		return match;
@@ -76,7 +76,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 				points: 5,
 			}) as TryScored,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -89,7 +89,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 				points: 2,
 			}) as ConversionScored,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -102,7 +102,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 				points: 3,
 			}) as PenaltyGoalScored,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -111,7 +111,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		const result = this.apply(
 			createDomainEvent("MatchFinished", {}) as MatchFinished,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}

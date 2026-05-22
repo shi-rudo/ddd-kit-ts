@@ -14,10 +14,6 @@
 			"import": "./dist/index.js",
 			"types": "./dist/index.d.ts"
 		},
-		"./result": {
-			"import": "./dist/result.js",
-			"types": "./dist/result.d.ts"
-		},
 		"./utils": {
 			"import": "./dist/utils.js",
 			"types": "./dist/utils.d.ts"
@@ -51,6 +47,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.1.4",
+		"@shirudo/result": "^0.0.6",
 		"tsup": "^8.5.0",
 		"typescript": "^5.9.2",
 		"vitest": "^3.2.4"
@@ -63,5 +60,8 @@
 	"homepage": "https://github.com/shi-rudo/ddd-kit-ts",
 	"bugs": {
 		"url": "https://github.com/shi-rudo/ddd-kit-ts/issues"
+	},
+	"peerDependencies": {
+		"@shirudo/result": "^0.0.6"
 	}
 }

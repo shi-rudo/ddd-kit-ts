@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "../core/result";
+import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
 import type { IAggregateRoot } from "./aggregate-root";
@@ -157,7 +157,7 @@ export abstract class EventSourcedAggregate<
 	 */
 	protected apply(event: TEvent, isNew = true): Result<void, string> {
 		const validation = this.validateEvent(event);
-		if (!validation.ok) {
+		if (validation.isErr()) {
 			return err(
 				`Event validation failed for ${event.type}: ${validation.error}`,
 			);
@@ -189,7 +189,7 @@ export abstract class EventSourcedAggregate<
 	 */
 	protected applyUnsafe(event: TEvent, isNew = true): void {
 		const validation = this.validateEvent(event);
-		if (!validation.ok) {
+		if (validation.isErr()) {
 			throw new Error(
 				`Event validation failed for ${event.type}: ${validation.error}`,
 			);
@@ -230,7 +230,7 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(history: TEvent[]): Result<void, string> {
 		for (const event of history) {
 			const result = this.apply(event, false);
-			if (!result.ok) {
+			if (result.isErr()) {
 				return result;
 			}
 		}
@@ -273,7 +273,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			const result = this.apply(event, false);
-			if (!result.ok) {
+			if (result.isErr()) {
 				return result;
 			}
 		}

@@ -3,7 +3,7 @@ import {
     deepEqualExcept,
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
-import { err, ok, type Result } from "../core/result";
+import { err, ok, type Result } from "@shirudo/result";
 
 // ============================================================================
 // Functional Value Object API

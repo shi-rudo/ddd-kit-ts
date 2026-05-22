@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { err, ok } from "../core/result";
+import { err, ok } from "@shirudo/result";
 import type { Command, CommandHandler } from "./command";
 
 describe("Command", () => {
@@ -58,8 +58,8 @@ describe("Command", () => {
 				customerId: "customer-123",
 			});
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value).toBe("order-456");
 			}
 		});
@@ -83,14 +83,14 @@ describe("Command", () => {
 				type: "CreateOrder",
 				customerId: "valid",
 			});
-			expect(successResult.ok).toBe(true);
+			expect(successResult.isOk()).toBe(true);
 
 			const errorResult = await handler({
 				type: "CreateOrder",
 				customerId: "invalid",
 			});
-			expect(errorResult.ok).toBe(false);
-			if (!errorResult.ok) {
+			expect(errorResult.isErr()).toBe(true);
+			if (errorResult.isErr()) {
 				expect(errorResult.error).toBe("Invalid customer");
 			}
 		});

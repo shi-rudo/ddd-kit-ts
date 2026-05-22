@@ -1,4 +1,4 @@
-import type { Result } from "../core/result";
+import type { Result } from "@shirudo/result";
 
 /**
  * Marker interface for Commands.

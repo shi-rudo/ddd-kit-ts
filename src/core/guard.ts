@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "./result";
+import { err, ok, type Result } from "@shirudo/result";
 
 /**
  * Guard function that validates a condition and returns a Result.

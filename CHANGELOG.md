@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING CHANGES
+
+- **Result type extracted to `@shirudo/result`** — the internal `Result<T, E>` and the class-based `Outcome` / `Success` / `Erroneous` API have been removed. Add `@shirudo/result` as a dependency in your app (now declared as a `peerDependency`) and import `ok`, `err`, `Result`, `isOk`, `isErr`, etc. from there. The shape changed: the discriminator is now `_tag: 'Ok' | 'Err'` instead of `ok: boolean`, and type guards are methods (`result.isOk()`, `result.isErr()`) — pure-function variants `isOk(result)` and `isErr(result)` are also available. `andThen` was renamed to `flatMap` and is curried for pipe-style composition.
+- **`@shirudo/ddd-kit/result` subpath export removed** — there is nothing to re-export. Import Result directly from `@shirudo/result`.
+- **`Outcome` / `Success` / `Erroneous` removed without a deprecation window** — these were RC-only and never reached a stable release.
+- **`tanstack-server-fn` examples removed** — they demonstrated the now-removed `Outcome` API.
+
+### Migration
+
+```diff
+- import { ok, err, type Result } from "@shirudo/ddd-kit/result";
++ import { ok, err, type Result } from "@shirudo/result";
+
+- if (result.ok) { /* ... */ }
++ if (result.isOk()) { /* ... */ }
+
+- if (!result.ok) { /* ... */ }
++ if (result.isErr()) { /* ... */ }
+```
+
+`result.value` and `result.error` field access stays the same (both fields always exist on the new shape; the inactive variant is `undefined`).
+
 ## [1.0.0-rc.1] - 2026-03-16
 
 First Release Candidate. The API is considered stable.

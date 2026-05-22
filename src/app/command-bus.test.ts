@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { err, ok, type Result } from "../core/result";
+import { err, ok, type Result } from "@shirudo/result";
 import type { Command } from "./command";
 import { CommandBus } from "./command-bus";
 
@@ -59,8 +59,8 @@ describe("CommandBus", () => {
 				customerId: "customer-123",
 			});
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value).toBe("order-456");
 			}
 		});
@@ -76,8 +76,8 @@ describe("CommandBus", () => {
 				type: "UnknownCommand",
 			});
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toContain("No handler registered");
 			}
 		});
@@ -99,8 +99,8 @@ describe("CommandBus", () => {
 				customerId: "customer-123",
 			});
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toBe("Failed to create order");
 			}
 		});
@@ -128,15 +128,15 @@ describe("CommandBus", () => {
 				type: "CreateOrder",
 				customerId: "customer-123",
 			});
-			expect(createResult.ok).toBe(true);
+			expect(createResult.isOk()).toBe(true);
 
 			const updateResult = await bus.execute({
 				type: "UpdateOrder",
 				orderId: "order-1",
 				status: "shipped",
 			});
-			expect(updateResult.ok).toBe(true);
-			if (updateResult.ok) {
+			expect(updateResult.isOk()).toBe(true);
+			if (updateResult.isOk()) {
 				expect(updateResult.value).toBe("updated-order-1");
 			}
 		});

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { Result } from "../core/result";
+import type { Result } from "@shirudo/result";
 import type { Query } from "./query";
 import { QueryBus } from "./query-bus";
 
@@ -59,8 +59,8 @@ describe("QueryBus", () => {
 				orderId: "order-123",
 			});
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value).toEqual({ id: "order-123", status: "pending" });
 			}
 		});
@@ -76,8 +76,8 @@ describe("QueryBus", () => {
 				type: "UnknownQuery",
 			});
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toContain("No handler registered");
 			}
 		});
@@ -97,8 +97,8 @@ describe("QueryBus", () => {
 				orderId: "not-found",
 			});
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value).toBeNull();
 			}
 		});
@@ -128,8 +128,8 @@ describe("QueryBus", () => {
 				type: "GetOrder",
 				orderId: "order-123",
 			});
-			expect(singleResult.ok).toBe(true);
-			if (singleResult.ok) {
+			expect(singleResult.isOk()).toBe(true);
+			if (singleResult.isOk()) {
 				expect(singleResult.value).toEqual({ id: "order-123" });
 			}
 
@@ -137,8 +137,8 @@ describe("QueryBus", () => {
 				type: "ListOrders",
 				customerId: "customer-456",
 			});
-			expect(listResult.ok).toBe(true);
-			if (listResult.ok) {
+			expect(listResult.isOk()).toBe(true);
+			if (listResult.isOk()) {
 				expect(listResult.value).toHaveLength(2);
 			}
 		});
@@ -159,8 +159,8 @@ describe("QueryBus", () => {
 				type: "ListOrders",
 			});
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(Array.isArray(result.value)).toBe(true);
 				expect(result.value).toHaveLength(2);
 			}

@@ -14,7 +14,7 @@ export * from "./app/query";
 export * from "./app/query-bus";
 export * from "./core/guard";
 export * from "./core/id";
-// Result types and utilities are available via @shirudo/ddd-kit/result
+// Result types come from the peer dependency `@shirudo/result` — import directly from there.
 // Entities
 export * from "./entity/entity";
 export * from "./events/event-bus";

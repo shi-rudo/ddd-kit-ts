@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { err, ok } from "../core/result";
+import { err, ok } from "@shirudo/result";
 import type { Id } from "../core/id";
 import {
 	EventSourcedAggregate,
@@ -53,7 +53,7 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		const result = aggregate.apply(
 			createDomainEvent("TestEventCreated", { value }) as TestEventCreated,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 		return aggregate;
@@ -63,7 +63,7 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		const result = this.apply(
 			createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -72,7 +72,7 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		const result = this.apply(
 			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -81,7 +81,7 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		const result = this.apply(
 			createDomainEvent("TestEventDeactivated", {}) as TestEventDeactivated,
 		);
-		if (!result.ok) {
+		if (result.isErr()) {
 			throw new Error(result.error);
 		}
 	}
@@ -227,8 +227,8 @@ describe("EventSourcedAggregate", () => {
 				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
 			);
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toContain("Event validation failed");
 			}
 		});
@@ -317,8 +317,8 @@ describe("EventSourcedAggregate", () => {
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			);
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toContain("Already active");
 			}
 
@@ -343,7 +343,7 @@ describe("EventSourcedAggregate", () => {
 
 			const result = aggregate.loadFromHistory(history);
 
-			expect(result.ok).toBe(true);
+			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(history.length);
 			expect(aggregate.state.value).toBe(30);
 			expect(aggregate.state.status).toBe("active");
@@ -355,7 +355,7 @@ describe("EventSourcedAggregate", () => {
 
 			const result = aggregate.loadFromHistory([]);
 
-			expect(result.ok).toBe(true);
+			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(0);
 		});
 	});
@@ -425,7 +425,7 @@ describe("EventSourcedAggregate", () => {
 
 			const result = aggregate2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot);
 
-			expect(result.ok).toBe(true);
+			expect(result.isOk()).toBe(true);
 			expect(aggregate2.state.value).toBe(30); // Updated by event after snapshot
 			expect(aggregate2.state.status).toBe("active"); // From snapshot
 			expect(aggregate2.version).toBe(4); // Snapshot version + events after
@@ -442,7 +442,7 @@ describe("EventSourcedAggregate", () => {
 
 			const result = aggregate2.restoreFromSnapshotWithEvents(snapshot, []);
 
-			expect(result.ok).toBe(true);
+			expect(result.isOk()).toBe(true);
 			expect(aggregate2.state.value).toBe(20);
 			expect(aggregate2.version).toBe(2);
 		});

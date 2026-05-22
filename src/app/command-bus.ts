@@ -1,5 +1,4 @@
-import type { Result } from "../core/result";
-import { err } from "../core/result";
+import { err, type Result } from "@shirudo/result";
 import type { Command, CommandHandler } from "./command";
 
 /**

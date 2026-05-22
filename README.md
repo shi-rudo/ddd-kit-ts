@@ -170,7 +170,7 @@ const result = voWithValidation(
   "Amount must be non-negative and currency must be 3 characters"
 );
 
-if (result.ok) {
+if (result.isOk()) {
   const validMoney = result.value;
   // Use validMoney...
 } else {
@@ -353,7 +353,7 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
     const result = this.apply(
       createDomainEvent("OrderConfirmed") as OrderConfirmed
     );
-    if (!result.ok) {
+    if (result.isErr()) {
       throw new Error(result.error);
     }
   }
@@ -362,7 +362,7 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
     const result = this.apply(
       createDomainEvent("OrderShipped", { trackingNumber }) as OrderShipped
     );
-    if (!result.ok) {
+    if (result.isErr()) {
       throw new Error(result.error);
     }
   }
@@ -495,14 +495,8 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
 Commands represent write operations that change system state. They return `Result` for explicit error handling.
 
 ```typescript
-import {
-  Command,
-  CommandHandler,
-  CommandBus,
-  ok,
-  err,
-  type Result,
-} from "@shirudo/ddd-kit";
+import { Command, CommandHandler, CommandBus } from "@shirudo/ddd-kit";
+import { ok, err, type Result } from "@shirudo/result";
 
 // Define a command
 type CreateOrderCommand = Command & {
@@ -541,7 +535,7 @@ const result = await createOrderHandler({
   items: [{ productId: "product-1", quantity: 2, price: 10.0 }],
 });
 
-if (result.ok) {
+if (result.isOk()) {
   console.log("Order created:", result.value);
 } else {
   console.error("Error:", result.error);
@@ -600,7 +594,7 @@ const result = await queryBus.execute({
   orderId: "order-123",
 });
 
-if (result.ok) {
+if (result.isOk()) {
   const orderFromBus = result.value;
   // Use orderFromBus...
 } else {
@@ -714,7 +708,7 @@ channel.consume("order.commands", async (message) => {
   const command = JSON.parse(message.content.toString()) as CreateOrderCommand;
   const result = await createOrderHandler(command);
 
-  if (result.ok) {
+  if (result.isOk()) {
     channel.ack(message);
   } else {
     channel.nack(message, false, true); // Requeue on error
@@ -1063,26 +1057,7 @@ The `Result<T, E>` type provides composition utilities to avoid repetitive `if (
 **Import Result utilities from the dedicated export path:**
 
 ```typescript
-import { 
-  ok, 
-  err, 
-  isOk, 
-  isErr, 
-  andThen, 
-  map, 
-  mapErr, 
-  unwrapOr, 
-  unwrapOrElse, 
-  match,
-  matchAsync,
-  pipe,
-  tryCatch,
-  tryCatchAsync,
-  type Result,
-  Outcome,
-  Success,
-  Erroneous
-} from "@shirudo/ddd-kit/result";
+import { ok, err, type Result } from "@shirudo/result";
 
 type UserId = string;
 
@@ -1090,94 +1065,21 @@ function validateUserId(id: string): Result<UserId, string> {
   return id.length > 0 ? ok(id as UserId) : err("User ID cannot be empty");
 }
 
-function validateEmail(email: string): Result<string, string> {
-  return email.includes("@") ? ok(email) : err("Invalid email");
-}
-
-// Chaining operations with andThen (avoids if-checks)
-function createUser(id: string, email: string): Result<{ id: UserId; email: string }, string> {
-  return andThen(validateUserId(id), (userId) =>
-    map(validateEmail(email), (email) => ({
-      id: userId,
-      email,
-    }))
-  );
-}
-
-// Using map for transformations
-const result = ok(5);
-const doubled = map(result, x => x * 2); // Ok<10>
-
-// Using mapErr to transform errors
-const errorResult = err("not found");
-const mappedError = mapErr(errorResult, e => `Error: ${e}`); // Err<"Error: not found">
-
-// Using unwrapOr for defaults
-const userId = unwrapOr(validateUserId(""), "default-id");
-
-// Using unwrapOrElse for computed defaults
-const userId2 = unwrapOrElse(validateUserId(""), err => `fallback-${Date.now()}`);
-
-// Using match for pattern matching
-const message = match(createUser("user-123", "test@example.com"),
-  user => `User created: ${user.id}`,
-  error => `Error: ${error}`
-);
-
-// Usage with type guards (still works)
-const result2 = createUser("user-123", "test@example.com");
-if (isOk(result2)) {
-  console.log("User created:", result2.value);
+const result = validateUserId("user-123");
+if (result.isOk()) {
+  console.log("Valid:", result.value);
 } else {
-  console.error("Error:", result2.error);
+  console.error("Invalid:", result.error);
 }
-
-// Using tryCatch to wrap functions that throw exceptions
-function riskyOperation(): string {
-  if (Math.random() > 0.5) {
-    throw new Error("Something went wrong");
-  }
-  return "success";
-}
-
-const result3 = tryCatch(() => riskyOperation());
-if (result3.ok) {
-  console.log(result3.value); // "success"
-} else {
-  console.error(result3.error.message); // "Something went wrong"
-}
-
-// Using tryCatchAsync for async operations
-async function riskyAsyncOperation(): Promise<string> {
-  if (Math.random() > 0.5) {
-    throw new Error("Async error");
-  }
-  return "async success";
-}
-
-const result4 = await tryCatchAsync(() => riskyAsyncOperation());
-match(result4,
-  (value) => console.log("Success:", value),
-  (error) => console.error("Error:", error.message)
-);
 ```
 
-**Available Composition Utilities:**
-- `andThen<T, E, U>(result, fn)` - Chains Result operations (flatMap/bind). If Ok, applies function; if Err, returns error unchanged.
-- `map<T, E, U>(result, fn)` - Transforms Ok value. If Err, returns error unchanged.
-- `mapErr<T, E, F>(result, fn)` - Transforms Err value. If Ok, returns value unchanged.
-- `unwrapOr<T, E>(result, defaultValue)` - Returns value if Ok, otherwise returns default.
-- `unwrapOrElse<T, E>(result, fn)` - Returns value if Ok, otherwise computes default from error.
-- `match<T, E, R>(result, onOk, onErr)` - Pattern matching. Applies one function if Ok, another if Err. Supports both function and object syntax.
-- `matchAsync<T, E, R>(result, onOk, onErr)` - Asynchronous pattern matching. Applies async functions for Ok/Err cases. Supports both function and object syntax.
-- `pipe<T, E>(initial, ...fns)` - Pipes a Result through multiple operations. Stops on first error. Cleaner alternative to nested `andThen` calls.
-- `tryCatch<T, E>(fn, errorMapper?)` - Wraps a function that may throw exceptions into a Result type. Catches exceptions and converts them to Err results.
-- `tryCatchAsync<T, E>(fn, errorMapper?)` - Wraps an async function that may throw exceptions into a Promise<Result>. Catches exceptions and Promise rejections.
+`ddd-kit` declares `@shirudo/result` as a `peerDependency`, so install it once in your app:
 
-**Class-based API (for method chaining):**
-- `Outcome<T, E>` - Wrapper class for Result with method chaining support
-- `Success<T>` - Class representing successful results (created via `Ok()` factory)
-- `Erroneous<E>` - Class representing error results (created via `Err()` factory)
+```bash
+pnpm add @shirudo/result
+```
+
+For composition utilities (`map`, `flatMap`, `mapErr`, `match`, `unwrapOr`, `pipe`, `tryCatch`, async variants, etc.), refer to the [`@shirudo/result` documentation](https://www.npmjs.com/package/@shirudo/result). All `ddd-kit` APIs that return `Result` — `voWithValidation`, `EventSourcedAggregate.apply()`, `CommandBus.execute()`, `QueryBus.execute()`, `guard()` — work seamlessly with the full operator set.
 
 ## API Documentation
 
@@ -1210,10 +1112,7 @@ Key exports include:
 - `EventBus.subscribe()` - Subscribe handlers to event types
 - `EventBus.publish()` - Publish events to all subscribers (uses `Promise.allSettled` — all handlers run even if one fails)
 - `EventBus.once()` - Wait for the next event of a given type (returns Promise, auto-unsubscribes)
-- `Result<T, E>`, `ok()`, `err()`, `isOk()`, `isErr()` - Result type and type guards
-- `andThen()`, `map()`, `mapErr()` - Result composition utilities
-- `unwrapOr()`, `unwrapOrElse()`, `match()` - Result unwrapping and pattern matching
-- `Id<Tag>` - Branded ID type
+- `Id<Tag>` - Branded ID type (Result type and operators come from the `@shirudo/result` peer dep)
 - `IRepository<TAgg, TId>` - Repository interface
 - `ISpecification<T>` - Specification interface
 - `UnitOfWork` - Unit of Work interface

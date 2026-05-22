@@ -342,8 +342,8 @@ describe("VO", () => {
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value.amount).toBe(100);
 				expect(result.value.currency).toBe("USD");
 			}
@@ -355,8 +355,8 @@ describe("VO", () => {
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toBeDefined();
 			}
 		});
@@ -370,8 +370,8 @@ describe("VO", () => {
 				customMessage,
 			);
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toBe(customMessage);
 			}
 		});
@@ -382,8 +382,8 @@ describe("VO", () => {
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
 
-			expect(result.ok).toBe(false);
-			if (!result.ok) {
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
 				expect(result.error).toContain("Validation failed for value object");
 			}
 		});
@@ -404,8 +404,8 @@ describe("VO", () => {
 					a.coordinates.lng <= 180,
 			);
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value.street).toBe("Main St");
 				expect(result.value.coordinates.lat).toBe(52.5);
 			}
@@ -427,7 +427,7 @@ describe("VO", () => {
 					a.coordinates.lng <= 180,
 			);
 
-			expect(result.ok).toBe(false);
+			expect(result.isErr()).toBe(true);
 		});
 
 		it("should create deeply frozen value object after validation", () => {
@@ -436,8 +436,8 @@ describe("VO", () => {
 				(m) => m.amount >= 0 && m.currency.length === 3,
 			);
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(() => {
 					(result.value as any).amount = 200;
 				}).toThrow();
@@ -450,8 +450,8 @@ describe("VO", () => {
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value.items).toEqual([1, 2, 3]);
 			}
 		});
@@ -462,7 +462,7 @@ describe("VO", () => {
 				(l) => l.items.length > 0 && l.items.every((i) => i > 0),
 			);
 
-			expect(result.ok).toBe(false);
+			expect(result.isErr()).toBe(true);
 		});
 
 		it("should handle complex validation logic", () => {
@@ -476,8 +476,8 @@ describe("VO", () => {
 				"Invalid email format",
 			);
 
-			expect(result.ok).toBe(true);
-			if (result.ok) {
+			expect(result.isOk()).toBe(true);
+			if (result.isOk()) {
 				expect(result.value.value).toBe("user@example.com");
 			}
 		});
