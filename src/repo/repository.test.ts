@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import type { Version } from "../aggregate/aggregate";
 import type { IQueryableRepository, IRepository } from "./repository";
 import {
 	AggregateNotFoundError,
@@ -13,6 +14,32 @@ type Order = IAggregateRoot<OrderId> & {
 	readonly customerId: string;
 	readonly total: number;
 };
+
+describe("IAggregateRoot interface contract", () => {
+	it("declares markPersisted so Repository.save can call it through the interface", () => {
+		// What a Repository.save implementer actually does after persisting:
+		// push the new version back into the aggregate. That call has to
+		// type-check against IAggregateRoot — the interface — not against
+		// the abstract class. If markPersisted only existed on the class,
+		// this function below would not compile.
+		function postSave<TId extends Id<string>, A extends IAggregateRoot<TId>>(
+			agg: A,
+			persistedVersion: Version,
+		): void {
+			agg.markPersisted(persistedVersion);
+		}
+
+		// Smoke-call to keep the function referenced (otherwise dead-code
+		// elimination at runtime hides the compile-time pin).
+		const stub: IAggregateRoot<OrderId> = {
+			id: "o-1" as OrderId,
+			version: 0 as Version,
+			markPersisted: () => {},
+		};
+		postSave(stub, 1 as Version);
+		expect(typeof stub.markPersisted).toBe("function");
+	});
+});
 
 describe("Repository contract", () => {
 	describe("IRepository — id-only access", () => {
@@ -51,6 +78,7 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
+				markPersisted: () => {},
 			};
 
 			expect(await repo.exists("o-1" as OrderId)).toBe(false);
@@ -110,6 +138,7 @@ describe("Repository contract", () => {
 					version: 3 as never,
 					customerId: "c-1",
 					total: 100,
+					markPersisted: () => {},
 				}),
 			).rejects.toBeInstanceOf(ConcurrencyConflictError);
 		});
@@ -156,12 +185,14 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
+				markPersisted: () => {},
 			});
 			await repo.save({
 				id: "o-2" as OrderId,
 				version: 1 as never,
 				customerId: "c-2",
 				total: 250,
+				markPersisted: () => {},
 			});
 
 			const found = await repo.find((o) => o.total > 200);

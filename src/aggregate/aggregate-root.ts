@@ -44,6 +44,20 @@ export interface IAggregateRoot<TId extends Id<string>> {
 	 * This version applies to the entire aggregate, including all child entities.
 	 */
 	readonly version: Version;
+
+	/**
+	 * Post-save hook: a `Repository.save()` implementation calls this with
+	 * the persisted version after a successful write to push the new
+	 * version back into the aggregate and clear any recorded domain events
+	 * (they are now safely on the write side / in the outbox).
+	 *
+	 * Required by the interface so a Repository implementation can call it
+	 * via the published `IAggregateRoot` contract without taking the
+	 * abstract class as a compile-time dependency.
+	 *
+	 * @param version - The version assigned by the persistence layer
+	 */
+	markPersisted(version: Version): void;
 }
 
 /**
