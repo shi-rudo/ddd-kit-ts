@@ -328,6 +328,47 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.state.value).toBe(7);
 			expect(agg.domainEvents).toHaveLength(0);
 		});
+
+		it("always bumps the version, regardless of the autoVersionBump config", () => {
+			// commit() is the opt-in path that explicitly couples state +
+			// event recording. Recording an event implies 'this is a
+			// version-worthy change'. The aggregate's autoVersionBump config
+			// governs the un-coupled setState path, not this one.
+			class NoAutoBumpAgg extends CommitAggregate {
+				constructor(id: TestId, state: TestState) {
+					// autoVersionBump = false (the default), the trap that
+					// silently broke OCC for callers using commit().
+					super(id, state);
+				}
+			}
+
+			const agg = new NoAutoBumpAgg("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			expect(agg.version).toBe(0);
+
+			agg.update(11, { type: "Updated", value: 11 });
+
+			expect(agg.version).toBe(1);
+		});
+
+		it("bumps the version exactly once even when committing multiple events", () => {
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			expect(agg.version).toBe(0);
+
+			agg.update(11, [
+				{ type: "Updated", value: 11 },
+				{ type: "Updated", value: 12 },
+			]);
+
+			// One state transition = one version bump, regardless of how
+			// many events accompany it.
+			expect(agg.version).toBe(1);
+		});
 	});
 
 	describe("markPersisted (post-save hook)", () => {

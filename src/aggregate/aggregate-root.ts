@@ -177,9 +177,18 @@ export abstract class AggregateRoot<
 	 * "event for a fact that never happened" footgun.
 	 *
 	 * Order of operations:
-	 *  1. `setState(newState)` — runs `validateState`. If it throws, the
-	 *     method propagates and **no event is recorded**.
+	 *  1. `setState(newState, true)` — runs `validateState` first.
+	 *     If it throws, the method propagates and **no event is recorded
+	 *     and no version is bumped**.
 	 *  2. Each event in `events` is appended via `addDomainEvent`.
+	 *
+	 * `commit()` **always bumps the version**, regardless of the aggregate's
+	 * `autoVersionBump` config. Recording a domain event implies "something
+	 * happened that the outside world cares about", and optimistic-
+	 * concurrency callers must see a fresh version every time. The config
+	 * still governs the un-coupled `setState` path. If you need to mutate
+	 * state without bumping (e.g. cosmetic caches), call `setState(newState,
+	 * false)` and skip `commit` entirely.
 	 *
 	 * `events` accepts a single event or an array. Omit it (or pass `[]`)
 	 * for state-only mutations.
@@ -204,15 +213,12 @@ export abstract class AggregateRoot<
 	 *
 	 * @param newState - The new state (validated by `validateState`)
 	 * @param events - One event, an array of events, or none (default)
-	 * @param bumpVersion - Override for `autoVersionBump`; defaults to the
-	 *                     aggregate's configured value
 	 */
 	protected commit(
 		newState: TState,
 		events: TEvent | readonly TEvent[] = [],
-		bumpVersion?: boolean,
 	): void {
-		this.setState(newState, bumpVersion);
+		this.setState(newState, true);
 		const list: readonly TEvent[] = Array.isArray(events)
 			? events
 			: [events as TEvent];
