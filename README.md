@@ -305,6 +305,8 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
 // order.addDomainEvent({ type: "WrongEvent" }) → compile error
 ```
 
+> **Domain-event ordering: record AFTER mutation.** A domain event represents something that has *just happened* to the aggregate. Always mutate state first (`setState`, invariant checks), then `addDomainEvent`. Recording before mutation is a footgun: if a subsequent invariant throws, the event has been queued for a fact that never actually happened. `EventSourcedAggregate.apply()` enforces this ordering structurally; `AggregateRoot` leaves it as a convention because state mutation (`setState`) and event recording (`addDomainEvent`) are decoupled.
+
 ### Creating an Aggregate WITH Event Sourcing
 
 ```typescript

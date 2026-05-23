@@ -167,10 +167,34 @@ export abstract class AggregateRoot<
 	}
 
 	/**
-	 * Adds a domain event to the aggregate's list of changes.
-	 * Use this to record side-effects that should be published.
+	 * Records a domain event for later publication.
 	 *
-	 * @param event - The domain event to add
+	 * **Ordering: record AFTER state mutation.** Vernon (IDDD §8) is
+	 * explicit: a domain event describes something that has just happened
+	 * to the aggregate — its existence implies the state change already
+	 * occurred. Concretely:
+	 *
+	 * ```ts
+	 * confirm(): void {
+	 *   if (this.state.status === "confirmed") {
+	 *     throw new OrderAlreadyConfirmedError(this.id);
+	 *   }
+	 *   this.setState({ ...this.state, status: "confirmed" }, true);
+	 *   this.addDomainEvent({ type: "OrderConfirmed", orderId: this.id });
+	 *   // ↑ post-mutation. The event represents the committed fact.
+	 * }
+	 * ```
+	 *
+	 * Recording before mutation is a footgun: if a subsequent invariant
+	 * check throws, the event has already been queued but the state never
+	 * actually changed — consumers see an event for a fact that did not
+	 * happen.
+	 *
+	 * `EventSourcedAggregate.apply()` enforces this ordering structurally;
+	 * `AggregateRoot` leaves it as a convention because the state-mutation
+	 * path (`setState`) is decoupled from event recording.
+	 *
+	 * @param event - The domain event to record
 	 */
 	protected addDomainEvent(event: TEvent): void {
 		this._domainEvents.push(event);
