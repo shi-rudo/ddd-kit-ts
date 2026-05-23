@@ -17,12 +17,9 @@
 		"./utils": {
 			"import": "./dist/utils.js",
 			"types": "./dist/utils.d.ts"
-		},
-		"./utils/array": {
-			"import": "./dist/utils-array.js",
-			"types": "./dist/utils-array.d.ts"
 		}
 	},
+	"sideEffects": false,
 	"files": [
 		"dist"
 	],

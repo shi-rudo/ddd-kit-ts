@@ -1,4 +1,3 @@
-// Re-export all utility functions
-// This allows importing from @shirudo/ddd-kit/utils
-export * from "./utils";
-
+export * from "./utils/array/deep-equal";
+export * from "./utils/array/deep-equal-except";
+export * from "./utils/array/deep-omit";
