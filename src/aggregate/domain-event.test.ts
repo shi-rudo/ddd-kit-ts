@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	type DomainEvent,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventWithMetadata,
+	resetEventIdFactory,
+	setEventIdFactory,
 } from "./domain-event";
 
 describe("DomainEvent", () => {
@@ -117,6 +119,60 @@ describe("DomainEvent", () => {
 			});
 			expect(event.occurredAt).toBe(when);
 			expect(event.version).toBe(7);
+		});
+	});
+
+	describe("EventIdFactory hook", () => {
+		afterEach(() => {
+			resetEventIdFactory();
+		});
+
+		it("uses a custom global factory when set via setEventIdFactory", () => {
+			let counter = 0;
+			setEventIdFactory(() => `seq-${++counter}`);
+
+			const a = createDomainEvent("Demo", { x: 1 });
+			const b = createDomainEvent("Demo", { x: 2 });
+
+			expect(a.eventId).toBe("seq-1");
+			expect(b.eventId).toBe("seq-2");
+		});
+
+		it("per-call eventId override takes precedence over the global factory", () => {
+			setEventIdFactory(() => "factory-id");
+
+			const event = createDomainEvent("Demo", { x: 1 }, {
+				eventId: "explicit-id",
+			});
+			expect(event.eventId).toBe("explicit-id");
+		});
+
+		it("resetEventIdFactory restores the default", () => {
+			setEventIdFactory(() => "custom");
+			expect(createDomainEvent("Demo").eventId).toBe("custom");
+
+			resetEventIdFactory();
+			const reset = createDomainEvent("Demo");
+			expect(reset.eventId).not.toBe("custom");
+			expect(reset.eventId.length).toBeGreaterThan(0);
+		});
+
+		it("supports ULID/KSUID/etc. by accepting any string-producing factory", () => {
+			const fakeUlid = "01HZ4Y3Y6T7M8X9YDE0FGH1234";
+			setEventIdFactory(() => fakeUlid);
+
+			const event = createDomainEvent("Demo", { x: 1 });
+			expect(event.eventId).toBe(fakeUlid);
+		});
+
+		it("invokes the factory afresh on every event (no caching)", () => {
+			let calls = 0;
+			setEventIdFactory(() => `call-${++calls}`);
+
+			createDomainEvent("Demo", { x: 1 });
+			createDomainEvent("Demo", { x: 2 });
+			createDomainEvent("Demo", { x: 3 });
+			expect(calls).toBe(3);
 		});
 	});
 

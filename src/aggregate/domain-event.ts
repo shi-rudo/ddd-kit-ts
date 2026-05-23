@@ -1,4 +1,44 @@
 /**
+ * Factory function producing a fresh, unique event identifier for each call.
+ *
+ * The library ships a default that uses Web Crypto `crypto.randomUUID()`
+ * (works on Node 19+, modern browsers in secure contexts, Deno, Bun,
+ * Cloudflare Workers, Vercel Edge, and other runtimes that implement Web
+ * Crypto). Override globally via `setEventIdFactory` to plug in ULID,
+ * KSUID, a deterministic test factory, or whatever your platform requires.
+ */
+export type EventIdFactory = () => string;
+
+const defaultEventIdFactory: EventIdFactory = () => crypto.randomUUID();
+let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
+
+/**
+ * Replaces the global event-id factory used by `createDomainEvent` and
+ * `createDomainEventWithMetadata`. Call once during application bootstrap,
+ * for example:
+ *
+ * ```ts
+ * import { ulid } from "ulid";
+ * import { setEventIdFactory } from "@shirudo/ddd-kit";
+ *
+ * setEventIdFactory(() => ulid());
+ * ```
+ *
+ * The per-call `options.eventId` override always wins over this factory.
+ */
+export function setEventIdFactory(factory: EventIdFactory): void {
+	currentEventIdFactory = factory;
+}
+
+/**
+ * Restores the default event-id factory (`crypto.randomUUID()`).
+ * Intended for use in test `afterEach` hooks.
+ */
+export function resetEventIdFactory(): void {
+	currentEventIdFactory = defaultEventIdFactory;
+}
+
+/**
  * Metadata associated with a domain event for traceability and correlation.
  * Used in event-driven architectures to track event flow across services.
  */
@@ -158,7 +198,7 @@ export function createDomainEvent<T extends string, P>(
 	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P> {
 	return {
-		eventId: options?.eventId ?? crypto.randomUUID(),
+		eventId: options?.eventId ?? currentEventIdFactory(),
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
