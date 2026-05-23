@@ -178,5 +178,45 @@ describe("CommandBus", () => {
 			expectTypeOf(result).toEqualTypeOf<Result<unknown, string>>();
 		});
 	});
+
+	describe("register() typing constrained by TMap", () => {
+		it("rejects registering an unknown command type", () => {
+			type Commands = {
+				CreateOrder: string;
+				CancelOrder: void;
+			};
+			const bus = new CommandBus<Commands>();
+
+			// @ts-expect-error: "Unknown" is not a key of TMap
+			bus.register("Unknown", async () => ok("x"));
+		});
+
+		it("rejects a handler whose return type does not match TMap[K]", () => {
+			type Commands = {
+				CreateOrder: string;
+			};
+			const bus = new CommandBus<Commands>();
+
+			// @ts-expect-error: TMap says CreateOrder returns string; ok(42) is Result<number,…>
+			bus.register("CreateOrder", async () => ok(42));
+		});
+
+		it("accepts a correctly-typed handler", () => {
+			type Commands = {
+				CreateOrder: string;
+			};
+			const bus = new CommandBus<Commands>();
+
+			// no @ts-expect-error — must compile cleanly
+			bus.register("CreateOrder", async () => ok("order-123"));
+		});
+
+		it("stays loose when no TMap is provided (backwards compatible)", () => {
+			const bus = new CommandBus();
+
+			bus.register("CreateOrder", async () => ok("order-1"));
+			bus.register("AnyOtherType", async () => ok(42));
+		});
+	});
 });
 

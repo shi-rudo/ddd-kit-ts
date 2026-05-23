@@ -59,12 +59,21 @@ export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
 	/**
 	 * Registers a handler for a specific command type.
 	 *
+	 * When `TMap` is supplied, the `commandType` argument is restricted to
+	 * its keys and the handler signature is forced to match `TMap[K]` for the
+	 * return value — typos and wrong-typed handlers are compile errors.
+	 * Without `TMap` the registration is loose (any string key, any return
+	 * type) so the no-config path keeps working.
+	 *
 	 * @param commandType - The command type to register the handler for
 	 * @param handler - The handler function for this command type
 	 */
-	register<C extends Command, R>(
-		commandType: C["type"],
-		handler: CommandHandler<C, R>,
+	register<
+		K extends keyof TMap & string,
+		C extends Command & { type: K } = Command & { type: K },
+	>(
+		commandType: K,
+		handler: CommandHandler<C, TMap[K]>,
 	): void;
 }
 
@@ -110,9 +119,12 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private readonly handlers = new Map<string, CommandHandler<any, any>>();
 
-	register<C extends Command, R>(
-		commandType: C["type"],
-		handler: CommandHandler<C, R>,
+	register<
+		K extends keyof TMap & string,
+		C extends Command & { type: K } = Command & { type: K },
+	>(
+		commandType: K,
+		handler: CommandHandler<C, TMap[K]>,
 	): void {
 		this.handlers.set(commandType, handler);
 	}

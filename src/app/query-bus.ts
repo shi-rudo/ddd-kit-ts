@@ -71,12 +71,21 @@ export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
 	/**
 	 * Registers a handler for a specific query type.
 	 *
+	 * When `TMap` is supplied, the `queryType` argument is restricted to its
+	 * keys and the handler signature is forced to match `TMap[K]` for the
+	 * return value — typos and wrong-typed handlers are compile errors.
+	 * Without `TMap` the registration is loose (any string key, any return
+	 * type) so the no-config path keeps working.
+	 *
 	 * @param queryType - The query type to register the handler for
 	 * @param handler - The handler function for this query type
 	 */
-	register<Q extends Query, R>(
-		queryType: Q["type"],
-		handler: QueryHandler<Q, R>,
+	register<
+		K extends keyof TMap & string,
+		Q extends Query & { type: K } = Query & { type: K },
+	>(
+		queryType: K,
+		handler: QueryHandler<Q, TMap[K]>,
 	): void;
 }
 
@@ -122,9 +131,12 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private readonly handlers = new Map<string, QueryHandler<any, any>>();
 
-	register<Q extends Query, R>(
-		queryType: Q["type"],
-		handler: QueryHandler<Q, R>,
+	register<
+		K extends keyof TMap & string,
+		Q extends Query & { type: K } = Query & { type: K },
+	>(
+		queryType: K,
+		handler: QueryHandler<Q, TMap[K]>,
 	): void {
 		this.handlers.set(queryType, handler);
 	}
