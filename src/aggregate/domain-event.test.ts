@@ -176,6 +176,43 @@ describe("DomainEvent", () => {
 		});
 	});
 
+	describe("Immutability — events are deeply frozen at construction", () => {
+		it("returns a top-level frozen event", () => {
+			const event = createDomainEvent("Demo", { x: 1 });
+			expect(Object.isFrozen(event)).toBe(true);
+			expect(() => {
+				(event as unknown as Record<string, unknown>).injected = "evil";
+			}).toThrow();
+		});
+
+		it("deeply freezes the payload so nested writes throw", () => {
+			const event = createDomainEvent("Demo", {
+				nested: { value: 1 },
+			});
+			expect(Object.isFrozen(event.payload.nested)).toBe(true);
+			expect(() => {
+				(event.payload.nested as { value: number }).value = 99;
+			}).toThrow();
+		});
+
+		it("deeply freezes metadata (so a mutating consumer cannot rewrite correlationId in flight)", () => {
+			const event = createDomainEvent(
+				"Demo",
+				{ x: 1 },
+				{ metadata: { correlationId: "corr-1", extra: { tag: "a" } } },
+			);
+			expect(Object.isFrozen(event.metadata)).toBe(true);
+			expect(() => {
+				(event.metadata as { extra: { tag: string } }).extra.tag = "evil";
+			}).toThrow();
+		});
+
+		it("payload-less events still produce a frozen event", () => {
+			const event = createDomainEvent("PayloadFree");
+			expect(Object.isFrozen(event)).toBe(true);
+		});
+	});
+
 	describe("copyMetadata interaction", () => {
 		it("does not copy eventId or aggregateId fields (those are per-event identity, not metadata)", () => {
 			const previous: DomainEvent<"Prev", { v: number }> = createDomainEvent(

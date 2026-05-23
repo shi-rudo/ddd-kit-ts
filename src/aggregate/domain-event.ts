@@ -1,3 +1,5 @@
+import { deepFreeze } from "../value-object/value-object";
+
 /**
  * Factory function producing a fresh, unique event identifier for each call.
  *
@@ -197,7 +199,7 @@ export function createDomainEvent<T extends string, P>(
 	payload?: P,
 	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P> {
-	return {
+	const event: DomainEvent<T, P> = {
 		eventId: options?.eventId ?? currentEventIdFactory(),
 		type,
 		aggregateId: options?.aggregateId,
@@ -207,6 +209,10 @@ export function createDomainEvent<T extends string, P>(
 		version: options?.version ?? 1,
 		metadata: options?.metadata,
 	};
+	// Deep-freeze so a mutating subscriber cannot poison subsequent
+	// handlers — events are facts of the past and must be immutable
+	// (Vernon, IDDD §8).
+	return deepFreeze(event) as DomainEvent<T, P>;
 }
 
 /**

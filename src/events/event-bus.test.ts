@@ -270,6 +270,37 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("event immutability across handler boundary", () => {
+		it("a mutating handler cannot poison the event seen by subsequent handlers", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			// Handler A tries to mutate the event — it must throw because
+			// createDomainEvent freezes the event deeply.
+			let handlerAThrew = false;
+			bus.subscribe("OrderCreated", async (event) => {
+				try {
+					(event.payload as { orderId: string }).orderId = "PWNED";
+				} catch {
+					handlerAThrew = true;
+				}
+			});
+
+			// Handler B must see the original payload, not the mutation A tried.
+			let handlerBSaw: string | null = null;
+			bus.subscribe("OrderCreated", async (event) => {
+				handlerBSaw = event.payload.orderId;
+			});
+
+			const ev = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+			await bus.publish([ev]);
+
+			expect(handlerAThrew).toBe(true);
+			expect(handlerBSaw).toBe("o-1");
+		});
+	});
+
 	describe("publish ordering & parallelism contract", () => {
 		it("dispatches events in input order", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
