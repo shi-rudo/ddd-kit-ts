@@ -110,7 +110,15 @@ export interface IQueryableRepository<
 	findOne(filter: TFilter): Promise<TAgg | null>;
 
 	/**
-	 * Returns all aggregates matching the filter.
+	 * Returns **every** aggregate matching the filter — no pagination,
+	 * no cursor. For unbounded result sets, prefer a read-side projection
+	 * (CQRS read model) over loading aggregates in bulk; aggregates are
+	 * write-side objects and rehydrating thousands of them by id is rarely
+	 * what you want. If you need pagination on the write side, declare a
+	 * domain-specific paged method on your concrete repository (e.g.
+	 * `findPage(filter, cursor)`) — the library does not prescribe a
+	 * pagination contract because cursor/offset/keyset semantics vary too
+	 * much across storage backends.
 	 */
 	find(filter: TFilter): Promise<TAgg[]>;
 }

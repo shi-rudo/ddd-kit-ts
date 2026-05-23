@@ -324,6 +324,29 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
 >
 > `commit()` accepts a single event, an array of events, or none. Direct `setState`/`addDomainEvent` calls remain available for cases that don't fit the helper (state-only mutations, audit-only events, multi-step transactions).
 
+> **Aggregate methods own the behaviour, not the consumer.** Subclasses of `AggregateRoot` and `EventSourcedAggregate` expose state via the `state` getter (DDD requires invariant checks to read it), but the canonical Pattern is *Tell, Don't Ask*: write business methods on the aggregate that mutate via `commit()` / `setState()` / `apply()` and emit events; do not write `if (order.state.status === "draft") order.state.status = "confirmed"` from outside the aggregate. The state getter is for the aggregate's own methods and for read-only projections — not as a public mutation handle.
+
+### Event-Sourcing Schema Evolution (Upcasting)
+
+`DomainEvent.version` is intentionally a plain integer rather than a library-managed migration chain. Schema evolution is **the consumer's responsibility** — every event store handles it differently (sync upcasters in the load path, async upcasters in a projection rebuild, schema-registry coupling, etc.). The recommended pattern is to wrap your event-store read path:
+
+```ts
+// At the infrastructure boundary, before passing events to loadFromHistory:
+function upcast(event: PersistedEvent): DomainEvent {
+  if (event.type === "OrderCreated" && event.version === 1) {
+    // v1 → v2 migration; produce a new DomainEvent
+    return { ...event, version: 2, payload: { ...event.payload, currency: "EUR" } };
+  }
+  return event;
+}
+
+const history = await eventStore.read(aggregateId);
+const upcasted = history.map(upcast);
+aggregate.loadFromHistory(upcasted);
+```
+
+The library deliberately ships no `EventUpcaster` port. Real upcasting strategies vary too much (chained vs schema-registry vs lazy) to commit to one shape pre-1.0 without concrete usage data.
+
 ### Creating an Aggregate WITH Event Sourcing
 
 ```typescript

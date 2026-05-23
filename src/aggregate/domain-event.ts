@@ -27,6 +27,13 @@ let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
  * ```
  *
  * The per-call `options.eventId` override always wins over this factory.
+ *
+ * **Module-scoped — last setter wins.** The factory lives as a single
+ * module variable; importing two libraries that both call this races on
+ * load order. For multi-tenant request isolation (e.g. one factory per
+ * tenant in a single Worker invocation) **prefer the per-call
+ * `options.eventId`** instead of mutating the global. Same caveat applies
+ * to `setClockFactory`.
  */
 export function setEventIdFactory(factory: EventIdFactory): void {
 	currentEventIdFactory = factory;

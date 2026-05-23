@@ -130,7 +130,15 @@ export abstract class Entity<TState, TId extends Id<string>>
 
 	/**
 	 * Returns the current state of the entity.
-	 * State is readonly from outside to enforce encapsulation.
+	 *
+	 * The state object is **shallowly frozen** — direct property writes
+	 * (`entity.state.foo = …`) throw in strict mode, but writes to nested
+	 * objects (`entity.state.address.zip = …`) bypass the freeze. For deep
+	 * immutability either model nested data with `vo()` (which freezes
+	 * deeply) or reach for a structural-sharing library like Immer at the
+	 * App layer. The shallow contract is intentional: deep freezing on
+	 * every state write is too expensive for hot paths, and DDD aggregates
+	 * normally treat their own state as private (`Tell, Don't Ask`).
 	 */
 	public get state(): TState {
 		return this._state;

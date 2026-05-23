@@ -152,6 +152,13 @@ export interface Outbox<Evt> {
 	/**
 	 * Persists events. Called from inside `withCommit`'s transactional
 	 * callback, atomically with the aggregate write.
+	 *
+	 * **Idempotency:** implementations should dedupe on the event's
+	 * `eventId`. `withCommit` itself does not retry, but the surrounding
+	 * use case (a queue consumer, an HTTP retry, a transactional
+	 * outbox-dispatcher loop) may legitimately invoke the same write more
+	 * than once. A unique-key constraint on `(eventId)` in the outbox
+	 * table is the standard implementation.
 	 */
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
 
