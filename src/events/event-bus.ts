@@ -29,32 +29,34 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	private readonly handlers = new Map<string, Set<EventHandler<any>>>();
 
-	subscribe<T extends Evt>(
-		eventType: Evt["type"],
-		handler: EventHandler<T>,
+	subscribe<K extends Evt["type"]>(
+		eventType: K,
+		handler: EventHandler<Extract<Evt, { type: K }>>,
 	): () => void {
 		const type = eventType;
 		if (!this.handlers.has(type)) {
 			this.handlers.set(type, new Set());
 		}
 		const handlersForType = this.handlers.get(type)!;
-		handlersForType.add(handler);
+		handlersForType.add(handler as EventHandler<Evt>);
 
 		// Return unsubscribe function
 		return () => {
-			handlersForType.delete(handler);
+			handlersForType.delete(handler as EventHandler<Evt>);
 			if (handlersForType.size === 0) {
 				this.handlers.delete(type);
 			}
 		};
 	}
 
-	once<T extends Evt>(eventType: Evt["type"]): Promise<T> {
-		return new Promise<T>((resolve) => {
-			const unsubscribe = this.subscribe<T>(eventType, ((event: T) => {
+	once<K extends Evt["type"]>(
+		eventType: K,
+	): Promise<Extract<Evt, { type: K }>> {
+		return new Promise<Extract<Evt, { type: K }>>((resolve) => {
+			const unsubscribe = this.subscribe(eventType, (event) => {
 				unsubscribe();
 				resolve(event);
-			}) as EventHandler<T>);
+			});
 		});
 	}
 

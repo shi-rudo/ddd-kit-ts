@@ -55,9 +55,9 @@ export interface EventBus<Evt extends { type: string }> {
 	 * unsubscribe();
 	 * ```
 	 */
-	subscribe: <T extends Evt>(
-		eventType: Evt["type"],
-		handler: EventHandler<T>,
+	subscribe: <K extends Evt["type"]>(
+		eventType: K,
+		handler: EventHandler<Extract<Evt, { type: K }>>,
 	) => () => void;
 
 	/**
@@ -74,7 +74,9 @@ export interface EventBus<Evt extends { type: string }> {
 	 * console.log("Order created:", event.payload.orderId);
 	 * ```
 	 */
-	once: <T extends Evt>(eventType: Evt["type"]) => Promise<T>;
+	once: <K extends Evt["type"]>(
+		eventType: K,
+	) => Promise<Extract<Evt, { type: K }>>;
 }
 export interface Outbox<Evt> {
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;

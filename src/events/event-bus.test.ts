@@ -71,7 +71,7 @@ describe("EventBusImpl", () => {
 			let called = false;
 			let receivedOrderId: string | null = null;
 
-			bus.subscribe<OrderCreated>("OrderCreated", async (event: OrderCreated) => {
+			bus.subscribe("OrderCreated", async (event: OrderCreated) => {
 				called = true;
 				receivedOrderId = event.payload.orderId;
 			});
@@ -238,7 +238,7 @@ describe("EventBusImpl", () => {
 		it("should resolve with the event on next publish", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 
-			const promise = bus.once<OrderCreated>("OrderCreated");
+			const promise = bus.once("OrderCreated");
 
 			const event = createDomainEvent("OrderCreated", {
 				orderId: "order-123",
@@ -253,7 +253,7 @@ describe("EventBusImpl", () => {
 		it("should automatically unsubscribe after first event", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 
-			const promise = bus.once<OrderCreated>("OrderCreated");
+			const promise = bus.once("OrderCreated");
 
 			const event1 = createDomainEvent("OrderCreated", {
 				orderId: "order-1",
@@ -267,6 +267,59 @@ describe("EventBusImpl", () => {
 
 			const received = await promise;
 			expect(received.payload.orderId).toBe("order-1");
+		});
+	});
+
+	describe("subscribe/once generic-binding to eventType", () => {
+		type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
+		type OrderShipped = DomainEvent<
+			"OrderShipped",
+			{ orderId: string; trackingNumber: string }
+		>;
+		type OrderEvt = OrderCreated | OrderShipped;
+
+		it("infers the handler event type from the eventType argument", () => {
+			const bus = new EventBusImpl<OrderEvt>();
+
+			// Type inference from the eventType — handler is typed as OrderCreated
+			bus.subscribe("OrderCreated", (event) => {
+				// Narrowed: event.payload has orderId, no trackingNumber
+				const _orderId: string = event.payload.orderId;
+				// @ts-expect-error: trackingNumber only exists on OrderShipped
+				const _tracking: string = event.payload.trackingNumber;
+				void _orderId;
+				void _tracking;
+			});
+
+			bus.subscribe("OrderShipped", (event) => {
+				const _orderId: string = event.payload.orderId;
+				const _tracking: string = event.payload.trackingNumber;
+				void _orderId;
+				void _tracking;
+			});
+		});
+
+		it("rejects an unknown event type", () => {
+			const bus = new EventBusImpl<OrderEvt>();
+			// @ts-expect-error: "OrderBanana" is not a member of OrderEvt["type"]
+			bus.subscribe("OrderBanana", () => {});
+		});
+
+		it("once() returns the event variant matching the eventType argument", async () => {
+			const bus = new EventBusImpl<OrderEvt>();
+
+			const p = bus.once("OrderShipped");
+			// p is narrowed to Promise<OrderShipped>
+
+			const event = createDomainEvent("OrderShipped", {
+				orderId: "o-1",
+				trackingNumber: "T-1",
+			}) as OrderShipped;
+			await bus.publish([event]);
+
+			const received = await p;
+			// Narrowed: trackingNumber is required on OrderShipped
+			expect(received.payload.trackingNumber).toBe("T-1");
 		});
 	});
 });
