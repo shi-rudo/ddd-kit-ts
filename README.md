@@ -2,8 +2,6 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design.
 
-📚 **[Full documentation site](https://shi-rudo.github.io/ddd-kit-ts/)** — guides, API reference, design decisions.
-
 > **Release Candidate**
 >
 > This library is in Release Candidate phase. The API is considered stable and ready for production evaluation. Please report any issues before the final 1.0.0 release.

@@ -1,9 +1,33 @@
 name: Deploy Docs
 
+# Deployment disabled 2026-05-23. A docs site operated from Germany
+# requires a legal-notice page (Germany's TMG §5) and a privacy notice
+# (GDPR Art. 13) once it is publicly reachable. Until those are in
+# place, the site stays offline; the docs source remains in the repo
+# and works locally via `pnpm docs:dev`.
+#
+# To re-enable:
+#  1. Add docs/legal/legal-notice.md and docs/legal/privacy.md, then
+#     link them from .vitepress/config.ts (themeConfig.footer + sidebar).
+#  2. Re-enable GitHub Pages in repo Settings → Pages → Source:
+#     "GitHub Actions".
+#  3. Restore the `push:` trigger below (uncomment the lines).
+
 on:
-  push:
-    branches: [main]
+  # push:
+  #   branches: [main]
+
+  # Manual-only trigger with an explicit acknowledgement gate so the
+  # build job cannot run without a human confirming the legal pages
+  # are in place. The deployment will fail anyway while Pages is
+  # disabled in repo settings, but this guard prevents accidental
+  # uploads in case Pages gets re-enabled before the pages exist.
   workflow_dispatch:
+    inputs:
+      legal_pages_in_place:
+        description: "Confirm that legal-notice.md and privacy.md are published in the docs."
+        required: true
+        type: boolean
 
 permissions:
   contents: read
@@ -22,6 +46,7 @@ env:
 
 jobs:
   build:
+    if: ${{ inputs.legal_pages_in_place == true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
