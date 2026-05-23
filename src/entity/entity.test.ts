@@ -43,6 +43,17 @@ class OrderItemEntity extends Entity<OrderItemState, ItemId> {
 	}
 }
 
+describe("Identifiable<TId> brand-discipline constraint", () => {
+	it("type-level: only Id<Tag> brands are accepted, not plain strings", () => {
+		// @ts-expect-error: plain string lacks the Id<…> brand
+		type _Bad = Identifiable<string>;
+		type _Good = Identifiable<Id<"OrderId">>;
+		// Smoke usage to prevent dead-code elimination of the type check
+		const ok: _Good = { id: "o-1" as Id<"OrderId"> };
+		expect(ok.id).toBe("o-1");
+	});
+});
+
 describe("Entity", () => {
 	describe("Functional Pattern (Identifiable)", () => {
 		it("should define entity with id", () => {

@@ -54,15 +54,18 @@
  * }
  * ```
  */
-import { deepEqual } from "../utils/array/deep-equal";
-
 import type { Id } from "../core/id";
 
 /**
- * Functional definition of an Entity via its capability.
- * An object is identifiable if it has an id.
+ * Functional definition of an Entity via its capability — an object is
+ * identifiable if it has an `id`.
+ *
+ * `TId` is constrained to `Id<string>` so the brand discipline that
+ * `Id<Tag>` enforces is preserved end-to-end: an `Identifiable<UserId>`
+ * cannot accidentally be paired with an `Identifiable<OrderId>` or with
+ * a plain `string`.
  */
-export type Identifiable<TId> = {
+export type Identifiable<TId extends Id<string>> = {
 	readonly id: TId;
 };
 
@@ -222,7 +225,7 @@ export function freezeShallow<T>(value: T): T {
  * sameEntity(item1, item1); // true
  * ```
  */
-export function sameEntity<TId>(a: Identifiable<TId>, b: Identifiable<TId>): boolean {
+export function sameEntity<TId extends Id<string>>(a: Identifiable<TId>, b: Identifiable<TId>): boolean {
 	return a.id === b.id;
 }
 
@@ -245,7 +248,7 @@ export function sameEntity<TId>(a: Identifiable<TId>, b: Identifiable<TId>): boo
  * // item is { id: itemId1, productId: "prod-1", quantity: 2 }
  * ```
  */
-export function findEntityById<TId, T extends Identifiable<TId>>(
+export function findEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T | undefined {
@@ -269,7 +272,7 @@ export function findEntityById<TId, T extends Identifiable<TId>>(
  * hasEntityId(items, itemId2); // false
  * ```
  */
-export function hasEntityId<TId, T extends Identifiable<TId>>(
+export function hasEntityId<TId extends Id<string>, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): boolean {
@@ -295,7 +298,7 @@ export function hasEntityId<TId, T extends Identifiable<TId>>(
  * // updated is [{ id: itemId2, productId: "prod-2", quantity: 1 }]
  * ```
  */
-export function removeEntityById<TId, T extends Identifiable<TId>>(
+export function removeEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T[] {
@@ -325,7 +328,7 @@ export function removeEntityById<TId, T extends Identifiable<TId>>(
  * // updated is [{ id: itemId1, productId: "prod-1", quantity: 3 }]
  * ```
  */
-export function updateEntityById<TId, T extends Identifiable<TId>>(
+export function updateEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 	updater: (entity: T) => T,
@@ -356,7 +359,7 @@ export function updateEntityById<TId, T extends Identifiable<TId>>(
  * });
  * ```
  */
-export function replaceEntityById<TId, T extends Identifiable<TId>>(
+export function replaceEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 	replacement: T,
@@ -381,7 +384,7 @@ export function replaceEntityById<TId, T extends Identifiable<TId>>(
  * // ids is [itemId1, itemId2]
  * ```
  */
-export function entityIds<TId, T extends Identifiable<TId>>(entities: T[]): TId[] {
+export function entityIds<TId extends Id<string>, T extends Identifiable<TId>>(entities: T[]): TId[] {
 	return entities.map((entity) => entity.id);
 }
 
