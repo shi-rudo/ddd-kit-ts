@@ -62,8 +62,18 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  */
 export interface EventSourcedAggregateConfig {
 	/**
-	 * Whether to automatically bump the version when applying new events.
-	 * Defaults to true. Set to false to manually control versioning.
+	 * Whether `apply()` should bump the version per event.
+	 *
+	 * Defaults to **`true`** for `EventSourcedAggregate` — each applied
+	 * event is by definition a versioned state change, so the canonical
+	 * event-sourcing pattern is "one event = one version bump". Set to
+	 * `false` only if your event store assigns version numbers itself
+	 * and you want the aggregate to track them via `bumpVersion()` /
+	 * `setVersion()` calls instead.
+	 *
+	 * (Contrast with `AggregateRoot`, which defaults this to `false`
+	 * because its `setState()` already takes a per-call `bumpVersion`
+	 * argument.)
 	 */
 	autoVersionBump?: boolean;
 }

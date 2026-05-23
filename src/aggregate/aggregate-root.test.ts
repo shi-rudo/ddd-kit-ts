@@ -327,7 +327,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("should manage domain events", () => {
-			class EventAggregate extends AggregateRoot<TestState, TestId> {
+			type EvT = { type: "SomethingHappened" };
+			class EventAggregate extends AggregateRoot<TestState, TestId, EvT> {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}

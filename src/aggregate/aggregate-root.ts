@@ -51,8 +51,17 @@ export interface IAggregateRoot<TId extends Id<string>> {
  */
 export interface AggregateConfig {
 	/**
-	 * Whether to automatically bump the version when state changes.
-	 * Defaults to false. Set to true for automatic versioning.
+	 * Whether `setState()` should bump the version automatically.
+	 *
+	 * Defaults to **`false`** for `AggregateRoot` — because `setState()`
+	 * already takes an explicit `bumpVersion` argument per call, so adding
+	 * an "always bump" config on top would be redundant. Keep it `false`
+	 * unless you have a subclass that never passes `bumpVersion` and you
+	 * want every state change to advance the version anyway.
+	 *
+	 * (Contrast with `EventSourcedAggregate`, which defaults this to
+	 * `true` because every event-sourced state change is per definition a
+	 * versioned commit.)
 	 */
 	autoVersionBump?: boolean;
 }
@@ -95,7 +104,11 @@ export interface AggregateConfig {
  * }
  * ```
  */
-export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unknown>
+export abstract class AggregateRoot<
+	TState,
+	TId extends Id<string>,
+	TEvent = never,
+>
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId> {
 	private _version: Version = 0 as Version;
