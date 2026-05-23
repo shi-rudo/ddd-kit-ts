@@ -270,6 +270,84 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("publish ordering & parallelism contract", () => {
+		it("dispatches events in input order", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribe("OrderCreated", async (event) => {
+				seen.push(`created:${event.payload.orderId}`);
+			});
+
+			await bus.publish([
+				createDomainEvent("OrderCreated", {
+					orderId: "o-1",
+				}) as OrderCreated,
+				createDomainEvent("OrderCreated", {
+					orderId: "o-2",
+				}) as OrderCreated,
+				createDomainEvent("OrderCreated", {
+					orderId: "o-3",
+				}) as OrderCreated,
+			]);
+
+			expect(seen).toEqual(["created:o-1", "created:o-2", "created:o-3"]);
+		});
+
+		it("runs handlers within a single event in parallel and collects all rejections", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let aDone = false;
+			let cDone = false;
+
+			bus.subscribe("OrderCreated", async () => {
+				aDone = true;
+			});
+			bus.subscribe("OrderCreated", async () => {
+				throw new Error("b failed");
+			});
+			bus.subscribe("OrderCreated", async () => {
+				cDone = true;
+			});
+
+			const evt = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+
+			await expect(bus.publish([evt])).rejects.toThrow("b failed");
+
+			// Peers ran even though one threw — allSettled semantics.
+			expect(aDone).toBe(true);
+			expect(cDone).toBe(true);
+		});
+
+		it("publishes remaining events when an earlier event's handler throws, then throws AggregateError at the end", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			bus.subscribe("OrderCreated", async (event) => {
+				seen.push(event.payload.orderId);
+				if (event.payload.orderId === "o-1") throw new Error("e1");
+				if (event.payload.orderId === "o-2") throw new Error("e2");
+			});
+
+			await expect(
+				bus.publish([
+					createDomainEvent("OrderCreated", {
+						orderId: "o-1",
+					}) as OrderCreated,
+					createDomainEvent("OrderCreated", {
+						orderId: "o-2",
+					}) as OrderCreated,
+					createDomainEvent("OrderCreated", {
+						orderId: "o-3",
+					}) as OrderCreated,
+				]),
+			).rejects.toBeInstanceOf(AggregateError);
+
+			// All three events dispatched — failures don't short-circuit the batch.
+			expect(seen).toEqual(["o-1", "o-2", "o-3"]);
+		});
+	});
+
 	describe("duplicate subscription semantics", () => {
 		it("invokes the same handler once per subscription when subscribed twice", async () => {
 			const bus = new EventBusImpl<OrderEvent>();

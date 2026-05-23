@@ -31,7 +31,28 @@ export type EventHandler<Evt> = (event: Evt) => Promise<void> | void;
 export interface EventBus<Evt extends { type: string }> {
 	/**
 	 * Publishes events to all subscribed handlers.
-	 * All handlers for each event type will be called.
+	 *
+	 * **Ordering & parallelism contract:**
+	 *
+	 *  1. **Events run in input order.** `publish([a, b, c])` dispatches `a`,
+	 *     awaits all of its handlers, then dispatches `b`, and so on. The
+	 *     library never reorders or parallelises across events.
+	 *  2. **Handlers within a single event run in parallel.** All handlers
+	 *     subscribed to `event.type` are awaited via `Promise.allSettled` —
+	 *     none of them sees the others' errors and none is skipped if a
+	 *     peer fails.
+	 *  3. **Errors are collected and thrown AFTER everything dispatches.**
+	 *     If one handler throws, remaining handlers for that event still
+	 *     run, and remaining events in the batch still publish. Once
+	 *     `publish` reaches the end of the batch it throws — the single
+	 *     error directly if there was one, or an `AggregateError`
+	 *     ("Multiple event handlers failed") containing every captured
+	 *     error otherwise. Callers that need fail-fast semantics should
+	 *     publish events one at a time and not rely on batch atomicity.
+	 *
+	 * The contract is intentionally simple and in-process. For
+	 * cross-process delivery (RabbitMQ, Kafka, etc.), use the `Outbox`
+	 * port and a dedicated dispatcher.
 	 *
 	 * @param events - Array of events to publish
 	 */

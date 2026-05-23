@@ -69,14 +69,22 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 		});
 	}
 
+	/**
+	 * See {@link EventBus.publish} for the full ordering / parallelism /
+	 * error-aggregation contract this implementation realises:
+	 *  - events in input order, sequentially;
+	 *  - handlers within one event in parallel via `Promise.allSettled`;
+	 *  - errors collected and thrown after the batch (single Error, or
+	 *    `AggregateError` for multiple failures).
+	 */
 	async publish(events: ReadonlyArray<Evt>): Promise<void> {
 		const errors: Error[] = [];
 
 		for (const event of events) {
 			const handlersForType = this.handlers.get(event.type);
 			if (handlersForType) {
-				// Snapshot the handler list so a handler unsubscribing during dispatch
-				// doesn't shift indices while we iterate.
+				// Snapshot so a handler unsubscribing during dispatch doesn't
+				// shift indices while we iterate.
 				const results = await Promise.allSettled(
 					handlersForType.slice().map((handler) => handler(event)),
 				);
