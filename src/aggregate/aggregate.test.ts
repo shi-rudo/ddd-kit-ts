@@ -148,6 +148,7 @@ describe("Domain Events", () => {
 	describe("copyMetadata()", () => {
 		it("should copy metadata from source event", () => {
 			const sourceEvent: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
@@ -166,6 +167,7 @@ describe("Domain Events", () => {
 
 		it("should merge additional metadata when copying", () => {
 			const sourceEvent: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
@@ -189,6 +191,7 @@ describe("Domain Events", () => {
 
 		it("should override source metadata with additional metadata", () => {
 			const sourceEvent: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
@@ -209,6 +212,7 @@ describe("Domain Events", () => {
 
 		it("should handle events without metadata", () => {
 			const sourceEvent: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
@@ -326,6 +330,7 @@ describe("Domain Events", () => {
 	describe("DomainEvent interface", () => {
 		it("should require version for schema evolution", () => {
 			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),
@@ -340,6 +345,7 @@ describe("Domain Events", () => {
 
 		it("should support events with version and metadata", () => {
 			const event: DomainEvent<"OrderCreated", { orderId: string }> = {
+				eventId: "evt-test-1",
 				type: "OrderCreated",
 				payload: { orderId: "123" },
 				occurredAt: new Date(),

@@ -41,13 +41,34 @@ export interface EventMetadata {
  */
 export interface DomainEvent<T extends string, P = void> {
 	/**
+	 * Unique identifier for this specific event instance. Used by idempotent
+	 * consumers, outbox dispatch tracking, and as the target of
+	 * `metadata.causationId`. Defaults to `crypto.randomUUID()` if not
+	 * supplied.
+	 */
+	eventId: string;
+
+	/**
 	 * The type of the event, used for routing and handling.
 	 */
 	type: T;
 
 	/**
-	 * The event payload containing the domain data.
-	 * Omitted when P is void (events without payload).
+	 * Identifier of the aggregate that produced the event. Optional at the
+	 * library level — set it whenever the producing aggregate is known so
+	 * downstream subscribers, outboxes, and projections can scope by entity.
+	 */
+	aggregateId?: string;
+
+	/**
+	 * Name of the aggregate type that produced the event (e.g. "Order").
+	 * Pairs with `aggregateId` to fully qualify the source aggregate.
+	 */
+	aggregateType?: string;
+
+	/**
+	 * The event payload containing the domain data. The field is always
+	 * present; its value is `undefined` when `P` is `void`.
 	 */
 	payload: P;
 
@@ -71,6 +92,43 @@ export interface DomainEvent<T extends string, P = void> {
 }
 
 /**
+ * Shared option bag for the `createDomainEvent*` factories.
+ */
+export interface CreateDomainEventOptions {
+	/**
+	 * Override for the auto-generated `eventId`. Pass an existing id (for
+	 * replay, tests, or deterministic event sourcing) instead of letting the
+	 * factory call `crypto.randomUUID()`.
+	 */
+	eventId?: string;
+
+	/**
+	 * Identifier of the aggregate that produced the event.
+	 */
+	aggregateId?: string;
+
+	/**
+	 * Name of the aggregate type that produced the event.
+	 */
+	aggregateType?: string;
+
+	/**
+	 * Override for the auto-generated `occurredAt` timestamp.
+	 */
+	occurredAt?: Date;
+
+	/**
+	 * Override for the default schema version (1).
+	 */
+	version?: number;
+
+	/**
+	 * Event metadata — correlation, causation, user, source, custom fields.
+	 */
+	metadata?: EventMetadata;
+}
+
+/**
  * Creates a domain event with default values.
  * Sets occurredAt to current date and version to 1 if not provided.
  *
@@ -87,32 +145,23 @@ export interface DomainEvent<T extends string, P = void> {
 export function createDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
-	options?: {
-		occurredAt?: Date;
-		version?: number;
-		metadata?: EventMetadata;
-	},
+	options?: CreateDomainEventOptions,
 ): DomainEvent<T, void>;
 export function createDomainEvent<T extends string, P>(
 	type: T,
 	payload: P,
-	options?: {
-		occurredAt?: Date;
-		version?: number;
-		metadata?: EventMetadata;
-	},
+	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P>;
 export function createDomainEvent<T extends string, P>(
 	type: T,
 	payload?: P,
-	options?: {
-		occurredAt?: Date;
-		version?: number;
-		metadata?: EventMetadata;
-	},
+	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P> {
 	return {
+		eventId: options?.eventId ?? crypto.randomUUID(),
 		type,
+		aggregateId: options?.aggregateId,
+		aggregateType: options?.aggregateType,
 		payload: payload as P,
 		occurredAt: options?.occurredAt ?? new Date(),
 		version: options?.version ?? 1,
@@ -137,10 +186,7 @@ export function createDomainEventWithMetadata<T extends string, P>(
 	type: T,
 	payload: P,
 	metadata: EventMetadata,
-	options?: {
-		occurredAt?: Date;
-		version?: number;
-	},
+	options?: Omit<CreateDomainEventOptions, "metadata">,
 ): DomainEvent<T, P> {
 	return createDomainEvent(type, payload, {
 		...options,
