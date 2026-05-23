@@ -169,4 +169,7 @@ skills-lock.json
 # Dolt database files (added by bd init)
 .dolt/
 *.db
-.beads/
+# NOTE: .beads/ itself is intentionally tracked — config.yaml, hooks/,
+# metadata.json, and README.md are shared project conventions. Beads'
+# own .beads/.gitignore handles the per-file ignores (Dolt files,
+# sockets, lock files, ephemeral state, backups).
