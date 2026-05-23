@@ -304,6 +304,50 @@ describe("deepEqual – Symbol-keyed properties", () => {
 	});
 });
 
+describe("deepEqual – Error comparison", () => {
+	it("returns false for two distinct Error instances with the same message", () => {
+		// Error has no Symbol.toStringTag default override beyond "Error";
+		// the Object.prototype.toString tag covers it via the built-in
+		// allow-list. The library treats unhandled built-ins by reference,
+		// so two distinct Error instances are NOT equal even if their
+		// message is the same. Documenting the behaviour.
+		const a = new Error("oops");
+		const b = new Error("oops");
+		expect(deepEqual(a, b)).toBe(false);
+	});
+
+	it("returns true when both sides reference the same Error instance", () => {
+		const err = new Error("oops");
+		expect(deepEqual(err, err)).toBe(true);
+	});
+});
+
+describe("deepEqual – Plain object vs class instance with identical keys", () => {
+	it("compares structurally on the tag = [object Object] (constructor not checked at the deepEqual level)", () => {
+		class Money {
+			constructor(
+				public amount: number,
+				public currency: string,
+			) {}
+		}
+		const lhs = new Money(100, "EUR");
+		const rhs = { amount: 100, currency: "EUR" };
+
+		// Both have tag "[object Object]"; deepEqual is structurally
+		// equal even though the constructor differs. Consumers who need
+		// constructor-aware identity should use ValueObject.equals (which
+		// adds a constructor check on top of deepEqual).
+		expect(deepEqual(lhs, rhs)).toBe(true);
+	});
+
+	it("returns false when constructors AND structure differ", () => {
+		class A {
+			constructor(public x: number) {}
+		}
+		expect(deepEqual(new A(1), { x: 2 })).toBe(false);
+	});
+});
+
 describe("deepEqual – Typ-Mismatches", () => {
 	it("unterscheidet klar nach Typen/Tags", () => {
 		expect(deepEqual([], {})).toBe(false);
