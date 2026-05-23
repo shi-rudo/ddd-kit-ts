@@ -247,6 +247,89 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
+	describe("commit() — record-after-mutation helper", () => {
+		type Ev = { type: "Updated"; value: number };
+
+		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
+			constructor(id: TestId, state: TestState) {
+				super(id, state);
+			}
+			update(value: number, ev: Ev | readonly Ev[] = []): void {
+				this.commit({ ...this.state, value }, ev);
+			}
+			recordOnly(ev: Ev): void {
+				// Forces "record before mutation" — would only be possible by
+				// calling addDomainEvent directly. commit() never does this.
+				this.addDomainEvent(ev);
+			}
+		}
+
+		class FailingValidator extends AggregateRoot<TestState, TestId, Ev> {
+			constructor(id: TestId, state: TestState) {
+				super(id, state);
+			}
+			protected validateState(state: TestState): void {
+				if (state.value < 0) throw new Error("negative");
+			}
+			tryCommit(value: number, ev: Ev): void {
+				this.commit({ ...this.state, value }, ev);
+			}
+		}
+
+		it("mutates state, then records the event, in that order", () => {
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			agg.update(42, { type: "Updated", value: 42 });
+
+			expect(agg.state.value).toBe(42);
+			expect(agg.domainEvents).toHaveLength(1);
+			expect(agg.domainEvents[0]).toEqual({ type: "Updated", value: 42 });
+		});
+
+		it("does NOT record the event when state validation throws", () => {
+			const agg = new FailingValidator("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			expect(() =>
+				agg.tryCommit(-1, { type: "Updated", value: -1 }),
+			).toThrow("negative");
+
+			// State unchanged AND no event queued — the validateState-throws-
+			// before-addDomainEvent path is enforced by commit().
+			expect(agg.state.value).toBe(10);
+			expect(agg.domainEvents).toHaveLength(0);
+		});
+
+		it("accepts multiple events and records them in order", () => {
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			agg.update(99, [
+				{ type: "Updated", value: 99 },
+				{ type: "Updated", value: 100 },
+			]);
+
+			expect(agg.state.value).toBe(99);
+			expect(agg.domainEvents.map((e) => e.value)).toEqual([99, 100]);
+		});
+
+		it("accepts no events (state change only)", () => {
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			agg.update(7);
+
+			expect(agg.state.value).toBe(7);
+			expect(agg.domainEvents).toHaveLength(0);
+		});
+	});
+
 	describe("markPersisted (post-save hook)", () => {
 		class EventingAggregate extends AggregateRoot<TestState, TestId, {
 			type: "TestRecorded";

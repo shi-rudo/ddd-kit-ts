@@ -305,7 +305,24 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
 // order.addDomainEvent({ type: "WrongEvent" }) → compile error
 ```
 
-> **Domain-event ordering: record AFTER mutation.** A domain event represents something that has *just happened* to the aggregate. Always mutate state first (`setState`, invariant checks), then `addDomainEvent`. Recording before mutation is a footgun: if a subsequent invariant throws, the event has been queued for a fact that never actually happened. `EventSourcedAggregate.apply()` enforces this ordering structurally; `AggregateRoot` leaves it as a convention because state mutation (`setState`) and event recording (`addDomainEvent`) are decoupled.
+> **Domain-event ordering: record AFTER mutation.** A domain event represents something that has *just happened* to the aggregate. Always mutate state first (`setState`, invariant checks), then `addDomainEvent`. Recording before mutation is a footgun: if a subsequent invariant throws, the event has been queued for a fact that never actually happened.
+>
+> Two paths give you that ordering for free, so you don't have to remember the rule:
+>
+> - **`EventSourcedAggregate.apply(event)`** — `validateEvent` runs, then the handler computes the next state, then state + event + version commit atomically. State is never mutated without the event, and the event is never recorded without the state.
+> - **`AggregateRoot.commit(newState, event)`** — opt-in helper that runs `setState(newState)` first (which throws on `validateState` failure) and only then appends the event(s). Use this instead of calling `setState` + `addDomainEvent` separately:
+>
+>   ```ts
+>   confirm(): void {
+>     if (this.state.status === "confirmed") throw new OrderAlreadyConfirmedError(this.id);
+>     this.commit(
+>       { ...this.state, status: "confirmed" },
+>       { type: "OrderConfirmed", orderId: this.id },
+>     );
+>   }
+>   ```
+>
+> `commit()` accepts a single event, an array of events, or none. Direct `setState`/`addDomainEvent` calls remain available for cases that don't fit the helper (state-only mutations, audit-only events, multi-step transactions).
 
 ### Creating an Aggregate WITH Event Sourcing
 

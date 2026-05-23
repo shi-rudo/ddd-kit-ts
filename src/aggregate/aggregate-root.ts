@@ -156,6 +156,57 @@ export abstract class AggregateRoot<
 		this._domainEvents = [];
 	}
 
+	/**
+	 * Mutates state and records the resulting domain events in the
+	 * **canonical record-after-mutation order**. Use this instead of calling
+	 * `setState` + `addDomainEvent` separately and you cannot trip the
+	 * "event for a fact that never happened" footgun.
+	 *
+	 * Order of operations:
+	 *  1. `setState(newState)` — runs `validateState`. If it throws, the
+	 *     method propagates and **no event is recorded**.
+	 *  2. Each event in `events` is appended via `addDomainEvent`.
+	 *
+	 * `events` accepts a single event or an array. Omit it (or pass `[]`)
+	 * for state-only mutations.
+	 *
+	 * @example
+	 * ```ts
+	 * confirm(): void {
+	 *   if (this.state.status === "confirmed") {
+	 *     throw new OrderAlreadyConfirmedError(this.id);
+	 *   }
+	 *   this.commit(
+	 *     { ...this.state, status: "confirmed" },
+	 *     { type: "OrderConfirmed", orderId: this.id },
+	 *   );
+	 * }
+	 * ```
+	 *
+	 * `EventSourcedAggregate.apply()` enforces the same ordering
+	 * structurally; `commit()` is the opt-in equivalent on `AggregateRoot`,
+	 * where `setState` and `addDomainEvent` are otherwise decoupled and the
+	 * ordering is convention-only.
+	 *
+	 * @param newState - The new state (validated by `validateState`)
+	 * @param events - One event, an array of events, or none (default)
+	 * @param bumpVersion - Override for `autoVersionBump`; defaults to the
+	 *                     aggregate's configured value
+	 */
+	protected commit(
+		newState: TState,
+		events: TEvent | readonly TEvent[] = [],
+		bumpVersion?: boolean,
+	): void {
+		this.setState(newState, bumpVersion);
+		const list: readonly TEvent[] = Array.isArray(events)
+			? events
+			: [events as TEvent];
+		for (const ev of list) {
+			this.addDomainEvent(ev);
+		}
+	}
+
 	protected constructor(
 		id: TId,
 		initialState: TState,
