@@ -183,9 +183,9 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(1); // Manual bump
 		});
 
-		it("should not bump version when loading from history", () => {
+		it("should advance version by history.length on top of the existing version (not stomp it)", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
-			const initialVersion = aggregate.version;
+			const initialVersion = aggregate.version; // 1 after creation
 
 			const history: TestEvent[] = [
 				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
@@ -194,9 +194,8 @@ describe("EventSourcedAggregate", () => {
 
 			aggregate.loadFromHistory(history);
 
-			// Version should be set to history length, not bumped per event
-			expect(aggregate.version).toBe(history.length);
-			expect(aggregate.version).not.toBe(initialVersion + history.length);
+			// Additive: version = startVersion + history.length (1 + 2 = 3)
+			expect(aggregate.version).toBe(initialVersion + history.length);
 		});
 	});
 
@@ -385,7 +384,7 @@ describe("EventSourcedAggregate", () => {
 	});
 
 	describe("loadFromHistory", () => {
-		it("should set version to history length", () => {
+		it("should set version to history length on a fresh aggregate", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
 			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
 
@@ -398,9 +397,24 @@ describe("EventSourcedAggregate", () => {
 			const result = aggregate.loadFromHistory(history);
 
 			expect(result.isOk()).toBe(true);
-			expect(aggregate.version).toBe(history.length);
+			expect(aggregate.version).toBe(history.length); // 0 + 3 = 3
 			expect(aggregate.state.value).toBe(30);
 			expect(aggregate.state.status).toBe("active");
+		});
+
+		it("should advance version additively when called on a non-zero aggregate", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			expect(aggregate.version).toBe(1); // created event
+
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
+				createDomainEvent("TestEventUpdated", { newValue: 30 }) as TestEventUpdated,
+			];
+
+			const result = aggregate.loadFromHistory(history);
+
+			expect(result.isOk()).toBe(true);
+			expect(aggregate.version).toBe(3); // 1 + 2, not 2 (the bug stomped it)
 		});
 
 		it("should handle empty history", () => {
@@ -411,6 +425,16 @@ describe("EventSourcedAggregate", () => {
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(0);
+		});
+
+		it("should leave the aggregate's pre-existing version untouched on empty history", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			expect(aggregate.version).toBe(1);
+
+			const result = aggregate.loadFromHistory([]);
+
+			expect(result.isOk()).toBe(true);
+			expect(aggregate.version).toBe(1); // 1 + 0 = 1
 		});
 
 		it("should return Err containing the DomainError on validation failure", () => {
@@ -518,6 +542,44 @@ describe("EventSourcedAggregate", () => {
 			expect(result.isOk()).toBe(true);
 			expect(aggregate2.state.value).toBe(20);
 			expect(aggregate2.version).toBe(2);
+		});
+
+		it("should roll back state + version when an event mid-stream fails validation", () => {
+			// aggregate1 produces a snapshot at v=3, value=20, status=active
+			const aggregate1 = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			aggregate1.updateValue(20);
+			aggregate1.activate();
+			const snapshot = aggregate1.createSnapshot();
+
+			// aggregate2 starts in a different state; the failed restore must leave it untouched
+			const originalState: TestState = { value: 555, status: "inactive" };
+			const aggregate2 = new ValidatingAggregate(
+				"test-1" as TestId,
+				originalState,
+			);
+			const originalVersion = aggregate2.version;
+
+			const eventsAfterSnapshot: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", {
+					newValue: 30,
+				}) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid, // rejected
+				createDomainEvent("TestEventUpdated", {
+					newValue: 40,
+				}) as TestEventUpdated,
+			];
+
+			const result = aggregate2.restoreFromSnapshotWithEvents(
+				snapshot,
+				eventsAfterSnapshot,
+			);
+
+			// Result reports the failure
+			expect(result.isErr()).toBe(true);
+
+			// And the aggregate is back to its pre-call state (atomic restore)
+			expect(aggregate2.state).toEqual(originalState);
+			expect(aggregate2.version).toBe(originalVersion);
 		});
 	});
 });

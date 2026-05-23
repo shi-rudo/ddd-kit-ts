@@ -235,12 +235,17 @@ export abstract class EventSourcedAggregate<
 
 	/**
 	 * Reconstitutes the aggregate from an event history. Catches `DomainError`
-	 * thrown by `apply()` during replay and returns it as an `Err` — this is
-	 * the infrastructure boundary, where event-stream corruption is an
-	 * expected recoverable failure. Unexpected (non-DomainError) throws
-	 * propagate.
+	 * thrown during replay and returns it as an `Err` — this is the
+	 * infrastructure boundary, where event-stream corruption is an expected
+	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
+	 *
+	 * Version advances additively: the aggregate's pre-existing version plus
+	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
+	 * an aggregate already at v=1 (e.g. after a creation event) loading
+	 * 2 events ends at v=3, not v=2.
 	 */
 	public loadFromHistory(history: TEvent[]): Result<void, DomainError> {
+		const startVersion = this._version;
 		for (const event of history) {
 			try {
 				this.dispatchAndCommit(event, false);
@@ -249,7 +254,7 @@ export abstract class EventSourcedAggregate<
 				throw e;
 			}
 		}
-		this.setVersion(history.length as Version);
+		this.setVersion((startVersion + history.length) as Version);
 		return ok();
 	}
 
@@ -277,14 +282,22 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Restores the aggregate from a snapshot and applies events that occurred after.
-	 * Same infrastructure-boundary semantics as `loadFromHistory`: catches
-	 * `DomainError` and returns it as an `Err`; non-domain throws propagate.
+	 * Restores the aggregate from a snapshot and applies events that occurred
+	 * after. Same infrastructure-boundary semantics as `loadFromHistory`:
+	 * catches `DomainError` and returns it as an `Err`; non-domain throws
+	 * propagate.
+	 *
+	 * All-or-nothing: if any event mid-stream throws a `DomainError`, the
+	 * aggregate is rolled back to its pre-call state + version. Partial
+	 * restoration is never observable to the caller.
 	 */
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TState>,
 		eventsAfterSnapshot: TEvent[],
 	): Result<void, DomainError> {
+		const previousState = this._state;
+		const previousVersion = this._version;
+
 		this._state = snapshot.state;
 		this.setVersion(snapshot.version);
 
@@ -292,6 +305,8 @@ export abstract class EventSourcedAggregate<
 			try {
 				this.dispatchAndCommit(event, false);
 			} catch (e) {
+				this._state = previousState;
+				this.setVersion(previousVersion);
 				if (e instanceof DomainError) return err(e);
 				throw e;
 			}
