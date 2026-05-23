@@ -179,21 +179,39 @@ export abstract class EventSourcedAggregate<
 	 * State is not mutated if any step throws — the handler is invoked into
 	 * a local and only assigned to `_state` once all checks pass.
 	 *
+	 * The method is generic in the event tag `K`, so concrete callers
+	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
+	 * dispatched handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`
+	 * — no `as` cast required at the call site.
+	 *
 	 * @param event - The domain event to apply
 	 * @param isNew - Whether the event is new (needs persisting) or replayed from history
 	 */
-	protected apply(event: TEvent, isNew = true): void {
+	protected apply<K extends TEvent["type"]>(
+		event: Extract<TEvent, { type: K }>,
+		isNew = true,
+	): void {
+		this.dispatchAndCommit(event, isNew);
+	}
+
+	/**
+	 * Internal dispatch path used by `apply()` and the replay methods
+	 * (`loadFromHistory`, `restoreFromSnapshotWithEvents`). The replay loop
+	 * iterates over `TEvent[]` and therefore cannot supply a narrowed `K`
+	 * generic, so this helper accepts `TEvent` and the discriminator is
+	 * resolved via the (statically-sound) `handlers` map.
+	 */
+	private dispatchAndCommit(event: TEvent, isNew: boolean): void {
 		this.validateEvent(event);
 
-		const handler = this.handlers[event.type as keyof typeof this.handlers];
+		const handler = this.handlers[event.type as keyof typeof this.handlers] as
+			| Handler<TState, TEvent>
+			| undefined;
 		if (!handler) {
 			throw new MissingHandlerError(event.type);
 		}
 
-		const nextState = handler(
-			this._state,
-			event as Extract<TEvent, { type: TEvent["type"] }>,
-		);
+		const nextState = handler(this._state, event);
 
 		// Atomic commit: nothing above this line mutated aggregate state.
 		this._state = nextState;
@@ -225,7 +243,7 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(history: TEvent[]): Result<void, DomainError> {
 		for (const event of history) {
 			try {
-				this.apply(event, false);
+				this.dispatchAndCommit(event, false);
 			} catch (e) {
 				if (e instanceof DomainError) return err(e);
 				throw e;
@@ -272,7 +290,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			try {
-				this.apply(event, false);
+				this.dispatchAndCommit(event, false);
 			} catch (e) {
 				if (e instanceof DomainError) return err(e);
 				throw e;
