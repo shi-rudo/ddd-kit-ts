@@ -137,4 +137,69 @@ describe("withCommit", () => {
 			),
 		).rejects.toThrow("Outbox failed");
 	});
+
+	it("publishes to the bus only AFTER the transaction has committed", async () => {
+		const callOrder: string[] = [];
+		const uow: UnitOfWork = {
+			transactional: async <T>(fn: () => Promise<T>) => {
+				callOrder.push("tx-start");
+				const result = await fn();
+				callOrder.push("tx-commit");
+				return result;
+			},
+		};
+		const outbox: Outbox<TestEvent> = {
+			add: async () => {
+				callOrder.push("outbox.add");
+			},
+		};
+		const bus: EventBus<TestEvent> = {
+			publish: async () => {
+				callOrder.push("bus.publish");
+			},
+			subscribe: () => () => {},
+			once: () => new Promise(() => {}),
+		};
+
+		await withCommit(
+			{ outbox, bus, uow },
+			async () => {
+				callOrder.push("fn");
+				return {
+					result: "ok",
+					events: [{ type: "OrderCreated", orderId: "o-1" }] as TestEvent[],
+				};
+			},
+		);
+
+		// Outbox stays inside the TX so the events persist atomically with state;
+		// bus.publish must happen AFTER tx-commit so subscribers never see events
+		// from a rolled-back transaction.
+		expect(callOrder).toEqual([
+			"tx-start",
+			"fn",
+			"outbox.add",
+			"tx-commit",
+			"bus.publish",
+		]);
+	});
+
+	it("does not publish to the bus when the transaction throws", async () => {
+		const uow: UnitOfWork = {
+			transactional: async <T>(fn: () => Promise<T>) => fn(),
+		};
+		const outbox = createMockOutbox();
+		const bus = createMockBus();
+
+		await expect(
+			withCommit(
+				{ outbox, bus, uow },
+				async () => {
+					throw new Error("write failed");
+				},
+			),
+		).rejects.toThrow("write failed");
+
+		expect(bus.published).toHaveLength(0);
+	});
 });
