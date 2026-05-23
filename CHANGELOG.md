@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING CHANGES — Repository API
+
+- **`ISpecification<T>` removed.** The phantom branded interface had no methods (no `isSatisfiedBy`, no `and`/`or`/`not` combinators) and was therefore impossible to use generically — `IRepository.find(spec)` could never do anything sound with it.
+- **`IRepository.find` / `findOne` removed from the base interface.** Read-only access by id (`getById`, `getByIdOrFail`) is the DDD-canonical Repository contract; querying is a separate concern.
+- **`IQueryableRepository<TAgg, TId, TFilter>` added.** Extends `IRepository` with `find(filter)` and `findOne(filter)`, parameterized over the persistence layer's native filter shape — Drizzle `SQL` expressions, Prisma `WhereInput`, Mongo filter documents, in-memory predicates, etc. The library no longer prescribes a query DSL.
+
 ### BREAKING CHANGES — DDD compliance
 
 - **Domain layer now throws, no longer returns Result.** Per Evans/Vernon convention, domain methods enforce invariants by throwing typed domain exceptions. Result is reserved for the App-Service boundary (Buses, Handlers, `withCommit`) and the Infrastructure boundary where stream corruption is recoverable (`loadFromHistory`, `restoreFromSnapshotWithEvents`).

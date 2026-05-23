@@ -22,7 +22,6 @@ export * from "./events/event-bus";
 export * from "./events/ports";
 // Repository
 export * from "./repo/repository";
-export * from "./repo/spec";
 export * from "./repo/uow";
 // Value Objects
 export * from "./value-object/value-object";

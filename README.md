@@ -1123,7 +1123,7 @@ Key exports include:
 - `EventBus.once()` - Wait for the next event of a given type (returns Promise, auto-unsubscribes)
 - `Id<Tag>` - Branded ID type (Result type and operators come from the `@shirudo/result` peer dep)
 - `IRepository<TAgg, TId>` - Repository interface
-- `ISpecification<T>` - Specification interface
+- `IQueryableRepository<TAgg, TId, TFilter>` - Repository extension that adds filter-based querying. `TFilter` is the persistence layer's native filter shape (Drizzle SQL, Prisma WhereInput, Mongo filter doc, in-memory predicate, …). Repositories that are only accessed by id should implement `IRepository` directly and skip this extension.
 - `UnitOfWork` - Unit of Work interface
 - `DomainError` - Abstract base for domain exceptions (Consumer subclasses for their aggregate-specific errors)
 - `MissingHandlerError`, `AggregateNotFoundError` - Concrete library-internal `DomainError` subclasses
