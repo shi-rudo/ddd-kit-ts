@@ -120,6 +120,52 @@ export interface OnceOptions {
 	 */
 	timeoutMs?: number;
 }
+/**
+ * One pending event in the outbox plus the opaque id the implementation
+ * needs to ack it via `markDispatched`. The library does not prescribe
+ * what `dispatchId` looks like — an implementation can reuse the event's
+ * own `eventId`, generate its own UUID, use the row's auto-increment
+ * primary key, or whatever the storage layer prefers.
+ */
+export interface OutboxRecord<Evt> {
+	dispatchId: string;
+	event: Evt;
+}
+
+/**
+ * Transactional outbox port — the bridge between the write-side
+ * transaction and the (out-of-band) event dispatcher.
+ *
+ * Lifecycle:
+ *  1. `add()` inside the write transaction (`withCommit` calls this) so
+ *     events persist atomically with the aggregate state.
+ *  2. A separate outbox dispatcher polls `getPending()` and forwards the
+ *     events to subscribers / external brokers.
+ *  3. After successful dispatch, the dispatcher calls `markDispatched()`
+ *     with the records' `dispatchId`s so they don't come back next poll.
+ *
+ * `markDispatched` is required to be idempotent — calling it with an id
+ * that's already marked is a no-op, not an error. This lets the
+ * dispatcher safely retry on partial-failure.
+ */
 export interface Outbox<Evt> {
+	/**
+	 * Persists events. Called from inside `withCommit`'s transactional
+	 * callback, atomically with the aggregate write.
+	 */
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
+
+	/**
+	 * Returns up to `limit` outbox records that have not yet been
+	 * dispatched. The dispatcher polls this on a schedule. When `limit`
+	 * is omitted, the implementation decides on a default page size.
+	 */
+	getPending: (limit?: number) => Promise<ReadonlyArray<OutboxRecord<Evt>>>;
+
+	/**
+	 * Marks the given dispatch records as delivered so subsequent
+	 * `getPending` calls don't return them. Must be idempotent on
+	 * already-marked ids.
+	 */
+	markDispatched: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
 }

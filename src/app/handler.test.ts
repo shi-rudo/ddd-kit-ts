@@ -18,6 +18,8 @@ function createMockOutbox(): Outbox<TestEvent> & { added: TestEvent[][] } {
 		add: async (events) => {
 			added.push([...events]);
 		},
+		getPending: async () => [],
+		markDispatched: async () => {},
 	};
 }
 
@@ -125,6 +127,8 @@ describe("withCommit", () => {
 			add: async () => {
 				throw new Error("Outbox failed");
 			},
+			getPending: async () => [],
+			markDispatched: async () => {},
 		};
 
 		await expect(
@@ -152,6 +156,8 @@ describe("withCommit", () => {
 			add: async () => {
 				callOrder.push("outbox.add");
 			},
+			getPending: async () => [],
+			markDispatched: async () => {},
 		};
 		const bus: EventBus<TestEvent> = {
 			publish: async () => {
