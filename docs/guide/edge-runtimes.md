@@ -20,6 +20,7 @@ The kit is built for modern TypeScript runtimes including Cloudflare Workers, Ve
 Three drop-in alternatives, all swap in via the factory:
 
 ```ts
+// worker.ts — at module top level, runs once per isolate boot
 import { setEventIdFactory } from "@shirudo/ddd-kit";
 
 // UUID v7 — time-ordered, 36-char hex with hyphens, RFC 9562 standard
@@ -37,7 +38,9 @@ setEventIdFactory(() => KSUID.randomSync().string);
 
 All three are time-ordered ⇒ `ORDER BY eventId ASC` matches creation order, B-tree indexes on the eventId column don't suffer write amplification, and eyeballing two ids tells you which came first. Most production DDD setups land on v7 (standards-track) or ULID (more compact).
 
-The kit's per-call `options.eventId` override always wins, so you can mix strategies (default global factory, per-tenant override at the request boundary).
+::: tip Call it **once** at module top level
+`setEventIdFactory` is a process-wide singleton — call it from the worker's top-level imports (or your Node entry, or your Vitest setup file), **not** from inside `fetch()` or per-request code. The kit's per-call `options.eventId` override still wins, so per-tenant variance goes there. See [Domain Events → Where to bootstrap the factory](./domain-events.md#where-to-bootstrap-the-factory) for the canonical patterns across Node / Workers / tests.
+:::
 
 ### Deterministic clocks for testing
 

@@ -46,16 +46,49 @@ The returned event is **deeply frozen**. Mutating it (or any nested object) thro
 `crypto.randomUUID()` is always **UUID v4** — purely random, no time component. Fine for tests and small workloads, but it scatters across B-tree indexes and amplifies writes once the event store grows. For production, swap in UUID v7 (RFC 9562), ULID, or KSUID via `setEventIdFactory` — all three are time-ordered, so `ORDER BY eventId ASC` matches creation order and indexes stay clustered. See [Edge Runtimes → Event ids](./edge-runtimes.md#event-ids-ulid-ksuid-snowflake) for the drop-ins.
 :::
 
-#### Deterministic ids and timestamps for tests
+#### Where to bootstrap the factory
+
+Both `setEventIdFactory` and `setClockFactory` are **process-wide singletons** — call them **once, at your app's entry point**, before any code constructs a domain event. Subsequent calls overwrite the previous factory (last setter wins), so a per-request `setEventIdFactory(...)` is almost always a bug. For per-request / per-tenant variance, use the per-call `options.eventId` / `options.occurredAt` overrides on `createDomainEvent` instead.
+
+The right place depends on your runtime:
+
+**Node / Bun entry point** — at the top of your main module, before any handler or use case imports a domain event:
 
 ```ts
-import { setEventIdFactory, setClockFactory, resetEventIdFactory, resetClockFactory } from "@shirudo/ddd-kit";
+// src/main.ts  (or index.ts, server.ts — your process entry)
+import { setEventIdFactory } from "@shirudo/ddd-kit";
+import { v7 as uuidv7 } from "uuid";
 
-beforeEach(() => {
-  let n = 0;
-  setEventIdFactory(() => `evt-${++n}`);
-  setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
-});
+setEventIdFactory(() => uuidv7());
+
+// ... then the rest of the bootstrap (express server, fastify, etc.)
+import { startServer } from "./server";
+startServer();
+```
+
+**Cloudflare Workers / Vercel Edge** — at module top level in the worker file. Module top-level code runs **once per isolate boot**, not per request, so the factory is set once and lives for the lifetime of that isolate:
+
+```ts
+// worker.ts
+import { setEventIdFactory } from "@shirudo/ddd-kit";
+import { v7 as uuidv7 } from "uuid";
+
+// Runs once when the isolate boots. Don't put this inside fetch().
+setEventIdFactory(() => uuidv7());
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    // ... domain events created here use the v7 factory ...
+  },
+};
+```
+
+**Test setup file** — once per test file, or globally via your test runner's setup config. The reset helpers exist so each test sees the default again unless it opts in:
+
+```ts
+// vitest.setup.ts  (referenced from vitest.config.ts `setupFiles`)
+import { afterEach } from "vitest";
+import { resetEventIdFactory, resetClockFactory } from "@shirudo/ddd-kit";
 
 afterEach(() => {
   resetEventIdFactory();
@@ -63,8 +96,21 @@ afterEach(() => {
 });
 ```
 
+```ts
+// A single test that needs determinism opts in:
+import { setEventIdFactory, setClockFactory } from "@shirudo/ddd-kit";
+
+it("emits a deterministic event", () => {
+  let n = 0;
+  setEventIdFactory(() => `evt-${++n}`);
+  setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
+
+  // ... assertions on event.eventId === "evt-1", event.occurredAt fixed ...
+});
+```
+
 ::: warning Module-scoped — last setter wins
-Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation), **prefer the per-call `options.eventId` / `options.occurredAt`** instead of mutating the global — two libraries / two tenants would race on load order.
+Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation serving multiple tenants, two libraries that both call `setEventIdFactory` at import time), **don't mutate the global per request** — that's a race waiting to happen. Use the per-call `options.eventId` / `options.occurredAt` on `createDomainEvent` instead; it always wins over the factory.
 :::
 
 #### Custom id formats (UUID v7, ULID, KSUID)
