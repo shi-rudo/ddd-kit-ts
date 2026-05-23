@@ -247,6 +247,43 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
+	describe("markPersisted (post-save hook)", () => {
+		class EventingAggregate extends AggregateRoot<TestState, TestId, {
+			type: "TestRecorded";
+			value: number;
+		}> {
+			constructor(id: TestId, state: TestState) {
+				super(id, state);
+			}
+			recordEvent(value: number): void {
+				this.addDomainEvent({ type: "TestRecorded", value });
+			}
+		}
+
+		it("updates the version and clears recorded domain events", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.recordEvent(1);
+			aggregate.recordEvent(2);
+
+			expect(aggregate.domainEvents.length).toBe(2);
+
+			aggregate.markPersisted(42 as Version);
+
+			expect(aggregate.version).toBe(42);
+			expect(aggregate.domainEvents).toHaveLength(0);
+		});
+
+		it("can be invoked on a fresh aggregate without events", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			aggregate.markPersisted(7 as Version);
+			expect(aggregate.version).toBe(7);
+			expect(aggregate.domainEvents).toHaveLength(0);
+		});
+	});
+
 	describe("domainEvents getter encapsulation", () => {
 		it("does not leak the internal domainEvents array", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);

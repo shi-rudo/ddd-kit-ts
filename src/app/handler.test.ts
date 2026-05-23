@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { withCommit } from "./handler";
 import type { Outbox, EventBus } from "../events/ports";
-import type { UnitOfWork } from "../repo/uow";
+import type { TransactionScope } from "../repo/scope";
 
 type TestEvent = { type: "OrderCreated"; orderId: string };
 
-function createMockUow(): UnitOfWork {
+function createMockScope(): TransactionScope {
 	return {
 		transactional: <T>(fn: () => Promise<T>) => fn(),
 	};
@@ -36,7 +36,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 describe("withCommit", () => {
 	it("should return the result from the function", async () => {
 		const result = await withCommit(
-			{ outbox: createMockOutbox(), uow: createMockUow() },
+			{ outbox: createMockOutbox(), scope: createMockScope() },
 			async () => ({
 				result: "order-123",
 				events: [],
@@ -51,7 +51,7 @@ describe("withCommit", () => {
 		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
 
 		await withCommit(
-			{ outbox, uow: createMockUow() },
+			{ outbox, scope: createMockScope() },
 			async () => ({ result: "ok", events }),
 		);
 
@@ -65,7 +65,7 @@ describe("withCommit", () => {
 		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
 
 		await withCommit(
-			{ outbox, bus, uow: createMockUow() },
+			{ outbox, bus, scope: createMockScope() },
 			async () => ({ result: "ok", events }),
 		);
 
@@ -78,7 +78,7 @@ describe("withCommit", () => {
 		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
 
 		const result = await withCommit(
-			{ outbox, uow: createMockUow() },
+			{ outbox, scope: createMockScope() },
 			async () => ({ result: "ok", events }),
 		);
 
@@ -88,7 +88,7 @@ describe("withCommit", () => {
 
 	it("should execute within the unit of work transaction", async () => {
 		const callOrder: string[] = [];
-		const uow: UnitOfWork = {
+		const scope: TransactionScope = {
 			transactional: async <T>(fn: () => Promise<T>) => {
 				callOrder.push("tx-start");
 				const result = await fn();
@@ -99,7 +99,7 @@ describe("withCommit", () => {
 		const outbox = createMockOutbox();
 
 		await withCommit(
-			{ outbox, uow },
+			{ outbox, scope },
 			async () => {
 				callOrder.push("fn");
 				return { result: "ok", events: [] };
@@ -112,7 +112,7 @@ describe("withCommit", () => {
 	it("should propagate errors from the function", async () => {
 		await expect(
 			withCommit(
-				{ outbox: createMockOutbox(), uow: createMockUow() },
+				{ outbox: createMockOutbox(), scope: createMockScope() },
 				async () => {
 					throw new Error("Something went wrong");
 				},
@@ -129,7 +129,7 @@ describe("withCommit", () => {
 
 		await expect(
 			withCommit(
-				{ outbox, uow: createMockUow() },
+				{ outbox, scope: createMockScope() },
 				async () => ({
 					result: "ok",
 					events: [{ type: "OrderCreated", orderId: "order-1" }] as TestEvent[],
@@ -140,7 +140,7 @@ describe("withCommit", () => {
 
 	it("publishes to the bus only AFTER the transaction has committed", async () => {
 		const callOrder: string[] = [];
-		const uow: UnitOfWork = {
+		const scope: TransactionScope = {
 			transactional: async <T>(fn: () => Promise<T>) => {
 				callOrder.push("tx-start");
 				const result = await fn();
@@ -162,7 +162,7 @@ describe("withCommit", () => {
 		};
 
 		await withCommit(
-			{ outbox, bus, uow },
+			{ outbox, bus, scope },
 			async () => {
 				callOrder.push("fn");
 				return {
@@ -185,7 +185,7 @@ describe("withCommit", () => {
 	});
 
 	it("does not publish to the bus when the transaction throws", async () => {
-		const uow: UnitOfWork = {
+		const scope: TransactionScope = {
 			transactional: async <T>(fn: () => Promise<T>) => fn(),
 		};
 		const outbox = createMockOutbox();
@@ -193,7 +193,7 @@ describe("withCommit", () => {
 
 		await expect(
 			withCommit(
-				{ outbox, bus, uow },
+				{ outbox, bus, scope },
 				async () => {
 					throw new Error("write failed");
 				},

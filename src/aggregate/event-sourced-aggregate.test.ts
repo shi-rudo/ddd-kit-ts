@@ -8,6 +8,7 @@ import {
 import {
 	createDomainEvent,
 	type DomainEvent,
+	type Version,
 } from "./aggregate";
 
 type TestId = Id<"TestId">;
@@ -454,6 +455,22 @@ describe("EventSourcedAggregate", () => {
 			if (result.isErr()) {
 				expect(result.error).toBeInstanceOf(InvalidTestEventError);
 			}
+		});
+	});
+
+	describe("markPersisted (post-save hook)", () => {
+		it("updates the version and clears pending events", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			aggregate.updateValue(20);
+
+			expect(aggregate.version).toBeGreaterThan(0);
+			expect(aggregate.pendingEvents.length).toBeGreaterThan(0);
+
+			aggregate.markPersisted(99 as Version);
+
+			expect(aggregate.version).toBe(99);
+			expect(aggregate.pendingEvents).toHaveLength(0);
+			expect(aggregate.hasPendingEvents()).toBe(false);
 		});
 	});
 

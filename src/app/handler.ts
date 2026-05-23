@@ -1,5 +1,5 @@
 import type { EventBus, Outbox } from "../events/ports";
-import type { UnitOfWork } from "../repo/uow";
+import type { TransactionScope } from "../repo/scope";
 
 /**
  * Helper for executing a write Use Case inside a Unit of Work.
@@ -35,11 +35,11 @@ export async function withCommit<Evt extends { type: string }, R>(
 	deps: {
 		outbox: Outbox<Evt>;
 		bus?: EventBus<Evt>;
-		uow: UnitOfWork;
+		scope: TransactionScope;
 	},
 	fn: () => Promise<{ result: R; events: ReadonlyArray<Evt> }>,
 ): Promise<R> {
-	const { result, events } = await deps.uow.transactional(async () => {
+	const { result, events } = await deps.scope.transactional(async () => {
 		const fnResult = await fn();
 		await deps.outbox.add(fnResult.events);
 		return fnResult;

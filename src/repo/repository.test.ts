@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { IQueryableRepository, IRepository } from "./repository";
-import { AggregateNotFoundError } from "../core/errors";
+import {
+	AggregateNotFoundError,
+	ConcurrencyConflictError,
+	DomainError,
+} from "../core/errors";
 
 type OrderId = Id<"OrderId">;
 type Order = IAggregateRoot<OrderId> & {
@@ -28,6 +32,10 @@ describe("Repository contract", () => {
 					return existing;
 				}
 
+				async exists(id: OrderId): Promise<boolean> {
+					return this.byId.has(id);
+				}
+
 				async save(aggregate: Order): Promise<void> {
 					this.byId.set(aggregate.id, aggregate);
 				}
@@ -44,13 +52,66 @@ describe("Repository contract", () => {
 				customerId: "c-1",
 				total: 100,
 			};
+
+			expect(await repo.exists("o-1" as OrderId)).toBe(false);
+
 			await repo.save(order);
 
+			expect(await repo.exists("o-1" as OrderId)).toBe(true);
+			expect(await repo.exists("o-missing" as OrderId)).toBe(false);
 			expect(await repo.getById("o-1" as OrderId)).toBe(order);
 			expect(await repo.getById("o-missing" as OrderId)).toBeNull();
 			await expect(
 				repo.getByIdOrFail("o-missing" as OrderId),
 			).rejects.toBeInstanceOf(AggregateNotFoundError);
+		});
+	});
+
+	describe("ConcurrencyConflictError contract", () => {
+		it("carries aggregate type, id, expected and actual versions", () => {
+			const error = new ConcurrencyConflictError("Order", "o-1", 3, 5);
+			expect(error).toBeInstanceOf(DomainError);
+			expect(error.aggregateType).toBe("Order");
+			expect(error.aggregateId).toBe("o-1");
+			expect(error.expectedVersion).toBe(3);
+			expect(error.actualVersion).toBe(5);
+			expect(error.message).toContain("Order(o-1)");
+			expect(error.message).toContain("expected version 3");
+			expect(error.message).toContain("actual 5");
+		});
+
+		it("is the canonical error a Repository.save() implementation throws on optimistic-lock mismatch", () => {
+			// Smoke check: a Repository implementation can construct + throw it.
+			class StaleRepo implements IRepository<Order, OrderId> {
+				async getById(): Promise<Order | null> {
+					return null;
+				}
+				async getByIdOrFail(id: OrderId): Promise<Order> {
+					throw new AggregateNotFoundError("Order", id);
+				}
+				async exists(): Promise<boolean> {
+					return false;
+				}
+				async save(aggregate: Order): Promise<void> {
+					throw new ConcurrencyConflictError(
+						"Order",
+						aggregate.id,
+						aggregate.version as unknown as number,
+						(aggregate.version as unknown as number) + 1,
+					);
+				}
+				async delete(): Promise<void> {}
+			}
+
+			const repo = new StaleRepo();
+			return expect(
+				repo.save({
+					id: "o-1" as OrderId,
+					version: 3 as never,
+					customerId: "c-1",
+					total: 100,
+				}),
+			).rejects.toBeInstanceOf(ConcurrencyConflictError);
 		});
 	});
 
@@ -70,6 +131,9 @@ describe("Repository contract", () => {
 					const existing = this.byId.get(id);
 					if (!existing) throw new AggregateNotFoundError("Order", id);
 					return existing;
+				}
+				async exists(id: OrderId): Promise<boolean> {
+					return this.byId.has(id);
 				}
 				async save(aggregate: Order): Promise<void> {
 					this.byId.set(aggregate.id, aggregate);
@@ -120,6 +184,9 @@ describe("Repository contract", () => {
 				}
 				async getByIdOrFail(id: OrderId): Promise<Order> {
 					throw new AggregateNotFoundError("Order", id);
+				}
+				async exists(): Promise<boolean> {
+					return false;
 				}
 				async save(): Promise<void> {}
 				async delete(): Promise<void> {}

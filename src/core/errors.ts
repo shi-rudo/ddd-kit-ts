@@ -42,3 +42,22 @@ export class AggregateNotFoundError extends DomainError {
 		super(`Aggregate not found: ${aggregateType}(${id})`);
 	}
 }
+
+/**
+ * Thrown by `IRepository.save()` when the aggregate's expected version does
+ * not match the version currently persisted — i.e. another writer updated
+ * the aggregate concurrently. The canonical DDD optimistic-concurrency
+ * signal; callers typically reload, re-apply the use case, and retry.
+ */
+export class ConcurrencyConflictError extends DomainError {
+	constructor(
+		public readonly aggregateType: string,
+		public readonly aggregateId: string,
+		public readonly expectedVersion: number,
+		public readonly actualVersion: number,
+	) {
+		super(
+			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
+		);
+	}
+}

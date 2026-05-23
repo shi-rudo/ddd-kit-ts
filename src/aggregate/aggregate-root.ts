@@ -128,6 +128,21 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 		this._domainEvents = [];
 	}
 
+	/**
+	 * Post-save hook called by a `Repository.save()` implementation to push
+	 * the persisted version back into the in-memory aggregate and clear the
+	 * recorded domain events (they are now safely on the write side / in
+	 * the outbox).
+	 *
+	 * Use this so `save()` can keep its `Promise<void>` return type: the
+	 * caller holds the aggregate reference, which is up to date after this
+	 * call.
+	 */
+	public markPersisted(version: Version): void {
+		this.setVersion(version);
+		this._domainEvents = [];
+	}
+
 	protected constructor(
 		id: TId,
 		initialState: TState,

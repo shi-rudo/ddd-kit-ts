@@ -37,7 +37,23 @@ export interface IRepository<
 	getByIdOrFail(id: TId): Promise<TAgg>;
 
 	/**
-	 * Persists the aggregate (insert or update).
+	 * Returns whether an aggregate with the given id exists. Cheaper than
+	 * `getById !== null` if your storage supports `EXISTS`-style queries.
+	 */
+	exists(id: TId): Promise<boolean>;
+
+	/**
+	 * Persists the aggregate (insert or update). Implementations should:
+	 *
+	 *  1. Throw `ConcurrencyConflictError` from `@shirudo/ddd-kit` when the
+	 *     aggregate's expected version does not match the version currently
+	 *     stored (optimistic concurrency).
+	 *  2. After a successful write, call `aggregate.markPersisted(newVersion)`
+	 *     so the in-memory aggregate reflects the new version and clears its
+	 *     pending/domain events.
+	 *
+	 * Return type stays `void` — the caller already holds the aggregate
+	 * reference, which is now up to date.
 	 */
 	save(aggregate: TAgg): Promise<void>;
 

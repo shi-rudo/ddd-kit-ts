@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### BREAKING CHANGES — Repository API
+### BREAKING CHANGES — Repository + persistence API
 
 - **`ISpecification<T>` removed.** The phantom branded interface had no methods (no `isSatisfiedBy`, no `and`/`or`/`not` combinators) and was therefore impossible to use generically — `IRepository.find(spec)` could never do anything sound with it.
 - **`IRepository.find` / `findOne` removed from the base interface.** Read-only access by id (`getById`, `getByIdOrFail`) is the DDD-canonical Repository contract; querying is a separate concern.
 - **`IQueryableRepository<TAgg, TId, TFilter>` added.** Extends `IRepository` with `find(filter)` and `findOne(filter)`, parameterized over the persistence layer's native filter shape — Drizzle `SQL` expressions, Prisma `WhereInput`, Mongo filter documents, in-memory predicates, etc. The library no longer prescribes a query DSL.
+- **`IRepository.exists(id)` added.** Collection-style existence check; cheaper than `getById !== null` when the storage supports `EXISTS`-style queries.
+- **`UnitOfWork` renamed to `TransactionScope`** (`src/repo/uow.ts` → `src/repo/scope.ts`). The original implementation was a transaction-scope helper (`(fn) => fn()`), not Fowler's full UoW (no change tracking, no registerDirty/registerNew/registerDeleted). The new name is honest. Consumers update `import { TransactionScope } from "@shirudo/ddd-kit"` and rename the dependency key in `withCommit({ scope, … })`.
+- **`RepoProvider<R>` removed.** Dead export, never used.
+- **`AggregateRoot.markPersisted(version)` / `EventSourcedAggregate.markPersisted(version)` added.** Post-save hook called by a `Repository.save()` implementation to push the persisted version back into the aggregate and clear domain/pending events. Lets `save()` keep its `Promise<void>` return type while still propagating the new version.
+- **`ConcurrencyConflictError extends DomainError` added.** The canonical signal a `Repository.save()` implementation throws on optimistic-lock mismatch — carries `aggregateType`, `aggregateId`, `expectedVersion`, `actualVersion`. Documented in the `IRepository.save` contract.
 
 ### BREAKING CHANGES — DDD compliance
 

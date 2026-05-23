@@ -1124,7 +1124,7 @@ Key exports include:
 - `Id<Tag>` - Branded ID type (Result type and operators come from the `@shirudo/result` peer dep)
 - `IRepository<TAgg, TId>` - Repository interface
 - `IQueryableRepository<TAgg, TId, TFilter>` - Repository extension that adds filter-based querying. `TFilter` is the persistence layer's native filter shape (Drizzle SQL, Prisma WhereInput, Mongo filter doc, in-memory predicate, …). Repositories that are only accessed by id should implement `IRepository` directly and skip this extension.
-- `UnitOfWork` - Unit of Work interface
+- `TransactionScope` - Transaction-scope abstraction (wraps a block of work in the persistence layer's native transaction). Intentionally minimal — not Fowler's full UoW with change tracking.
 - `DomainError` - Abstract base for domain exceptions (Consumer subclasses for their aggregate-specific errors)
 - `MissingHandlerError`, `AggregateNotFoundError` - Concrete library-internal `DomainError` subclasses
 

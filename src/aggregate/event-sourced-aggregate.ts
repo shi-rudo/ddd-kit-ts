@@ -149,6 +149,17 @@ export abstract class EventSourcedAggregate<
 		this._pendingEvents = [];
 	}
 
+	/**
+	 * Post-save hook called by a `Repository.save()` implementation to push
+	 * the persisted version back into the in-memory aggregate and clear the
+	 * pending events (they are now in the event store / outbox). Lets
+	 * `save()` keep its `Promise<void>` return type.
+	 */
+	public markPersisted(version: Version): void {
+		this.setVersion(version);
+		this._pendingEvents = [];
+	}
+
 	protected constructor(
 		id: TId,
 		initialState: TState,
