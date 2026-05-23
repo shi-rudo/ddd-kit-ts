@@ -11,37 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Tightens the error contract on top of rc.2: every library error now extends `BaseError<Name>` from `@shirudo/base-error`, so timestamps / cause chains / user messages / retryable hints / structured-log serialisation come for free. Also splits the error hierarchy into three honest tiers (`KitError` / `DomainError` / `InfrastructureError`) so a "catch domain errors → HTTP 400" handler at the App boundary can't silently mask a programming bug like a forgotten event handler. Migration mostly mechanical: install `@shirudo/base-error` as a peer dep, switch `instanceof DomainError` to `instanceof InfrastructureError` where you were catching `AggregateNotFoundError` or `ConcurrencyConflictError`.
 
-### BREAKING — `@shirudo/base-error` as the error foundation
+### BREAKING — New error hierarchy on top of `@shirudo/base-error`
 
-`KitError` / `DomainError` / `InfrastructureError` now extend `BaseError<Name>` from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (added as a `peerDependency`, analogous to `@shirudo/result`). Library errors get for free:
+Library-internal errors are reorganised into a three-tier hierarchy that separates **business-rule violations**, **infrastructure failures**, and **programming bugs** — and the abstract bases now extend `BaseError<Name>` from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (added as a `peerDependency`, analogous to `@shirudo/result`):
+
+```ts
+import { BaseError } from "@shirudo/base-error";
+
+abstract class KitError<Name>            extends BaseError<Name> {}   // marker for App-Service catch
+abstract class DomainError<Name>         extends KitError<Name> {}    // invariant violations (consumer-derived)
+abstract class InfrastructureError<Name> extends KitError<Name> {}    // persistence + concurrency
+
+class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // was DomainError
+class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // was DomainError; retryable: true
+class MissingHandlerError       extends KitError<"MissingHandlerError"> {}                  // was DomainError — now programming bug
+```
+
+The previous hierarchy had `AggregateNotFoundError`, `ConcurrencyConflictError`, and `MissingHandlerError` all under `DomainError`, conflating three categories. `MissingHandlerError` deliberately no longer extends `DomainError` — it represents "the aggregate's subclass forgot to register a handler", which is a configuration/programming bug, not a business-rule violation. `loadFromHistory` and `restoreFromSnapshotWithEvents` continue to catch only `DomainError` thrown by `apply()`; a `MissingHandlerError` now propagates uncaught, so the bug surfaces loudly instead of being silently wrapped in `Result.Err`.
+
+Because every library error now extends `BaseError<Name>`, consumers get for free:
 
 - **Timestamps** (`error.timestamp`, `error.timestampIso`)
 - **`error.toJSON()`** for structured logging
 - **`error.getUserMessage()`** + `withUserMessage()` / `addLocalizedMessage()` for i18n-aware end-user messages
 - **Cause chains** via the native `error.cause`, with traversal helpers (`getRootCause`, `findInCauseChain`, `filterCauseChain`)
-- **`isRetryable(error)`** predicate. `ConcurrencyConflictError` now ships with `retryable: true` so the canonical OCC retry-on-conflict pattern is one check away.
-- **Typed `name`** — the abstract bases carry an optional `Name` generic; the concrete `AggregateNotFoundError` / `ConcurrencyConflictError` / `MissingHandlerError` set their literal so `error.name` is `"AggregateNotFoundError"` (literal), not `string`.
+- **`isRetryable(error)`** predicate. `ConcurrencyConflictError` ships with `retryable: true` so the canonical OCC retry-on-conflict pattern is one check away.
+- **Typed `error.name`** — the concrete classes set their literal so `error.name` is `"AggregateNotFoundError"` (literal type), not `string`.
 - **Cross-environment stack traces** for Node, browser, and edge runtimes.
 
-`AggregateNotFoundError` and `ConcurrencyConflictError` both call `withUserMessage(...)` in their constructors with a default English user-safe message. Consumers using non-English locales can override with `addLocalizedMessage("de", ...)` at use-site.
-
-Migration: consumers who explicitly typed the abstract bases as `class X extends DomainError` continue to work (the generic defaults to `string`). Consumers who want literal-typed `error.name` can pass the name explicitly: `class FooError extends DomainError<"FooError"> {}`. Install the new peer dependency: `pnpm add @shirudo/base-error`.
-
-### BREAKING — Error hierarchy split
-
-Library-internal errors regrouped into a three-tier hierarchy that separates **business-rule violations**, **infrastructure failures**, and **programming bugs**:
-
-```ts
-abstract class KitError extends Error {}                       // marker
-abstract class DomainError extends KitError {}                  // invariant violations (consumer-derived)
-abstract class InfrastructureError extends KitError {}          // persistence + concurrency
-
-class AggregateNotFoundError extends InfrastructureError {}     // was DomainError
-class ConcurrencyConflictError extends InfrastructureError {}   // was DomainError
-class MissingHandlerError extends KitError {}                   // was DomainError — now programming bug
-```
-
-`MissingHandlerError` deliberately no longer extends `DomainError` — it represents "the aggregate's subclass forgot to register a handler", which is a configuration/programming bug, not a business-rule violation. `loadFromHistory` and `restoreFromSnapshotWithEvents` continue to catch only `DomainError` thrown by `apply()`; a `MissingHandlerError` now propagates uncaught, so the bug surfaces loudly instead of being silently wrapped in `Result.Err`.
+`AggregateNotFoundError` and `ConcurrencyConflictError` ship with default English user-safe messages via `withUserMessage(...)` in their constructors. Consumers using non-English locales can override with `addLocalizedMessage("de", ...)` at use-site.
 
 Catch-pattern at the App-Service boundary:
 - `instanceof DomainError` → HTTP 400 (business rule)
@@ -49,7 +47,10 @@ Catch-pattern at the App-Service boundary:
 - `instanceof KitError` (else) → HTTP 500 / log + alert (currently only `MissingHandlerError`)
 - anything else → HTTP 500 (unexpected programmer error)
 
-Migration: consumers who did `instanceof DomainError` to catch `AggregateNotFoundError` or `ConcurrencyConflictError` need to switch to `instanceof InfrastructureError` (or `KitError` if they want both branches).
+Migration:
+- `pnpm add @shirudo/base-error` (new peer dependency).
+- Consumers who did `instanceof DomainError` to catch `AggregateNotFoundError` or `ConcurrencyConflictError` switch to `instanceof InfrastructureError` (or `KitError` if they want both branches).
+- Consumers who subclassed the abstract bases without a generic (`class X extends DomainError {}`) keep compiling — the `Name` generic defaults to `string`. For typed `error.name` literals, pass the name: `class FooError extends DomainError<"FooError"> {}`.
 
 ### Documentation
 
