@@ -270,6 +270,50 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("duplicate subscription semantics", () => {
+		it("invokes the same handler once per subscription when subscribed twice", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			const handler = async () => {
+				calls += 1;
+			};
+
+			bus.subscribe("OrderCreated", handler);
+			bus.subscribe("OrderCreated", handler);
+
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+			await bus.publish([event]);
+
+			// Set-coalescing would yield 1; Array semantics yield 2 — the standard
+			// pub/sub expectation (Node EventEmitter, RxJS subjects, etc.).
+			expect(calls).toBe(2);
+		});
+
+		it("the returned unsubscribe removes exactly the matching subscription, not all duplicates", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			const handler = async () => {
+				calls += 1;
+			};
+
+			const off1 = bus.subscribe("OrderCreated", handler);
+			bus.subscribe("OrderCreated", handler);
+
+			off1();
+
+			await bus.publish([
+				createDomainEvent("OrderCreated", {
+					orderId: "o-1",
+				}) as OrderCreated,
+			]);
+
+			// One subscription still alive → exactly one invocation
+			expect(calls).toBe(1);
+		});
+	});
+
 	describe("subscribe/once generic-binding to eventType", () => {
 		type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 		type OrderShipped = DomainEvent<

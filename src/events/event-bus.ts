@@ -27,7 +27,7 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	implements EventBus<Evt>
 {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private readonly handlers = new Map<string, Set<EventHandler<any>>>();
+	private readonly handlers = new Map<string, EventHandler<any>[]>();
 
 	subscribe<K extends Evt["type"]>(
 		eventType: K,
@@ -35,15 +35,24 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	): () => void {
 		const type = eventType;
 		if (!this.handlers.has(type)) {
-			this.handlers.set(type, new Set());
+			this.handlers.set(type, []);
 		}
 		const handlersForType = this.handlers.get(type)!;
-		handlersForType.add(handler as EventHandler<Evt>);
+		const casted = handler as EventHandler<Evt>;
+		handlersForType.push(casted);
 
-		// Return unsubscribe function
+		// Return unsubscribe — removes exactly this subscription, even if the
+		// same handler reference was subscribed multiple times (each call to
+		// subscribe gets its own unsubscribe).
+		let removed = false;
 		return () => {
-			handlersForType.delete(handler as EventHandler<Evt>);
-			if (handlersForType.size === 0) {
+			if (removed) return;
+			const idx = handlersForType.indexOf(casted);
+			if (idx !== -1) {
+				handlersForType.splice(idx, 1);
+				removed = true;
+			}
+			if (handlersForType.length === 0) {
 				this.handlers.delete(type);
 			}
 		};
@@ -66,8 +75,10 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 		for (const event of events) {
 			const handlersForType = this.handlers.get(event.type);
 			if (handlersForType) {
+				// Snapshot the handler list so a handler unsubscribing during dispatch
+				// doesn't shift indices while we iterate.
 				const results = await Promise.allSettled(
-					Array.from(handlersForType).map((handler) => handler(event)),
+					handlersForType.slice().map((handler) => handler(event)),
 				);
 				for (const result of results) {
 					if (result.status === "rejected") {
