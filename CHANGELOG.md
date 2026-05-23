@@ -7,65 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### BREAKING CHANGES — Aggregate API consolidation
+## [1.0.0-rc.2] - 2026-05-23
 
-- **Functional aggregate API removed.** `aggregate(state, version)`, `bump(agg)`, and `AggregateState<S>` are gone. The library kept two parallel models for the same concept (functional projection vs class-based `AggregateRoot` / `EventSourcedAggregate`), which forced consumers to learn both and made the documentation hand-wavy about when to use which. Class-based aggregates are DDD-canonical and pair with the rest of the kit (Entity, IAggregateRoot, EventSourcedAggregate, Repository); the functional path saved a few lines but didn't earn the cognitive split. Migration: extend `AggregateRoot<TState, TId>` (or `EventSourcedAggregate` for event sourcing) instead of holding a plain `{ state, version }` record.
-- **`AggregateRoot.commit(newState, events)` always bumps the version.** The `bumpVersion` parameter has been removed; `commit()` is the opt-in path that explicitly couples state mutation + event recording, and recording an event implies a version-worthy change. The aggregate's `autoVersionBump` config still governs the un-coupled `setState` path; users who need state-only mutations without a version bump should call `setState(newState, false)` directly.
+A consolidation release. Closed 60+ audit items across the entire surface, restructured the kit around DDD-canonical conventions (domain throws, App boundary returns Result), and shipped a documentation site at <https://shi-rudo.github.io/ddd-kit-ts>. Many breaking changes — the kit is in RC explicitly so these can land before the API freezes.
 
-### BREAKING CHANGES — Interface contracts
-
-- **`IAggregateRoot.markPersisted(version)` is now required by the interface.** Previously the method lived only on the concrete `AggregateRoot` / `EventSourcedAggregate` classes; a repository implementation that coded against the public `IAggregateRoot` interface would have compiled fine and crashed at runtime when `save()` tried to push the persisted version back. Consumers implementing `IAggregateRoot` directly must add `markPersisted(version: Version): void`.
-- **`Identifiable<TId extends Id<string>>` constrained.** `Identifiable<string>` no longer compiles; only branded `Id<Tag>` is accepted. Aligns with `IAggregateRoot<TId extends Id<string>>` and `IEntity<TId extends Id<string>, TState>`. Consumers using plain string ids must brand them via `Id<Tag>` (the canonical pattern across the rest of the API).
-
-### Added — Determinism + immutability hooks
-
-- **`ClockFactory` + `setClockFactory` / `resetClockFactory`** symmetric to `EventIdFactory`. Defaults to `() => new Date()`; override globally for deterministic event-sourcing tests and time-travel debugging. The per-call `options.occurredAt` override still wins.
-- **`createDomainEvent` now deep-freezes its return value.** Events are facts of the past (Vernon, IDDD §8) and must be immutable. A mutating subscriber on the `EventBus` now throws instead of poisoning subsequent handlers; nested writes to `payload` / `metadata` also throw.
-
-### BREAKING CHANGES — Repository + persistence API
-
-- **`ISpecification<T>` removed.** The phantom branded interface had no methods (no `isSatisfiedBy`, no `and`/`or`/`not` combinators) and was therefore impossible to use generically — `IRepository.find(spec)` could never do anything sound with it.
-- **`IRepository.find` / `findOne` removed from the base interface.** Read-only access by id (`getById`, `getByIdOrFail`) is the DDD-canonical Repository contract; querying is a separate concern.
-- **`IQueryableRepository<TAgg, TId, TFilter>` added.** Extends `IRepository` with `find(filter)` and `findOne(filter)`, parameterized over the persistence layer's native filter shape — Drizzle `SQL` expressions, Prisma `WhereInput`, Mongo filter documents, in-memory predicates, etc. The library no longer prescribes a query DSL.
-- **`IRepository.exists(id)` added.** Collection-style existence check; cheaper than `getById !== null` when the storage supports `EXISTS`-style queries.
-- **`UnitOfWork` renamed to `TransactionScope`** (`src/repo/uow.ts` → `src/repo/scope.ts`). The original implementation was a transaction-scope helper (`(fn) => fn()`), not Fowler's full UoW (no change tracking, no registerDirty/registerNew/registerDeleted). The new name is honest. Consumers update `import { TransactionScope } from "@shirudo/ddd-kit"` and rename the dependency key in `withCommit({ scope, … })`.
-- **`RepoProvider<R>` removed.** Dead export, never used.
-- **`AggregateRoot.markPersisted(version)` / `EventSourcedAggregate.markPersisted(version)` added.** Post-save hook called by a `Repository.save()` implementation to push the persisted version back into the aggregate and clear domain/pending events. Lets `save()` keep its `Promise<void>` return type while still propagating the new version.
-- **`ConcurrencyConflictError extends DomainError` added.** The canonical signal a `Repository.save()` implementation throws on optimistic-lock mismatch — carries `aggregateType`, `aggregateId`, `expectedVersion`, `actualVersion`. Documented in the `IRepository.save` contract.
-
-### BREAKING CHANGES — DDD compliance
-
-- **Domain layer now throws, no longer returns Result.** Per Evans/Vernon convention, domain methods enforce invariants by throwing typed domain exceptions. Result is reserved for the App-Service boundary (Buses, Handlers, `withCommit`) and the Infrastructure boundary where stream corruption is recoverable (`loadFromHistory`, `restoreFromSnapshotWithEvents`).
-- **`EventSourcedAggregate.apply()`** is now `protected apply(event, isNew?): void`. It throws `DomainError`-derived exceptions on validation failure and `MissingHandlerError` when no handler is registered. State, pending events, and version are committed atomically — if the handler or `validateEvent` throws, no mutation occurs.
-- **`EventSourcedAggregate.applyUnsafe()` removed.** `apply()` already throws.
-- **`validateEvent(event)`** is now `protected validateEvent(event): void` (was `Result<true, string>`). Subclasses override to throw a concrete `DomainError` subclass.
-- **`loadFromHistory()` / `restoreFromSnapshotWithEvents()`** now return `Result<void, DomainError>` (was `Result<void, string>`). They catch `DomainError` thrown by `apply()` during replay; non-domain throws propagate.
-- **`guard()` removed.** Use inline `if (!cond) throw new YourDomainError(...)`. No replacement helper.
-- **`voWithValidationUnsafe()` removed.** Redundant with the `ValueObject` base class constructor which already throws via `validate()`.
-- **New `DomainError` base + library-internal subclasses.** `abstract class DomainError extends Error` is the consumer extension point; `MissingHandlerError` and `AggregateNotFoundError` are the library's own concrete subclasses.
-- **`IRepository.getByIdOrFail(id)` added.** Throws `AggregateNotFoundError` when the aggregate does not exist. Use `getById` when null is a valid outcome.
-
-### BREAKING CHANGES — Result migration
-
-- **Result type extracted to `@shirudo/result`** — the internal `Result<T, E>` and the class-based `Outcome` / `Success` / `Erroneous` API have been removed. Add `@shirudo/result` as a dependency in your app (now declared as a `peerDependency`) and import `ok`, `err`, `Result`, `isOk`, `isErr`, etc. from there. The shape changed: the discriminator is now `_tag: 'Ok' | 'Err'` instead of `ok: boolean`, and type guards are methods (`result.isOk()`, `result.isErr()`) — pure-function variants `isOk(result)` and `isErr(result)` are also available. `andThen` was renamed to `flatMap` and is curried for pipe-style composition.
-- **`@shirudo/ddd-kit/result` subpath export removed** — there is nothing to re-export. Import Result directly from `@shirudo/result`.
-- **`Outcome` / `Success` / `Erroneous` removed without a deprecation window** — these were RC-only and never reached a stable release.
-- **`tanstack-server-fn` examples removed** — they demonstrated the now-removed `Outcome` API.
-
-### Migration
+### Migration cheatsheet
 
 ```diff
+// Result moved to a peer dependency
 - import { ok, err, type Result } from "@shirudo/ddd-kit/result";
 + import { ok, err, type Result } from "@shirudo/result";
 
-- if (result.ok) { /* ... */ }
-+ if (result.isOk()) { /* ... */ }
+// Type-guards: properties became methods (functions still exported too)
+- if (result.ok) { ... }
++ if (result.isOk()) { ... }
+- if (!result.ok) { ... }
++ if (result.isErr()) { ... }
 
-- if (!result.ok) { /* ... */ }
-+ if (result.isErr()) { /* ... */ }
+// Unit of Work → Transaction Scope
+- import { UnitOfWork } from "@shirudo/ddd-kit";
++ import { TransactionScope } from "@shirudo/ddd-kit";
+- withCommit({ uow, outbox, bus }, fn);
++ withCommit({ scope, outbox, bus }, fn);
+
+// guard() removed
+- const r = guard(items.length > 0, "EMPTY");
+- if (r.isErr()) return err(r.error);
++ if (items.length === 0) throw new EmptyOrderError();
+
+// EventSourcedAggregate.apply() now void, throws on invariant violation
+- const r = this.apply(event); if (r.isErr()) throw new Error(r.error);
++ this.apply(event); // throws DomainError-derived
+
+// IRepository.find / findOne moved to IQueryableRepository extension
+- interface OrderRepo extends IRepository<Order, OrderId> { /* find(spec) */ }
++ interface OrderRepo extends IQueryableRepository<Order, OrderId, OrderFilter> {}
+
+// Functional aggregate dropped — extend the class
+- const order = aggregate<OrderState>(initialState);
+- const next  = bump(order);
++ class Order extends AggregateRoot<OrderState, OrderId> { ... }
 ```
 
-`result.value` and `result.error` field access stays the same (both fields always exist on the new shape; the inactive variant is `undefined`).
+`result.value` / `result.error` field access is unchanged (both fields exist on the new shape; the inactive variant is `undefined`).
+
+### BREAKING — Result moved to `@shirudo/result`
+
+- Internal `Result<T, E>` and the class-based `Outcome` / `Success` / `Erroneous` API removed. Add `@shirudo/result` as a dependency in your app (now declared as a `peerDependency`).
+- Shape changed: discriminator is now `_tag: 'Ok' | 'Err'` (was `ok: boolean`); type guards are methods (`result.isOk()` / `result.isErr()`) — pure-function variants `isOk(result)` / `isErr(result)` are also exported. `andThen` is now `flatMap` (curried, pipe-style).
+- `@shirudo/ddd-kit/result` subpath export removed — import directly from `@shirudo/result`.
+- `tanstack-server-fn` examples removed (they demonstrated the now-gone `Outcome` API).
+
+### BREAKING — Domain layer throws, App boundary returns Result
+
+- Domain methods (Aggregates, ValueObject constructors, `validateEvent`) **throw** `DomainError`-derived exceptions. Result is reserved for the App-Service boundary (`CommandBus.execute`, `QueryBus.execute`, `withCommit`) and the Infrastructure boundary where stream corruption is recoverable (`loadFromHistory`, `restoreFromSnapshotWithEvents`).
+- `EventSourcedAggregate.apply()` is now `void` (was `Result<void, string>`). Throws `DomainError` on validation failure and `MissingHandlerError` when no handler is registered. State, pending events, and version commit atomically — if the handler or `validateEvent` throws, no mutation occurs.
+- `EventSourcedAggregate.applyUnsafe()` removed — `apply()` already throws.
+- `validateEvent(event)` is now `void` (was `Result<true, string>`). Subclasses override to throw a concrete `DomainError` subclass.
+- `loadFromHistory()` and `restoreFromSnapshotWithEvents()` now return `Result<void, DomainError>` (was `Result<void, string>`). They catch `DomainError` thrown by `apply()` during replay; non-domain throws propagate.
+- `guard()` removed. Use inline `if (!cond) throw new YourDomainError(...)`. No replacement helper — the indirection wasn't earning its keep.
+- `voWithValidationUnsafe()` removed (redundant with the `ValueObject` base class, whose constructor throws via `validate()`).
+- New `DomainError` abstract base in `src/core/errors.ts`. Concrete library-internal subclasses: `MissingHandlerError`, `AggregateNotFoundError`, `ConcurrencyConflictError`.
+- `IRepository.getByIdOrFail(id)` added — throws `AggregateNotFoundError` when the aggregate does not exist. Use `getById` when `null` is a valid outcome.
+
+### BREAKING — Aggregate API consolidation
+
+- **Functional aggregate API removed.** `aggregate(state, version)`, `bump(agg)`, and `AggregateState<S>` are gone. Class-based `AggregateRoot` / `EventSourcedAggregate` is the canonical model and pairs with the rest of the kit (Entity, IAggregateRoot, Repository).
+- `AggregateRoot<TState, TId, TEvent>` — `TEvent` defaults to `never` (was `unknown`). Forces an explicit event union whenever the subclass actually records events; the no-events path (`setState` only) still works.
+- `AggregateRoot.commit(newState, events)` added — the opt-in record-after-mutation helper. Calls `setState(newState, true)` first (which throws on `validateState` failure), then appends the event(s). Always bumps the version (no `bumpVersion` parameter — recording an event implies a version-worthy change). Use `setState(newState, false)` directly for state-only mutations.
+- `AggregateRoot.markPersisted(version)` and `EventSourcedAggregate.markPersisted(version)` added. The post-save hook a `Repository.save()` implementation calls to push the persisted version back into the in-memory aggregate and clear recorded events. Lets `save()` keep its `Promise<void>` return type.
+- `EventSourcedAggregate.apply()` is now generic in the event tag (`K extends TEvent["type"]`) — concrete callers narrow the dispatched handler at compile time without an `as` cast.
+- `loadFromHistory()` advances version **additively** (`startVersion + history.length`) — was previously stomped to `history.length`, breaking continuity for aggregates loaded mid-life.
+- `restoreFromSnapshotWithEvents()` is now **all-or-nothing** — a mid-replay `DomainError` rolls back to the pre-call state and version. Partial restoration is never observable.
+- `autoVersionBump` defaults documented as pattern-specific: `false` on `AggregateRoot` (because `setState` already takes an explicit `bumpVersion` argument), `true` on `EventSourcedAggregate` (one event = one version bump, canonical ES).
+
+### BREAKING — Interfaces and identity
+
+- `IAggregateRoot.markPersisted(version)` required by the interface (previously only on the abstract classes). Repository implementations can now code against the interface alone.
+- `Identifiable<TId extends Id<string>>` constrained — `Identifiable<string>` no longer compiles. Aligns with `IAggregateRoot<TId extends Id<string>>` and `IEntity<TId extends Id<string>, TState>`. The brand discipline of `Id<Tag>` is now uniform across the entire entity surface.
+- `IdGenerator<Tag extends string>` — the tag is bound at the generator type, not the call site. The old shape `IdGenerator { next: <T extends string>() => Id<T> }` let callers pick any tag for free, defeating the brand.
+- Entity helpers (`sameEntity`, `findEntityById`, `hasEntityId`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, `entityIds`) now compare by `===` (was `deepEqual`) and require `TId extends Id<string>`. Branded ids are primitive strings; deep equality was wasted work.
+
+### BREAKING — Repository + persistence
+
+- `ISpecification<T>` removed (phantom branded interface with no methods; could not be used generically).
+- `IRepository.find` / `findOne` moved to the **opt-in** `IQueryableRepository<TAgg, TId, TFilter>` extension. `TFilter` is the persistence layer's native filter shape (Drizzle `SQL`, Prisma `WhereInput`, Mongo filter documents, in-memory predicates, …). The library no longer prescribes a query DSL.
+- `IRepository.exists(id): Promise<boolean>` added. Collection-style existence check; cheaper than `getById !== null` when the storage supports `EXISTS`-style queries.
+- `UnitOfWork` renamed to `TransactionScope`; `src/repo/uow.ts` → `src/repo/scope.ts`. The implementation was a transaction-scope helper, not Fowler's full UoW (no change tracking). The new name is honest. Consumers update `import { TransactionScope } from "@shirudo/ddd-kit"` and rename `withCommit({ uow, … })` to `withCommit({ scope, … })`.
+- `RepoProvider<R>` removed (dead export, never used).
+- `withCommit` publishes events **after** the transactional callback resolves (was: inside the transactional callback). Defeats the classic publish-before-commit footgun — in-process subscribers can never react to events from a rolled-back transaction.
+- `ConcurrencyConflictError extends DomainError` is the canonical signal a `Repository.save()` implementation throws on optimistic-lock mismatch. Carries `aggregateType`, `aggregateId`, `expectedVersion`, `actualVersion`.
+
+### BREAKING — Domain events
+
+- `DomainEvent<T, P>` gains required `eventId: string` and optional `aggregateId` / `aggregateType`. Idempotent consumers, outbox dispatch tracking, and `metadata.causationId` references now have something concrete to point at.
+- `createDomainEvent()` **deep-freezes** the returned event. A mutating subscriber on the `EventBus` throws instead of poisoning subsequent handlers; nested writes to `payload` / `metadata` also throw.
+- `createDomainEvent()` payload-shape JSDoc fixed — the field is always present; the value is `undefined` when `P = void` (was documented as "omitted").
+
+### BREAKING — CQRS / Buses
+
+- `CommandBus.register` / `QueryBus.register` are now strictly typed when a `TMap` is supplied. Unknown command/query keys and wrong-typed handlers are compile errors; the no-`TMap` path stays loose for tests.
+- `EventBus.subscribe<K extends Evt["type"]>(eventType, handler)` binds the handler's event type to the `eventType` argument. The previous shape let `subscribe<OrderShipped>("OrderCreated", h)` compile silently.
+- `EventBus.once<K extends Evt["type"]>(eventType, options?)` — same narrowing. New optional `{ signal?: AbortSignal; timeoutMs?: number }` options bag to abort or time out a wait; the promise rejects synchronously when the signal is already aborted.
+- `EventBusImpl` stores handlers in an `Array` instead of a `Set` — subscribing the same handler reference twice now invokes it twice (the canonical pub/sub expectation). The returned unsubscribe removes exactly the matching subscription.
+- `Outbox<Evt>` port expanded — `add` plus new `getPending(limit?)` and `markDispatched(dispatchIds)`. Introduces an `OutboxRecord<Evt>` wrapper so implementations choose their own opaque `dispatchId` (typically reuses `eventId`). `markDispatched` is required idempotent.
+
+### BREAKING — Utilities, exports, and types
+
+- `/utils/array` subpath export removed — use `/utils` (or the main entry). The two subpaths resolved to identical code through layered re-exports.
+- `sideEffects: false` added to `package.json` — free aggressive tree-shaking. None of the modules have top-level side effects.
+- `vo()` deep-clones via `structuredClone` before freezing — the caller's nested object graph is no longer frozen as a side effect. As a side benefit, function-valued payloads now throw at construction time (Value Objects are data, not behaviour).
+- `deepFreeze` iterates `Reflect.ownKeys` so Symbol-keyed properties are also frozen (asymmetric vs `deepEqual` before).
+- `isBuiltInObject` replaced the `globalThis[name]` + `proto !== Object.prototype` heuristics with an explicit tag allow-list. Cross-realm safe; user classes named after globals (e.g. `class Date {}`) are no longer misclassified as built-ins.
+- `deepEqual` cycle tracker switched from `WeakMap<obj, obj>` to `WeakMap<obj, WeakSet<obj>>` — pair-set semantics, can't be poisoned by a previous compare against a different B. Symbol-key membership probed via `Set` (was `Array.includes` in a loop). TypedArray indexed access typed (no more `any` leak).
+- `deepOmit` cycle cache via `visited.has(obj)` (was `cached !== undefined`); built-ins **cloned** by type (`Date` / `RegExp` / `Map` / `Set`, fallback `structuredClone`) instead of returned by reference; `__proto__` / `constructor` keys assigned via `Object.defineProperty` so they can't pollute `Object.prototype`; `ignoreKeys` probed via `Set` (was `Array.includes`).
+
+### Added
+
+- **Documentation site** — VitePress + TypeDoc + GitHub Pages workflow at <https://shi-rudo.github.io/ddd-kit-ts>. 13 hand-written guide pages plus auto-generated API reference via `typedoc-vitepress-theme`.
+- `EventIdFactory` + `setEventIdFactory(fn)` / `resetEventIdFactory()` — global override for event-id generation (default `crypto.randomUUID()`). Per-call `options.eventId` still wins.
+- `ClockFactory` + `setClockFactory(fn)` / `resetClockFactory()` — symmetric global override for `occurredAt`. For deterministic event-sourcing tests / time-travel debugging.
+- `AggregateRoot.commit(newState, events)` — record-after-mutation helper.
+- `AggregateRoot.markPersisted(version)` / `EventSourcedAggregate.markPersisted(version)` — post-save hook.
+- `IQueryableRepository<TAgg, TId, TFilter>` interface.
+- `IRepository.exists(id)`, `IRepository.getByIdOrFail(id)`.
+- `DomainError` (abstract) + `MissingHandlerError` + `AggregateNotFoundError` + `ConcurrencyConflictError` in `src/core/errors.ts`.
+- `DomainEvent.eventId` / `aggregateId` / `aggregateType` fields.
+- `OutboxRecord<Evt>` + `Outbox.getPending(limit?)` + `Outbox.markDispatched(dispatchIds)`.
+- `EventBus.once(eventType, { signal, timeoutMs })` — abortable / time-limited waits.
+
+### Fixed
+
+- `EventSourcedAggregate.apply()` no longer leaves state partially mutated when the handler throws. Computes the next state in a temporary; only the atomic commit step mutates `_state`, pushes the event, and bumps the version.
+- `loadFromHistory()` no longer stomps version to `history.length` — advances additively from the aggregate's current version.
+- `restoreFromSnapshotWithEvents()` rolls back state + version when a mid-replay event throws.
+- `AggregateRoot.domainEvents` and `EventSourcedAggregate.pendingEvents` getters return a `Object.freeze(arr.slice())` snapshot (were returning the internal array directly — outside code could push into it).
+- `Entity._state` is shallowly frozen on every assignment (`Object.freeze`); the `state` getter exposes the same frozen object. Direct property writes throw in strict mode; nested mutation still bypasses (deep freeze on every assignment would be too costly on hot paths — documented).
+- `withCommit` publishes events **after** `scope.transactional` resolves (was: inside the transactional callback). No more publish-before-commit.
+- `EventBus.once()` no longer leaks the subscription forever when the event never arrives — the optional `signal` / `timeoutMs` paths clean up the handler + the timer + the abort listener atomically.
+
+### Documentation
+
+- README points to the docs site at the top and is no longer the primary entry point for narrative content.
+- `addDomainEvent` JSDoc spells out the "record AFTER mutation" rule with a concrete example and the Vernon rationale.
+- `Entity.validateState` JSDoc warns about the constructor-order footgun (subclass field initializers haven't run when validateState is called from the base constructor); a pinning test exercises it.
+- `EventBus.publish` JSDoc spells out the ordering / parallelism / error-aggregation contract; three tests pin each rule.
+- `EventBus.once` JSDoc and a `OnceOptions` interface document the AbortSignal + timeout semantics.
+- `IRepository.save` JSDoc states the contract: throw `ConcurrencyConflictError` on version mismatch; call `aggregate.markPersisted(newVersion)` after successful write.
+- `IRepository.find` (on `IQueryableRepository`) JSDoc states "returns every match — no pagination; for unbounded sets prefer read-side projections or declare domain-specific paged methods on the concrete repository."
+- `Outbox.add` JSDoc documents the idempotency expectation (dedupe on `eventId`).
+- `setEventIdFactory` / `setClockFactory` JSDoc warns "module-scoped, last setter wins — for multi-tenant request isolation prefer the per-call `options` override."
+- README event-ordering callout points to both `EventSourcedAggregate.apply()` (structural enforcement) and `AggregateRoot.commit()` (opt-in helper) instead of treating record-after-mutation as a convention.
+- New "Event-Sourcing Schema Evolution (Upcasting)" section in README documents the recommended consumer pattern. The library deliberately ships no `EventUpcaster` port.
+- ValueObject section in README spells out: `voWithValidation` for parsing untrusted input at the App boundary; `ValueObject` base class for Domain construction.
 
 ## [1.0.0-rc.1] - 2026-03-16
 
