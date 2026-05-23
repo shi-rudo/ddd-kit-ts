@@ -41,7 +41,7 @@ export default defineConfig({
 			{ text: "Guide", link: "/guide/getting-started" },
 			{ text: "API", link: "/api/" },
 			{
-				text: "1.0.0-rc.2",
+				text: "1.0.0-rc.3",
 				items: [
 					{
 						text: "Changelog",

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.3] - 2026-05-23
+
+Tightens the error contract on top of rc.2: every library error now extends `BaseError<Name>` from `@shirudo/base-error`, so timestamps / cause chains / user messages / retryable hints / structured-log serialisation come for free. Also splits the error hierarchy into three honest tiers (`KitError` / `DomainError` / `InfrastructureError`) so a "catch domain errors → HTTP 400" handler at the App boundary can't silently mask a programming bug like a forgotten event handler. Migration mostly mechanical: install `@shirudo/base-error` as a peer dep, switch `instanceof DomainError` to `instanceof InfrastructureError` where you were catching `AggregateNotFoundError` or `ConcurrencyConflictError`.
+
 ### BREAKING — `@shirudo/base-error` as the error foundation
 
 `KitError` / `DomainError` / `InfrastructureError` now extend `BaseError<Name>` from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (added as a `peerDependency`, analogous to `@shirudo/result`). Library errors get for free:
@@ -46,6 +50,13 @@ Catch-pattern at the App-Service boundary:
 - anything else → HTTP 500 (unexpected programmer error)
 
 Migration: consumers who did `instanceof DomainError` to catch `AggregateNotFoundError` or `ConcurrencyConflictError` need to switch to `instanceof InfrastructureError` (or `KitError` if they want both branches).
+
+### Documentation
+
+- New "Where to bootstrap the factory" subsection in `docs/guide/domain-events.md` shows the three canonical placements for `setEventIdFactory` / `setClockFactory` (Node entry, Cloudflare Worker module-top-level, test setup file). Spells out "call it once per isolate boot, not inside `fetch()`" and routes per-tenant variance to the per-call `options.eventId` override instead of mutating the global per request.
+- `docs/guide/domain-events.md` and `docs/guide/edge-runtimes.md` now explicitly tag the default `eventId` as **UUID v4** and recommend time-ordered alternatives (UUID v7 / ULID / KSUID) for production. v4 is random and amplifies B-tree index writes once the event store grows; time-ordered ids stay clustered.
+- `EventIdFactory` JSDoc gets the same v4-vs-time-ordered note so IDE hover surfaces the recommendation.
+- `package.json` `homepage` now points at the docs site (<https://shi-rudo.github.io/ddd-kit-ts/>) instead of the GitHub repo, so npmjs.com routes visitors through the guide first.
 
 
 ## [1.0.0-rc.2] - 2026-05-23
