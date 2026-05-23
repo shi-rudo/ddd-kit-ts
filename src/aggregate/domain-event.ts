@@ -41,6 +41,43 @@ export function resetEventIdFactory(): void {
 }
 
 /**
+ * Clock function producing a fresh `Date` for each call. The library
+ * defaults to `() => new Date()`; override globally via `setClockFactory`
+ * for deterministic event-sourcing tests, time-travel debugging, or any
+ * scenario where `occurredAt` must be reproducible.
+ */
+export type ClockFactory = () => Date;
+
+const defaultClockFactory: ClockFactory = () => new Date();
+let currentClockFactory: ClockFactory = defaultClockFactory;
+
+/**
+ * Replaces the global clock factory used by `createDomainEvent` and
+ * `createDomainEventWithMetadata`. Call once during application bootstrap
+ * (or per-test in deterministic test suites):
+ *
+ * ```ts
+ * import { setClockFactory } from "@shirudo/ddd-kit";
+ *
+ * setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
+ * ```
+ *
+ * The per-call `options.occurredAt` override always wins over this
+ * factory. Symmetric to `setEventIdFactory`.
+ */
+export function setClockFactory(factory: ClockFactory): void {
+	currentClockFactory = factory;
+}
+
+/**
+ * Restores the default clock factory (`() => new Date()`).
+ * Intended for use in test `afterEach` hooks.
+ */
+export function resetClockFactory(): void {
+	currentClockFactory = defaultClockFactory;
+}
+
+/**
  * Metadata associated with a domain event for traceability and correlation.
  * Used in event-driven architectures to track event flow across services.
  */
@@ -205,7 +242,7 @@ export function createDomainEvent<T extends string, P>(
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: payload as P,
-		occurredAt: options?.occurredAt ?? new Date(),
+		occurredAt: options?.occurredAt ?? currentClockFactory(),
 		version: options?.version ?? 1,
 		metadata: options?.metadata,
 	};

@@ -4,7 +4,9 @@ import {
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventWithMetadata,
+	resetClockFactory,
 	resetEventIdFactory,
+	setClockFactory,
 	setEventIdFactory,
 } from "./domain-event";
 
@@ -173,6 +175,54 @@ describe("DomainEvent", () => {
 			createDomainEvent("Demo", { x: 2 });
 			createDomainEvent("Demo", { x: 3 });
 			expect(calls).toBe(3);
+		});
+	});
+
+	describe("ClockFactory hook", () => {
+		afterEach(() => {
+			resetClockFactory();
+		});
+
+		it("uses a custom global clock when set via setClockFactory", () => {
+			const fixed = new Date("2026-01-01T00:00:00Z");
+			setClockFactory(() => fixed);
+
+			const event = createDomainEvent("Demo", { x: 1 });
+			expect(event.occurredAt.getTime()).toBe(fixed.getTime());
+		});
+
+		it("per-call occurredAt override takes precedence over the global factory", () => {
+			setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
+
+			const explicit = new Date("2030-12-31T00:00:00Z");
+			const event = createDomainEvent("Demo", { x: 1 }, {
+				occurredAt: explicit,
+			});
+
+			expect(event.occurredAt.getTime()).toBe(explicit.getTime());
+		});
+
+		it("resetClockFactory restores the default", () => {
+			setClockFactory(() => new Date(0));
+			expect(createDomainEvent("Demo").occurredAt.getTime()).toBe(0);
+
+			resetClockFactory();
+
+			const before = Date.now();
+			const reset = createDomainEvent("Demo");
+			const after = Date.now();
+			expect(reset.occurredAt.getTime()).toBeGreaterThanOrEqual(before);
+			expect(reset.occurredAt.getTime()).toBeLessThanOrEqual(after);
+		});
+
+		it("invokes the factory afresh on every event (no caching)", () => {
+			let n = 0;
+			setClockFactory(() => new Date(++n));
+
+			createDomainEvent("Demo");
+			createDomainEvent("Demo");
+			createDomainEvent("Demo");
+			expect(n).toBe(3);
 		});
 	});
 
