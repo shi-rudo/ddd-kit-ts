@@ -1,0 +1,104 @@
+import { defineConfig } from "vitepress";
+
+export default defineConfig({
+	title: "ddd-kit",
+	description:
+		"Composable TypeScript toolkit for tactical Domain-Driven Design",
+	lang: "en-US",
+
+	// Set to the repo name when deploying to https://shi-rudo.github.io/ddd-kit-ts/
+	base: "/ddd-kit-ts/",
+
+	cleanUrls: true,
+	lastUpdated: true,
+
+	head: [
+		[
+			"link",
+			{
+				rel: "icon",
+				href: "/ddd-kit-ts/favicon.svg",
+				type: "image/svg+xml",
+			},
+		],
+	],
+
+	themeConfig: {
+		nav: [
+			{ text: "Guide", link: "/guide/getting-started" },
+			{ text: "API", link: "/api/" },
+			{
+				text: "1.0.0-rc.1",
+				items: [
+					{
+						text: "Changelog",
+						link: "https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md",
+					},
+					{
+						text: "npm",
+						link: "https://www.npmjs.com/package/@shirudo/ddd-kit",
+					},
+				],
+			},
+		],
+
+		sidebar: {
+			"/guide/": [
+				{
+					text: "Introduction",
+					items: [
+						{ text: "Getting Started", link: "/guide/getting-started" },
+						{ text: "Design Decisions", link: "/guide/design-decisions" },
+					],
+				},
+				{
+					text: "Building Blocks",
+					items: [
+						{ text: "Value Objects", link: "/guide/value-objects" },
+						{ text: "Entities", link: "/guide/entities" },
+						{ text: "Aggregate Roots", link: "/guide/aggregates" },
+						{ text: "Event Sourcing", link: "/guide/event-sourcing" },
+						{ text: "Domain Events", link: "/guide/domain-events" },
+					],
+				},
+				{
+					text: "Application Layer",
+					items: [
+						{ text: "Result vs Throw", link: "/guide/result-vs-throw" },
+						{ text: "CQRS & Buses", link: "/guide/cqrs-and-buses" },
+						{ text: "Repository", link: "/guide/repository" },
+						{ text: "Outbox & Transactions", link: "/guide/outbox" },
+					],
+				},
+				{
+					text: "Advanced",
+					items: [
+						{ text: "Event Upcasting", link: "/guide/event-upcasting" },
+						{ text: "Concurrency", link: "/guide/concurrency" },
+						{ text: "Edge Runtimes", link: "/guide/edge-runtimes" },
+					],
+				},
+			],
+			"/api/": [{ text: "API Reference", link: "/api/" }],
+		},
+
+		socialLinks: [
+			{ icon: "github", link: "https://github.com/shi-rudo/ddd-kit-ts" },
+		],
+
+		editLink: {
+			pattern:
+				"https://github.com/shi-rudo/ddd-kit-ts/edit/main/docs/:path",
+			text: "Edit this page on GitHub",
+		},
+
+		footer: {
+			message: "Released under the MIT License",
+			copyright: "Copyright © Shirudo",
+		},
+
+		search: {
+			provider: "local",
+		},
+	},
+});

@@ -1,0 +1,110 @@
+# Outbox & Transactions
+
+The transactional outbox is the canonical pattern for "domain event must persist atomically with the state change, even if downstream delivery is asynchronous". The kit ships two small ports — `TransactionScope` and `Outbox<Evt>` — plus a `withCommit` helper that wires them together.
+
+## `TransactionScope`
+
+A minimal transaction-scope abstraction:
+
+```ts
+interface TransactionScope {
+  transactional<T>(fn: () => Promise<T>): Promise<T>;
+}
+```
+
+`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws.
+
+::: info Not Fowler's full Unit of Work
+`TransactionScope` is intentionally **not** Fowler's UoW — no change tracking, no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time flush. That's the ORM's job; competing with Prisma / Drizzle / TypeORM on their home turf only creates incompatibility. The kit stays out of it.
+:::
+
+## `Outbox<Evt>`
+
+```ts
+interface OutboxRecord<Evt> {
+  dispatchId: string;     // opaque — the impl chooses (eventId, UUID, row PK, …)
+  event: Evt;
+}
+
+interface Outbox<Evt> {
+  add(events: ReadonlyArray<Evt>):                 Promise<void>;
+  getPending(limit?: number):                      Promise<ReadonlyArray<OutboxRecord<Evt>>>;
+  markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void>;
+}
+```
+
+Lifecycle:
+
+1. **`add`** is called inside the write transaction (typically from `withCommit`), so events persist atomically with the state change.
+2. A separate **outbox dispatcher** polls `getPending` and forwards the events to subscribers / external brokers.
+3. After successful dispatch, the dispatcher calls `markDispatched(dispatchIds)` so they don't come back next poll.
+
+### Idempotency
+
+Both `add` and `markDispatched` should be idempotent — the dispatcher may retry on partial failure. A unique constraint on `(eventId)` for the outbox row is the standard pattern; the implementation can reuse the event's own `eventId` as the `dispatchId` (the common, clean choice).
+
+### Reference implementation
+
+```ts
+import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
+import type { Outbox, OutboxRecord } from "@shirudo/ddd-kit";
+
+type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
+
+function createInMemoryOutbox(): Outbox<OrderCreated> {
+  const pending = new Map<string, OutboxRecord<OrderCreated>>();
+  return {
+    async add(events) {
+      for (const event of events) {
+        pending.set(event.eventId, { dispatchId: event.eventId, event });
+      }
+    },
+    async getPending(limit) {
+      const all = [...pending.values()];
+      return typeof limit === "number" ? all.slice(0, limit) : all;
+    },
+    async markDispatched(dispatchIds) {
+      for (const id of dispatchIds) pending.delete(id);
+    },
+  };
+}
+```
+
+## `withCommit`: putting it together
+
+```ts
+import { withCommit } from "@shirudo/ddd-kit";
+
+const orderId = await withCommit(
+  { outbox, bus, scope },
+  async () => {
+    const order = await repo.getByIdOrFail(id);
+    order.confirm();
+    await repo.save(order);
+    return {
+      result: order.id,
+      events: order.domainEvents,
+    };
+  },
+);
+```
+
+Order of operations:
+
+1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction
+2. **Inside the transaction:**
+   - State mutations (`order.confirm()`, `repo.save(order)`)
+   - `outbox.add(events)` — events persist atomically with the state change
+3. **Transaction commits**
+4. **After the commit:** `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired)
+
+Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
+
+## When you need each piece
+
+| You have | You need |
+|---|---|
+| A single Worker invocation, no external services | EventBus + `withCommit({ scope, outbox, bus })` |
+| Modular monolith, in-process subscribers + external consumers | EventBus (in-process fast path) + Outbox (durable handoff) + dispatcher (cron / queue) |
+| Pure microservices, no in-process subscribers | Outbox + dispatcher only; omit `bus` from `withCommit` |
+| Tests | In-memory Outbox + EventBus (both ship as plug-ins) |

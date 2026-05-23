@@ -1,0 +1,140 @@
+# CQRS & Buses
+
+The kit ships an in-memory `CommandBus` and `QueryBus` plus marker types (`Command`, `Query`, `CommandHandler<C, R>`, `QueryHandler<Q, R>`) that stay portable across transports.
+
+## Scope: in-process only
+
+The bundled buses are **zero-config in-process dispatchers**. They fit:
+
+- **Edge runtimes** (Cloudflare Workers, Vercel Edge, Deno Deploy, Bun) — each worker invocation handles one command in-process; external brokers would defeat edge latency
+- **Modular monoliths** — single Node process, multiple bounded contexts; the bus routes between modules
+- **Tests and local development** — stand-in for production buses without infrastructure
+- **Small CLIs and scripts**
+
+For **cross-process messaging** (RabbitMQ, NATS, Kafka, AWS SQS), don't use the in-memory bus. Keep the `CommandHandler<C, R>` / `QueryHandler<Q, R>` types as the contract and wire them to your transport. The handlers stay portable; only the dispatcher changes.
+
+The included buses intentionally have **no middleware/pipeline machinery** — wrap handlers with decorator functions when you need logging, auth, metrics. Anything more elaborate is in-house framework territory and lives outside the kit.
+
+## Commands
+
+```ts
+import {
+  CommandBus,
+  type Command,
+  type CommandHandler,
+} from "@shirudo/ddd-kit";
+import { ok, err, type Result } from "@shirudo/result";
+
+// Define commands as discriminated unions on `type`
+type CreateOrderCommand = Command & {
+  type: "CreateOrder";
+  customerId: string;
+  items: Array<{ productId: string; quantity: number; priceCents: number }>;
+};
+
+type ConfirmOrderCommand = Command & {
+  type: "ConfirmOrder";
+  orderId: string;
+};
+
+// Map of command type → handler return type for end-to-end typing
+type Commands = {
+  CreateOrder:  string;  // returns the new orderId
+  ConfirmOrder: void;
+};
+
+// Define handlers
+const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (cmd) => {
+  if (cmd.items.length === 0) return err("EMPTY_ORDER");
+  // ... business logic ...
+  return ok(orderId);
+};
+
+// Wire up the bus
+const bus = new CommandBus<Commands>();
+bus.register("CreateOrder", createOrderHandler);
+
+// Execute — return type is Result<string, string>
+const result = await bus.execute({
+  type: "CreateOrder",
+  customerId: "c-1",
+  items: [{ productId: "p-1", quantity: 2, priceCents: 999 }],
+});
+```
+
+### Strict typing through `TMap`
+
+When you supply the type map, `register()` constraints kick in:
+
+```ts
+// @ts-expect-error: "Unknown" is not a key of Commands
+bus.register("Unknown", async () => ok("x"));
+
+// @ts-expect-error: handler must return Promise<Result<string, string>>
+bus.register("CreateOrder", async () => ok(42));
+```
+
+Without a `TMap` the registration is loose (any key, any return type) — the no-config path keeps working for tests and prototypes.
+
+## Queries
+
+```ts
+import {
+  QueryBus,
+  type Query,
+  type QueryHandler,
+} from "@shirudo/ddd-kit";
+
+type GetOrderQuery = Query & {
+  type: "GetOrder";
+  orderId: string;
+};
+
+type Queries = {
+  GetOrder: Order | null;
+};
+
+const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => {
+  return await orderRepo.getById(q.orderId as OrderId);
+};
+
+const queryBus = new QueryBus<Queries>();
+queryBus.register("GetOrder", getOrderHandler);
+
+// Safe variant — returns Result<Order | null, string>
+const safe = await queryBus.execute({ type: "GetOrder", orderId: "o-1" });
+
+// Throw-on-failure variant — returns Order | null directly
+const order = await queryBus.executeUnsafe({ type: "GetOrder", orderId: "o-1" });
+```
+
+Queries return data directly (`QueryHandler` is `(q: Q) => Promise<R>`), not a `Result` — read operations don't usually have business-level errors. Only `execute` adds the Result wrapper for "no handler registered" / unexpected throws; `executeUnsafe` skips it.
+
+## `withCommit`: transactional Use Cases
+
+The canonical write-side wrapper:
+
+```ts
+import { withCommit } from "@shirudo/ddd-kit";
+
+const result = await withCommit(
+  { outbox, bus, scope },
+  async () => {
+    const order = await repo.getByIdOrFail(orderId);
+    order.confirm();
+    await repo.save(order);
+    return { result: order.id, events: order.domainEvents };
+  },
+);
+```
+
+Order of operations:
+
+1. `scope.transactional(fn)` — `fn` runs inside the persistence layer's native transaction
+2. Inside the transaction: state mutations + `outbox.add(events)` — events persist **atomically** with the state change
+3. Transaction commits
+4. **After** the commit, `bus.publish(events)` fires for in-process subscribers
+
+Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, the outbox dispatcher will still deliver the events (eventual consistency).
+
+See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract.

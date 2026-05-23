@@ -1,0 +1,67 @@
+# Design Decisions
+
+This page collects the non-obvious calls the kit has made and *why* — the choices a consumer is most likely to want to push back on before adopting the library.
+
+## Result lives at the App-Service boundary, not in the domain
+
+**The rule:**
+- **Domain layer throws** `DomainError`-derived exceptions. Aggregates, value-object constructors, and the `validateEvent` hook all throw.
+- **App-Service boundary returns `Result`.** `CommandBus.execute`, `QueryBus.execute`, `CommandHandler<C,R>`, `QueryHandler<Q,R>`, and `withCommit` return `Result<T, E>` so HTTP handlers can map errors to status codes / logs.
+- **Infrastructure boundary returns `Result` where corruption is recoverable.** `EventSourcedAggregate.loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a corrupt event stream is the kind of failure the caller might want to inspect, not fail-fast on.
+
+**Why:** mixing throw + Result in the same code path is the worst of both worlds — Vernon, Evans, and Khononov all model aggregate invariants as exceptions because that's what they are (programming-error level "this should never happen for a valid request"). Result is the right shape *at the boundary* where you serialise to JSON. See [Result vs Throw](./result-vs-throw.md) for the full discussion.
+
+## In-process buses are first-class for edge runtimes
+
+`CommandBus` and `QueryBus` are zero-config in-memory dispatchers. They're not toys for tests — they're the right tool for:
+
+- **Cloudflare Workers / Vercel Edge / Deno Deploy:** each worker invocation is short-lived, no broker to call.
+- **Modular monoliths:** in-process routing between bounded contexts; events leave the process via outbox when other services need them.
+- **Tests and small CLIs.**
+
+For cross-process messaging (RabbitMQ, NATS, Kafka, SQS), keep the `CommandHandler<C,R>` and `QueryHandler<Q,R>` types as the contract and wire them to your transport. No middleware/pipeline machinery in the library — wrap handlers with decorator functions for logging, auth, metrics.
+
+## The Specification pattern was deliberately not shipped
+
+`IQueryableRepository<TAgg, TId, TFilter>` is generic over the filter shape. Drizzle `SQL`, Prisma `WhereInput`, Mongo filter documents, plain predicates — every repository implementation owns its filter language. The library does **not** ship an `ISpecification<T>` interface because a brand-only marker with no `isSatisfiedBy` / `and` / `or` / `not` combinators can't be used generically, and a full Specification pattern in TypeScript fights the ORM query DSLs people actually use.
+
+## Event sourcing structurally enforces "record-after-mutation"
+
+`EventSourcedAggregate.apply(event)` is the only mutation path. The dispatch is atomic:
+
+1. `validateEvent(event)` — throws if the event violates an invariant
+2. handler lookup (throws `MissingHandlerError` if absent)
+3. compute `nextState`
+4. **commit:** state + pending event + version bump in one tick
+
+If anything in (1)–(3) throws, no state is mutated and no event is queued. Vernon's canonical "events are facts of the past" rule is enforced by the structure, not by convention.
+
+For `AggregateRoot` (non-event-sourced), use the `commit(newState, events)` helper to get the same guarantee. The unscoped `setState` + `addDomainEvent` pair stays available for cases that don't fit the helper (state-only mutations, audit-only events, multi-step transactions).
+
+## Events are deeply frozen at construction
+
+`createDomainEvent` returns a deeply frozen object. A mutating subscriber on the `EventBus` throws instead of poisoning subsequent handlers. Events are facts of the past — immutable by definition (Vernon, IDDD §8).
+
+## Identity ids are branded strings, generated app-side
+
+`Id<Tag>` is `string & { readonly __brand: Tag }`. Generators are bound to a single tag at creation:
+
+```ts
+const userIds: IdGenerator<"UserId"> = { next: () => ulid() as Id<"UserId"> };
+```
+
+Per Vernon's "Identity from User-Side", id generation happens in the application, not in the repository — `IRepository` deliberately does not expose `nextId()`. The library provides an `EventIdFactory` and `ClockFactory` for deterministic tests.
+
+## No deep clone on every state read
+
+`Entity.state` is **shallowly frozen** on every assignment. Direct property writes (`entity.state.foo = …`) throw in strict mode, but writes to nested objects bypass the freeze. For deep immutability either model nested data with `vo()` (deep-freezes by construction) or reach for Immer / Immutable.js at the App layer. The shallow contract is deliberate — deep freezing on every state write would dominate hot paths.
+
+## TransactionScope, not "Unit of Work"
+
+The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T>` — honest naming for what it actually does. The library does **not** ship a Fowler-style UoW (no `registerDirty` / `registerNew` / `registerDeleted` change tracking). That's the ORM's job — Prisma, Drizzle, TypeORM all handle it differently, and competing with them only creates incompatibility.
+
+`withCommit` publishes events **after** `transactional` resolves, so an in-process EventBus subscriber never sees events from a rolled-back transaction.
+
+## The kit is small on purpose
+
+`dist/index.js` is around 30 KB. Operators that have entire ecosystems behind them (a Result type with 30+ combinators, a deep-equal that handles every corner of JavaScript, a frozen value-object library) are pulled in from peer deps rather than re-implemented. The kit's job is to ship the *DDD-specific* shapes; the surrounding TypeScript ecosystem is rich enough to handle the rest.

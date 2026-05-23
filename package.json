@@ -30,7 +30,11 @@
 		"lint": "biome lint .",
 		"format": "pnpm exec biome format --write . && pnpm exec biome lint --write . && pnpm exec biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"prepublishOnly": "npm run clean && vitest run && npm run build"
+		"prepublishOnly": "npm run clean && vitest run && npm run build",
+		"docs:api": "typedoc",
+		"docs:dev": "pnpm run docs:api && vitepress dev docs",
+		"docs:build": "pnpm run docs:api && vitepress build docs",
+		"docs:preview": "vitepress preview docs"
 	},
 	"keywords": [
 		"ddd",
@@ -46,7 +50,10 @@
 		"@biomejs/biome": "2.1.4",
 		"@shirudo/result": "^0.0.6",
 		"tsup": "^8.5.0",
+		"typedoc": "^0.28.19",
+		"typedoc-plugin-markdown": "^4.11.0",
 		"typescript": "^5.9.2",
+		"vitepress": "^1.6.4",
 		"vitest": "^3.2.4"
 	},
 	"private": false,

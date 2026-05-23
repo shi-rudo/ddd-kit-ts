@@ -1,0 +1,16 @@
+{
+	"$schema": "https://typedoc.org/schema.json",
+	"entryPoints": ["src/index.ts"],
+	"out": "docs/api",
+	"plugin": ["typedoc-plugin-markdown"],
+	"readme": "none",
+	"hideBreadcrumbs": true,
+	"hidePageHeader": true,
+	"useCodeBlocks": true,
+	"expandObjects": true,
+	"sort": ["source-order"],
+	"excludeInternal": true,
+	"entryFileName": "index.md",
+	"fileExtension": ".md",
+	"flattenOutputFiles": false
+}
