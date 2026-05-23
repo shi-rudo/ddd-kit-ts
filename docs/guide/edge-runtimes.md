@@ -15,15 +15,27 @@ The kit is built for modern TypeScript runtimes including Cloudflare Workers, Ve
 
 ### Event ids: ULID, KSUID, snowflake
 
-`crypto.randomUUID()` is great for "uniqueness", less great for "sortable" or "compact". Most DDD setups eventually want ULID or KSUID:
+`crypto.randomUUID()` returns **UUID v4** (purely random) on every runtime — that's the Web Crypto spec, nothing has shifted the default to v7. v4 is unique but **not time-ordered**, which is what you actually want once an event store has more than a handful of rows: v4 inserts scatter across a B-tree index and amplify writes, time-ordered ids stay clustered.
+
+Three drop-in alternatives, all swap in via the factory:
 
 ```ts
 import { setEventIdFactory } from "@shirudo/ddd-kit";
-import { ulid } from "ulid";
 
-// Call once at module load / Worker init
+// UUID v7 — time-ordered, 36-char hex with hyphens, RFC 9562 standard
+import { v7 as uuidv7 } from "uuid";
+setEventIdFactory(() => uuidv7());
+
+// ULID — 26-char Crockford base32, time-ordered, URL-safe without escapes
+import { ulid } from "ulid";
 setEventIdFactory(() => ulid());
+
+// KSUID — 27-char base62, time-ordered, includes 128-bit random payload
+import KSUID from "ksuid";
+setEventIdFactory(() => KSUID.randomSync().string);
 ```
+
+All three are time-ordered ⇒ `ORDER BY eventId ASC` matches creation order, B-tree indexes on the eventId column don't suffer write amplification, and eyeballing two ids tells you which came first. Most production DDD setups land on v7 (standards-track) or ULID (more compact).
 
 The kit's per-call `options.eventId` override always wins, so you can mix strategies (default global factory, per-tenant override at the request boundary).
 

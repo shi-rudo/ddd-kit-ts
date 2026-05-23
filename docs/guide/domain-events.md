@@ -37,10 +37,14 @@ The returned event is **deeply frozen**. Mutating it (or any nested object) thro
 
 | Field | Default | Override |
 |---|---|---|
-| `eventId` | `crypto.randomUUID()` | `options.eventId` (per-call) or `setEventIdFactory(fn)` (global) |
+| `eventId` | `crypto.randomUUID()` (UUID **v4**) | `options.eventId` (per-call) or `setEventIdFactory(fn)` (global) |
 | `occurredAt` | `new Date()` | `options.occurredAt` (per-call) or `setClockFactory(fn)` (global) |
 | `version` | `1` | `options.version` |
 | `metadata` | `undefined` | `options.metadata` |
+
+::: tip Prefer time-ordered ids in production
+`crypto.randomUUID()` is always **UUID v4** — purely random, no time component. Fine for tests and small workloads, but it scatters across B-tree indexes and amplifies writes once the event store grows. For production, swap in UUID v7 (RFC 9562), ULID, or KSUID via `setEventIdFactory` — all three are time-ordered, so `ORDER BY eventId ASC` matches creation order and indexes stay clustered. See [Edge Runtimes → Event ids](./edge-runtimes.md#event-ids-ulid-ksuid-snowflake) for the drop-ins.
+:::
 
 #### Deterministic ids and timestamps for tests
 
@@ -63,9 +67,14 @@ afterEach(() => {
 Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation), **prefer the per-call `options.eventId` / `options.occurredAt`** instead of mutating the global — two libraries / two tenants would race on load order.
 :::
 
-#### Custom id formats (ULID, KSUID)
+#### Custom id formats (UUID v7, ULID, KSUID)
 
 ```ts
+// UUID v7 — RFC 9562 standards-track, time-ordered
+import { v7 as uuidv7 } from "uuid";
+setEventIdFactory(() => uuidv7());
+
+// ULID — 26-char Crockford base32, time-ordered, URL-safe
 import { ulid } from "ulid";
 setEventIdFactory(() => ulid()); // call once at bootstrap
 ```

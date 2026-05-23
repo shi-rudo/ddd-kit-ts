@@ -5,9 +5,12 @@ import { deepFreeze } from "../value-object/value-object";
  *
  * The library ships a default that uses Web Crypto `crypto.randomUUID()`
  * (works on Node 19+, modern browsers in secure contexts, Deno, Bun,
- * Cloudflare Workers, Vercel Edge, and other runtimes that implement Web
- * Crypto). Override globally via `setEventIdFactory` to plug in ULID,
- * KSUID, a deterministic test factory, or whatever your platform requires.
+ * Cloudflare Workers, Vercel Edge, and any runtime that implements Web
+ * Crypto). Note that `crypto.randomUUID()` returns **UUID v4** (purely
+ * random) — for production event stores prefer a **time-ordered** id
+ * format (UUID v7 / ULID / KSUID) so B-tree indexes on the eventId
+ * column stay clustered and `ORDER BY eventId` matches creation order.
+ * Swap one in via `setEventIdFactory(() => uuidv7())` or `() => ulid()`.
  */
 export type EventIdFactory = () => string;
 
