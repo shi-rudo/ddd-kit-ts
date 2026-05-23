@@ -223,7 +223,7 @@ export function freezeShallow<T>(value: T): T {
  * ```
  */
 export function sameEntity<TId>(a: Identifiable<TId>, b: Identifiable<TId>): boolean {
-	return deepEqual(a.id, b.id);
+	return a.id === b.id;
 }
 
 /**
@@ -249,7 +249,7 @@ export function findEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T | undefined {
-	return entities.find((entity) => deepEqual(entity.id, id));
+	return entities.find((entity) => entity.id === id);
 }
 
 /**
@@ -273,7 +273,7 @@ export function hasEntityId<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): boolean {
-	return entities.some((entity) => deepEqual(entity.id, id));
+	return entities.some((entity) => entity.id === id);
 }
 
 /**
@@ -299,7 +299,7 @@ export function removeEntityById<TId, T extends Identifiable<TId>>(
 	entities: T[],
 	id: TId,
 ): T[] {
-	return entities.filter((entity) => !deepEqual(entity.id, id));
+	return entities.filter((entity) => entity.id !== id);
 }
 
 /**
@@ -330,7 +330,7 @@ export function updateEntityById<TId, T extends Identifiable<TId>>(
 	id: TId,
 	updater: (entity: T) => T,
 ): T[] {
-	return entities.map((entity) => (deepEqual(entity.id, id) ? updater(entity) : entity));
+	return entities.map((entity) => (entity.id === id ? updater(entity) : entity));
 }
 
 /**
@@ -361,7 +361,7 @@ export function replaceEntityById<TId, T extends Identifiable<TId>>(
 	id: TId,
 	replacement: T,
 ): T[] {
-	return entities.map((entity) => (deepEqual(entity.id, id) ? replacement : entity));
+	return entities.map((entity) => (entity.id === id ? replacement : entity));
 }
 
 /**
