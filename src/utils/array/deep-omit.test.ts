@@ -157,69 +157,78 @@ describe("deepOmit – Object.create(null) and Symbols", () => {
 	});
 });
 
-describe("deepOmit – Built-ins Atomic", () => {
-	it("leaves Date instances unchanged and identical", () => {
+describe("deepOmit – Built-ins are cloned atomically (distinct, equal-by-value)", () => {
+	it("clones Date by value, not by reference", () => {
 		const date = new Date("2024-01-01T00:00:00Z");
 		const input = { id: 1, date };
-
-		const result = deepOmit(input, { ignoreKeys: ["id"] });
+		const result = deepOmit(input, { ignoreKeys: ["id"] }) as { date: Date };
 
 		expect(result).toEqual({ date });
-		expect((result as any).date).toBe(date); // same reference
+		expect(result.date).not.toBe(date);
+		expect(result.date.getTime()).toBe(date.getTime());
 	});
 
-	it("leaves RegExp instances unchanged", () => {
+	it("clones RegExp by source + flags", () => {
 		const re = /abc/gi;
 		const input = { pattern: re };
-		const result = deepOmit(input, { ignoreKeys: ["x"] });
-
-		expect((result as any).pattern).toBe(re);
+		const result = deepOmit(input, { ignoreKeys: ["x"] }) as {
+			pattern: RegExp;
+		};
+		expect(result.pattern).not.toBe(re);
+		expect(result.pattern.source).toBe("abc");
+		expect(result.pattern.flags).toBe("gi");
 	});
 
-	it("treats Map atomically (no internal changes)", () => {
-		const map = new Map<string, any>([
+	it("clones Map by entries", () => {
+		const map = new Map<string, unknown>([
 			["id", 1],
 			["value", "x"],
 		]);
 		const input = { map };
-
-		const result = deepOmit(input, { ignoreKeys: ["id"] });
-
-		// map content remains untouched
-		expect((result as any).map).toBe(map);
-		expect(map.has("id")).toBe(true);
-		expect(map.get("value")).toBe("x");
+		const result = deepOmit(input, { ignoreKeys: ["id"] }) as {
+			map: Map<string, unknown>;
+		};
+		expect(result.map).not.toBe(map);
+		expect([...result.map.entries()]).toEqual([
+			["id", 1],
+			["value", "x"],
+		]);
 	});
 
-	it("treats Set atomically", () => {
-		const set = new Set<any>([{ id: 1 }, { id: 2 }]);
+	it("clones Set by members", () => {
+		const a = { id: 1 };
+		const b = { id: 2 };
+		const set = new Set<object>([a, b]);
 		const input = { set };
-
-		const result = deepOmit(input, { ignoreKeys: ["id"] });
-
-		expect((result as any).set).toBe(set);
-		expect(set.size).toBe(2);
+		const result = deepOmit(input, { ignoreKeys: ["id"] }) as {
+			set: Set<object>;
+		};
+		expect(result.set).not.toBe(set);
+		expect(result.set.size).toBe(2);
 	});
 
-	it("treats Typed Arrays atomically", () => {
+	it("clones Typed Arrays", () => {
 		const arr = new Uint8Array([1, 2, 3]);
 		const input = { buffer: arr };
-
-		const result = deepOmit(input, { ignoreKeys: ["buffer2"] });
-
-		expect((result as any).buffer).toBe(arr);
+		const result = deepOmit(input, { ignoreKeys: ["buffer2"] }) as {
+			buffer: Uint8Array;
+		};
+		expect(result.buffer).not.toBe(arr);
+		expect([...result.buffer]).toEqual([1, 2, 3]);
 	});
 
-	it("treats DataView atomically", () => {
+	it("clones DataView", () => {
 		const buf = new ArrayBuffer(4);
 		const view = new DataView(buf);
 		view.setUint8(0, 42);
-
 		const input = { view, meta: { id: 1 } };
-		const result = deepOmit(input, { ignoreKeys: ["id"] });
-
-		expect((result as any).view).toBe(view);
-		expect((result as any).meta).toEqual({});
+		const result = deepOmit(input, { ignoreKeys: ["id"] }) as {
+			view: DataView;
+			meta: Record<string, unknown>;
+		};
+		expect(result.view).not.toBe(view);
+		expect(result.view.getUint8(0)).toBe(42);
+		expect(result.meta).toEqual({});
 	});
 });
 
@@ -247,5 +256,62 @@ describe("deepOmit – Circular References", () => {
 		expect(result.child.parent).toBe(result);
 		expect(result.ref).toBe(result);
 		expect("secret" in result.child).toBe(false);
+	});
+});
+
+describe("deepOmit – Built-in atomic types are cloned, not aliased", () => {
+	it("returns a distinct Date instance with the same time", () => {
+		const input = { stamp: new Date("2026-01-02T03:04:05Z") };
+		const result = deepOmit(input, {}) as { stamp: Date };
+		expect(result.stamp).not.toBe(input.stamp);
+		expect(result.stamp.getTime()).toBe(input.stamp.getTime());
+	});
+
+	it("returns a distinct RegExp instance with the same source and flags", () => {
+		const input = { rx: /foo/i };
+		const result = deepOmit(input, {}) as { rx: RegExp };
+		expect(result.rx).not.toBe(input.rx);
+		expect(result.rx.source).toBe("foo");
+		expect(result.rx.flags).toBe("i");
+	});
+
+	it("returns a distinct Map instance with the same entries", () => {
+		const input = { m: new Map([["k", 1]]) };
+		const result = deepOmit(input, {}) as { m: Map<string, number> };
+		expect(result.m).not.toBe(input.m);
+		expect([...result.m.entries()]).toEqual([["k", 1]]);
+	});
+
+	it("returns a distinct Set instance with the same members", () => {
+		const input = { s: new Set([1, 2, 3]) };
+		const result = deepOmit(input, {}) as { s: Set<number> };
+		expect(result.s).not.toBe(input.s);
+		expect([...result.s]).toEqual([1, 2, 3]);
+	});
+});
+
+describe("deepOmit – Prototype pollution safety", () => {
+	it("treats an own __proto__ key as a regular data property, not a prototype write", () => {
+		// JSON.parse('{"__proto__":{"polluted":true}}') yields an object whose
+		// __proto__ is an OWN property (not a setter call). A naive
+		// `clone[key] = value` would then traverse the setter and pollute
+		// Object.prototype. deepOmit must keep __proto__ inert.
+		const malicious = JSON.parse(
+			'{"safe": 1, "__proto__": {"polluted": true}}',
+		);
+
+		const result = deepOmit(malicious, {}) as Record<string, unknown>;
+
+		expect(result.safe).toBe(1);
+		// The clone should NOT have polluted Object.prototype.
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+	});
+
+	it("does not pollute Object.prototype via 'constructor' own key", () => {
+		const malicious = JSON.parse(
+			'{"safe": 1, "constructor": {"prototype": {"polluted": true}}}',
+		);
+		deepOmit(malicious, {});
+		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 	});
 });
