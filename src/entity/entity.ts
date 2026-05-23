@@ -149,12 +149,25 @@ export abstract class Entity<TState, TId extends Id<string>>
 	}
 
 	/**
-	 * Optional validation hook to ensure state invariants.
-	 * Called during construction and whenever helpful.
-	 * Override this method to implement validation logic.
+	 * Optional validation hook to ensure state invariants. Called during
+	 * construction (from `Entity`'s constructor) and again on every
+	 * `setState()` call. Throw to reject invalid state.
+	 *
+	 * **⚠️ Must not read subclass instance fields via `this`.** The
+	 * constructor calls `validateState(initialState)` BEFORE the subclass's
+	 * field initializers run, so `this.someField` is `undefined` at that
+	 * point — a classic TypeScript/JavaScript constructor-ordering footgun.
+	 * The `state` argument is the single source of truth; treat the method
+	 * as pure with respect to `this`.
+	 *
+	 * If your invariants genuinely depend on per-instance configuration
+	 * that isn't part of the state, pass that configuration into the state
+	 * itself (DDD-canonical: the aggregate's state contains everything it
+	 * needs) or perform the additional check after construction in a
+	 * dedicated factory method.
 	 *
 	 * @param state - The state to validate
-	 * @throws Error if validation fails
+	 * @throws Error (or `DomainError` subclass) if validation fails
 	 */
 	protected validateState(_state: TState): void {
 		// Default implementation does nothing

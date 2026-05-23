@@ -148,6 +148,34 @@ describe("Entity", () => {
 			);
 		});
 
+		it("calls validateState BEFORE subclass field initializers (constructor-ordering footgun)", () => {
+			// Documents the JavaScript/TS constructor ordering: the super() call
+			// (Entity's constructor) runs `validateState` BEFORE the subclass's
+			// field initializers. A subclass that reads `this.someField` from
+			// inside validateState will see `undefined`. Test pins the behavior
+			// so the doc warning stays accurate.
+			let seenMinQuantity: unknown = "untouched";
+
+			class TrappyEntity extends Entity<
+				{ quantity: number },
+				Id<"TrappyId">
+			> {
+				private readonly minQuantity = 1;
+				constructor(id: Id<"TrappyId">, state: { quantity: number }) {
+					super(id, state);
+				}
+				protected validateState(_state: { quantity: number }): void {
+					seenMinQuantity = this.minQuantity;
+				}
+			}
+
+			new TrappyEntity("t-1" as Id<"TrappyId">, { quantity: 5 });
+
+			// The subclass field initializer hadn't run yet at validateState time,
+			// so `this.minQuantity` was undefined — DON'T rely on `this` in validateState.
+			expect(seenMinQuantity).toBeUndefined();
+		});
+
 		it("should call validateState during construction", () => {
 			expect(() => new OrderItemEntity("id-1" as ItemId, "prod-1", -5)).toThrow(
 				"Quantity cannot be negative",
