@@ -1,4 +1,17 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+
+// typedoc-vitepress-theme writes the API sidebar to this file as part of
+// `pnpm docs:api`. Read it lazily so a fresh checkout (where docs/api/ is
+// gitignored and not yet generated) still loads the config — the API
+// sidebar just appears empty until `docs:api` has run.
+const typedocSidebarPath = fileURLToPath(
+	new URL("../api/typedoc-sidebar.json", import.meta.url),
+);
+const typedocSidebar = existsSync(typedocSidebarPath)
+	? (JSON.parse(readFileSync(typedocSidebarPath, "utf-8")) as Array<unknown>)
+	: [];
 
 export default defineConfig({
 	title: "ddd-kit",
@@ -79,7 +92,17 @@ export default defineConfig({
 					],
 				},
 			],
-			"/api/": [{ text: "API Reference", link: "/api/" }],
+			"/api/": [
+				{
+					text: "API Reference",
+					link: "/api/",
+					items: typedocSidebar as Array<{
+						text: string;
+						link?: string;
+						items?: unknown[];
+					}>,
+				},
+			],
 		},
 
 		socialLinks: [

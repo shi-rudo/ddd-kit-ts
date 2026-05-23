@@ -2,15 +2,17 @@
 	"$schema": "https://typedoc.org/schema.json",
 	"entryPoints": ["src/index.ts"],
 	"out": "docs/api",
-	"plugin": ["typedoc-plugin-markdown"],
+	"plugin": ["typedoc-plugin-markdown", "typedoc-vitepress-theme"],
 	"readme": "none",
-	"hideBreadcrumbs": true,
-	"hidePageHeader": true,
 	"useCodeBlocks": true,
 	"expandObjects": true,
 	"sort": ["source-order"],
 	"excludeInternal": true,
-	"entryFileName": "index.md",
-	"fileExtension": ".md",
-	"flattenOutputFiles": false
+	"docsRoot": "docs",
+	"sidebar": {
+		"autoConfiguration": true,
+		"format": "vitepress",
+		"pretty": true,
+		"collapsed": false
+	}
 }
