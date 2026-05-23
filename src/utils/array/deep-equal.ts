@@ -31,23 +31,30 @@ const objHasOwn = objProto.hasOwnProperty;
  * ```
  */
 export function deepEqual(a: unknown, b: unknown): boolean {
-	return deepEqualInner(a, b, new WeakMap<object, object>());
+	return deepEqualInner(a, b, new WeakMap<object, WeakSet<object>>());
 }
 
 /**
+ * Visited pair tracker for cycle detection. The cache is a pair-set:
+ * for every left-hand object we keep the set of right-hand objects we
+ * have already paired it with. Encountering an already-known pair returns
+ * the cycle hypothesis (assume equal); a new (a, b') pair with b' ≠ any
+ * previously cached b for that a is walked normally — the previous shape
+ * (`WeakMap<object, object>`) could only remember one B per A, which
+ * could short-circuit unrelated comparisons that happened to revisit the
+ * same A with a different B.
+ */
+type VisitedPairs = WeakMap<object, WeakSet<object>>;
+
+/**
  * Internal recursive function for deep equality comparison.
- * Tracks visited objects to detect and handle circular references.
  *
- * @param a - The first value to compare
- * @param b - The second value to compare
- * @param visited - WeakMap to track visited object pairs and detect cycles
- * @returns `true` if the values are deeply equal, `false` otherwise
  * @internal
  */
 function deepEqualInner(
 	a: unknown,
 	b: unknown,
-	visited: WeakMap<object, object>
+	visited: VisitedPairs,
 ): boolean {
 	// 1. Fast path: reference equality
 	if (a === b) return true;
@@ -70,13 +77,19 @@ function deepEqualInner(
 	const objA = a as object;
 	const objB = b as object;
 
-	// 3. Cycles: already seen pair?
-	const cached = visited.get(objA);
-	if (cached !== undefined) {
-		// If we already paired this A with a different B → unequal
-		return cached === objB;
+	// 3. Cycles: already seen this exact (a, b) pair?
+	let cachedBs = visited.get(objA);
+	if (cachedBs?.has(objB)) {
+		// Cycle hypothesis: pretend equal so the walk can terminate. If the
+		// structure is actually unequal elsewhere, a different recursive
+		// branch will surface the mismatch.
+		return true;
 	}
-	visited.set(objA, objB);
+	if (!cachedBs) {
+		cachedBs = new WeakSet();
+		visited.set(objA, cachedBs);
+	}
+	cachedBs.add(objB);
 
 	// 4. Handle Typed Arrays / DataView first
 	if (ArrayBuffer.isView(objA) || ArrayBuffer.isView(objB)) {
@@ -99,15 +112,16 @@ function deepEqualInner(
 			return true;
 		}
 
-		// Typed Arrays: element by element
-		const arrA = objA as unknown as ArrayLike<unknown>;
-		const arrB = objB as unknown as ArrayLike<unknown>;
+		// Typed Arrays: element by element (length + numeric index access are
+		// part of the TypedArray contract; the indexed read is sound).
+		const arrA = objA as unknown as Record<number, unknown> & { length: number };
+		const arrB = objB as unknown as Record<number, unknown> & { length: number };
 
 		const len = arrA.length;
 		if (len !== arrB.length) return false;
 
 		for (let i = 0; i < len; i++) {
-			if ((arrA as any)[i] !== (arrB as any)[i]) return false;
+			if (arrA[i] !== arrB[i]) return false;
 		}
 		return true;
 	}
@@ -188,36 +202,35 @@ function deepEqualInner(
 			}
 
 			// 7. Fallback: plain / custom objects → compare own enumerable keys + values
-			const stringKeysA = Object.keys(objA as any);
-			const stringKeysB = Object.keys(objB as any);
-			const symbolKeysA = Object.getOwnPropertySymbols(objA as any);
-			const symbolKeysB = Object.getOwnPropertySymbols(objB as any);
+			const recA = objA as Record<string | symbol, unknown>;
+			const recB = objB as Record<string | symbol, unknown>;
 
-			// Compare string keys count
+			const stringKeysA = Object.keys(objA as object);
+			const stringKeysB = Object.keys(objB as object);
 			if (stringKeysA.length !== stringKeysB.length) return false;
-			// Compare symbol keys count
+
+			const symbolKeysA = Object.getOwnPropertySymbols(objA as object);
+			const symbolKeysB = Object.getOwnPropertySymbols(objB as object);
 			if (symbolKeysA.length !== symbolKeysB.length) return false;
 
-			// Check all string keys exist in both objects
+			// Build the B-side symbol set once; the previous impl rebuilt the
+			// array and ran .includes per key, which was quadratic.
+			const symbolKeysBSet = new Set<symbol>(symbolKeysB);
+
 			for (const key of stringKeysA) {
 				if (!objHasOwn.call(objB, key)) return false;
 			}
-
-			// Check all symbol keys exist in both objects
 			for (const key of symbolKeysA) {
-				if (!Object.getOwnPropertySymbols(objB as any).includes(key)) return false;
+				if (!symbolKeysBSet.has(key)) return false;
 			}
 
-			// Compare string key values
 			for (const key of stringKeysA) {
-				if (!deepEqualInner((objA as any)[key], (objB as any)[key], visited)) {
+				if (!deepEqualInner(recA[key], recB[key], visited)) {
 					return false;
 				}
 			}
-
-			// Compare symbol key values
 			for (const key of symbolKeysA) {
-				if (!deepEqualInner((objA as any)[key], (objB as any)[key], visited)) {
+				if (!deepEqualInner(recA[key], recB[key], visited)) {
 					return false;
 				}
 			}

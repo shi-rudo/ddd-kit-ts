@@ -255,6 +255,55 @@ describe("deepEqual – Zirkuläre Referenzen", () => {
 	});
 });
 
+describe("deepEqual – Pair-tracking edge cases", () => {
+	it("compares the same shared sub-graph at multiple positions without poisoning the cache", () => {
+		const shared = { v: 1 };
+		const a = { l: shared, r: shared, x: { v: 2 } };
+		const b = { l: shared, r: shared, x: { v: 3 } };
+
+		// Difference is in `x`, not in the shared sub-graph; the pair-cache must
+		// not short-circuit the unrelated x sub-tree.
+		expect(deepEqual(a, b)).toBe(false);
+	});
+
+	it("two-cycle (A↔A') vs self-cycle (B→B) with otherwise identical fields", () => {
+		const a1: any = { tag: "n" };
+		const a2: any = { tag: "n" };
+		a1.next = a2;
+		a2.next = a1;
+
+		const b: any = { tag: "n" };
+		b.next = b;
+
+		// Both structures look identical at every node — pair-set cycle
+		// hypothesis treats them as equal once the pair (aN, b) has been
+		// visited.
+		expect(deepEqual(a1, b)).toBe(true);
+	});
+});
+
+describe("deepEqual – Symbol-keyed properties", () => {
+	const TAG = Symbol("tag");
+
+	it("compares symbol-keyed values like string-keyed ones", () => {
+		expect(deepEqual({ [TAG]: 1 }, { [TAG]: 1 })).toBe(true);
+		expect(deepEqual({ [TAG]: 1 }, { [TAG]: 2 })).toBe(false);
+	});
+
+	it("fails fast when one side has an extra symbol key", () => {
+		const a: Record<symbol, number> = { [TAG]: 1 };
+		const b: Record<symbol, number> = {};
+		expect(deepEqual(a, b)).toBe(false);
+	});
+
+	it("fails fast when sides have different symbol keys with the same count", () => {
+		const OTHER = Symbol("other");
+		const a: Record<symbol, number> = { [TAG]: 1 };
+		const b: Record<symbol, number> = { [OTHER]: 1 };
+		expect(deepEqual(a, b)).toBe(false);
+	});
+});
+
 describe("deepEqual – Typ-Mismatches", () => {
 	it("unterscheidet klar nach Typen/Tags", () => {
 		expect(deepEqual([], {})).toBe(false);
