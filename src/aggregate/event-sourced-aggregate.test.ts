@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
-import { DomainError, MissingHandlerError } from "../core/errors";
+import {
+	DomainError,
+	KitError,
+	MissingHandlerError,
+} from "../core/errors";
 import {
 	EventSourcedAggregate,
 	type EventSourcedAggregateConfig,
@@ -326,6 +330,49 @@ describe("EventSourcedAggregate", () => {
 						newValue: 1,
 					}) as TestEventUpdated,
 				);
+			}).toThrow(MissingHandlerError);
+		});
+
+		it("MissingHandlerError is a KitError but NOT a DomainError (programming bug)", () => {
+			// MissingHandlerError signals a subclass forgot to register a
+			// handler — that's a configuration / programming error, not a
+			// domain-invariant violation. It must not be catchable via
+			// `instanceof DomainError` at the App-Service boundary, so a
+			// 'catch domain errors → HTTP 400' handler can't mask the bug.
+			const error = new MissingHandlerError("Foo");
+			expect(error).toBeInstanceOf(KitError);
+			expect(error).not.toBeInstanceOf(DomainError);
+		});
+
+		it("MissingHandlerError thrown during loadFromHistory propagates (not caught as DomainError)", () => {
+			class HandlerlessReplay extends EventSourcedAggregate<
+				TestState,
+				TestEvent,
+				TestId
+			> {
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+				protected readonly handlers = {} as unknown as Record<
+					TestEvent["type"],
+					(s: TestState, e: TestEvent) => TestState
+				>;
+			}
+
+			const aggregate = new HandlerlessReplay("test-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+
+			// loadFromHistory only catches DomainError; a MissingHandlerError
+			// (programming bug) should propagate up unwrapped, not get
+			// silently wrapped into Result.Err.
+			expect(() => {
+				aggregate.loadFromHistory([
+					createDomainEvent("TestEventCreated", {
+						value: 1,
+					}) as TestEventCreated,
+				]);
 			}).toThrow(MissingHandlerError);
 		});
 

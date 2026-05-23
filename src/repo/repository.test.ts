@@ -7,6 +7,8 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
+	InfrastructureError,
+	KitError,
 } from "../core/errors";
 
 type OrderId = Id<"OrderId">;
@@ -95,10 +97,38 @@ describe("Repository contract", () => {
 		});
 	});
 
+	describe("Error hierarchy — InfrastructureError vs DomainError", () => {
+		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
+			const error = new AggregateNotFoundError("Order", "o-1");
+			expect(error).toBeInstanceOf(InfrastructureError);
+			expect(error).toBeInstanceOf(KitError);
+			expect(error).not.toBeInstanceOf(DomainError);
+		});
+
+		it("ConcurrencyConflictError is an InfrastructureError, not a DomainError", () => {
+			const error = new ConcurrencyConflictError("Order", "o-1", 3, 5);
+			expect(error).toBeInstanceOf(InfrastructureError);
+			expect(error).toBeInstanceOf(KitError);
+			expect(error).not.toBeInstanceOf(DomainError);
+		});
+
+		it("a consumer-derived DomainError is NOT an InfrastructureError", () => {
+			class OrderAlreadyConfirmedError extends DomainError {
+				constructor() {
+					super("Order already confirmed");
+				}
+			}
+			const e = new OrderAlreadyConfirmedError();
+			expect(e).toBeInstanceOf(DomainError);
+			expect(e).toBeInstanceOf(KitError);
+			expect(e).not.toBeInstanceOf(InfrastructureError);
+		});
+	});
+
 	describe("ConcurrencyConflictError contract", () => {
 		it("carries aggregate type, id, expected and actual versions", () => {
 			const error = new ConcurrencyConflictError("Order", "o-1", 3, 5);
-			expect(error).toBeInstanceOf(DomainError);
+			expect(error).toBeInstanceOf(InfrastructureError);
 			expect(error.aggregateType).toBe("Order");
 			expect(error.aggregateId).toBe("o-1");
 			expect(error.expectedVersion).toBe(3);

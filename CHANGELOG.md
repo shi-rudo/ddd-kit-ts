@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — Error hierarchy split
+
+Library-internal errors regrouped into a three-tier hierarchy that separates **business-rule violations**, **infrastructure failures**, and **programming bugs**:
+
+```ts
+abstract class KitError extends Error {}                       // marker
+abstract class DomainError extends KitError {}                  // invariant violations (consumer-derived)
+abstract class InfrastructureError extends KitError {}          // persistence + concurrency
+
+class AggregateNotFoundError extends InfrastructureError {}     // was DomainError
+class ConcurrencyConflictError extends InfrastructureError {}   // was DomainError
+class MissingHandlerError extends KitError {}                   // was DomainError — now programming bug
+```
+
+`MissingHandlerError` deliberately no longer extends `DomainError` — it represents "the aggregate's subclass forgot to register a handler", which is a configuration/programming bug, not a business-rule violation. `loadFromHistory` and `restoreFromSnapshotWithEvents` continue to catch only `DomainError` thrown by `apply()`; a `MissingHandlerError` now propagates uncaught, so the bug surfaces loudly instead of being silently wrapped in `Result.Err`.
+
+Catch-pattern at the App-Service boundary:
+- `instanceof DomainError` → HTTP 400 (business rule)
+- `instanceof InfrastructureError` → HTTP 404 / 409 (persistence boundary)
+- `instanceof KitError` (else) → HTTP 500 / log + alert (currently only `MissingHandlerError`)
+- anything else → HTTP 500 (unexpected programmer error)
+
+Migration: consumers who did `instanceof DomainError` to catch `AggregateNotFoundError` or `ConcurrencyConflictError` need to switch to `instanceof InfrastructureError` (or `KitError` if they want both branches).
+
+
 ## [1.0.0-rc.2] - 2026-05-23
 
 A consolidation release. Closed 60+ audit items across the entire surface, restructured the kit around DDD-canonical conventions (domain throws, App boundary returns Result), and shipped a documentation site at <https://shi-rudo.github.io/ddd-kit-ts>. Many breaking changes — the kit is in RC explicitly so these can land before the API freezes.

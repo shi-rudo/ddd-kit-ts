@@ -31,17 +31,30 @@ if (result.isOk()) {
 }
 ```
 
-## DomainError hierarchy
+## Error hierarchy
 
-The kit ships an abstract base and two library-internal subclasses:
+The kit ships a three-tier hierarchy so the App-Service can map errors to HTTP responses without conflating categories:
 
 ```ts
-abstract class DomainError extends Error {}
+abstract class KitError extends Error {}                    // marker: "an expected library error"
 
-class MissingHandlerError extends DomainError {}      // EventSourcedAggregate.apply()
-class AggregateNotFoundError extends DomainError {}   // Repository.getByIdOrFail()
-class ConcurrencyConflictError extends DomainError {} // Repository.save() on version mismatch
+abstract class DomainError extends KitError {}              // business-rule violations
+abstract class InfrastructureError extends KitError {}      // persistence + concurrency
+
+class AggregateNotFoundError extends InfrastructureError {} // Repository.getByIdOrFail()
+class ConcurrencyConflictError extends InfrastructureError {} // Repository.save() on version mismatch
+
+class MissingHandlerError extends KitError {}               // programming bug — NOT a DomainError
 ```
+
+| Catch | Map to | Reason |
+|---|---|---|
+| `instanceof DomainError` | HTTP 400 / business rule | The Use Case violated an invariant; the caller did something the domain forbids. |
+| `instanceof InfrastructureError` | HTTP 404 / 409 (with retry hint) | The persistence layer raced or the row is missing; the domain itself didn't fail. |
+| `instanceof KitError` (else) | HTTP 500 / log + alert | A library-internal error the App didn't categorise. Currently only `MissingHandlerError`, which means a subclass forgot to register an event handler — should crash loud. |
+| anything else | HTTP 500 | Programmer error / unexpected runtime exception. |
+
+`MissingHandlerError` deliberately sits on `KitError` rather than `DomainError`: a generic "catch domain errors → 400" handler must not mask a forgotten event handler. The replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also propagate it as an uncaught throw rather than wrapping it in their `Result<void, DomainError>` return — programming bugs should fail loud, not look like a recoverable infrastructure failure.
 
 Consumers derive their own concrete errors for invariant violations:
 
@@ -72,11 +85,13 @@ try {
   order.confirm();
   await repo.save(order);
   return ok(order.id);
-} catch (err) {
-  if (err instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");
-  if (err instanceof ConcurrencyConflictError)   return err("CONFLICT");
-  if (err instanceof DomainError)                return err(err.message);
-  throw err; // unexpected; let the runtime crash
+} catch (e) {
+  if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain
+  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → HTTP 409
+  if (e instanceof AggregateNotFoundError)     return err("NOT_FOUND");               // infra → HTTP 404
+  if (e instanceof InfrastructureError)        return err(e.message);                 // any other infra fallback
+  if (e instanceof DomainError)                return err(e.message);                 // any other invariant violation
+  throw e; // includes MissingHandlerError — programming bug, let it crash
 }
 ```
 
