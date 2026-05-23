@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.4] - 2026-05-23
+
+Cleanup release on top of rc.3. Drops the redundant `KitError` marker class and adjusts the legal posture of the docs site (Pages deployment disabled until the legal-notice + privacy pages are in place). Repo hygiene: stale `.DS_Store` entries untracked, `.beads/` ignore-rule corrected so project-shared Beads files (hooks, config) stay in git per Beads' own convention.
+
 ### BREAKING — Drop `KitError`; `DomainError` / `InfrastructureError` extend `BaseError` directly
 
 `KitError` was a redundant abstraction layer. Semantically it duplicated the `isBaseError(e)` predicate from `@shirudo/base-error`, while the name "kit" said nothing about what the library does, and the boundary it claimed to draw ("library-internal") didn't actually hold — `DomainError` is shared between library and consumer-derived errors. Removing it.
@@ -37,6 +41,12 @@ Migration: replace `instanceof KitError` at the App-Service catch-all with `isBa
 ```
 
 The discriminators `DomainError` / `InfrastructureError` / `MissingHandlerError` keep the same behaviour and remain the canonical catch points for HTTP 400 / 4xx / re-throw mapping.
+
+### Other
+
+- **GitHub Pages docs deployment disabled** pending a legal-notice page (Germany's TMG §5) and a privacy notice (GDPR Art. 13). The `Deploy Docs` workflow is now `workflow_dispatch`-only with a `legal_pages_in_place` boolean input gating the build job, so a re-deploy can only happen after those pages are published. The docs source stays in the repo and remains fully usable locally via `pnpm docs:dev`. `package.json`'s `homepage` reverted from the docs-site URL to the GitHub README.
+- **`.beads/` ignore rule corrected.** The blanket `.beads/` entry in the top-level `.gitignore` was overriding Beads's own intended per-file tracking (`.beads/hooks/`, `config.yaml`, `metadata.json`, `README.md` are project-shared; Beads' nested `.beads/.gitignore` handles per-machine exclusions). Removed the blanket rule.
+- **`.DS_Store` untracked.** Two stale entries (`./.DS_Store`, `src/.DS_Store`) committed before the ignore rule existed were removed from the index via `git rm --cached`.
 
 ## [1.0.0-rc.3] - 2026-05-23
 
