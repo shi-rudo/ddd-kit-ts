@@ -1,9 +1,15 @@
+import { BaseError } from "@shirudo/base-error";
+
 /**
- * Common marker base for every error the library itself raises. An
- * App-Service can write `catch (e) { if (e instanceof KitError) ... }`
+ * Common marker base for every error the library itself raises. Extends
+ * `@shirudo/base-error`'s `BaseError`, so consumers get cause chains,
+ * `isChainRetryable`, `withUserMessage`, `toJSON()`, cross-environment
+ * stack traces, and the rest of the `BaseError` toolbox for free.
+ *
+ * An App-Service can write `catch (e) { if (e instanceof KitError) ... }`
  * to handle anything the kit might surface as a recoverable / expected
- * failure; an unrelated `TypeError` or `ReferenceError` falls through
- * to the catch-all "HTTP 500 / unexpected bug" branch.
+ * failure; an unrelated `TypeError` or `ReferenceError` falls through to
+ * the catch-all "HTTP 500 / unexpected bug" branch.
  *
  * Two concrete subtrees:
  *  - {@link DomainError} — invariant violations (consumer-derived).
@@ -14,22 +20,18 @@
  *    on `KitError` but explicitly NOT on `DomainError`, so a generic
  *    domain-error handler can't mask a forgotten event handler.
  */
-export abstract class KitError extends Error {
-	constructor(message: string, options?: ErrorOptions) {
-		super(message, options);
-		this.name = new.target.name;
-		Object.setPrototypeOf(this, new.target.prototype);
-	}
-}
+export abstract class KitError<
+	Name extends string = string,
+> extends BaseError<Name> {}
 
 /**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
  * violated. Consumers derive their own concrete errors — e.g.
- * `class OrderAlreadyShippedError extends DomainError {}` — for
- * `instanceof`-style catching at the App-Service boundary, where they
- * typically map to HTTP 400 / business-rule responses.
+ * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}` —
+ * for `instanceof`-style catching at the App-Service boundary, where
+ * they typically map to HTTP 400 / business-rule responses.
  *
  * The library itself does **not** ship any concrete `DomainError`
  * subclass — the kit can't know your invariants. `MissingHandlerError`,
@@ -37,7 +39,9 @@ export abstract class KitError extends Error {
  * sit on other branches of the hierarchy (see below) because they are
  * not invariant violations.
  */
-export abstract class DomainError extends KitError {}
+export abstract class DomainError<
+	Name extends string = string,
+> extends KitError<Name> {}
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
@@ -51,7 +55,9 @@ export abstract class DomainError extends KitError {}
  *  - {@link AggregateNotFoundError}
  *  - {@link ConcurrencyConflictError}
  */
-export abstract class InfrastructureError extends KitError {}
+export abstract class InfrastructureError<
+	Name extends string = string,
+> extends KitError<Name> {}
 
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
@@ -67,7 +73,7 @@ export abstract class InfrastructureError extends KitError {}
  * methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also let
  * it propagate instead of catching it.
  */
-export class MissingHandlerError extends KitError {
+export class MissingHandlerError extends KitError<"MissingHandlerError"> {
 	constructor(public readonly eventType: string) {
 		super(`Missing handler for event type: ${eventType}`);
 	}
@@ -78,13 +84,19 @@ export class MissingHandlerError extends KitError {
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the
  * nullable variant `getById()` if "not found" is a valid outcome.
+ *
+ * Ships with a user-safe message via `withUserMessage`. Not retryable —
+ * retrying won't make the row appear.
  */
-export class AggregateNotFoundError extends InfrastructureError {
+export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
 	constructor(
 		public readonly aggregateType: string,
 		public readonly id: string,
 	) {
 		super(`Aggregate not found: ${aggregateType}(${id})`);
+		this.withUserMessage(
+			`The requested ${aggregateType.toLowerCase()} could not be found.`,
+		);
 	}
 }
 
@@ -96,9 +108,19 @@ export class AggregateNotFoundError extends InfrastructureError {
  * the use case, and retries, or surfaces HTTP 409 to the caller.
  *
  * `InfrastructureError` because the persistence layer (not a domain
- * rule) detects the race.
+ * rule) detects the race. Marks itself as `retryable: true` so the
+ * `isChainRetryable` / `getFirstRetryableCause` helpers from
+ * `@shirudo/base-error` can pick it up when this error is wrapped by
+ * a Use Case in the cause chain.
  */
-export class ConcurrencyConflictError extends InfrastructureError {
+export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyConflictError"> {
+	/**
+	 * Marks this error as retryable so `isChainRetryable(err)` returns
+	 * true. The canonical OCC pattern is to reload the aggregate, re-apply
+	 * the use case, and retry on this exception.
+	 */
+	readonly retryable = true as const;
+
 	constructor(
 		public readonly aggregateType: string,
 		public readonly aggregateId: string,
@@ -107,6 +129,9 @@ export class ConcurrencyConflictError extends InfrastructureError {
 	) {
 		super(
 			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
+		);
+		this.withUserMessage(
+			"This resource was updated by another request. Please reload and try again.",
 		);
 	}
 }

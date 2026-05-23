@@ -97,6 +97,76 @@ describe("Repository contract", () => {
 		});
 	});
 
+	describe("@shirudo/base-error integration", () => {
+		it("library errors carry timestamp + name from BaseError", () => {
+			const before = Date.now();
+			const e = new AggregateNotFoundError("Order", "o-1");
+			const after = Date.now();
+
+			expect(e.name).toBe("AggregateNotFoundError");
+			expect(e.timestamp).toBeGreaterThanOrEqual(before);
+			expect(e.timestamp).toBeLessThanOrEqual(after);
+			expect(typeof e.timestampIso).toBe("string");
+		});
+
+		it("AggregateNotFoundError exposes a user-safe message separate from the technical one", () => {
+			const e = new AggregateNotFoundError("Order", "o-1");
+
+			expect(e.message).toContain("Order(o-1)"); // technical
+			const userMsg = e.getUserMessage();
+			expect(userMsg).toBeDefined();
+			expect(userMsg).toContain("order");
+			expect(userMsg).not.toContain("o-1"); // no leaky id
+		});
+
+		it("ConcurrencyConflictError marks itself retryable via @shirudo/base-error isRetryable", async () => {
+			const { isRetryable } = await import("@shirudo/base-error");
+			const e = new ConcurrencyConflictError("Order", "o-1", 3, 5);
+
+			expect(e.retryable).toBe(true);
+			expect(isRetryable(e)).toBe(true);
+		});
+
+		it("AggregateNotFoundError is NOT retryable (the row isn't there; retry won't help)", async () => {
+			const { isRetryable } = await import("@shirudo/base-error");
+			const e = new AggregateNotFoundError("Order", "o-1");
+
+			expect(isRetryable(e)).toBe(false);
+		});
+
+		it("library errors serialise to JSON for structured logging", () => {
+			const e = new ConcurrencyConflictError("Order", "o-1", 3, 5);
+			const json = e.toJSON();
+
+			expect(json.name).toBe("ConcurrencyConflictError");
+			expect(json.message).toContain("Order(o-1)");
+			expect(json.timestamp).toBeDefined();
+		});
+
+		it("wrapping a library error in a use-case error preserves the cause chain", async () => {
+			const { getRootCause, findInCauseChain, isRetryable } = await import(
+				"@shirudo/base-error"
+			);
+
+			class FailedToProcessOrderError extends DomainError<"FailedToProcessOrderError"> {
+				constructor(cause: unknown) {
+					super("Failed to process order", cause);
+				}
+			}
+
+			const root = new ConcurrencyConflictError("Order", "o-1", 3, 5);
+			const wrapped = new FailedToProcessOrderError(root);
+
+			expect(getRootCause(wrapped)).toBe(root);
+			expect(
+				findInCauseChain(wrapped, (e) => e instanceof ConcurrencyConflictError),
+			).toBe(root);
+			// The retryable hint survives the wrap: walk the chain or
+			// inspect the root to decide whether to retry the use case.
+			expect(isRetryable(getRootCause(wrapped))).toBe(true);
+		});
+	});
+
 	describe("Error hierarchy — InfrastructureError vs DomainError", () => {
 		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
 			const error = new AggregateNotFoundError("Order", "o-1");

@@ -48,6 +48,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.1.4",
+		"@shirudo/base-error": "^4.6.0",
 		"@shirudo/result": "^0.0.6",
 		"tsup": "^8.5.0",
 		"typedoc": "^0.28.19",
@@ -67,6 +68,7 @@
 		"url": "https://github.com/shi-rudo/ddd-kit-ts/issues"
 	},
 	"peerDependencies": {
+		"@shirudo/base-error": "^4.6.0",
 		"@shirudo/result": "^0.0.6"
 	}
 }

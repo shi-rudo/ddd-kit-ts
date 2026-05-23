@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `@shirudo/base-error` as the error foundation
+
+`KitError` / `DomainError` / `InfrastructureError` now extend `BaseError<Name>` from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (added as a `peerDependency`, analogous to `@shirudo/result`). Library errors get for free:
+
+- **Timestamps** (`error.timestamp`, `error.timestampIso`)
+- **`error.toJSON()`** for structured logging
+- **`error.getUserMessage()`** + `withUserMessage()` / `addLocalizedMessage()` for i18n-aware end-user messages
+- **Cause chains** via the native `error.cause`, with traversal helpers (`getRootCause`, `findInCauseChain`, `filterCauseChain`)
+- **`isRetryable(error)`** predicate. `ConcurrencyConflictError` now ships with `retryable: true` so the canonical OCC retry-on-conflict pattern is one check away.
+- **Typed `name`** — the abstract bases carry an optional `Name` generic; the concrete `AggregateNotFoundError` / `ConcurrencyConflictError` / `MissingHandlerError` set their literal so `error.name` is `"AggregateNotFoundError"` (literal), not `string`.
+- **Cross-environment stack traces** for Node, browser, and edge runtimes.
+
+`AggregateNotFoundError` and `ConcurrencyConflictError` both call `withUserMessage(...)` in their constructors with a default English user-safe message. Consumers using non-English locales can override with `addLocalizedMessage("de", ...)` at use-site.
+
+Migration: consumers who explicitly typed the abstract bases as `class X extends DomainError` continue to work (the generic defaults to `string`). Consumers who want literal-typed `error.name` can pass the name explicitly: `class FooError extends DomainError<"FooError"> {}`. Install the new peer dependency: `pnpm add @shirudo/base-error`.
+
 ### BREAKING — Error hierarchy split
 
 Library-internal errors regrouped into a three-tier hierarchy that separates **business-rule violations**, **infrastructure failures**, and **programming bugs**:

@@ -11,6 +11,9 @@ importers:
       '@biomejs/biome':
         specifier: 2.1.4
         version: 2.1.4
+      '@shirudo/base-error':
+        specifier: ^4.6.0
+        version: 4.6.0(typescript@5.9.2)
       '@shirudo/result':
         specifier: ^0.0.6
         version: 0.0.6
@@ -684,6 +687,11 @@ packages:
 
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
+
+  '@shirudo/base-error@4.6.0':
+    resolution: {integrity: sha512-vvs/yqj2mxB1MakqQDdl7QZPm77SIBehH/blgbIwLQT7CNaMV8DBKSgxHeq3cuJhKhvhkthUtBK47Lwv8V6rxg==}
+    peerDependencies:
+      typescript: ^5.3.3
 
   '@shirudo/result@0.0.6':
     resolution: {integrity: sha512-meBe7kSb7KJsMyt9VHR/GrCBsew9fL46cCvS4UQfoDFKgzx6IWMT6lkmiY1/O8zsei5X0aLR9G3SlpEttZy+tA==}
@@ -2124,6 +2132,10 @@ snapshots:
       '@types/hast': 3.0.4
 
   '@shikijs/vscode-textmate@10.0.2': {}
+
+  '@shirudo/base-error@4.6.0(typescript@5.9.2)':
+    dependencies:
+      typescript: 5.9.2
 
   '@shirudo/result@0.0.6': {}
 

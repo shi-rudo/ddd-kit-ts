@@ -33,18 +33,18 @@ if (result.isOk()) {
 
 ## Error hierarchy
 
-The kit ships a three-tier hierarchy so the App-Service can map errors to HTTP responses without conflating categories:
+The kit ships a three-tier hierarchy on top of [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error), so the App-Service can map errors to HTTP responses without conflating categories — and library errors come with timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
 
 ```ts
-abstract class KitError extends Error {}                    // marker: "an expected library error"
+import { BaseError } from "@shirudo/base-error";
 
-abstract class DomainError extends KitError {}              // business-rule violations
-abstract class InfrastructureError extends KitError {}      // persistence + concurrency
+abstract class KitError<Name>          extends BaseError<Name> {}   // marker: "an expected library error"
+abstract class DomainError<Name>       extends KitError<Name> {}     // business-rule violations
+abstract class InfrastructureError<Name> extends KitError<Name> {}   // persistence + concurrency
 
-class AggregateNotFoundError extends InfrastructureError {} // Repository.getByIdOrFail()
-class ConcurrencyConflictError extends InfrastructureError {} // Repository.save() on version mismatch
-
-class MissingHandlerError extends KitError {}               // programming bug — NOT a DomainError
+class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // Repository.getByIdOrFail()
+class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // Repository.save() on version mismatch; retryable: true
+class MissingHandlerError       extends KitError<"MissingHandlerError"> {}                  // programming bug — NOT a DomainError
 ```
 
 | Catch | Map to | Reason |
@@ -81,19 +81,43 @@ class CreditLimitExceededError extends DomainError {
 Catching by class lets the App-Service map errors to responses:
 
 ```ts
+import { isRetryable, getRootCause } from "@shirudo/base-error";
+
 try {
   order.confirm();
   await repo.save(order);
   return ok(order.id);
 } catch (e) {
-  if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain
-  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → HTTP 409
-  if (e instanceof AggregateNotFoundError)     return err("NOT_FOUND");               // infra → HTTP 404
-  if (e instanceof InfrastructureError)        return err(e.message);                 // any other infra fallback
-  if (e instanceof DomainError)                return err(e.message);                 // any other invariant violation
+  // Walk the cause chain for retry hints — ConcurrencyConflictError sets
+  // retryable: true; an OCC-aware Use Case retries instead of bubbling up.
+  const root = getRootCause(e);
+  if (isRetryable(root)) {
+    logger.info({ err: (e as KitError).toJSON() }, "retrying use case");
+    return retry();
+  }
+
+  if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain → 400
+  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409
+  if (e instanceof AggregateNotFoundError) {
+    // Use the user-safe message instead of the technical one
+    return err(e.getUserMessage() ?? e.message);                                      // infra → 404
+  }
+  if (e instanceof InfrastructureError)        return err(e.getUserMessage() ?? e.message);
+  if (e instanceof DomainError)                return err(e.getUserMessage() ?? e.message);
   throw e; // includes MissingHandlerError — programming bug, let it crash
 }
 ```
+
+### What `BaseError` gives you
+
+Because every library error extends `BaseError<Name>`:
+
+- **`error.toJSON()`** — structured log entry: name, message, timestamp, stack, cause chain.
+- **`error.getUserMessage({ preferredLang?, fallbackLang? })`** — i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError` and `ConcurrencyConflictError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
+- **`error.timestamp` / `error.timestampIso`** — epoch + ISO, useful for sorting / correlating log entries across distributed systems.
+- **`error.name`** — typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
+- **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`) — for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
+- **`isRetryable(error)`** — the canonical retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
 
 ## What `Result` is (and isn't)
 
