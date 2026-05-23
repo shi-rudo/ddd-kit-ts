@@ -33,28 +33,30 @@ if (result.isOk()) {
 
 ## Error hierarchy
 
-The kit ships a three-tier hierarchy on top of [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error), so the App-Service can map errors to HTTP responses without conflating categories — and library errors come with timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
+The kit ships two abstract bases plus three concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
 
 ```ts
 import { BaseError } from "@shirudo/base-error";
 
-abstract class KitError<Name>          extends BaseError<Name> {}   // marker: "an expected library error"
-abstract class DomainError<Name>       extends KitError<Name> {}     // business-rule violations
-abstract class InfrastructureError<Name> extends KitError<Name> {}   // persistence + concurrency
+abstract class DomainError<Name>         extends BaseError<Name> {}   // business-rule violations
+abstract class InfrastructureError<Name> extends BaseError<Name> {}   // persistence + concurrency
 
 class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // Repository.getByIdOrFail()
 class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // Repository.save() on version mismatch; retryable: true
-class MissingHandlerError       extends KitError<"MissingHandlerError"> {}                  // programming bug — NOT a DomainError
+class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug — NOT a DomainError
 ```
 
 | Catch | Map to | Reason |
 |---|---|---|
 | `instanceof DomainError` | HTTP 400 / business rule | The Use Case violated an invariant; the caller did something the domain forbids. |
 | `instanceof InfrastructureError` | HTTP 404 / 409 (with retry hint) | The persistence layer raced or the row is missing; the domain itself didn't fail. |
-| `instanceof KitError` (else) | HTTP 500 / log + alert | A library-internal error the App didn't categorise. Currently only `MissingHandlerError`, which means a subclass forgot to register an event handler — should crash loud. |
-| anything else | HTTP 500 | Programmer error / unexpected runtime exception. |
+| `instanceof MissingHandlerError` | re-throw → HTTP 500 / alert | The aggregate's subclass forgot to register an event handler. Programming bug — crash loud. |
+| `isBaseError(e)` (else) | HTTP 500 / log | Any other structured error from the kit or another `BaseError`-using library. Treated as expected-but-uncategorised. |
+| anything else | HTTP 500 | Unexpected runtime exception. |
 
-`MissingHandlerError` deliberately sits on `KitError` rather than `DomainError`: a generic "catch domain errors → 400" handler must not mask a forgotten event handler. The replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also propagate it as an uncaught throw rather than wrapping it in their `Result<void, DomainError>` return — programming bugs should fail loud, not look like a recoverable infrastructure failure.
+`MissingHandlerError` deliberately sits directly on `BaseError`, **not** on `DomainError` or `InfrastructureError`: a generic "catch domain errors → 400" handler must not mask a forgotten event handler. The replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also propagate it as an uncaught throw rather than wrapping it in their `Result<void, DomainError>` return — programming bugs should fail loud, not look like a recoverable infrastructure failure.
+
+Use the [`isBaseError`](https://www.npmjs.com/package/@shirudo/base-error) predicate from the peer dep to detect "any structured error" without depending on the concrete library hierarchy.
 
 Consumers derive their own concrete errors for invariant violations:
 
@@ -81,7 +83,7 @@ class CreditLimitExceededError extends DomainError {
 Catching by class lets the App-Service map errors to responses:
 
 ```ts
-import { isRetryable, getRootCause } from "@shirudo/base-error";
+import { isBaseError, isRetryable, getRootCause } from "@shirudo/base-error";
 
 try {
   order.confirm();
@@ -92,7 +94,9 @@ try {
   // retryable: true; an OCC-aware Use Case retries instead of bubbling up.
   const root = getRootCause(e);
   if (isRetryable(root)) {
-    logger.info({ err: (e as KitError).toJSON() }, "retrying use case");
+    if (isBaseError(e)) {
+      logger.info({ err: e.toJSON() }, "retrying use case");
+    }
     return retry();
   }
 

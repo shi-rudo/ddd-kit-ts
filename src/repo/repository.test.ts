@@ -3,12 +3,12 @@ import type { Id } from "../core/id";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
 import type { IQueryableRepository, IRepository } from "./repository";
+import { isBaseError } from "@shirudo/base-error";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
 	InfrastructureError,
-	KitError,
 } from "../core/errors";
 
 type OrderId = Id<"OrderId">;
@@ -171,14 +171,14 @@ describe("Repository contract", () => {
 		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
 			const error = new AggregateNotFoundError("Order", "o-1");
 			expect(error).toBeInstanceOf(InfrastructureError);
-			expect(error).toBeInstanceOf(KitError);
+			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
 		it("ConcurrencyConflictError is an InfrastructureError, not a DomainError", () => {
 			const error = new ConcurrencyConflictError("Order", "o-1", 3, 5);
 			expect(error).toBeInstanceOf(InfrastructureError);
-			expect(error).toBeInstanceOf(KitError);
+			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
@@ -190,7 +190,7 @@ describe("Repository contract", () => {
 			}
 			const e = new OrderAlreadyConfirmedError();
 			expect(e).toBeInstanceOf(DomainError);
-			expect(e).toBeInstanceOf(KitError);
+			expect(isBaseError(e)).toBe(true);
 			expect(e).not.toBeInstanceOf(InfrastructureError);
 		});
 	});

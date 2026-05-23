@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — Drop `KitError`; `DomainError` / `InfrastructureError` extend `BaseError` directly
+
+`KitError` was a redundant abstraction layer. Semantically it duplicated the `isBaseError(e)` predicate from `@shirudo/base-error`, while the name "kit" said nothing about what the library does, and the boundary it claimed to draw ("library-internal") didn't actually hold — `DomainError` is shared between library and consumer-derived errors. Removing it.
+
+New hierarchy:
+
+```ts
+import { BaseError } from "@shirudo/base-error";
+
+abstract class DomainError<Name>         extends BaseError<Name> {}
+abstract class InfrastructureError<Name> extends BaseError<Name> {}
+
+class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}
+class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}
+class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}
+```
+
+Migration: replace `instanceof KitError` at the App-Service catch-all with `isBaseError(e)` from `@shirudo/base-error`:
+
+```diff
+- import { KitError } from "@shirudo/ddd-kit";
++ import { isBaseError } from "@shirudo/base-error";
+
+  catch (e) {
+-   if (e instanceof KitError) { ... }
++   if (isBaseError(e)) { ... }
+  }
+```
+
+The discriminators `DomainError` / `InfrastructureError` / `MissingHandlerError` keep the same behaviour and remain the canonical catch points for HTTP 400 / 4xx / re-throw mapping.
+
 ## [1.0.0-rc.3] - 2026-05-23
 
 Tightens the error contract on top of rc.2: every library error now extends `BaseError<Name>` from `@shirudo/base-error`, so timestamps / cause chains / user messages / retryable hints / structured-log serialisation come for free. Also splits the error hierarchy into three honest tiers (`KitError` / `DomainError` / `InfrastructureError`) so a "catch domain errors → HTTP 400" handler at the App boundary can't silently mask a programming bug like a forgotten event handler. Migration mostly mechanical: install `@shirudo/base-error` as a peer dep, switch `instanceof DomainError` to `instanceof InfrastructureError` where you were catching `AggregateNotFoundError` or `ConcurrencyConflictError`.

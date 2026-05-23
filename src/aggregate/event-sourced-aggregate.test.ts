@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
-import {
-	DomainError,
-	KitError,
-	MissingHandlerError,
-} from "../core/errors";
+import { isBaseError } from "@shirudo/base-error";
+import { DomainError, MissingHandlerError } from "../core/errors";
 import {
 	EventSourcedAggregate,
 	type EventSourcedAggregateConfig,
@@ -333,14 +330,14 @@ describe("EventSourcedAggregate", () => {
 			}).toThrow(MissingHandlerError);
 		});
 
-		it("MissingHandlerError is a KitError but NOT a DomainError (programming bug)", () => {
+		it("MissingHandlerError is a BaseError but NOT a DomainError (programming bug)", () => {
 			// MissingHandlerError signals a subclass forgot to register a
 			// handler — that's a configuration / programming error, not a
 			// domain-invariant violation. It must not be catchable via
 			// `instanceof DomainError` at the App-Service boundary, so a
 			// 'catch domain errors → HTTP 400' handler can't mask the bug.
 			const error = new MissingHandlerError("Foo");
-			expect(error).toBeInstanceOf(KitError);
+			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 

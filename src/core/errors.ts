@@ -1,30 +1,6 @@
 import { BaseError } from "@shirudo/base-error";
 
 /**
- * Common marker base for every error the library itself raises. Extends
- * `@shirudo/base-error`'s `BaseError`, so consumers get cause chains,
- * `isChainRetryable`, `withUserMessage`, `toJSON()`, cross-environment
- * stack traces, and the rest of the `BaseError` toolbox for free.
- *
- * An App-Service can write `catch (e) { if (e instanceof KitError) ... }`
- * to handle anything the kit might surface as a recoverable / expected
- * failure; an unrelated `TypeError` or `ReferenceError` falls through to
- * the catch-all "HTTP 500 / unexpected bug" branch.
- *
- * Two concrete subtrees:
- *  - {@link DomainError} — invariant violations (consumer-derived).
- *  - {@link InfrastructureError} — persistence / concurrency.
- *
- * One stand-alone:
- *  - {@link MissingHandlerError} — programming/configuration bug. Lives
- *    on `KitError` but explicitly NOT on `DomainError`, so a generic
- *    domain-error handler can't mask a forgotten event handler.
- */
-export abstract class KitError<
-	Name extends string = string,
-> extends BaseError<Name> {}
-
-/**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
@@ -34,14 +10,18 @@ export abstract class KitError<
  * they typically map to HTTP 400 / business-rule responses.
  *
  * The library itself does **not** ship any concrete `DomainError`
- * subclass — the kit can't know your invariants. `MissingHandlerError`,
- * `AggregateNotFoundError`, and `ConcurrencyConflictError` deliberately
- * sit on other branches of the hierarchy (see below) because they are
- * not invariant violations.
+ * subclass — the kit can't know your invariants. {@link MissingHandlerError},
+ * {@link AggregateNotFoundError}, and {@link ConcurrencyConflictError}
+ * deliberately sit on other branches of the hierarchy (see below) because
+ * they are not invariant violations.
+ *
+ * Extends `BaseError<Name>` from `@shirudo/base-error`, so derived
+ * classes get timestamps, `error.cause` traversal, `toJSON()`, i18n-
+ * aware `getUserMessage()`, and the `isRetryable` predicate for free.
  */
 export abstract class DomainError<
 	Name extends string = string,
-> extends KitError<Name> {}
+> extends BaseError<Name> {}
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
@@ -54,10 +34,12 @@ export abstract class DomainError<
  * Library-internal concrete subclasses:
  *  - {@link AggregateNotFoundError}
  *  - {@link ConcurrencyConflictError}
+ *
+ * Extends `BaseError<Name>` from `@shirudo/base-error`.
  */
 export abstract class InfrastructureError<
 	Name extends string = string,
-> extends KitError<Name> {}
+> extends BaseError<Name> {}
 
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
@@ -65,15 +47,18 @@ export abstract class InfrastructureError<
  * forgot to add an entry to its `handlers` map — a programming /
  * configuration bug, not a domain or infrastructure failure.
  *
- * Lives on `KitError` (catchable as "an expected library error") but
- * deliberately **not** on `DomainError` or `InfrastructureError` — a
- * generic `catch (e instanceof DomainError)` handler at the App layer
- * must not mask a forgotten handler; this should crash loud and fail
- * the calling Use Case so the bug surfaces in development. The replay
- * methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also let
- * it propagate instead of catching it.
+ * Deliberately **not** on `DomainError` or `InfrastructureError` —
+ * a generic `catch (e instanceof DomainError)` handler at the App
+ * layer must not mask a forgotten handler; this should crash loud and
+ * fail the calling Use Case so the bug surfaces in development. The
+ * replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`)
+ * also let it propagate uncaught instead of wrapping it in `Result.Err`.
+ *
+ * Use `isBaseError(e)` from `@shirudo/base-error` to detect
+ * "any structured error from the kit or any other BaseError-using
+ * library" at the App boundary.
  */
-export class MissingHandlerError extends KitError<"MissingHandlerError"> {
+export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 	constructor(public readonly eventType: string) {
 		super(`Missing handler for event type: ${eventType}`);
 	}
@@ -109,13 +94,11 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
  *
  * `InfrastructureError` because the persistence layer (not a domain
  * rule) detects the race. Marks itself as `retryable: true` so the
- * `isChainRetryable` / `getFirstRetryableCause` helpers from
- * `@shirudo/base-error` can pick it up when this error is wrapped by
- * a Use Case in the cause chain.
+ * `isRetryable` predicate from `@shirudo/base-error` picks it up.
  */
 export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyConflictError"> {
 	/**
-	 * Marks this error as retryable so `isChainRetryable(err)` returns
+	 * Marks this error as retryable so `isRetryable(err)` returns
 	 * true. The canonical OCC pattern is to reload the aggregate, re-apply
 	 * the use case, and retry on this exception.
 	 */
