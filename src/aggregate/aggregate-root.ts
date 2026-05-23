@@ -1,5 +1,5 @@
 import type { Id } from "../core/id";
-import { Entity } from "../entity/entity";
+import { Entity, freezeShallow } from "../entity/entity";
 import type {
 	AggregateSnapshot,
 	Version,
@@ -117,7 +117,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 	 * These events are side-effects of state changes.
 	 */
 	public get domainEvents(): ReadonlyArray<TEvent> {
-		return this._domainEvents;
+		return Object.freeze(this._domainEvents.slice());
 	}
 
 	/**
@@ -215,7 +215,7 @@ export abstract class AggregateRoot<TState, TId extends Id<string>, TEvent = unk
 	 */
 	public restoreFromSnapshot(snapshot: AggregateSnapshot<TState>): void {
 		this.validateState(snapshot.state);
-		this._state = snapshot.state;
+		this._state = freezeShallow(snapshot.state);
 		this.setVersion(snapshot.version);
 	}
 }

@@ -162,6 +162,24 @@ describe("Entity", () => {
 			// But we can verify state is returned
 			expect(state.quantity).toBe(2);
 		});
+
+		it("does not leak the internal state reference through the getter", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
+			const leaked = entity.state as { quantity: number };
+
+			// Attempt to mutate the returned snapshot — should not affect the entity
+			expect(() => {
+				leaked.quantity = 999;
+			}).toThrow(); // frozen object → strict-mode TypeError
+
+			expect(entity.state.quantity).toBe(2);
+		});
+
+		it("freezes the state shallowly so that direct property writes throw", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
+			const state = entity.state;
+			expect(Object.isFrozen(state)).toBe(true);
+		});
 	});
 
 	describe("Helper functions compatibility", () => {

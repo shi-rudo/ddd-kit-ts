@@ -144,7 +144,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
-		this._state = initialState;
+		this._state = freezeShallow(initialState);
 		this.validateState(this._state);
 	}
 
@@ -169,8 +169,26 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected setState(newState: TState): void {
 		this.validateState(newState);
-		this._state = newState;
+		this._state = freezeShallow(newState);
 	}
+}
+
+/**
+ * Shallow-freezes `value` when it's a non-null object or array, so that
+ * direct property writes throw in strict mode. Returns the value as-is for
+ * primitives. Used internally by `Entity` and its subclasses to prevent
+ * outside mutation of state read through the `state` getter without paying
+ * the cost of a deep clone on every read.
+ *
+ * Exported so that sibling classes (`EventSourcedAggregate`, `AggregateRoot`)
+ * can apply the same freeze when they bypass `setState` and assign
+ * `this._state` directly.
+ */
+export function freezeShallow<T>(value: T): T {
+	if (value !== null && typeof value === "object") {
+		return Object.freeze(value);
+	}
+	return value;
 }
 
 

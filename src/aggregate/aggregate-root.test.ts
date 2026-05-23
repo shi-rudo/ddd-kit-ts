@@ -234,6 +234,30 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			expect(aggregate.state.value).toBe(20);
 		});
+
+		it("does not leak the internal state reference through the getter", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			const leaked = aggregate.state as { value: number };
+
+			expect(() => {
+				leaked.value = 999;
+			}).toThrow();
+
+			expect(aggregate.state.value).toBe(10);
+		});
+	});
+
+	describe("domainEvents getter encapsulation", () => {
+		it("does not leak the internal domainEvents array", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			const eventsBefore = aggregate.domainEvents.length;
+
+			// Cast-around the ReadonlyArray contract and try to push directly
+			const leaked = aggregate.domainEvents as unknown as unknown[];
+			expect(() => leaked.push({ fake: "event" })).toThrow();
+
+			expect(aggregate.domainEvents.length).toBe(eventsBefore);
+		});
 	});
 
 	describe("Enhancements", () => {

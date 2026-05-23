@@ -1,7 +1,7 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
-import { Entity } from "../entity/entity";
+import { Entity, freezeShallow } from "../entity/entity";
 import type { IAggregateRoot } from "./aggregate-root";
 import type { DomainEvent } from "./domain-event";
 import type {
@@ -142,7 +142,7 @@ export abstract class EventSourcedAggregate<
 	private readonly _autoVersionBump: boolean;
 
 	public get pendingEvents(): ReadonlyArray<TEvent> {
-		return this._pendingEvents;
+		return Object.freeze(this._pendingEvents.slice());
 	}
 
 	public clearPendingEvents(): void {
@@ -214,7 +214,7 @@ export abstract class EventSourcedAggregate<
 		const nextState = handler(this._state, event);
 
 		// Atomic commit: nothing above this line mutated aggregate state.
-		this._state = nextState;
+		this._state = freezeShallow(nextState);
 		if (isNew) {
 			this._pendingEvents.push(event);
 			if (this._autoVersionBump) {
@@ -298,7 +298,7 @@ export abstract class EventSourcedAggregate<
 		const previousState = this._state;
 		const previousVersion = this._version;
 
-		this._state = snapshot.state;
+		this._state = freezeShallow(snapshot.state);
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {

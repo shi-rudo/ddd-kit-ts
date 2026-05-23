@@ -457,6 +457,18 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("pendingEvents getter encapsulation", () => {
+		it("does not leak the internal pendingEvents array", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			const eventsBefore = aggregate.pendingEvents.length;
+
+			const leaked = aggregate.pendingEvents as unknown as unknown[];
+			expect(() => leaked.push({ fake: "event" })).toThrow();
+
+			expect(aggregate.pendingEvents.length).toBe(eventsBefore);
+		});
+	});
+
 	describe("Helper methods", () => {
 		it("should check if aggregate has pending events", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
