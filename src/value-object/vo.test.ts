@@ -482,6 +482,40 @@ describe("VO", () => {
 		});
 	});
 
+	describe("vo() defensive deep-clone", () => {
+		it("does not freeze the caller's nested object reference", () => {
+			const nested = { lat: 52.5, lng: 13.4 };
+			const original = { city: "Berlin", coords: nested };
+
+			const v = vo(original);
+
+			// The VO is frozen — both at the top level and at the nested level.
+			expect(Object.isFrozen(v)).toBe(true);
+			expect(Object.isFrozen(v.coords)).toBe(true);
+
+			// But the caller's nested object reference must stay mutable —
+			// vo() should not have side-effects on the input graph.
+			expect(Object.isFrozen(nested)).toBe(false);
+			expect(Object.isFrozen(original.coords)).toBe(false);
+
+			// And mutating the caller's reference must not bleed into the VO.
+			nested.lat = 0;
+			expect(v.coords.lat).toBe(52.5);
+		});
+	});
+
+	describe("deepFreeze symbol-key handling", () => {
+		it("freezes properties whose key is a Symbol, not only string keys", () => {
+			const tag = Symbol("tag");
+			const v = vo({ [tag]: { nested: 1 } } as Record<symbol, unknown>);
+
+			const nested = (v as unknown as Record<symbol, { nested: number }>)[
+				tag
+			];
+			expect(Object.isFrozen(nested)).toBe(true);
+		});
+	});
+
 	describe("Type safety", () => {
 		it("should preserve TypeScript types", () => {
 			type Money = VO<{
@@ -516,16 +550,18 @@ describe("VO", () => {
 			expect(event.date).toBeInstanceOf(Date);
 		});
 
-		it("should handle objects with function properties (functions are not frozen)", () => {
-			// Note: Functions are not frozen by Object.freeze
-			const obj = vo({
-				data: "test",
-				fn: () => "hello",
-			});
-
-			expect(typeof obj.fn).toBe("function");
-			// Functions can still be called
-			expect((obj.fn as any)()).toBe("hello");
+		it("rejects function properties (Value Objects are data, not behaviour)", () => {
+			// vo() deep-clones via structuredClone before freezing so the
+			// caller's input graph is not touched as a side-effect.
+			// structuredClone refuses to clone function values, which catches
+			// the DDD anti-pattern of putting behaviour on a Value Object
+			// at construction time.
+			expect(() =>
+				vo({
+					data: "test",
+					fn: () => "hello",
+				}),
+			).toThrow();
 		});
 
 		it("should handle circular references gracefully", () => {

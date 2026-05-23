@@ -12,33 +12,29 @@ import { err, ok, type Result } from "@shirudo/result";
 export type VO<T> = Readonly<T>;
 
 /**
- * Deep freezes an object and all its nested properties recursively.
- * This ensures true immutability for value objects with nested structures.
- * Handles circular references by tracking visited objects.
+ * Deep freezes an object and all its nested properties recursively, then
+ * returns it. Iterates both string-keyed and symbol-keyed own properties
+ * so the freeze symmetry matches `deepEqual` (which also considers symbol
+ * keys). Handles circular references by tracking visited objects.
+ *
+ * Note: `deepFreeze` mutates its argument in place — it sets `[[Frozen]]`
+ * on the object you pass in. Callers that need to avoid touching the
+ * input (e.g. `vo()`) should deep-clone first.
  */
 export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
-    // Handle null and non-objects
     if (obj === null || typeof obj !== "object") {
         return obj as Readonly<T>;
     }
-
-    // Handle circular references
     if (visited.has(obj as object)) {
         return obj as Readonly<T>;
     }
-
-    // Mark as visited
     visited.add(obj as object);
 
-    // Retrieve the property names defined on obj
-    const propNames = Object.getOwnPropertyNames(obj);
-
-    // Freeze properties before freezing self
-    for (const name of propNames) {
-        const value = (obj as Record<string, unknown>)[name];
-
-        // Freeze value if it is an object or array
-        if (value && (typeof value === "object" || Array.isArray(value))) {
+    // Reflect.ownKeys returns both string and symbol own keys.
+    const keys = Reflect.ownKeys(obj);
+    for (const key of keys) {
+        const value = (obj as Record<string | symbol, unknown>)[key];
+        if (value !== null && typeof value === "object") {
             deepFreeze(value, visited);
         }
     }
@@ -48,23 +44,22 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 
 /**
  * Creates a deeply immutable value object from the given data.
- * All nested objects and arrays are frozen recursively.
  *
- * @param t - The data to convert into a value object
- * @returns A deeply frozen, immutable value object
+ * The input is first deep-cloned with `structuredClone`, then the clone
+ * is frozen — so calling `vo(input)` never freezes the caller's own
+ * object graph as a side-effect. Mutating the input afterwards does not
+ * bleed into the VO.
  *
  * @example
  * ```typescript
- * const address = vo({
- *   street: "Main St",
- *   city: "Berlin",
- *   coordinates: { lat: 52.5, lng: 13.4 }
- * });
- * // address.coordinates.lat = 99; // ❌ Error: Cannot assign to read-only property
+ * const nested = { lat: 52.5, lng: 13.4 };
+ * const address = vo({ street: "Main St", coordinates: nested });
+ * address.coordinates.lat = 99; // ❌ Cannot assign to read-only property
+ * nested.lat = 0;               // ✅ caller's input still mutable
  * ```
  */
 export function vo<T>(t: T): VO<T> {
-    return deepFreeze({ ...t });
+    return deepFreeze(structuredClone(t));
 }
 
 /**
