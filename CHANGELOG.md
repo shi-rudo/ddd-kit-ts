@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `TransactionScope<TCtx>`: explicit context generic
+
+`TransactionScope` is now generic over the persistence layer's transaction handle:
+
+```ts
+interface TransactionScope<TCtx = unknown> {
+  transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
+}
+```
+
+The previous shape gave `fn` no way to receive Drizzle's `tx`, Prisma's `tx`, or Mongo's session, so consumers had to fall back to `AsyncLocalStorage` or constructor injection to bind their repositories to the live transaction. The new generic lets the scope pass the handle in, and `withCommit` threads it through:
+
+```ts
+// Drizzle-flavoured
+class DrizzleScope implements TransactionScope<DrizzleTx> {
+  constructor(private db: DrizzleDb) {}
+  async transactional<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => fn(tx));
+  }
+}
+
+await withCommit({ scope, outbox }, async (tx) => {
+  const order = await orderRepo.getByIdOrFail(tx, orderId);
+  order.confirm();
+  await orderRepo.save(tx, order);
+  return { result: order.id, events: order.domainEvents };
+});
+```
+
+Default `TCtx = unknown` keeps the no-context callers compiling — `withCommit({ scope, outbox }, async () => ({...}))` still works; the `ctx` parameter is simply ignored.
+
+Migration: any custom `TransactionScope` implementation needs to update its `fn` parameter to accept `(ctx: TCtx) => Promise<T>` (or `(_ctx: unknown) => Promise<T>` for the no-context path). Test fakes typically change `fn()` to `fn(undefined)`.
+
 ## [1.0.0-rc.4] - 2026-05-23
 
 Cleanup release on top of rc.3. Drops the redundant `KitError` marker class and adjusts the legal posture of the docs site (Pages deployment disabled until the legal-notice + privacy pages are in place). Repo hygiene: stale `.DS_Store` entries untracked, `.beads/` ignore-rule corrected so project-shared Beads files (hooks, config) stay in git per Beads' own convention.

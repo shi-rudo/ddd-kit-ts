@@ -2,17 +2,54 @@
 
 The transactional outbox is the canonical pattern for "domain event must persist atomically with the state change, even if downstream delivery is asynchronous". The kit ships two small ports — `TransactionScope` and `Outbox<Evt>` — plus a `withCommit` helper that wires them together.
 
-## `TransactionScope`
+## `TransactionScope<TCtx>`
 
-A minimal transaction-scope abstraction:
+A minimal transaction-scope abstraction generic over the persistence layer's transaction handle:
 
 ```ts
-interface TransactionScope {
-  transactional<T>(fn: () => Promise<T>): Promise<T>;
+interface TransactionScope<TCtx = unknown> {
+  transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
 }
 ```
 
-`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws.
+`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle — `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
+
+The use case threads `ctx` to its repositories so writes bind to the right transaction:
+
+```ts
+// Drizzle implementation
+import type { drizzle } from "drizzle-orm/node-postgres";
+type DrizzleDb = ReturnType<typeof drizzle>;
+type DrizzleTx = Parameters<Parameters<DrizzleDb["transaction"]>[0]>[0];
+
+class DrizzleScope implements TransactionScope<DrizzleTx> {
+  constructor(private db: DrizzleDb) {}
+  async transactional<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => fn(tx));
+  }
+}
+
+// Use case
+await withCommit({ scope, outbox, bus }, async (tx) => {
+  const order = await orderRepo.getByIdOrFail(tx, orderId);
+  order.confirm();
+  await orderRepo.save(tx, order);
+  return { result: order.id, events: order.domainEvents };
+});
+```
+
+For tests or no-context flows, `TCtx` defaults to `unknown` — the no-arg style still compiles:
+
+```ts
+const scope: TransactionScope = {
+  transactional: (fn) => fn(undefined),
+};
+
+await withCommit({ scope, outbox }, async () => ({
+  result: "ok",
+  events: [],
+}));
+```
 
 ::: info Not Fowler's full Unit of Work
 `TransactionScope` is intentionally **not** Fowler's UoW — no change tracking, no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time flush. That's the ORM's job; competing with Prisma / Drizzle / TypeORM on their home turf only creates incompatibility. The kit stays out of it.

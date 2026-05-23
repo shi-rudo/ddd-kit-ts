@@ -7,7 +7,7 @@ type TestEvent = { type: "OrderCreated"; orderId: string };
 
 function createMockScope(): TransactionScope {
 	return {
-		transactional: <T>(fn: () => Promise<T>) => fn(),
+		transactional: <T>(fn: (_ctx: unknown) => Promise<T>) => fn(undefined),
 	};
 }
 
@@ -91,9 +91,9 @@ describe("withCommit", () => {
 	it("should execute within the unit of work transaction", async () => {
 		const callOrder: string[] = [];
 		const scope: TransactionScope = {
-			transactional: async <T>(fn: () => Promise<T>) => {
+			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => {
 				callOrder.push("tx-start");
-				const result = await fn();
+				const result = await fn(undefined);
 				callOrder.push("tx-end");
 				return result;
 			},
@@ -145,9 +145,9 @@ describe("withCommit", () => {
 	it("publishes to the bus only AFTER the transaction has committed", async () => {
 		const callOrder: string[] = [];
 		const scope: TransactionScope = {
-			transactional: async <T>(fn: () => Promise<T>) => {
+			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => {
 				callOrder.push("tx-start");
-				const result = await fn();
+				const result = await fn(undefined);
 				callOrder.push("tx-commit");
 				return result;
 			},
@@ -190,9 +190,56 @@ describe("withCommit", () => {
 		]);
 	});
 
+	it("threads the TransactionScope context through to fn (Drizzle/Prisma/Mongo-tx pattern)", async () => {
+		// Simulate a persistence-layer transaction handle that the scope
+		// passes into the callback. Real-world examples: Drizzle's tx,
+		// Prisma's tx, Mongo's session. The scope opens it, the use case
+		// hands it to its repositories so writes bind to that transaction.
+		type DrizzleLikeTx = { id: string; isTx: true };
+
+		const tx: DrizzleLikeTx = { id: "tx-42", isTx: true };
+
+		const scope: TransactionScope<DrizzleLikeTx> = {
+			transactional: async <T>(
+				fn: (ctx: DrizzleLikeTx) => Promise<T>,
+			): Promise<T> => fn(tx),
+		};
+
+		const outbox = createMockOutbox();
+
+		let received: DrizzleLikeTx | undefined;
+		await withCommit({ outbox, scope }, async (ctx) => {
+			received = ctx;
+			return {
+				result: ctx.id,
+				events: [],
+			};
+		});
+
+		expect(received).toBe(tx);
+	});
+
+	it("typing: TransactionScope without an explicit ctx generic stays at unknown (back-compat)", async () => {
+		// No type parameter on TransactionScope; fn signature treats ctx
+		// as unknown — the no-context path keeps compiling.
+		const scope: TransactionScope = {
+			transactional: async <T>(fn: (ctx: unknown) => Promise<T>) =>
+				fn(undefined),
+		};
+
+		const outbox = createMockOutbox();
+
+		const result = await withCommit({ outbox, scope }, async () => ({
+			result: "ok",
+			events: [],
+		}));
+
+		expect(result).toBe("ok");
+	});
+
 	it("does not publish to the bus when the transaction throws", async () => {
 		const scope: TransactionScope = {
-			transactional: async <T>(fn: () => Promise<T>) => fn(),
+			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => fn(undefined),
 		};
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
