@@ -481,6 +481,17 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
 
 ### Using CQRS: Commands and Queries
 
+The library ships an in-memory `CommandBus` and `QueryBus`. These are zero-config in-process dispatchers — they fit:
+
+- **Edge runtimes** (Cloudflare Workers, Vercel Edge, Deno Deploy, Bun): each worker invocation handles one command in-process; external brokers would defeat edge latency.
+- **Modular monoliths**: a single Node process with several bounded contexts; the bus routes commands between modules. Domain events still leave the process via outbox/external bus when other services need them.
+- **Tests and local development**: stand-in for production buses without infrastructure.
+- **Small CLIs and scripts**: CQRS structure without infrastructure.
+
+For **cross-process messaging** (RabbitMQ, NATS, Kafka, AWS SQS, etc.), don't use the in-memory bus — keep the `CommandHandler<C, R>` / `QueryHandler<Q, R>` types as the contract and wire them to your transport of choice. The handlers stay portable; only the dispatcher changes.
+
+The included buses intentionally have no middleware/pipeline machinery — wrap handlers with decorator functions when you need logging, auth, metrics. Anything more elaborate is "in-house framework" territory and lives outside the kit.
+
 #### Commands (Write Operations)
 
 Commands represent write operations that change system state. They return `Result` for explicit error handling.
