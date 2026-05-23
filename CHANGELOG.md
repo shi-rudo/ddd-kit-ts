@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING CHANGES — Aggregate API consolidation
+
+- **Functional aggregate API removed.** `aggregate(state, version)`, `bump(agg)`, and `AggregateState<S>` are gone. The library kept two parallel models for the same concept (functional projection vs class-based `AggregateRoot` / `EventSourcedAggregate`), which forced consumers to learn both and made the documentation hand-wavy about when to use which. Class-based aggregates are DDD-canonical and pair with the rest of the kit (Entity, IAggregateRoot, EventSourcedAggregate, Repository); the functional path saved a few lines but didn't earn the cognitive split. Migration: extend `AggregateRoot<TState, TId>` (or `EventSourcedAggregate` for event sourcing) instead of holding a plain `{ state, version }` record.
+- **`AggregateRoot.commit(newState, events)` always bumps the version.** The `bumpVersion` parameter has been removed; `commit()` is the opt-in path that explicitly couples state mutation + event recording, and recording an event implies a version-worthy change. The aggregate's `autoVersionBump` config still governs the un-coupled `setState` path; users who need state-only mutations without a version bump should call `setState(newState, false)` directly.
+
+### BREAKING CHANGES — Interface contracts
+
+- **`IAggregateRoot.markPersisted(version)` is now required by the interface.** Previously the method lived only on the concrete `AggregateRoot` / `EventSourcedAggregate` classes; a repository implementation that coded against the public `IAggregateRoot` interface would have compiled fine and crashed at runtime when `save()` tried to push the persisted version back. Consumers implementing `IAggregateRoot` directly must add `markPersisted(version: Version): void`.
+- **`Identifiable<TId extends Id<string>>` constrained.** `Identifiable<string>` no longer compiles; only branded `Id<Tag>` is accepted. Aligns with `IAggregateRoot<TId extends Id<string>>` and `IEntity<TId extends Id<string>, TState>`. Consumers using plain string ids must brand them via `Id<Tag>` (the canonical pattern across the rest of the API).
+
+### Added — Determinism + immutability hooks
+
+- **`ClockFactory` + `setClockFactory` / `resetClockFactory`** symmetric to `EventIdFactory`. Defaults to `() => new Date()`; override globally for deterministic event-sourcing tests and time-travel debugging. The per-call `options.occurredAt` override still wins.
+- **`createDomainEvent` now deep-freezes its return value.** Events are facts of the past (Vernon, IDDD §8) and must be immutable. A mutating subscriber on the `EventBus` now throws instead of poisoning subsequent handlers; nested writes to `payload` / `metadata` also throw.
+
 ### BREAKING CHANGES — Repository + persistence API
 
 - **`ISpecification<T>` removed.** The phantom branded interface had no methods (no `isSatisfiedBy`, no `and`/`or`/`not` combinators) and was therefore impossible to use generically — `IRepository.find(spec)` could never do anything sound with it.

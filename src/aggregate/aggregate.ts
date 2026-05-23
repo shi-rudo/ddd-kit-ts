@@ -12,45 +12,6 @@ export type { IEventSourcedAggregate } from "./event-sourced-aggregate";
 export type Version = number & { readonly __v: true };
 
 /**
- * Lightweight functional aggregate state — state + version, no event sourcing.
- * This is a data projection, not a full Aggregate (which requires identity via IAggregateRoot).
- *
- * For event sourcing, use the class-based `EventSourcedAggregate` which enforces
- * that state changes happen through event handlers.
- *
- * @template State - The type of the aggregate state
- */
-export interface AggregateState<State> {
-	state: Readonly<State>;
-	version: Version;
-}
-
-/**
- * Creates a lightweight functional aggregate state.
- *
- * @example
- * ```typescript
- * const order = aggregate<OrderState>({ status: "draft", items: [] });
- * ```
- */
-export function aggregate<State>(
-	state: State,
-	version: Version = 0 as Version,
-): AggregateState<State> {
-	return { state, version };
-}
-
-/**
- * Bumps the version of a functional aggregate state.
- * Returns a new aggregate state with incremented version.
- */
-export function bump<S>(
-	agg: AggregateState<S>,
-): AggregateState<S> {
-	return { ...agg, version: (agg.version + 1) as Version };
-}
-
-/**
  * Snapshot of an aggregate state at a specific point in time.
  * Used for optimizing event replay by starting from a snapshot
  * instead of replaying all events from the beginning.
