@@ -427,6 +427,47 @@ describe("EventBusImpl", () => {
 			bus.subscribe("OrderBanana", () => {});
 		});
 
+		it("once() rejects when an AbortSignal is fired before the event arrives", async () => {
+			const bus = new EventBusImpl<OrderEvt>();
+			const ac = new AbortController();
+			const p = bus.once("OrderCreated", { signal: ac.signal });
+
+			ac.abort(new Error("client gave up"));
+
+			await expect(p).rejects.toThrow("client gave up");
+		});
+
+		it("once() rejects with a timeout when timeoutMs elapses without the event", async () => {
+			const bus = new EventBusImpl<OrderEvt>();
+			const p = bus.once("OrderCreated", { timeoutMs: 10 });
+
+			await expect(p).rejects.toThrow(/timed out.*OrderCreated/);
+		});
+
+		it("once() with timeoutMs resolves normally and clears the timer if the event arrives first", async () => {
+			const bus = new EventBusImpl<OrderEvt>();
+			const p = bus.once("OrderCreated", { timeoutMs: 50 });
+
+			const evt = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+			await bus.publish([evt]);
+
+			const received = await p;
+			expect(received.payload.orderId).toBe("o-1");
+			// Wait past the timeout to make sure no late rejection happens
+			await new Promise((r) => setTimeout(r, 60));
+		});
+
+		it("once() with an already-aborted signal rejects synchronously without subscribing", async () => {
+			const bus = new EventBusImpl<OrderEvt>();
+			const ac = new AbortController();
+			ac.abort();
+			await expect(
+				bus.once("OrderCreated", { signal: ac.signal }),
+			).rejects.toBeDefined();
+		});
+
 		it("once() returns the event variant matching the eventType argument", async () => {
 			const bus = new EventBusImpl<OrderEvt>();
 

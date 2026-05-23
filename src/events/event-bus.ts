@@ -1,5 +1,5 @@
 import type { DomainEvent } from "../aggregate/domain-event";
-import type { EventBus, EventHandler } from "./ports";
+import type { EventBus, EventHandler, OnceOptions } from "./ports";
 
 /**
  * Simple in-memory event bus implementation.
@@ -60,12 +60,55 @@ export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 
 	once<K extends Evt["type"]>(
 		eventType: K,
+		options?: OnceOptions,
 	): Promise<Extract<Evt, { type: K }>> {
-		return new Promise<Extract<Evt, { type: K }>>((resolve) => {
-			const unsubscribe = this.subscribe(eventType, (event) => {
+		return new Promise<Extract<Evt, { type: K }>>((resolve, reject) => {
+			// Reject synchronously if the signal is already aborted — don't
+			// even subscribe.
+			if (options?.signal?.aborted) {
+				reject(options.signal.reason ?? new Error("EventBus.once aborted"));
+				return;
+			}
+
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let settled = false;
+			let abortListener: (() => void) | undefined;
+
+			const cleanup = () => {
+				if (settled) return;
+				settled = true;
 				unsubscribe();
+				if (timer !== undefined) clearTimeout(timer);
+				if (abortListener && options?.signal) {
+					options.signal.removeEventListener("abort", abortListener);
+				}
+			};
+
+			const unsubscribe = this.subscribe(eventType, (event) => {
+				cleanup();
 				resolve(event);
 			});
+
+			if (options?.signal) {
+				abortListener = () => {
+					cleanup();
+					reject(
+						options.signal!.reason ?? new Error("EventBus.once aborted"),
+					);
+				};
+				options.signal.addEventListener("abort", abortListener);
+			}
+
+			if (typeof options?.timeoutMs === "number") {
+				timer = setTimeout(() => {
+					cleanup();
+					reject(
+						new Error(
+							`EventBus.once timed out after ${options.timeoutMs}ms waiting for "${eventType}"`,
+						),
+					);
+				}, options.timeoutMs);
+			}
 		});
 	}
 

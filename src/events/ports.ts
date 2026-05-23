@@ -97,7 +97,28 @@ export interface EventBus<Evt extends { type: string }> {
 	 */
 	once: <K extends Evt["type"]>(
 		eventType: K,
+		options?: OnceOptions,
 	) => Promise<Extract<Evt, { type: K }>>;
+}
+
+/**
+ * Options for `EventBus.once()`. Both fields are optional; without them
+ * `once()` waits forever (the historical behaviour).
+ */
+export interface OnceOptions {
+	/**
+	 * Aborts the wait. When `signal` fires, `once()` rejects with
+	 * `signal.reason` (or a generic abort error if none was supplied) and
+	 * the internal subscription is removed.
+	 */
+	signal?: AbortSignal;
+
+	/**
+	 * Rejects with a timeout error after this many milliseconds if no event
+	 * has arrived. The internal subscription and timer are cleaned up
+	 * regardless of which path settles the promise.
+	 */
+	timeoutMs?: number;
 }
 export interface Outbox<Evt> {
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
