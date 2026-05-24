@@ -7,12 +7,14 @@ The transactional outbox is the canonical pattern for "domain event must persist
 A minimal transaction-scope abstraction generic over the persistence layer's transaction handle:
 
 ```ts
-interface TransactionScope<TCtx = unknown> {
+interface TransactionScope<TCtx> {
   transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
 }
 ```
 
 `fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle — `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
+
+`TCtx` has no default: every implementor names it explicitly so "what lives in my unit-of-work boundary" is a conscious decision. Context-free scopes spell it out as `TransactionScope<undefined>` — that's the honest "there is nothing meaningful here" statement, not an inherited `unknown` fallback.
 
 The use case binds its repositories to `ctx` — typically by constructing tx-scoped repos from a factory. `IRepository`'s methods take only the id / aggregate; the transaction handle is wired into the repo at construction, not threaded through every call.
 
@@ -42,10 +44,10 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 });
 ```
 
-For tests or no-context flows, `TCtx` defaults to `unknown` — the no-arg style still compiles:
+For tests or no-context flows, write `TransactionScope<undefined>` explicitly:
 
 ```ts
-const scope: TransactionScope = {
+const scope: TransactionScope<undefined> = {
   transactional: (fn) => fn(undefined),
 };
 

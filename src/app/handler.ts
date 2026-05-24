@@ -8,7 +8,7 @@ import type { TransactionScope } from "../repo/scope";
  *  1. `fn(ctx)` runs inside `scope.transactional(...)` — domain mutations
  *     + repo writes happen here. `ctx` is whatever transaction handle the
  *     `scope` exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or
- *     `unknown` for the no-context path).
+ *     `undefined` for context-free scopes).
  *  2. `outbox.add(events)` is also inside the transaction (skipped when
  *     the use case emits no events), so events persist atomically with
  *     the state change.
@@ -42,11 +42,7 @@ import type { TransactionScope } from "../repo/scope";
  * });
  * ```
  */
-export async function withCommit<
-	Evt extends { type: string },
-	R,
-	TCtx = unknown,
->(
+export async function withCommit<Evt extends { type: string }, R, TCtx>(
 	deps: {
 		outbox: Outbox<Evt>;
 		bus?: EventBus<Evt>;

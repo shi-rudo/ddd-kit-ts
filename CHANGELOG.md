@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `TransactionScope<TCtx>`: no default for the context generic
+
+`TCtx` no longer defaults to `unknown`. Every implementor names its context type explicitly:
+
+```diff
+- interface TransactionScope<TCtx = unknown> {
++ interface TransactionScope<TCtx> {
+    transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
+  }
+```
+
+The `unknown` default in rc.5 was a back-compat convenience but encouraged a degenerate "ignore the ctx" mental model. In practice the ctx is almost always meaningful — the ORM tx handle, a tx-scoped logger, a correlation id. Forcing the type makes consumers articulate what lives in their unit-of-work boundary.
+
+Migration: pick a concrete type. Drizzle / Prisma / Mongo users already write `TransactionScope<DrizzleTx>` etc. and need no change. Context-free scopes (in-memory tests, naive no-tx scopes) spell out `TransactionScope<undefined>`:
+
+```diff
+- const scope: TransactionScope = {
+-   transactional: <T>(fn: (_ctx: unknown) => Promise<T>) => fn(undefined),
++ const scope: TransactionScope<undefined> = {
++   transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => fn(undefined),
+  };
+```
+
+`withCommit` loses its `TCtx = unknown` default as well; `TCtx` is inferred from the `scope` argument, so call sites typically need no change.
+
 ## [1.0.0-rc.5] - 2026-05-24
 
 Adds an explicit transaction context to `TransactionScope` so consumer repositories can bind to the live Drizzle/Prisma/Mongo handle without falling back to `AsyncLocalStorage`. Also polishes the error contract (cause chains now actually propagate through library errors) and fixes JSDoc examples that referenced a non-existent `repo.save(tx, order)` API.

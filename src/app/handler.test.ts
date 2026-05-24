@@ -5,9 +5,9 @@ import type { TransactionScope } from "../repo/scope";
 
 type TestEvent = { type: "OrderCreated"; orderId: string };
 
-function createMockScope(): TransactionScope {
+function createMockScope(): TransactionScope<undefined> {
 	return {
-		transactional: <T>(fn: (_ctx: unknown) => Promise<T>) => fn(undefined),
+		transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => fn(undefined),
 	};
 }
 
@@ -90,8 +90,8 @@ describe("withCommit", () => {
 
 	it("should execute within the unit of work transaction", async () => {
 		const callOrder: string[] = [];
-		const scope: TransactionScope = {
-			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => {
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
 				callOrder.push("tx-start");
 				const result = await fn(undefined);
 				callOrder.push("tx-end");
@@ -144,8 +144,8 @@ describe("withCommit", () => {
 
 	it("publishes to the bus only AFTER the transaction has committed", async () => {
 		const callOrder: string[] = [];
-		const scope: TransactionScope = {
-			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => {
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
 				callOrder.push("tx-start");
 				const result = await fn(undefined);
 				callOrder.push("tx-commit");
@@ -219,9 +219,10 @@ describe("withCommit", () => {
 		expect(received).toBe(tx);
 	});
 
-	it("typing: TransactionScope without an explicit ctx generic stays at unknown (back-compat)", async () => {
-		// createMockScope's fn treats ctx as unknown — the no-context
-		// path keeps compiling.
+	it("typing: context-free scopes use TransactionScope<undefined> as the explicit no-ctx idiom", async () => {
+		// No default for TCtx — context-free callers spell out
+		// `TransactionScope<undefined>` so "there is nothing here" is a
+		// conscious choice, not an inherited `unknown` fallback.
 		const outbox = createMockOutbox();
 		const result = await withCommit(
 			{ outbox, scope: createMockScope() },

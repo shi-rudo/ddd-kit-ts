@@ -7,11 +7,15 @@
  * and rolls back if it throws.
  *
  * `TCtx` is the persistence layer's transaction handle — Drizzle's `tx`,
- * Prisma's `tx`, Mongo's session, or `unknown` for the no-context path.
- * The scope opens the transaction and passes the handle to `fn`; the
- * use case binds its repositories to that handle (typically by
- * constructing a tx-scoped repo from the ctx). Default `TCtx = unknown`
- * keeps the no-context callers compiling.
+ * Prisma's `tx`, Mongo's session, etc. The scope opens the transaction
+ * and passes the handle to `fn`; the use case binds its repositories to
+ * that handle (typically by constructing a tx-scoped repo from the ctx).
+ *
+ * No default for `TCtx`: every implementor names their context type
+ * explicitly. For genuinely context-free scopes (in-memory tests, naive
+ * no-tx scopes) use `TransactionScope<undefined>` — that's a conscious
+ * "there is nothing meaningful here" statement, not an accidental
+ * `unknown` fallback.
  *
  * Intentionally **not** Fowler's full Unit of Work (no change tracking,
  * no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time
@@ -45,6 +49,6 @@
  * (constructor injection, factory functions, `withTx` chains); pick one
  * and keep it consistent.
  */
-export interface TransactionScope<TCtx = unknown> {
+export interface TransactionScope<TCtx> {
 	transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
 }
