@@ -33,13 +33,59 @@ let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
  *
  * **Module-scoped — last setter wins.** The factory lives as a single
  * module variable; importing two libraries that both call this races on
- * load order. For multi-tenant request isolation (e.g. one factory per
- * tenant in a single Worker invocation) **prefer the per-call
- * `options.eventId`** instead of mutating the global. Same caveat applies
- * to `setClockFactory`.
+ * load order, and parallel test workers will see each other's factory.
+ * For test isolation and short-lived contexts prefer
+ * {@link withEventIdFactory}; for multi-tenant request isolation
+ * (e.g. one factory per tenant in a single Worker invocation) **prefer
+ * the per-call `options.eventId`** instead of mutating the global. Same
+ * caveat applies to `setClockFactory`.
  */
 export function setEventIdFactory(factory: EventIdFactory): void {
 	currentEventIdFactory = factory;
+}
+
+/**
+ * Scoped variant of {@link setEventIdFactory}: installs `factory`,
+ * runs `fn`, then restores the previous factory in a `finally` block —
+ * so the restoration happens even if `fn` throws. Safe for parallel
+ * tests and for synchronous request handlers that need a tenant-
+ * specific factory without polluting the global.
+ *
+ * **Synchronous-only.** `fn` must return synchronously. The factory is
+ * restored at the moment `fn` returns; any work `fn` schedules to run
+ * after returning (timers, queued microtasks, awaited continuations of
+ * an async `fn`) will see the *previous* factory, not the scoped one.
+ * For async scoping across `await` boundaries, you'd need
+ * `AsyncLocalStorage` — out of scope for this helper; build it on top
+ * if you need it.
+ *
+ * Composes by nesting: an inner `withEventIdFactory` restores back to
+ * the outer's factory; the outer restores to the original.
+ *
+ * @example
+ * ```ts
+ * // In a vitest test:
+ * it("emits deterministic ids", () => {
+ *   withEventIdFactory(() => "evt-fixed", () => {
+ *     const e = createDomainEvent("X", { v: 1 });
+ *     expect(e.eventId).toBe("evt-fixed");
+ *   });
+ *   // Outside the callback the default crypto.randomUUID is restored,
+ *   // even if the body had thrown.
+ * });
+ * ```
+ */
+export function withEventIdFactory<T>(
+	factory: EventIdFactory,
+	fn: () => T,
+): T {
+	const previous = currentEventIdFactory;
+	currentEventIdFactory = factory;
+	try {
+		return fn();
+	} finally {
+		currentEventIdFactory = previous;
+	}
 }
 
 /**
@@ -74,9 +120,40 @@ let currentClockFactory: ClockFactory = defaultClockFactory;
  *
  * The per-call `options.occurredAt` override always wins over this
  * factory. Symmetric to `setEventIdFactory`.
+ *
+ * Module-scoped — see {@link setEventIdFactory} for the global-state
+ * caveats. For test isolation prefer {@link withClockFactory}; for
+ * multi-tenant request isolation prefer the per-call
+ * `options.occurredAt`.
  */
 export function setClockFactory(factory: ClockFactory): void {
 	currentClockFactory = factory;
+}
+
+/**
+ * Scoped variant of {@link setClockFactory}: installs `factory`, runs
+ * `fn`, then restores the previous factory in a `finally` block.
+ * Synchronous-only — same constraints as {@link withEventIdFactory}.
+ *
+ * @example
+ * ```ts
+ * it("stamps events with a fixed clock", () => {
+ *   const fixed = new Date("2026-01-01T00:00:00Z");
+ *   withClockFactory(() => fixed, () => {
+ *     const e = createDomainEvent("X", { v: 1 });
+ *     expect(e.occurredAt).toEqual(fixed);
+ *   });
+ * });
+ * ```
+ */
+export function withClockFactory<T>(factory: ClockFactory, fn: () => T): T {
+	const previous = currentClockFactory;
+	currentClockFactory = factory;
+	try {
+		return fn();
+	} finally {
+		currentClockFactory = previous;
+	}
 }
 
 /**

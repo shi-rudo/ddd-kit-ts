@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Scoped factory helpers `withEventIdFactory` / `withClockFactory`
+
+`setEventIdFactory` and `setClockFactory` mutate module-level globals, which races under two real workloads:
+
+- **Parallel tests** — vitest's default `pool: "threads"` (and `"forks"`) runs test files concurrently. Test A's `setEventIdFactory(deterministicGen)` leaks into Test B's `createDomainEvent(...)` running in parallel; the "call once at bootstrap" advice in the existing JSDoc breaks down here.
+- **Multi-tenant request handlers** — Request A and Request B sharing the same process collide on the global if each wants a tenant-specific factory.
+
+New helpers:
+
+```ts
+withEventIdFactory(factory, () => { /* sync work */ });
+withClockFactory(factory, () => { /* sync work */ });
+```
+
+Both install the supplied factory, run the callback, and restore the previous factory in a `finally` block — so restoration happens even when the callback throws. Composable via nesting: an inner `withEventIdFactory` restores back to the outer's factory; the outer restores to the original.
+
+Synchronous-only — `fn` must return synchronously. The factory is restored at the moment `fn` returns, so any work scheduled to run after (timers, queued microtasks, the continuations of an `async fn`) will see the *previous* factory. For async-scoped factories spanning `await` boundaries, `AsyncLocalStorage` is the right tool — explicitly out of scope for these helpers; build on top if needed.
+
+`setEventIdFactory` / `setClockFactory` stay as the global-mutation helpers (still appropriate for once-at-bootstrap calls); the new helpers are the safer choice for tests and short-lived contexts. Their JSDoc now points at the scoped variants.
+
+Tests cover: factory installed during fn, restored after fn returns, restored after fn throws, returns fn's value, and nested composition (inner restores to outer, outer restores to original).
+
 ### Added — `onPersisted(version)` Template-Method hook on both aggregate flavours
 
 `AggregateRoot` and `EventSourcedAggregate` both gain a `protected onPersisted(version: Version): void` no-op default. `markPersisted(version)` calls it after the framework's cleanup (`setVersion` + `pendingEvents = []`). Subclasses should override `onPersisted` for post-persist logging, metrics, or cache-eviction — never override `markPersisted` directly.

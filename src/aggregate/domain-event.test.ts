@@ -8,6 +8,8 @@ import {
 	resetEventIdFactory,
 	setClockFactory,
 	setEventIdFactory,
+	withClockFactory,
+	withEventIdFactory,
 } from "./domain-event";
 
 describe("DomainEvent", () => {
@@ -223,6 +225,136 @@ describe("DomainEvent", () => {
 			createDomainEvent("Demo");
 			createDomainEvent("Demo");
 			expect(n).toBe(3);
+		});
+	});
+
+	describe("Scoped factory helpers: withEventIdFactory / withClockFactory", () => {
+		afterEach(() => {
+			// Defence in depth — every test in this block should leave
+			// state clean via the scoped helper's try/finally, but reset
+			// anyway in case a future addition mutates the global directly.
+			resetEventIdFactory();
+			resetClockFactory();
+		});
+
+		it("withEventIdFactory installs the factory during fn and restores after", () => {
+			const captured = withEventIdFactory(
+				() => "scoped-evt",
+				() => createDomainEvent("Demo", { x: 1 }).eventId,
+			);
+			expect(captured).toBe("scoped-evt");
+
+			// After the scoped block, the default is back.
+			const after = createDomainEvent("Demo", { x: 1 }).eventId;
+			expect(after).not.toBe("scoped-evt");
+		});
+
+		it("withEventIdFactory restores even when fn throws", () => {
+			expect(() => {
+				withEventIdFactory(
+					() => "scoped-evt",
+					() => {
+						throw new Error("boom");
+					},
+				);
+			}).toThrow("boom");
+
+			// Factory was restored despite the throw.
+			const after = createDomainEvent("Demo", { x: 1 }).eventId;
+			expect(after).not.toBe("scoped-evt");
+		});
+
+		it("withEventIdFactory composes via nesting (inner restores to outer)", () => {
+			const trail: string[] = [];
+
+			withEventIdFactory(
+				() => "outer",
+				() => {
+					trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
+
+					withEventIdFactory(
+						() => "inner",
+						() => {
+							trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
+						},
+					);
+
+					// Inner restored to outer.
+					trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
+				},
+			);
+
+			expect(trail).toEqual(["outer", "inner", "outer"]);
+
+			// Outer restored to default.
+			expect(createDomainEvent("Demo", { x: 1 }).eventId).not.toBe("outer");
+		});
+
+		it("withEventIdFactory returns the value produced by fn", () => {
+			const out = withEventIdFactory(
+				() => "scoped",
+				() => ({ ok: true, count: 42 }),
+			);
+			expect(out).toEqual({ ok: true, count: 42 });
+		});
+
+		it("withClockFactory installs the factory during fn and restores after", () => {
+			const fixed = new Date("2026-01-01T00:00:00Z");
+			const capturedTime = withClockFactory(
+				() => fixed,
+				() => createDomainEvent("Demo", { x: 1 }).occurredAt.getTime(),
+			);
+			expect(capturedTime).toBe(fixed.getTime());
+
+			// Default Date factory restored.
+			const before = Date.now();
+			const after = createDomainEvent("Demo", { x: 1 }).occurredAt.getTime();
+			const stop = Date.now();
+			expect(after).toBeGreaterThanOrEqual(before);
+			expect(after).toBeLessThanOrEqual(stop);
+		});
+
+		it("withClockFactory restores even when fn throws", () => {
+			const fixed = new Date("1999-12-31T23:59:59Z");
+			expect(() => {
+				withClockFactory(
+					() => fixed,
+					() => {
+						throw new Error("clock-boom");
+					},
+				);
+			}).toThrow("clock-boom");
+
+			const after = createDomainEvent("Demo", { x: 1 }).occurredAt;
+			expect(after.getTime()).not.toBe(fixed.getTime());
+		});
+
+		it("withClockFactory composes via nesting (inner restores to outer)", () => {
+			const outerDate = new Date("2026-01-01T00:00:00Z");
+			const innerDate = new Date("2026-06-15T12:00:00Z");
+			const times: number[] = [];
+
+			withClockFactory(
+				() => outerDate,
+				() => {
+					times.push(createDomainEvent("Demo").occurredAt.getTime());
+
+					withClockFactory(
+						() => innerDate,
+						() => {
+							times.push(createDomainEvent("Demo").occurredAt.getTime());
+						},
+					);
+
+					times.push(createDomainEvent("Demo").occurredAt.getTime());
+				},
+			);
+
+			expect(times).toEqual([
+				outerDate.getTime(),
+				innerDate.getTime(),
+				outerDate.getTime(),
+			]);
 		});
 	});
 
