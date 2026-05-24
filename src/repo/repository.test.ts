@@ -115,7 +115,7 @@ describe("Repository contract", () => {
 			expect(e.message).toContain("Order(o-1)"); // technical
 			const userMsg = e.getUserMessage();
 			expect(userMsg).toBeDefined();
-			expect(userMsg).toContain("order");
+			expect(userMsg).toContain("Order");
 			expect(userMsg).not.toContain("o-1"); // no leaky id
 		});
 

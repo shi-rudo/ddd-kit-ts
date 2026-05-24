@@ -8,38 +8,42 @@
  *
  * `TCtx` is the persistence layer's transaction handle — Drizzle's `tx`,
  * Prisma's `tx`, Mongo's session, or `unknown` for the no-context path.
- * The scope opens the transaction and passes the handle to `fn`; the use
- * case hands it down to its repositories so writes bind to that
- * transaction. Default `TCtx = unknown` keeps the no-context callers
- * compiling — they just ignore the parameter.
+ * The scope opens the transaction and passes the handle to `fn`; the
+ * use case binds its repositories to that handle (typically by
+ * constructing a tx-scoped repo from the ctx). Default `TCtx = unknown`
+ * keeps the no-context callers compiling.
  *
- * This is **not** Fowler's full Unit of Work (no change tracking, no
- * `registerDirty` / `registerNew` / `registerDeleted`, no commit-time
- * flush). It is intentionally minimal — change tracking is the ORM's
- * job; the library stays out of it. The name `TransactionScope` is
- * therefore more honest than `UnitOfWork`.
+ * Intentionally **not** Fowler's full Unit of Work (no change tracking,
+ * no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time
+ * flush). Change tracking is the ORM's job.
  *
- * @example
+ * @example Drizzle implementation
  * ```typescript
- * // No-context fake (tests):
- * const scope: TransactionScope = {
- *   transactional: (fn) => fn(undefined),
- * };
- *
- * // Drizzle-flavoured:
  * class DrizzleScope implements TransactionScope<DrizzleTx> {
  *   constructor(private db: DrizzleDb) {}
  *   async transactional<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
  *     return this.db.transaction((tx) => fn(tx));
  *   }
  * }
+ * ```
  *
+ * @example Use site — bind repos to the live transaction
+ * ```typescript
  * await scope.transactional(async (tx) => {
- *   const order = await orderRepo.getByIdOrFail(tx, orderId);
+ *   // Construct tx-bound repos from ctx (your factory / DI of choice)
+ *   const orders = makeOrderRepo(tx);
+ *
+ *   const order = await orders.getByIdOrFail(orderId);
  *   order.confirm();
- *   await orderRepo.save(tx, order);
+ *   await orders.save(order);
  * });
  * ```
+ *
+ * `IRepository`'s contract takes the id / aggregate only — the tx handle
+ * is wired into a concrete repository at construction time, not threaded
+ * through every call. Different ORMs have different idioms for that
+ * (constructor injection, factory functions, `withTx` chains); pick one
+ * and keep it consistent.
  */
 export interface TransactionScope<TCtx = unknown> {
 	transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;

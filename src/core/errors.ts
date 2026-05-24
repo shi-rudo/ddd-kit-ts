@@ -10,14 +10,11 @@ import { BaseError } from "@shirudo/base-error";
  * they typically map to HTTP 400 / business-rule responses.
  *
  * The library itself does **not** ship any concrete `DomainError`
- * subclass — the kit can't know your invariants. {@link MissingHandlerError},
- * {@link AggregateNotFoundError}, and {@link ConcurrencyConflictError}
- * deliberately sit on other branches of the hierarchy (see below) because
- * they are not invariant violations.
+ * subclass — the kit can't know your invariants.
  *
- * Extends `BaseError<Name>` from `@shirudo/base-error`, so derived
- * classes get timestamps, `error.cause` traversal, `toJSON()`, i18n-
- * aware `getUserMessage()`, and the `isRetryable` predicate for free.
+ * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
+ * surface (timestamps, cause chains, `toJSON()`, `getUserMessage()`,
+ * `isRetryable`, …).
  */
 export abstract class DomainError<
 	Name extends string = string,
@@ -31,11 +28,8 @@ export abstract class DomainError<
  * broken); they describe race conditions and missing rows at the
  * storage boundary.
  *
- * Library-internal concrete subclasses:
- *  - {@link AggregateNotFoundError}
- *  - {@link ConcurrencyConflictError}
- *
- * Extends `BaseError<Name>` from `@shirudo/base-error`.
+ * Library-internal concrete subclasses: {@link AggregateNotFoundError},
+ * {@link ConcurrencyConflictError}.
  */
 export abstract class InfrastructureError<
 	Name extends string = string,
@@ -59,8 +53,11 @@ export abstract class InfrastructureError<
  * library" at the App boundary.
  */
 export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
-	constructor(public readonly eventType: string) {
-		super(`Missing handler for event type: ${eventType}`);
+	constructor(
+		public readonly eventType: string,
+		cause?: unknown,
+	) {
+		super(`Missing handler for event type: ${eventType}`, cause);
 	}
 }
 
@@ -70,17 +67,22 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
  * boundary, not a business rule, decided the row is absent. Use the
  * nullable variant `getById()` if "not found" is a valid outcome.
  *
- * Ships with a user-safe message via `withUserMessage`. Not retryable —
- * retrying won't make the row appear.
+ * Accepts an optional `cause` so a `Repository.save()` implementation
+ * can wrap a lower-level "row not found" / driver-level error without
+ * losing context. Cause-chain helpers (`getRootCause`,
+ * `findInCauseChain`) from `@shirudo/base-error` traverse the chain.
+ *
+ * Not retryable — retrying won't make the row appear.
  */
 export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
 	constructor(
 		public readonly aggregateType: string,
 		public readonly id: string,
+		cause?: unknown,
 	) {
-		super(`Aggregate not found: ${aggregateType}(${id})`);
+		super(`Aggregate not found: ${aggregateType}(${id})`, cause);
 		this.withUserMessage(
-			`The requested ${aggregateType.toLowerCase()} could not be found.`,
+			`The requested ${aggregateType} could not be found.`,
 		);
 	}
 }
@@ -109,9 +111,11 @@ export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyCo
 		public readonly aggregateId: string,
 		public readonly expectedVersion: number,
 		public readonly actualVersion: number,
+		cause?: unknown,
 	) {
 		super(
 			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
+			cause,
 		);
 		this.withUserMessage(
 			"This resource was updated by another request. Please reload and try again.",

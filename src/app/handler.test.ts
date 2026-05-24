@@ -220,27 +220,19 @@ describe("withCommit", () => {
 	});
 
 	it("typing: TransactionScope without an explicit ctx generic stays at unknown (back-compat)", async () => {
-		// No type parameter on TransactionScope; fn signature treats ctx
-		// as unknown — the no-context path keeps compiling.
-		const scope: TransactionScope = {
-			transactional: async <T>(fn: (ctx: unknown) => Promise<T>) =>
-				fn(undefined),
-		};
-
+		// createMockScope's fn treats ctx as unknown — the no-context
+		// path keeps compiling.
 		const outbox = createMockOutbox();
-
-		const result = await withCommit({ outbox, scope }, async () => ({
-			result: "ok",
-			events: [],
-		}));
+		const result = await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({ result: "ok", events: [] }),
+		);
 
 		expect(result).toBe("ok");
 	});
 
 	it("does not publish to the bus when the transaction throws", async () => {
-		const scope: TransactionScope = {
-			transactional: async <T>(fn: (_ctx: unknown) => Promise<T>) => fn(undefined),
-		};
+		const scope = createMockScope();
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
 

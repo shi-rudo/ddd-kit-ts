@@ -14,7 +14,7 @@ interface TransactionScope<TCtx = unknown> {
 
 `fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle — `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
 
-The use case threads `ctx` to its repositories so writes bind to the right transaction:
+The use case binds its repositories to `ctx` — typically by constructing tx-scoped repos from a factory. `IRepository`'s methods take only the id / aggregate; the transaction handle is wired into the repo at construction, not threaded through every call.
 
 ```ts
 // Drizzle implementation
@@ -31,9 +31,13 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 
 // Use case
 await withCommit({ scope, outbox, bus }, async (tx) => {
-  const order = await orderRepo.getByIdOrFail(tx, orderId);
+  // Bind your repos to the live transaction however your ORM expects.
+  // Constructor injection / factory / `.withTx()` are all valid idioms.
+  const orders = makeOrderRepo(tx);
+
+  const order = await orders.getByIdOrFail(orderId);
   order.confirm();
-  await orderRepo.save(tx, order);
+  await orders.save(order);
   return { result: order.id, events: order.domainEvents };
 });
 ```

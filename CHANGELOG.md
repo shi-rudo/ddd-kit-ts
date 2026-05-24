@@ -29,9 +29,12 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 }
 
 await withCommit({ scope, outbox }, async (tx) => {
-  const order = await orderRepo.getByIdOrFail(tx, orderId);
+  // IRepository takes only the aggregate / id; bind tx into the repo
+  // at construction (constructor injection / factory / `.withTx()`).
+  const orders = makeOrderRepo(tx);
+  const order = await orders.getByIdOrFail(orderId);
   order.confirm();
-  await orderRepo.save(tx, order);
+  await orders.save(order);
   return { result: order.id, events: order.domainEvents };
 });
 ```
