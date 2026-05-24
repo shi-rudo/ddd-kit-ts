@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Entity-collection helpers accept `ReadonlyArray<T>`
+
+`findEntityById`, `hasEntityId`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, and `entityIds` now declare their `entities` parameter as `ReadonlyArray<T>` instead of `T[]`. None of these helpers ever mutated the input — the mutable-array signature was forcing callers holding a `readonly OrderItem[]` (e.g. inside a frozen aggregate state slice) to cast or copy unnecessarily. Mutable arrays continue to work since `T[]` is assignable to `ReadonlyArray<T>`.
+
 ### Added — `InMemoryOutbox<Evt>` reference implementation
 
 Ships an in-memory `Outbox<Evt>` implementation alongside `EventBusImpl`, so consumers no longer have to copy-paste the Map-backed boilerplate from the docs for every test or quick-start demo:

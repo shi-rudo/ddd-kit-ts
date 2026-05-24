@@ -257,7 +257,7 @@ export function sameEntity<TId extends Id<string>>(a: Identifiable<TId>, b: Iden
  * ```
  */
 export function findEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: T[],
+	entities: ReadonlyArray<T>,
 	id: TId,
 ): T | undefined {
 	return entities.find((entity) => entity.id === id);
@@ -281,7 +281,7 @@ export function findEntityById<TId extends Id<string>, T extends Identifiable<TI
  * ```
  */
 export function hasEntityId<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: T[],
+	entities: ReadonlyArray<T>,
 	id: TId,
 ): boolean {
 	return entities.some((entity) => entity.id === id);
@@ -307,7 +307,7 @@ export function hasEntityId<TId extends Id<string>, T extends Identifiable<TId>>
  * ```
  */
 export function removeEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: T[],
+	entities: ReadonlyArray<T>,
 	id: TId,
 ): T[] {
 	return entities.filter((entity) => entity.id !== id);
@@ -337,7 +337,7 @@ export function removeEntityById<TId extends Id<string>, T extends Identifiable<
  * ```
  */
 export function updateEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: T[],
+	entities: ReadonlyArray<T>,
 	id: TId,
 	updater: (entity: T) => T,
 ): T[] {
@@ -368,7 +368,7 @@ export function updateEntityById<TId extends Id<string>, T extends Identifiable<
  * ```
  */
 export function replaceEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: T[],
+	entities: ReadonlyArray<T>,
 	id: TId,
 	replacement: T,
 ): T[] {
@@ -392,7 +392,7 @@ export function replaceEntityById<TId extends Id<string>, T extends Identifiable
  * // ids is [itemId1, itemId2]
  * ```
  */
-export function entityIds<TId extends Id<string>, T extends Identifiable<TId>>(entities: T[]): TId[] {
+export function entityIds<TId extends Id<string>, T extends Identifiable<TId>>(entities: ReadonlyArray<T>): TId[] {
 	return entities.map((entity) => entity.id);
 }
 

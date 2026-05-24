@@ -246,5 +246,26 @@ describe("Entity", () => {
 			expect(removed).toHaveLength(1);
 			expect(removed[0]!.id).toBe("id-2");
 		});
+
+		it("accepts ReadonlyArray inputs — callers holding a readonly aggregate state slice don't need to cast", () => {
+			// The state slice of a frozen aggregate is typically typed as
+			// ReadonlyArray<T>. Helpers must accept it without forcing a
+			// copy / cast at the call site.
+			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);
+			const e2 = new OrderItemEntity("id-2" as ItemId, "prod-2", 2);
+			const items: ReadonlyArray<OrderItemEntity> = [e1, e2];
+
+			expect(findEntityById(items, "id-1" as ItemId)).toBe(e1);
+			expect(hasEntityId(items, "id-2" as ItemId)).toBe(true);
+			expect(entityIds(items)).toEqual(["id-1", "id-2"]);
+			expect(removeEntityById(items, "id-1" as ItemId)).toHaveLength(1);
+			expect(
+				replaceEntityById(
+					items,
+					"id-1" as ItemId,
+					new OrderItemEntity("id-1" as ItemId, "prod-1", 99),
+				)[0]?.state.quantity,
+			).toBe(99);
+		});
 	});
 });
