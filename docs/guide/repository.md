@@ -26,12 +26,57 @@ Two flavours so the Use Case picks the right contract:
 
 ### `save` and optimistic concurrency
 
-`save()` returns `Promise<void>`. Implementations should:
+`save()` is **pure persistence**. Implementations write the aggregate and throw on OCC conflict — that's it. They must NOT call `aggregate.markPersisted(...)`; the `withCommit` orchestrator handles the post-save lifecycle (harvest pending events, then mark persisted after the transaction commits). See [Outbox & Transactions](./outbox.md) for the full flow.
 
-1. Throw `ConcurrencyConflictError` (a `DomainError`) when `aggregate.version` doesn't match the version currently persisted
-2. After a successful write, call `aggregate.markPersisted(newVersion)` so the in-memory aggregate reflects the new version and clears any recorded domain events
+#### Insert vs update — the `version` convention
 
-`markPersisted` is declared on the `IAggregateRoot` interface, so a repository can call it via the public contract without coupling to the concrete abstract class.
+A fresh aggregate begins at `version === 0`. After its first versioned mutation (`setState(_, true)`, `apply()`, `commit()`) the version is `> 0`. Implementations distinguish the two paths by the incoming `aggregate.version`:
+
+- `aggregate.version === 0` → **INSERT** (no existing row to lock against)
+- `aggregate.version  >  0` → **UPDATE** with the OCC predicate `WHERE id = ? AND version = expected`
+
+If the update affects zero rows, another writer raced you — throw `ConcurrencyConflictError`.
+
+```ts
+// Drizzle-flavoured save
+async save(aggregate: Order): Promise<void> {
+  if (aggregate.version === 0) {
+    // INSERT — fresh aggregate, never persisted
+    await this.db.insert(orders).values({
+      id: aggregate.id,
+      state: aggregate.state,
+      version: 1, // first persisted version
+    });
+    return;
+  }
+
+  // UPDATE — existing aggregate, lock against concurrent writers
+  const expected = aggregate.version;
+  const result = await this.db
+    .update(orders)
+    .set({ state: aggregate.state, version: expected + 1 })
+    .where(and(eq(orders.id, aggregate.id), eq(orders.version, expected)));
+
+  if (result.rowsAffected === 0) {
+    // The row's version no longer matches `expected` — concurrent writer
+    const current = await this.db.select({ version: orders.version })
+      .from(orders).where(eq(orders.id, aggregate.id)).get();
+    throw new ConcurrencyConflictError(
+      "Order",
+      aggregate.id,
+      expected,
+      current?.version ?? -1,
+    );
+  }
+}
+```
+
+The actual "what becomes the new persisted version" formula varies by aggregate flavour:
+
+- **`AggregateRoot`** (state-stored): the aggregate's local version was bumped by `setState(_, true)` / `commit()` calls inside the use case. By the time `save` runs, `aggregate.version` already reflects the post-mutation state — use it as-is for the row's new version.
+- **`EventSourcedAggregate`**: the aggregate's version equals its event count (canonical ES per Greg Young / Vernon §9). `aggregate.version` is the new total. For an event-store-backed implementation, `save` typically appends events to the stream; the store's stream-revision matches the aggregate's version after a successful append.
+
+The Drizzle snippet above uses `expected + 1` for clarity, but in a state-stored aggregate `aggregate.version` already IS `expected + 1` after `setState(_, true)` — either form works.
 
 ## `IQueryableRepository` — bring your own filter
 
@@ -93,24 +138,31 @@ const id = userIds.next(); // Id<"UserId">
 
 ## `AggregateNotFoundError` and `ConcurrencyConflictError`
 
-Both are `DomainError` subclasses with structured context:
+Both are `InfrastructureError` subclasses (not `DomainError` — the storage boundary decided the row is absent or stale, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, `toJSON()`, and `getUserMessage()` out of the box.
+
+- **`AggregateNotFoundError(aggregateType, id, cause?)`** — thrown by `getByIdOrFail`. Carries a user-safe message that does NOT leak the id. Not retryable (the row isn't there; retry won't help).
+- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`** — thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `isRetryable(err)` predicate from `@shirudo/base-error` picks it up — the canonical OCC pattern is to reload, re-apply, and retry.
 
 ```ts
-class AggregateNotFoundError extends DomainError {
-  constructor(public readonly aggregateType: string, public readonly id: string) {
-    super(`Aggregate not found: ${aggregateType}(${id})`);
-  }
-}
+import {
+  AggregateNotFoundError,
+  ConcurrencyConflictError,
+} from "@shirudo/ddd-kit";
+import { isRetryable } from "@shirudo/base-error";
 
-class ConcurrencyConflictError extends DomainError {
-  constructor(
-    public readonly aggregateType: string,
-    public readonly aggregateId: string,
-    public readonly expectedVersion: number,
-    public readonly actualVersion: number,
-  ) {
-    super(`Concurrency conflict on ${aggregateType}(${aggregateId}): expected ${expectedVersion}, actual ${actualVersion}`);
+try {
+  await orderRepository.save(order);
+} catch (err) {
+  if (err instanceof ConcurrencyConflictError) {
+    // reload, re-apply use case, retry — or surface HTTP 409
   }
+  if (err instanceof AggregateNotFoundError) {
+    // map to HTTP 404
+  }
+  if (isRetryable(err)) {
+    // delegate to retry middleware
+  }
+  throw err;
 }
 ```
 

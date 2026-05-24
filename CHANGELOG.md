@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Document the `version === 0` / `version > 0` insert-vs-update convention
+
+`IRepository.save`'s JSDoc and `docs/guide/repository.md` now explicitly document the library's convention for distinguishing fresh aggregates from existing ones: `aggregate.version === 0` means INSERT, `aggregate.version > 0` means UPDATE with the OCC predicate `WHERE id = ? AND version = expected`. Every persistence-layer adapter has to make this distinction; now it's stated once and pointed at from JSDoc. Also fixes two stale facts in `repository.md`: `save()` no longer instructs implementors to call `markPersisted` (the `withCommit` orchestrator owns the lifecycle since rc.6), and `AggregateNotFoundError` / `ConcurrencyConflictError` are correctly described as `InfrastructureError` subclasses, not `DomainError`.
+
+Docs-only — no API change.
+
 ## [1.0.0-rc.6] - 2026-05-24
 
 The big architectural hardening pass. Closes the gap between what the kit's docs promised and what the code actually delivered — particularly around the Repository/withCommit lifecycle, the event-port contract, and the EventSourcedAggregate version model. Six breaking changes, all driven by Vernon / Greg Young / Khononov / Axon / EventFlow research into the canonical DDD patterns; each one removes a footgun rather than adding a feature.
