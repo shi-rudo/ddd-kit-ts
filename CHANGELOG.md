@@ -43,6 +43,24 @@ Default `TCtx = unknown` keeps the no-context callers compiling — `withCommit(
 
 Migration: any custom `TransactionScope` implementation needs to update its `fn` parameter to accept `(ctx: TCtx) => Promise<T>` (or `(_ctx: unknown) => Promise<T>` for the no-context path). Test fakes typically change `fn()` to `fn(undefined)`.
 
+### Added
+
+- **`cause?: unknown` parameter on every library error constructor.** `AggregateNotFoundError`, `ConcurrencyConflictError`, and `MissingHandlerError` now forward the cause to `BaseError`, so the cause-chain helpers from `@shirudo/base-error` (`getRootCause`, `findInCauseChain`, `filterCauseChain`) traverse into wrapped lower-level errors. A `Repository.save()` implementation can now wrap the driver error without losing context:
+  ```ts
+  catch (driverError) {
+    throw new ConcurrencyConflictError("Order", id, expected, actual, driverError);
+  }
+  ```
+
+### Changed
+
+- **`withCommit` no longer calls `outbox.add` or `bus.publish` when the use case emits no events.** State-only mutations and audit-only commands now skip the SQL round-trip and the `Promise.allSettled([])` allocation. Functional behaviour is unchanged for use cases that do emit events.
+- **`AggregateNotFoundError`'s default user message no longer lowercases the aggregate type.** Compound names like `OrderLineItem` now read naturally in the message instead of `orderlineitem`. Behaviour change for consumers reading `error.getUserMessage()` directly without overriding it via `addLocalizedMessage`.
+
+### Fixed
+
+- **Documentation no longer shows a fictional `repo.save(tx, order)` signature.** `IRepository.save` takes only the aggregate; the tx handle is bound into the repository at construction (constructor injection / factory / `.withTx()` chain). The `TransactionScope` / `withCommit` JSDoc examples and `docs/guide/outbox.md` now show the canonical idiom so copy-paste consumers don't hit a TS error against the kit's own contract.
+
 ## [1.0.0-rc.4] - 2026-05-23
 
 Cleanup release on top of rc.3. Drops the redundant `KitError` marker class and adjusts the legal posture of the docs site (Pages deployment disabled until the legal-notice + privacy pages are in place). Repo hygiene: stale `.DS_Store` entries untracked, `.beads/` ignore-rule corrected so project-shared Beads files (hooks, config) stay in git per Beads' own convention.
