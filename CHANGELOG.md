@@ -13,11 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ```diff
   await withCommit({ scope, outbox, bus }, async (tx) => {
-    const order = await orders.getByIdOrFail(orderId);
+    const orderRepository = makeOrderRepository(tx);
+    const order = await orderRepository.getByIdOrFail(orderId);
     order.confirm();
--   await orders.save(order);  // also called markPersisted internally
+-   await orderRepository.save(order);  // also called markPersisted internally
 -   return { result: order.id, events: order.pendingEvents };
-+   await orders.save(order);  // pure persistence — no markPersisted
++   await orderRepository.save(order);  // pure persistence — no markPersisted
 +   return { result: order.id, aggregates: [order] };
   });
 ```
@@ -198,10 +199,10 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 await withCommit({ scope, outbox }, async (tx) => {
   // IRepository takes only the aggregate / id; bind tx into the repo
   // at construction (constructor injection / factory / `.withTx()`).
-  const orders = makeOrderRepo(tx);
-  const order = await orders.getByIdOrFail(orderId);
+  const orderRepository = makeOrderRepository(tx);
+  const order = await orderRepository.getByIdOrFail(orderId);
   order.confirm();
-  await orders.save(order);
+  await orderRepository.save(order);
   return { result: order.id, events: order.domainEvents };
 });
 ```

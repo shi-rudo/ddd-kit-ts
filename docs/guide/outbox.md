@@ -35,11 +35,11 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 await withCommit({ scope, outbox, bus }, async (tx) => {
   // Bind your repos to the live transaction however your ORM expects.
   // Constructor injection / factory / `.withTx()` are all valid idioms.
-  const orders = makeOrderRepo(tx);
+  const orderRepository = makeOrderRepository(tx);
 
-  const order = await orders.getByIdOrFail(orderId);
+  const order = await orderRepository.getByIdOrFail(orderId);
   order.confirm();
-  await orders.save(order);                       // pure persistence
+  await orderRepository.save(order);                       // pure persistence
   return { result: order.id, aggregates: [order] }; // withCommit harvests pendingEvents
 });
 ```

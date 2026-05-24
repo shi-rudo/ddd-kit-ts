@@ -41,10 +41,10 @@ import type { TransactionScope } from "../repo/scope";
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)
  * ```typescript
  * const result = await withCommit({ outbox, bus, scope }, async (tx) => {
- *   const orders = makeOrderRepo(tx); // your factory binds tx to the repo
- *   const order = await orders.getByIdOrFail(orderId);
+ *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
+ *   const order = await orderRepository.getByIdOrFail(orderId);
  *   order.confirm();
- *   await orders.save(order);             // pure persistence — does NOT call markPersisted
+ *   await orderRepository.save(order);             // pure persistence — does NOT call markPersisted
  *   return { result: order.id, aggregates: [order] };
  * });
  * ```

@@ -35,11 +35,11 @@
  * ```typescript
  * await scope.transactional(async (tx) => {
  *   // Construct tx-bound repos from ctx (your factory / DI of choice)
- *   const orders = makeOrderRepo(tx);
+ *   const orderRepository = makeOrderRepository(tx);
  *
- *   const order = await orders.getByIdOrFail(orderId);
+ *   const order = await orderRepository.getByIdOrFail(orderId);
  *   order.confirm();
- *   await orders.save(order);
+ *   await orderRepository.save(order);
  * });
  * ```
  *

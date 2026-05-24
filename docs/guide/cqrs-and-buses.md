@@ -95,7 +95,7 @@ type Queries = {
 };
 
 const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => {
-  return await orderRepo.getById(q.orderId as OrderId);
+  return await orderRepository.getById(q.orderId as OrderId);
 };
 
 const queryBus = new QueryBus<Queries>();
