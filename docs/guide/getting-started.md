@@ -61,14 +61,14 @@ const order = Order.draft("o-1" as OrderId, "c-42");
 order.confirm();
 // order.state.status === "confirmed"
 // order.version       === 1
-// order.domainEvents  === [{ type: "OrderConfirmed", orderId: "o-1" }]
+// order.pendingEvents  === [{ type: "OrderConfirmed", orderId: "o-1" }]
 ```
 
 What this example shows:
 
 - **Aggregates throw to enforce invariants.** `OrderAlreadyConfirmedError extends DomainError` — consumers can catch by `instanceof`.
 - **`commit(state, events)` is the canonical record-after-mutation path.** It validates state first, only then records the event(s), and always bumps the version.
-- **Domain events are typed.** The `OrderEvent` union flows through `AggregateRoot<OrderState, OrderId, OrderEvent>` so `domainEvents` reads as `ReadonlyArray<OrderEvent>`.
+- **Domain events are typed.** The `OrderEvent` union flows through `AggregateRoot<OrderState, OrderId, OrderEvent>` so `pendingEvents` reads as `ReadonlyArray<OrderEvent>`.
 
 ## Where to next
 

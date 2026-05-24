@@ -103,9 +103,9 @@ The Aggregate Root is an Entity (the parent Entity of the aggregate) that repres
 
 The library provides:
 
-- **`IAggregateRoot<TId>`** - Marker interface for Aggregate Root Entities. The Aggregate Root is an Entity with identity (id) and version for optimistic concurrency control. It represents the aggregate externally and is the only object that can be loaded/saved through repositories.
+- **`IAggregateRoot<TId, TEvent?>`** - Interface for Aggregate Root Entities. The Aggregate Root is an Entity with identity (id), version for optimistic concurrency control, and a `pendingEvents` list of domain events recorded but not yet flushed. Both aggregate flavours (state-stored and event-sourced) expose `pendingEvents` under the same name, so a generic Repository.save() can harvest them uniformly.
 
-- **`AggregateRoot<TState, TId, TEvent?>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `IAggregateRoot<TId>`. The optional `TEvent` parameter (defaults to `unknown`) enables type-safe domain events — only aggregates that specify it get compile-time event validation. Provides ID and version management, state management, domain event tracking, and snapshot support. Use this when you don't need Event Sourcing but still want aggregate patterns with versioning and state management.
+- **`AggregateRoot<TState, TId, TEvent?>`** - Base class for creating Aggregate Root Entities without Event Sourcing. Implements `IAggregateRoot<TId, TEvent>`. The optional `TEvent` parameter (defaults to `never`) enables type-safe domain events — only aggregates that specify it can record events at all. Provides ID and version management, state management, pending-event tracking, and snapshot support.
 
 - **`EventSourcedAggregate<TState, TEvent, TId>`** - Base class for Event-Sourced Aggregate Roots. Extends `Entity` directly (not `AggregateRoot`) so that state changes can only happen through event handlers via `apply()`. Provides event tracking, event validation, history replay, and snapshot support.
 
@@ -301,7 +301,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderDomainEvent> {
   }
 }
 
-// order.domainEvents is ReadonlyArray<OrderDomainEvent> — no cast needed
+// order.pendingEvents is ReadonlyArray<OrderDomainEvent> — no cast needed
 // order.addDomainEvent({ type: "WrongEvent" }) → compile error
 ```
 
@@ -431,13 +431,10 @@ order.confirm();
 order.ship("TRACK-789");
 
 // Access pending events
-console.log(order.pendingEvents); // Array of events not yet persisted
-
-// Helper methods
-console.log(order.hasPendingEvents()); // true
-console.log(order.getEventCount()); // 3
-console.log(order.getLatestEvent()?.type); // "OrderShipped"
-console.log(order.version); // 3 (automatically bumped)
+console.log(order.pendingEvents);          // Array of events not yet persisted
+console.log(order.pendingEvents.length);   // 3
+console.log(order.pendingEvents.at(-1)?.type); // "OrderShipped"
+console.log(order.version);                // 3 (automatically bumped)
 ```
 
 ### Aggregate Features: Snapshots and Configuration
@@ -1139,7 +1136,7 @@ This package is written in TypeScript and provides full type definitions. All ty
 Key exports include:
 - `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()` - Value Object utilities (`voWithValidation` is for the App-Service boundary; Domain construction goes through the `ValueObject` base class which throws via `validate()`)
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
-- `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`). Optional `TEvent` parameter enables type-safe domain events
+- `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId, TEvent>`). Optional `TEvent` parameter enables type-safe domain events
 - `EventSourcedAggregate<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Roots (extends `Entity`, implements `IEventSourcedAggregate<TId, TEvent>`)
 - `AggregateConfig` - Configuration interface for `AggregateRoot` (controls per-call `setState` version-bump behavior)
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
@@ -1286,7 +1283,7 @@ class CreateOrderHandler implements CommandHandler<CreateOrderCommand, OrderId> 
 
     // 3. Save
     await this.repository.save(order);
-    await this.eventBus.publish(order.domainEvents);
+    await this.eventBus.publish(order.pendingEvents);
 
     return ok(order.id);
     // 4. Aggregate is garbage collected when method returns
@@ -1493,7 +1490,7 @@ class OrderService {
     }
 
     await this.repository.save(order);
-    await this.eventBus.publish(order.domainEvents);
+    await this.eventBus.publish(order.pendingEvents);
 
     return ok(order.id);
     // order is garbage collected here

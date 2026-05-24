@@ -397,7 +397,7 @@ describe("EventSourcedAggregate", () => {
 			// State and version unchanged — no pending event added
 			expect(aggregate.stateSnapshot()).toEqual(before);
 			expect(aggregate.versionSnapshot()).toBe(versionBefore);
-			expect(aggregate.hasPendingEvents()).toBe(false);
+			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 	});
 
@@ -487,7 +487,6 @@ describe("EventSourcedAggregate", () => {
 
 			expect(aggregate.version).toBe(99);
 			expect(aggregate.pendingEvents).toHaveLength(0);
-			expect(aggregate.hasPendingEvents()).toBe(false);
 		});
 	});
 
@@ -500,40 +499,6 @@ describe("EventSourcedAggregate", () => {
 			expect(() => leaked.push({ fake: "event" })).toThrow();
 
 			expect(aggregate.pendingEvents.length).toBe(eventsBefore);
-		});
-	});
-
-	describe("Helper methods", () => {
-		it("should check if aggregate has pending events", () => {
-			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
-
-			expect(aggregate.hasPendingEvents()).toBe(true);
-			expect(aggregate.getEventCount()).toBe(1);
-
-			aggregate.clearPendingEvents();
-
-			expect(aggregate.hasPendingEvents()).toBe(false);
-			expect(aggregate.getEventCount()).toBe(0);
-		});
-
-		it("should get latest event", () => {
-			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
-
-			const latest = aggregate.getLatestEvent();
-			expect(latest).toBeDefined();
-			expect(latest?.type).toBe("TestEventCreated");
-
-			aggregate.updateValue(20);
-
-			const newLatest = aggregate.getLatestEvent();
-			expect(newLatest?.type).toBe("TestEventUpdated");
-		});
-
-		it("should return undefined for latest event when no events exist", () => {
-			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
-
-			expect(aggregate.getLatestEvent()).toBeUndefined();
 		});
 	});
 

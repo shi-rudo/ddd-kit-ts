@@ -32,7 +32,7 @@ import type {
  * }
  * ```
  */
-export interface IAggregateRoot<TId extends Id<string>> {
+export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
 	/**
 	 * Unique identifier of the aggregate root entity.
 	 */
@@ -46,10 +46,26 @@ export interface IAggregateRoot<TId extends Id<string>> {
 	readonly version: Version;
 
 	/**
+	 * Read-only list of domain events recorded on this aggregate that have
+	 * not yet been flushed to the outbox / persistence layer. Both state-
+	 * stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`)
+	 * aggregates expose them under the same name, so Repository.save() can
+	 * harvest them uniformly without branching on the aggregate flavour.
+	 */
+	readonly pendingEvents: ReadonlyArray<TEvent>;
+
+	/**
+	 * Clears the pending-event list. Called by `markPersisted` after a
+	 * successful write — the events have been handed off to the outbox
+	 * / event store and are no longer the aggregate's responsibility.
+	 */
+	clearPendingEvents(): void;
+
+	/**
 	 * Post-save hook: a `Repository.save()` implementation calls this with
 	 * the persisted version after a successful write to push the new
-	 * version back into the aggregate and clear any recorded domain events
-	 * (they are now safely on the write side / in the outbox).
+	 * version back into the aggregate and clear pendingEvents (they are
+	 * now safely on the write side / in the outbox).
 	 *
 	 * Required by the interface so a Repository implementation can call it
 	 * via the published `IAggregateRoot` contract without taking the
@@ -65,17 +81,14 @@ export interface IAggregateRoot<TId extends Id<string>> {
  */
 export interface AggregateConfig {
 	/**
-	 * Whether `setState()` should bump the version automatically.
+	 * Whether `setState()` should bump the version automatically when the
+	 * caller omits the per-call `bumpVersion` argument.
 	 *
-	 * Defaults to **`false`** for `AggregateRoot` — because `setState()`
-	 * already takes an explicit `bumpVersion` argument per call, so adding
-	 * an "always bump" config on top would be redundant. Keep it `false`
-	 * unless you have a subclass that never passes `bumpVersion` and you
-	 * want every state change to advance the version anyway.
-	 *
-	 * (Contrast with `EventSourcedAggregate`, which defaults this to
-	 * `true` because every event-sourced state change is per definition a
-	 * versioned commit.)
+	 * Defaults to **`false`** — `setState()` already takes an explicit
+	 * `bumpVersion` argument per call, so the config is just the default
+	 * the per-call argument falls back to. Set to `true` only if you have
+	 * a subclass that never passes `bumpVersion` and you want every state
+	 * change to advance the version anyway.
 	 */
 	autoVersionBump?: boolean;
 }
@@ -124,7 +137,7 @@ export abstract class AggregateRoot<
 	TEvent = never,
 >
 	extends Entity<TState, TId>
-	implements IAggregateRoot<TId> {
+	implements IAggregateRoot<TId, TEvent> {
 	private _version: Version = 0 as Version;
 
 	public get version(): Version {
@@ -137,29 +150,29 @@ export abstract class AggregateRoot<
 
 	private readonly _config: AggregateConfig;
 	private readonly _autoVersionBump: boolean;
-	private _domainEvents: TEvent[] = [];
+	private _pendingEvents: TEvent[] = [];
 
 	/**
-	 * Returns a read-only list of domain events recorded by this aggregate.
-	 * These events are side-effects of state changes.
+	 * Read-only list of domain events recorded on this aggregate that have
+	 * not yet been flushed to the outbox / persistence layer.
 	 */
-	public get domainEvents(): ReadonlyArray<TEvent> {
-		return Object.freeze(this._domainEvents.slice());
+	public get pendingEvents(): ReadonlyArray<TEvent> {
+		return Object.freeze(this._pendingEvents.slice());
 	}
 
 	/**
-	 * Clears the list of recorded domain events.
-	 * Call this after dispatching the events.
+	 * Clears the pending-event list. Call this after the events have been
+	 * dispatched (typically `markPersisted` handles it for you).
 	 */
-	public clearDomainEvents(): void {
-		this._domainEvents = [];
+	public clearPendingEvents(): void {
+		this._pendingEvents = [];
 	}
 
 	/**
 	 * Post-save hook called by a `Repository.save()` implementation to push
-	 * the persisted version back into the in-memory aggregate and clear the
-	 * recorded domain events (they are now safely on the write side / in
-	 * the outbox).
+	 * the persisted version back into the in-memory aggregate and clear
+	 * pendingEvents (they are now safely on the write side / in the
+	 * outbox).
 	 *
 	 * Use this so `save()` can keep its `Promise<void>` return type: the
 	 * caller holds the aggregate reference, which is up to date after this
@@ -167,7 +180,7 @@ export abstract class AggregateRoot<
 	 */
 	public markPersisted(version: Version): void {
 		this.setVersion(version);
-		this._domainEvents = [];
+		this._pendingEvents = [];
 	}
 
 	/**
@@ -268,7 +281,7 @@ export abstract class AggregateRoot<
 	 * @param event - The domain event to record
 	 */
 	protected addDomainEvent(event: TEvent): void {
-		this._domainEvents.push(event);
+		this._pendingEvents.push(event);
 	}
 
 	/**

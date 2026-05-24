@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — Unify `pendingEvents` accessor across both aggregate flavours
+
+`AggregateRoot.domainEvents` / `clearDomainEvents()` are renamed to `pendingEvents` / `clearPendingEvents()`, matching `EventSourcedAggregate`. The shared accessor is hoisted to the `IAggregateRoot<TId, TEvent = never>` interface so a generic `Repository.save()` can harvest pending events uniformly without branching on the aggregate flavour.
+
+```diff
+- aggregate.domainEvents              // ReadonlyArray<TEvent>
+- aggregate.clearDomainEvents()
++ aggregate.pendingEvents             // ReadonlyArray<TEvent>
++ aggregate.clearPendingEvents()
+```
+
+The protected `addDomainEvent(event)` helper on `AggregateRoot` is **unchanged** — the verb-object pattern names what's being added (a domain event), while the container's lifecycle name (`pendingEvents`) describes the not-yet-flushed state. Both readings coexist consistently.
+
+`IAggregateRoot<TId>` gains a second generic param `TEvent` (default `never`) so the interface can carry the typed `pendingEvents` array. Existing consumers writing `IAggregateRoot<OrderId>` keep compiling; `pendingEvents` is `ReadonlyArray<never>` (always empty) for the no-events case.
+
+### Removed — `hasPendingEvents`, `getEventCount`, `getLatestEvent` helpers on `EventSourcedAggregate`
+
+These three convenience methods are deleted. Each was a trivial wrapper that adds API-surface bloat without earning its keep:
+
+```diff
+- aggregate.hasPendingEvents()
+- aggregate.getEventCount()
+- aggregate.getLatestEvent()
++ aggregate.pendingEvents.length > 0
++ aggregate.pendingEvents.length
++ aggregate.pendingEvents.at(-1)
+```
+
+`getEventCount` was actively misleading (a method wrapping `.length`); `getLatestEvent` predates `Array.prototype.at()` being idiomatic. Reduces the symmetric surface across both aggregate flavours.
+
 ### Fixed — `restoreFromSnapshot*` now deep-clones the snapshot input
 
 `AggregateRoot.restoreFromSnapshot` and `EventSourcedAggregate.restoreFromSnapshotWithEvents` previously did only `freezeShallow(snapshot.state)`, leaving nested fields aliased to the caller's snapshot object. A caller that mutated a nested field on `snapshot.state` after passing it in would silently bleed the mutation into the live aggregate (only the top-level object was frozen).

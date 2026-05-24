@@ -57,7 +57,7 @@ When two operations might still race despite operation-scoping (two Workers, two
 
 ```ts
 async function save(order: Order): Promise<void> {
-  const expectedVersion = order.version - order.domainEvents.length;
+  const expectedVersion = order.version - order.pendingEvents.length;
   const writeResult = await db
     .update(orders)
     .set({ ...orderToRow(order) })

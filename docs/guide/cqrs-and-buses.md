@@ -123,7 +123,7 @@ const result = await withCommit(
     const order = await repo.getByIdOrFail(orderId);
     order.confirm();
     await repo.save(order);
-    return { result: order.id, events: order.domainEvents };
+    return { result: order.id, events: order.pendingEvents };
   },
 );
 ```

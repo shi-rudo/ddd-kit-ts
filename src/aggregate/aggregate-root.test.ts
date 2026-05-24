@@ -313,8 +313,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			agg.update(42, { type: "Updated", value: 42 });
 
 			expect(agg.state.value).toBe(42);
-			expect(agg.domainEvents).toHaveLength(1);
-			expect(agg.domainEvents[0]).toEqual({ type: "Updated", value: 42 });
+			expect(agg.pendingEvents).toHaveLength(1);
+			expect(agg.pendingEvents[0]).toEqual({ type: "Updated", value: 42 });
 		});
 
 		it("does NOT record the event when state validation throws", () => {
@@ -330,7 +330,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// State unchanged AND no event queued — the validateState-throws-
 			// before-addDomainEvent path is enforced by commit().
 			expect(agg.state.value).toBe(10);
-			expect(agg.domainEvents).toHaveLength(0);
+			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
 		it("accepts multiple events and records them in order", () => {
@@ -344,7 +344,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			]);
 
 			expect(agg.state.value).toBe(99);
-			expect(agg.domainEvents.map((e) => e.value)).toEqual([99, 100]);
+			expect(agg.pendingEvents.map((e) => e.value)).toEqual([99, 100]);
 		});
 
 		it("accepts no events (state change only)", () => {
@@ -355,7 +355,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			agg.update(7);
 
 			expect(agg.state.value).toBe(7);
-			expect(agg.domainEvents).toHaveLength(0);
+			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
 		it("always bumps the version, regardless of the autoVersionBump config", () => {
@@ -421,32 +421,32 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			aggregate.recordEvent(1);
 			aggregate.recordEvent(2);
 
-			expect(aggregate.domainEvents.length).toBe(2);
+			expect(aggregate.pendingEvents.length).toBe(2);
 
 			aggregate.markPersisted(42 as Version);
 
 			expect(aggregate.version).toBe(42);
-			expect(aggregate.domainEvents).toHaveLength(0);
+			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
 		it("can be invoked on a fresh aggregate without events", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 			aggregate.markPersisted(7 as Version);
 			expect(aggregate.version).toBe(7);
-			expect(aggregate.domainEvents).toHaveLength(0);
+			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 	});
 
-	describe("domainEvents getter encapsulation", () => {
-		it("does not leak the internal domainEvents array", () => {
+	describe("pendingEvents getter encapsulation", () => {
+		it("does not leak the internal pendingEvents array", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-			const eventsBefore = aggregate.domainEvents.length;
+			const eventsBefore = aggregate.pendingEvents.length;
 
 			// Cast-around the ReadonlyArray contract and try to push directly
-			const leaked = aggregate.domainEvents as unknown as unknown[];
+			const leaked = aggregate.pendingEvents as unknown as unknown[];
 			expect(() => leaked.push({ fake: "event" })).toThrow();
 
-			expect(aggregate.domainEvents.length).toBe(eventsBefore);
+			expect(aggregate.pendingEvents.length).toBe(eventsBefore);
 		});
 	});
 
@@ -492,13 +492,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			const agg = new EventAggregate("id-1" as TestId, { value: 10, status: "inactive" });
 
-			expect(agg.domainEvents).toHaveLength(0);
+			expect(agg.pendingEvents).toHaveLength(0);
 			agg.doSomething();
-			expect(agg.domainEvents).toHaveLength(1);
-			expect(agg.domainEvents[0]).toEqual({ type: "SomethingHappened" });
+			expect(agg.pendingEvents).toHaveLength(1);
+			expect(agg.pendingEvents[0]).toEqual({ type: "SomethingHappened" });
 
-			agg.clearDomainEvents();
-			expect(agg.domainEvents).toHaveLength(0);
+			agg.clearPendingEvents();
+			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
 		it("should support typed domain events via TEvent parameter", () => {
@@ -525,12 +525,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			agg.updateValue(42);
 			agg.activate();
 
-			expect(agg.domainEvents).toHaveLength(2);
-			expect(agg.domainEvents[0]).toEqual({ type: "ValueUpdated", newValue: 42 });
-			expect(agg.domainEvents[1]).toEqual({ type: "Activated" });
+			expect(agg.pendingEvents).toHaveLength(2);
+			expect(agg.pendingEvents[0]).toEqual({ type: "ValueUpdated", newValue: 42 });
+			expect(agg.pendingEvents[1]).toEqual({ type: "Activated" });
 
-			// domainEvents is typed — access event-specific fields without cast
-			const firstEvent = agg.domainEvents[0]!;
+			// pendingEvents is typed — access event-specific fields without cast
+			const firstEvent = agg.pendingEvents[0]!;
 			expect(firstEvent.type).toBe("ValueUpdated");
 		});
 
@@ -552,8 +552,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			const agg = new StrictAggregate("id-1" as TestId, { value: 1, status: "inactive" });
 			agg.doCorrect();
-			expect(agg.domainEvents).toHaveLength(1);
-			expect(agg.domainEvents[0]).toEqual({ type: "OnlyThis", data: "hello" });
+			expect(agg.pendingEvents).toHaveLength(1);
+			expect(agg.pendingEvents[0]).toEqual({ type: "OnlyThis", data: "hello" });
 		});
 	});
 });

@@ -19,12 +19,7 @@ import type {
 export interface IEventSourcedAggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
-> extends IAggregateRoot<TId> {
-	/**
-	 * Returns a read-only list of new, not-yet-persisted events.
-	 */
-	readonly pendingEvents: ReadonlyArray<TEvent>;
-
+> extends IAggregateRoot<TId, TEvent> {
 	/**
 	 * Reconstitutes the aggregate from an event history. Returns `Result`
 	 * because event-stream corruption is an expected recoverable failure
@@ -33,26 +28,6 @@ export interface IEventSourcedAggregate<
 	 * @param history - An ordered list of past events
 	 */
 	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
-
-	/**
-	 * Clears the list of pending events.
-	 */
-	clearPendingEvents(): void;
-
-	/**
-	 * Checks if the aggregate has any pending events.
-	 */
-	hasPendingEvents(): boolean;
-
-	/**
-	 * Returns the number of pending events.
-	 */
-	getEventCount(): number;
-
-	/**
-	 * Returns the latest pending event, if any.
-	 */
-	getLatestEvent(): TEvent | undefined;
 }
 
 type Handler<TState, TEvent extends AnyDomainEvent> = (
@@ -243,18 +218,6 @@ export abstract class EventSourcedAggregate<
 		}
 		this.setVersion((startVersion + history.length) as Version);
 		return ok();
-	}
-
-	public hasPendingEvents(): boolean {
-		return this._pendingEvents.length > 0;
-	}
-
-	public getEventCount(): number {
-		return this._pendingEvents.length;
-	}
-
-	public getLatestEvent(): TEvent | undefined {
-		return this._pendingEvents[this._pendingEvents.length - 1];
 	}
 
 	/**
