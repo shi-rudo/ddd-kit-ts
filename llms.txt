@@ -2,15 +2,20 @@
 
 > Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. Targets Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun. ESM-only.
 
-The library is in 1.0.0-rc.4 (Release Candidate). API is considered stable, breaking changes only on explicit consumer feedback. Architectural choices to know before reading the rest:
+The library is in **1.0.0-rc.7** (Release Candidate). API is materially stable; the next release is 1.0 unless rc.7 surfaces feedback requiring API-level changes. No breaking changes since rc.6 — the rc.7 cycle was hardening, doc completeness, and consumer-feedback follow-through. Architectural choices to know before reading the rest:
 
 - **Domain layer throws `DomainError`-derived exceptions; App-Service boundary returns `Result`.** Aggregates / entity validators / value-object constructors throw on invariant violations (Vernon-canonical). `CommandBus.execute`, `QueryBus.execute`, `withCommit`, and `loadFromHistory` return `Result<T, E>` — the latter only because event-stream corruption is a recoverable infrastructure failure.
 - **Result type comes from `@shirudo/result`** as a peer dependency. Not re-exported.
-- **Error hierarchy** uses `@shirudo/base-error` as a peer dependency. `DomainError<Name>` and `InfrastructureError<Name>` extend `BaseError<Name>` directly. `MissingHandlerError` (programming bug) and `AggregateNotFoundError` + `ConcurrencyConflictError` (infrastructure) are the only library-internal concrete classes.
-- **Aggregates are class-based.** Extend `AggregateRoot` (state stored) or `EventSourcedAggregate` (state derived from events). There is no functional aggregate API.
-- **Event sourcing structurally enforces "record after mutation".** `EventSourcedAggregate.apply()` is atomic: state, event, version commit together; a throwing handler mutates nothing. `AggregateRoot.commit(state, events)` provides the same guarantee for the non-event-sourced path.
+- **Error hierarchy** uses `@shirudo/base-error` as a peer dependency. `DomainError<Name>` and `InfrastructureError<Name>` extend `BaseError<Name>` directly. `MissingHandlerError` (programming bug), `AggregateNotFoundError` and `ConcurrencyConflictError` (infrastructure) are the only library-internal concrete classes. `ConcurrencyConflictError.retryable = true` is picked up by `@shirudo/base-error`'s `isRetryable` predicate.
+- **Aggregates are class-based.** Extend `AggregateRoot` (state stored) or `EventSourcedAggregate` (state derived from events). There is no functional aggregate API. Both have `protected constructor`; construction goes through static factory methods (`Order.place(...)`, Vernon §11 Aggregate Factory). Reconstitution from persistence is a separate static method (`Order.reconstitute(id, state, version)`); see the Reconstitution section in the aggregates guide.
+- **`withCommit` owns the post-save lifecycle.** `Repository.save` is **pure persistence** — it writes the aggregate row(s) and throws `ConcurrencyConflictError` on OCC mismatch, nothing else. The use-case callback returns `{ result, aggregates: [...] }`; `withCommit` harvests `pendingEvents` from each aggregate inside the transaction, writes to `Outbox.add` atomically, commits, then calls `markPersisted` on each aggregate post-commit, then publishes to `EventBus` if wired. This matches the Vernon / Axon / EventFlow unit-of-work pattern.
+- **`markPersisted` is framework-internal.** Subclasses should override the `onPersisted(version)` Template-Method hook instead — overriding `markPersisted` directly without `super` silently leaks `pendingEvents` and double-dispatches events on the next save.
+- **`Repository` must maintain an Identity Map** (Fowler PoEAA): two `getById(id)` calls within the same Unit of Work return the **same in-memory instance**. `withCommit`'s aggregate-dedupe relies on JS object identity for soundness; distinct instances with the same logical id are not detected here.
+- **Event sourcing structurally enforces "record after mutation".** `EventSourcedAggregate.apply()` is atomic: state, event, version commit together; a throwing handler mutates nothing. Aggregate version IS event count (Greg Young / Vernon §9 canonical).
 - **Repository contract is split.** `IRepository<TAgg, TId>` is id-canonical CRUD; `IQueryableRepository<TAgg, TId, TFilter>` adds filter-based querying parameterised over the persistence layer's native filter shape (Drizzle SQL, Prisma WhereInput, Mongo filter docs, in-memory predicates).
-- **In-memory `CommandBus` / `QueryBus`** are zero-config in-process dispatchers — designed for edge runtimes (one Worker invocation), modular monoliths, tests. For cross-process messaging use the `CommandHandler<C,R>` / `QueryHandler<Q,R>` types with your own broker.
+- **In-memory `CommandBus` / `QueryBus`** are zero-config in-process dispatchers — designed for edge runtimes (one Worker invocation), modular monoliths, tests. For cross-process messaging use the `CommandHandler<C,R>` / `QueryHandler<Q,R>` types with your own broker. `InMemoryOutbox<Evt>` ships as the canonical Map-backed reference outbox for tests + single-process workers.
+- **Event-port constraints are tight.** `EventBus<Evt>`, `Outbox<Evt>`, `OutboxRecord<Evt>`, `withCommit<Evt>` all require `Evt extends AnyDomainEvent` (alias for `DomainEvent<string, unknown>`). The library is for *domain* events; non-event tagged unions are rejected at the type level.
+- **Process Managers are aggregates.** A saga / process manager extends `AggregateRoot` (Vernon §12-13); its outputs are commands dispatched via `CommandBus`, not events published via `EventBus`. See `examples/saga/` for the worked example.
 
 ## Installation
 
@@ -26,50 +31,59 @@ Guides live as markdown in the repo (the public docs site is currently offline p
 
 - [README](https://github.com/shi-rudo/ddd-kit-ts/blob/main/README.md): Overview, badges, RC notice. Points here for the rest.
 - [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md): Install + minimal Order aggregate example showing throws, `commit()`, typed events.
-- [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md): The non-obvious calls — Result at the App boundary, no Specification pattern, no Fowler UoW, shallow-freeze state. Read this before adopting.
+- [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md): The non-obvious calls — Result at the App boundary, no Specification pattern, no Fowler UoW, shallow-freeze state, globals-vs-DI trade-off for `EventIdFactory`/`ClockFactory`, Domain Services and Bounded Contexts notes. Read this before adopting.
 
 ### Building blocks
 
 - [Value Objects](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/value-objects.md): `vo()` for deep-frozen records; `ValueObject<T>` base class for behaviour-rich VOs; `voEquals`, `voEqualsExcept`, `voWithValidation` for the App boundary.
-- [Entities](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/entities.md): `Entity<TState, TId>` for child entities; `Identifiable<TId>` for plain id-only records; helpers (`sameEntity`, `findEntityById`, etc.) all branded by `Id<Tag>`.
-- [Aggregate Roots](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/aggregates.md): `AggregateRoot<TState, TId, TEvent>`, the `commit(state, events)` helper, optimistic concurrency via `sameVersion`, snapshots.
-- [Event Sourcing](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-sourcing.md): `EventSourcedAggregate<TState, TEvent, TId>`, `apply()` atomicity, `loadFromHistory` semantics, `restoreFromSnapshotWithEvents` rollback, `markPersisted`.
-- [Domain Events](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-events.md): `createDomainEvent`, frozen events, `EventIdFactory` + `ClockFactory` hooks, UUID v4 vs v7/ULID/KSUID recommendation, factory bootstrap locations.
+- [Entities](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/entities.md): `Entity<TState, TId>` for child entities; `Identifiable<TId>` for plain id-only records; helpers (`sameEntity`, `findEntityById`, etc.) all branded by `Id<Tag>` and accepting `ReadonlyArray<T>` inputs.
+- [Aggregate Roots](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/aggregates.md): `AggregateRoot<TState, TId, TEvent>`, the `commit(state, events)` helper, static-factory convention (Vernon §11 Aggregate Factory), reconstitution pattern (`Order.reconstitute(id, state, version)`), where-invariants-live map (per-state / per-event / per-method / cross-aggregate), optimistic concurrency via `sameVersion`, snapshots, `onPersisted(version)` Template-Method hook.
+- [Event Sourcing](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-sourcing.md): `EventSourcedAggregate<TState, TEvent, TId>`, `apply()` atomicity, `loadFromHistory` as the reconstitution path, `restoreFromSnapshotWithEvents` rollback, snapshot policies (every-N, time-based, background-sweep with trade-offs), the canonical "version IS event count" rule.
+- [Domain Events](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-events.md): `createDomainEvent`, frozen events, `EventIdFactory` + `ClockFactory` hooks, scoped helpers (`withEventIdFactory` / `withClockFactory`) with try/finally restore + thenable-guard, UUID v4 vs v7/ULID/KSUID recommendation, factory bootstrap locations.
 
 ### Application layer
 
 - [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md): The central architectural choice. Error hierarchy (`DomainError` / `InfrastructureError` / `MissingHandlerError`), HTTP mapping table, `isBaseError` predicate, cause-chain examples.
-- [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md): `CommandBus<TMap>`, `QueryBus<TMap>`, strict-typed `register()`, when to use the in-memory bus vs an external broker, `withCommit`.
-- [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md): `IRepository` (id-only) vs `IQueryableRepository<TFilter>`, `getById` vs `getByIdOrFail`, `markPersisted` post-save hook, `ConcurrencyConflictError`.
-- [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md): `TransactionScope` (not Fowler UoW), `Outbox<Evt>` with `add` / `getPending` / `markDispatched`, `withCommit` ordering (commit before publish).
+- [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md): `CommandBus<TMap>`, `QueryBus<TMap>`, strict-typed `register()`, when to use the in-memory bus vs an external broker, `withCommit`'s `{ result, aggregates: [...] }` use-case-return shape, cross-link to Process Manager example.
+- [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md): `IRepository` (id-only) vs `IQueryableRepository<TFilter>`, `getById` vs `getByIdOrFail`, reconstitution inside the read path, Identity Map contract (Fowler PoEAA), `save()` as pure persistence (no `markPersisted` from impl), version=0 INSERT vs version>0 UPDATE convention, deletion-and-domain-events patterns (state transition / hard-delete with event harvest / hard-delete without event), `AggregateNotFoundError` and `ConcurrencyConflictError` as `InfrastructureError` subclasses.
+- [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md): `TransactionScope<TCtx>` (not Fowler UoW — no change tracking), `Outbox<Evt extends AnyDomainEvent>` with `add` / `getPending` / `markDispatched`, `InMemoryOutbox` reference impl, `withCommit` ordering (harvest inside tx → outbox.add → tx commit → markPersisted → bus.publish), event-ordering contract (within-aggregate causal order is sacred, cross-aggregate is incidental — use `EventMetadata.causationId` if you need real causation).
+- [Read-Side Projections](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/projections.md): End-to-end CQRS read flow from outbox-dispatcher to projection-handlers to read-model tables to `QueryBus`. Includes dispatcher-loop pseudocode (polling + queue-based variants), event-type-keyed projection-handler pattern, the canonical `last_event_id` idempotency trick, the projection-vs-process-manager distinction, eventual-consistency UX strategies. Explicit list of what the kit does NOT ship.
 
 ### Advanced
 
-- [Event Upcasting](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-upcasting.md): Why the kit ships no `EventUpcaster` port; recommended consumer pattern at the event-store read boundary.
+- [Event Upcasting](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-upcasting.md): Why the kit ships no `EventUpcaster` port; recommended consumer pattern at the event-store read boundary, using `AnyDomainEvent` for upcaster signatures.
 - [Concurrency](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/concurrency.md): Operation-scoped aggregates, OCC via `ConcurrencyConflictError`, `EventBus.publish` ordering contract.
 - [Edge Runtimes](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/edge-runtimes.md): Cloudflare Workers / Vercel Edge / Deno / Bun specifics; UUID v7 / ULID drop-ins; module-top-level factory bootstrap pattern.
 
+### Examples
+
+- [`examples/order/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/order): Minimal state-stored `Order` aggregate.
+- [`examples/order-with-entity-items/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/order-with-entity-items): Aggregate with child entities.
+- [`examples/rugby/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/rugby): Event-sourced aggregate.
+- [`examples/saga/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga): Process Manager / Saga (Vernon §12-13). Order → Payment → Shipping workflow with happy-path + two compensation flows (payment failure cancels order; shipping failure refunds payment then cancels order). Shows the saga-as-aggregate pattern, `EventBus`-subscribers-as-reflexes wiring, and forward-command compensation. README explains saga-vs-process-manager terminology, production caveats (durable outbox-dispatcher instead of in-process EventBus, idempotent compensating domain methods, scheduled timeouts), and why the kit ships no `Saga` abstraction.
+
 ## API surface (high signal)
 
-- `src/core/errors.ts` — `DomainError`, `InfrastructureError`, `MissingHandlerError`, `AggregateNotFoundError`, `ConcurrencyConflictError`.
-- `src/core/id.ts` — `Id<Tag>` brand and `IdGenerator<Tag>`.
-- `src/aggregate/aggregate.ts` — `Version`, `AggregateSnapshot`, `sameVersion`, plus re-exports.
-- `src/aggregate/aggregate-root.ts` — `AggregateRoot`, `IAggregateRoot`, `AggregateConfig`. Notable: `commit(state, events)` always bumps version.
-- `src/aggregate/event-sourced-aggregate.ts` — `EventSourcedAggregate`, atomic `apply()`, `loadFromHistory` returns `Result<void, DomainError>`.
-- `src/aggregate/domain-event.ts` — `DomainEvent`, `createDomainEvent`, `EventIdFactory`, `ClockFactory`, metadata helpers. Events are deeply frozen.
-- `src/entity/entity.ts` — `Entity`, `Identifiable`, `IEntity`, `freezeShallow`, entity-collection helpers.
+- `src/core/errors.ts` — `DomainError`, `InfrastructureError`, `MissingHandlerError`, `AggregateNotFoundError`, `ConcurrencyConflictError`. All extend `BaseError` from `@shirudo/base-error`. `ConcurrencyConflictError.retryable = true`.
+- `src/core/id.ts` — `Id<Tag>` brand and `IdGenerator<Tag>`. JSDoc spells out collision-resistance requirements (safe: UUIDv4/ULID/UUIDv7/KSUID; unsafe: `Date.now()` alone, non-persistent counters).
+- `src/aggregate/aggregate.ts` — `Version` brand, `AggregateSnapshot`, `sameVersion`, plus re-exports from domain-event.
+- `src/aggregate/aggregate-root.ts` — `AggregateRoot`, `IAggregateRoot<TId, TEvent>`, `AggregateConfig`. `commit(state, events)` always bumps version. `pendingEvents` + `clearPendingEvents` on the interface. `protected onPersisted(version)` Template-Method hook (the safe subclass extension point).
+- `src/aggregate/event-sourced-aggregate.ts` — `EventSourcedAggregate`, atomic `apply()`, `loadFromHistory(history: ReadonlyArray<TEvent>)` returns `Result<void, DomainError>` and IS the reconstitution path. `protected onPersisted(version)` hook (mirrors AggregateRoot).
+- `src/aggregate/domain-event.ts` — `DomainEvent<T, P>`, `AnyDomainEvent` alias (= `DomainEvent<string, unknown>`), `createDomainEvent`, `EventIdFactory`, `ClockFactory`, `setEventIdFactory` / `setClockFactory` globals, **`withEventIdFactory` / `withClockFactory` scoped helpers** with thenable-guard, metadata helpers (`copyMetadata`, `mergeMetadata`). Events are deeply frozen at construction.
+- `src/entity/entity.ts` — `Entity`, `Identifiable`, `IEntity`, `freezeShallow`, entity-collection helpers (`findEntityById`, `hasEntityId`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, `entityIds`) — all accept `ReadonlyArray<T>`.
 - `src/value-object/value-object.ts` — `vo`, `voEquals`, `voEqualsExcept`, `voWithValidation`, `ValueObject` base, `deepFreeze`.
-- `src/events/ports.ts` — `EventBus`, `OnceOptions`, `Outbox`, `OutboxRecord`.
-- `src/events/event-bus.ts` — `EventBusImpl` (publish ordering: input order across events, parallel within event via `Promise.allSettled`).
-- `src/app/command.ts`, `command-bus.ts`, `query.ts`, `query-bus.ts`, `handler.ts` — `Command`, `Query`, `CommandHandler`, `QueryHandler`, `CommandBus<TMap>`, `QueryBus<TMap>`, `withCommit`.
-- `src/repo/repository.ts` — `IRepository`, `IQueryableRepository`.
-- `src/repo/scope.ts` — `TransactionScope`.
+- `src/events/ports.ts` — `EventBus<Evt extends AnyDomainEvent>`, `OnceOptions`, `Outbox<Evt extends AnyDomainEvent>`, `OutboxRecord<Evt extends AnyDomainEvent>`, `EventHandler<Evt>`.
+- `src/events/event-bus.ts` — `EventBusImpl<Evt extends AnyDomainEvent>` (publish ordering: input order across events, parallel within event via `Promise.allSettled`).
+- `src/events/outbox.ts` — `InMemoryOutbox<Evt extends AnyDomainEvent>` Map-backed reference implementation, idempotent on duplicate add by eventId.
+- `src/app/command.ts`, `command-bus.ts`, `query.ts`, `query-bus.ts`, `handler.ts` — `Command`, `Query`, `CommandHandler`, `QueryHandler`, `CommandBus<TMap>`, `QueryBus<TMap>`, **`withCommit<Evt extends AnyDomainEvent, R, TCtx>`** taking `fn: (ctx) => Promise<{ result: R; aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>> }>` — dedupes the returned aggregates array by reference, harvests pending events inside the tx, calls `markPersisted` post-commit on each aggregate, publishes to the bus.
+- `src/repo/repository.ts` — `IRepository<TAgg, TId>`, `IQueryableRepository<TAgg, TId, TFilter>`. `save(agg): Promise<void>` is pure persistence (must NOT call `markPersisted`). JSDoc covers insert vs update convention (version=0 vs version>0) and deletion patterns.
+- `src/repo/scope.ts` — `TransactionScope<TCtx>` generic, no default for `TCtx` (use `TransactionScope<undefined>` for context-free / in-memory scopes).
 
 ## Source repository
 
 - [GitHub repo](https://github.com/shi-rudo/ddd-kit-ts): Source, issues, PRs.
-- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.4). Each rc documents breaking changes + migration paths.
-- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit).
+- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.7). Each rc documents breaking changes + migration paths; rc.6 was the last release with breaking changes; rc.7 was hardening + docs only.
+- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Pre-releases published under the `next` dist-tag.
 
 ## Optional
 
