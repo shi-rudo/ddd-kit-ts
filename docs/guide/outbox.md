@@ -90,30 +90,17 @@ Both `add` and `markDispatched` should be idempotent — the dispatcher may retr
 
 ### Reference implementation
 
+The kit ships an in-memory reference outbox — use it for tests, single-process workers, and quick-start demos:
+
 ```ts
-import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
-import type { Outbox, OutboxRecord } from "@shirudo/ddd-kit";
+import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
-function createInMemoryOutbox(): Outbox<OrderCreated> {
-  const pending = new Map<string, OutboxRecord<OrderCreated>>();
-  return {
-    async add(events) {
-      for (const event of events) {
-        pending.set(event.eventId, { dispatchId: event.eventId, event });
-      }
-    },
-    async getPending(limit) {
-      const all = [...pending.values()];
-      return typeof limit === "number" ? all.slice(0, limit) : all;
-    },
-    async markDispatched(dispatchIds) {
-      for (const id of dispatchIds) pending.delete(id);
-    },
-  };
-}
+const outbox = new InMemoryOutbox<OrderCreated>();
 ```
+
+It uses each event's own `eventId` as the `dispatchId` (the standard choice) and keys storage on `eventId`, so re-adds are naturally idempotent. For production, swap it for an outbox that writes to your transactional store — the outbox row should participate in the same transaction as the aggregate write so events and state commit atomically.
 
 ## `withCommit`: putting it together
 

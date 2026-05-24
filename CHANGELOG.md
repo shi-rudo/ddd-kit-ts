@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `InMemoryOutbox<Evt>` reference implementation
+
+Ships an in-memory `Outbox<Evt>` implementation alongside `EventBusImpl`, so consumers no longer have to copy-paste the Map-backed boilerplate from the docs for every test or quick-start demo:
+
+```ts
+import { InMemoryOutbox } from "@shirudo/ddd-kit";
+
+const outbox = new InMemoryOutbox<OrderEvent>();
+await withCommit({ scope, outbox, bus }, async (tx) => { … });
+```
+
+Uses each event's own `eventId` as the `dispatchId` and keys storage on `eventId`, so re-adds are naturally idempotent. For production, swap it for an outbox backed by your transactional store.
+
 ### BREAKING — `withCommit` use case returns `aggregates`, not `events`; `Repository.save` is pure persistence
 
 `withCommit` now owns the post-save lifecycle (harvest pending events, write outbox, mark persisted after commit, publish to bus). `Repository.save` is responsible for **persistence only** and must NOT call `aggregate.markPersisted(...)` itself. This is the Vernon / Axon / EventFlow unit-of-work pattern — `save` is "I wrote this row"; "this aggregate has been committed" is the orchestrator's call to make.

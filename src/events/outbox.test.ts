@@ -1,36 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
-import type { Outbox, OutboxRecord } from "./ports";
+import { InMemoryOutbox } from "./outbox";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
-/**
- * Minimal reference outbox — the kind of in-memory impl a Worker would use
- * in tests or for very small monoliths. Reuses the event's own `eventId`
- * as the dispatch id (a common, clean choice).
- */
-function createInMemoryOutbox(): Outbox<OrderCreated> {
-	const pending = new Map<string, OutboxRecord<OrderCreated>>();
-	return {
-		async add(events) {
-			for (const event of events) {
-				const id = event.eventId;
-				pending.set(id, { dispatchId: id, event });
-			}
-		},
-		async getPending(limit) {
-			const all = [...pending.values()];
-			return typeof limit === "number" ? all.slice(0, limit) : all;
-		},
-		async markDispatched(dispatchIds) {
-			for (const id of dispatchIds) pending.delete(id);
-		},
-	};
-}
-
-describe("Outbox port", () => {
+describe("InMemoryOutbox", () => {
 	it("getPending returns everything added until something is marked", async () => {
-		const outbox = createInMemoryOutbox();
+		const outbox = new InMemoryOutbox<OrderCreated>();
 		const e1 = createDomainEvent("OrderCreated", { orderId: "o-1" });
 		const e2 = createDomainEvent("OrderCreated", { orderId: "o-2" });
 
@@ -44,7 +20,7 @@ describe("Outbox port", () => {
 	});
 
 	it("markDispatched removes only the matching records", async () => {
-		const outbox = createInMemoryOutbox();
+		const outbox = new InMemoryOutbox<OrderCreated>();
 		const e1 = createDomainEvent("OrderCreated", { orderId: "o-1" });
 		const e2 = createDomainEvent("OrderCreated", { orderId: "o-2" });
 		await outbox.add([e1, e2]);
@@ -57,7 +33,7 @@ describe("Outbox port", () => {
 	});
 
 	it("markDispatched is idempotent on already-marked ids", async () => {
-		const outbox = createInMemoryOutbox();
+		const outbox = new InMemoryOutbox<OrderCreated>();
 		const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
 		await outbox.add([e]);
 
@@ -73,7 +49,7 @@ describe("Outbox port", () => {
 	});
 
 	it("getPending respects the optional limit", async () => {
-		const outbox = createInMemoryOutbox();
+		const outbox = new InMemoryOutbox<OrderCreated>();
 		await outbox.add([
 			createDomainEvent("OrderCreated", { orderId: "o-1" }),
 			createDomainEvent("OrderCreated", { orderId: "o-2" }),
@@ -82,5 +58,20 @@ describe("Outbox port", () => {
 
 		const firstTwo = await outbox.getPending(2);
 		expect(firstTwo).toHaveLength(2);
+	});
+
+	it("re-adding the same eventId is naturally idempotent", async () => {
+		// Re-adds (via at-least-once consumers, transactional outbox-
+		// dispatcher retries, etc.) overwrite the existing entry keyed on
+		// eventId, so getPending still returns each event exactly once.
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const e = createDomainEvent("OrderCreated", { orderId: "o-1" });
+
+		await outbox.add([e]);
+		await outbox.add([e]); // duplicate add
+
+		const pending = await outbox.getPending();
+		expect(pending).toHaveLength(1);
+		expect(pending[0]?.dispatchId).toBe(e.eventId);
 	});
 });

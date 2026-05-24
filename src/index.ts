@@ -18,6 +18,7 @@ export * from "./core/id";
 // Entities
 export * from "./entity/entity";
 export * from "./events/event-bus";
+export * from "./events/outbox";
 // Events
 export * from "./events/ports";
 // Repository
