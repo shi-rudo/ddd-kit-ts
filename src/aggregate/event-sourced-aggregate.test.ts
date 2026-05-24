@@ -488,6 +488,78 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(99);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
+
+		it("calls the onPersisted hook after clearing pendingEvents", () => {
+			class HookingAggregate extends TestEventSourcedAggregate {
+				public hookCalls: Array<{
+					version: Version;
+					pendingLengthDuringHook: number;
+				}> = [];
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push({
+						version,
+						pendingLengthDuringHook: this.pendingEvents.length,
+					});
+				}
+			}
+
+			const aggregate = new HookingAggregate("hook-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.updateValue(20);
+
+			aggregate.markPersisted(99 as Version);
+
+			expect(aggregate.hookCalls).toHaveLength(1);
+			expect(aggregate.hookCalls[0]!.version).toBe(99);
+			// onPersisted runs AFTER pendingEvents is cleared, so subclass
+			// hook code can never accidentally read stale events.
+			expect(aggregate.hookCalls[0]!.pendingLengthDuringHook).toBe(0);
+		});
+
+		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
+			// NEGATIVE example — this is the bug pattern hit in production
+			// (a consumer's Restaurant aggregate). Override markPersisted
+			// directly, forget super, framework cleanup never runs, next
+			// withCommit re-dispatches the same events.
+			class BuggyAggregate extends TestEventSourcedAggregate {
+				public sideEffectFired = false;
+				public override markPersisted(_version: Version): void {
+					this.sideEffectFired = true;
+					// MISSING: super.markPersisted(_version)
+				}
+			}
+
+			const buggy = new BuggyAggregate("bug-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			buggy.updateValue(20);
+			buggy.markPersisted(7 as Version);
+
+			expect(buggy.sideEffectFired).toBe(true);
+			// THE BUG: events still in pendingEvents.
+			expect(buggy.pendingEvents.length).toBeGreaterThan(0);
+
+			// ✅ Same intent via onPersisted — framework cleans up first.
+			class FixedAggregate extends TestEventSourcedAggregate {
+				public sideEffectFired = false;
+				protected override onPersisted(_version: Version): void {
+					this.sideEffectFired = true;
+				}
+			}
+
+			const fixed = new FixedAggregate("fix-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			fixed.updateValue(20);
+			fixed.markPersisted(7 as Version);
+
+			expect(fixed.sideEffectFired).toBe(true);
+			expect(fixed.pendingEvents).toHaveLength(0);
+		});
 	});
 
 	describe("pendingEvents getter encapsulation", () => {

@@ -116,14 +116,54 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Post-save hook called by a `Repository.save()` implementation to push
-	 * the persisted version back into the in-memory aggregate and clear the
-	 * pending events (they are now in the event store / outbox). Lets
-	 * `save()` keep its `Promise<void>` return type.
+	 * **Framework lifecycle method — `@sealed`.** Called by `withCommit`
+	 * (or by your own orchestration code, after harvesting `pendingEvents`)
+	 * to push the persisted version back into the in-memory aggregate and
+	 * clear `pendingEvents`. TypeScript has no `final` keyword, but
+	 * subclasses **should not** override this method directly.
+	 *
+	 * Overriding without calling `super.markPersisted(version)` silently
+	 * leaks `pendingEvents` — the next `withCommit` will re-dispatch them
+	 * through the outbox, double-emitting events. This bug has been hit
+	 * in production by consumers; the {@link onPersisted} hook below is
+	 * the safer extension point.
+	 *
+	 * If you must override (legitimate cases are very rare), call
+	 * `super.markPersisted(version)` FIRST so the framework's cleanup
+	 * runs, then add your logic afterwards.
+	 *
+	 * @param version - The version assigned by the persistence layer
+	 * @see onPersisted — the safe extension point for subclasses
 	 */
 	public markPersisted(version: Version): void {
 		this.setVersion(version);
 		this._pendingEvents = [];
+		this.onPersisted(version);
+	}
+
+	/**
+	 * Subclass extension point — fires AFTER {@link markPersisted} has
+	 * updated the version and cleared `pendingEvents`. Override this for
+	 * post-persist logging, metrics, or cache-eviction without risk of
+	 * breaking the framework's pendingEvents cleanup.
+	 *
+	 * The default implementation is a no-op. Subclasses do NOT need to
+	 * call `super.onPersisted(version)` — there is nothing in the parent
+	 * implementation to preserve.
+	 *
+	 * **`onPersisted` deliberately receives only the version, not the
+	 * drained events.** Event-driven post-persist logic (aggregate-level
+	 * audit logging, per-event-type side effects) belongs in `EventBus`
+	 * subscribers or the outbox dispatcher — that is the proper
+	 * Aggregate-Boundary separation. Building event-aware logic into
+	 * `onPersisted` couples aggregate lifecycle to event processing and
+	 * recreates the boundary problems Vernon's aggregate discipline is
+	 * meant to prevent.
+	 *
+	 * @param version - The version that was just persisted
+	 */
+	protected onPersisted(_version: Version): void {
+		// no-op by default
 	}
 
 	protected constructor(id: TId, initialState: TState) {

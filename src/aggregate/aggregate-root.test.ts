@@ -435,6 +435,114 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.version).toBe(7);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
+
+		it("calls the onPersisted hook after clearing pendingEvents", () => {
+			// onPersisted is the framework-safe subclass extension point.
+			// It fires AFTER pendingEvents is cleared, so a subclass can't
+			// accidentally read stale events when implementing the hook.
+			class HookingAggregate extends AggregateRoot<TestState, TestId, {
+				type: "TestRecorded";
+				value: number;
+			}> {
+				public hookCalls: Array<{
+					version: Version;
+					pendingLengthDuringHook: number;
+				}> = [];
+
+				constructor(id: TestId, state: TestState) {
+					super(id, state);
+				}
+				recordEvent(value: number): void {
+					this.addDomainEvent({ type: "TestRecorded", value });
+				}
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push({
+						version,
+						pendingLengthDuringHook: this.pendingEvents.length,
+					});
+				}
+			}
+
+			const aggregate = new HookingAggregate("hook-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			aggregate.recordEvent(1);
+			aggregate.recordEvent(2);
+
+			aggregate.markPersisted(99 as Version);
+
+			expect(aggregate.hookCalls).toHaveLength(1);
+			expect(aggregate.hookCalls[0]!.version).toBe(99);
+			// Critical: pendingEvents is already empty when the hook runs.
+			// This is what makes onPersisted the safe extension point.
+			expect(aggregate.hookCalls[0]!.pendingLengthDuringHook).toBe(0);
+		});
+
+		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
+			// NEGATIVE example: this is the bug pattern hit in production.
+			// A subclass overrides markPersisted directly, forgets to call
+			// super, and the framework's pendingEvents cleanup never runs.
+			// Next save re-dispatches the same events through the outbox.
+			class BuggyAggregate extends AggregateRoot<TestState, TestId, {
+				type: "TestRecorded";
+				value: number;
+			}> {
+				public sideEffectFired = false;
+				constructor(id: TestId, state: TestState) {
+					super(id, state);
+				}
+				recordEvent(value: number): void {
+					this.addDomainEvent({ type: "TestRecorded", value });
+				}
+				// ❌ This is the bug: override without super.markPersisted(version)
+				public override markPersisted(_version: Version): void {
+					this.sideEffectFired = true;
+					// MISSING: super.markPersisted(_version)
+					// pendingEvents stays populated. Catastrophic under withCommit.
+				}
+			}
+
+			const buggy = new BuggyAggregate("bug-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			buggy.recordEvent(1);
+			buggy.markPersisted(5 as Version);
+
+			expect(buggy.sideEffectFired).toBe(true);
+			// THE BUG: pendingEvents was NOT cleared.
+			expect(buggy.pendingEvents).toHaveLength(1);
+
+			// ✅ The fix: same intent via onPersisted, framework cleanup
+			// runs first, side-effect still fires.
+			class FixedAggregate extends AggregateRoot<TestState, TestId, {
+				type: "TestRecorded";
+				value: number;
+			}> {
+				public sideEffectFired = false;
+				constructor(id: TestId, state: TestState) {
+					super(id, state);
+				}
+				recordEvent(value: number): void {
+					this.addDomainEvent({ type: "TestRecorded", value });
+				}
+				protected override onPersisted(_version: Version): void {
+					this.sideEffectFired = true;
+					// pendingEvents is already empty here — by design.
+				}
+			}
+
+			const fixed = new FixedAggregate("fix-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			fixed.recordEvent(1);
+			fixed.markPersisted(5 as Version);
+
+			expect(fixed.sideEffectFired).toBe(true);
+			expect(fixed.pendingEvents).toHaveLength(0);
+		});
 	});
 
 	describe("pendingEvents getter encapsulation", () => {

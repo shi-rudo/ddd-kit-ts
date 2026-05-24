@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `onPersisted(version)` Template-Method hook on both aggregate flavours
+
+`AggregateRoot` and `EventSourcedAggregate` both gain a `protected onPersisted(version: Version): void` no-op default. `markPersisted(version)` calls it after the framework's cleanup (`setVersion` + `pendingEvents = []`). Subclasses should override `onPersisted` for post-persist logging, metrics, or cache-eviction — never override `markPersisted` directly.
+
+Why: a real-world consumer (omakaseHub) shipped an aggregate that overrode `markPersisted(version)` without calling `super.markPersisted(version)`. The framework's `pendingEvents = []` reset never ran; subsequent `withCommit` calls re-harvested the same events and double-dispatched them through the outbox. The bug was in user code (forgotten `super`) but the API surface invited it — `markPersisted` was the only obvious lifecycle hook, with no extension point next to it. This release adds the proper extension point structurally.
+
+Design choices documented in JSDoc:
+
+- **`onPersisted` receives only `version`, not the drained events.** Aggregate-level event-driven logic (audit logging, per-event-type side effects) belongs in `EventBus` subscribers or the outbox dispatcher — that's the Aggregate-Boundary separation Vernon's aggregate discipline is meant to preserve. Building event-aware logic into `onPersisted` recreates exactly the boundary problems the framework wants to keep apart. (Object-shape `onPersisted({ version, drainedEvents })` was considered and rejected for this reason; if a use case appears it can be added additively without breaking.)
+- **Cleanup runs BEFORE the hook.** `markPersisted` does `setVersion` + `pendingEvents = []` *then* calls `onPersisted(version)`. Hook code can't accidentally read stale events.
+- **`onPersisted` stays off `IAggregateRoot`.** Interface is the repository contract (`markPersisted` callable from outside); the hook is an internal subclass extension point. Keeps mock-shaped consumers (`{ id, version, markPersisted, … }`) compiling without ceremony.
+
+Regression tests on both flavours assert the positive path (subclass overrides `onPersisted`, hook fires with correct version, `pendingEvents` is empty at hook time) and include a **negative example test** documenting the bug pattern with explicit ❌/✅ contrast — same intent expressed via direct `markPersisted` override (broken) vs `onPersisted` override (correct), so any future reader sees exactly what to avoid.
+
+#### Migration
+
+If you override `markPersisted(version)`, switch to overriding `onPersisted(version)`:
+
+```diff
+  class Restaurant extends AggregateRoot<RestaurantState, RestaurantId, RestaurantEvent> {
+-   public override markPersisted(version: Version): void {
+-     // logger.info("persisted", { id: this.id, version });
+-     // ❌ Missing super call — pendingEvents leaks; next save double-dispatches
+-   }
++   protected override onPersisted(version: Version): void {
++     // logger.info("persisted", { id: this.id, version });
++     // ✅ Framework cleanup already ran; pendingEvents is empty here.
++   }
+  }
+```
+
+Direct `markPersisted` overrides without `super.markPersisted(version)` silently leak `pendingEvents` — caught in production on rc.5/rc.6 by a consumer (Restaurant aggregate at omakaseHub). The kit cannot detect the missing `super` in TypeScript (no `final` keyword), but the JSDoc `@sealed`-style warning now flags it explicitly.
+
+Non-breaking — existing overrides that DO call `super.markPersisted` continue to work; the new hook simply gives consumers a safer place to put their logic.
+
 ### Added — Reconstitution pattern documented (state-stored + event-sourced)
 
 The kit shipped the mechanisms but only documented half: `loadFromHistory` is the canonical reconstitution path for event-sourced aggregates, but the state-stored case (`Repository.getById` reading a row and rebuilding an `Order` instance) had no documented pattern at all. Consumers had to discover that `protected constructor` + `protected setVersion` together form the kit's state-stored reconstitution surface, accessed via a `static Order.reconstitute(id, state, version)` helper on the aggregate.
