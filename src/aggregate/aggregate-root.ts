@@ -213,6 +213,15 @@ export abstract class AggregateRoot<
 	 * recreates the boundary problems Vernon's aggregate discipline is
 	 * meant to prevent.
 	 *
+	 * **The hook must return synchronously.** `markPersisted` is `void`-
+	 * typed and calls `onPersisted` without `await`. TypeScript's
+	 * permissive `void` will accept an `async`-override returning
+	 * `Promise<void>`, but the returned promise is fire-and-forget —
+	 * any rejection becomes an unhandled rejection and `withCommit`
+	 * proceeds without waiting. For asynchronous work, subscribe to the
+	 * relevant domain event on the `EventBus` instead; that is the
+	 * properly awaited extension point.
+	 *
 	 * @param version - The version that was just persisted
 	 */
 	protected onPersisted(_version: Version): void {
