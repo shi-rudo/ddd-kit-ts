@@ -80,11 +80,21 @@ The Drizzle snippet above uses `expected + 1` for clarity, but in a state-stored
 
 ### Deletion and Domain Events
 
-`delete(id)` is **pure persistence** — it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from. If a use case needs an `AggregateDeleted`-style event recorded atomically with the row removal, you pick one of three canonical patterns:
+`delete(id)` is **pure persistence** — it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from.
 
-#### 1. Soft-delete (preferred)
+Before reaching for it, ask whether *"delete"* is the right domain verb at all. Most user-facing "deletes" are something else in the domain language — *cancel*, *archive*, *close*, *deactivate*, *terminate*, *withdraw*, *expire*. Those are **state transitions**, not row removals; they have proper names in the ubiquitous language and they record events. If your use case has a proper name, use it.
 
-DDD literature (Vernon, Khononov) defaults to soft-delete: model deletion as a state transition that records a domain event. The row stays; a status column marks it archived. `delete(id)` is never called by the use case — instead the use case calls `save()` with the state-mutated aggregate.
+`delete(id)` belongs in the toolkit for the genuinely different cases: regulated data must physically vanish, an aggregate has no domain meaning anymore, or you're cleaning up infrastructure rows that were never real domain objects in the first place.
+
+::: info Event-Sourcing note
+In pure event-sourced systems `IRepository.delete` is rarely meaningful — the aggregate's end-of-lifecycle lives in the stream as an event (`Closed`, `Terminated`), and the identity persists in the event log forever. `delete` applies primarily to state-stored aggregates and to snapshot / projection tables.
+:::
+
+Three canonical patterns, applied per use case:
+
+#### 1. State transition that records an event (the most common case)
+
+When the user says "delete the order" but the domain actually means *cancel*, *archive*, *close* — model it as a state transition with a domain method that records the corresponding event. The row stays in the table; a status column marks the transition. `delete(id)` is never called.
 
 ```ts
 // Domain method on the aggregate
@@ -114,7 +124,7 @@ The audit trail is preserved (the event documents *who* archived *what* and *whe
 
 #### 2. Hard-delete with event harvest
 
-For regulatory deletion (GDPR right-to-be-forgotten, etc.) where the row genuinely must disappear from the primary store, record the deletion event on the aggregate first, then call `delete(id)` inside the same transactional callback. Return the aggregate in `withCommit`'s `aggregates` array so its pending events flow through the outbox before the row is gone:
+When the row genuinely must disappear from the primary store — privacy/regulatory deletion (GDPR right-to-be-forgotten), data-retention purge after a contractual window, true subscription-termination — but the disappearance itself is a domain fact subscribers care about, record the deletion event on the aggregate first, then call `delete(id)` inside the same transactional callback. Return the aggregate in `withCommit`'s `aggregates` array so its pending events flow through the outbox before the row is gone:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -158,9 +168,13 @@ Skip this path if anything else in the system might care about the disappearance
 
 #### Choosing between them
 
-- **Default to pattern 1.** Audit trail + replay-safety + simple use cases.
-- **Pattern 2 only when the row truly must vanish** (legal/regulatory). Be explicit about which downstream consumers process `OrderDeleted` (cache eviction, projection cleanup, archive copy).
-- **Pattern 3 only for internal housekeeping** where deletion is invisible to the domain.
+Decide by **what the operation means in your domain**, not by a default:
+
+- **Pattern 1** if the user-facing "delete" maps to a real domain operation (*cancel*, *archive*, *close*, *deactivate*). This is most user-initiated cases. Audit trail + replay-safety come for free.
+- **Pattern 2** if the row truly must vanish *and* the disappearance is something subscribers should react to (cache eviction, projection cleanup, archive copy elsewhere, downstream system notification).
+- **Pattern 3** if deletion is invisible to the domain — abandoned-cart cleanup, expired session rows, infrastructure GC. If you find yourself wanting a Pattern 3 hard-delete for something that has identity in the ubiquitous language, you probably want Pattern 1 or 2 instead.
+
+Aggregates have identity; identity has a lifecycle worth recording. Patterns 1 and 2 honour that. Pattern 3 is for rows that were never really aggregates to begin with.
 
 ## `IQueryableRepository` — bring your own filter
 

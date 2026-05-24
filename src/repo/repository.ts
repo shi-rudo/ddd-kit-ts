@@ -91,26 +91,41 @@ export interface IRepository<
 	 * harvest pending events from the aggregate (the contract takes
 	 * only the id, so there is no aggregate to harvest from).
 	 *
-	 * If you need an `AggregateDeleted` event recorded atomically with
-	 * the row removal, the DDD-canonical patterns are:
+	 * Before reaching for `delete`, ask whether the user-facing "delete"
+	 * is the right domain verb. Most are actually state transitions
+	 * (*cancel*, *archive*, *close*, *deactivate*, *terminate*) with
+	 * proper domain names that should be modelled as state changes plus
+	 * a recorded event — not as row removal.
 	 *
-	 * 1. **Soft-delete (preferred).** Add a domain method that mutates
-	 *    state and records the event (e.g. `order.archive()` records
-	 *    `OrderArchived`), then call `save(aggregate)`. The row stays;
-	 *    a status column marks it archived. No `delete()` call needed.
-	 *    Preserves audit trail, replays cleanly. See
-	 *    `docs/guide/repository.md` → "Deletion and Domain Events".
+	 * `delete(id)` belongs in the toolkit for three distinct cases, in
+	 * decreasing order of common occurrence (see
+	 * `docs/guide/repository.md` → "Deletion and Domain Events" for
+	 * worked examples):
 	 *
-	 * 2. **Hard-delete with event harvest.** Inside `withCommit`'s
-	 *    transactional callback, load the aggregate, call a domain
-	 *    method that records the deletion event, then call `delete(id)`
-	 *    in the same transaction. Return the aggregate in the
-	 *    `aggregates` array so `withCommit` harvests its pending events
-	 *    into the outbox before the row is gone.
+	 * 1. **State transition that records an event.** The user-facing
+	 *    "delete" maps to a real domain operation (e.g. `order.cancel()`,
+	 *    `order.archive()`). Call `save(aggregate)`; the row stays with
+	 *    a status column. `delete(id)` is never called by the use case.
 	 *
-	 * 3. **Hard-delete without event.** Use `delete(id)` directly when
-	 *    the aggregate has no domain meaning anymore and no subscriber
-	 *    needs to know (e.g. abandoned-cart cleanup, internal GC).
+	 * 2. **Hard-delete with event harvest.** The row genuinely must
+	 *    vanish (regulatory purge, retention-window expiry, true
+	 *    termination) *and* the disappearance is a domain fact
+	 *    subscribers care about. Inside `withCommit`'s transactional
+	 *    callback, record the deletion event on the aggregate, then
+	 *    call `delete(id)`. Return the aggregate in the `aggregates`
+	 *    array so `withCommit` harvests its pending events into the
+	 *    outbox before the row is gone.
+	 *
+	 * 3. **Hard-delete without event.** Deletion is invisible to the
+	 *    domain (abandoned-cart cleanup, expired session rows). No
+	 *    subscriber cares. If the entity has identity in the ubiquitous
+	 *    language, you probably want path 1 or 2 instead.
+	 *
+	 * In pure event-sourced systems `delete` is rarely meaningful —
+	 * end-of-lifecycle there is a `Closed` / `Terminated` event in the
+	 * stream, and identity persists in the event log. `delete` applies
+	 * primarily to state-stored aggregates and snapshot / projection
+	 * tables.
 	 */
 	delete(id: TId): Promise<void>;
 }

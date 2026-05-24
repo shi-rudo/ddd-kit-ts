@@ -9,13 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Documentation for `Repository.delete` + domain-event pipeline
 
-`IRepository.delete(id)` is pure persistence — the contract takes only the id, so there's no aggregate to harvest pending events from. Consumers who need an `AggregateDeleted`-style event recorded atomically with the row removal had to figure out the wiring themselves. Now spelled out in three canonical patterns (`docs/guide/repository.md` → "Deletion and Domain Events"):
+`IRepository.delete(id)` is pure persistence — the contract takes only the id, so there's no aggregate to harvest pending events from. Consumers who need an event recorded atomically with the row removal had to figure out the wiring themselves. Now spelled out in three canonical patterns (`docs/guide/repository.md` → "Deletion and Domain Events"), framed around the right question: *"is `delete` even the right domain verb here?"* Most user-facing deletes are state transitions (cancel, archive, close, deactivate, terminate) with proper domain names — they aren't deletes at all.
 
-1. **Soft-delete (preferred)** — model deletion as a state transition that records a domain event. `delete()` is never called by the use case; `save()` persists the new status. Preserves audit trail and replays cleanly.
-2. **Hard-delete with event harvest** — for regulatory deletion (GDPR etc.). Inside `withCommit`'s transactional callback: record the deletion event on the aggregate, call `delete(id)`, return the aggregate in `aggregates`. The outbox receives the event atomically before the row vanishes.
-3. **Hard-delete without event** — for internal GC where deletion is invisible to the domain.
+1. **State transition that records an event** — the most common case. The use case calls a domain method like `order.archive()` or `subscription.cancel()`; `save()` persists the new state; `delete(id)` is never called.
+2. **Hard-delete with event harvest** — when the row truly must vanish (privacy/regulatory purge, retention windows, true termination) *and* the disappearance is a domain fact subscribers care about. Inside `withCommit`: record the event on the aggregate, call `delete(id)`, return the aggregate in `aggregates[]` so the outbox receives the event before the row is gone.
+3. **Hard-delete without event** — internal GC where deletion is invisible to the domain (abandoned carts, expired sessions). If the entity has identity in the ubiquitous language, you probably want pattern 1 or 2 instead.
 
-`IRepository.delete`'s JSDoc now points at the doc and summarises the three patterns inline.
+The new section also notes that `IRepository.delete` is rarely meaningful in pure event-sourced systems — end-of-lifecycle there lives in the stream as a `Closed` / `Terminated` event, and identity persists in the event log. `delete` applies primarily to state-stored aggregates and snapshot tables.
+
+`IRepository.delete`'s JSDoc points at the doc and summarises the three patterns inline.
 
 ### Added — Read-Side Projections guide (`docs/guide/projections.md`)
 
