@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Reconstitution pattern documented (state-stored + event-sourced)
+
+The kit shipped the mechanisms but only documented half: `loadFromHistory` is the canonical reconstitution path for event-sourced aggregates, but the state-stored case (`Repository.getById` reading a row and rebuilding an `Order` instance) had no documented pattern at all. Consumers had to discover that `protected constructor` + `protected setVersion` together form the kit's state-stored reconstitution surface, accessed via a `static Order.reconstitute(id, state, version)` helper on the aggregate.
+
+New "Reconstitution" section in `docs/guide/aggregates.md` makes the convention explicit and grounds it in Vernon IDDD §11's explicit factory-vs-reconstitution distinction. Notes the terminology variations across DDD authors (Vernon: *reconstitute* / *materialize*; Khononov: *reconstitute*; Greg Young: *rehydrate* — all the same operation). Covers both aggregate flavours with worked code, and a "why reconstitution must NOT record events" subsection making the no-side-effects-on-the-event-pipeline rule explicit.
+
+`docs/guide/repository.md` updated with the matching `getById` implementation showing `Order.reconstitute(row.id, row.state, row.version)` in context for both flavours.
+
+Bonus: fixed a stale fact in `repository.md`'s `getByIdOrFail` description — `AggregateNotFoundError` is correctly described as an `InfrastructureError` (post the rc.5 error-hierarchy split), not a `DomainError`.
+
 ### Added — Static-factory convention documented in the aggregates guide
 
 Every example in the kit uses `static Order.place(...)` / `static Customer.register(...)` style construction, but the prose never named the pattern. New section in `docs/guide/aggregates.md` makes the convention explicit and grounds it in Vernon IDDD §11 *Factories* — specifically the **Factory Method on the Aggregate Root** shape (§11 also covers standalone factory classes for cases that need external dependencies; both are valid).

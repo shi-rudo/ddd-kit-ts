@@ -85,6 +85,89 @@ The factory shape buys two things Vernon §11 specifically calls out, plus one e
 
 `AggregateRoot` and `EventSourcedAggregate` both declare `protected constructor(...)`, so `new Order(...)` from outside the aggregate's own file is a compile error. The static factory is the only public construction path.
 
+### Reconstitution: loading existing aggregates from persistence
+
+`Order.place(...)` creates a *new* aggregate — the order is being born into the system, and the factory records the creation event. But when `Repository.getById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
+
+Vernon IDDD §11 distinguishes these two paths explicitly:
+
+- **Factory** — for *new* aggregates. Records creation events, validates new-state invariants.
+- **Reconstitution** — for *existing* aggregates loaded from persistence. No events, just state assembly.
+
+Terminology varies across DDD authors and the broader CQRS/ES community: Vernon uses *reconstitute* and *materialize* interchangeably, Khononov prefers *reconstitute*, Greg Young uses *rehydrate* (especially in event-sourcing contexts). They all describe the same operation.
+
+#### State-stored aggregates: `Order.reconstitute(id, state, version)`
+
+Add a second static method alongside the factory. It calls the protected constructor and the protected `setVersion`, both inherited from `AggregateRoot`, both legal from inside the aggregate's own class body:
+
+```ts
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  static place(id: OrderId, customerId: string): Order {
+    // Factory: new aggregate, records creation event.
+  }
+
+  /**
+   * Reconstitution: assemble an in-memory Order from a persisted row.
+   * No events recorded — the order already exists in the world.
+   */
+  static reconstitute(
+    id: OrderId,
+    state: OrderState,
+    version: Version,
+  ): Order {
+    const order = new Order(id, state);
+    order.setVersion(version);
+    return order;
+  }
+}
+```
+
+The Repository's `getById` becomes mechanical:
+
+```ts
+async getById(id: OrderId): Promise<Order | null> {
+  const row = await this.db
+    .select()
+    .from(orders)
+    .where(eq(orders.id, id))
+    .get();
+  if (!row) return null;
+  return Order.reconstitute(
+    row.id as OrderId,
+    row.state as OrderState,
+    row.version as Version,
+  );
+}
+```
+
+`pendingEvents` is empty after reconstitution — `addDomainEvent` is never called along this path — so the next `withCommit` sees an aggregate with no events to harvest, exactly as the persistence layer represents it.
+
+#### Event-sourced aggregates: `loadFromHistory` is the reconstitution path
+
+For `EventSourcedAggregate`, reconstitution means *replaying the event history*. The kit already exposes this as `loadFromHistory(events)`:
+
+```ts
+async getById(id: OrderId): Promise<Order | null> {
+  const events = await this.eventStore.read(id);
+  if (events.length === 0) return null;
+
+  const order = new Order(id, blankInitialState);  // empty canvas
+  const result = order.loadFromHistory(events);
+  if (result.isErr()) throw result.error;          // corrupt stream
+  return order;
+}
+```
+
+`loadFromHistory` calls each event's handler to fold state forward, advances the version by `events.length`, and records **nothing** in `pendingEvents` — events flowing through `loadFromHistory` are historical facts, not new ones. See [Event Sourcing → Replay](./event-sourcing.md#replay-loadfromhistory) for the full contract, and [Snapshots](./event-sourcing.md#snapshots-restorefromsnapshotwithevents) for the faster path past a threshold.
+
+The "empty canvas" `blankInitialState` is the inert starting state your handlers fold events into — typically a minimal valid `OrderState` with no items, status `"draft"`, etc. Convention: expose it via a static `Order.empty(id)` if it's needed often, or inline it in the repository if it's only used in one place.
+
+#### Why reconstitution must NOT record events
+
+A reconstituted aggregate is, by definition, the same domain object it was before the process restarted. Recording an `OrderRehydrated` event would tell the rest of the system "this thing just happened" — when nothing did. Subscribers, projections, and the outbox would react to a non-event; the read model would double-count; sagas would re-trigger. The cardinal rule of reconstitution is *no side effects on the event pipeline*.
+
+The kit's two reconstitution paths enforce this structurally: `setVersion` writes a number, `loadFromHistory` folds state without recording. Both leave `pendingEvents` empty.
+
 ### `commit(newState, events)`
 
 The canonical record-after-mutation helper:

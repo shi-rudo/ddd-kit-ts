@@ -22,7 +22,42 @@ interface IRepository<TAgg extends IAggregateRoot<TId>, TId extends Id<string>> 
 Two flavours so the Use Case picks the right contract:
 
 - **`getById`** — returns `null` when not found. Use when "missing is a valid outcome" (e.g. idempotent upsert, optional lookup).
-- **`getByIdOrFail`** — throws `AggregateNotFoundError` (a `DomainError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
+- **`getByIdOrFail`** — throws `AggregateNotFoundError` (an `InfrastructureError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
+
+#### Inside the read path: reconstituting the aggregate
+
+Both `getById` variants need to **reconstitute** the aggregate — read its persisted row(s), build the in-memory representation, and return it. This is *not* a factory call: the aggregate already exists; we're not creating it now, so no creation event should fire.
+
+The aggregate's class exposes a `static reconstitute(...)` paired with its factory (see [Reconstitution](./aggregates.md#reconstitution-loading-existing-aggregates-from-persistence) in the aggregates guide). The repository just calls it:
+
+```ts
+// State-stored aggregate
+async getById(id: OrderId): Promise<Order | null> {
+  const row = await this.db
+    .select()
+    .from(orders)
+    .where(eq(orders.id, id))
+    .get();
+  if (!row) return null;
+  return Order.reconstitute(
+    row.id as OrderId,
+    row.state as OrderState,
+    row.version as Version,
+  );
+}
+
+// Event-sourced aggregate — loadFromHistory IS the reconstitution path
+async getById(id: OrderId): Promise<Order | null> {
+  const events = await this.eventStore.read(id);
+  if (events.length === 0) return null;
+  const order = new Order(id, blankInitialState);
+  const result = order.loadFromHistory(events);
+  if (result.isErr()) throw result.error; // corrupt stream
+  return order;
+}
+```
+
+The reconstituted aggregate has `pendingEvents` empty by construction — no spurious events leak into the next `withCommit`.
 
 ### `save` and optimistic concurrency
 
