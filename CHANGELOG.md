@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Process Manager / Saga example (`examples/saga/`)
+
+A worked example showing how `EventBus`, `CommandBus`, `withCommit`, `IRepository`, and `InMemoryOutbox` compose into a Vernon-style Process Manager (IDDD §12-13). Four aggregates — `Order`, `Payment`, `Shipment`, and `CheckoutSaga` (the Process Manager itself) — orchestrate a multi-step checkout flow with three end-to-end tests: happy path, payment-failure compensation, and shipping-failure compensation (payment refunded + order cancelled). The saga is itself an `AggregateRoot<CheckoutSagaState, OrderId>` whose `TEvent` stays at `never`: its outputs are dispatched commands, not published events.
+
+Includes a `README.md` explaining the pattern, the saga-as-aggregate framing, EventBus-subscribers-as-reflexes, the compensation-via-forward-commands principle, and production caveats (the in-process EventBus trigger should be swapped for a durable outbox-dispatcher; saga timeouts need an external scheduler).
+
+The library deliberately ships no `Saga` abstraction — sagas vary too much (choreography vs orchestration, state-machine shapes); the example is the documentation. Cross-linked from `docs/guide/cqrs-and-buses.md`.
+
 ### Added — Documentation for `Repository.delete` + domain-event pipeline
 
 `IRepository.delete(id)` is pure persistence — the contract takes only the id, so there's no aggregate to harvest pending events from. Consumers who need an event recorded atomically with the row removal had to figure out the wiring themselves. Now spelled out in three canonical patterns (`docs/guide/repository.md` → "Deletion and Domain Events"), framed around the right question: *"is `delete` even the right domain verb here?"* Most user-facing deletes are state transitions (cancel, archive, close, deactivate, terminate) with proper domain names — they aren't deletes at all.

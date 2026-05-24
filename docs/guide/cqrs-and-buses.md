@@ -138,3 +138,7 @@ Order of operations:
 Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, the outbox dispatcher will still deliver the events (eventual consistency).
 
 See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract, and [Read-Side Projections](./projections.md) for the canonical CQRS read-side flow (dispatcher → projection handlers → read-model tables → `QueryBus`).
+
+## Process Managers / Sagas
+
+For multi-step workflows that span aggregates (order → payment → shipping → confirmation, with compensating actions on failure), the kit ships no abstraction — but the building blocks compose into the canonical pattern. The Process Manager is itself an `AggregateRoot` whose `EventBus.subscribe` reflexes transition its state and dispatch the next `CommandBus` command. See [`examples/saga/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga) for a worked example with happy-path + two compensation flows.
