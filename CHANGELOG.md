@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 `AggregateRoot` and `EventSourcedAggregate` both gain a `protected onPersisted(version: Version): void` no-op default. `markPersisted(version)` calls it after the framework's cleanup (`setVersion` + `pendingEvents = []`). Subclasses should override `onPersisted` for post-persist logging, metrics, or cache-eviction — never override `markPersisted` directly.
 
-Why: a real-world consumer (omakaseHub) shipped an aggregate that overrode `markPersisted(version)` without calling `super.markPersisted(version)`. The framework's `pendingEvents = []` reset never ran; subsequent `withCommit` calls re-harvested the same events and double-dispatched them through the outbox. The bug was in user code (forgotten `super`) but the API surface invited it — `markPersisted` was the only obvious lifecycle hook, with no extension point next to it. This release adds the proper extension point structurally.
+Why: a consumer shipped an aggregate that overrode `markPersisted(version)` without calling `super.markPersisted(version)`. The framework's `pendingEvents = []` reset never ran; subsequent `withCommit` calls re-harvested the same events and double-dispatched them through the outbox. The bug was in user code (forgotten `super`) but the API surface invited it — `markPersisted` was the only obvious lifecycle hook, with no extension point next to it. This release adds the proper extension point structurally.
 
 Design choices documented in JSDoc:
 
@@ -38,7 +38,7 @@ If you override `markPersisted(version)`, switch to overriding `onPersisted(vers
   }
 ```
 
-Direct `markPersisted` overrides without `super.markPersisted(version)` silently leak `pendingEvents` — caught in production on rc.5/rc.6 by a consumer (Restaurant aggregate at omakaseHub). The kit cannot detect the missing `super` in TypeScript (no `final` keyword), but the JSDoc `@sealed`-style warning now flags it explicitly.
+Direct `markPersisted` overrides without `super.markPersisted(version)` silently leak `pendingEvents` — observed in production usage on rc.5/rc.6. The kit cannot detect the missing `super` in TypeScript (no `final` keyword), but the JSDoc `@sealed`-style warning now flags it explicitly.
 
 Non-breaking — existing overrides that DO call `super.markPersisted` continue to work; the new hook simply gives consumers a safer place to put their logic.
 

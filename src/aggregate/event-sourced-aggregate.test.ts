@@ -519,10 +519,10 @@ describe("EventSourcedAggregate", () => {
 		});
 
 		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
-			// NEGATIVE example — this is the bug pattern hit in production
-			// (a consumer's Restaurant aggregate). Override markPersisted
-			// directly, forget super, framework cleanup never runs, next
-			// withCommit re-dispatches the same events.
+			// NEGATIVE example — this is the bug pattern observed in
+			// production usage. Override markPersisted directly, forget
+			// super, framework cleanup never runs, next withCommit
+			// re-dispatches the same events.
 			class BuggyAggregate extends TestEventSourcedAggregate {
 				public sideEffectFired = false;
 				public override markPersisted(_version: Version): void {
