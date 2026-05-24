@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Document IdGenerator collision and monotonicity requirements
+
+`IdGenerator<Tag>` consumers can today implement `next: () => Date.now().toString() as Id<...>` — compiles fine, looks clean in tests, collides silently in production. The kit makes no attempt to dedupe or detect collisions, so a duplicate id either overwrites an earlier row (under unique-key constraints) or silently aliases two different entities (without).
+
+JSDoc on `IdGenerator` in `src/core/id.ts` now states the requirement explicitly with concrete safe choices (`crypto.randomUUID`, ULID, UUIDv7, KSUID) and the unsafe-looking-fine traps (`Date.now()` alone, process-local counter without persistence, sequential id from non-atomic state). One-paragraph echo of the same requirement in `docs/guide/repository.md` next to the `IdGenerator` introduction, plus a note that `EventIdFactory` has identical semantics.
+
 ### Added — Document Identity-Map requirement for Repository implementations
 
 `docs/guide/repository.md` gains a new "Identity Map: one instance per aggregate per Unit of Work" section that names the unspoken assumption behind `withCommit`'s aggregate-dedupe: two `getById(id)` calls within the same UoW MUST return the **same in-memory instance**. This is Fowler's Identity Map pattern (*PoEAA*, 2002), implicitly assumed by Evans, Vernon, Khononov, and the broader DDD/CQRS-ES canon, but never previously stated in the kit's docs.

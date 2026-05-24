@@ -317,6 +317,8 @@ const id = userIds.next(); // Id<"UserId">
 
 `IdGenerator<Tag>` binds the tag at the generator type, so a `UserId` generator is not interchangeable with an `OrderId` generator.
 
+**Your factory must produce unique ids under concurrent calls.** The kit makes no attempt to dedupe or detect collisions. Collision-resistant choices: `crypto.randomUUID()` (UUIDv4), ULID, UUIDv7 (RFC 9562), KSUID — all designed for the job. Unsafe choices that look fine in tests but collide in production: `Date.now()` alone (duplicates within the same millisecond under load), a process-local counter without persistence (resets on restart, collides with prior runs), a sequential id derived from non-atomic state. The same requirement applies to `EventIdFactory`.
+
 ## `AggregateNotFoundError` and `ConcurrencyConflictError`
 
 Both are `InfrastructureError` subclasses (not `DomainError` — the storage boundary decided the row is absent or stale, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, `toJSON()`, and `getUserMessage()` out of the box.
