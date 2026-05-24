@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Documentation for `Repository.delete` + domain-event pipeline
+
+`IRepository.delete(id)` is pure persistence — the contract takes only the id, so there's no aggregate to harvest pending events from. Consumers who need an `AggregateDeleted`-style event recorded atomically with the row removal had to figure out the wiring themselves. Now spelled out in three canonical patterns (`docs/guide/repository.md` → "Deletion and Domain Events"):
+
+1. **Soft-delete (preferred)** — model deletion as a state transition that records a domain event. `delete()` is never called by the use case; `save()` persists the new status. Preserves audit trail and replays cleanly.
+2. **Hard-delete with event harvest** — for regulatory deletion (GDPR etc.). Inside `withCommit`'s transactional callback: record the deletion event on the aggregate, call `delete(id)`, return the aggregate in `aggregates`. The outbox receives the event atomically before the row vanishes.
+3. **Hard-delete without event** — for internal GC where deletion is invisible to the domain.
+
+`IRepository.delete`'s JSDoc now points at the doc and summarises the three patterns inline.
+
 ### Added — Read-Side Projections guide (`docs/guide/projections.md`)
 
 New documentation page for the canonical CQRS read-side flow: outbox → dispatcher → projection handlers → read-model tables → `QueryBus`. Covers the dispatcher loop pattern (polling + queue-based variants), the event-type-keyed projection-handler shape (mirroring `EventSourcedAggregate.handlers`), the `last_event_id` idempotency trick, the QueryHandler-reads-from-projection wiring, and eventual-consistency UX strategies. Closes a long-standing pedagogical gap where the kit shipped all the pieces but never showed them composed end-to-end.

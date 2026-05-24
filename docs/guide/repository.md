@@ -78,6 +78,90 @@ The actual "what becomes the new persisted version" formula varies by aggregate 
 
 The Drizzle snippet above uses `expected + 1` for clarity, but in a state-stored aggregate `aggregate.version` already IS `expected + 1` after `setState(_, true)` — either form works.
 
+### Deletion and Domain Events
+
+`delete(id)` is **pure persistence** — it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from. If a use case needs an `AggregateDeleted`-style event recorded atomically with the row removal, you pick one of three canonical patterns:
+
+#### 1. Soft-delete (preferred)
+
+DDD literature (Vernon, Khononov) defaults to soft-delete: model deletion as a state transition that records a domain event. The row stays; a status column marks it archived. `delete(id)` is never called by the use case — instead the use case calls `save()` with the state-mutated aggregate.
+
+```ts
+// Domain method on the aggregate
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  archive(reason: string): void {
+    if (this.state.status === "archived") {
+      throw new OrderAlreadyArchivedError(this.id);
+    }
+    this.commit(
+      { ...this.state, status: "archived", archivedAt: new Date() },
+      { type: "OrderArchived", reason, archivedAt: new Date() },
+    );
+  }
+}
+
+// Use case
+await withCommit({ scope, outbox, bus }, async (tx) => {
+  const orderRepository = makeOrderRepository(tx);
+  const order = await orderRepository.getByIdOrFail(orderId);
+  order.archive(reason);
+  await orderRepository.save(order);          // state change persists; outbox gets OrderArchived
+  return { result: undefined, aggregates: [order] };
+});
+```
+
+The audit trail is preserved (the event documents *who* archived *what* and *when*). Replays work cleanly — `OrderArchived` is just another event in the stream. Filter archived rows out of read queries (`WHERE status <> 'archived'`) or build a separate "active orders" projection.
+
+#### 2. Hard-delete with event harvest
+
+For regulatory deletion (GDPR right-to-be-forgotten, etc.) where the row genuinely must disappear from the primary store, record the deletion event on the aggregate first, then call `delete(id)` inside the same transactional callback. Return the aggregate in `withCommit`'s `aggregates` array so its pending events flow through the outbox before the row is gone:
+
+```ts
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  recordDeletion(reason: string): void {
+    // No state change — the row is about to be deleted entirely.
+    // We only need the event in pendingEvents for the outbox.
+    this.addDomainEvent({ type: "OrderDeleted", reason, deletedAt: new Date() });
+  }
+}
+
+await withCommit({ scope, outbox, bus }, async (tx) => {
+  const orderRepository = makeOrderRepository(tx);
+  const order = await orderRepository.getByIdOrFail(orderId);
+  order.recordDeletion(reason);              // records the event
+  await orderRepository.delete(orderId);     // removes the row in the same tx
+  return { result: undefined, aggregates: [order] };
+});
+```
+
+Order of operations inside the transaction:
+
+1. `recordDeletion` puts `OrderDeleted` into `order.pendingEvents`
+2. `delete(orderId)` removes the row
+3. `withCommit` harvests `order.pendingEvents` and writes them to the outbox — *still inside the transaction*, so the event and the row removal commit atomically
+4. After the transaction commits, downstream subscribers see `OrderDeleted` and react (clear caches, expire projections, etc.)
+
+The in-memory `order` object still has its version and (now-empty) state after `withCommit` calls `markPersisted`, but the caller typically discards the reference immediately — the aggregate is gone.
+
+#### 3. Hard-delete without event
+
+When the aggregate has no domain meaning anymore and no subscriber needs to know — abandoned-cart cleanup, internal garbage collection, expired session rows — call `delete(id)` directly. No event, no `withCommit` ceremony:
+
+```ts
+await scope.transactional(async (tx) => {
+  const orderRepository = makeOrderRepository(tx);
+  await orderRepository.delete(orderId);
+});
+```
+
+Skip this path if anything else in the system might care about the disappearance. The cost of recording a deletion event is small; the cost of subscribers silently going stale is much higher.
+
+#### Choosing between them
+
+- **Default to pattern 1.** Audit trail + replay-safety + simple use cases.
+- **Pattern 2 only when the row truly must vanish** (legal/regulatory). Be explicit about which downstream consumers process `OrderDeleted` (cache eviction, projection cleanup, archive copy).
+- **Pattern 3 only for internal housekeeping** where deletion is invisible to the domain.
+
 ## `IQueryableRepository` — bring your own filter
 
 Aggregates that are queried by criteria opt in by implementing the extended interface:

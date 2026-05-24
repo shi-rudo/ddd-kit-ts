@@ -87,7 +87,30 @@ export interface IRepository<
 	save(aggregate: TAgg): Promise<void>;
 
 	/**
-	 * Removes the aggregate by id.
+	 * Removes the aggregate's row by id. Pure persistence — does NOT
+	 * harvest pending events from the aggregate (the contract takes
+	 * only the id, so there is no aggregate to harvest from).
+	 *
+	 * If you need an `AggregateDeleted` event recorded atomically with
+	 * the row removal, the DDD-canonical patterns are:
+	 *
+	 * 1. **Soft-delete (preferred).** Add a domain method that mutates
+	 *    state and records the event (e.g. `order.archive()` records
+	 *    `OrderArchived`), then call `save(aggregate)`. The row stays;
+	 *    a status column marks it archived. No `delete()` call needed.
+	 *    Preserves audit trail, replays cleanly. See
+	 *    `docs/guide/repository.md` → "Deletion and Domain Events".
+	 *
+	 * 2. **Hard-delete with event harvest.** Inside `withCommit`'s
+	 *    transactional callback, load the aggregate, call a domain
+	 *    method that records the deletion event, then call `delete(id)`
+	 *    in the same transaction. Return the aggregate in the
+	 *    `aggregates` array so `withCommit` harvests its pending events
+	 *    into the outbox before the row is gone.
+	 *
+	 * 3. **Hard-delete without event.** Use `delete(id)` directly when
+	 *    the aggregate has no domain meaning anymore and no subscriber
+	 *    needs to know (e.g. abandoned-cart cleanup, internal GC).
 	 */
 	delete(id: TId): Promise<void>;
 }
