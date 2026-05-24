@@ -55,6 +55,15 @@ You don't always. Rules of thumb:
 - **You need to scale reads independently from writes** — projections are the canonical answer.
 - **Read patterns differ from write patterns** (search, full-text, aggregations, list views) — yes.
 
+### Projection vs Process Manager (Saga)
+
+Both projections and process managers consume events from the outbox. They are different things:
+
+- A **projection** updates a read model — a table you `SELECT` from. It does not issue commands, does not change domain state, does not have invariants. Pure state-of-the-world for queries.
+- A **process manager / saga** orchestrates multi-step business workflows by **issuing commands** in response to events (e.g. on `OrderConfirmed`, dispatch a `RequestPayment` command; on `PaymentReceived`, dispatch `RequestShipping`). Its own state lives in an aggregate; the kit treats it as a regular aggregate that happens to be driven by events instead of direct user commands.
+
+A single application has many of both. They share the dispatcher pipeline but serve different purposes — this page is about projections only.
+
 ## The read-model schema
 
 A read model is a **table shaped exactly for the query that reads it**. It is not an aggregate. It is not normalised. It carries denormalised copies of whatever fields the view needs:
@@ -209,7 +218,7 @@ The simplest pattern is the `last_event_id` column above:
 - A retry of the same event is a no-op (the predicate fails; zero rows affected).
 - This works regardless of whether the events are commutative (`OrderItemAdded` adding `+5` to a total is NOT commutative — applying it twice would double-count).
 
-For projections that span aggregates (a `customer_with_recent_orders_view` updated by both `CustomerCreated` and `OrderCreated`), use one tracking column per source aggregate, or a per-event-id audit table — depending on how much storage you're willing to spend on idempotency.
+For projections that span aggregates (a `customer_with_recent_orders_view` updated by both `CustomerCreated` and `OrderCreated`), the **same single column still works**: `eventId` is globally unique, so `WHERE last_event_id <> incoming.eventId` skips duplicates regardless of source. Per-aggregate tracking columns are only needed if you also need **per-stream ordering guarantees** ("apply `CustomerCreated` before any `OrderCreated` for that customer") — and that's a separate concern from idempotency. The simplest pattern for ordering is a `processed_events(projection_id, event_id)` audit table queried before applying.
 
 ### Pure projections
 
@@ -329,6 +338,9 @@ If all three hold, the read model converges to a function of the event history. 
 - **No `ProjectionHandler<E>` type or `Projector` base class.** A projection is just an `(event: E) => Promise<void>` function. The eventType-keyed map pattern shown above is convention; the kit has no opinion.
 - **No outbox-dispatcher implementation.** Runtime-specific (Node `setInterval`, Cloudflare cron triggers, AWS Lambda + EventBridge, etc.). Pseudocode above is the contract.
 - **No read-model storage abstraction.** Projections write to your existing database. Pick whatever DDL/ORM your write side already uses, or a separate read-store if you want true scale separation.
-- **No event-replay tooling for rebuilding projections.** Rebuilds are a separate concern (truncate read table → re-run the dispatcher from outbox start). Outbox semantics support it but the library doesn't automate it.
+- **No event-replay tooling for rebuilding projections.** Projections converge to the event history; rebuilding (after a schema change, or when adding a new view) means re-applying the history. The source you replay from depends on whether you keep one:
+  - **Event-sourced aggregates** — the event store IS the durable history. Replay reads from it directly. The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
+  - **State-stored aggregates** — there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table the dispatcher copies events to before delivery.
+  Either path is a consumer decision. The kit's outbox is a transient handoff buffer, not a durable event log.
 
 The kit's role is the **write-side guarantee** (`withCommit` → outbox is transactional; projections see every event ≥ once). Everything to the right of the outbox is consumer territory.
