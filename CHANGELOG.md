@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.6] - 2026-05-24
+
+The big architectural hardening pass. Closes the gap between what the kit's docs promised and what the code actually delivered — particularly around the Repository/withCommit lifecycle, the event-port contract, and the EventSourcedAggregate version model. Six breaking changes, all driven by Vernon / Greg Young / Khononov / Axon / EventFlow research into the canonical DDD patterns; each one removes a footgun rather than adding a feature.
+
+Highlights:
+
+- `withCommit` now owns the post-save event lifecycle (harvest, outbox, mark-persisted, publish). `Repository.save` is pure persistence. The previous documented use-case pattern was latently broken — `repo.save` cleared events before they could be harvested.
+- `EventSourcedAggregate` loses the `autoVersionBump` flag entirely. Version IS event count per Greg Young / Vernon §9; there is no canonical use-case for opting out, and the flag was non-functional anyway (it promised `setVersion` access that was private).
+- `TransactionScope<TCtx>`, `EventBus`, `Outbox`, `withCommit` all tighten their generic constraints: `TCtx` has no default; events must extend `AnyDomainEvent`. The looser shapes invited misuse the kit's own implementations didn't follow.
+- `AggregateRoot.domainEvents` is renamed to `pendingEvents` to unify with `EventSourcedAggregate`. The `IAggregateRoot` interface now exposes `pendingEvents` + `clearPendingEvents` so generic repository code works across both flavours.
+- `restoreFromSnapshot*` deep-clones the snapshot input — fixes a latent footgun where caller mutations bled into the live aggregate.
+- Three convenience helpers (`hasPendingEvents`, `getEventCount`, `getLatestEvent`) removed — `.length > 0` / `.length` / `.at(-1)` are the idioms.
+
+Plus: `InMemoryOutbox<Evt>` reference implementation shipped, entity-collection helpers widened to `ReadonlyArray<T>`, dedicated test files for `core/errors` and `repo/scope` (+21 tests).
+
+Naming: every example identifier follows Vernon's Persistence-oriented Repository style (`orderRepository`, not `orders`).
+
 ### Changed — Entity-collection helpers accept `ReadonlyArray<T>`
 
 `findEntityById`, `hasEntityId`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, and `entityIds` now declare their `entities` parameter as `ReadonlyArray<T>` instead of `T[]`. None of these helpers ever mutated the input — the mutable-array signature was forcing callers holding a `readonly OrderItem[]` (e.g. inside a frozen aggregate state slice) to cast or copy unnecessarily. Mutable arrays continue to work since `T[]` is assignable to `ReadonlyArray<T>`.
