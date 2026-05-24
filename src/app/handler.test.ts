@@ -337,6 +337,30 @@ describe("withCommit", () => {
 		expect(bus.published).toEqual([expected]);
 	});
 
+	it("dedupes aggregates by reference: same instance twice harvests events once and markPersists once", async () => {
+		// A use case that touches the same aggregate via two repository
+		// references (same identity-map entry) would otherwise double-
+		// harvest its events through the outbox and call markPersisted
+		// twice. Dedupe is by JavaScript object identity — distinct
+		// instances with the same logical id are NOT detected here.
+		const event = createDomainEvent("OrderCreated", { orderId: "o-1" });
+		const agg = createMockAggregate([event]);
+
+		const outbox = createMockOutbox();
+		const bus = createMockBus();
+
+		await withCommit(
+			{ outbox, bus, scope: createMockScope() },
+			async () => ({ result: "ok", aggregates: [agg, agg, agg] }),
+		);
+
+		// Event harvested exactly once.
+		expect(outbox.added).toEqual([[event]]);
+		expect(bus.published).toEqual([[event]]);
+		// markPersisted called exactly once on the deduped aggregate.
+		expect(agg.markPersistedCalls).toBe(1);
+	});
+
 	it("skips outbox.add and bus.publish when no aggregates emit events", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();

@@ -61,6 +61,16 @@ import type { TransactionScope } from "../repo/scope";
  * If the transaction rolls back, `markPersisted` is **not** called — the
  * aggregate keeps its pending events, so the caller can retry or discard.
  *
+ * **Duplicate aggregates are deduped by reference.** If the returned
+ * `aggregates` array contains the same instance twice — e.g. a use
+ * case touches an order via two repository references that happen to
+ * resolve to the same identity-map entry — `withCommit` dedupes by
+ * JavaScript object identity before harvesting. Each event lands in
+ * the outbox exactly once and `markPersisted` fires exactly once. Two
+ * *different* instances with the same logical id (which would
+ * indicate a separate aggregate-instance-sharing violation upstream)
+ * cannot be detected at this layer.
+ *
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)
  * ```typescript
  * const result = await withCommit({ outbox, bus, scope }, async (tx) => {
@@ -86,13 +96,19 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	const { result, aggregates, events } = await deps.scope.transactional(
 		async (ctx) => {
 			const fnResult = await fn(ctx);
-			const harvested = fnResult.aggregates.flatMap(
+			// Dedupe by object identity. A use case that touches the same
+			// aggregate via two repository references (same identity-map
+			// entry) would otherwise double-harvest its events and call
+			// markPersisted twice. Distinct instances with the same logical
+			// id are NOT detected here — that's a different misuse class.
+			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
+			const harvested = uniqueAggregates.flatMap(
 				(agg) => agg.pendingEvents,
 			);
 			if (harvested.length > 0) {
 				await deps.outbox.add(harvested);
 			}
-			return { ...fnResult, events: harvested };
+			return { ...fnResult, aggregates: uniqueAggregates, events: harvested };
 		},
 	);
 

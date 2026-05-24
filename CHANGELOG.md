@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `withCommit` dedupes aggregates by reference
+
+If a use case accidentally returns the same aggregate instance more than once in the `aggregates` array — typically because two repository references resolve to the same identity-map entry — `withCommit` now dedupes by JavaScript object identity before harvesting. Each event lands in the outbox exactly once and `markPersisted` fires exactly once.
+
+Previously the same event would land in the outbox twice (duplicate `dispatchId` collisions in `InMemoryOutbox`, row-uniqueness conflicts in a SQL outbox without `(eventId)` constraints) and `markPersisted` would run twice on the same aggregate (second call a no-op since `pendingEvents` was empty after the first, but version assignment ran twice with the same value).
+
+Dedupe is by object identity (`new Set(aggregates)`). Two **different** instances with the same logical id — which would indicate a separate aggregate-instance-sharing violation upstream — cannot be detected at this layer. Defensive behaviour change, non-breaking: no consumer's existing code does worse after this change.
+
+JSDoc on `withCommit` mentions the dedupe behaviour explicitly so the contract is part of the published surface.
+
 ### Added — Doc: globals-vs-DI trade-off for `EventIdFactory` / `ClockFactory`
 
 `docs/guide/design-decisions.md` gains a new section naming the architectural choice the kit made: module-level globals + scoped helpers + per-call overrides for `EventIdFactory` and `ClockFactory`, instead of Vernon IDDD §13's preferred constructor-injection pattern. Reading the docs in order without this section, a consumer sees the global-with-helpers path as THE supported way and either assumes the kit endorses globals as best practice, or rolls Vernon-DI ad-hoc without realising the kit's per-call `{ eventId, occurredAt }` is the canonical hook for it.
