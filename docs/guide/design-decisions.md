@@ -52,6 +52,67 @@ const userIds: IdGenerator<"UserId"> = { next: () => ulid() as Id<"UserId"> };
 
 Per Vernon's "Identity from User-Side", id generation happens in the application, not in the repository — `IRepository` deliberately does not expose `nextId()`. The library provides an `EventIdFactory` and `ClockFactory` for deterministic tests.
 
+## `EventIdFactory` / `ClockFactory`: globals by default, DI on top when you need it
+
+The kit ships module-level globals (`setEventIdFactory`, `setClockFactory`), scoped helpers (`withEventIdFactory`, `withClockFactory`), and per-call overrides on `createDomainEvent` (`{ eventId, occurredAt }`). This is **not** the DI-canonical shape Vernon's IDDD §13 prefers — Vernon's pattern is constructor-injected `clock: () => Date` and `idGen: () => string` threaded through every aggregate. Both designs are available; the kit defaults to globals because the production fast path (95% of methods emit events with default clock + UUID) benefits more from minimal aggregate-construction surface than from per-instance factory control.
+
+### Trade-off
+
+|  | Globals + scoped helpers (kit default) | Vernon-style DI |
+|---|---|---|
+| Race-free structurally | ❌ (mitigated via `withEventIdFactory` / `withClockFactory` + per-call options) | ✅ |
+| Aggregate constructor surface | minimal (`id, state`) | wider (`id, state, clock, idGen, …`) |
+| Reconstitution signature | `Order.reconstitute(id, state, version)` | + factories threaded through |
+| Test isolation | scoped helpers or per-call options | constructor-injected mocks |
+| Edge-runtime plumbing | none (defaults work) | factories must be wired per worker invocation |
+| DDD-canon strictness | pragmatic | hard Vernon §13 |
+
+If you're shipping a production aggregate that mostly records events with default clock + UUID, the globals + scoped helpers cover you with zero ceremony. If you're shipping a research / time-travel / multi-tenant codebase where time-control is per-call, Vernon-DI eliminates the race window entirely and is worth the heavier constructors.
+
+### Vernon-DI works on top of the existing API — no library change needed
+
+`createDomainEvent` already accepts per-call `{ eventId, occurredAt }`. A consumer can ignore the globals entirely:
+
+```ts
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected constructor(
+    id: OrderId,
+    state: OrderState,
+    private readonly clock: () => Date,
+    private readonly idGen: () => string,
+  ) {
+    super(id, state);
+  }
+
+  static place(
+    id: OrderId,
+    customerId: string,
+    clock: () => Date,
+    idGen: () => string,
+  ): Order {
+    const order = new Order(id, { customerId, status: "draft" }, clock, idGen);
+    order.addDomainEvent(
+      createDomainEvent(
+        "OrderPlaced",
+        { customerId },
+        {
+          eventId: idGen(),
+          occurredAt: clock(),  // per-call options bypass the globals
+          aggregateId: id,
+        },
+      ),
+    );
+    return order;
+  }
+}
+```
+
+That's Vernon-pure: no globals touched, no scoped helpers needed, every event's clock and id come from the aggregate's injected factories. Test mocks pass in deterministic factories at construction time.
+
+### When the scoped helpers still win
+
+Even in a DI-leaning codebase, `withEventIdFactory` / `withClockFactory` remain the right tool for one case: **events constructed deep inside a domain method** where threading an explicit `{ eventId, occurredAt }` through every `createDomainEvent` call is awkward. A test that wraps the whole operation in `withEventIdFactory(() => "deterministic", () => order.processBatch(...))` is cleaner than refactoring `processBatch` to thread the id-gen through three layers of internal helpers.
+
 ## No deep clone on every state read
 
 `Entity.state` is **shallowly frozen** on every assignment. Direct property writes (`entity.state.foo = …`) throw in strict mode, but writes to nested objects bypass the freeze. For deep immutability either model nested data with `vo()` (deep-freezes by construction) or reach for Immer / Immutable.js at the App layer. The shallow contract is deliberate — deep freezing on every state write would dominate hot paths.

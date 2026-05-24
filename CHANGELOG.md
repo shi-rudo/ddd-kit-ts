@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Doc: globals-vs-DI trade-off for `EventIdFactory` / `ClockFactory`
+
+`docs/guide/design-decisions.md` gains a new section naming the architectural choice the kit made: module-level globals + scoped helpers + per-call overrides for `EventIdFactory` and `ClockFactory`, instead of Vernon IDDD §13's preferred constructor-injection pattern. Reading the docs in order without this section, a consumer sees the global-with-helpers path as THE supported way and either assumes the kit endorses globals as best practice, or rolls Vernon-DI ad-hoc without realising the kit's per-call `{ eventId, occurredAt }` is the canonical hook for it.
+
+The new section spells out:
+
+- **Why globals are the default.** Production fast path (events with default clock + UUID) benefits from minimal aggregate-construction surface.
+- **Trade-off table.** Race-free-structurally vs minimal-constructor, edge-runtime plumbing, DDD-canon strictness.
+- **Worked code snippet showing Vernon-DI on top.** Constructor-injected `clock` and `idGen`, no globals touched, `createDomainEvent`'s per-call `{ eventId, occurredAt }` doing the work. No library change required.
+- **When the scoped helpers still win even in a DI-leaning codebase.** Events constructed deep inside domain methods where threading explicit options through every `createDomainEvent` call is awkward.
+
+Doc-only. Honest framing for Vernon-leaning readers; the kit's design choice is preserved.
+
 ### Added — Scoped factory helpers `withEventIdFactory` / `withClockFactory`
 
 `setEventIdFactory` and `setClockFactory` mutate module-level globals, which races under two real workloads:
