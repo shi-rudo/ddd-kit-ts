@@ -181,6 +181,14 @@ export interface DomainEvent<T extends string, P = void> {
 }
 
 /**
+ * Upper-bound alias for "any `DomainEvent` shape". Use as a generic
+ * constraint when a type parameter should accept any concrete event
+ * union. The `unknown` payload is the upper bound — concrete unions
+ * still narrow via `Extract<Evt, { type: K }>` at the use-site.
+ */
+export type AnyDomainEvent = DomainEvent<string, unknown>;
+
+/**
  * Shared option bag for the `createDomainEvent*` factories.
  */
 export interface CreateDomainEventOptions {
@@ -301,7 +309,7 @@ export function createDomainEventWithMetadata<T extends string, P>(
  * ```
  */
 export function copyMetadata(
-	sourceEvent: DomainEvent<string, unknown>,
+	sourceEvent: AnyDomainEvent,
 	additionalMetadata?: Partial<EventMetadata>,
 ): EventMetadata {
 	return {

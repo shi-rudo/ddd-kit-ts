@@ -32,6 +32,49 @@ Migration: pick a concrete type. Drizzle / Prisma / Mongo users already write `T
 
 `withCommit` loses its `TCtx = unknown` default as well; `TCtx` is inferred from the `scope` argument, so call sites typically need no change.
 
+### BREAKING — Event-port constraints tightened to `AnyDomainEvent`
+
+`EventBus`, `Outbox`, `OutboxRecord`, and `withCommit` previously accepted any `{ type: string }` shape (or, for `Outbox` / `OutboxRecord`, no constraint at all). They now all require `Evt extends AnyDomainEvent` — a new exported alias for `DomainEvent<string, unknown>`:
+
+```diff
+- interface EventBus<Evt extends { type: string }> { … }
+- interface Outbox<Evt> { … }
+- interface OutboxRecord<Evt> { … }
+- function withCommit<Evt extends { type: string }, R, TCtx>(…)
++ interface EventBus<Evt extends AnyDomainEvent> { … }
++ interface Outbox<Evt extends AnyDomainEvent> { … }
++ interface OutboxRecord<Evt extends AnyDomainEvent> { … }
++ function withCommit<Evt extends AnyDomainEvent, R, TCtx>(…)
+```
+
+The DDD-kit ports are for *domain* events, not arbitrary tagged unions. Previously the concrete `EventBusImpl` already constrained to `DomainEvent<string, unknown>` — the public ports were looser than the only implementation. The new constraint aligns the interfaces with their stated purpose and prevents non-event objects from leaking through the outbox / bus pipeline.
+
+The `unknown` in `AnyDomainEvent` is an upper bound, not a value that flows through methods: when a consumer supplies a concrete event union as the type argument, `EventBus.subscribe<K>` still sees the specific payload via `Extract<Evt, { type: K }>`.
+
+Migration: ad-hoc shapes like `{ type: "OrderCreated"; orderId: string }` need to become proper domain events:
+
+```diff
+- type OrderCreated = { type: "OrderCreated"; orderId: string };
++ type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
+
+- const events = [{ type: "OrderCreated", orderId: "o-1" }];
++ const events = [createDomainEvent("OrderCreated", { orderId: "o-1" })];
+```
+
+Same alignment landed for `IEventSourcedAggregate`, `EventSourcedAggregate`, and the internal `Handler<TState, TEvent>` type — all now reference `AnyDomainEvent` instead of inlining `DomainEvent<string, unknown>`. `copyMetadata` and the `EventUpcaster` examples in the docs follow the same alias.
+
+### BREAKING — `loadFromHistory` / `restoreFromSnapshotWithEvents` accept `ReadonlyArray<TEvent>`
+
+```diff
+- loadFromHistory(history: TEvent[]): Result<void, DomainError>;
++ loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
+
+- restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot: TEvent[]): …
++ restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot: ReadonlyArray<TEvent>): …
+```
+
+The implementations never mutated the input — the mutable-array signature was misleading. The new shape declares the actual contract: the aggregate only consumes the history, it never writes back. Callers passing `TEvent[]` continue to work (mutable arrays are assignable to `ReadonlyArray<T>`); callers whose own variable was already typed `ReadonlyArray<TEvent>` no longer need a copy.
+
 ## [1.0.0-rc.5] - 2026-05-24
 
 Adds an explicit transaction context to `TransactionScope` so consumer repositories can bind to the live Drizzle/Prisma/Mongo handle without falling back to `AsyncLocalStorage`. Also polishes the error contract (cause chains now actually propagate through library errors) and fixes JSDoc examples that referenced a non-existent `repo.save(tx, order)` API.

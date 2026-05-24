@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { withCommit } from "./handler";
-import type { Outbox, EventBus } from "../events/ports";
+import { describe, expect, it } from "vitest";
+import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
+import { withCommit } from "./handler";
 
-type TestEvent = { type: "OrderCreated"; orderId: string };
+type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 
 function createMockScope(): TransactionScope<undefined> {
 	return {
@@ -50,7 +51,9 @@ describe("withCommit", () => {
 
 	it("should add events to the outbox", async () => {
 		const outbox = createMockOutbox();
-		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
+		const events: TestEvent[] = [
+			createDomainEvent("OrderCreated", { orderId: "order-1" }),
+		];
 
 		await withCommit(
 			{ outbox, scope: createMockScope() },
@@ -64,7 +67,9 @@ describe("withCommit", () => {
 	it("should publish events to bus when provided", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
-		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
+		const events: TestEvent[] = [
+			createDomainEvent("OrderCreated", { orderId: "order-1" }),
+		];
 
 		await withCommit(
 			{ outbox, bus, scope: createMockScope() },
@@ -77,7 +82,9 @@ describe("withCommit", () => {
 
 	it("should not fail when bus is not provided", async () => {
 		const outbox = createMockOutbox();
-		const events: TestEvent[] = [{ type: "OrderCreated", orderId: "order-1" }];
+		const events: TestEvent[] = [
+			createDomainEvent("OrderCreated", { orderId: "order-1" }),
+		];
 
 		const result = await withCommit(
 			{ outbox, scope: createMockScope() },
@@ -136,7 +143,7 @@ describe("withCommit", () => {
 				{ outbox, scope: createMockScope() },
 				async () => ({
 					result: "ok",
-					events: [{ type: "OrderCreated", orderId: "order-1" }] as TestEvent[],
+					events: [createDomainEvent("OrderCreated", { orderId: "order-1" })],
 				}),
 			),
 		).rejects.toThrow("Outbox failed");
@@ -173,7 +180,7 @@ describe("withCommit", () => {
 				callOrder.push("fn");
 				return {
 					result: "ok",
-					events: [{ type: "OrderCreated", orderId: "o-1" }] as TestEvent[],
+					events: [createDomainEvent("OrderCreated", { orderId: "o-1" })],
 				};
 			},
 		);

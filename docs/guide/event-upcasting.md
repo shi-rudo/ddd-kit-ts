@@ -7,7 +7,11 @@ The recommended pattern is to wrap your event-store read path with a per-type up
 ## A minimal upcaster
 
 ```ts
-import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
+import {
+  createDomainEvent,
+  type AnyDomainEvent,
+  type DomainEvent,
+} from "@shirudo/ddd-kit";
 
 // v1 — initial schema
 type OrderCreatedV1 = DomainEvent<"OrderCreated", { customerId: string }>;
@@ -18,7 +22,7 @@ type OrderCreatedV2 = DomainEvent<
   { customerId: string; currency: string }
 >;
 
-function upcast(event: DomainEvent<string, unknown>): DomainEvent<string, unknown> {
+function upcast(event: AnyDomainEvent): AnyDomainEvent {
   if (event.type === "OrderCreated" && event.version === 1) {
     return {
       ...event,
@@ -44,9 +48,7 @@ The upcaster runs at the **infrastructure boundary** — before events reach the
 For aggregates that have gone through many migrations:
 
 ```ts
-type UpcastFn = (
-  event: DomainEvent<string, unknown>,
-) => DomainEvent<string, unknown>;
+type UpcastFn = (event: AnyDomainEvent) => AnyDomainEvent;
 
 function chain(...fns: UpcastFn[]): UpcastFn {
   return (event) => fns.reduce((e, fn) => fn(e), event);

@@ -1,3 +1,5 @@
+import type { AnyDomainEvent } from "../aggregate/domain-event";
+
 /**
  * Event handler function type for subscribing to domain events.
  *
@@ -28,7 +30,7 @@ export type EventHandler<Evt> = (event: Evt) => Promise<void> | void;
  * await bus.publish([orderCreatedEvent, orderShippedEvent]);
  * ```
  */
-export interface EventBus<Evt extends { type: string }> {
+export interface EventBus<Evt extends AnyDomainEvent> {
 	/**
 	 * Publishes events to all subscribed handlers.
 	 *
@@ -127,7 +129,7 @@ export interface OnceOptions {
  * own `eventId`, generate its own UUID, use the row's auto-increment
  * primary key, or whatever the storage layer prefers.
  */
-export interface OutboxRecord<Evt> {
+export interface OutboxRecord<Evt extends AnyDomainEvent> {
 	dispatchId: string;
 	event: Evt;
 }
@@ -148,7 +150,7 @@ export interface OutboxRecord<Evt> {
  * that's already marked is a no-op, not an error. This lets the
  * dispatcher safely retry on partial-failure.
  */
-export interface Outbox<Evt> {
+export interface Outbox<Evt extends AnyDomainEvent> {
 	/**
 	 * Persists events. Called from inside `withCommit`'s transactional
 	 * callback, atomically with the aggregate write.

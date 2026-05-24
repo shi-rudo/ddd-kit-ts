@@ -1,4 +1,4 @@
-import type { DomainEvent } from "../aggregate/domain-event";
+import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { EventBus, EventHandler, OnceOptions } from "./ports";
 
 /**
@@ -23,7 +23,7 @@ import type { EventBus, EventHandler, OnceOptions } from "./ports";
  * // Both handlers will be called
  * ```
  */
-export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
+export class EventBusImpl<Evt extends AnyDomainEvent>
 	implements EventBus<Evt>
 {
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();

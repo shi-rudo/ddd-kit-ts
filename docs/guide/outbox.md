@@ -64,17 +64,19 @@ await withCommit({ scope, outbox }, async () => ({
 ## `Outbox<Evt>`
 
 ```ts
-interface OutboxRecord<Evt> {
+interface OutboxRecord<Evt extends AnyDomainEvent> {
   dispatchId: string;     // opaque — the impl chooses (eventId, UUID, row PK, …)
   event: Evt;
 }
 
-interface Outbox<Evt> {
+interface Outbox<Evt extends AnyDomainEvent> {
   add(events: ReadonlyArray<Evt>):                 Promise<void>;
   getPending(limit?: number):                      Promise<ReadonlyArray<OutboxRecord<Evt>>>;
   markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void>;
 }
 ```
+
+`Evt` is constrained to [`AnyDomainEvent`](../api/) so the outbox only stores proper domain events with the standard envelope (`eventId`, `type`, `payload`, `occurredAt`, etc.).
 
 Lifecycle:
 

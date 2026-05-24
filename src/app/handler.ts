@@ -1,3 +1,4 @@
+import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 
@@ -42,7 +43,7 @@ import type { TransactionScope } from "../repo/scope";
  * });
  * ```
  */
-export async function withCommit<Evt extends { type: string }, R, TCtx>(
+export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: {
 		outbox: Outbox<Evt>;
 		bus?: EventBus<Evt>;

@@ -3,7 +3,7 @@ import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
 import { Entity, freezeShallow } from "../entity/entity";
 import type { IAggregateRoot } from "./aggregate-root";
-import type { DomainEvent } from "./domain-event";
+import type { AnyDomainEvent } from "./domain-event";
 import type {
 	AggregateSnapshot,
 	Version,
@@ -18,7 +18,7 @@ import type {
  */
 export interface IEventSourcedAggregate<
 	TId extends Id<string>,
-	TEvent extends DomainEvent<string, unknown>,
+	TEvent extends AnyDomainEvent,
 > extends IAggregateRoot<TId> {
 	/**
 	 * Returns a read-only list of new, not-yet-persisted events.
@@ -32,7 +32,7 @@ export interface IEventSourcedAggregate<
 	 *
 	 * @param history - An ordered list of past events
 	 */
-	loadFromHistory(history: TEvent[]): Result<void, DomainError>;
+	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
 
 	/**
 	 * Clears the list of pending events.
@@ -55,7 +55,10 @@ export interface IEventSourcedAggregate<
 	getLatestEvent(): TEvent | undefined;
 }
 
-type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
+type Handler<TState, TEvent extends AnyDomainEvent> = (
+	state: TState,
+	event: TEvent,
+) => TState;
 
 /**
  * Configuration options for EventSourcedAggregate behavior.
@@ -129,7 +132,7 @@ export interface EventSourcedAggregateConfig {
  */
 export abstract class EventSourcedAggregate<
 	TState,
-	TEvent extends DomainEvent<string, unknown>,
+	TEvent extends AnyDomainEvent,
 	TId extends Id<string>,
 > extends Entity<TState, TId>
 	implements IEventSourcedAggregate<TId, TEvent> {
@@ -265,7 +268,7 @@ export abstract class EventSourcedAggregate<
 	 * an aggregate already at v=1 (e.g. after a creation event) loading
 	 * 2 events ends at v=3, not v=2.
 	 */
-	public loadFromHistory(history: TEvent[]): Result<void, DomainError> {
+	public loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError> {
 		const startVersion = this._version;
 		for (const event of history) {
 			try {
@@ -314,7 +317,7 @@ export abstract class EventSourcedAggregate<
 	 */
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TState>,
-		eventsAfterSnapshot: TEvent[],
+		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		const previousState = this._state;
 		const previousVersion = this._version;
