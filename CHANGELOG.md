@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Static-factory convention documented in the aggregates guide
+
+Every example in the kit uses `static Order.place(...)` / `static Customer.register(...)` style construction, but the prose never named the pattern. Vernon IDDD §11 calls this the **Aggregate Factory**. New section in `docs/guide/aggregates.md` makes the convention explicit:
+
+- Factories named with domain verbs (place / draft / register / open / submit), not JavaScript boilerplate (`new`)
+- The creation event (`OrderPlaced`, `UserRegistered`, …) is recorded **inside** the factory — no library magic auto-emits it
+- `protected constructor` on `AggregateRoot` and `EventSourcedAggregate` means `new Order(...)` from outside the aggregate's module is a compile error; the static factory is the only public construction path
+
+With a worked code snippet showing `Order.place(id, customerId)` calling `addDomainEvent(createDomainEvent("OrderPlaced", ...))` and three Vernon-grounded rationales (domain language, encapsulated validation, atomic creation event).
+
 ### Added — Domain Services + Bounded Contexts notes in design-decisions.md
 
 Two short prophylactic sections close common consumer questions that the kit's API surface raised but never answered:
