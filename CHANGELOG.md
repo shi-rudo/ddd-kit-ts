@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Domain Services + Bounded Contexts notes in design-decisions.md
+
+Two short prophylactic sections close common consumer questions that the kit's API surface raised but never answered:
+
+- **Domain Services** — Vernon IDDD §7. The kit ships no `IDomainService` marker, no base class, no decorator. The reason: a marker that adds nothing at type or runtime level is just noise. A Domain Service is a function or interface alongside your aggregates; file naming and module structure identify it. With an example showing `calculateShippingCost(order, destination, rates): Money` as the canonical shape. Includes the Vernon §7 rule of thumb: a stateful "service" is a sign you've found a new aggregate.
+
+- **Bounded Contexts** — Evans, *Domain-Driven Design* §14. The kit is BC-agnostic. Each BC is a module / package / repo importing the kit; the library prescribes no layout, no naming, no integration. Inter-BC communication is typically outbox + message broker (the topology the kit is designed for, but enforces nothing); the receiving BC translates incoming events via an Anti-Corruption Layer (Evans §14) using plain functions.
+
 ### Added — Event-ordering documented for `withCommit`, with the Vernon/Young caveat
 
 The harvest order of events flowing through `withCommit` is now stated explicitly: events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. A regression test in `handler.test.ts` pins this down across three aggregates with multi-event emissions.

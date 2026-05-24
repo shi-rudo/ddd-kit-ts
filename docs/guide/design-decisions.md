@@ -62,6 +62,33 @@ The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T
 
 `withCommit` publishes events **after** `transactional` resolves, so an in-process EventBus subscriber never sees events from a rolled-back transaction.
 
+## Domain Services are consumer constructs — no library marker
+
+Vernon IDDD §7 describes Domain Services as the home for business logic that doesn't naturally belong to an Aggregate or a Value Object — operations that span multiple aggregates without owning state ("compute exchange rate", "check inventory across warehouses", "evaluate a credit-risk policy"). The kit deliberately ships no `IDomainService` marker, no `DomainService` base class, no decorator.
+
+The reason is the same one Evans gives for not over-marking patterns: a marker that does nothing at the type or runtime level adds noise without adding constraint. A Domain Service in this kit is just a function or interface defined alongside your aggregates — file naming and module structure already identify it:
+
+```ts
+// pricing/exchange-rate.service.ts
+export function calculateShippingCost(
+  order: Order,
+  destination: Address,
+  rates: ExchangeRateTable,
+): Money {
+  // pure function over aggregates + value objects; no state of its own
+}
+```
+
+If you find yourself wanting to make a Domain Service stateful, that's the strongest signal in DDD that you've found a new aggregate (Vernon §7). Promote it.
+
+## Bounded Contexts: the kit is agnostic
+
+ddd-kit is bounded-context-agnostic. Each Bounded Context (Evans, *Domain-Driven Design* §14) is a module or package — or a separate repo for larger systems — that imports the kit; the library does not prescribe a layout, naming convention, or inter-BC integration pattern.
+
+Inter-BC communication is typically via published domain events through the outbox + a message broker (the topology the kit is designed for, but enforces nothing). The receiving BC translates incoming events into its own ubiquitous language at the boundary — an Anti-Corruption Layer (Evans §14) — using plain functions or adapter classes; again, no library construct.
+
+The kit is small enough that a single TypeScript codebase can host multiple BCs comfortably, with each BC in its own directory tree of aggregates / repositories / use cases. Larger systems split BCs across repos and treat the outbox as the only contract that crosses the boundary.
+
 ## The kit is small on purpose
 
 `dist/index.js` is around 30 KB. Operators that have entire ecosystems behind them (a Result type with 30+ combinators, a deep-equal that handles every corner of JavaScript, a frozen value-object library) are pulled in from peer deps rather than re-implemented. The kit's job is to ship the *DDD-specific* shapes; the surrounding TypeScript ecosystem is rich enough to handle the rest.
