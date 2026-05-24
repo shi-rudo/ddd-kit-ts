@@ -4,7 +4,7 @@ import {
 	AggregateRoot,
 	type AggregateConfig,
 } from "./aggregate-root";
-import type { Version } from "./aggregate";
+import type { AggregateSnapshot, Version } from "./aggregate";
 
 type TestId = Id<"TestId">;
 
@@ -215,6 +215,35 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// Snapshot must be isolated
 			expect(snapshot.state.items).toHaveLength(1);
 			expect(agg.state.items).toHaveLength(2);
+		});
+
+		it("should deep-clone the snapshot when restoring — caller mutations don't leak in", () => {
+			type StateWithChildren = {
+				items: { id: string; qty: number }[];
+				status: string;
+			};
+
+			class AggWithChildren extends AggregateRoot<StateWithChildren, TestId> {
+				constructor(id: TestId, state: StateWithChildren) {
+					super(id, state);
+				}
+			}
+
+			const snapshot: AggregateSnapshot<StateWithChildren> = {
+				state: { items: [{ id: "i1", qty: 2 }], status: "open" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+			};
+
+			const agg = new AggWithChildren("a-1" as TestId, { items: [], status: "open" });
+			agg.restoreFromSnapshot(snapshot);
+
+			// Mutate the original snapshot AFTER restore — the aggregate must be isolated.
+			snapshot.state.items[0]!.qty = 999;
+			snapshot.state.items.push({ id: "i2", qty: 5 });
+
+			expect(agg.state.items).toHaveLength(1);
+			expect(agg.state.items[0]?.qty).toBe(2);
 		});
 	});
 

@@ -337,8 +337,9 @@ export abstract class AggregateRoot<
 	 * ```
 	 */
 	public restoreFromSnapshot(snapshot: AggregateSnapshot<TState>): void {
-		this.validateState(snapshot.state);
-		this._state = freezeShallow(snapshot.state);
+		const cloned = structuredClone(snapshot.state);
+		this.validateState(cloned);
+		this._state = freezeShallow(cloned);
 		this.setVersion(snapshot.version);
 	}
 }

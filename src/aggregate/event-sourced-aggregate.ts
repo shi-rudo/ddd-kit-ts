@@ -285,7 +285,7 @@ export abstract class EventSourcedAggregate<
 		const previousState = this._state;
 		const previousVersion = this._version;
 
-		this._state = freezeShallow(snapshot.state);
+		this._state = freezeShallow(structuredClone(snapshot.state));
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {

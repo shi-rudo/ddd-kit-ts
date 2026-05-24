@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `restoreFromSnapshot*` now deep-clones the snapshot input
+
+`AggregateRoot.restoreFromSnapshot` and `EventSourcedAggregate.restoreFromSnapshotWithEvents` previously did only `freezeShallow(snapshot.state)`, leaving nested fields aliased to the caller's snapshot object. A caller that mutated a nested field on `snapshot.state` after passing it in would silently bleed the mutation into the live aggregate (only the top-level object was frozen).
+
+`createSnapshot` already clones on the way out; the restore paths now mirror that contract on the way in:
+
+```diff
++ const cloned = structuredClone(snapshot.state);
+- this._state = freezeShallow(snapshot.state);
++ this._state = freezeShallow(cloned);
+```
+
+Adds tests on both flavours that mutate the original snapshot post-restore and assert the aggregate is unaffected. No API change; non-breaking.
+
 ### BREAKING — Remove `EventSourcedAggregateConfig` / `autoVersionBump` from `EventSourcedAggregate`
 
 `EventSourcedAggregate` no longer accepts a config object. The `EventSourcedAggregateConfig` interface and the `autoVersionBump` flag are deleted. Every `apply()` bumps the version by one — no opt-out.

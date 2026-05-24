@@ -4,6 +4,7 @@ import { isBaseError } from "@shirudo/base-error";
 import { DomainError, MissingHandlerError } from "../core/errors";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
 import {
+	type AggregateSnapshot,
 	createDomainEvent,
 	type DomainEvent,
 	type Version,
@@ -587,6 +588,27 @@ describe("EventSourcedAggregate", () => {
 			expect(result.isOk()).toBe(true);
 			expect(aggregate2.state.value).toBe(20);
 			expect(aggregate2.version).toBe(2);
+		});
+
+		it("should deep-clone the snapshot when restoring — caller mutations don't leak in", () => {
+			const snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+			};
+
+			const initialState: TestState = { value: 0, status: "inactive" };
+			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
+			const result = aggregate.restoreFromSnapshotWithEvents(snapshot, []);
+
+			expect(result.isOk()).toBe(true);
+
+			// Mutate the original snapshot AFTER restore — the aggregate must be isolated.
+			snapshot.state.value = 999;
+			snapshot.state.status = "inactive";
+
+			expect(aggregate.state.value).toBe(42);
+			expect(aggregate.state.status).toBe("active");
 		});
 
 		it("should roll back state + version when an event mid-stream fails validation", () => {
