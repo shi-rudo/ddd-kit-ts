@@ -45,19 +45,42 @@ export function setEventIdFactory(factory: EventIdFactory): void {
 }
 
 /**
+ * Internal guard for the scoped factory helpers. Throws a clear error
+ * when the user-supplied `fn` returns a thenable — the helpers are
+ * synchronous-only, and a silent async-misuse would restore the factory
+ * before the awaited body of `fn` runs, leaving the awaited code
+ * reading the previous factory.
+ */
+function assertNotThenable(result: unknown, helperName: string): void {
+	if (
+		result !== null &&
+		(typeof result === "object" || typeof result === "function") &&
+		typeof (result as { then?: unknown }).then === "function"
+	) {
+		throw new Error(
+			`${helperName}: fn returned a thenable. ` +
+				`The factory is only installed for the synchronous portion of fn; ` +
+				`awaited continuations would see the previous factory. ` +
+				`For async-scoped factories use AsyncLocalStorage.`,
+		);
+	}
+}
+
+/**
  * Scoped variant of {@link setEventIdFactory}: installs `factory`,
  * runs `fn`, then restores the previous factory in a `finally` block —
  * so the restoration happens even if `fn` throws. Safe for parallel
  * tests and for synchronous request handlers that need a tenant-
  * specific factory without polluting the global.
  *
- * **Synchronous-only.** `fn` must return synchronously. The factory is
- * restored at the moment `fn` returns; any work `fn` schedules to run
- * after returning (timers, queued microtasks, awaited continuations of
- * an async `fn`) will see the *previous* factory, not the scoped one.
- * For async scoping across `await` boundaries, you'd need
- * `AsyncLocalStorage` — out of scope for this helper; build it on top
- * if you need it.
+ * **Synchronous-only — enforced at runtime.** If `fn` returns a
+ * thenable (a `Promise` or any object with a `then` method), the
+ * helper throws *before* returning the value to the caller. This
+ * catches the async-misuse footgun where the factory would be
+ * restored before the awaited body of `fn` runs, leaving the awaited
+ * code reading the previous factory. For async scoping across `await`
+ * boundaries, use `AsyncLocalStorage` — out of scope for this helper;
+ * build it on top if you need it.
  *
  * Composes by nesting: an inner `withEventIdFactory` restores back to
  * the outer's factory; the outer restores to the original.
@@ -82,7 +105,9 @@ export function withEventIdFactory<T>(
 	const previous = currentEventIdFactory;
 	currentEventIdFactory = factory;
 	try {
-		return fn();
+		const result = fn();
+		assertNotThenable(result, "withEventIdFactory");
+		return result;
 	} finally {
 		currentEventIdFactory = previous;
 	}
@@ -150,7 +175,9 @@ export function withClockFactory<T>(factory: ClockFactory, fn: () => T): T {
 	const previous = currentClockFactory;
 	currentClockFactory = factory;
 	try {
-		return fn();
+		const result = fn();
+		assertNotThenable(result, "withClockFactory");
+		return result;
 	} finally {
 		currentClockFactory = previous;
 	}

@@ -23,11 +23,11 @@ withClockFactory(factory, () => { /* sync work */ });
 
 Both install the supplied factory, run the callback, and restore the previous factory in a `finally` block — so restoration happens even when the callback throws. Composable via nesting: an inner `withEventIdFactory` restores back to the outer's factory; the outer restores to the original.
 
-Synchronous-only — `fn` must return synchronously. The factory is restored at the moment `fn` returns, so any work scheduled to run after (timers, queued microtasks, the continuations of an `async fn`) will see the *previous* factory. For async-scoped factories spanning `await` boundaries, `AsyncLocalStorage` is the right tool — explicitly out of scope for these helpers; build on top if needed.
+**Sync-contract enforced at runtime.** If `fn` returns a thenable (a Promise or any object with a `then` method), both helpers throw before returning the value to the caller. This catches the async-misuse footgun where the JS try/finally + return semantics would restore the factory before the awaited body of `fn` ran, leaving the awaited code silently reading the previous factory. For async-scoped factories spanning `await` boundaries, use `AsyncLocalStorage` — explicitly out of scope for these helpers; build on top if needed.
 
 `setEventIdFactory` / `setClockFactory` stay as the global-mutation helpers (still appropriate for once-at-bootstrap calls); the new helpers are the safer choice for tests and short-lived contexts. Their JSDoc now points at the scoped variants.
 
-Tests cover: factory installed during fn, restored after fn returns, restored after fn throws, returns fn's value, and nested composition (inner restores to outer, outer restores to original).
+Tests cover: factory installed during fn (eventId + clock variants), restored after fn returns, restored after fn throws, fn's return value propagated, nested composition (inner restores to outer, outer restores to original), and the thenable-guard rejecting both real Promises and raw thenables.
 
 ### Added — `onPersisted(version)` Template-Method hook on both aggregate flavours
 

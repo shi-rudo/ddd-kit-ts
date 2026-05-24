@@ -356,6 +356,46 @@ describe("DomainEvent", () => {
 				outerDate.getTime(),
 			]);
 		});
+
+		it("withEventIdFactory throws if fn returns a thenable (async-misuse guard)", () => {
+			// JS spec: try { return fn() } finally { restore } runs the
+			// finally BEFORE the Promise resolves. So an async fn would
+			// see the restored (previous) factory in its awaited body —
+			// silent corruption. The guard catches this at write time.
+			expect(() =>
+				withEventIdFactory(
+					() => "scoped",
+					(async () => createDomainEvent("X", {})) as unknown as () => void,
+				),
+			).toThrow(/withEventIdFactory.*thenable/);
+
+			// And the factory was restored despite the throw.
+			const after = createDomainEvent("Demo", { x: 1 }).eventId;
+			expect(after).not.toBe("scoped");
+		});
+
+		it("withClockFactory throws if fn returns a thenable (async-misuse guard)", () => {
+			const fixed = new Date("1999-12-31T23:59:59Z");
+			expect(() =>
+				withClockFactory(
+					() => fixed,
+					(async () => createDomainEvent("X", {})) as unknown as () => void,
+				),
+			).toThrow(/withClockFactory.*thenable/);
+
+			const after = createDomainEvent("Demo", { x: 1 }).occurredAt;
+			expect(after.getTime()).not.toBe(fixed.getTime());
+		});
+
+		it("guards also catch raw thenables (object with a then method), not just real Promises", () => {
+			const fakeThenable = { then: () => {} };
+			expect(() =>
+				withEventIdFactory(
+					() => "scoped",
+					() => fakeThenable as unknown as void,
+				),
+			).toThrow(/thenable/);
+		});
 	});
 
 	describe("Immutability — events are deeply frozen at construction", () => {
