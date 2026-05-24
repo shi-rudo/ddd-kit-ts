@@ -53,16 +53,18 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 ### Construction: static factory methods, not public constructors
 
-The example above uses `Order.draft(...)`, not `new Order(...)`. That is the convention everywhere in the kit's examples — and the convention Vernon IDDD §11 calls the **Aggregate Factory**.
+The example above uses `Order.draft(...)`, not `new Order(...)`. That is the convention everywhere in the kit's examples — and the canonical **Factory Method on the Aggregate Root** form of Vernon IDDD §11's *Factories*. (§11 also covers standalone factory classes — `OrderFactory.place(customerId, ...)` — for cases where construction needs dependencies the aggregate shouldn't know about. Both are valid; for most aggregates a static method on the class is enough.)
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  // Static factory: named with a domain verb (place / draft / register /
-  // open / create / submit) — not the boilerplate `new`.
+  // Static factory: named with a domain verb, ideally a specific one
+  // (place / draft / register / open / submit). `Order.create(...)`
+  // works but is the weakest choice — it borrows the JS boilerplate
+  // verb instead of the ubiquitous language. Reach for the more
+  // specific verb when there is one.
   static place(id: OrderId, customerId: string): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
-    // Record the creation event inside the factory, atomically with
-    // the aggregate's appearance in the system.
+    // Optional: record the creation event inside the factory.
     order.addDomainEvent(
       createDomainEvent(
         "OrderPlaced",
@@ -75,13 +77,11 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-Three reasons this is the right shape:
+The factory shape buys two things Vernon §11 specifically calls out, plus one event-sourcing concern that comes along for the ride:
 
-1. **Domain language.** `Order.place(...)` reads like the ubiquitous language. `new Order(...)` reads like JavaScript boilerplate. Vernon's §11 framing: a factory captures the *act of creation* as a first-class domain operation.
-2. **Encapsulated validation.** The factory can refuse to create an invalid aggregate (`Order.place` could throw if `customerId` is blank) before the object exists. A constructor can do this too, but a factory makes it the obvious place.
-3. **Atomic creation event.** State-stored aggregates and event-sourced aggregates both need to record their birth event somewhere. The factory is the canonical home — the aggregate is *born* into a domain state that includes "having been created", and the event lands in `pendingEvents` immediately so the next `withCommit` picks it up.
-
-The library does not auto-emit a creation event. If your bounded context cares (most do — `OrderPlaced`, `UserRegistered`, `AccountOpened`), record it inside the factory. If you don't (rare; usually internal scaffolding), skip it.
+1. **Domain language (Vernon §11).** `Order.place(...)` reads like the ubiquitous language; `new Order(...)` reads like JavaScript boilerplate. The factory names the *act of creation* as a first-class domain operation. This is §11's primary argument.
+2. **Whole-object validity at construction (Vernon §11).** The factory can refuse to create an invalid aggregate — `Order.place` throws if `customerId` is blank — *before* the object exists. A constructor can do the same, but a factory makes it the obvious place and removes the temptation to scatter partial-init logic across multiple methods.
+3. **Atomic creation event (ES / CQRS, not §11).** If your bounded context records a birth event (`OrderPlaced`, `UserRegistered`, `AccountOpened`), the factory is the natural home — the aggregate is born into a state that includes "having been created", and the event lands in `pendingEvents` immediately so the next `withCommit` picks it up. The library does NOT auto-emit a creation event; this is the consumer's call per bounded context.
 
 `AggregateRoot` and `EventSourcedAggregate` both declare `protected constructor(...)`, so `new Order(...)` from outside the aggregate's own file is a compile error. The static factory is the only public construction path.
 
