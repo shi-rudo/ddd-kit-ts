@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Event-ordering contract documented for `withCommit`
+
+The harvest order of events flowing through `withCommit` is now stated explicitly: events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order (the order they were recorded via `apply` / `commit` / `addDomainEvent`). Subscribers — sagas, projection handlers, in-process bus subscribers — will come to rely on this; the contract was previously only encoded in the `flatMap` implementation. Now stated in the `withCommit` JSDoc, in the "Order of operations" list in `docs/guide/outbox.md`, and pinned down by a regression test that asserts the order across three aggregates with multi-event emissions.
+
 ### Added — "Where invariants live" map in the aggregates guide
 
 DDD aggregates enforce business rules at four distinct locations and the kit exposes hooks at each — but consumers were re-deriving the map from scratch every time and often choosing the wrong location. New section in `docs/guide/aggregates.md` provides the canonical table:

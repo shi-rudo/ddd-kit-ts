@@ -124,7 +124,7 @@ const orderId = await withCommit(
 Order of operations:
 
 1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence** — it does NOT clear pending events.
-2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded.
+2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded. **Harvest order is part of the contract:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order (the order they were recorded via `apply` / `commit` / `addDomainEvent`). Subscribers that depend on ordering can rely on this.
 3. **Transaction commits.**
 4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
 5. `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired).

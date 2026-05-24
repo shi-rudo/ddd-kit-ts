@@ -312,6 +312,31 @@ describe("withCommit", () => {
 		expect(b.pendingEvents).toHaveLength(0);
 	});
 
+	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
+		// Subscribers will come to rely on this. Concatenation is:
+		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.
+		const e1 = createDomainEvent("OrderCreated", { orderId: "a-evt-1" });
+		const e2 = createDomainEvent("OrderCreated", { orderId: "a-evt-2" });
+		const e3 = createDomainEvent("OrderCreated", { orderId: "b-evt-1" });
+		const e4 = createDomainEvent("OrderCreated", { orderId: "c-evt-1" });
+
+		const aggA = createMockAggregate([e1, e2]);
+		const aggB = createMockAggregate([e3]);
+		const aggC = createMockAggregate([e4]);
+
+		const outbox = createMockOutbox();
+		const bus = createMockBus();
+
+		await withCommit(
+			{ outbox, bus, scope: createMockScope() },
+			async () => ({ result: "ok", aggregates: [aggA, aggB, aggC] }),
+		);
+
+		const expected = [e1, e2, e3, e4];
+		expect(outbox.added).toEqual([expected]);
+		expect(bus.published).toEqual([expected]);
+	});
+
 	it("skips outbox.add and bus.publish when no aggregates emit events", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();

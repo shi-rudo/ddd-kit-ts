@@ -22,6 +22,16 @@ import type { TransactionScope } from "../repo/scope";
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
  *     events were recorded.
+ *
+ *     **Harvest order is part of the contract.** Events are concatenated
+ *     in the order aggregates appear in the returned `aggregates`
+ *     array, then in each aggregate's `pendingEvents` order (which is
+ *     the order they were recorded via `apply` / `commit` /
+ *     `addDomainEvent`). So `aggregates: [a, b]` with `a` emitting
+ *     `[e1, e2]` and `b` emitting `[e3]` produces `outbox.add([e1, e2,
+ *     e3])` and `bus.publish([e1, e2, e3])` in that exact order.
+ *     Subscribers that rely on ordering should treat this as the
+ *     library's guarantee.
  *  3. The transaction commits.
  *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
  *     fires on each returned aggregate — only now are pending events
