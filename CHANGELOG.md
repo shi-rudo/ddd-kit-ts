@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.7] - 2026-05-24
+
+The settling-period release before 1.0. No breaking changes since rc.6 — this cycle is dedicated to hardening, doc completeness, and consumer-feedback follow-through. Real-world production usage of rc.5/rc.6 surfaced one footgun (forgotten `super.markPersisted` in a subclass) and the architectural depth of several DDD patterns the kit had implemented but never explicitly documented.
+
+Highlights:
+
+- **`onPersisted(version)` Template-Method hook** on both aggregate flavours. The proper extension point for post-persist logging, metrics, and cache eviction — overriding `markPersisted` directly is now structurally discouraged (silent `pendingEvents` leak if `super` is forgotten). Closed via the GoF Template Method pattern: framework owns the cleanup; subclasses override the hook.
+- **`withEventIdFactory` / `withClockFactory`** — scoped factory helpers with try/finally restore + runtime thenable-guard catching the async-misuse footgun. Closes the parallel-test and multi-tenant race conditions inherent to the module-global factory design.
+- **Process Manager / Saga example** (`examples/saga/`) showing the canonical Order → Payment → Shipping flow with compensation paths — the last big pedagogical gap.
+- **Read-Side Projections guide** (`docs/guide/projections.md`) — end-to-end CQRS read flow from outbox dispatcher to QueryBus, including the `last_event_id` idempotency trick and the projection-vs-process-manager distinction.
+- **Snapshot policies** documented (`event-sourcing.md`) — three canonical strategies (every-N, time-based, background-sweep) with explicit trade-offs.
+- **Reconstitution pattern** (state-stored + ES) — Vernon §11's factory-vs-reconstitution distinction documented with worked code for both flavours.
+- **`InMemoryOutbox<Evt>` reference implementation** alongside `EventBusImpl`.
+- **DDD-canonical architectural notes**: where invariants live (per-state/per-event/per-method/cross-aggregate), Domain Services and Bounded Contexts in design-decisions, static-factory convention (Vernon §11 Aggregate Factory), the globals-vs-DI trade-off for clock/id factories.
+- **Sharpened contracts**: `withCommit` aggregate-dedupe by reference (defensive), event-ordering contract within vs across aggregates (Vernon §10 distinction made explicit), Identity Map requirement on `IRepository` implementations (Fowler PoEAA), IdGenerator collision/monotonicity requirements.
+- **Test coverage** grew from 416 to 435 (+19) — dedicated tests for `core/errors` and `repo/scope`, regression tests for every new contract, three Saga end-to-end scenarios.
+
+Several previously-published claims were re-reviewed against the DDD canon (Vernon / Young / Khononov / Evans / Fowler) and sharpened where they overstated. The library's posture is now consistent: ship parts not glue, document the conventions the parts assume, and stay honest about what's pragmatic-default versus what's DDD-canonical.
+
+The next step is 1.0 unless rc.7 surfaces new feedback that requires API-level changes.
+
 ### Added — Document IdGenerator collision and monotonicity requirements
 
 `IdGenerator<Tag>` consumers can today implement `next: () => Date.now().toString() as Id<...>` — compiles fine, looks clean in tests, collides silently in production. The kit makes no attempt to dedupe or detect collisions, so a duplicate id either overwrites an earlier row (under unique-key constraints) or silently aliases two different entities (without).
