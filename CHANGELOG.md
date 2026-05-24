@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — Event-ordering contract documented for `withCommit`
+### Added — Event-ordering documented for `withCommit`, with the Vernon/Young caveat
 
-The harvest order of events flowing through `withCommit` is now stated explicitly: events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order (the order they were recorded via `apply` / `commit` / `addDomainEvent`). Subscribers — sagas, projection handlers, in-process bus subscribers — will come to rely on this; the contract was previously only encoded in the `flatMap` implementation. Now stated in the `withCommit` JSDoc, in the "Order of operations" list in `docs/guide/outbox.md`, and pinned down by a regression test that asserts the order across three aggregates with multi-event emissions.
+The harvest order of events flowing through `withCommit` is now stated explicitly: events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. A regression test in `handler.test.ts` pins this down across three aggregates with multi-event emissions.
+
+Crucially, the same docs now distinguish the two ordering guarantees that consumers conflate at their peril (Vernon IDDD §10; Greg Young):
+
+- **Within a single aggregate** — causal order. `apply` / `commit` / `addDomainEvent` push to `pendingEvents` in domain-method invocation order, and subscribers MUST process them in that order. Inviolable.
+- **Across aggregates within one `withCommit`** — incidental order, not a domain guarantee. Aggregates are independent consistency boundaries; events across them are eventually consistent. Parallel outbox dispatchers or message brokers may reorder them at delivery time.
+
+The practical rule, now stated in `outbox.md` and the `withCommit` JSDoc: if a subscriber depends on the order in which events from *different aggregates* arrive, that's the wrong design — use `EventMetadata.causationId` for explicit causation, or a Process Manager to coordinate. Don't engineer against the harvest-order luck of being in the same batch.
 
 ### Added — "Where invariants live" map in the aggregates guide
 

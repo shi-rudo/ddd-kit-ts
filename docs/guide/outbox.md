@@ -124,7 +124,7 @@ const orderId = await withCommit(
 Order of operations:
 
 1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence** — it does NOT clear pending events.
-2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded. **Harvest order is part of the contract:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order (the order they were recorded via `apply` / `commit` / `addDomainEvent`). Subscribers that depend on ordering can rely on this.
+2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded. **Harvest order:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. See the [ordering note](#two-ordering-guarantees-not-one) below before designing subscribers against it.
 3. **Transaction commits.**
 4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
 5. `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired).
@@ -132,6 +132,16 @@ Order of operations:
 Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
 
 If the transaction rolls back, `markPersisted` is **not** called — the aggregate keeps its pending events, so the caller can retry or discard.
+
+### Two ordering guarantees, not one
+
+The events harvested in step 2 carry two different ordering guarantees that consumers conflate at their peril:
+
+- **Within a single aggregate — causal order.** `apply` / `commit` / `addDomainEvent` push to `pendingEvents` in domain-method invocation order, and that order reflects real causality: the second event happened *because* the first one did. Subscribers (in-process handlers, projection handlers, event-store replay) MUST process these in order. Out-of-order processing within an aggregate breaks state derivation. Vernon IDDD §10; Greg Young's ES talks treat this as inviolable.
+
+- **Across aggregates within one `withCommit` — incidental, not domain.** The order in which `aggregates: [a, b, c]` were written into the array is deterministic, and the in-process `EventBus.publish` and sequential outbox-dispatchers preserve it. But this is an *implementation* artifact, not a domain guarantee. DDD treats aggregates as independent consistency boundaries; events across them are eventually consistent (Vernon §10). Parallel outbox dispatchers, message brokers, or cross-process delivery may reorder events from `a` against events from `b` at delivery time.
+
+**Practical rule:** if a subscriber depends on the order in which events from *different aggregates* arrive, that's the wrong design. Use `EventMetadata.causationId` to express explicit causation across events (the event from `b` carries the `eventId` of the event from `a` that triggered it), or use a Process Manager to coordinate. Don't engineer against the harvest-order luck of being in the same batch.
 
 For the downstream side — outbox-dispatcher → projection-handlers → read-model tables → `QueryBus` — see [Read-Side Projections](./projections.md).
 

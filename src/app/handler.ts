@@ -23,15 +23,28 @@ import type { TransactionScope } from "../repo/scope";
  *     events persist atomically with the state change). Skipped when no
  *     events were recorded.
  *
- *     **Harvest order is part of the contract.** Events are concatenated
- *     in the order aggregates appear in the returned `aggregates`
- *     array, then in each aggregate's `pendingEvents` order (which is
- *     the order they were recorded via `apply` / `commit` /
- *     `addDomainEvent`). So `aggregates: [a, b]` with `a` emitting
- *     `[e1, e2]` and `b` emitting `[e3]` produces `outbox.add([e1, e2,
- *     e3])` and `bus.publish([e1, e2, e3])` in that exact order.
- *     Subscribers that rely on ordering should treat this as the
- *     library's guarantee.
+ *     **Harvest order.** Events are concatenated in the order
+ *     aggregates appear in the returned `aggregates` array, then in
+ *     each aggregate's `pendingEvents` order (insertion order via
+ *     `apply` / `commit` / `addDomainEvent`). So `aggregates: [a, b]`
+ *     with `a` emitting `[e1, e2]` and `b` emitting `[e3]` produces
+ *     `outbox.add([e1, e2, e3])` and `bus.publish([e1, e2, e3])` in
+ *     that exact order.
+ *
+ *     **Two ordering guarantees, not one.** Within a single aggregate
+ *     the order is *causal* — events are recorded in the order the
+ *     domain methods ran, and subscribers (handlers, projections,
+ *     replay) MUST process them in that order. Across aggregates the
+ *     order in this batch is deterministic but *not* a domain
+ *     guarantee. Greg Young / Vernon IDDD §10: aggregates are
+ *     independent consistency boundaries; events across them are
+ *     eventually consistent. Subscribers should NOT engineer
+ *     dependencies on cross-aggregate ordering — use
+ *     `EventMetadata.causationId` to express true causation, or a
+ *     process manager to coordinate. The in-process EventBus delivers
+ *     this batch in order, sequential outbox-dispatchers preserve it
+ *     too, but parallel dispatchers or message brokers may reorder
+ *     across aggregates at delivery time.
  *  3. The transaction commits.
  *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
  *     fires on each returned aggregate — only now are pending events
