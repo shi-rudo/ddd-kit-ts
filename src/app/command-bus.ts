@@ -2,6 +2,21 @@ import { err, type Result } from "@shirudo/result";
 import type { Command, CommandHandler } from "./command";
 
 /**
+ * Internal adapter shape for handlers stored in the map.
+ *
+ * Registered handlers are typed as `CommandHandler<C, TMap[K]>` — narrower
+ * input, specific return — and cannot be stored directly in a heterogeneous
+ * map (function-parameter contravariance). The closure in `register`
+ * downcasts `Command` to the handler's expected `C` based on the
+ * dispatch-key invariant (we only call this entry when `cmd.type` matches
+ * the key it was registered under). Result is widened to `unknown` here
+ * and narrowed back via the public overloads on `execute`.
+ */
+type StoredCommandHandler = (
+	cmd: Command,
+) => Promise<Result<unknown, string>>;
+
+/**
  * Type map for command types to their return types.
  * Used to improve type inference in CommandBus.
  *
@@ -116,8 +131,7 @@ export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
 export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 	implements ICommandBus<TMap>
 {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private readonly handlers = new Map<string, CommandHandler<any, any>>();
+	private readonly handlers = new Map<string, StoredCommandHandler>();
 
 	register<
 		K extends keyof TMap & string,
@@ -126,7 +140,7 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 		commandType: K,
 		handler: CommandHandler<C, TMap[K]>,
 	): void {
-		this.handlers.set(commandType, handler);
+		this.handlers.set(commandType, (cmd) => handler(cmd as C));
 	}
 
 	async execute<C extends Command & { type: keyof TMap & string }>(
@@ -143,7 +157,7 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 			return err(`No handler registered for command type: ${command.type}`);
 		}
 		try {
-			return await handler(command);
+			return (await handler(command)) as Result<R, string>;
 		} catch (error) {
 			return err(
 				error instanceof Error ? error.message : String(error),

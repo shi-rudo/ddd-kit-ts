@@ -26,8 +26,7 @@ import type { EventBus, EventHandler, OnceOptions } from "./ports";
 export class EventBusImpl<Evt extends DomainEvent<string, unknown>>
 	implements EventBus<Evt>
 {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private readonly handlers = new Map<string, EventHandler<any>[]>();
+	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
 
 	subscribe<K extends Evt["type"]>(
 		eventType: K,

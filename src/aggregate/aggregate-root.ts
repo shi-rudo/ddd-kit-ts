@@ -102,7 +102,7 @@ export interface AggregateConfig {
  *
  * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TId - The type of the aggregate root identifier
- * @template TEvent - The type of domain events recorded by this aggregate (defaults to unknown)
+ * @template TEvent - The type of domain events recorded by this aggregate. Defaults to `never` — aggregates without a declared event type cannot emit events (emitting any event becomes a compile error). Supply a concrete event union to opt in.
  *
  * @example
  * ```typescript

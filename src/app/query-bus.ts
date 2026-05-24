@@ -2,6 +2,19 @@ import { err, ok, type Result } from "@shirudo/result";
 import type { Query, QueryHandler } from "./query";
 
 /**
+ * Internal adapter shape for handlers stored in the map.
+ *
+ * Registered handlers are typed as `QueryHandler<Q, TMap[K]>` — narrower
+ * input, specific return — and cannot be stored directly in a heterogeneous
+ * map (function-parameter contravariance). The closure in `register`
+ * downcasts `Query` to the handler's expected `Q` based on the
+ * dispatch-key invariant (we only call this entry when `query.type` matches
+ * the key it was registered under). Result is widened to `unknown` here
+ * and narrowed back via the public overloads on `execute` / `executeUnsafe`.
+ */
+type StoredQueryHandler = (query: Query) => Promise<unknown>;
+
+/**
  * Type map for query types to their return types.
  * Used to improve type inference in QueryBus.
  *
@@ -128,8 +141,7 @@ export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
 export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 	implements IQueryBus<TMap>
 {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	private readonly handlers = new Map<string, QueryHandler<any, any>>();
+	private readonly handlers = new Map<string, StoredQueryHandler>();
 
 	register<
 		K extends keyof TMap & string,
@@ -138,7 +150,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		queryType: K,
 		handler: QueryHandler<Q, TMap[K]>,
 	): void {
-		this.handlers.set(queryType, handler);
+		this.handlers.set(queryType, (query) => handler(query as Q));
 	}
 
 	async execute<Q extends Query & { type: keyof TMap & string }>(
@@ -151,7 +163,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 			return err(`No handler registered for query type: ${query.type}`);
 		}
 		try {
-			const result = await handler(query);
+			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
 			return err(
@@ -169,6 +181,6 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		if (!handler) {
 			throw new Error(`No handler registered for query type: ${query.type}`);
 		}
-		return handler(query);
+		return (await handler(query)) as R;
 	}
 }
