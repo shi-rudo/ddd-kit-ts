@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — "Where invariants live" map in the aggregates guide
+
+DDD aggregates enforce business rules at four distinct locations and the kit exposes hooks at each — but consumers were re-deriving the map from scratch every time and often choosing the wrong location. New section in `docs/guide/aggregates.md` provides the canonical table:
+
+| Location | What it guards | Library hook |
+|---|---|---|
+| **Per-state** | structural invariants ("total ≥ 0") | `validateState` (every `setState` / `commit`) |
+| **Per-event (ES only)** | lifecycle invariants ("OrderShipped only after OrderConfirmed") | `validateEvent` (start of `apply()`) |
+| **Per-method** | command-side guards ("can't confirm an empty order") | inline `if (...) throw` at the top of the domain method |
+| **Cross-aggregate** | spanning invariants ("payment within 30min of order") | `EventBus` + Process Manager (eventual consistency) |
+
+Each row has a worked code snippet and an explicit warning that cross-aggregate invariants cannot be enforced transactionally — Vernon's "modify one aggregate per transaction" rule (IDDD §10). If you want transactional cross-aggregate consistency, the aggregate boundaries are wrong.
+
+Bonus: while in the file, fixed two stale facts in the Optimistic Concurrency section — `ConcurrencyConflictError` is now correctly described as an `InfrastructureError` subclass (post rc.5 hierarchy split), and the rc.5-era "repository calls `aggregate.markPersisted`" claim is replaced with the rc.6 `save()`-is-pure-persistence + `withCommit`-owns-the-lifecycle shape.
+
 ### Added — Snapshot-policy guidance in `event-sourcing.md`
 
 `createSnapshot` and `restoreFromSnapshotWithEvents` shipped with mechanics-only docs. The when-to-snapshot question dominates load latency at scale and was nowhere addressed. New "Snapshot policies" subsection covers the three canonical strategies:
