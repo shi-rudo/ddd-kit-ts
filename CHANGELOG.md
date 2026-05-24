@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Read-Side Projections guide (`docs/guide/projections.md`)
+
+New documentation page for the canonical CQRS read-side flow: outbox → dispatcher → projection handlers → read-model tables → `QueryBus`. Covers the dispatcher loop pattern (polling + queue-based variants), the event-type-keyed projection-handler shape (mirroring `EventSourcedAggregate.handlers`), the `last_event_id` idempotency trick, the QueryHandler-reads-from-projection wiring, and eventual-consistency UX strategies. Closes a long-standing pedagogical gap where the kit shipped all the pieces but never showed them composed end-to-end.
+
+Includes a full topology snippet wiring `withCommit`, `InMemoryOutbox`, `EventBusImpl`, `CommandBus`, `QueryBus`, and a projection together. Explicitly documents what the library does NOT ship (no `ProjectionHandler` type, no dispatcher impl, no replay tooling) and why — projections are consumer territory; the kit's contract ends at the outbox.
+
+Cross-links from `outbox.md` and `cqrs-and-buses.md`; new sidebar entry under "Application Layer".
+
 ### Changed — Document the `version === 0` / `version > 0` insert-vs-update convention
 
 `IRepository.save`'s JSDoc and `docs/guide/repository.md` now explicitly document the library's convention for distinguishing fresh aggregates from existing ones: `aggregate.version === 0` means INSERT, `aggregate.version > 0` means UPDATE with the OCC predicate `WHERE id = ? AND version = expected`. Every persistence-layer adapter has to make this distinction; now it's stated once and pointed at from JSDoc. Also fixes two stale facts in `repository.md`: `save()` no longer instructs implementors to call `markPersisted` (the `withCommit` orchestrator owns the lifecycle since rc.6), and `AggregateNotFoundError` / `ConcurrencyConflictError` are correctly described as `InfrastructureError` subclasses, not `DomainError`.

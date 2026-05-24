@@ -137,4 +137,4 @@ Order of operations:
 
 Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, the outbox dispatcher will still deliver the events (eventual consistency).
 
-See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract.
+See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract, and [Read-Side Projections](./projections.md) for the canonical CQRS read-side flow (dispatcher → projection handlers → read-model tables → `QueryBus`).

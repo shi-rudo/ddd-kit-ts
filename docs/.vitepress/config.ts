@@ -81,6 +81,7 @@ export default defineConfig({
 						{ text: "CQRS & Buses", link: "/guide/cqrs-and-buses" },
 						{ text: "Repository", link: "/guide/repository" },
 						{ text: "Outbox & Transactions", link: "/guide/outbox" },
+						{ text: "Read-Side Projections", link: "/guide/projections" },
 					],
 				},
 				{

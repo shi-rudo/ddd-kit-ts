@@ -133,6 +133,8 @@ Publishing *after* the commit is the key invariant: in-process subscribers never
 
 If the transaction rolls back, `markPersisted` is **not** called — the aggregate keeps its pending events, so the caller can retry or discard.
 
+For the downstream side — outbox-dispatcher → projection-handlers → read-model tables → `QueryBus` — see [Read-Side Projections](./projections.md).
+
 ::: tip Why the use case returns `aggregates`, not `events`
 The Vernon / Axon / EventFlow pattern: `Repository.save` is pure persistence; "this aggregate has been committed" is the orchestrator's call to make, not the repo's. Returning aggregates lets `withCommit` harvest pending events itself and call `markPersisted` at the right moment (post-commit, before publish). The earlier pattern of returning `events: order.pendingEvents` directly was a footgun: if `repo.save` cleared events early, the harvest would see an empty list and the outbox would receive nothing.
 :::
