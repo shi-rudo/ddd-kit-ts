@@ -43,17 +43,25 @@ export interface IRepository<
 	exists(id: TId): Promise<boolean>;
 
 	/**
-	 * Persists the aggregate (insert or update). Implementations should:
+	 * Persists the aggregate (insert or update). Implementations are
+	 * responsible for **persistence only** — they must NOT touch the
+	 * aggregate's in-memory state:
 	 *
 	 *  1. Throw `ConcurrencyConflictError` from `@shirudo/ddd-kit` when the
 	 *     aggregate's expected version does not match the version currently
 	 *     stored (optimistic concurrency).
-	 *  2. After a successful write, call `aggregate.markPersisted(newVersion)`
-	 *     so the in-memory aggregate reflects the new version and clears its
-	 *     pending/domain events.
+	 *  2. Write the aggregate to durable storage.
 	 *
-	 * Return type stays `void` — the caller already holds the aggregate
-	 * reference, which is now up to date.
+	 * Do **not** call `aggregate.markPersisted(...)` here. The library's
+	 * `withCommit` orchestrator handles the post-save lifecycle (harvest
+	 * pending events into the outbox, then mark persisted after commit).
+	 * Calling `markPersisted` inside `save` clears pending events too early
+	 * and breaks the harvest path — and is also why the Vernon/Axon/
+	 * EventFlow pattern separates persistence from commit-events.
+	 *
+	 * If you are not using `withCommit` (custom orchestration), call
+	 * `aggregate.markPersisted(aggregate.version)` yourself **after** you
+	 * have harvested `aggregate.pendingEvents` for downstream dispatch.
 	 */
 	save(aggregate: TAgg): Promise<void>;
 

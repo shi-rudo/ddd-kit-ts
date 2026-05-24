@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `withCommit` use case returns `aggregates`, not `events`; `Repository.save` is pure persistence
+
+`withCommit` now owns the post-save lifecycle (harvest pending events, write outbox, mark persisted after commit, publish to bus). `Repository.save` is responsible for **persistence only** and must NOT call `aggregate.markPersisted(...)` itself. This is the Vernon / Axon / EventFlow unit-of-work pattern — `save` is "I wrote this row"; "this aggregate has been committed" is the orchestrator's call to make.
+
+```diff
+  await withCommit({ scope, outbox, bus }, async (tx) => {
+    const order = await orders.getByIdOrFail(orderId);
+    order.confirm();
+-   await orders.save(order);  // also called markPersisted internally
+-   return { result: order.id, events: order.pendingEvents };
++   await orders.save(order);  // pure persistence — no markPersisted
++   return { result: order.id, aggregates: [order] };
+  });
+```
+
+```diff
+  // Repository implementation
+  async save(aggregate: Order): Promise<void> {
+    if (aggregate.version !== currentDbVersion + 1) {
+      throw new ConcurrencyConflictError("Order", aggregate.id, currentDbVersion, aggregate.version);
+    }
+    await db.upsert({ id: aggregate.id, state: aggregate.state, version: aggregate.version });
+-   aggregate.markPersisted(aggregate.version);  // DON'T do this anymore
++   // withCommit calls markPersisted after the transaction commits
+  }
+```
+
+Why this is BREAKING and worth doing: the prior contract had `Repository.save` clear pending events as a side effect, but the documented use-case pattern then read `order.pendingEvents` AFTER the call. With a correct `save` implementation that list would be empty by then — the outbox would receive nothing. The bug was latent in the kit's docs and tests; no integration test exercised the full path. The new shape closes both ends: pending events are harvested by the library (so the user can't get the order wrong), and `markPersisted` only fires after the transaction commits (so a rolled-back transaction never silently consumes the aggregate's pending events).
+
+Migration:
+1. Use-case bodies inside `withCommit`: return `{ result, aggregates: [agg, ...] }` instead of `{ result, events: agg.pendingEvents }`.
+2. Repository implementations: remove the `aggregate.markPersisted(...)` call from `save`. `save` should now just write and return.
+3. Custom orchestration outside `withCommit`: call `aggregate.markPersisted(aggregate.version)` yourself **after** you have harvested `aggregate.pendingEvents` for downstream dispatch.
+
 ### BREAKING — Unify `pendingEvents` accessor across both aggregate flavours
 
 `AggregateRoot.domainEvents` / `clearDomainEvents()` are renamed to `pendingEvents` / `clearPendingEvents()`, matching `EventSourcedAggregate`. The shared accessor is hoisted to the `IAggregateRoot<TId, TEvent = never>` interface so a generic `Repository.save()` can harvest pending events uniformly without branching on the aggregate flavour.

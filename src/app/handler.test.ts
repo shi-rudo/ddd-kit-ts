@@ -1,10 +1,40 @@
 import { describe, expect, it } from "vitest";
+import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import type { Version } from "../aggregate/aggregate";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { withCommit } from "./handler";
 
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
+type TestId = Id<"TestId">;
+
+type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
+	markPersistedCalls: number;
+};
+
+function createMockAggregate(events: TestEvent[]): MockAggregate {
+	let pending: TestEvent[] = [...events];
+	let calls = 0;
+	return {
+		id: "agg-1" as TestId,
+		version: 1 as Version,
+		get pendingEvents(): ReadonlyArray<TestEvent> {
+			return pending;
+		},
+		clearPendingEvents(): void {
+			pending = [];
+		},
+		markPersisted(_v: Version): void {
+			pending = [];
+			calls += 1;
+		},
+		get markPersistedCalls(): number {
+			return calls;
+		},
+	};
+}
 
 function createMockScope(): TransactionScope<undefined> {
 	return {
@@ -37,65 +67,59 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 }
 
 describe("withCommit", () => {
-	it("should return the result from the function", async () => {
+	it("returns the result from the function", async () => {
 		const result = await withCommit(
 			{ outbox: createMockOutbox(), scope: createMockScope() },
-			async () => ({
-				result: "order-123",
-				events: [],
-			}),
+			async () => ({ result: "order-123", aggregates: [] }),
 		);
 
 		expect(result).toBe("order-123");
 	});
 
-	it("should add events to the outbox", async () => {
+	it("harvests pendingEvents from the returned aggregates into the outbox", async () => {
 		const outbox = createMockOutbox();
-		const events: TestEvent[] = [
-			createDomainEvent("OrderCreated", { orderId: "order-1" }),
-		];
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const agg = createMockAggregate([event]);
 
 		await withCommit(
 			{ outbox, scope: createMockScope() },
-			async () => ({ result: "ok", events }),
+			async () => ({ result: "ok", aggregates: [agg] }),
 		);
 
 		expect(outbox.added).toHaveLength(1);
-		expect(outbox.added[0]).toEqual(events);
+		expect(outbox.added[0]).toEqual([event]);
 	});
 
-	it("should publish events to bus when provided", async () => {
+	it("publishes harvested events to the bus when provided", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
-		const events: TestEvent[] = [
-			createDomainEvent("OrderCreated", { orderId: "order-1" }),
-		];
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const agg = createMockAggregate([event]);
 
 		await withCommit(
 			{ outbox, bus, scope: createMockScope() },
-			async () => ({ result: "ok", events }),
+			async () => ({ result: "ok", aggregates: [agg] }),
 		);
 
 		expect(bus.published).toHaveLength(1);
-		expect(bus.published[0]).toEqual(events);
+		expect(bus.published[0]).toEqual([event]);
 	});
 
-	it("should not fail when bus is not provided", async () => {
+	it("works without a bus", async () => {
 		const outbox = createMockOutbox();
-		const events: TestEvent[] = [
-			createDomainEvent("OrderCreated", { orderId: "order-1" }),
-		];
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const agg = createMockAggregate([event]);
 
 		const result = await withCommit(
 			{ outbox, scope: createMockScope() },
-			async () => ({ result: "ok", events }),
+			async () => ({ result: "ok", aggregates: [agg] }),
 		);
 
 		expect(result).toBe("ok");
 		expect(outbox.added).toHaveLength(1);
 	});
 
-	it("should execute within the unit of work transaction", async () => {
+	it("runs fn inside the transaction scope", async () => {
 		const callOrder: string[] = [];
 		const scope: TransactionScope<undefined> = {
 			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -105,20 +129,19 @@ describe("withCommit", () => {
 				return result;
 			},
 		};
-		const outbox = createMockOutbox();
 
 		await withCommit(
-			{ outbox, scope },
+			{ outbox: createMockOutbox(), scope },
 			async () => {
 				callOrder.push("fn");
-				return { result: "ok", events: [] };
+				return { result: "ok", aggregates: [] };
 			},
 		);
 
 		expect(callOrder).toEqual(["tx-start", "fn", "tx-end"]);
 	});
 
-	it("should propagate errors from the function", async () => {
+	it("propagates errors from the function", async () => {
 		await expect(
 			withCommit(
 				{ outbox: createMockOutbox(), scope: createMockScope() },
@@ -129,7 +152,7 @@ describe("withCommit", () => {
 		).rejects.toThrow("Something went wrong");
 	});
 
-	it("should propagate errors from the outbox", async () => {
+	it("propagates errors from the outbox", async () => {
 		const outbox: Outbox<TestEvent> = {
 			add: async () => {
 				throw new Error("Outbox failed");
@@ -137,19 +160,19 @@ describe("withCommit", () => {
 			getPending: async () => [],
 			markDispatched: async () => {},
 		};
+		const agg = createMockAggregate([
+			createDomainEvent("OrderCreated", { orderId: "order-1" }),
+		]);
 
 		await expect(
 			withCommit(
 				{ outbox, scope: createMockScope() },
-				async () => ({
-					result: "ok",
-					events: [createDomainEvent("OrderCreated", { orderId: "order-1" })],
-				}),
+				async () => ({ result: "ok", aggregates: [agg] }),
 			),
 		).rejects.toThrow("Outbox failed");
 	});
 
-	it("publishes to the bus only AFTER the transaction has committed", async () => {
+	it("orders outbox.add inside tx, markPersisted + bus.publish after commit", async () => {
 		const callOrder: string[] = [];
 		const scope: TransactionScope<undefined> = {
 			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -173,37 +196,45 @@ describe("withCommit", () => {
 			subscribe: () => () => {},
 			once: () => new Promise(() => {}),
 		};
+		// A specifically-instrumented mock that records when markPersisted is called.
+		let pending: TestEvent[] = [
+			createDomainEvent("OrderCreated", { orderId: "o-1" }),
+		];
+		const agg: IAggregateRoot<TestId, TestEvent> = {
+			id: "agg-1" as TestId,
+			version: 1 as Version,
+			get pendingEvents() {
+				return pending;
+			},
+			clearPendingEvents() {
+				pending = [];
+			},
+			markPersisted() {
+				callOrder.push("markPersisted");
+				pending = [];
+			},
+		};
 
 		await withCommit(
 			{ outbox, bus, scope },
 			async () => {
 				callOrder.push("fn");
-				return {
-					result: "ok",
-					events: [createDomainEvent("OrderCreated", { orderId: "o-1" })],
-				};
+				return { result: "ok", aggregates: [agg] };
 			},
 		);
 
-		// Outbox stays inside the TX so the events persist atomically with state;
-		// bus.publish must happen AFTER tx-commit so subscribers never see events
-		// from a rolled-back transaction.
 		expect(callOrder).toEqual([
 			"tx-start",
 			"fn",
 			"outbox.add",
 			"tx-commit",
+			"markPersisted",
 			"bus.publish",
 		]);
 	});
 
-	it("threads the TransactionScope context through to fn (Drizzle/Prisma/Mongo-tx pattern)", async () => {
-		// Simulate a persistence-layer transaction handle that the scope
-		// passes into the callback. Real-world examples: Drizzle's tx,
-		// Prisma's tx, Mongo's session. The scope opens it, the use case
-		// hands it to its repositories so writes bind to that transaction.
+	it("threads the TransactionScope context through to fn", async () => {
 		type DrizzleLikeTx = { id: string; isTx: true };
-
 		const tx: DrizzleLikeTx = { id: "tx-42", isTx: true };
 
 		const scope: TransactionScope<DrizzleLikeTx> = {
@@ -212,31 +243,37 @@ describe("withCommit", () => {
 			): Promise<T> => fn(tx),
 		};
 
-		const outbox = createMockOutbox();
-
 		let received: DrizzleLikeTx | undefined;
-		await withCommit({ outbox, scope }, async (ctx) => {
-			received = ctx;
-			return {
-				result: ctx.id,
-				events: [],
-			};
-		});
+		await withCommit(
+			{ outbox: createMockOutbox(), scope },
+			async (ctx) => {
+				received = ctx;
+				return { result: ctx.id, aggregates: [] };
+			},
+		);
 
 		expect(received).toBe(tx);
 	});
 
-	it("typing: context-free scopes use TransactionScope<undefined> as the explicit no-ctx idiom", async () => {
-		// No default for TCtx — context-free callers spell out
-		// `TransactionScope<undefined>` so "there is nothing here" is a
-		// conscious choice, not an inherited `unknown` fallback.
-		const outbox = createMockOutbox();
-		const result = await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "ok", events: [] }),
-		);
+	it("calls markPersisted only AFTER the tx commits (not on a rolled-back tx)", async () => {
+		const scope = createMockScope();
+		const agg = createMockAggregate([
+			createDomainEvent("OrderCreated", { orderId: "o-1" }),
+		]);
 
-		expect(result).toBe("ok");
+		await expect(
+			withCommit(
+				{ outbox: createMockOutbox(), scope },
+				async () => {
+					throw new Error("write failed");
+				},
+			),
+		).rejects.toThrow("write failed");
+
+		// fn threw before withCommit even saw the aggregate; markPersisted
+		// must NOT have been called and pending events must survive.
+		expect(agg.markPersistedCalls).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
 	it("does not publish to the bus when the transaction throws", async () => {
@@ -254,5 +291,41 @@ describe("withCommit", () => {
 		).rejects.toThrow("write failed");
 
 		expect(bus.published).toHaveLength(0);
+	});
+
+	it("calls markPersisted on EACH returned aggregate", async () => {
+		const a = createMockAggregate([
+			createDomainEvent("OrderCreated", { orderId: "a" }),
+		]);
+		const b = createMockAggregate([
+			createDomainEvent("OrderCreated", { orderId: "b" }),
+		]);
+
+		await withCommit(
+			{ outbox: createMockOutbox(), scope: createMockScope() },
+			async () => ({ result: "ok", aggregates: [a, b] }),
+		);
+
+		expect(a.markPersistedCalls).toBe(1);
+		expect(b.markPersistedCalls).toBe(1);
+		expect(a.pendingEvents).toHaveLength(0);
+		expect(b.pendingEvents).toHaveLength(0);
+	});
+
+	it("skips outbox.add and bus.publish when no aggregates emit events", async () => {
+		const outbox = createMockOutbox();
+		const bus = createMockBus();
+		const agg = createMockAggregate([]);
+
+		await withCommit(
+			{ outbox, bus, scope: createMockScope() },
+			async () => ({ result: "ok", aggregates: [agg] }),
+		);
+
+		expect(outbox.added).toHaveLength(0);
+		expect(bus.published).toHaveLength(0);
+		// markPersisted still runs — keeps the lifecycle consistent even
+		// for empty-event commits.
+		expect(agg.markPersistedCalls).toBe(1);
 	});
 });

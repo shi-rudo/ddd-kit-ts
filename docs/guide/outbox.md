@@ -39,8 +39,8 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
 
   const order = await orders.getByIdOrFail(orderId);
   order.confirm();
-  await orders.save(order);
-  return { result: order.id, events: order.pendingEvents };
+  await orders.save(order);                       // pure persistence
+  return { result: order.id, aggregates: [order] }; // withCommit harvests pendingEvents
 });
 ```
 
@@ -125,10 +125,10 @@ const orderId = await withCommit(
   async () => {
     const order = await repo.getByIdOrFail(id);
     order.confirm();
-    await repo.save(order);
+    await repo.save(order);                      // pure persistence
     return {
       result: order.id,
-      events: order.pendingEvents,
+      aggregates: [order],                       // withCommit owns the rest
     };
   },
 );
@@ -136,14 +136,19 @@ const orderId = await withCommit(
 
 Order of operations:
 
-1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction
-2. **Inside the transaction:**
-   - State mutations (`order.confirm()`, `repo.save(order)`)
-   - `outbox.add(events)` — events persist atomically with the state change
-3. **Transaction commits**
-4. **After the commit:** `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired)
+1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence** — it does NOT clear pending events.
+2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded.
+3. **Transaction commits.**
+4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
+5. `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired).
 
 Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
+
+If the transaction rolls back, `markPersisted` is **not** called — the aggregate keeps its pending events, so the caller can retry or discard.
+
+::: tip Why the use case returns `aggregates`, not `events`
+The Vernon / Axon / EventFlow pattern: `Repository.save` is pure persistence; "this aggregate has been committed" is the orchestrator's call to make, not the repo's. Returning aggregates lets `withCommit` harvest pending events itself and call `markPersisted` at the right moment (post-commit, before publish). The earlier pattern of returning `events: order.pendingEvents` directly was a footgun: if `repo.save` cleared events early, the harvest would see an empty list and the outbox would receive nothing.
+:::
 
 ## When you need each piece
 

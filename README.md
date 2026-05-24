@@ -672,7 +672,7 @@ const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (
 
       return {
         result: order.id,
-        events: order.pendingEvents,
+        aggregates: [order],
       };
     }
   );
@@ -1429,7 +1429,7 @@ async function createOrderCommand(cmd: CreateOrderCommand) {
 
     return {
       result: order.id,
-      events: order.pendingEvents // Published atomically
+      aggregates: [order], // withCommit harvests pendingEvents and dispatches
     };
   }); // Commits or rollbacks everything
 }
