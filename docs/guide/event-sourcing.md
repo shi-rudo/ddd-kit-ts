@@ -69,22 +69,26 @@ If any step throws, **no state is mutated** and no event is queued. The "event f
 `EventSourcedAggregate` doesn't need a `commit()` helper because `apply()` already enforces the record-after-mutation ordering at the structural level — state is computed by the handler *from* the event, so the two can never be out of sync.
 :::
 
-## Persistence: `pendingEvents` + `markPersisted`
+## Persistence: pure-persistence `save()` + `withCommit` lifecycle
 
-After `apply()`, the new event lands in `pendingEvents`. The repository writes them to the event store and then calls `markPersisted(version)`:
+After `apply()`, the new event lands in `pendingEvents`. The repository is responsible for **persistence only** — appending the events to the event store with optimistic-concurrency. The `withCommit` orchestrator harvests pending events into the outbox and calls `markPersisted` after the transaction commits.
 
 ```ts
-class OrderRepo implements IRepository<Order, OrderId> {
+class OrderRepository implements IRepository<Order, OrderId> {
   async save(order: Order): Promise<void> {
     const events = order.pendingEvents;
-    await this.eventStore.append(order.id, order.version - events.length, events);
-    order.markPersisted(order.version); // pushes new version + clears pendingEvents
+    const expectedVersion = order.version - events.length;
+    await this.eventStore.append(order.id, expectedVersion, events);
+    // Do NOT call markPersisted here — withCommit handles it after the
+    // transaction commits. Calling it inside save clears pendingEvents
+    // before withCommit can harvest them, and the outbox would receive
+    // nothing.
   }
   // ...
 }
 ```
 
-`markPersisted` is required by the `IAggregateRoot` interface, so a repository can implement against the interface alone without coupling to the concrete class.
+`markPersisted` is library-internal under the canonical `withCommit` path. It stays on `IAggregateRoot` for consumers running their own orchestration (call it manually **after** harvesting `pendingEvents`). See [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ## Replay: `loadFromHistory`
 
@@ -115,6 +119,102 @@ const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapsho
 ```
 
 **All-or-nothing**: if any event mid-replay throws a `DomainError`, the aggregate is rolled back to its pre-call state and version. Partial restoration is never observable to the caller.
+
+### Snapshot policies — when to snapshot
+
+`createSnapshot` and `restoreFromSnapshotWithEvents` give you the **mechanism**; the **policy** is yours. For an aggregate with a few dozen events, replay from the beginning is cheap and you can skip snapshots entirely. For long-lived aggregates (subscriptions accumulating monthly billing events for years, devices emitting telemetry, etc.), the replay cost dominates load latency and snapshots become essential.
+
+The three canonical strategies, in increasing operational complexity:
+
+#### 1. Every-N-events
+
+Snapshot after every N events have been applied since the last snapshot. Simple, predictable, and easy to reason about. The classic choice; mentioned in Vernon's IDDD §A, Greg Young's ES talks, and shipped by EventStoreDB / Marten as their default.
+
+```ts
+const SNAPSHOT_EVERY = 100;
+
+class OrderRepository {
+  async save(order: Order): Promise<void> {
+    const events = order.pendingEvents;
+    await this.eventStore.append(order.id, order.version - events.length, events);
+
+    // Decide whether to snapshot. Read the last snapshot's version
+    // (cheaply cacheable) and compare to the new version.
+    const lastSnapVersion = await this.snapshotStore.lastVersion(order.id);
+    if (order.version - lastSnapVersion >= SNAPSHOT_EVERY) {
+      await this.snapshotStore.save(order.id, order.createSnapshot());
+    }
+  }
+}
+```
+
+Trade-offs:
+
+- **Pro:** zero coordination; the snapshot decision is local to the save path.
+- **Con:** chatty aggregates oversample (a hot stream gets a snapshot every minute even when its state barely changes); cold streams undersample (a subscription that fires twice a year never reaches N).
+- **Con:** the snapshot write happens synchronously with the save unless you fire-and-forget it (which costs you the consistency you might rely on under crash recovery).
+
+Pick this when most aggregates have similar churn and you can tune N to a "good enough" middle ground.
+
+#### 2. Time-based
+
+Snapshot when the last snapshot is older than T (clock-time or wall-time since last snapshot). Smooths bursts and idle periods; aggregates with constant low traffic still get snapshots over time.
+
+```ts
+const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+
+if (order.pendingEvents.length > 0) {
+  const lastSnap = await this.snapshotStore.last(order.id);
+  if (!lastSnap || Date.now() - lastSnap.snapshotAt.getTime() > SNAPSHOT_MAX_AGE_MS) {
+    await this.snapshotStore.save(order.id, order.createSnapshot());
+  }
+}
+```
+
+Trade-offs:
+
+- **Pro:** quiet aggregates still get snapshots eventually.
+- **Con:** still synchronous with save; for high-throughput streams you pay the snapshot cost on the hot path.
+- **Con:** "every save checks a timestamp" is a small but real per-write cost.
+
+Pick this when traffic varies wildly across aggregates of the same type.
+
+#### 3. On-demand / background job
+
+Move the snapshot decision off the write path entirely. A separate worker (cron job, scheduled task, queue consumer) sweeps aggregates whose `(version - lastSnapVersion)` or `(now - lastSnapshotAt)` exceeds a threshold, loads each one, snapshots, and writes the snapshot back.
+
+```ts
+// pseudocode for a background sweeper
+async function snapshotSweep(): Promise<void> {
+  const candidates = await db.execute(sql`
+    SELECT aggregate_id, last_snapshot_version
+    FROM aggregate_versions
+    WHERE current_version - last_snapshot_version >= ${SNAPSHOT_THRESHOLD}
+    LIMIT 1000
+  `);
+  for (const { aggregate_id, last_snapshot_version } of candidates) {
+    const order = await orderRepository.getByIdOrFail(aggregate_id);
+    await snapshotStore.save(aggregate_id, order.createSnapshot());
+  }
+}
+```
+
+Trade-offs:
+
+- **Pro:** zero impact on the write path. Snapshot pressure becomes a scheduling concern, not a hot-path one.
+- **Pro:** snapshots can be batched, throttled, run on a separate worker pool, prioritised by aggregate size.
+- **Con:** more operational machinery — a separate process to monitor, deploy, and reason about.
+- **Con:** aggregates between snapshots may have replay latency until the sweep catches them.
+
+Pick this at scale, or when the write path's latency budget is tight, or when you want to snapshot only when you have spare capacity.
+
+#### What the kit does NOT ship
+
+No `SnapshotPolicy` port, no default frequency, no built-in sweeper. Every event store has different snapshotting facilities (EventStoreDB has `LinkTo` + projections, Marten has its own snapshot API, Postgres-backed implementations write to a sibling table). The aggregate exposes `createSnapshot` / `restoreFromSnapshotWithEvents`; the policy lives next to your event-store wiring.
+
+#### A note on snapshot invalidation
+
+When you change an event schema (see [Event Upcasting](./event-upcasting.md)), existing snapshots may also need to be invalidated — the snapshot captured a state shape derived from the old event schema, and a code change to handlers can desync the snapshot from the events that would now replay differently. Two patterns: stamp snapshots with a schema-version number and discard mismatched ones on load (fall back to full replay), or rebuild affected snapshots during the upcast deploy. Neither is wrong; pick by how often you change schemas.
 
 ## Versioning
 

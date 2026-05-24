@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Snapshot-policy guidance in `event-sourcing.md`
+
+`createSnapshot` and `restoreFromSnapshotWithEvents` shipped with mechanics-only docs. The when-to-snapshot question dominates load latency at scale and was nowhere addressed. New "Snapshot policies" subsection covers the three canonical strategies:
+
+- **Every-N-events** — simplest, predictable; oversamples hot streams and undersamples cold ones
+- **Time-based** — smooths bursts and idle periods; quiet aggregates still get snapshots eventually
+- **On-demand / background job** — moves snapshot pressure off the write path; needs operational machinery
+
+Each strategy has working pseudocode with the appropriate snapshot-store sketches, plus an honest trade-off block. The section explicitly notes what the library does NOT ship (no `SnapshotPolicy` port, no default frequency, no built-in sweeper) and adds a closing note on snapshot invalidation when event schemas change.
+
+Bonus: while in the file, fixed a stale rc.5-era `save()` example that still called `markPersisted` from inside `Repository.save` — replaced with the rc.6 pure-persistence shape and a pointer to the `withCommit` lifecycle.
+
 ### Added — Process Manager / Saga example (`examples/saga/`)
 
 A worked example showing how `EventBus`, `CommandBus`, `withCommit`, `IRepository`, and `InMemoryOutbox` compose into a Vernon-style Process Manager (IDDD §12-13). Four aggregates — `Order`, `Payment`, `Shipment`, and `CheckoutSaga` (the Process Manager itself) — orchestrate a multi-step checkout flow with three end-to-end tests: happy path, payment-failure compensation, and shipping-failure compensation (payment refunded + order cancelled).
