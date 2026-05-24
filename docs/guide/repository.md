@@ -59,6 +59,54 @@ async getById(id: OrderId): Promise<Order | null> {
 
 The reconstituted aggregate has `pendingEvents` empty by construction — no spurious events leak into the next `withCommit`.
 
+### Identity Map: one instance per aggregate per Unit of Work
+
+This is Fowler's **Identity Map** pattern (*Patterns of Enterprise Application Architecture*, 2002), implicitly assumed by Evans, Vernon, Khononov, and the broader DDD/CQRS-ES literature. The library relies on it for `withCommit`'s aggregate-dedupe to be conceptually sound, but the kit's interface doesn't enforce it — your `IRepository` implementation has to maintain it.
+
+**The contract.** Two `getById(id)` calls (or `getByIdOrFail(id)`) within the same Unit of Work — typically the same `withCommit` invocation, or any sequence sharing a transactional scope — MUST return the **same in-memory instance**.
+
+**Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `getById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** — i.e. your repository violates the Identity Map contract — the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
+
+**How to maintain it.** Most ORM-backed repositories get this for free:
+
+- **Drizzle / Postgres.js**: the connection-bound transaction session naturally returns the same hydrated object for repeated lookups within the same `tx` block.
+- **Prisma**: the `PrismaClient` instance per-request acts as the identity map across `findUnique` calls.
+- **Entity Framework Core (.NET parallel)**: `DbContext` IS the identity map.
+- **Mongo with a session**: the session boundary is your UoW; cache hydrated aggregates in a `Map<TId, TAgg>` keyed by id.
+
+For hand-rolled in-memory or custom repositories, wrap the store with a per-UoW `Map<TId, TAgg>`:
+
+```ts
+class TxScopedOrderRepository implements IRepository<Order, OrderId> {
+  private readonly identityMap = new Map<OrderId, Order>();
+
+  constructor(private readonly tx: DrizzleTx) {}
+
+  async getById(id: OrderId): Promise<Order | null> {
+    const cached = this.identityMap.get(id);
+    if (cached) return cached;
+
+    const row = await this.tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, id))
+      .get();
+    if (!row) return null;
+    const agg = Order.reconstitute(
+      row.id as OrderId,
+      row.state as OrderState,
+      row.version as Version,
+    );
+    this.identityMap.set(id, agg);
+    return agg;
+  }
+
+  // …
+}
+```
+
+The identity map's lifetime is **the Unit of Work** — fresh per `withCommit` call. Don't cache across UoW boundaries; that would silently bypass optimistic concurrency control.
+
 ### `save` and optimistic concurrency
 
 `save()` is **pure persistence**. Implementations write the aggregate and throw on OCC conflict — that's it. They must NOT call `aggregate.markPersisted(...)`; the `withCommit` orchestrator handles the post-save lifecycle (harvest pending events, then mark persisted after the transaction commits). See [Outbox & Transactions](./outbox.md) for the full flow.

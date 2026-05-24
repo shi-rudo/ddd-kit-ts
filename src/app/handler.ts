@@ -67,9 +67,12 @@ import type { TransactionScope } from "../repo/scope";
  * resolve to the same identity-map entry — `withCommit` dedupes by
  * JavaScript object identity before harvesting. Each event lands in
  * the outbox exactly once and `markPersisted` fires exactly once. Two
- * *different* instances with the same logical id (which would
- * indicate a separate aggregate-instance-sharing violation upstream)
- * cannot be detected at this layer.
+ * *different* instances with the same logical id cannot be detected
+ * at this layer; that is a Repository contract violation (failure to
+ * maintain Fowler's Identity Map per Unit of Work). See
+ * `docs/guide/repository.md` → "Identity Map: one instance per
+ * aggregate per Unit of Work" for the requirement on `IRepository`
+ * implementations that makes this dedupe sound.
  *
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)
  * ```typescript

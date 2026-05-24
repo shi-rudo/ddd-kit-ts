@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Document Identity-Map requirement for Repository implementations
+
+`docs/guide/repository.md` gains a new "Identity Map: one instance per aggregate per Unit of Work" section that names the unspoken assumption behind `withCommit`'s aggregate-dedupe: two `getById(id)` calls within the same UoW MUST return the **same in-memory instance**. This is Fowler's Identity Map pattern (*PoEAA*, 2002), implicitly assumed by Evans, Vernon, Khononov, and the broader DDD/CQRS-ES canon, but never previously stated in the kit's docs.
+
+Without the contract spelled out, a consumer could read `withCommit`'s dedupe behaviour as "the kit handles aggregate identity entirely" and build a Repository without Identity-Map semantics — silently corrupting outbox dispatch when two distinct instances with the same id are returned.
+
+The new section covers: the contract verbatim, why it matters (dedupe is by JS object identity, not by aggregate id), how most ORMs provide it for free (Drizzle session, Prisma client, EF Core context, Mongo session), and a worked code snippet for hand-rolled repositories using a per-UoW `Map<TId, TAgg>`. Closes by warning that the identity map's lifetime IS the Unit of Work — caching across UoW boundaries silently bypasses optimistic concurrency.
+
+Cross-referenced from `withCommit`'s JSDoc so a reader landing on the duplicate-aggregate dedupe behaviour sees the Repository requirement that makes it sound.
+
 ### Changed — `withCommit` dedupes aggregates by reference
 
 If a use case accidentally returns the same aggregate instance more than once in the `aggregates` array — typically because two repository references resolve to the same identity-map entry — `withCommit` now dedupes by JavaScript object identity before harvesting. Each event lands in the outbox exactly once and `markPersisted` fires exactly once.
