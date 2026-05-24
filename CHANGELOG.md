@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — Remove `EventSourcedAggregateConfig` / `autoVersionBump` from `EventSourcedAggregate`
+
+`EventSourcedAggregate` no longer accepts a config object. The `EventSourcedAggregateConfig` interface and the `autoVersionBump` flag are deleted. Every `apply()` bumps the version by one — no opt-out.
+
+```diff
+- super(id, initialState, { autoVersionBump: false });
++ super(id, initialState);
+```
+
+The flag was non-functional in practice: its JSDoc promised user-controlled versioning via `bumpVersion()` / `setVersion()` calls, but `setVersion` was `private` — consumers had no way to actually set the version. Replay (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also ignored the flag entirely, always deriving version from `history.length`. The escape hatch led nowhere.
+
+DDD literature is unanimous on the canonical rule (Greg Young; Vernon IDDD §9; Khononov *Learning DDD*): for an event-sourced aggregate, **the aggregate version IS the event count**. There is no canonical use-case for manual version control on an event-sourced aggregate. If your event store has a stream-position concept (EventStoreDB `streamRevision`, Marten / Equinox offsets), keep it as a store-layer detail — it is not the aggregate's domain version.
+
+`AggregateRoot.autoVersionBump` is **unchanged**. That flag is well-designed and Vernon-conformant: state-stored aggregates legitimately need a per-call escape hatch for cosmetic / denormalized state mutations that are not domain-meaningful (`setState(newState, false)`). The protected `bumpVersion()` / `setVersion()` methods stay where the user can reach them.
+
+Migration: any subclass passing a config object to `super(...)` drops the third argument. Anyone who relied on `autoVersionBump: false` was almost certainly working around a misunderstanding of the JSDoc — the actual behavior they got never matched the promise. The library now matches the documentation.
+
 ### BREAKING — `TransactionScope<TCtx>`: no default for the context generic
 
 `TCtx` no longer defaults to `unknown`. Every implementor names its context type explicitly:

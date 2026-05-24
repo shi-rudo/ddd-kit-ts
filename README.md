@@ -1141,7 +1141,7 @@ Key exports include:
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
 - `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId>`). Optional `TEvent` parameter enables type-safe domain events
 - `EventSourcedAggregate<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Roots (extends `Entity`, implements `IEventSourcedAggregate<TId, TEvent>`)
-- `AggregateConfig`, `EventSourcedAggregateConfig` - Configuration interfaces
+- `AggregateConfig` - Configuration interface for `AggregateRoot` (controls per-call `setState` version-bump behavior)
 - `AggregateSnapshot<TState>` - Snapshot interface for performance optimization
 - `sameVersion()` - Optimistic concurrency check (same ID and version)
 - `Entity<TState, TId>` - Base class for entities with state and business logic

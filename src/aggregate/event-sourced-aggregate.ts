@@ -61,27 +61,6 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
 ) => TState;
 
 /**
- * Configuration options for EventSourcedAggregate behavior.
- */
-export interface EventSourcedAggregateConfig {
-	/**
-	 * Whether `apply()` should bump the version per event.
-	 *
-	 * Defaults to **`true`** for `EventSourcedAggregate` — each applied
-	 * event is by definition a versioned state change, so the canonical
-	 * event-sourcing pattern is "one event = one version bump". Set to
-	 * `false` only if your event store assigns version numbers itself
-	 * and you want the aggregate to track them via `bumpVersion()` /
-	 * `setVersion()` calls instead.
-	 *
-	 * (Contrast with `AggregateRoot`, which defaults this to `false`
-	 * because its `setState()` already takes a per-call `bumpVersion`
-	 * argument.)
-	 */
-	autoVersionBump?: boolean;
-}
-
-/**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
  *
  * Like `AggregateRoot`, this is both the root entity and the aggregate boundary.
@@ -152,7 +131,6 @@ export abstract class EventSourcedAggregate<
 	// --- Event tracking ---
 
 	private _pendingEvents: TEvent[] = [];
-	private readonly _autoVersionBump: boolean;
 
 	public get pendingEvents(): ReadonlyArray<TEvent> {
 		return Object.freeze(this._pendingEvents.slice());
@@ -173,13 +151,8 @@ export abstract class EventSourcedAggregate<
 		this._pendingEvents = [];
 	}
 
-	protected constructor(
-		id: TId,
-		initialState: TState,
-		config?: EventSourcedAggregateConfig,
-	) {
+	protected constructor(id: TId, initialState: TState) {
 		super(id, initialState);
-		this._autoVersionBump = config?.autoVersionBump ?? true;
 	}
 
 	// --- Event application ---
@@ -241,18 +214,8 @@ export abstract class EventSourcedAggregate<
 		this._state = freezeShallow(nextState);
 		if (isNew) {
 			this._pendingEvents.push(event);
-			if (this._autoVersionBump) {
-				this.setVersion((this._version + 1) as Version);
-			}
+			this.setVersion((this._version + 1) as Version);
 		}
-	}
-
-	/**
-	 * Manually bumps the aggregate version.
-	 * Only needed if `autoVersionBump` is disabled.
-	 */
-	protected bumpVersion(): void {
-		this.setVersion((this._version + 1) as Version);
 	}
 
 	// --- History & Snapshots ---

@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import { isBaseError } from "@shirudo/base-error";
 import { DomainError, MissingHandlerError } from "../core/errors";
-import {
-	EventSourcedAggregate,
-	type EventSourcedAggregateConfig,
-} from "./event-sourced-aggregate";
+import { EventSourcedAggregate } from "./event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -49,12 +46,8 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestEvent,
 	TestId
 > {
-	constructor(
-		id: TestId,
-		initialState: TestState,
-		config?: EventSourcedAggregateConfig,
-	) {
-		super(id, initialState, config);
+	constructor(id: TestId, initialState: TestState) {
+		super(id, initialState);
 	}
 
 	static create(id: TestId, value: number): TestEventSourcedAggregate {
@@ -162,27 +155,6 @@ describe("EventSourcedAggregate", () => {
 
 			aggregate.activate();
 			expect(aggregate.version).toBe(3);
-		});
-
-		it("should not bump version when autoVersionBump is disabled", () => {
-			class ManualVersionAggregate extends TestEventSourcedAggregate {
-				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState, { autoVersionBump: false });
-				}
-
-				public testBumpVersion(): void {
-					this.bumpVersion();
-				}
-			}
-
-			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new ManualVersionAggregate("test-1" as TestId, initialState);
-
-			aggregate.updateValue(20);
-			expect(aggregate.version).toBe(0); // No auto-bump
-
-			aggregate.testBumpVersion();
-			expect(aggregate.version).toBe(1); // Manual bump
 		});
 
 		it("should advance version by history.length on top of the existing version (not stomp it)", () => {

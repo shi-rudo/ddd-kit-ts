@@ -116,17 +116,11 @@ const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapsho
 
 **All-or-nothing**: if any event mid-replay throws a `DomainError`, the aggregate is rolled back to its pre-call state and version. Partial restoration is never observable to the caller.
 
-## Configuration
+## Versioning
 
-```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
-  constructor(id: OrderId, initialState: OrderState) {
-    super(id, initialState, { autoVersionBump: true /* default */ });
-  }
-}
-```
+Every `apply()` bumps the aggregate version by one — this is the canonical event-sourcing invariant (Vernon IDDD §9, Greg Young): the aggregate version IS the event count, no opt-out. `loadFromHistory(N events)` advances the version by `N`.
 
-`autoVersionBump` defaults to `true` on `EventSourcedAggregate` — each `apply()` is by definition one event = one version bump. Set to `false` only if your event store assigns version numbers itself and you want to track them via explicit `bumpVersion()` / `setVersion()` calls.
+If your event store has its own stream-position concept (EventStoreDB `streamRevision`, Marten / Equinox stream offsets), treat that as a store-layer detail — keep it separate from the aggregate's domain version. The domain version is what optimistic-concurrency callers compare against; the stream position is how your store happens to lay out events on disk.
 
 ## Schema evolution
 
