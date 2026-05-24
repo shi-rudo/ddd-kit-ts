@@ -85,6 +85,15 @@ function assertNotThenable(result: unknown, helperName: string): void {
  * Composes by nesting: an inner `withEventIdFactory` restores back to
  * the outer's factory; the outer restores to the original.
  *
+ * **When to prefer the per-call `options.eventId` instead.** If you're
+ * constructing a single event and want full control over its id,
+ * passing `{ eventId: "..." }` to `createDomainEvent` is the strongest
+ * isolation — it bypasses the factory mechanism entirely, no global
+ * mutation, no scope to manage. Reach for `withEventIdFactory` when
+ * the events are constructed deep inside domain methods you can't
+ * thread an explicit id through (typical test scenario), or when many
+ * events in a scope should share the same factory.
+ *
  * @example
  * ```ts
  * // In a vitest test:
@@ -158,7 +167,14 @@ export function setClockFactory(factory: ClockFactory): void {
 /**
  * Scoped variant of {@link setClockFactory}: installs `factory`, runs
  * `fn`, then restores the previous factory in a `finally` block.
- * Synchronous-only — same constraints as {@link withEventIdFactory}.
+ * Synchronous-only — same constraints (and same runtime thenable
+ * guard) as {@link withEventIdFactory}.
+ *
+ * **When to prefer the per-call `options.occurredAt` instead.** Same
+ * trade-off as {@link withEventIdFactory}: passing `{ occurredAt }`
+ * to `createDomainEvent` is the strongest isolation for single-event
+ * cases. The scoped helper is for events constructed deep inside
+ * domain methods where threading an explicit timestamp is awkward.
  *
  * @example
  * ```ts
