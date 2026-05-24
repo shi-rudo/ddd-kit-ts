@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added — Process Manager / Saga example (`examples/saga/`)
 
-A worked example showing how `EventBus`, `CommandBus`, `withCommit`, `IRepository`, and `InMemoryOutbox` compose into a Vernon-style Process Manager (IDDD §12-13). Four aggregates — `Order`, `Payment`, `Shipment`, and `CheckoutSaga` (the Process Manager itself) — orchestrate a multi-step checkout flow with three end-to-end tests: happy path, payment-failure compensation, and shipping-failure compensation (payment refunded + order cancelled). The saga is itself an `AggregateRoot<CheckoutSagaState, OrderId>` whose `TEvent` stays at `never`: its outputs are dispatched commands, not published events.
+A worked example showing how `EventBus`, `CommandBus`, `withCommit`, `IRepository`, and `InMemoryOutbox` compose into a Vernon-style Process Manager (IDDD §12-13). Four aggregates — `Order`, `Payment`, `Shipment`, and `CheckoutSaga` (the Process Manager itself) — orchestrate a multi-step checkout flow with three end-to-end tests: happy path, payment-failure compensation, and shipping-failure compensation (payment refunded + order cancelled).
 
-Includes a `README.md` explaining the pattern, the saga-as-aggregate framing, EventBus-subscribers-as-reflexes, the compensation-via-forward-commands principle, and production caveats (the in-process EventBus trigger should be swapped for a durable outbox-dispatcher; saga timeouts need an external scheduler).
+The saga is itself an `AggregateRoot<CheckoutSagaState, OrderId>`. This example takes the strict form (`TEvent = never`, outputs are exclusively dispatched commands), but the README documents the looser alternative where Process Managers also publish progress / observability events — Vernon's IDDD §12 examples often do.
+
+Includes a `README.md` explaining the pattern, the saga-as-aggregate framing, the Saga-vs-Process-Manager terminology (Garcia-Molina/Salem 1987 vs Hohpe/Woolf), EventBus-subscribers-as-reflexes, the compensation-via-forward-commands principle, and production caveats: outbox-dispatcher for durability, optimistic concurrency on the saga aggregate, **idempotent compensating domain methods** (the example's `Payment.refund()` throws on second call — fine for in-process tests, broken under at-least-once delivery; needs rework for production per Newman, *Building Microservices* §4), subscriber error-handling semantics, and saga-timeout strategies.
 
 The library deliberately ships no `Saga` abstraction — sagas vary too much (choreography vs orchestration, state-machine shapes); the example is the documentation. Cross-linked from `docs/guide/cqrs-and-buses.md`.
 

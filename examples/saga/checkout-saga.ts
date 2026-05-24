@@ -14,10 +14,18 @@ import type { ShipmentId } from "./shipping";
  *  - Shipping fails → payment refunded + order cancelled
  *
  * The Process Manager is itself an aggregate: it has identity (the
- * saga id, here aligned with the orderId), state (its position in the
- * workflow), and a lifecycle. It does NOT publish domain events of
- * its own — its outputs are commands dispatched to other aggregates,
- * not events for subscribers to react to.
+ * saga id, here aligned with the orderId), state (its position in
+ * the workflow), and a lifecycle.
+ *
+ * **This example publishes no Process-Manager events** — `TEvent`
+ * defaults to `never` — so its outputs are exclusively the commands
+ * it dispatches to other aggregates. This is a design choice, not a
+ * canonical rule: Vernon's IDDD §12 examples often publish
+ * progress events (`CheckoutStarted`, `AwaitingPayment`,
+ * `ProcessCompleted`) so monitoring/observability subscribers can
+ * react. If you need that, give `CheckoutSaga` a `TEvent` union and
+ * record events via `commit(state, event)` in the transition
+ * methods — the surrounding infrastructure already supports it.
  */
 
 export type CheckoutSagaState = {
