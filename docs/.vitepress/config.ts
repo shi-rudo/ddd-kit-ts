@@ -101,6 +101,12 @@ export default defineConfig({
 						{ text: "Edge Runtimes", link: "/guide/edge-runtimes" },
 					],
 				},
+				{
+					text: "Reference",
+					items: [
+						{ text: "Common Mistakes", link: "/guide/common-mistakes" },
+					],
+				},
 			],
 			"/api/": [
 				{

@@ -83,32 +83,9 @@ Guides live as markdown in the repo (the public docs site is currently offline p
 - `src/repo/repository.ts` — `IRepository<TAgg, TId>`, `IQueryableRepository<TAgg, TId, TFilter>`. `save(agg): Promise<void>` is pure persistence (must NOT call `markPersisted`). JSDoc covers insert vs update convention (version=0 vs version>0) and deletion patterns.
 - `src/repo/scope.ts` — `TransactionScope<TCtx>` generic, no default for `TCtx` (use `TransactionScope<undefined>` for context-free / in-memory scopes).
 
-## Common mistakes (LLM footguns)
+## Common mistakes
 
-Grouped by failure mode — compile-time first (TypeScript catches you immediately), then silent runtime bugs (passes type-check, fails in production), then architectural / testing mistakes.
-
-**Compile-time errors:**
-
-- **Aggregate subclass without `protected readonly aggregateType = "..."`.** Both `AggregateRoot` and `EventSourcedAggregate` declare `aggregateType` as `abstract readonly`. Every concrete subclass MUST declare it as a string literal. TS error: "Non-abstract class 'X' does not implement inherited abstract member aggregateType". The string is what downstream consumers (outbox dispatchers, projection handlers) route by — pick the canonical domain name.
-- **`class Order extends AggregateRoot<OrderState, OrderId>` for an aggregate that emits events.** Forgetting the third generic locks `TEvent` to `never`; every `addDomainEvent` / `commit(state, event)` call becomes a type error ("argument not assignable to `never`"). Always: `extends AggregateRoot<OrderState, OrderId, OrderEvent>`.
-- **Using `aggregate.domainEvents` / `clearDomainEvents()`.** Wrong names. Use `pendingEvents` / `clearPendingEvents()` on both aggregate flavours; they are part of the `IAggregateRoot` interface.
-- **Calling `repo.save(tx, aggregate)`.** Wrong shape. `IRepository.save` takes only the aggregate. The transaction is bound to the repository at construction (factory pattern: `const orderRepository = makeOrderRepository(tx)` inside the `withCommit` callback).
-- **Returning `{ result, events: aggregate.pendingEvents }` from the `withCommit` callback.** Wrong shape — type-rejected. Return `{ result, aggregates: [aggregate, ...] }` and let `withCommit` harvest the events itself.
-
-**Silent runtime bugs (the dangerous ones):**
-
-- **Calling `createDomainEvent(...)` directly inside an aggregate domain method.** Skips the auto-injection of `aggregateId` + `aggregateType`. The `withCommit` harvest boundary catches it at runtime with a guard ("withCommit: event 'X' is missing aggregateId and aggregateType"), but use `this.recordEvent(type, payload)` inside aggregates — it auto-injects from `this.id` and `this.aggregateType`. Downstream consumers (outbox dispatchers, projection handlers) route by these fields.
-- **Overriding `markPersisted(version)` instead of `onPersisted(version)`.** Without `super.markPersisted(version)` the framework's `pendingEvents = []` cleanup never runs; the next `withCommit` re-dispatches the same events through the outbox. Override `protected onPersisted(version)` instead — it fires after the cleanup and has nothing to call `super` on.
-- **Calling `aggregate.markPersisted(...)` from inside `Repository.save`.** `save` is pure persistence; `withCommit` calls `markPersisted` post-commit. Doing it from save clears `pendingEvents` before the harvest and the outbox receives nothing.
-- **Setting `setEventIdFactory` / `setClockFactory` per-test without `withEventIdFactory` / `withClockFactory`.** Module globals leak across vitest's parallel test workers. Use the scoped helpers (try/finally restore + thenable-guard) for test isolation.
-- **Repository that returns a fresh aggregate instance for every `getById(id)` call within one `withCommit`.** Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work.
-- **Storing aggregate instances at module top level on Cloudflare Workers / Vercel Edge.** Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.getById(id)` inside the request handler.
-- **Routing `Repository.save` INSERT vs UPDATE on `aggregate.version === 0`.** Broken in any flow where a fresh aggregate is mutated before the first save (factory + setup wizard, factory + profile editor). The version advances past zero in memory while the DB row still doesn't exist; the save tries an UPDATE that affects zero rows and throws a spurious `ConcurrencyConflictError`. Use `aggregate.persistedVersion === undefined` for the INSERT marker — that field tracks the DB state, not in-memory mutations. The OCC predicate's `WHERE version = ?` also uses `persistedVersion` (the load-time / last-save baseline), not `aggregate.version`. Reconstitute factories use `order.markRestored(version)`, not `order.setVersion(version)`.
-- **Calling `isChainRetryable(err)` on a wrapped ddd-kit error.** `@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`). ddd-kit's errors (`DomainError`, `InfrastructureError`, `ConcurrencyConflictError`, `AggregateNotFoundError`) extend `BaseError` directly without `code`/`category` — they discriminate by class, not RFC 9457 fields — so `isChainRetryable` returns `false` silently and OCC retry middleware skips the conflict. Use `someChainRetryable(err)` for whole-chain checks or `isRetryable(err)` for single-level. Same trap for `getRootCauseRetryable` and `getFirstRetryableCause`.
-
-**Architectural / testing mistakes:**
-
-- **Mocking `CommandBus` / `QueryBus` in unit tests.** The buses are already in-process dispatchers — register your real handler against a fresh `new CommandBus()` in the test, no mock needed. Mocking the bus tests the bus, not your handler.
+The catalogue of footguns the kit has accumulated (compile-time errors, silent runtime bugs, architectural mistakes) lives at [docs/guide/common-mistakes.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/common-mistakes.md). Read it before writing consumer code — most of the silent-runtime entries describe events going missing from the outbox in ways that don't surface until production traffic hits.
 
 ## Source repository
 
