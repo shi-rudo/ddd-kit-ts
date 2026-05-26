@@ -33,6 +33,10 @@ const event = createDomainEvent("OrderConfirmed", { orderId: "o-1" }, {
 
 The returned event is **deeply frozen**. Mutating it (or any nested object) throws — a mutating EventBus subscriber cannot poison subsequent handlers.
 
+::: tip Inside an aggregate method? Prefer `this.recordEvent(...)`
+`createDomainEvent` is the construction primitive and stays the right call for system events, integration events, and anything outside an aggregate (process managers / sagas, outbox dispatch, tests). **Inside an aggregate domain method**, use the `this.recordEvent(type, payload, options?)` helper on `AggregateRoot` / `EventSourcedAggregate` instead — it auto-injects `aggregateId = this.id` and `aggregateType = this.aggregateType`. `withCommit`'s harvest guard throws on any event with either field missing, so calling `createDomainEvent(...)` from inside an aggregate is a footgun the helper closes. See [Aggregate Roots → State + Version + Domain Events](./aggregates.md#state-version-domain-events).
+:::
+
 ### Auto-generated fields and override hooks
 
 | Field | Default | Override |

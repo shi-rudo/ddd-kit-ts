@@ -35,6 +35,8 @@ class OrderAlreadyConfirmedError extends DomainError {
 }
 
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   static draft(id: OrderId, customerId: string): Order {
     return new Order(id, { customerId, items: [], status: "draft" });
   }
@@ -45,11 +47,15 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     }
     this.commit(
       { ...this.state, status: "confirmed" },
-      createDomainEvent("OrderConfirmed", { orderId: this.id }),
+      this.recordEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
 ```
+
+::: warning `aggregateType` and `recordEvent` are required as of rc.8
+Every concrete `AggregateRoot` / `EventSourcedAggregate` subclass must declare `protected readonly aggregateType = "..."` as a string literal — both bases declare it `abstract readonly`, so omitting it is a compile error. Use `this.recordEvent(type, payload)` from inside aggregate methods (and `instance.recordEvent(...)` from inside static factories) to record events; the helper auto-injects `aggregateId` and `aggregateType` into the event metadata. Calling `createDomainEvent(...)` directly inside an aggregate method is still legal, but `withCommit`'s harvest guard throws if either field is missing — `recordEvent` makes the right thing impossible to forget. Outbox dispatchers and projection handlers route by both fields.
+:::
 
 ### Construction: static factory methods, not public constructors
 
@@ -57,6 +63,8 @@ The example above uses `Order.draft(...)`, not `new Order(...)`. That is the con
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   // Static factory: named with a domain verb, ideally a specific one
   // (place / draft / register / open / submit). `Order.create(...)`
   // works but is the weakest choice — it borrows the JS boilerplate
@@ -65,13 +73,9 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   static place(id: OrderId, customerId: string): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
     // Optional: record the creation event inside the factory.
-    order.addDomainEvent(
-      createDomainEvent(
-        "OrderPlaced",
-        { customerId },
-        { aggregateId: id, aggregateType: "Order" },
-      ),
-    );
+    // `order.recordEvent(...)` is legal here — static methods have
+    // access to the protected helper on instances of their own class.
+    order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
     return order;
   }
 }
@@ -102,6 +106,8 @@ Add a second static method alongside the factory. It calls the protected constru
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   static place(id: OrderId, customerId: string): Order {
     // Factory: new aggregate, records creation event.
   }
@@ -206,6 +212,8 @@ The state must always be valid on its own — independent of any history. If a s
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   protected validateState(state: OrderState): void {
     if (state.items.length > 100) {
       throw new TooManyItemsError(this.id);
@@ -225,6 +233,8 @@ The event must be valid against the *current* state at the moment of `apply()`. 
 
 ```ts
 class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+  protected readonly aggregateType = "Order";
+
   protected validateEvent(event: OrderEvent): void {
     if (event.type === "OrderConfirmed" && this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
@@ -246,6 +256,8 @@ The most common location: a domain method's first responsibility is to refuse im
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   confirm(): void {
     if (this.state.status === "shipped") {
       throw new CannotConfirmShippedOrderError(this.id);
@@ -255,7 +267,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     }
     this.commit(
       { ...this.state, status: "confirmed" },
-      createDomainEvent("OrderConfirmed", { orderId: this.id }),
+      this.recordEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }

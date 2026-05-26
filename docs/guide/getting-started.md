@@ -21,6 +21,7 @@ The simplest end-to-end example: an `Order` aggregate with a single business met
 ```ts
 import {
   AggregateRoot,
+  type DomainEvent,
   type Id,
   DomainError,
 } from "@shirudo/ddd-kit";
@@ -32,8 +33,7 @@ type OrderState = {
   status: "draft" | "confirmed" | "shipped";
 };
 
-type OrderEvent =
-  | { type: "OrderConfirmed"; orderId: OrderId };
+type OrderEvent = DomainEvent<"OrderConfirmed", { orderId: OrderId }>;
 
 class OrderAlreadyConfirmedError extends DomainError {
   constructor(public readonly orderId: OrderId) {
@@ -42,6 +42,8 @@ class OrderAlreadyConfirmedError extends DomainError {
 }
 
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   static draft(id: OrderId, customerId: string): Order {
     return new Order(id, { customerId, status: "draft" });
   }
@@ -52,7 +54,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     }
     this.commit(
       { ...this.state, status: "confirmed" },
-      { type: "OrderConfirmed", orderId: this.id },
+      this.recordEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -61,11 +63,14 @@ const order = Order.draft("o-1" as OrderId, "c-42");
 order.confirm();
 // order.state.status === "confirmed"
 // order.version       === 1
-// order.pendingEvents  === [{ type: "OrderConfirmed", orderId: "o-1" }]
+// order.pendingEvents[0].type    === "OrderConfirmed"
+// order.pendingEvents[0].payload === { orderId: "o-1" }
 ```
 
 What this example shows:
 
+- **`protected readonly aggregateType = "Order"` is required on every concrete subclass.** Both `AggregateRoot` and `EventSourcedAggregate` declare it `abstract readonly`; concrete classes fail to compile until it's set. Outbox dispatchers and projection handlers route events by this string, so pick the canonical domain name.
+- **`this.recordEvent(type, payload)` is the canonical path for recording events from aggregate methods.** It calls `createDomainEvent` under the hood and auto-injects `aggregateId = this.id` + `aggregateType = this.aggregateType` into the event metadata. `withCommit` validates both fields at the harvest boundary and throws if either is missing — `recordEvent` makes that impossible to forget.
 - **Aggregates throw to enforce invariants.** `OrderAlreadyConfirmedError extends DomainError` — consumers can catch by `instanceof`.
 - **`commit(state, events)` is the canonical record-after-mutation path.** It validates state first, only then records the event(s), and always bumps the version.
 - **Domain events are typed.** The `OrderEvent` union flows through `AggregateRoot<OrderState, OrderId, OrderEvent>` so `pendingEvents` reads as `ReadonlyArray<OrderEvent>`.

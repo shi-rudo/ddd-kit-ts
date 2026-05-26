@@ -182,13 +182,15 @@ When the user says "delete the order" but the domain actually means *cancel*, *a
 ```ts
 // Domain method on the aggregate
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   archive(reason: string): void {
     if (this.state.status === "archived") {
       throw new OrderAlreadyArchivedError(this.id);
     }
     this.commit(
       { ...this.state, status: "archived", archivedAt: new Date() },
-      { type: "OrderArchived", reason, archivedAt: new Date() },
+      this.recordEvent("OrderArchived", { reason, archivedAt: new Date() }),
     );
   }
 }
@@ -211,10 +213,14 @@ When the row genuinely must disappear from the primary store — privacy/regulat
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   recordDeletion(reason: string): void {
     // No state change — the row is about to be deleted entirely.
     // We only need the event in pendingEvents for the outbox.
-    this.addDomainEvent({ type: "OrderDeleted", reason, deletedAt: new Date() });
+    this.addDomainEvent(
+      this.recordEvent("OrderDeleted", { reason, deletedAt: new Date() }),
+    );
   }
 }
 

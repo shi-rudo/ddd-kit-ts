@@ -75,6 +75,8 @@ If you're shipping a production aggregate that mostly records events with defaul
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
   protected constructor(
     id: OrderId,
     state: OrderState,
@@ -91,14 +93,16 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     idGen: () => string,
   ): Order {
     const order = new Order(id, { customerId, status: "draft" }, clock, idGen);
+    // `recordEvent` here auto-injects aggregateId + aggregateType but
+    // still threads through the per-call eventId/occurredAt overrides,
+    // so the DI pattern survives.
     order.addDomainEvent(
-      createDomainEvent(
+      order.recordEvent(
         "OrderPlaced",
         { customerId },
         {
           eventId: idGen(),
           occurredAt: clock(),  // per-call options bypass the globals
-          aggregateId: id,
         },
       ),
     );

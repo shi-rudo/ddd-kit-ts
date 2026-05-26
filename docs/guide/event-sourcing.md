@@ -7,7 +7,6 @@
 ```ts
 import {
   EventSourcedAggregate,
-  createDomainEvent,
   DomainError,
   type Id,
   type DomainEvent,
@@ -27,14 +26,16 @@ class OrderAlreadyConfirmedError extends DomainError {
 }
 
 class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+  protected readonly aggregateType = "Order";
+
   static create(id: OrderId, customerId: string): Order {
     const order = new Order(id, { customerId, status: "pending" });
-    order.apply(createDomainEvent("OrderCreated", { customerId }));
+    order.apply(order.recordEvent("OrderCreated", { customerId }));
     return order;
   }
 
   confirm(): void {
-    this.apply(createDomainEvent("OrderConfirmed", { orderId: this.id }));
+    this.apply(this.recordEvent("OrderConfirmed", { orderId: this.id }));
   }
 
   // Optional: invariants that depend on current state
