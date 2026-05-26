@@ -1,18 +1,11 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
-import { Entity, freezeShallow } from "../entity/entity";
+import { freezeShallow } from "../entity/entity";
+import { BaseAggregate } from "./base-aggregate";
 import type { IAggregateRoot } from "./aggregate-root";
-import {
-	type AnyDomainEvent,
-	type CreateDomainEventOptions,
-	createDomainEvent,
-	type DomainEvent,
-} from "./domain-event";
-import type {
-	AggregateSnapshot,
-	Version,
-} from "./aggregate";
+import type { AnyDomainEvent } from "./domain-event";
+import type { AggregateSnapshot, Version } from "./aggregate";
 
 /**
  * Interface for Event-Sourced Aggregate Roots.
@@ -43,25 +36,27 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
  *
- * Like `AggregateRoot`, this is both the root entity and the aggregate boundary.
- * The difference is persistence: state is derived from events, not stored directly.
- * Events are the single source of truth — all state changes go through `apply()` → handler.
+ * Like `AggregateRoot`, this is both the root entity and the aggregate
+ * boundary. The difference is persistence: state is derived from events,
+ * not stored directly. Events are the single source of truth — all state
+ * changes go through `apply()` → handler.
  *
- * Extends `Entity` directly (not `AggregateRoot`) so that `setState()` and
- * `addDomainEvent()` are not available. This enforces the event sourcing pattern
- * at the type level — there is no way to mutate state without going through an event handler.
+ * Extends `BaseAggregate` (the shared lifecycle machinery) but does NOT
+ * expose `setState()` or `commit()` from `AggregateRoot`. This enforces
+ * the event sourcing pattern at the type level — there is no way to
+ * mutate state without going through an event handler.
  *
- * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions on
- * invariant violations. Subclasses override `validateEvent()` to throw their
- * own concrete subclasses (e.g. `OrderAlreadyConfirmedError`). Only the
- * infrastructure-boundary methods (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) return `Result` — they catch `DomainError`
- * during replay so callers can react to corrupted event streams without
- * try/catch.
+ * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
+ * on invariant violations. Subclasses override `validateEvent()` to
+ * throw their own concrete subclasses (e.g. `OrderAlreadyConfirmedError`).
+ * Only the infrastructure-boundary methods (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) return `Result` — they catch
+ * `DomainError` during replay so callers can react to corrupted event
+ * streams without try/catch.
  *
- * @template TState - The type of the aggregate state (contains child entities and value objects)
+ * @template TState - The aggregate state (contains child entities and value objects)
  * @template TEvent - The union type of all domain events
- * @template TId - The type of the aggregate root identifier
+ * @template TId    - The aggregate root identifier
  *
  * @example
  * ```typescript
@@ -70,8 +65,10 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  * }
  *
  * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+ *   protected readonly aggregateType = "Order";
+ *
  *   confirm(): void {
- *     this.apply(createDomainEvent("OrderConfirmed", {}));
+ *     this.apply(this.recordEvent("OrderConfirmed", { orderId: this.id }));
  *   }
  *
  *   protected validateEvent(event: OrderEvent): void {
@@ -90,193 +87,16 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  * ```
  */
 export abstract class EventSourcedAggregate<
-	TState,
-	TEvent extends AnyDomainEvent,
-	TId extends Id<string>,
-> extends Entity<TState, TId>
-	implements IEventSourcedAggregate<TId, TEvent> {
-
-	/**
-	 * The aggregate's domain type as a string, used to populate
-	 * `aggregateType` on events recorded via {@link recordEvent}.
-	 *
-	 * Subclasses MUST declare this as a string literal:
-	 *
-	 * ```ts
-	 * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
-	 *   protected readonly aggregateType = "Order";
-	 * }
-	 * ```
-	 *
-	 * Downstream consumers (outbox dispatchers, projection handlers,
-	 * audit logs) route by this. Use the canonical aggregate name
-	 * consistently across your bounded context. The value comes from
-	 * this explicit declaration, not `constructor.name` (fragile under
-	 * minification + bundler transforms).
-	 */
-	protected abstract readonly aggregateType: string;
-
-	// --- Version management (own, not inherited from AggregateRoot) ---
-
-	private _version: Version = 0 as Version;
-
-	/**
-	 * DB-baseline version. `undefined` until the aggregate has been
-	 * persisted or restored at least once. Repository implementations
-	 * route INSERT vs UPDATE on this field and use it as the OCC
-	 * baseline / stream-revision check. See `IRepository.save` JSDoc.
-	 *
-	 * Distinct from {@link version}, which is the in-memory
-	 * post-mutation value. `apply()` (new events) bumps `_version` but
-	 * never touches `_persistedVersion` — that field only moves on
-	 * {@link markRestored} (Post-Load), {@link loadFromHistory} /
-	 * {@link restoreFromSnapshotWithEvents} (kit-internal Post-Load),
-	 * and {@link markPersisted} (Post-Save).
-	 */
-	private _persistedVersion: Version | undefined = undefined;
-
-	public get version(): Version {
-		return this._version;
-	}
-
-	public get persistedVersion(): Version | undefined {
-		return this._persistedVersion;
-	}
-
-	private setVersion(version: Version): void {
-		this._version = version;
-	}
-
-	/**
-	 * **Lifecycle marker — Post-Load.** Synchronises both `_version`
-	 * and `_persistedVersion` to the version held by the event store.
-	 * Used by `reconstitute(...)` factories (state-snapshot style) when
-	 * the consumer materialises an aggregate from a pre-computed state
-	 * rather than via {@link loadFromHistory}.
-	 *
-	 * Does NOT fire {@link onPersisted} — that hook has post-save
-	 * semantics. See Vernon §11 (Factory vs Reconstitution).
-	 *
-	 * @param version - The version held by the persistence layer
-	 */
-	protected markRestored(version: Version): void {
-		this.setVersion(version);
-		this._persistedVersion = version;
-	}
-
-	// --- Event tracking ---
-
-	private _pendingEvents: TEvent[] = [];
-
-	public get pendingEvents(): ReadonlyArray<TEvent> {
-		return Object.freeze(this._pendingEvents.slice());
-	}
-
-	public clearPendingEvents(): void {
-		this._pendingEvents = [];
-	}
-
-	/**
-	 * **Framework lifecycle method — `@sealed`.** Called by `withCommit`
-	 * (or by your own orchestration code, after harvesting `pendingEvents`)
-	 * to push the persisted version back into the in-memory aggregate and
-	 * clear `pendingEvents`. TypeScript has no `final` keyword, but
-	 * subclasses **should not** override this method directly.
-	 *
-	 * Overriding without calling `super.markPersisted(version)` silently
-	 * leaks `pendingEvents` — the next `withCommit` will re-dispatch them
-	 * through the outbox, double-emitting events. This bug has been hit
-	 * in production by consumers; the {@link onPersisted} hook below is
-	 * the safer extension point.
-	 *
-	 * If you must override (legitimate cases are very rare), call
-	 * `super.markPersisted(version)` FIRST so the framework's cleanup
-	 * runs, then add your logic afterwards.
-	 *
-	 * @param version - The version assigned by the persistence layer
-	 * @see onPersisted — the safe extension point for subclasses
-	 */
-	public markPersisted(version: Version): void {
-		this.markRestored(version);
-		this._pendingEvents = [];
-		this.onPersisted(version);
-	}
-
-	/**
-	 * Subclass extension point — fires AFTER {@link markPersisted} has
-	 * updated the version and cleared `pendingEvents`. Override this for
-	 * post-persist logging, metrics, or cache-eviction without risk of
-	 * breaking the framework's pendingEvents cleanup.
-	 *
-	 * The default implementation is a no-op. Subclasses do NOT need to
-	 * call `super.onPersisted(version)` — there is nothing in the parent
-	 * implementation to preserve.
-	 *
-	 * **`onPersisted` deliberately receives only the version, not the
-	 * drained events.** Event-driven post-persist logic (aggregate-level
-	 * audit logging, per-event-type side effects) belongs in `EventBus`
-	 * subscribers or the outbox dispatcher — that is the proper
-	 * Aggregate-Boundary separation. Building event-aware logic into
-	 * `onPersisted` couples aggregate lifecycle to event processing and
-	 * recreates the boundary problems Vernon's aggregate discipline is
-	 * meant to prevent.
-	 *
-	 * **The hook must return synchronously.** `markPersisted` is `void`-
-	 * typed and calls `onPersisted` without `await`. TypeScript's
-	 * permissive `void` will accept an `async`-override returning
-	 * `Promise<void>`, but the returned promise is fire-and-forget —
-	 * any rejection becomes an unhandled rejection and `withCommit`
-	 * proceeds without waiting. For asynchronous work, subscribe to the
-	 * relevant domain event on the `EventBus` instead; that is the
-	 * properly awaited extension point.
-	 *
-	 * @param version - The version that was just persisted
-	 */
-	protected onPersisted(_version: Version): void {
-		// no-op by default
-	}
-
+		TState,
+		TEvent extends AnyDomainEvent,
+		TId extends Id<string>,
+	>
+	extends BaseAggregate<TState, TId, TEvent>
+	implements IEventSourcedAggregate<TId, TEvent>
+{
 	protected constructor(id: TId, initialState: TState) {
 		super(id, initialState);
 	}
-
-	/**
-	 * Sugar for `createDomainEvent` that auto-injects `aggregateId`
-	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
-	 * into the event's metadata fields. The canonical path for
-	 * constructing events to feed into `apply()` from inside aggregate
-	 * domain methods.
-	 *
-	 * @example
-	 * ```ts
-	 * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
-	 *   protected readonly aggregateType = "Order";
-	 *
-	 *   confirm(): void {
-	 *     this.apply(this.recordEvent("OrderConfirmed", { orderId: this.id }));
-	 *   }
-	 * }
-	 * ```
-	 *
-	 * Calling `createDomainEvent(...)` directly inside an aggregate
-	 * method leaves `aggregateId` and `aggregateType` unset; the
-	 * `withCommit` harvest boundary catches it at runtime, but
-	 * `this.recordEvent(...)` makes the right thing impossible to
-	 * forget.
-	 */
-	protected recordEvent<E extends TEvent>(
-		type: E["type"],
-		payload: E["payload"],
-		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
-	): E {
-		return createDomainEvent(type, payload, {
-			...options,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		}) as DomainEvent<E["type"], E["payload"]> as E;
-	}
-
-	// --- Event application ---
 
 	/**
 	 * Validates an event before it is applied. Default is no-op.
@@ -334,12 +154,10 @@ export abstract class EventSourcedAggregate<
 		// Atomic commit: nothing above this line mutated aggregate state.
 		this._state = freezeShallow(nextState);
 		if (isNew) {
-			this._pendingEvents.push(event);
-			this.setVersion((this._version + 1) as Version);
+			this.addDomainEvent(event);
+			this.bumpVersion();
 		}
 	}
-
-	// --- History & Snapshots ---
 
 	/**
 	 * Reconstitutes the aggregate from an event history. Catches `DomainError`
@@ -352,8 +170,10 @@ export abstract class EventSourcedAggregate<
 	 * an aggregate already at v=1 (e.g. after a creation event) loading
 	 * 2 events ends at v=3, not v=2.
 	 */
-	public loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError> {
-		const startVersion = this._version;
+	public loadFromHistory(
+		history: ReadonlyArray<TEvent>,
+	): Result<void, DomainError> {
+		const startVersion = this.version;
 		for (const event of history) {
 			try {
 				this.dispatchAndCommit(event, false);
@@ -372,7 +192,7 @@ export abstract class EventSourcedAggregate<
 	public createSnapshot(): AggregateSnapshot<TState> {
 		return {
 			state: structuredClone(this._state),
-			version: this._version,
+			version: this.version,
 			snapshotAt: new Date(),
 		};
 	}
@@ -392,8 +212,11 @@ export abstract class EventSourcedAggregate<
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		const previousState = this._state;
-		const previousVersion = this._version;
-		const previousPersistedVersion = this._persistedVersion;
+		const previousVersion = this.version;
+		// `persistedVersion` is not touched during the loop — only `_state`
+		// (via dispatchAndCommit with isNew=false) and `_version` (via the
+		// initial setVersion) move. So no rollback handling is needed here:
+		// if the loop throws, persistedVersion is still its pre-call value.
 
 		this._state = freezeShallow(structuredClone(snapshot.state));
 		this.setVersion(snapshot.version);
@@ -404,7 +227,6 @@ export abstract class EventSourcedAggregate<
 			} catch (e) {
 				this._state = previousState;
 				this.setVersion(previousVersion);
-				this._persistedVersion = previousPersistedVersion;
 				if (e instanceof DomainError) return err(e);
 				throw e;
 			}
