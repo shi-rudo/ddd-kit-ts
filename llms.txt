@@ -2,7 +2,7 @@
 
 > Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. Targets Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun. ESM-only.
 
-The library is in **1.0.0-rc.7** (Release Candidate). API is materially stable; the next release is 1.0 unless rc.7 surfaces feedback requiring API-level changes. No breaking changes since rc.6 — the rc.7 cycle was hardening, doc completeness, and consumer-feedback follow-through.
+The library is in **1.0.0-rc.8** (Release Candidate). API is materially stable; the next release is either 1.0 or a docs-only rc.9 unless rc.8 surfaces feedback requiring API-level changes. rc.8 ships two coordinated breaking changes — framework-enforced aggregate-event metadata (`aggregateType` abstract property + `recordEvent` helper + `withCommit` runtime guard) and a `@shirudo/base-error` peer-dep bump to `^4.7.0` so `someChainRetryable` becomes the canonical retry-chain predicate.
 
 **Recent renames (rc.6) — LLM training-data tripping points:**
 
@@ -99,7 +99,7 @@ Grouped by failure mode — compile-time first (TypeScript catches you immediate
 - **`class Order extends AggregateRoot<OrderState, OrderId>` for an aggregate that emits events.** Forgetting the third generic locks `TEvent` to `never`; every `addDomainEvent` / `commit(state, event)` call becomes a type error ("argument not assignable to `never`"). Always: `extends AggregateRoot<OrderState, OrderId, OrderEvent>`.
 - **Using `aggregate.domainEvents` / `clearDomainEvents()`.** Pre-rc.6 names. Use `pendingEvents` / `clearPendingEvents()` on both aggregate flavours; they are part of the `IAggregateRoot` interface.
 - **Calling `repo.save(tx, aggregate)`.** Wrong shape. `IRepository.save` takes only the aggregate. The transaction is bound to the repository at construction (factory pattern: `const orderRepository = makeOrderRepository(tx)` inside the `withCommit` callback).
-- **Returning `{ result, events: aggregate.pendingEvents }` from the `withCommit` callback.** Pre-rc.6 shape. Return `{ result, aggregates: [aggregate, ...] }` and let `withCommit` harvest. Returning `events` directly is type-rejected by rc.7.
+- **Returning `{ result, events: aggregate.pendingEvents }` from the `withCommit` callback.** Pre-rc.6 shape. Return `{ result, aggregates: [aggregate, ...] }` and let `withCommit` harvest. Returning `events` directly is type-rejected by rc.7+.
 
 **Silent runtime bugs (the dangerous ones):**
 
@@ -118,7 +118,7 @@ Grouped by failure mode — compile-time first (TypeScript catches you immediate
 ## Source repository
 
 - [GitHub repo](https://github.com/shi-rudo/ddd-kit-ts): Source, issues, PRs.
-- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.7). Each rc documents breaking changes + migration paths; rc.6 was the last release with breaking changes; rc.7 was hardening + docs only.
+- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.8). Each rc documents breaking changes + migration paths; rc.7 was hardening + docs only; rc.8 ships two coordinated breaking changes (aggregate-metadata enforcement + base-error 4.7 peer-dep bump).
 - [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Pre-releases published under the `next` dist-tag.
 
 ## Optional

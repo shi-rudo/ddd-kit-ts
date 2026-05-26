@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.8] - 2026-05-26
+
+Two coordinated BREAKING changes: aggregate-event metadata is now framework-enforced (no more silent missing `aggregateId` / `aggregateType` in the outbox), and the `@shirudo/base-error` peer-dep is bumped to `^4.7.0` to unlock `someChainRetryable` for the OCC retry-chain pattern.
+
+Highlights:
+
+- **Aggregate metadata by construction.** `protected abstract readonly aggregateType: string` on both aggregate flavours, `protected recordEvent(type, payload, options?)` helper that auto-injects `aggregateId`/`aggregateType`, and a runtime guard in `withCommit` that throws if any harvested event is missing either. Closes the long-standing "outbox dispatcher routes nothing because the aggregate forgot a field" footgun.
+- **`someChainRetryable` is the canonical retry-chain predicate.** `@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit's class-based errors (`ConcurrencyConflictError` etc). 4.7.0 ships `someChainRetryable`, which composes `someCauseChain` over the loose `isRetryable` predicate and walks the whole chain. Peer-dep minimum bumped accordingly so docs can recommend it without a pre-4.7 fallback path.
+- **Docs**: `result-vs-throw.md` catch example + helper-compatibility callout (loose vs strict helpers from `@shirudo/base-error`); `repository.md` OCC example updated with tip callout distinguishing `isRetryable` / `someChainRetryable` / `isChainRetryable`; `llms.txt` Silent-runtime block now warns about `isChainRetryable` returning `false` silently.
+- **Test coverage**: 435 → 441 (+6 covering the new aggregate-metadata helper and guard).
+
+Migration in one paragraph: every concrete `AggregateRoot` / `EventSourcedAggregate` subclass adds `protected readonly aggregateType = "X";` where X is the canonical domain name; optionally migrate internal `createDomainEvent(...)` calls inside aggregate methods to `this.recordEvent(...)`; consumers on `@shirudo/base-error` 4.6.x bump to 4.7.0 (additive over 4.6.x, no API changes).
+
+Per-section migration details below.
+
 ### BREAKING — `@shirudo/base-error` peer-dep bumped to `^4.7.0`
 
 `@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`). ddd-kit's errors extend `BaseError<Name>` directly — they discriminate by class (Vernon-canonical DDD), not RFC 9457 code/category fields — so `isChainRetryable(err)` returns `false` for `ConcurrencyConflictError` and consumers' OCC retry middleware silently skips the conflict.
