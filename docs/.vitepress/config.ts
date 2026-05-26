@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+import llmstxt from "vitepress-plugin-llms";
 
 // typedoc-vitepress-theme writes the API sidebar to this file as part of
 // `pnpm docs:api`. Read it lazily so a fresh checkout (where docs/api/ is
@@ -24,6 +25,14 @@ export default defineConfig({
 
 	cleanUrls: true,
 	lastUpdated: true,
+
+	// Emit llms.txt (sitemap index) and llms-full.txt (full docs concat)
+	// at the docs site root for LLM coding tools. The hand-curated LLM
+	// integration guide lives at /LLM.md in the repo root (audience: tools
+	// that read directly from the GitHub repo, not the deployed docs site).
+	vite: {
+		plugins: [llmstxt()],
+	},
 
 	head: [
 		[
