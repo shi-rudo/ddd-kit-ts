@@ -52,26 +52,25 @@ export interface IRepository<
 	 *     stored (optimistic concurrency).
 	 *  2. Write the aggregate to durable storage.
 	 *
-	 * **Insert vs update — library convention.** A fresh aggregate begins
-	 * at `version === 0` (the `Version` brand defaults to `0` in both
-	 * `AggregateRoot` and `EventSourcedAggregate`). After the first
-	 * versioned mutation (`setState(_, true)`, `apply()`, `commit()`) the
-	 * version is `> 0`. Implementations distinguish the two paths by the
-	 * incoming `aggregate.version`:
+	 * **Insert vs update — `persistedVersion` convention.** Every aggregate
+	 * exposes two version fields with distinct roles:
 	 *
-	 *  - `aggregate.version === 0` → **INSERT** (no existing row to lock
-	 *    against; the write succeeds unconditionally or fails the unique
+	 *  - `aggregate.version` — in-memory post-mutation value, bumped by
+	 *    `setState(_, true)` / `commit()` / `apply()`. NOT the right
+	 *    routing key, because mutations can advance it past zero while
+	 *    the DB row still does not exist.
+	 *  - `aggregate.persistedVersion` — what the persistence layer holds.
+	 *    `undefined` until the aggregate has been persisted or restored
+	 *    at least once. This is the routing key.
+	 *
+	 *  - `aggregate.persistedVersion === undefined` → **INSERT** (never
+	 *    persisted; write succeeds unconditionally or fails the unique
 	 *    constraint on `id`).
-	 *  - `aggregate.version  >  0` → **UPDATE** with the OCC predicate
-	 *    `WHERE id = ? AND version = expected`. If the row count is `0`,
-	 *    another writer raced you — throw `ConcurrencyConflictError`.
-	 *
-	 * The library does not formalise this in the type system because
-	 * version-bump semantics differ across the two aggregate flavours
-	 * (state-stored aggregates bump on the user's call to `setState(_,
-	 * true)`; event-sourced aggregates bump on every `apply()` by
-	 * definition). The `version === 0` invariant for "never persisted" is
-	 * the common contract.
+	 *  - otherwise → **UPDATE** with the OCC predicate
+	 *    `WHERE id = ? AND version = aggregate.persistedVersion` (the
+	 *    load-time / last-save baseline, not the post-mutation in-memory
+	 *    value). If the row count is `0`, another writer raced you —
+	 *    throw `ConcurrencyConflictError`.
 	 *
 	 * Do **not** call `aggregate.markPersisted(...)` here. The library's
 	 * `withCommit` orchestrator handles the post-save lifecycle (harvest

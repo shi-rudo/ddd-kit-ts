@@ -710,15 +710,37 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.persistedVersion).toBeUndefined();
 		});
 
-		it("persistedVersion stays undefined after apply()-ing new events on a new aggregate (H1 regression)", () => {
-			// Scenario: create → apply more events → save. Save must see this
-			// as INSERT, not UPDATE → false ConcurrencyConflictError.
+		it("persistedVersion stays undefined after apply()-ing new events on a never-persisted aggregate", () => {
+			// Factory + edit-before-save flow. `version` advances past 0
+			// in memory; `persistedVersion` must remain undefined so save()
+			// routes to INSERT / append-from-zero, not a stream-revision
+			// check against a stream that doesn't exist.
 			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 42);
 			agg.updateValue(100);
 			agg.activate();
 
-			expect(agg.version).toBe(3); // create + update + activate
+			expect(agg.version).toBe(3);
 			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("markRestored does NOT fire the onPersisted hook", () => {
+			class HookSpyAggregate extends TestEventSourcedAggregate {
+				public hookCalls: Version[] = [];
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push(version);
+				}
+				public callMarkRestored(version: Version): void {
+					this.markRestored(version);
+				}
+			}
+
+			const agg = new HookSpyAggregate("id-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+			agg.callMarkRestored(3 as Version);
+
+			expect(agg.hookCalls).toEqual([]);
 		});
 
 		it("loadFromHistory aligns persistedVersion to the final post-replay version", () => {

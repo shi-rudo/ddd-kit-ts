@@ -36,7 +36,7 @@ describe("IAggregateRoot interface contract", () => {
 		const stub: IAggregateRoot<OrderId> = {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
-			markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {},
+			markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
 		};
 		postSave(stub, 1 as Version);
 		expect(typeof stub.markPersisted).toBe("function");
@@ -80,7 +80,7 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {},
+				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
 			};
 
 			expect(await repo.exists("o-1" as OrderId)).toBe(false);
@@ -238,7 +238,7 @@ describe("Repository contract", () => {
 					version: 3 as never,
 					customerId: "c-1",
 					total: 100,
-					markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {},
+					markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
 				}),
 			).rejects.toBeInstanceOf(ConcurrencyConflictError);
 		});
@@ -285,14 +285,14 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {},
+				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
 			});
 			await repo.save({
 				id: "o-2" as OrderId,
 				version: 1 as never,
 				customerId: "c-2",
 				total: 250,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {},
+				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
 			});
 
 			const found = await repo.find((o) => o.total > 200);

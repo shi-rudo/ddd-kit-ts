@@ -20,6 +20,7 @@ function createMockAggregate(events: TestEvent[]): MockAggregate {
 	return {
 		id: "agg-1" as TestId,
 		version: 1 as Version,
+		persistedVersion: undefined,
 		get pendingEvents(): ReadonlyArray<TestEvent> {
 			return pending;
 		},
@@ -203,6 +204,7 @@ describe("withCommit", () => {
 		const agg: IAggregateRoot<TestId, TestEvent> = {
 			id: "agg-1" as TestId,
 			version: 1 as Version,
+			persistedVersion: undefined,
 			get pendingEvents() {
 				return pending;
 			},

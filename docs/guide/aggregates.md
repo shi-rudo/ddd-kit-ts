@@ -130,6 +130,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 `markRestored(version)` is the Post-Load symmetric of `markPersisted(version)` (Post-Save). It syncs both `version` and `persistedVersion` to the loaded DB version, so the next `repository.save(order)` sees `persistedVersion !== undefined` and routes to UPDATE (with the loaded version as the OCC baseline). Unlike `markPersisted`, it does NOT fire the `onPersisted` hook — load-time semantics are distinct from save-time semantics. The Factory-vs-Reconstitution distinction is Vernon's (IDDD §11).
 
+::: warning Why `persistedVersion`, not `version === 0`, drives Insert vs Update
+A naive Repository might route INSERT vs UPDATE on `aggregate.version === 0`. That breaks the moment a fresh aggregate is mutated before its first save. `Order.place(...)` typically calls `commit(state, event)` which bumps `version` to 1; a follow-up `order.updateProfile(...)` bumps it to 2 — but no DB row exists yet. Routing on `version === 0` would misroute to UPDATE, hit zero rows, and throw a spurious `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the persistence layer's state, not in-memory mutations. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+:::
+
 The Repository's `getById` becomes mechanical:
 
 ```ts
@@ -174,7 +178,7 @@ The "empty canvas" `blankInitialState` is the inert starting state your handlers
 
 A reconstituted aggregate is, by definition, the same domain object it was before the process restarted. Recording an `OrderRehydrated` event would tell the rest of the system "this thing just happened" — when nothing did. Subscribers, projections, and the outbox would react to a non-event; the read model would double-count; sagas would re-trigger. The cardinal rule of reconstitution is *no side effects on the event pipeline*.
 
-The kit's two reconstitution paths enforce this structurally: `setVersion` writes a number, `loadFromHistory` folds state without recording. Both leave `pendingEvents` empty.
+The kit's two reconstitution paths enforce this structurally: `markRestored` writes the version baseline without firing the `onPersisted` hook, and `loadFromHistory` folds state without recording new events. Both leave `pendingEvents` empty and align `persistedVersion` so the next `repository.save(order)` routes to UPDATE — load and save are mechanically distinct lifecycle markers (Vernon §11).
 
 ### `commit(newState, events)`
 

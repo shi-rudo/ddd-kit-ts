@@ -121,30 +121,17 @@ export abstract class EventSourcedAggregate<
 	private _version: Version = 0 as Version;
 
 	/**
-	 * The DB-baseline version — what the persistence layer holds for this
-	 * aggregate. `undefined` until persisted or restored at least once.
+	 * DB-baseline version. `undefined` until the aggregate has been
+	 * persisted or restored at least once. Repository implementations
+	 * route INSERT vs UPDATE on this field and use it as the OCC
+	 * baseline / stream-revision check. See `IRepository.save` JSDoc.
 	 *
-	 * Distinct from {@link version}: `version` is the in-memory
-	 * post-mutation value (bumped by every `apply()`);
-	 * `persistedVersion` is what the kit believes the DB / event store
-	 * currently holds. Repository implementations use this for:
-	 *
-	 *  - **INSERT vs UPDATE / append routing**:
-	 *    `persistedVersion === undefined` → never persisted → INSERT /
-	 *    append-from-zero. Otherwise → UPDATE / append-from-baseline.
-	 *  - **OCC predicate**: the stream-revision check (event-store) or
-	 *    UPDATE's `WHERE version = ?` (state-stored) uses
-	 *    `persistedVersion`, NOT `version` (which has already advanced
-	 *    by `pendingEvents.length` since load).
-	 *
-	 * Transitions:
-	 *  - Initial: `undefined`.
-	 *  - After {@link markRestored}: set to the loaded version.
-	 *  - After {@link loadFromHistory} / {@link restoreFromSnapshotWithEvents}:
-	 *    aligned to the final post-replay version.
-	 *  - After {@link markPersisted}: set to the just-persisted version.
-	 *  - `apply()` (new events) bumps `version` but does NOT touch
-	 *    `persistedVersion`.
+	 * Distinct from {@link version}, which is the in-memory
+	 * post-mutation value. `apply()` (new events) bumps `_version` but
+	 * never touches `_persistedVersion` — that field only moves on
+	 * {@link markRestored} (Post-Load), {@link loadFromHistory} /
+	 * {@link restoreFromSnapshotWithEvents} (kit-internal Post-Load),
+	 * and {@link markPersisted} (Post-Save).
 	 */
 	private _persistedVersion: Version | undefined = undefined;
 
@@ -210,8 +197,7 @@ export abstract class EventSourcedAggregate<
 	 * @see onPersisted — the safe extension point for subclasses
 	 */
 	public markPersisted(version: Version): void {
-		this.setVersion(version);
-		this._persistedVersion = version;
+		this.markRestored(version);
 		this._pendingEvents = [];
 		this.onPersisted(version);
 	}

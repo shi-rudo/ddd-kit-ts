@@ -52,6 +52,15 @@ export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
 	readonly version: Version;
 
 	/**
+	 * DB-baseline version. `undefined` until the aggregate has been
+	 * persisted or restored at least once. Repository implementations
+	 * route INSERT vs UPDATE on this field and use it as the OCC
+	 * baseline in the UPDATE's `WHERE version = ?` predicate. See
+	 * `IRepository.save` JSDoc for the full routing rule.
+	 */
+	readonly persistedVersion: Version | undefined;
+
+	/**
 	 * Read-only list of domain events recorded on this aggregate that have
 	 * not yet been flushed to the outbox / persistence layer. Both state-
 	 * stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`)
@@ -169,29 +178,15 @@ export abstract class AggregateRoot<
 	private _version: Version = 0 as Version;
 
 	/**
-	 * The DB-baseline version — the version the persistence layer holds
-	 * for this aggregate. `undefined` until the aggregate has been
-	 * persisted or restored from persistence at least once.
+	 * DB-baseline version. `undefined` until the aggregate has been
+	 * persisted or restored at least once. Repository implementations
+	 * route INSERT vs UPDATE on this field and use it as the OCC
+	 * baseline. See `IRepository.save` JSDoc.
 	 *
-	 * Distinct from {@link version}: `version` is the in-memory
-	 * post-mutation value (bumped by `setState(_, true)` / `commit()` /
-	 * `apply()`); `persistedVersion` is what the kit believes the DB
-	 * currently holds. Repository implementations use this for two
-	 * decisions:
-	 *
-	 *  - **INSERT vs UPDATE routing**: `persistedVersion === undefined`
-	 *    → never persisted → INSERT. Otherwise → UPDATE.
-	 *  - **OCC predicate**: the UPDATE's `WHERE version = ?` clause
-	 *    uses `persistedVersion` (the load-time / last-save baseline),
-	 *    NOT `version` (the post-mutation in-memory value).
-	 *
-	 * Transitions:
-	 *  - Initial: `undefined`.
-	 *  - After {@link markRestored}: set to the loaded DB version.
-	 *  - After {@link markPersisted}: set to the just-persisted version.
-	 *  - Mutations ({@link setState}, {@link bumpVersion},
-	 *    `EventSourcedAggregate.apply()`) bump `version` but do NOT touch
-	 *    `persistedVersion`.
+	 * Distinct from {@link version}, which is the in-memory
+	 * post-mutation value. Mutations bump `_version` but never touch
+	 * `_persistedVersion` — that field only moves on {@link markRestored}
+	 * (Post-Load) and {@link markPersisted} (Post-Save).
 	 */
 	private _persistedVersion: Version | undefined = undefined;
 
@@ -208,20 +203,15 @@ export abstract class AggregateRoot<
 	}
 
 	/**
-	 * **Lifecycle marker — Post-Load.** Synchronises both `_version` and
+	 * **Lifecycle marker — Post-Load.** Syncs both `_version` and
 	 * `_persistedVersion` to the DB-stored version. Used by
 	 * `reconstitute(...)` factories to assemble an in-memory aggregate
 	 * from a persisted row.
 	 *
-	 * After this call, `version === persistedVersion === version`, so:
-	 *  - Repository sees `persistedVersion !== undefined` → UPDATE on save.
-	 *  - The OCC baseline for the next UPDATE's `WHERE version = ?` is
-	 *    the value just passed in.
-	 *
-	 * Does NOT fire the {@link onPersisted} hook — that hook is
-	 * post-save semantics (metrics, audit, cache eviction). Vernon §11
-	 * draws the Factory-vs-Reconstitution distinction explicitly; the
-	 * kit honours it by keeping the two lifecycle markers separate.
+	 * Does NOT fire {@link onPersisted} — that hook has post-save
+	 * semantics (metrics, audit, cache eviction), not post-load. The
+	 * Factory-vs-Reconstitution distinction (Vernon §11) is honoured
+	 * structurally: two separate markers, one for each transition.
 	 *
 	 * @param version - The version the row currently holds in the DB
 	 *
@@ -280,8 +270,7 @@ export abstract class AggregateRoot<
 	 * @see onPersisted — the safe extension point for subclasses
 	 */
 	public markPersisted(version: Version): void {
-		this.setVersion(version);
-		this._persistedVersion = version;
+		this.markRestored(version);
 		this._pendingEvents = [];
 		this.onPersisted(version);
 	}
