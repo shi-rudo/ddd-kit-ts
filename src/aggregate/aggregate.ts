@@ -1,11 +1,10 @@
+import type { Result } from "@shirudo/result";
 import type { Id } from "../core/id";
+import type { DomainError } from "../core/errors";
+import type { AnyDomainEvent } from "./domain-event";
 
 // Re-export domain event types for convenience
 export * from "./domain-event";
-
-// Re-export interfaces from their respective files
-export type { IAggregateRoot } from "./aggregate-root";
-export type { IEventSourcedAggregate } from "./event-sourced-aggregate";
 
 // --- Aggregate types ---
 
@@ -33,6 +32,48 @@ export interface AggregateSnapshot<TState> {
 	 * Timestamp when the snapshot was created.
 	 */
 	snapshotAt: Date;
+}
+
+/**
+ * Public contract every Aggregate Root satisfies. Implemented by
+ * `BaseAggregate` and inherited by both `AggregateRoot` and
+ * `EventSourcedAggregate`. Repository implementations type their
+ * `save(aggregate)` parameter against this interface rather than the
+ * concrete classes, so the repo layer does not take a compile-time
+ * dependency on the aggregate hierarchy.
+ *
+ * Full per-member documentation lives on the concrete `BaseAggregate`
+ * class; the interface is intentionally terse to avoid drift.
+ *
+ * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
+ * @template TEvent - The domain-event union, defaults to `never`
+ */
+export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
+	readonly id: TId;
+	readonly version: Version;
+	readonly persistedVersion: Version | undefined;
+	readonly pendingEvents: ReadonlyArray<TEvent>;
+	clearPendingEvents(): void;
+	markPersisted(version: Version): void;
+}
+
+/**
+ * Public contract for Event-Sourced Aggregate Roots. Extends
+ * `IAggregateRoot` with the replay-from-history boundary.
+ *
+ * @template TId    - The aggregate root identifier
+ * @template TEvent - The union type of all domain events
+ */
+export interface IEventSourcedAggregate<
+	TId extends Id<string>,
+	TEvent extends AnyDomainEvent,
+> extends IAggregateRoot<TId, TEvent> {
+	/**
+	 * Reconstitutes the aggregate from an event history. Returns
+	 * `Result` because event-stream corruption is an expected
+	 * recoverable failure at the infrastructure boundary.
+	 */
+	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
 }
 
 /**

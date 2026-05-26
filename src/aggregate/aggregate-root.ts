@@ -1,88 +1,13 @@
 import type { Id } from "../core/id";
 import { freezeShallow } from "../entity/entity";
 import { BaseAggregate } from "./base-aggregate";
-import type { AggregateSnapshot, Version } from "./aggregate";
+import type { AggregateSnapshot } from "./aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 
-/**
- * Marker interface for Aggregate Roots.
- *
- * In Domain-Driven Design, an Aggregate Root is an Entity (the parent Entity of the aggregate).
- * It represents the aggregate externally and is the only object that external code
- * is allowed to hold references to. All access to child entities within the aggregate
- * must go through the Aggregate Root.
- *
- * An Aggregate consists of:
- * - One Aggregate Root (Entity with id + version)
- * - Optional child entities (Entities with id + state, but no own version)
- * - Optional value objects
- *
- * The Aggregate Root has identity (id), state, and version for optimistic concurrency control.
- * Child entities exist only within the aggregate boundary and are versioned through
- * the Aggregate Root.
- *
- * @template TId - The type of the aggregate root identifier
- *
- * @example
- * ```typescript
- * class Order extends AggregateRoot<OrderState, OrderId> implements IAggregateRoot<OrderId> {
- *   // Order is an Aggregate Root (an Entity with version)
- *   // OrderState contains child entities (e.g., OrderItem) and value objects
- * }
- * ```
- */
-export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
-	/**
-	 * Unique identifier of the aggregate root entity.
-	 */
-	readonly id: TId;
-
-	/**
-	 * Version number for optimistic concurrency control.
-	 * Incremented on each state change to detect concurrent modifications.
-	 * This version applies to the entire aggregate, including all child entities.
-	 */
-	readonly version: Version;
-
-	/**
-	 * DB-baseline version. `undefined` until the aggregate has been
-	 * persisted or restored at least once. Repository implementations
-	 * route INSERT vs UPDATE on this field and use it as the OCC
-	 * baseline in the UPDATE's `WHERE version = ?` predicate. See
-	 * `IRepository.save` JSDoc for the full routing rule.
-	 */
-	readonly persistedVersion: Version | undefined;
-
-	/**
-	 * Read-only list of domain events recorded on this aggregate that have
-	 * not yet been flushed to the outbox / persistence layer. Both state-
-	 * stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`)
-	 * aggregates expose them under the same name, so Repository.save() can
-	 * harvest them uniformly without branching on the aggregate flavour.
-	 */
-	readonly pendingEvents: ReadonlyArray<TEvent>;
-
-	/**
-	 * Clears the pending-event list. Called by `markPersisted` after a
-	 * successful write — the events have been handed off to the outbox
-	 * / event store and are no longer the aggregate's responsibility.
-	 */
-	clearPendingEvents(): void;
-
-	/**
-	 * Post-save hook: a `Repository.save()` implementation calls this with
-	 * the persisted version after a successful write to push the new
-	 * version back into the aggregate and clear pendingEvents (they are
-	 * now safely on the write side / in the outbox).
-	 *
-	 * Required by the interface so a Repository implementation can call it
-	 * via the published `IAggregateRoot` contract without taking the
-	 * abstract class as a compile-time dependency.
-	 *
-	 * @param version - The version assigned by the persistence layer
-	 */
-	markPersisted(version: Version): void;
-}
+// Re-export for backwards compatibility — `IAggregateRoot` lives in
+// `aggregate.ts` (the type hub) but consumers historically imported it
+// from `@shirudo/ddd-kit` / `./aggregate-root`. Keep both paths working.
+export type { IAggregateRoot } from "./aggregate";
 
 /**
  * Configuration options for AggregateRoot behavior.
@@ -231,20 +156,6 @@ export abstract class AggregateRoot<
 		if (shouldBump) {
 			this.bumpVersion();
 		}
-	}
-
-	/**
-	 * Creates a snapshot of the current aggregate state.
-	 * Useful for performance optimization, backup/restore, and audit trails.
-	 *
-	 * @returns A snapshot containing the current state and version
-	 */
-	public createSnapshot(): AggregateSnapshot<TState> {
-		return {
-			state: structuredClone(this._state),
-			version: this.version,
-			snapshotAt: new Date(),
-		};
 	}
 
 	/**

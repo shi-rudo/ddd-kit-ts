@@ -3,30 +3,12 @@ import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
 import { freezeShallow } from "../entity/entity";
 import { BaseAggregate } from "./base-aggregate";
-import type { IAggregateRoot } from "./aggregate-root";
 import type { AnyDomainEvent } from "./domain-event";
-import type { AggregateSnapshot, Version } from "./aggregate";
+import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
 
-/**
- * Interface for Event-Sourced Aggregate Roots.
- * Defines the contract for aggregates that manage state changes via event sourcing.
- *
- * @template TId - The type of the aggregate root identifier
- * @template TEvent - The union type of all domain events
- */
-export interface IEventSourcedAggregate<
-	TId extends Id<string>,
-	TEvent extends AnyDomainEvent,
-> extends IAggregateRoot<TId, TEvent> {
-	/**
-	 * Reconstitutes the aggregate from an event history. Returns `Result`
-	 * because event-stream corruption is an expected recoverable failure
-	 * at the infrastructure boundary.
-	 *
-	 * @param history - An ordered list of past events
-	 */
-	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
-}
+// Re-export for backwards compatibility — `IEventSourcedAggregate` lives
+// in `aggregate.ts` (the type hub).
+export type { IEventSourcedAggregate } from "./aggregate";
 
 type Handler<TState, TEvent extends AnyDomainEvent> = (
 	state: TState,
@@ -94,18 +76,12 @@ export abstract class EventSourcedAggregate<
 	extends BaseAggregate<TState, TId, TEvent>
 	implements IEventSourcedAggregate<TId, TEvent>
 {
-	protected constructor(id: TId, initialState: TState) {
-		super(id, initialState);
-	}
-
 	/**
 	 * Validates an event before it is applied. Default is no-op.
 	 * Subclasses override to throw a concrete `DomainError` subclass when
 	 * the event violates an invariant in the current state.
 	 */
-	protected validateEvent(_event: TEvent): void {
-		// no-op by default
-	}
+	protected validateEvent(_event: TEvent): void {}
 
 	/**
 	 * Applies an event: validates, locates the handler, computes the next
@@ -187,17 +163,6 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Creates a snapshot of the current aggregate state.
-	 */
-	public createSnapshot(): AggregateSnapshot<TState> {
-		return {
-			state: structuredClone(this._state),
-			version: this.version,
-			snapshotAt: new Date(),
-		};
-	}
-
-	/**
 	 * Restores the aggregate from a snapshot and applies events that occurred
 	 * after. Same infrastructure-boundary semantics as `loadFromHistory`:
 	 * catches `DomainError` and returns it as an `Err`; non-domain throws
@@ -213,10 +178,7 @@ export abstract class EventSourcedAggregate<
 	): Result<void, DomainError> {
 		const previousState = this._state;
 		const previousVersion = this.version;
-		// `persistedVersion` is not touched during the loop — only `_state`
-		// (via dispatchAndCommit with isNew=false) and `_version` (via the
-		// initial setVersion) move. So no rollback handling is needed here:
-		// if the loop throws, persistedVersion is still its pre-call value.
+		// `persistedVersion` is invariant during the loop; no rollback needed.
 
 		this._state = freezeShallow(structuredClone(snapshot.state));
 		this.setVersion(snapshot.version);

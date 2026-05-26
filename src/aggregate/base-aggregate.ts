@@ -1,7 +1,6 @@
 import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
-import type { IAggregateRoot } from "./aggregate-root";
-import type { Version } from "./aggregate";
+import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
 import {
 	type AnyDomainEvent,
 	type CreateDomainEventOptions,
@@ -199,28 +198,32 @@ export abstract class BaseAggregate<
 	 *
 	 * @param version - The version that was just persisted
 	 */
-	protected onPersisted(_version: Version): void {
-		// no-op by default
-	}
+	protected onPersisted(_version: Version): void {}
 
 	/**
-	 * Records a domain event on the aggregate's pending list.
-	 *
-	 * **Ordering: record AFTER state mutation.** Vernon (IDDD §8) is
-	 * explicit: a domain event describes something that has just
-	 * happened — its existence implies the state change already
-	 * occurred. Recording before mutation is a footgun: if a subsequent
-	 * invariant check throws, the event has already been queued but
-	 * the state never actually changed — consumers see an event for a
-	 * fact that did not happen.
-	 *
-	 * `EventSourcedAggregate.apply()` enforces this ordering
-	 * structurally; `AggregateRoot.commit()` is the opt-in equivalent
-	 * for state-stored aggregates, where `setState` and event recording
-	 * are otherwise decoupled.
+	 * Appends a domain event to the pending list. Prefer the higher-level
+	 * `AggregateRoot.commit()` (state-stored) or `EventSourcedAggregate.apply()`
+	 * (event-sourced) call sites — both wrap `addDomainEvent` in the
+	 * canonical record-AFTER-mutation order (Vernon §8). Calling
+	 * `addDomainEvent` directly is appropriate only when state and event
+	 * recording have already been decoupled deliberately (e.g. a
+	 * deletion event before a hard-delete; see `docs/guide/repository.md`).
 	 */
 	protected addDomainEvent(event: TEvent): void {
 		this._pendingEvents.push(event);
+	}
+
+	/**
+	 * Creates a snapshot of the current aggregate state — the state at
+	 * this moment plus the version. Useful for ES snapshot policies and
+	 * for state-stored backup / restore.
+	 */
+	public createSnapshot(): AggregateSnapshot<TState> {
+		return {
+			state: structuredClone(this._state),
+			version: this.version,
+			snapshotAt: new Date(),
+		};
 	}
 
 	/**
