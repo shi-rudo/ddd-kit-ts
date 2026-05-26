@@ -324,14 +324,14 @@ const id = userIds.next(); // Id<"UserId">
 Both are `InfrastructureError` subclasses (not `DomainError` — the storage boundary decided the row is absent or stale, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, `toJSON()`, and `getUserMessage()` out of the box.
 
 - **`AggregateNotFoundError(aggregateType, id, cause?)`** — thrown by `getByIdOrFail`. Carries a user-safe message that does NOT leak the id. Not retryable (the row isn't there; retry won't help).
-- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`** — thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `isRetryable(err)` predicate from `@shirudo/base-error` picks it up — the canonical OCC pattern is to reload, re-apply, and retry.
+- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`** — thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it — the canonical OCC pattern is to reload, re-apply, and retry.
 
 ```ts
 import {
   AggregateNotFoundError,
   ConcurrencyConflictError,
 } from "@shirudo/ddd-kit";
-import { isRetryable } from "@shirudo/base-error";
+import { someChainRetryable } from "@shirudo/base-error";
 
 try {
   await orderRepository.save(order);
@@ -342,11 +342,16 @@ try {
   if (err instanceof AggregateNotFoundError) {
     // map to HTTP 404
   }
-  if (isRetryable(err)) {
-    // delegate to retry middleware
+  if (someChainRetryable(err)) {
+    // delegate to retry middleware — walks the cause chain, so it matches
+    // even when ConcurrencyConflictError is nested inside a wrapper error
   }
   throw err;
 }
 ```
+
+::: tip Why `someChainRetryable`, not `isChainRetryable` or `isRetryable`
+`isChainRetryable` from `@shirudo/base-error` filters on the strict `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for `ConcurrencyConflictError`. `isRetryable(err)` only inspects the top-level error — if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` (base-error 4.7+) walks the whole chain with the loose predicate. On base-error 4.6.x use `someCauseChain(err, isRetryable)` instead.
+:::
 
 Catch them at the App-Service layer to map to HTTP 404 / HTTP 409 as appropriate.

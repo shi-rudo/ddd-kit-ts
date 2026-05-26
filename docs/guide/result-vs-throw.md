@@ -83,17 +83,19 @@ class CreditLimitExceededError extends DomainError {
 Catching by class lets the App-Service map errors to responses:
 
 ```ts
-import { isBaseError, isRetryable, getRootCause } from "@shirudo/base-error";
+import { isBaseError, someChainRetryable } from "@shirudo/base-error";
 
 try {
   order.confirm();
   await repo.save(order);
   return ok(order.id);
 } catch (e) {
-  // Walk the cause chain for retry hints — ConcurrencyConflictError sets
-  // retryable: true; an OCC-aware Use Case retries instead of bubbling up.
-  const root = getRootCause(e);
-  if (isRetryable(root)) {
+  // Walk the whole cause chain for retry hints — ConcurrencyConflictError
+  // sets retryable: true; an OCC-aware Use Case retries instead of bubbling
+  // up. someChainRetryable matches the loose `retryable === true` predicate
+  // anywhere in the chain, so it works whether the conflict is the thrown
+  // error or wrapped inside an infrastructure error.
+  if (someChainRetryable(e)) {
     if (isBaseError(e)) {
       logger.info({ err: e.toJSON() }, "retrying use case");
     }
@@ -121,7 +123,17 @@ Because every library error extends `BaseError<Name>`:
 - **`error.timestamp` / `error.timestampIso`** — epoch + ISO, useful for sorting / correlating log entries across distributed systems.
 - **`error.name`** — typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
 - **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`) — for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
-- **`isRetryable(error)`** — the canonical retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
+- **`isRetryable(error)`** — single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
+- **`someChainRetryable(error)`** (base-error 4.7+) — whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors. On base-error 4.6.x the same behaviour is reached via `someCauseChain(err, isRetryable)`.
+
+::: warning Which `@shirudo/base-error` helpers work with ddd-kit errors
+ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, and `ConcurrencyConflictError` extend `BaseError<Name>` directly — they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
+
+- **Works** (loose / class-based): `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `findInCauseChain`, `filterCauseChain`, `everyCauseChain`, `getRootCause`, `instanceof` checks.
+- **Returns false / undefined for ddd-kit errors** (strict `StructuredError` filter): `isStructuredError`, `isRetryableStructuredError`, `isChainRetryable`, `getRootCauseRetryable`, `getFirstRetryableCause`.
+
+If you also throw `StructuredError`-shaped errors from your own code, those keep working with the strict helpers — only the ddd-kit-supplied errors fall through the strict filter.
+:::
 
 ## What `Result` is (and isn't)
 
