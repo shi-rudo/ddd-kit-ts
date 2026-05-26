@@ -7,17 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation — `someChainRetryable` is the correct retry-chain predicate for ddd-kit errors
+### BREAKING — `@shirudo/base-error` peer-dep bumped to `^4.7.0`
 
 `@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`). ddd-kit's errors extend `BaseError<Name>` directly — they discriminate by class (Vernon-canonical DDD), not RFC 9457 code/category fields — so `isChainRetryable(err)` returns `false` for `ConcurrencyConflictError` and consumers' OCC retry middleware silently skips the conflict.
 
-`@shirudo/base-error` 4.7.0 ships `someChainRetryable`, which walks the cause chain with the loose `retryable === true` predicate (the same one `isRetryable` uses). Docs now recommend it as the canonical retry-chain check:
+`@shirudo/base-error` 4.7.0 ships `someChainRetryable`, which walks the cause chain with the loose `retryable === true` predicate (the same one `isRetryable` uses). It is now the canonical retry-chain check across the ddd-kit guides.
+
+Migration:
+
+- Consumers on `@shirudo/base-error` 4.7.x — no action.
+- Consumers on `@shirudo/base-error` 4.6.x — bump to `4.7.0`. 4.7.0 is additive over 4.6.x (only new exports; no API changes), so a clean upgrade.
+
+Docs updated to recommend `someChainRetryable`:
 
 - `docs/guide/result-vs-throw.md` — catch example updated, helper-compatibility callout listing the loose helpers that work with ddd-kit errors vs the strict ones that do not.
 - `docs/guide/repository.md` — `ConcurrencyConflictError` example updated, callout explaining the choice between `isRetryable` / `someChainRetryable` / `isChainRetryable`.
 - `llms.txt` — new Silent-runtime entry warning about `isChainRetryable` returning `false` for ddd-kit errors; base-error helper list expanded to flag strict-shape helpers as incompatible with ddd-kit's class-based hierarchy.
-
-No code or peer-dep change. On base-error 4.6.x the equivalent composition is `someCauseChain(err, isRetryable)`, also documented inline.
 
 ### BREAKING — `recordEvent` helper + `aggregateType` abstract property; `withCommit` validates aggregate metadata
 
