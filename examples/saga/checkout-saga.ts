@@ -54,6 +54,8 @@ export class CheckoutSaga extends AggregateRoot<
 	CheckoutSagaState,
 	OrderId
 > {
+	protected readonly aggregateType = "CheckoutSaga";
+
 	static start(orderId: OrderId, totalCents: number): CheckoutSaga {
 		const saga = new CheckoutSaga(orderId, {
 			orderId,

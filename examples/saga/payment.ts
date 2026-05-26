@@ -1,8 +1,5 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import {
-	createDomainEvent,
-	type DomainEvent,
-} from "../../src/aggregate/domain-event";
+import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import type { OrderId } from "./order";
@@ -51,6 +48,8 @@ export class Payment extends AggregateRoot<
 	PaymentId,
 	PaymentEvent
 > {
+	protected readonly aggregateType = "Payment";
+
 	static request(id: PaymentId, orderId: OrderId, amountCents: number): Payment {
 		const payment = new Payment(id, {
 			id,
@@ -60,11 +59,7 @@ export class Payment extends AggregateRoot<
 		});
 		payment.commit(
 			{ id, orderId, amountCents, status: "requested" },
-			createDomainEvent(
-				"PaymentRequested",
-				{ orderId, amountCents },
-				{ aggregateId: id, aggregateType: "Payment" },
-			),
+			payment.recordEvent("PaymentRequested", { orderId, amountCents }),
 		);
 		return payment;
 	}
@@ -75,11 +70,10 @@ export class Payment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "received" },
-			createDomainEvent(
-				"PaymentReceived",
-				{ orderId: this.state.orderId, amountCents: this.state.amountCents },
-				{ aggregateId: this.id, aggregateType: "Payment" },
-			),
+			this.recordEvent("PaymentReceived", {
+				orderId: this.state.orderId,
+				amountCents: this.state.amountCents,
+			}),
 		);
 	}
 
@@ -89,11 +83,10 @@ export class Payment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "failed", failureReason: reason },
-			createDomainEvent(
-				"PaymentFailed",
-				{ orderId: this.state.orderId, reason },
-				{ aggregateId: this.id, aggregateType: "Payment" },
-			),
+			this.recordEvent("PaymentFailed", {
+				orderId: this.state.orderId,
+				reason,
+			}),
 		);
 	}
 
@@ -103,11 +96,10 @@ export class Payment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "refunded" },
-			createDomainEvent(
-				"PaymentRefunded",
-				{ orderId: this.state.orderId, amountCents: this.state.amountCents },
-				{ aggregateId: this.id, aggregateType: "Payment" },
-			),
+			this.recordEvent("PaymentRefunded", {
+				orderId: this.state.orderId,
+				amountCents: this.state.amountCents,
+			}),
 		);
 	}
 }

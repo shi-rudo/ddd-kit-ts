@@ -25,6 +25,8 @@ export type OrderState = {
  * - How child entity logic is accessed through the Aggregate Root
  */
 export class Order extends AggregateRoot<OrderState, OrderId> {
+	protected readonly aggregateType = "Order";
+
 	private itemCounter = 0;
 
 	static create(id: OrderId, customerId: string): Order {

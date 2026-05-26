@@ -1,8 +1,5 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import {
-	createDomainEvent,
-	type DomainEvent,
-} from "../../src/aggregate/domain-event";
+import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 
@@ -32,6 +29,8 @@ export class OrderInWrongStateError extends DomainError<"OrderInWrongStateError"
 }
 
 export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+	protected readonly aggregateType = "Order";
+
 	static place(
 		id: OrderId,
 		customerId: string,
@@ -46,11 +45,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		// Bump version to 1 and record the placement event.
 		order.commit(
 			{ id, customerId, totalCents, status: "placed" },
-			createDomainEvent(
-				"OrderPlaced",
-				{ customerId, totalCents },
-				{ aggregateId: id, aggregateType: "Order" },
-			),
+			order.recordEvent("OrderPlaced", { customerId, totalCents }),
 		);
 		return order;
 	}
@@ -61,11 +56,9 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		}
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			createDomainEvent(
-				"OrderConfirmed",
-				{ confirmedAt: new Date().toISOString() },
-				{ aggregateId: this.id, aggregateType: "Order" },
-			),
+			this.recordEvent("OrderConfirmed", {
+				confirmedAt: new Date().toISOString(),
+			}),
 		);
 	}
 
@@ -76,11 +69,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		}
 		this.commit(
 			{ ...this.state, status: "cancelled", cancelReason: reason },
-			createDomainEvent(
-				"OrderCancelled",
-				{ reason },
-				{ aggregateId: this.id, aggregateType: "Order" },
-			),
+			this.recordEvent("OrderCancelled", { reason }),
 		);
 	}
 }

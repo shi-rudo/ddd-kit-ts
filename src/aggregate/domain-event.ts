@@ -349,9 +349,25 @@ export interface CreateDomainEventOptions {
  * Creates a domain event with default values.
  * Sets occurredAt to current date and version to 1 if not provided.
  *
+ * **For aggregate-internal events, prefer `this.recordEvent(...)` on
+ * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
+ * `aggregateId` (from `this.id`) and `aggregateType` (from the
+ * aggregate's declared `aggregateType` property), which downstream
+ * consumers — outbox dispatchers, projection handlers, audit logs —
+ * route by. The `withCommit` harvest boundary now validates both fields
+ * are present and throws if they're missing, so a direct
+ * `createDomainEvent(...)` call inside an aggregate that forgets the
+ * options is caught at runtime.
+ *
+ * Use `createDomainEvent(...)` directly for events that don't belong to
+ * an aggregate: system events, integration events, configuration events,
+ * test fixtures. For those, set `aggregateId` / `aggregateType` in
+ * `options` if downstream consumers expect routing metadata.
+ *
  * @param type - The event type
  * @param payload - The event payload
- * @param options - Optional event configuration
+ * @param options - Optional event configuration (including `aggregateId`
+ *   and `aggregateType` for routing)
  * @returns A domain event
  *
  * @example

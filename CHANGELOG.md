@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `recordEvent` helper + `aggregateType` abstract property; `withCommit` validates aggregate metadata
+
+Aggregate-emitted events now carry `aggregateId` and `aggregateType` by construction, not by user discipline. Three coordinated changes:
+
+1. **`protected abstract readonly aggregateType: string`** on both `AggregateRoot` and `EventSourcedAggregate`. Every concrete subclass MUST declare it as a string literal:
+
+   ```diff
+     class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+   +   protected readonly aggregateType = "Order";
+       static place(id, customerId): Order { ... }
+     }
+   ```
+
+   This is the breaking change. Existing aggregates fail to compile until they declare the property. The string is what downstream consumers (outbox dispatchers, projection handlers, audit logs) route by — pick the canonical domain name. `constructor.name` was rejected as a default because it's fragile under minification and bundler transforms; the explicit string is robust.
+
+2. **`protected recordEvent<E extends TEvent>(type, payload, options?)`** on both aggregate flavours. Sugar for `createDomainEvent` that auto-injects `aggregateId = this.id` and `aggregateType = this.aggregateType`. The canonical path for recording events from inside aggregate domain methods:
+
+   ```ts
+   class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+     protected readonly aggregateType = "Order";
+
+     confirm(): void {
+       this.commit(
+         { ...this.state, status: "confirmed" },
+         this.recordEvent("OrderConfirmed", { orderId: this.id }),
+       );
+     }
+   }
+   ```
+
+   Direct `createDomainEvent(...)` calls outside aggregates still work and are still appropriate for system events, integration events, or anything the aggregate didn't emit.
+
+3. **Runtime guard in `withCommit`** validates every harvested event has both `aggregateId` and `aggregateType` set. Throws a diagnostic error naming the event type and listing missing fields:
+
+   ```
+   withCommit: event "OrderCreated" is missing aggregateId and aggregateType.
+   Use this.recordEvent(type, payload) inside aggregate methods instead of
+   createDomainEvent(...) — recordEvent auto-injects aggregateId and
+   aggregateType. Outbox dispatchers and projection handlers rely on these
+   fields for routing.
+   ```
+
+   This catches the case where someone bypassed `recordEvent` by calling `createDomainEvent` directly inside an aggregate.
+
+**Also tightened**: `AggregateRoot`'s `TEvent` generic now constrains `extends AnyDomainEvent = never` (matches `EventSourcedAggregate`). Tests using ad-hoc `{ type: "X"; value: number }` event shapes were migrated to proper `DomainEvent<T, P>` shapes.
+
+Migration:
+
+- Every existing `AggregateRoot` / `EventSourcedAggregate` subclass adds one line: `protected readonly aggregateType = "X";` where X is the canonical aggregate name.
+- Optional but recommended: migrate internal `createDomainEvent(...)` calls inside aggregate domain methods to `this.recordEvent(...)`. The new helper is shorter and removes the chance of forgetting `aggregateId`/`aggregateType`.
+- Tests / examples using ad-hoc inline event types (`{ type: "X"; ... }`) must move to proper `DomainEvent<T, P>` shapes, since `AggregateRoot`'s TEvent now requires `AnyDomainEvent`.
+
+Future direction (NOT in this release): the cleaner long-term shape splits `DomainEvent` into a base type and a richer `AggregateDomainEvent` that REQUIRES `aggregateId` and `aggregateType` at the type level. That would eliminate the runtime guard entirely. Candidate for 2.0.
+
+435 → 441 tests (+6 covering the new helper and guard).
+
 ## [1.0.0-rc.7] - 2026-05-24
 
 The settling-period release before 1.0. No breaking changes since rc.6 — this cycle is dedicated to hardening, doc completeness, and consumer-feedback follow-through. Real-world production usage of rc.5/rc.6 surfaced one footgun (forgotten `super.markPersisted` in a subclass) and the architectural depth of several DDD patterns the kit had implemented but never explicitly documented.

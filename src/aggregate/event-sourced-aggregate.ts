@@ -3,7 +3,12 @@ import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
 import { Entity, freezeShallow } from "../entity/entity";
 import type { IAggregateRoot } from "./aggregate-root";
-import type { AnyDomainEvent } from "./domain-event";
+import {
+	type AnyDomainEvent,
+	type CreateDomainEventOptions,
+	createDomainEvent,
+	type DomainEvent,
+} from "./domain-event";
 import type {
 	AggregateSnapshot,
 	Version,
@@ -91,6 +96,26 @@ export abstract class EventSourcedAggregate<
 > extends Entity<TState, TId>
 	implements IEventSourcedAggregate<TId, TEvent> {
 
+	/**
+	 * The aggregate's domain type as a string, used to populate
+	 * `aggregateType` on events recorded via {@link recordEvent}.
+	 *
+	 * Subclasses MUST declare this as a string literal:
+	 *
+	 * ```ts
+	 * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+	 *   protected readonly aggregateType = "Order";
+	 * }
+	 * ```
+	 *
+	 * Downstream consumers (outbox dispatchers, projection handlers,
+	 * audit logs) route by this. Use the canonical aggregate name
+	 * consistently across your bounded context. The value comes from
+	 * this explicit declaration, not `constructor.name` (fragile under
+	 * minification + bundler transforms).
+	 */
+	protected abstract readonly aggregateType: string;
+
 	// --- Version management (own, not inherited from AggregateRoot) ---
 
 	private _version: Version = 0 as Version;
@@ -177,6 +202,42 @@ export abstract class EventSourcedAggregate<
 
 	protected constructor(id: TId, initialState: TState) {
 		super(id, initialState);
+	}
+
+	/**
+	 * Sugar for `createDomainEvent` that auto-injects `aggregateId`
+	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
+	 * into the event's metadata fields. The canonical path for
+	 * constructing events to feed into `apply()` from inside aggregate
+	 * domain methods.
+	 *
+	 * @example
+	 * ```ts
+	 * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+	 *   protected readonly aggregateType = "Order";
+	 *
+	 *   confirm(): void {
+	 *     this.apply(this.recordEvent("OrderConfirmed", { orderId: this.id }));
+	 *   }
+	 * }
+	 * ```
+	 *
+	 * Calling `createDomainEvent(...)` directly inside an aggregate
+	 * method leaves `aggregateId` and `aggregateType` unset; the
+	 * `withCommit` harvest boundary catches it at runtime, but
+	 * `this.recordEvent(...)` makes the right thing impossible to
+	 * forget.
+	 */
+	protected recordEvent<E extends TEvent>(
+		type: E["type"],
+		payload: E["payload"],
+		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
+	): E {
+		return createDomainEvent(type, payload, {
+			...options,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
 
 	// --- Event application ---

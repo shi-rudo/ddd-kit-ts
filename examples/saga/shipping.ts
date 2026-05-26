@@ -1,8 +1,5 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import {
-	createDomainEvent,
-	type DomainEvent,
-} from "../../src/aggregate/domain-event";
+import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import type { OrderId } from "./order";
@@ -46,15 +43,13 @@ export class Shipment extends AggregateRoot<
 	ShipmentId,
 	ShippingEvent
 > {
+	protected readonly aggregateType = "Shipment";
+
 	static request(id: ShipmentId, orderId: OrderId): Shipment {
 		const shipment = new Shipment(id, { id, orderId, status: "requested" });
 		shipment.commit(
 			{ id, orderId, status: "requested" },
-			createDomainEvent(
-				"ShippingRequested",
-				{ orderId },
-				{ aggregateId: id, aggregateType: "Shipment" },
-			),
+			shipment.recordEvent("ShippingRequested", { orderId }),
 		);
 		return shipment;
 	}
@@ -65,11 +60,10 @@ export class Shipment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "shipped", trackingId },
-			createDomainEvent(
-				"ShippingCompleted",
-				{ orderId: this.state.orderId, trackingId },
-				{ aggregateId: this.id, aggregateType: "Shipment" },
-			),
+			this.recordEvent("ShippingCompleted", {
+				orderId: this.state.orderId,
+				trackingId,
+			}),
 		);
 	}
 
@@ -79,11 +73,10 @@ export class Shipment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "failed", failureReason: reason },
-			createDomainEvent(
-				"ShippingFailed",
-				{ orderId: this.state.orderId, reason },
-				{ aggregateId: this.id, aggregateType: "Shipment" },
-			),
+			this.recordEvent("ShippingFailed", {
+				orderId: this.state.orderId,
+				reason,
+			}),
 		);
 	}
 }

@@ -5,6 +5,7 @@ import {
 	type AggregateConfig,
 } from "./aggregate-root";
 import type { AggregateSnapshot, Version } from "./aggregate";
+import type { DomainEvent } from "./domain-event";
 
 type TestId = Id<"TestId">;
 
@@ -14,6 +15,7 @@ type TestState = {
 };
 
 class TestAggregate extends AggregateRoot<TestState, TestId> {
+	protected readonly aggregateType = "TestAggregate";
 	constructor(
 		id: TestId,
 		initialState: TestState,
@@ -108,6 +110,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should support automatic version bumping with config", () => {
 			class AutoVersionAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "AutoVersionAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, { autoVersionBump: true });
 				}
@@ -126,6 +129,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should not auto-bump when disabled", () => {
 			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "ManualVersionAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, { autoVersionBump: false });
 				}
@@ -198,6 +202,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			};
 
 			class AggWithChildren extends AggregateRoot<StateWithChildren, TestId> {
+				protected readonly aggregateType = "AggWithChildren";
 				constructor(id: TestId, state: StateWithChildren) {
 					super(id, state);
 				}
@@ -224,6 +229,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			};
 
 			class AggWithChildren extends AggregateRoot<StateWithChildren, TestId> {
+				protected readonly aggregateType = "AggWithChildren";
 				constructor(id: TestId, state: StateWithChildren) {
 					super(id, state);
 				}
@@ -277,9 +283,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("commit() — record-after-mutation helper", () => {
-		type Ev = { type: "Updated"; value: number };
+		type Ev = DomainEvent<"Updated", { value: number }>;
 
 		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
+			protected readonly aggregateType = "CommitAggregate";
+
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
@@ -291,9 +299,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				// calling addDomainEvent directly. commit() never does this.
 				this.addDomainEvent(ev);
 			}
+			recordTestEvent(value: number): Ev {
+				return this.recordEvent("Updated", { value });
+			}
 		}
 
 		class FailingValidator extends AggregateRoot<TestState, TestId, Ev> {
+			protected readonly aggregateType = "FailingValidator";
+
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
@@ -303,6 +316,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			tryCommit(value: number, ev: Ev): void {
 				this.commit({ ...this.state, value }, ev);
 			}
+			recordTestEvent(value: number): Ev {
+				return this.recordEvent("Updated", { value });
+			}
 		}
 
 		it("mutates state, then records the event, in that order", () => {
@@ -310,11 +326,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			agg.update(42, { type: "Updated", value: 42 });
+			agg.update(42, agg.recordTestEvent(42));
 
 			expect(agg.state.value).toBe(42);
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]).toEqual({ type: "Updated", value: 42 });
+			expect(agg.pendingEvents[0]?.type).toBe("Updated");
+			expect(agg.pendingEvents[0]?.payload).toEqual({ value: 42 });
 		});
 
 		it("does NOT record the event when state validation throws", () => {
@@ -323,9 +340,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 
-			expect(() =>
-				agg.tryCommit(-1, { type: "Updated", value: -1 }),
-			).toThrow("negative");
+			expect(() => agg.tryCommit(-1, agg.recordTestEvent(-1))).toThrow(
+				"negative",
+			);
 
 			// State unchanged AND no event queued — the validateState-throws-
 			// before-addDomainEvent path is enforced by commit().
@@ -338,13 +355,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			agg.update(99, [
-				{ type: "Updated", value: 99 },
-				{ type: "Updated", value: 100 },
-			]);
+			agg.update(99, [agg.recordTestEvent(99), agg.recordTestEvent(100)]);
 
 			expect(agg.state.value).toBe(99);
-			expect(agg.pendingEvents.map((e) => e.value)).toEqual([99, 100]);
+			expect(agg.pendingEvents.map((e) => e.payload.value)).toEqual([99, 100]);
 		});
 
 		it("accepts no events (state change only)", () => {
@@ -377,7 +391,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 			expect(agg.version).toBe(0);
 
-			agg.update(11, { type: "Updated", value: 11 });
+			agg.update(11, agg.recordTestEvent(11));
 
 			expect(agg.version).toBe(1);
 		});
@@ -389,10 +403,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 			expect(agg.version).toBe(0);
 
-			agg.update(11, [
-				{ type: "Updated", value: 11 },
-				{ type: "Updated", value: 12 },
-			]);
+			agg.update(11, [agg.recordTestEvent(11), agg.recordTestEvent(12)]);
 
 			// One state transition = one version bump, regardless of how
 			// many events accompany it.
@@ -400,16 +411,64 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
+	describe("recordEvent helper", () => {
+		type Recorded = DomainEvent<"Recorded", { v: number }>;
+
+		class RecordingAggregate extends AggregateRoot<TestState, TestId, Recorded> {
+			protected readonly aggregateType = "RecordingAggregate";
+
+			constructor(id: TestId, initialState: TestState) {
+				super(id, initialState);
+			}
+
+			fire(v: number): Recorded {
+				return this.recordEvent("Recorded", { v });
+			}
+		}
+
+		it("auto-injects aggregateId from this.id", () => {
+			const agg = new RecordingAggregate("r-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			const event = agg.fire(7);
+			expect(event.aggregateId).toBe("r-1");
+		});
+
+		it("auto-injects aggregateType from the static declaration", () => {
+			const agg = new RecordingAggregate("r-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			const event = agg.fire(7);
+			expect(event.aggregateType).toBe("RecordingAggregate");
+		});
+
+		it("preserves the payload exactly", () => {
+			const agg = new RecordingAggregate("r-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			const event = agg.fire(42);
+			expect(event.type).toBe("Recorded");
+			expect(event.payload).toEqual({ v: 42 });
+		});
+	});
+
 	describe("markPersisted (post-save hook)", () => {
-		class EventingAggregate extends AggregateRoot<TestState, TestId, {
-			type: "TestRecorded";
-			value: number;
-		}> {
+		type TestRecorded = DomainEvent<"TestRecorded", { value: number }>;
+
+		class EventingAggregate extends AggregateRoot<
+			TestState,
+			TestId,
+			TestRecorded
+		> {
+			protected readonly aggregateType = "EventingAggregate";
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
-			recordEvent(value: number): void {
-				this.addDomainEvent({ type: "TestRecorded", value });
+			addTestEvent(value: number): void {
+				this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
 			}
 		}
 
@@ -418,8 +477,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.recordEvent(1);
-			aggregate.recordEvent(2);
+			aggregate.addTestEvent(1);
+			aggregate.addTestEvent(2);
 
 			expect(aggregate.pendingEvents.length).toBe(2);
 
@@ -440,10 +499,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// onPersisted is the framework-safe subclass extension point.
 			// It fires AFTER pendingEvents is cleared, so a subclass can't
 			// accidentally read stale events when implementing the hook.
-			class HookingAggregate extends AggregateRoot<TestState, TestId, {
-				type: "TestRecorded";
-				value: number;
-			}> {
+			class HookingAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				TestRecorded
+			> {
+				protected readonly aggregateType = "HookingAggregate";
 				public hookCalls: Array<{
 					version: Version;
 					pendingLengthDuringHook: number;
@@ -452,8 +513,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				constructor(id: TestId, state: TestState) {
 					super(id, state);
 				}
-				recordEvent(value: number): void {
-					this.addDomainEvent({ type: "TestRecorded", value });
+				addTestEvent(value: number): void {
+					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
 				}
 				protected override onPersisted(version: Version): void {
 					this.hookCalls.push({
@@ -467,8 +528,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 0,
 				status: "inactive",
 			});
-			aggregate.recordEvent(1);
-			aggregate.recordEvent(2);
+			aggregate.addTestEvent(1);
+			aggregate.addTestEvent(2);
 
 			aggregate.markPersisted(99 as Version);
 
@@ -484,16 +545,18 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// A subclass overrides markPersisted directly, forgets to call
 			// super, and the framework's pendingEvents cleanup never runs.
 			// Next save re-dispatches the same events through the outbox.
-			class BuggyAggregate extends AggregateRoot<TestState, TestId, {
-				type: "TestRecorded";
-				value: number;
-			}> {
+			class BuggyAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				TestRecorded
+			> {
+				protected readonly aggregateType = "BuggyAggregate";
 				public sideEffectFired = false;
 				constructor(id: TestId, state: TestState) {
 					super(id, state);
 				}
-				recordEvent(value: number): void {
-					this.addDomainEvent({ type: "TestRecorded", value });
+				addTestEvent(value: number): void {
+					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
 				}
 				// ❌ This is the bug: override without super.markPersisted(version)
 				public override markPersisted(_version: Version): void {
@@ -507,7 +570,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 0,
 				status: "inactive",
 			});
-			buggy.recordEvent(1);
+			buggy.addTestEvent(1);
 			buggy.markPersisted(5 as Version);
 
 			expect(buggy.sideEffectFired).toBe(true);
@@ -516,16 +579,18 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			// ✅ The fix: same intent via onPersisted, framework cleanup
 			// runs first, side-effect still fires.
-			class FixedAggregate extends AggregateRoot<TestState, TestId, {
-				type: "TestRecorded";
-				value: number;
-			}> {
+			class FixedAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				TestRecorded
+			> {
+				protected readonly aggregateType = "FixedAggregate";
 				public sideEffectFired = false;
 				constructor(id: TestId, state: TestState) {
 					super(id, state);
 				}
-				recordEvent(value: number): void {
-					this.addDomainEvent({ type: "TestRecorded", value });
+				addTestEvent(value: number): void {
+					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
 				}
 				protected override onPersisted(_version: Version): void {
 					this.sideEffectFired = true;
@@ -537,7 +602,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 0,
 				status: "inactive",
 			});
-			fixed.recordEvent(1);
+			fixed.addTestEvent(1);
 			fixed.markPersisted(5 as Version);
 
 			expect(fixed.sideEffectFired).toBe(true);
@@ -569,6 +634,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should validate state changes", () => {
 			class ValidatedAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "ValidatedAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
@@ -588,13 +654,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("should manage domain events", () => {
-			type EvT = { type: "SomethingHappened" };
+			type EvT = DomainEvent<"SomethingHappened", void>;
 			class EventAggregate extends AggregateRoot<TestState, TestId, EvT> {
+				protected readonly aggregateType = "EventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
 				public doSomething() {
-					this.addDomainEvent({ type: "SomethingHappened" });
+					this.addDomainEvent(this.recordEvent("SomethingHappened", undefined));
 				}
 			}
 
@@ -603,7 +670,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents).toHaveLength(0);
 			agg.doSomething();
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]).toEqual({ type: "SomethingHappened" });
+			expect(agg.pendingEvents[0]?.type).toBe("SomethingHappened");
 
 			agg.clearPendingEvents();
 			expect(agg.pendingEvents).toHaveLength(0);
@@ -611,20 +678,21 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should support typed domain events via TEvent parameter", () => {
 			type TestEvent =
-				| { type: "ValueUpdated"; newValue: number }
-				| { type: "Activated" };
+				| DomainEvent<"ValueUpdated", { newValue: number }>
+				| DomainEvent<"Activated", void>;
 
 			class TypedEventAggregate extends AggregateRoot<TestState, TestId, TestEvent> {
+				protected readonly aggregateType = "TypedEventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
 				public updateValue(newValue: number) {
 					this.setState({ ...this.state, value: newValue }, true);
-					this.addDomainEvent({ type: "ValueUpdated", newValue });
+					this.addDomainEvent(this.recordEvent("ValueUpdated", { newValue }));
 				}
 				public activate() {
 					this.setState({ ...this.state, status: "active" }, true);
-					this.addDomainEvent({ type: "Activated" });
+					this.addDomainEvent(this.recordEvent("Activated", undefined));
 				}
 			}
 
@@ -634,8 +702,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			agg.activate();
 
 			expect(agg.pendingEvents).toHaveLength(2);
-			expect(agg.pendingEvents[0]).toEqual({ type: "ValueUpdated", newValue: 42 });
-			expect(agg.pendingEvents[1]).toEqual({ type: "Activated" });
+			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
+			expect((agg.pendingEvents[0] as Extract<TestEvent, { type: "ValueUpdated" }>).payload).toEqual({ newValue: 42 });
+			expect(agg.pendingEvents[1]?.type).toBe("Activated");
 
 			// pendingEvents is typed — access event-specific fields without cast
 			const firstEvent = agg.pendingEvents[0]!;
@@ -643,25 +712,27 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("should reject wrong event types at compile time with TEvent", () => {
-			type StrictEvent = { type: "OnlyThis"; data: string };
+			type StrictEvent = DomainEvent<"OnlyThis", { data: string }>;
 
 			class StrictAggregate extends AggregateRoot<TestState, TestId, StrictEvent> {
+				protected readonly aggregateType = "StrictAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
 				public doCorrect() {
-					this.addDomainEvent({ type: "OnlyThis", data: "hello" });
+					this.addDomainEvent(this.recordEvent("OnlyThis", { data: "hello" }));
 				}
 				public doWrong() {
 					// @ts-expect-error - wrong event type is rejected by TEvent constraint
-					this.addDomainEvent({ type: "WrongEvent" });
+					this.recordEvent("WrongEvent", undefined);
 				}
 			}
 
 			const agg = new StrictAggregate("id-1" as TestId, { value: 1, status: "inactive" });
 			agg.doCorrect();
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]).toEqual({ type: "OnlyThis", data: "hello" });
+			expect(agg.pendingEvents[0]?.type).toBe("OnlyThis");
+			expect(agg.pendingEvents[0]?.payload).toEqual({ data: "hello" });
 		});
 	});
 });

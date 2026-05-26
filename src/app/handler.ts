@@ -108,6 +108,30 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			const harvested = uniqueAggregates.flatMap(
 				(agg) => agg.pendingEvents,
 			);
+			// Guard: every event harvested from an aggregate MUST carry
+			// aggregateId + aggregateType. Downstream consumers (outbox
+			// dispatchers, projection handlers, audit logs) route by these
+			// fields; missing them silently breaks routing. The
+			// `this.recordEvent(...)` helper on AggregateRoot /
+			// EventSourcedAggregate injects them automatically — this guard
+			// catches the case where someone called `createDomainEvent(...)`
+			// directly inside an aggregate method and forgot the options.
+			for (const event of harvested) {
+				const missing: string[] = [];
+				if (!event.aggregateId) missing.push("aggregateId");
+				if (!event.aggregateType) missing.push("aggregateType");
+				if (missing.length > 0) {
+					throw new Error(
+						`withCommit: event "${event.type}" is missing ${missing.join(
+							" and ",
+						)}. ` +
+							`Use this.recordEvent(type, payload) inside aggregate methods ` +
+							`instead of createDomainEvent(...) — recordEvent auto-injects ` +
+							`aggregateId and aggregateType. Outbox dispatchers and ` +
+							`projection handlers rely on these fields for routing.`,
+					);
+				}
+			}
 			if (harvested.length > 0) {
 				await deps.outbox.add(harvested);
 			}

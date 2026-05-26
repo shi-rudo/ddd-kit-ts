@@ -78,7 +78,7 @@ describe("withCommit", () => {
 
 	it("harvests pendingEvents from the returned aggregates into the outbox", async () => {
 		const outbox = createMockOutbox();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
 
 		await withCommit(
@@ -93,7 +93,7 @@ describe("withCommit", () => {
 	it("publishes harvested events to the bus when provided", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
 
 		await withCommit(
@@ -107,7 +107,7 @@ describe("withCommit", () => {
 
 	it("works without a bus", async () => {
 		const outbox = createMockOutbox();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" });
+		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
 
 		const result = await withCommit(
@@ -161,7 +161,7 @@ describe("withCommit", () => {
 			markDispatched: async () => {},
 		};
 		const agg = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "order-1" }),
+			createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" }),
 		]);
 
 		await expect(
@@ -198,7 +198,7 @@ describe("withCommit", () => {
 		};
 		// A specifically-instrumented mock that records when markPersisted is called.
 		let pending: TestEvent[] = [
-			createDomainEvent("OrderCreated", { orderId: "o-1" }),
+			createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" }),
 		];
 		const agg: IAggregateRoot<TestId, TestEvent> = {
 			id: "agg-1" as TestId,
@@ -258,7 +258,7 @@ describe("withCommit", () => {
 	it("calls markPersisted only AFTER the tx commits (not on a rolled-back tx)", async () => {
 		const scope = createMockScope();
 		const agg = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "o-1" }),
+			createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" }),
 		]);
 
 		await expect(
@@ -295,10 +295,10 @@ describe("withCommit", () => {
 
 	it("calls markPersisted on EACH returned aggregate", async () => {
 		const a = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "a" }),
+			createDomainEvent("OrderCreated", { orderId: "a" }, { aggregateId: "a", aggregateType: "MockOrder" }),
 		]);
 		const b = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "b" }),
+			createDomainEvent("OrderCreated", { orderId: "b" }, { aggregateId: "b", aggregateType: "MockOrder" }),
 		]);
 
 		await withCommit(
@@ -315,10 +315,10 @@ describe("withCommit", () => {
 	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
 		// Subscribers will come to rely on this. Concatenation is:
 		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.
-		const e1 = createDomainEvent("OrderCreated", { orderId: "a-evt-1" });
-		const e2 = createDomainEvent("OrderCreated", { orderId: "a-evt-2" });
-		const e3 = createDomainEvent("OrderCreated", { orderId: "b-evt-1" });
-		const e4 = createDomainEvent("OrderCreated", { orderId: "c-evt-1" });
+		const e1 = createDomainEvent("OrderCreated", { orderId: "a-evt-1" }, { aggregateId: "a-evt-1", aggregateType: "MockOrder" });
+		const e2 = createDomainEvent("OrderCreated", { orderId: "a-evt-2" }, { aggregateId: "a-evt-2", aggregateType: "MockOrder" });
+		const e3 = createDomainEvent("OrderCreated", { orderId: "b-evt-1" }, { aggregateId: "b-evt-1", aggregateType: "MockOrder" });
+		const e4 = createDomainEvent("OrderCreated", { orderId: "c-evt-1" }, { aggregateId: "c-evt-1", aggregateType: "MockOrder" });
 
 		const aggA = createMockAggregate([e1, e2]);
 		const aggB = createMockAggregate([e3]);
@@ -343,7 +343,7 @@ describe("withCommit", () => {
 		// harvest its events through the outbox and call markPersisted
 		// twice. Dedupe is by JavaScript object identity — distinct
 		// instances with the same logical id are NOT detected here.
-		const event = createDomainEvent("OrderCreated", { orderId: "o-1" });
+		const event = createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
 
 		const outbox = createMockOutbox();
@@ -359,6 +359,54 @@ describe("withCommit", () => {
 		expect(bus.published).toEqual([[event]]);
 		// markPersisted called exactly once on the deduped aggregate.
 		expect(agg.markPersistedCalls).toBe(1);
+	});
+
+	it("throws if a harvested event is missing aggregateId (recordEvent guard)", async () => {
+		// A direct createDomainEvent without aggregateId would silently
+		// break downstream routing. The guard catches it at the harvest
+		// boundary with a diagnostic message naming the event type and
+		// the missing field.
+		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
+			// aggregateType set, aggregateId NOT set → guard rejects
+			aggregateType: "MockOrder",
+		});
+		const agg = createMockAggregate([badEvent]);
+
+		await expect(
+			withCommit(
+				{ outbox: createMockOutbox(), scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			),
+		).rejects.toThrow(/aggregateId/);
+	});
+
+	it("throws if a harvested event is missing aggregateType (recordEvent guard)", async () => {
+		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
+			aggregateId: "x",
+			// aggregateType missing → guard rejects
+		});
+		const agg = createMockAggregate([badEvent]);
+
+		await expect(
+			withCommit(
+				{ outbox: createMockOutbox(), scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			),
+		).rejects.toThrow(/aggregateType/);
+	});
+
+	it("guard error message names the event type and lists both missing fields", async () => {
+		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" });
+		const agg = createMockAggregate([badEvent]);
+
+		await expect(
+			withCommit(
+				{ outbox: createMockOutbox(), scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			),
+		).rejects.toThrow(
+			/withCommit: event "OrderCreated" is missing aggregateId and aggregateType/,
+		);
 	});
 
 	it("skips outbox.add and bus.publish when no aggregates emit events", async () => {

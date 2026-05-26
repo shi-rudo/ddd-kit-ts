@@ -95,6 +95,7 @@ Grouped by failure mode — compile-time first (TypeScript catches you immediate
 
 **Compile-time errors:**
 
+- **Aggregate subclass without `protected readonly aggregateType = "..."`.** Both `AggregateRoot` and `EventSourcedAggregate` declare `aggregateType` as `abstract readonly` (rc.8+). Every concrete subclass MUST declare it as a string literal. TS error: "Non-abstract class 'X' does not implement inherited abstract member aggregateType". The string is what downstream consumers (outbox dispatchers, projection handlers) route by — pick the canonical domain name.
 - **`class Order extends AggregateRoot<OrderState, OrderId>` for an aggregate that emits events.** Forgetting the third generic locks `TEvent` to `never`; every `addDomainEvent` / `commit(state, event)` call becomes a type error ("argument not assignable to `never`"). Always: `extends AggregateRoot<OrderState, OrderId, OrderEvent>`.
 - **Using `aggregate.domainEvents` / `clearDomainEvents()`.** Pre-rc.6 names. Use `pendingEvents` / `clearPendingEvents()` on both aggregate flavours; they are part of the `IAggregateRoot` interface.
 - **Calling `repo.save(tx, aggregate)`.** Wrong shape. `IRepository.save` takes only the aggregate. The transaction is bound to the repository at construction (factory pattern: `const orderRepository = makeOrderRepository(tx)` inside the `withCommit` callback).
@@ -102,6 +103,7 @@ Grouped by failure mode — compile-time first (TypeScript catches you immediate
 
 **Silent runtime bugs (the dangerous ones):**
 
+- **Calling `createDomainEvent(...)` directly inside an aggregate domain method.** Skips the auto-injection of `aggregateId` + `aggregateType`. The `withCommit` harvest boundary catches it at runtime with a guard ("withCommit: event 'X' is missing aggregateId and aggregateType"), but use `this.recordEvent(type, payload)` inside aggregates — it auto-injects from `this.id` and `this.aggregateType`. Downstream consumers (outbox dispatchers, projection handlers) route by these fields.
 - **Overriding `markPersisted(version)` instead of `onPersisted(version)`.** Without `super.markPersisted(version)` the framework's `pendingEvents = []` cleanup never runs; the next `withCommit` re-dispatches the same events through the outbox. Override `protected onPersisted(version)` instead — it fires after the cleanup and has nothing to call `super` on.
 - **Calling `aggregate.markPersisted(...)` from inside `Repository.save`.** Pre-rc.6 pattern. `save` is pure persistence; `withCommit` calls `markPersisted` post-commit. Doing it from save clears `pendingEvents` before the harvest and the outbox receives nothing.
 - **Setting `setEventIdFactory` / `setClockFactory` per-test without `withEventIdFactory` / `withClockFactory`.** Module globals leak across vitest's parallel test workers. Use the scoped helpers (try/finally restore + thenable-guard) for test isolation.

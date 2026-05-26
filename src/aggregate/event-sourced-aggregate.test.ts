@@ -47,6 +47,8 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestEvent,
 	TestId
 > {
+	protected readonly aggregateType = "TestEventSourcedAggregate";
+
 	constructor(id: TestId, initialState: TestState) {
 		super(id, initialState);
 	}
@@ -110,6 +112,8 @@ class ValidatingAggregate extends EventSourcedAggregate<
 	TestEvent,
 	TestId
 > {
+	protected readonly aggregateType = "ValidatingAggregate";
+
 	constructor(id: TestId, initialState: TestState) {
 		super(id, initialState);
 	}
@@ -209,6 +213,8 @@ describe("EventSourcedAggregate", () => {
 				TestEvent,
 				TestId
 			> {
+				protected readonly aggregateType = "CustomValidatingAggregate";
+
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
@@ -272,6 +278,8 @@ describe("EventSourcedAggregate", () => {
 				TestEvent,
 				TestId
 			> {
+				protected readonly aggregateType = "HandlerlessAggregate";
+
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
@@ -320,6 +328,8 @@ describe("EventSourcedAggregate", () => {
 				TestEvent,
 				TestId
 			> {
+				protected readonly aggregateType = "HandlerlessReplay";
+
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
@@ -352,6 +362,8 @@ describe("EventSourcedAggregate", () => {
 				TestEvent,
 				TestId
 			> {
+				protected readonly aggregateType = "ThrowingHandlerAggregate";
+
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}

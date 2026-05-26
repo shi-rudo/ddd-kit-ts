@@ -39,6 +39,8 @@ export class RugbyMatch extends EventSourcedAggregate<
 	RugbyMatchEvent,
 	MatchId
 > {
+	protected readonly aggregateType = "RugbyMatch";
+
 	static schedule(
 		id: MatchId,
 		homeTeam: Team,

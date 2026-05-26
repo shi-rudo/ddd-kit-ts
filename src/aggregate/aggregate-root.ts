@@ -4,6 +4,12 @@ import type {
 	AggregateSnapshot,
 	Version,
 } from "./aggregate";
+import {
+	type AnyDomainEvent,
+	type CreateDomainEventOptions,
+	createDomainEvent,
+	type DomainEvent,
+} from "./domain-event";
 
 /**
  * Marker interface for Aggregate Roots.
@@ -134,10 +140,32 @@ export interface AggregateConfig {
 export abstract class AggregateRoot<
 	TState,
 	TId extends Id<string>,
-	TEvent = never,
+	TEvent extends AnyDomainEvent = never,
 >
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId, TEvent> {
+	/**
+	 * The aggregate's domain type as a string, used to populate
+	 * `aggregateType` on events recorded via {@link recordEvent}.
+	 *
+	 * Subclasses MUST declare this as a string literal:
+	 *
+	 * ```ts
+	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+	 *   protected readonly aggregateType = "Order";
+	 * }
+	 * ```
+	 *
+	 * The string is *the* identifier downstream consumers (outbox
+	 * dispatchers, projection handlers, audit logs) use to route by
+	 * aggregate kind. Use the same canonical name across your system —
+	 * matching the class name is the obvious choice, but the value
+	 * comes from this explicit declaration, not `constructor.name`
+	 * (which is fragile under minification, bundler transforms, and
+	 * subclass renaming).
+	 */
+	protected abstract readonly aggregateType: string;
+
 	private _version: Version = 0 as Version;
 
 	public get version(): Version {
@@ -327,6 +355,52 @@ export abstract class AggregateRoot<
 	 */
 	protected addDomainEvent(event: TEvent): void {
 		this._pendingEvents.push(event);
+	}
+
+	/**
+	 * Sugar for `createDomainEvent` that auto-injects `aggregateId`
+	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
+	 * into the event's metadata fields. This is the canonical path for
+	 * recording events from inside aggregate domain methods.
+	 *
+	 * Downstream consumers — outbox dispatchers, projection handlers,
+	 * audit logs — route by these two fields. Calling
+	 * `createDomainEvent(...)` directly inside an aggregate method
+	 * leaves them unset and is caught at the `withCommit` harvest
+	 * boundary, but `this.recordEvent(...)` makes the right thing
+	 * impossible to forget.
+	 *
+	 * @example
+	 * ```ts
+	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+	 *   protected readonly aggregateType = "Order";
+	 *
+	 *   confirm(): void {
+	 *     this.commit(
+	 *       { ...this.state, status: "confirmed" },
+	 *       this.recordEvent("OrderConfirmed", { orderId: this.id }),
+	 *     );
+	 *   }
+	 * }
+	 * ```
+	 *
+	 * @param type    - event type discriminator (must be one of `TEvent`'s tags)
+	 * @param payload - payload for that event subtype
+	 * @param options - any remaining `createDomainEvent` options
+	 *   (`eventId`, `occurredAt`, `metadata`, `version`); `aggregateId`
+	 *   and `aggregateType` are deliberately omitted — the helper sets
+	 *   them.
+	 */
+	protected recordEvent<E extends TEvent>(
+		type: E["type"],
+		payload: E["payload"],
+		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
+	): E {
+		return createDomainEvent(type, payload, {
+			...options,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
 
 	/**

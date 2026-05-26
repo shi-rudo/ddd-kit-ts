@@ -20,6 +20,8 @@ export type OrderState = {
  * This aggregate uses direct state mutation via setState().
  */
 export class Order extends AggregateRoot<OrderState, OrderId> {
+	protected readonly aggregateType = "Order";
+
 	static create(id: OrderId, customerId: string): Order {
 		const initialState: OrderState = {
 			id,
