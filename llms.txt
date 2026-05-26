@@ -2,7 +2,7 @@
 
 > Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. Targets Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun. ESM-only.
 
-The library is in **1.0.0-rc.8** (Release Candidate). API is materially stable; the next release is either 1.0 or a docs-only rc.9 unless rc.8 surfaces feedback requiring API-level changes. rc.8 ships two coordinated breaking changes — framework-enforced aggregate-event metadata (`aggregateType` abstract property + `recordEvent` helper + `withCommit` runtime guard) and a `@shirudo/base-error` peer-dep bump to `^4.7.0` so `someChainRetryable` becomes the canonical retry-chain predicate.
+The library is in **1.0.0-rc.9** (Release Candidate). API is materially stable; the next release is either 1.0 or a docs-only follow-up unless rc.9 surfaces feedback requiring API-level changes. rc.9 ships one BREAKING change closing a consumer-reported OCC-routing footgun (`persistedVersion` replaces `version === 0` as the Insert-vs-Update marker) plus an internal refactor that lifts the shared aggregate-lifecycle machinery into a `BaseAggregate` abstract base. rc.8 shipped two BREAKING changes: framework-enforced aggregate-event metadata (`aggregateType` abstract property + `recordEvent` helper + `withCommit` runtime guard) and a `@shirudo/base-error` peer-dep bump to `^4.7.0` for `someChainRetryable`.
 
 **Recent renames (rc.6) — LLM training-data tripping points:**
 
@@ -119,7 +119,7 @@ Grouped by failure mode — compile-time first (TypeScript catches you immediate
 ## Source repository
 
 - [GitHub repo](https://github.com/shi-rudo/ddd-kit-ts): Source, issues, PRs.
-- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.8). Each rc documents breaking changes + migration paths; rc.7 was hardening + docs only; rc.8 ships two coordinated breaking changes (aggregate-metadata enforcement + base-error 4.7 peer-dep bump).
+- [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history (rc.1 through rc.9). Each rc documents breaking changes + migration paths; rc.7 was hardening + docs only; rc.8 shipped two breaking changes (aggregate-metadata enforcement + base-error 4.7 peer-dep bump); rc.9 ships the `persistedVersion`-replaces-`version === 0` Insert-vs-Update marker fix.
 - [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Pre-releases published under the `next` dist-tag.
 
 ## Optional

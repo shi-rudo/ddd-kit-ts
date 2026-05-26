@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-rc.9] - 2026-05-26
+
+One BREAKING change closing a real consumer-reported footgun in OCC routing, plus a quiet internal refactor that deduplicates the aggregate hierarchy without touching the public API.
+
+Highlights:
+
+- **`persistedVersion` is the correct Insert-vs-Update marker.** The pre-rc.9 convention "route on `aggregate.version === 0`" breaks the moment a fresh aggregate is mutated before its first save — common in setup wizards, profile editors, and any factory-followed-by-edit flow. The new `persistedVersion: Version | undefined` field tracks the DB baseline explicitly. Repositories route INSERT vs UPDATE on `persistedVersion === undefined` and use it as the OCC predicate's `WHERE version = ?` baseline (NOT `aggregate.version`, which has already advanced by `pendingEvents.length` since load).
+- **`markRestored(version)` is the Post-Load lifecycle marker.** Symmetric with `markPersisted(version)` (Post-Save). Consumers' `reconstitute(...)` factories migrate from `setVersion` to `markRestored`. The pair honours Vernon §11's Factory-vs-Reconstitution distinction at the lifecycle-marker level — load fires no hook, save fires `onPersisted`.
+- **Internal refactor**: lifecycle machinery (version + persistedVersion + pending events + markPersisted / markRestored / onPersisted / recordEvent / aggregateType) was duplicated across `AggregateRoot` and `EventSourcedAggregate`. Extracted to a new `BaseAggregate<TState, TId, TEvent>` abstract class between `Entity` and the two flavours. Net -257 LOC across the three files; no public API change.
+
+Migration in one paragraph: in every consumer `Repository.save`, swap `aggregate.version === 0` → `aggregate.persistedVersion === undefined` for INSERT vs UPDATE routing, and `expected = aggregate.version` → `baseline = aggregate.persistedVersion` for the OCC predicate. In every `reconstitute(...)` factory, swap `order.setVersion(version)` → `order.markRestored(version)`. No changes needed for ES aggregates loading via `loadFromHistory` / `restoreFromSnapshotWithEvents` — those now align `persistedVersion` automatically.
+
+441 → 461 tests (+20 covering the H1 factory-then-mutate-before-save regression, `markRestored` semantics, hook isolation between load and save, snapshot-rollback baseline preservation, multi-save cycles, `loadFromHistory` failure-path baseline preservation, and `restoreFromSnapshot` failure-path state preservation).
+
+Per-section migration details below.
+
 ### BREAKING — `persistedVersion` replaces `version === 0` as the Insert-vs-Update marker
 
 `Repository.save` implementations that routed INSERT vs UPDATE on `aggregate.version === 0` are broken in any flow where a fresh aggregate is mutated before the first save. A setup wizard, profile editor, or any factory-followed-by-edit advances `version` past zero in memory while the DB row still doesn't exist — the save flow tries an UPDATE that affects zero rows and throws a spurious `ConcurrencyConflictError`.
@@ -42,8 +58,6 @@ Migration:
      }
    ```
 3. No changes needed for ES aggregates that load via `loadFromHistory` / `restoreFromSnapshotWithEvents` — those now sync `persistedVersion` automatically.
-
-441 → 455 tests (+14 covering the H1 regression scenario, `markRestored` semantics, hook-isolation between load and save, and snapshot-rollback persistedVersion-baseline restore).
 
 Background: the prior `version === 0` convention was internally inconsistent with the kit's own factory pattern. `Order.place(...)` invokes `commit(state, event)` which bumps `version` to 1, so the documented `version === 0 → INSERT` check would already misroute the kit's own examples if those examples persisted via the documented Repository pattern. The `persistedVersion` field surfaces what was always implicit and lets Repository implementations distinguish "row exists at version N in DB" from "in-memory version is N after N mutations from a never-persisted aggregate."
 
