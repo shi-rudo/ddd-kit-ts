@@ -4,12 +4,6 @@
 
 The library is in **1.0.0-rc.9** (Release Candidate). API is materially stable; the next release is either 1.0 or a docs-only follow-up unless rc.9 surfaces feedback requiring API-level changes. rc.9 ships one BREAKING change closing a consumer-reported OCC-routing footgun (`persistedVersion` replaces `version === 0` as the Insert-vs-Update marker) plus an internal refactor that lifts the shared aggregate-lifecycle machinery into a `BaseAggregate` abstract base. rc.8 shipped two BREAKING changes: framework-enforced aggregate-event metadata (`aggregateType` abstract property + `recordEvent` helper + `withCommit` runtime guard) and a `@shirudo/base-error` peer-dep bump to `^4.7.0` for `someChainRetryable`.
 
-**Recent renames (rc.6) — LLM training-data tripping points:**
-
-- `aggregate.domainEvents` → `aggregate.pendingEvents`
-- `aggregate.clearDomainEvents()` → `aggregate.clearPendingEvents()`
-- `withCommit` use-case return: `{ result, events: aggregate.pendingEvents }` → `{ result, aggregates: [aggregate] }` (the kit harvests events itself; the call-site never reads `pendingEvents` directly)
-
 Architectural choices to know before reading the rest:
 
 - **Domain layer throws `DomainError`-derived exceptions; App-Service boundary returns `Result`.** Aggregates / entity validators / value-object constructors throw on invariant violations (Vernon-canonical). `CommandBus.execute`, `QueryBus.execute`, `withCommit`, and `loadFromHistory` return `Result<T, E>` — the latter only because event-stream corruption is a recoverable infrastructure failure.
