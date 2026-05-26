@@ -102,7 +102,7 @@ Terminology varies across DDD authors and the broader CQRS/ES community: Vernon 
 
 #### State-stored aggregates: `Order.reconstitute(id, state, version)`
 
-Add a second static method alongside the factory. It calls the protected constructor and the protected `setVersion`, both inherited from `AggregateRoot`, both legal from inside the aggregate's own class body:
+Add a second static method alongside the factory. It calls the protected constructor and the protected `markRestored(version)` lifecycle marker, both legal from inside the aggregate's own class body:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -122,11 +122,13 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.setVersion(version);
+    order.markRestored(version);
     return order;
   }
 }
 ```
+
+`markRestored(version)` is the Post-Load symmetric of `markPersisted(version)` (Post-Save). It syncs both `version` and `persistedVersion` to the loaded DB version, so the next `repository.save(order)` sees `persistedVersion !== undefined` and routes to UPDATE (with the loaded version as the OCC baseline). Unlike `markPersisted`, it does NOT fire the `onPersisted` hook — load-time semantics are distinct from save-time semantics. The Factory-vs-Reconstitution distinction is Vernon's (IDDD §11).
 
 The Repository's `getById` becomes mechanical:
 

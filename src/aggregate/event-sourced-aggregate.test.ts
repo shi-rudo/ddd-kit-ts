@@ -698,4 +698,136 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate2.version).toBe(originalVersion);
 		});
 	});
+
+	describe("persistedVersion + markRestored (Insert-vs-Update + OCC baseline)", () => {
+		it("persistedVersion is undefined on a freshly-constructed aggregate", () => {
+			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+
+			expect(agg.version).toBe(0);
+			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("persistedVersion stays undefined after apply()-ing new events on a new aggregate (H1 regression)", () => {
+			// Scenario: create → apply more events → save. Save must see this
+			// as INSERT, not UPDATE → false ConcurrencyConflictError.
+			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 42);
+			agg.updateValue(100);
+			agg.activate();
+
+			expect(agg.version).toBe(3); // create + update + activate
+			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("loadFromHistory aligns persistedVersion to the final post-replay version", () => {
+			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			expect(agg.persistedVersion).toBeUndefined();
+
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventCreated", { value: 1 }) as TestEventCreated,
+				createDomainEvent("TestEventUpdated", { newValue: 2 }) as TestEventUpdated,
+				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+			];
+
+			const result = agg.loadFromHistory(history);
+			expect(result.isOk()).toBe(true);
+			expect(agg.version).toBe(3);
+			expect(agg.persistedVersion).toBe(3); // baseline = post-replay version
+		});
+
+		it("new events after loadFromHistory bump version but not persistedVersion", () => {
+			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventCreated", { value: 1 }) as TestEventCreated,
+				createDomainEvent("TestEventUpdated", { newValue: 2 }) as TestEventUpdated,
+			];
+			agg.loadFromHistory(history);
+			expect(agg.persistedVersion).toBe(2);
+
+			// Domain method appends a new event.
+			agg.updateValue(99);
+
+			expect(agg.version).toBe(3);
+			expect(agg.persistedVersion).toBe(2); // OCC baseline unchanged
+			expect(agg.pendingEvents).toHaveLength(1);
+		});
+
+		it("markPersisted updates persistedVersion AND fires onPersisted", () => {
+			class HookSpyAggregate extends TestEventSourcedAggregate {
+				public hookCalls: Version[] = [];
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push(version);
+				}
+			}
+
+			const agg = new HookSpyAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			agg.updateValue(1);
+			expect(agg.persistedVersion).toBeUndefined();
+
+			agg.markPersisted(1 as Version);
+
+			expect(agg.version).toBe(1);
+			expect(agg.persistedVersion).toBe(1);
+			expect(agg.hookCalls).toEqual([1]);
+		});
+
+		it("restoreFromSnapshotWithEvents aligns persistedVersion to the final version", () => {
+			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+
+			const snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 50, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+			};
+			const eventsAfterSnapshot: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 51 }) as TestEventUpdated,
+				createDomainEvent("TestEventUpdated", { newValue: 52 }) as TestEventUpdated,
+			];
+
+			const result = agg.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot);
+			expect(result.isOk()).toBe(true);
+			expect(agg.version).toBe(7);
+			expect(agg.persistedVersion).toBe(7);
+		});
+
+		it("restoreFromSnapshotWithEvents rolls back persistedVersion when an event fails mid-stream", () => {
+			const agg = new ValidatingAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			// Establish a prior persisted baseline.
+			agg.markPersisted(2 as Version);
+			const baselineBeforeRestore = agg.persistedVersion;
+
+			const snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 50, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+			};
+			// Second event triggers validateEvent in ValidatingAggregate.
+			const eventsAfterSnapshot: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 51 }) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			];
+
+			const result = agg.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot);
+			expect(result.isErr()).toBe(true);
+			// Rolled back: persistedVersion is back to the pre-call baseline.
+			expect(agg.persistedVersion).toBe(baselineBeforeRestore);
+		});
+	});
 });

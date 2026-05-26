@@ -735,4 +735,140 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents[0]?.payload).toEqual({ data: "hello" });
 		});
 	});
+
+	describe("persistedVersion + markRestored (Insert-vs-Update + OCC baseline)", () => {
+		it("persistedVersion is undefined on a freshly-constructed aggregate", () => {
+			const agg = TestAggregate.create("id-1" as TestId, 42);
+
+			expect(agg.version).toBe(0);
+			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("persistedVersion stays undefined after mutations on a new aggregate (H1 regression)", () => {
+			// Scenario: create → mutate → save. Save must see this as INSERT,
+			// not UPDATE-with-WHERE-version=1 → false ConcurrencyConflictError.
+			const agg = TestAggregate.create("id-1" as TestId, 42);
+			agg.updateValue(100);
+			agg.activate();
+
+			expect(agg.version).toBe(2);
+			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("markRestored sets both version and persistedVersion to the same value", () => {
+			class RestoringAggregate extends TestAggregate {
+				static reconstitute(
+					id: TestId,
+					state: TestState,
+					version: Version,
+				): RestoringAggregate {
+					const agg = new RestoringAggregate(id, state);
+					agg.markRestored(version);
+					return agg;
+				}
+				// Expose for testing.
+				public callMarkRestored(version: Version): void {
+					this.markRestored(version);
+				}
+			}
+
+			const agg = RestoringAggregate.reconstitute(
+				"id-1" as TestId,
+				{ value: 7, status: "active" },
+				5 as Version,
+			);
+
+			expect(agg.version).toBe(5);
+			expect(agg.persistedVersion).toBe(5);
+		});
+
+		it("markRestored does NOT fire the onPersisted hook", () => {
+			class HookSpyAggregate extends TestAggregate {
+				public hookCalls: Version[] = [];
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push(version);
+				}
+				public callMarkRestored(version: Version): void {
+					this.markRestored(version);
+				}
+			}
+
+			const agg = new HookSpyAggregate("id-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+			agg.callMarkRestored(3 as Version);
+
+			expect(agg.hookCalls).toEqual([]); // no hook fire on restore
+		});
+
+		it("markPersisted updates persistedVersion AND fires onPersisted", () => {
+			class HookSpyAggregate extends TestAggregate {
+				public hookCalls: Version[] = [];
+				protected override onPersisted(version: Version): void {
+					this.hookCalls.push(version);
+				}
+			}
+
+			const agg = new HookSpyAggregate("id-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+			agg.updateValue(2);
+			expect(agg.persistedVersion).toBeUndefined();
+
+			agg.markPersisted(1 as Version);
+
+			expect(agg.version).toBe(1);
+			expect(agg.persistedVersion).toBe(1);
+			expect(agg.hookCalls).toEqual([1]); // hook fired exactly once
+		});
+
+		it("mutations bump version but do NOT touch persistedVersion (OCC baseline stays at load value)", () => {
+			class RestoringAggregate extends TestAggregate {
+				static reconstitute(
+					id: TestId,
+					state: TestState,
+					version: Version,
+				): RestoringAggregate {
+					const agg = new RestoringAggregate(id, state);
+					agg.markRestored(version);
+					return agg;
+				}
+			}
+
+			const agg = RestoringAggregate.reconstitute(
+				"id-1" as TestId,
+				{ value: 0, status: "inactive" },
+				3 as Version,
+			);
+
+			expect(agg.persistedVersion).toBe(3);
+
+			agg.updateValue(1);
+			agg.updateValue(2);
+			agg.activate();
+
+			// Three mutations → version advances to 6.
+			expect(agg.version).toBe(6);
+			// persistedVersion stays at the load-time baseline (3) so the
+			// next UPDATE uses WHERE version = 3.
+			expect(agg.persistedVersion).toBe(3);
+		});
+
+		it("restoreFromSnapshot aligns persistedVersion to the snapshot version", () => {
+			const agg = TestAggregate.create("id-1" as TestId, 42);
+			expect(agg.persistedVersion).toBeUndefined();
+
+			const snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 99, status: "active" },
+				version: 7 as Version,
+				snapshotAt: new Date(),
+			};
+			agg.restoreFromSnapshot(snapshot);
+
+			expect(agg.version).toBe(7);
+			expect(agg.persistedVersion).toBe(7);
+		});
+	});
 });

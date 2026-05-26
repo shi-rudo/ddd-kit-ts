@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### BREAKING — `persistedVersion` replaces `version === 0` as the Insert-vs-Update marker
+
+`Repository.save` implementations that routed INSERT vs UPDATE on `aggregate.version === 0` are broken in any flow where a fresh aggregate is mutated before the first save. A setup wizard, profile editor, or any factory-followed-by-edit advances `version` past zero in memory while the DB row still doesn't exist — the save flow tries an UPDATE that affects zero rows and throws a spurious `ConcurrencyConflictError`.
+
+The fix exposes the DB baseline explicitly on the aggregate API:
+
+- **`aggregate.persistedVersion: Version | undefined`** (new). The version the persistence layer currently holds. `undefined` until the aggregate has been persisted or restored at least once. Repository implementations route INSERT vs UPDATE on `persistedVersion === undefined` and use it as the OCC baseline in the UPDATE's `WHERE version = ?` predicate.
+- **`aggregate.version`** keeps its current semantics — in-memory post-mutation value, bumped by every `setState(_, true)` / `commit()` / `apply()`. It is no longer the right field for INSERT vs UPDATE routing.
+- **`markRestored(version)`** (new, protected). Lifecycle marker for the Post-Load transition: syncs both `version` and `persistedVersion` to the loaded DB version, does NOT fire `onPersisted`. Consumers' `reconstitute(...)` factories migrate from `order.setVersion(version)` to `order.markRestored(version)`. Vernon §11 Factory-vs-Reconstitution distinction is now enforced at the lifecycle-marker level — load and save are mechanically separate.
+- **`markPersisted(version)`** keeps Post-Save semantics — syncs both fields, clears `pendingEvents`, fires `onPersisted`.
+- **Internal alignments**: `AggregateRoot.restoreFromSnapshot`, `EventSourcedAggregate.loadFromHistory`, and `EventSourcedAggregate.restoreFromSnapshotWithEvents` now call `markRestored` internally so the kit's own reconstitution paths align `persistedVersion` automatically.
+
+Migration:
+
+1. **In every consumer Repository's `save`**, swap the routing check:
+   ```diff
+   - if (aggregate.version === 0) {
+   + if (aggregate.persistedVersion === undefined) {
+       // INSERT
+     } else {
+   -   const expected = aggregate.version;
+   +   const baseline = aggregate.persistedVersion;
+       // UPDATE WHERE version = baseline SET version = aggregate.version
+     }
+   ```
+2. **In every consumer `reconstitute(...)` factory**, swap `setVersion` for `markRestored`:
+   ```diff
+     static reconstitute(id, state, version): Order {
+       const order = new Order(id, state);
+   -   order.setVersion(version);
+   +   order.markRestored(version);
+       return order;
+     }
+   ```
+3. No changes needed for ES aggregates that load via `loadFromHistory` / `restoreFromSnapshotWithEvents` — those now sync `persistedVersion` automatically.
+
+441 → 455 tests (+14 covering the H1 regression scenario, `markRestored` semantics, hook-isolation between load and save, and snapshot-rollback persistedVersion-baseline restore).
+
+Background: the prior `version === 0` convention was internally inconsistent with the kit's own factory pattern. `Order.place(...)` invokes `commit(state, event)` which bumps `version` to 1, so the documented `version === 0 → INSERT` check would already misroute the kit's own examples if those examples persisted via the documented Repository pattern. The `persistedVersion` field surfaces what was always implicit and lets Repository implementations distinguish "row exists at version N in DB" from "in-memory version is N after N mutations from a never-persisted aggregate."
+
 ## [1.0.0-rc.8] - 2026-05-26
 
 Two coordinated BREAKING changes: aggregate-event metadata is now framework-enforced (no more silent missing `aggregateId` / `aggregateType` in the outbox), and the `@shirudo/base-error` peer-dep is bumped to `^4.7.0` to unlock `someChainRetryable` for the OCC retry-chain pattern.

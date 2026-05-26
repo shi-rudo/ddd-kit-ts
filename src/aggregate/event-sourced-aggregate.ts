@@ -120,12 +120,61 @@ export abstract class EventSourcedAggregate<
 
 	private _version: Version = 0 as Version;
 
+	/**
+	 * The DB-baseline version — what the persistence layer holds for this
+	 * aggregate. `undefined` until persisted or restored at least once.
+	 *
+	 * Distinct from {@link version}: `version` is the in-memory
+	 * post-mutation value (bumped by every `apply()`);
+	 * `persistedVersion` is what the kit believes the DB / event store
+	 * currently holds. Repository implementations use this for:
+	 *
+	 *  - **INSERT vs UPDATE / append routing**:
+	 *    `persistedVersion === undefined` → never persisted → INSERT /
+	 *    append-from-zero. Otherwise → UPDATE / append-from-baseline.
+	 *  - **OCC predicate**: the stream-revision check (event-store) or
+	 *    UPDATE's `WHERE version = ?` (state-stored) uses
+	 *    `persistedVersion`, NOT `version` (which has already advanced
+	 *    by `pendingEvents.length` since load).
+	 *
+	 * Transitions:
+	 *  - Initial: `undefined`.
+	 *  - After {@link markRestored}: set to the loaded version.
+	 *  - After {@link loadFromHistory} / {@link restoreFromSnapshotWithEvents}:
+	 *    aligned to the final post-replay version.
+	 *  - After {@link markPersisted}: set to the just-persisted version.
+	 *  - `apply()` (new events) bumps `version` but does NOT touch
+	 *    `persistedVersion`.
+	 */
+	private _persistedVersion: Version | undefined = undefined;
+
 	public get version(): Version {
 		return this._version;
 	}
 
+	public get persistedVersion(): Version | undefined {
+		return this._persistedVersion;
+	}
+
 	private setVersion(version: Version): void {
 		this._version = version;
+	}
+
+	/**
+	 * **Lifecycle marker — Post-Load.** Synchronises both `_version`
+	 * and `_persistedVersion` to the version held by the event store.
+	 * Used by `reconstitute(...)` factories (state-snapshot style) when
+	 * the consumer materialises an aggregate from a pre-computed state
+	 * rather than via {@link loadFromHistory}.
+	 *
+	 * Does NOT fire {@link onPersisted} — that hook has post-save
+	 * semantics. See Vernon §11 (Factory vs Reconstitution).
+	 *
+	 * @param version - The version held by the persistence layer
+	 */
+	protected markRestored(version: Version): void {
+		this.setVersion(version);
+		this._persistedVersion = version;
 	}
 
 	// --- Event tracking ---
@@ -162,6 +211,7 @@ export abstract class EventSourcedAggregate<
 	 */
 	public markPersisted(version: Version): void {
 		this.setVersion(version);
+		this._persistedVersion = version;
 		this._pendingEvents = [];
 		this.onPersisted(version);
 	}
@@ -326,7 +376,7 @@ export abstract class EventSourcedAggregate<
 				throw e;
 			}
 		}
-		this.setVersion((startVersion + history.length) as Version);
+		this.markRestored((startVersion + history.length) as Version);
 		return ok();
 	}
 
@@ -357,6 +407,7 @@ export abstract class EventSourcedAggregate<
 	): Result<void, DomainError> {
 		const previousState = this._state;
 		const previousVersion = this._version;
+		const previousPersistedVersion = this._persistedVersion;
 
 		this._state = freezeShallow(structuredClone(snapshot.state));
 		this.setVersion(snapshot.version);
@@ -367,12 +418,15 @@ export abstract class EventSourcedAggregate<
 			} catch (e) {
 				this._state = previousState;
 				this.setVersion(previousVersion);
+				this._persistedVersion = previousPersistedVersion;
 				if (e instanceof DomainError) return err(e);
 				throw e;
 			}
 		}
 
-		this.setVersion((snapshot.version + eventsAfterSnapshot.length) as Version);
+		this.markRestored(
+			(snapshot.version + eventsAfterSnapshot.length) as Version,
+		);
 		return ok();
 	}
 

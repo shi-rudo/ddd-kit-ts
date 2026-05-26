@@ -111,55 +111,62 @@ The identity map's lifetime is **the Unit of Work** — fresh per `withCommit` c
 
 `save()` is **pure persistence**. Implementations write the aggregate and throw on OCC conflict — that's it. They must NOT call `aggregate.markPersisted(...)`; the `withCommit` orchestrator handles the post-save lifecycle (harvest pending events, then mark persisted after the transaction commits). See [Outbox & Transactions](./outbox.md) for the full flow.
 
-#### Insert vs update — the `version` convention
+#### Insert vs update — the `persistedVersion` convention
 
-A fresh aggregate begins at `version === 0`. After its first versioned mutation (`setState(_, true)`, `apply()`, `commit()`) the version is `> 0`. Implementations distinguish the two paths by the incoming `aggregate.version`:
+Every aggregate exposes two version fields with distinct roles:
 
-- `aggregate.version === 0` → **INSERT** (no existing row to lock against)
-- `aggregate.version  >  0` → **UPDATE** with the OCC predicate `WHERE id = ? AND version = expected`
+- **`aggregate.version`** — the in-memory post-mutation value. Bumped by `setState(_, true)`, `commit()`, and every `apply()` on an event-sourced aggregate.
+- **`aggregate.persistedVersion`** — the version the persistence layer currently holds. `undefined` until the aggregate has been persisted or restored from persistence at least once. Repository implementations route INSERT vs UPDATE on this field and use it as the OCC baseline.
 
-If the update affects zero rows, another writer raced you — throw `ConcurrencyConflictError`.
+The two diverge as soon as a domain method mutates the aggregate: `version` advances; `persistedVersion` stays at the load-time / last-save baseline.
 
 ```ts
 // Drizzle-flavoured save
 async save(aggregate: Order): Promise<void> {
-  if (aggregate.version === 0) {
-    // INSERT — fresh aggregate, never persisted
+  if (aggregate.persistedVersion === undefined) {
+    // INSERT — never persisted, regardless of how many in-memory mutations
+    // have advanced `aggregate.version` since construction.
     await this.db.insert(orders).values({
       id: aggregate.id,
       state: aggregate.state,
-      version: 1, // first persisted version
+      version: aggregate.version,
     });
     return;
   }
 
-  // UPDATE — existing aggregate, lock against concurrent writers
-  const expected = aggregate.version;
+  // UPDATE — existing row; the OCC predicate uses the load-time baseline.
+  const baseline = aggregate.persistedVersion;
   const result = await this.db
     .update(orders)
-    .set({ state: aggregate.state, version: expected + 1 })
-    .where(and(eq(orders.id, aggregate.id), eq(orders.version, expected)));
+    .set({ state: aggregate.state, version: aggregate.version })
+    .where(and(eq(orders.id, aggregate.id), eq(orders.version, baseline)));
 
   if (result.rowsAffected === 0) {
-    // The row's version no longer matches `expected` — concurrent writer
+    // The row's version no longer matches `baseline` — concurrent writer.
     const current = await this.db.select({ version: orders.version })
       .from(orders).where(eq(orders.id, aggregate.id)).get();
     throw new ConcurrencyConflictError(
       "Order",
       aggregate.id,
-      expected,
+      baseline,
       current?.version ?? -1,
     );
   }
 }
 ```
 
-The actual "what becomes the new persisted version" formula varies by aggregate flavour:
+If the update affects zero rows, another writer raced you — throw `ConcurrencyConflictError`.
 
-- **`AggregateRoot`** (state-stored): the aggregate's local version was bumped by `setState(_, true)` / `commit()` calls inside the use case. By the time `save` runs, `aggregate.version` already reflects the post-mutation state — use it as-is for the row's new version.
-- **`EventSourcedAggregate`**: the aggregate's version equals its event count (canonical ES per Greg Young / Vernon §9). `aggregate.version` is the new total. For an event-store-backed implementation, `save` typically appends events to the stream; the store's stream-revision matches the aggregate's version after a successful append.
+::: warning Don't route on `aggregate.version === 0`
+Pre-rc.9 docs and consumer code routed INSERT vs UPDATE on `aggregate.version === 0`. That convention breaks the moment a fresh aggregate is mutated before its first save (factory call followed by an edit-wizard mutation, for example): the version advances past zero in memory, the row still doesn't exist in the DB, and the save flow tries an UPDATE that affects zero rows → false `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the DB state, not the in-memory state.
+:::
 
-The Drizzle snippet above uses `expected + 1` for clarity, but in a state-stored aggregate `aggregate.version` already IS `expected + 1` after `setState(_, true)` — either form works.
+The "what becomes the new persisted version" formula:
+
+- **`AggregateRoot`** (state-stored): `aggregate.version` already reflects every mutation by the time `save` runs — use it as-is for the row's new version. The OCC predicate uses `aggregate.persistedVersion`.
+- **`EventSourcedAggregate`**: `aggregate.version` equals the post-append event count (canonical ES per Greg Young / Vernon §9). For an event-store-backed implementation, the stream-revision check uses `aggregate.persistedVersion`; the append targets `aggregate.version` (= `persistedVersion + pendingEvents.length`).
+
+After a successful save, `withCommit` calls `aggregate.markPersisted(aggregate.version)`, which syncs both fields and clears `pendingEvents`.
 
 ### Deletion and Domain Events
 
