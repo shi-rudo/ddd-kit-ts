@@ -826,6 +826,75 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.persistedVersion).toBe(7);
 		});
 
+		it("loadFromHistory failure preserves persistedVersion at the pre-call baseline", () => {
+			const agg = new ValidatingAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			// Establish a prior persisted baseline.
+			agg.markPersisted(2 as Version);
+			const baselineBefore = agg.persistedVersion;
+
+			// Second event triggers ValidatingAggregate.validateEvent.
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 1 }) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			];
+
+			const result = agg.loadFromHistory(history);
+			expect(result.isErr()).toBe(true);
+			// persistedVersion is invariant during the loop and the final
+			// markRestored is only called on the success path, so the
+			// baseline stays where it was before loadFromHistory was called.
+			expect(agg.persistedVersion).toBe(baselineBefore);
+		});
+
+		it("loadFromHistory failure on a fresh aggregate keeps persistedVersion undefined", () => {
+			const agg = new ValidatingAggregate("id-1" as TestId, {
+				value: 0,
+				status: "inactive",
+			});
+			expect(agg.persistedVersion).toBeUndefined();
+
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 1 }) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			];
+
+			const result = agg.loadFromHistory(history);
+			expect(result.isErr()).toBe(true);
+			// The "never persisted" sentinel survives a failed load — a
+			// follow-up save() must still route to INSERT, not UPDATE
+			// against a baseline that loadFromHistory never wrote.
+			expect(agg.persistedVersion).toBeUndefined();
+		});
+
+		it("multi-save cycle: persistedVersion advances on each markPersisted across save iterations", () => {
+			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 10);
+			// First save: create event landed at v1.
+			expect(agg.version).toBe(1);
+			expect(agg.persistedVersion).toBeUndefined();
+
+			agg.markPersisted(1 as Version);
+			expect(agg.persistedVersion).toBe(1);
+
+			// Second save cycle: one more event, then save at v2.
+			agg.updateValue(20);
+			expect(agg.version).toBe(2);
+			expect(agg.persistedVersion).toBe(1);
+
+			agg.markPersisted(2 as Version);
+			expect(agg.persistedVersion).toBe(2);
+
+			// Third save cycle: another event, save at v3.
+			agg.activate();
+			expect(agg.version).toBe(3);
+			expect(agg.persistedVersion).toBe(2);
+
+			agg.markPersisted(3 as Version);
+			expect(agg.persistedVersion).toBe(3);
+		});
+
 		it("restoreFromSnapshotWithEvents rolls back persistedVersion when an event fails mid-stream", () => {
 			const agg = new ValidatingAggregate("id-1" as TestId, {
 				value: 0,

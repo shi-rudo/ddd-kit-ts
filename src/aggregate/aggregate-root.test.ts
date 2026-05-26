@@ -849,5 +849,69 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.version).toBe(7);
 			expect(agg.persistedVersion).toBe(7);
 		});
+
+		it("restoreFromSnapshot failure (validateState throws) leaves state, version, and persistedVersion unchanged", () => {
+			class StrictAggregate extends TestAggregate {
+				protected override validateState(state: TestState): void {
+					if (state.value < 0) {
+						throw new Error("value must be non-negative");
+					}
+				}
+			}
+
+			const agg = new StrictAggregate("id-1" as TestId, {
+				value: 10,
+				status: "active",
+			});
+			// Establish a baseline so we can verify nothing moves on failure.
+			agg.markPersisted(2 as Version);
+			const stateBefore = agg.state;
+			const versionBefore = agg.version;
+			const baselineBefore = agg.persistedVersion;
+
+			const invalidSnapshot: AggregateSnapshot<TestState> = {
+				state: { value: -1, status: "active" },
+				version: 99 as Version,
+				snapshotAt: new Date(),
+			};
+
+			expect(() => agg.restoreFromSnapshot(invalidSnapshot)).toThrow(
+				"value must be non-negative",
+			);
+
+			// validateState runs BEFORE _state is assigned and BEFORE
+			// markRestored, so all three fields stay at their pre-call values.
+			expect(agg.state).toBe(stateBefore);
+			expect(agg.version).toBe(versionBefore);
+			expect(agg.persistedVersion).toBe(baselineBefore);
+		});
+
+		it("multi-save cycle: persistedVersion advances on each markPersisted across multiple save iterations", () => {
+			const agg = RestoringAggregate.reconstitute(
+				"id-1" as TestId,
+				{ value: 0, status: "inactive" },
+				1 as Version,
+			);
+			expect(agg.persistedVersion).toBe(1);
+
+			// First save cycle: mutate twice, then save at v3.
+			agg.updateValue(10);
+			agg.updateValue(20);
+			expect(agg.version).toBe(3);
+			expect(agg.persistedVersion).toBe(1); // baseline unchanged
+
+			agg.markPersisted(3 as Version);
+			expect(agg.version).toBe(3);
+			expect(agg.persistedVersion).toBe(3); // baseline advanced
+
+			// Second save cycle: one more mutation, save at v4.
+			agg.activate();
+			expect(agg.version).toBe(4);
+			expect(agg.persistedVersion).toBe(3); // baseline tracks the NEW load-time value
+
+			agg.markPersisted(4 as Version);
+			expect(agg.version).toBe(4);
+			expect(agg.persistedVersion).toBe(4);
+		});
 	});
 });
