@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     utils: "src/utils.ts",
+    http: "src/http.ts",
   },
   format: ["esm"], // ES modules only
   dts: true, // Generate .d.ts files
