@@ -2,11 +2,12 @@
 
 > Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. Targets Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun. ESM-only.
 
-The library is in **Release Candidate** phase. API is materially stable; the next release is either 1.0 or a docs-only follow-up unless current-RC feedback surfaces API-level changes. Recent breaking changes and migration paths are documented per release in [CHANGELOG.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md) — read it before adopting an RC version.
+The library is **1.0 — stable**. The public surface is under Semantic Versioning; breaking changes bump the major and ship with a migration path. Per-release changes and migrations are documented in [CHANGELOG.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md) — read the latest entry before upgrading across a major.
 
 Architectural choices to know before reading the rest:
 
 - **Domain layer throws `DomainError`-derived exceptions; App-Service boundary returns `Result`.** Aggregates / entity validators / value-object constructors throw on invariant violations (Vernon-canonical). `CommandBus.execute`, `QueryBus.execute`, `withCommit`, and `loadFromHistory` return `Result<T, E>` — the latter only because event-stream corruption is a recoverable infrastructure failure.
+- **Two error styles, distinguished by how you consume them.** `DomainError` is thrown and caught at the boundary; `ValidationError` (from `@shirudo/base-error` v5) is a Result-axis *value* you destructure, never catch. `voValidated` collects multiple field violations into one `ValidationError`; the opt-in `@shirudo/ddd-kit/http` entry renders it as RFC 9457. See Result vs Throw.
 - **Result type comes from `@shirudo/result`** as a peer dependency. Not re-exported.
 - **Error hierarchy** uses `@shirudo/base-error` as a peer dependency. `DomainError<Name>` and `InfrastructureError<Name>` extend `BaseError<Name>` directly. `MissingHandlerError` (programming bug), `AggregateNotFoundError` and `ConcurrencyConflictError` (infrastructure) are the only library-internal concrete classes. `ConcurrencyConflictError.retryable = true` is picked up by `@shirudo/base-error`'s `isRetryable` predicate.
 - **Aggregates are class-based.** Extend `AggregateRoot` (state stored) or `EventSourcedAggregate` (state derived from events). There is no functional aggregate API. Both have `protected constructor`; construction goes through static factory methods (`Order.place(...)`, Vernon §11 Aggregate Factory). Reconstitution from persistence is a separate static method (`Order.reconstitute(id, state, version)`); see the Reconstitution section in the aggregates guide.
@@ -23,17 +24,16 @@ Architectural choices to know before reading the rest:
 ## Installation
 
 ```bash
-# RC builds live under the `next` dist-tag — the default `latest` still points at 0.x.
-pnpm add @shirudo/ddd-kit@next @shirudo/result @shirudo/base-error
+pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 ```
 
-Both `@shirudo/result` and `@shirudo/base-error` are peer dependencies — install them once in the consuming app. Drop `@next` once 1.0 ships.
+Both `@shirudo/result` and `@shirudo/base-error` are peer dependencies — install them once in the consuming app.
 
 ## Documentation
 
 Guides live as markdown in the repo (the public docs site is currently offline pending legal-notice + privacy pages; the source is fully usable).
 
-- [README](https://github.com/shi-rudo/ddd-kit-ts/blob/main/README.md): Overview, badges, RC notice. Points here for the rest.
+- [README](https://github.com/shi-rudo/ddd-kit-ts/blob/main/README.md): Overview, badges. Points here for the rest.
 - [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md): Install + minimal Order aggregate example showing throws, `commit()`, typed events.
 - [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md): The non-obvious calls — Result at the App boundary, no Specification pattern, no Fowler UoW, shallow-freeze state, globals-vs-DI trade-off for `EventIdFactory`/`ClockFactory`, Domain Services and Bounded Contexts notes. Read this before adopting.
 
@@ -47,7 +47,7 @@ Guides live as markdown in the repo (the public docs site is currently offline p
 
 ### Application layer
 
-- [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md): The central architectural choice. Error hierarchy (`DomainError` / `InfrastructureError` / `MissingHandlerError`), HTTP mapping table, `isBaseError` predicate, cause-chain examples.
+- [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md): The central architectural choice. Error hierarchy (`DomainError` / `InfrastructureError` / `MissingHandlerError`), HTTP mapping table, `isBaseError` predicate, cause-chain examples. Also covers the two-error-style axis: `voWithValidation` (fail-fast) vs `voValidated` (collects every violation into a Result-axis `ValidationError`), and rendering RFC 9457 via `@shirudo/ddd-kit/http`.
 - [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md): `CommandBus<TMap>`, `QueryBus<TMap>`, strict-typed `register()`, when to use the in-memory bus vs an external broker, `withCommit`'s `{ result, aggregates: [...] }` use-case-return shape, cross-link to Process Manager example.
 - [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md): `IRepository` (id-only) vs `IQueryableRepository<TFilter>`, `getById` vs `getByIdOrFail`, reconstitution inside the read path, Identity Map contract (Fowler PoEAA), `save()` as pure persistence (no `markPersisted` from impl), version=0 INSERT vs version>0 UPDATE convention, deletion-and-domain-events patterns (state transition / hard-delete with event harvest / hard-delete without event), `AggregateNotFoundError` and `ConcurrencyConflictError` as `InfrastructureError` subclasses.
 - [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md): `TransactionScope<TCtx>` (not Fowler UoW — no change tracking), `Outbox<Evt extends AnyDomainEvent>` with `add` / `getPending` / `markDispatched`, `InMemoryOutbox` reference impl, `withCommit` ordering (harvest inside tx → outbox.add → tx commit → markPersisted → bus.publish), event-ordering contract (within-aggregate causal order is sacred, cross-aggregate is incidental — use `EventMetadata.causationId` if you need real causation).
@@ -76,6 +76,8 @@ Guides live as markdown in the repo (the public docs site is currently offline p
 - `src/aggregate/domain-event.ts` — `DomainEvent<T, P>`, `AnyDomainEvent` alias (= `DomainEvent<string, unknown>`), `createDomainEvent`, `EventIdFactory`, `ClockFactory`, `setEventIdFactory` / `setClockFactory` globals, **`withEventIdFactory` / `withClockFactory` scoped helpers** with thenable-guard, metadata helpers (`copyMetadata`, `mergeMetadata`). Events are deeply frozen at construction.
 - `src/entity/entity.ts` — `Entity`, `Identifiable`, `IEntity`, `freezeShallow`, entity-collection helpers (`findEntityById`, `hasEntityId`, `removeEntityById`, `updateEntityById`, `replaceEntityById`, `entityIds`) — all accept `ReadonlyArray<T>`.
 - `src/value-object/value-object.ts` — `vo`, `voEquals`, `voEqualsExcept`, `voWithValidation`, `ValueObject` base, `deepFreeze`.
+- `src/validation/` — `voValidated(t, (issues, value) => …, message?)`: builds a frozen VO while collecting **all** field violations into one base-error `ValidationError`; returns `Result<VO<T>, ValidationError>` (the failure is a value, not a throw). `ValidationError` is imported from `@shirudo/base-error`, not re-exported.
+- `src/http.ts` (subpath `@shirudo/ddd-kit/http`) — `toProblemDetails(error: ValidationError, { member?, status?, … })`: projects a `ValidationError` to an RFC 9457 Problem Details object, attaching `publicIssues()` under `errors` (or `invalid-params`), defaulting to 422. Opt-in so transport stays out of the core barrel.
 - `src/events/ports.ts` — `EventBus<Evt extends AnyDomainEvent>`, `OnceOptions`, `Outbox<Evt extends AnyDomainEvent>`, `OutboxRecord<Evt extends AnyDomainEvent>`, `EventHandler<Evt>`.
 - `src/events/event-bus.ts` — `EventBusImpl<Evt extends AnyDomainEvent>` (publish ordering: input order across events, parallel within event via `Promise.allSettled`).
 - `src/events/outbox.ts` — `InMemoryOutbox<Evt extends AnyDomainEvent>` Map-backed reference implementation, idempotent on duplicate add by eventId.
@@ -91,10 +93,10 @@ The catalogue of footguns the kit has accumulated (compile-time errors, silent r
 
 - [GitHub repo](https://github.com/shi-rudo/ddd-kit-ts): Source, issues, PRs.
 - [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history with migration paths for every breaking change.
-- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Pre-releases published under the `next` dist-tag.
+- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Stable releases published under the `latest` dist-tag.
 
 ## Optional
 
 - [@shirudo/result](https://www.npmjs.com/package/@shirudo/result): Result/Either implementation, peer dependency. `_tag: 'Ok' | 'Err'`, method-style guards (`result.isOk()`), curried operators (`flatMap`, `mapAsync`, `pipeAsync`, etc.).
-- [@shirudo/base-error](https://www.npmjs.com/package/@shirudo/base-error): Base error class, peer dependency (`^4.7.0`). Provides `BaseError<Name>`, `withUserMessage`, `addLocalizedMessage`, `toJSON`, `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `getRootCause`, `findInCauseChain`, `filterCauseChain`. Strict-shape helpers (`isChainRetryable`, `isStructuredError`, `isRetryableStructuredError`, `getRootCauseRetryable`, `getFirstRetryableCause`) target `StructuredError`-shaped errors and do NOT match ddd-kit's class-based hierarchy — see Common Mistakes.
+- [@shirudo/base-error](https://www.npmjs.com/package/@shirudo/base-error): Base error class, peer dependency (`^5.0.0`). Provides `BaseError<Name>`, `withUserMessage`, `addLocalizedMessage`, `toJSON`, `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `getRootCause`, `findInCauseChain`, `filterCauseChain`. v5 adds the `ValidationError` aggregate (field-level issues, Standard Schema ingestion) and safe-by-default `toProblemDetails()` (RFC 9457) — the kit builds `voValidated` and the `/http` presenter on these. Strict-shape helpers (`isChainRetryable`, `isStructuredError`, `isRetryableStructuredError`, `getRootCauseRetryable`, `getFirstRetryableCause`) target `StructuredError`-shaped errors and do NOT match ddd-kit's class-based hierarchy — see Common Mistakes.
 - [Releases](https://github.com/shi-rudo/ddd-kit-ts/releases): Tagged pre-releases with migration notes.

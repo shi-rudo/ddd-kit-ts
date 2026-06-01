@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-01
+
+First stable release. The API is now under Semantic Versioning — breaking changes will bump the major and ship with a migration path here. The kit's surface (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, CQRS handlers, the outbox/`withCommit` unit-of-work) is frozen as of this release; the two changes below land with it.
+
+### BREAKING — `@shirudo/base-error` peer-dep bumped to `^5.0.0`; new `voValidated` + `@shirudo/ddd-kit/http` Problem Details presenter
+
+base-error v5 ships a `ValidationError` aggregate (collects N field-level issues, ingests [Standard Schema](https://standardschema.dev) output) and safe-by-default `toProblemDetails()` (RFC 9457). The kit adopts v5 and adds thin, Result-first glue on top instead of re-implementing it.
+
+The v5 bump is BREAKING only at the peer-dep level — ddd-kit's own errors are unaffected. v5 preserves `BaseError` `name` / `_tag` inference (only `StructuredError._tag` changed, which the kit does not use), so the class-discriminated hierarchy (`DomainError`, `InfrastructureError`, `AggregateNotFoundError`, `ConcurrencyConflictError`, `MissingHandlerError`) and the `e.name` / `toJSON().name` / `isBaseError` contracts all hold. The full test suite (461 → 468) passes unchanged across the bump.
+
+New surface:
+
+- **`voValidated(t, (issues, value) => …, message?)`** (`src/validation/`) — the Result-axis, multi-issue counterpart to `voWithValidation`. Runs every check, collects each violation into one base-error `ValidationError`, and returns a deep-frozen `VO<T>` only when none fired. Returns `Result<VO<T>, ValidationError>` — the failure is a **value you destructure, not a throw you catch**. `ValidationError` is imported from `@shirudo/base-error` (like `Result` from `@shirudo/result`), not re-exported.
+- **`toProblemDetails(error, { member?, status?, … })`** — new opt-in entry point **`@shirudo/ddd-kit/http`**. Projects a `ValidationError` to an RFC 9457 Problem Details object, attaching `publicIssues()` under `errors` (default) or `invalid-params`, defaulting to `422` / `"Validation Failed"`. base-error is safe-by-default and hides issues unless whitelisted; this helper performs that explicit projection. Shipped from a separate subpath so transport concerns stay out of the core barrel.
+
+This establishes a deliberate **two-error-style axis**, documented in [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md): `DomainError` is thrown and caught at the boundary; `ValidationError` is a Result-axis value you destructure. Validation does **not** fold into the `DomainError` hierarchy by design — a kit hands back the value and stays out of your boundary.
+
+Migration:
+
+1. **Bump the peer dep**: `pnpm add @shirudo/base-error@^5.0.0`. No code changes are required for existing ddd-kit error usage.
+2. If you call base-error's `StructuredError.toProblemDetails()` directly, review v5's safe-by-default serialization (technical messages / details no longer exposed without an explicit `mapDetails` projection) — see base-error's `MIGRATION.md`.
+
 ### Documentation — `llms.txt` + `llms-full.txt` auto-generated at docs build; hand-curated guide moved to `LLM.md`
 
 The repo-root file at `/llms.txt` previously served two distinct audiences with one document: a Howard-convention sitemap (for LLM tools that discover docs via the standard endpoint) AND a hand-curated consumer-coding guide (with rc-rename trail, common-mistakes block, "use X not Y" directives). The two never aligned cleanly — the curated content didn't fit the sitemap convention, and the sitemap couldn't carry the curation.

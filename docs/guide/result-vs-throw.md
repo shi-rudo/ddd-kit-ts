@@ -149,7 +149,7 @@ This keeps the kit out of "in-house framework" territory and avoids re-export bl
 
 ## `voWithValidation` is the App-boundary parser
 
-The one Result-returning helper on the value-object side. Use it for parsing untrusted input *at the App boundary*; for Domain construction prefer the `ValueObject` base class which throws on invalid input.
+The fail-fast Result-returning helper on the value-object side (see [`voValidated`](#vovalidated-collects-every-violation) below when you need *all* violations at once). Use it for parsing untrusted input *at the App boundary*; for Domain construction prefer the `ValueObject` base class which throws on invalid input.
 
 ```ts
 // At the App boundary — parsing user input
@@ -158,4 +158,54 @@ if (result.isErr()) return new Response(result.error, { status: 400 });
 
 // In the Domain — constructor throws
 new Money({ amount: -1, currency: "EUR" }); // throws DomainError
+```
+
+## `voValidated` collects every violation
+
+`voWithValidation` fails fast with a single string. A form parser usually wants the opposite: report *all* the broken fields at once ("email invalid **and** age negative"). `voValidated` runs your checks, collects each violation, and returns a populated `ValidationError` only if any fired — otherwise a frozen value object.
+
+```ts
+import { voValidated } from "@shirudo/ddd-kit";
+
+const result = voValidated(
+  { email, age },
+  (issues, m) => {
+    if (!isEmail(m.email))
+      issues.addIssue({ message: "must be a valid email", path: ["email"] });
+    if (m.age < 0)
+      issues.addIssue({ message: "must not be negative", path: ["age"] });
+  },
+  "Registration is invalid",
+);
+
+if (result.isErr()) {
+  // result.error.publicIssues() → both violations, in order
+}
+```
+
+### Two error styles, one axis
+
+This is where the kit's error model has **two deliberate styles** — and the rule that keeps them straight is *how you consume them*, not a single class hierarchy:
+
+| Style | Type | You… | When |
+|---|---|---|---|
+| **Throw / catch** | `DomainError` (and subclasses) | `catch (e instanceof DomainError)` at the boundary | Aggregate invariant violated — a bug or a race |
+| **Result / destructure** | `ValidationError` | `if (result.isErr())` then read `result.error` | Untrusted input failed field-level validation |
+
+`voValidated` returns a `ValidationError` as a **value** — you never `throw` it, so you never `catch` it. That is why it does **not** sit on the `DomainError` throw/catch hierarchy, and why a generic `catch (e instanceof DomainError)` handler is *correct* to ignore it: validation lives on the Result axis. This is a kit, not a framework — it hands you the value and stays out of your boundary.
+
+`ValidationError` comes from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (import it from there, like `Result`). Unlike the kit's class-discriminated errors, it *is* a `StructuredError` carrying `code` / `category` and ingesting [Standard Schema](https://standardschema.dev) output — deliberately, because field validation is exactly the case that serializes to RFC 9457 with structured per-field output.
+
+### Rendering RFC 9457 at the boundary
+
+`@shirudo/base-error` is **safe by default**: `ValidationError.toProblemDetails()` does not expose the issues on its own. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free:
+
+```ts
+import { toProblemDetails } from "@shirudo/ddd-kit/http";
+
+if (result.isErr()) {
+  return Response.json(toProblemDetails(result.error), { status: 422 });
+}
+// → { type, title: "Validation Failed", status: 422,
+//     errors: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] }
 ```
