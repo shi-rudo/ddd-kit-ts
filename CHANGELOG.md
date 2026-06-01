@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-01
+
+First stable release. The API is now under Semantic Versioning — breaking changes will bump the major and ship with a migration path here. The kit's surface (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, CQRS handlers, the outbox/`withCommit` unit-of-work) is frozen as of this release; the two changes below land with it.
+
 ### BREAKING — `@shirudo/base-error` peer-dep bumped to `^5.0.0`; new `voValidated` + `@shirudo/ddd-kit/http` Problem Details presenter
 
 base-error v5 ships a `ValidationError` aggregate (collects N field-level issues, ingests [Standard Schema](https://standardschema.dev) output) and safe-by-default `toProblemDetails()` (RFC 9457). The kit adopts v5 and adds thin, Result-first glue on top instead of re-implementing it.

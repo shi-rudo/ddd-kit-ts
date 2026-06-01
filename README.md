@@ -2,9 +2,9 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design.
 
-> **Release Candidate**
+> **Stable — 1.0**
 >
-> This library is in Release Candidate phase. The API is considered stable and ready for production evaluation. Please report any issues before the final 1.0.0 release.
+> The public API is stable and follows [Semantic Versioning](https://semver.org/). Breaking changes bump the major and ship with a migration path in the [CHANGELOG](CHANGELOG.md).
 
 ## Badges
 

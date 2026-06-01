@@ -2,7 +2,7 @@
 
 > Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. Targets Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun. ESM-only.
 
-The library is in **Release Candidate** phase. API is materially stable; the next release is either 1.0 or a docs-only follow-up unless current-RC feedback surfaces API-level changes. Recent breaking changes and migration paths are documented per release in [CHANGELOG.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md) — read it before adopting an RC version.
+The library is **1.0 — stable**. The public surface is under Semantic Versioning; breaking changes bump the major and ship with a migration path. Per-release changes and migrations are documented in [CHANGELOG.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md) — read the latest entry before upgrading across a major.
 
 Architectural choices to know before reading the rest:
 
@@ -24,17 +24,16 @@ Architectural choices to know before reading the rest:
 ## Installation
 
 ```bash
-# RC builds live under the `next` dist-tag — the default `latest` still points at 0.x.
-pnpm add @shirudo/ddd-kit@next @shirudo/result @shirudo/base-error
+pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 ```
 
-Both `@shirudo/result` and `@shirudo/base-error` are peer dependencies — install them once in the consuming app. Drop `@next` once 1.0 ships.
+Both `@shirudo/result` and `@shirudo/base-error` are peer dependencies — install them once in the consuming app.
 
 ## Documentation
 
 Guides live as markdown in the repo (the public docs site is currently offline pending legal-notice + privacy pages; the source is fully usable).
 
-- [README](https://github.com/shi-rudo/ddd-kit-ts/blob/main/README.md): Overview, badges, RC notice. Points here for the rest.
+- [README](https://github.com/shi-rudo/ddd-kit-ts/blob/main/README.md): Overview, badges. Points here for the rest.
 - [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md): Install + minimal Order aggregate example showing throws, `commit()`, typed events.
 - [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md): The non-obvious calls — Result at the App boundary, no Specification pattern, no Fowler UoW, shallow-freeze state, globals-vs-DI trade-off for `EventIdFactory`/`ClockFactory`, Domain Services and Bounded Contexts notes. Read this before adopting.
 
@@ -94,7 +93,7 @@ The catalogue of footguns the kit has accumulated (compile-time errors, silent r
 
 - [GitHub repo](https://github.com/shi-rudo/ddd-kit-ts): Source, issues, PRs.
 - [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md): Release history with migration paths for every breaking change.
-- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Pre-releases published under the `next` dist-tag.
+- [npm package](https://www.npmjs.com/package/@shirudo/ddd-kit). Stable releases published under the `latest` dist-tag.
 
 ## Optional
 
