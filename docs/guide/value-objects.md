@@ -43,6 +43,30 @@ if (result.isOk()) {
 
 `voWithValidation` is the **App-boundary parser** — use it when validating untrusted input (HTTP body, queue message, file). For Domain construction, prefer the class-based `ValueObject` so the constructor itself enforces invariants and throws on violation.
 
+### Collecting every violation: `voValidated`
+
+`voWithValidation` fails fast with a single message. When you parse a form and want to report *all* the broken fields at once, `voValidated` collects each violation into one `ValidationError` (from `@shirudo/base-error`):
+
+```ts
+import { voValidated } from "@shirudo/ddd-kit";
+
+const result = voValidated(
+  { email, age },
+  (issues, m) => {
+    if (!isEmail(m.email))
+      issues.addIssue({ message: "must be a valid email", path: ["email"] });
+    if (m.age < 0)
+      issues.addIssue({ message: "must not be negative", path: ["age"] });
+  },
+);
+
+if (result.isErr()) {
+  // result.error.publicIssues() → every violation, in order
+}
+```
+
+The returned `ValidationError` is a **value you destructure, not a throw you catch** — it lives on the Result axis, distinct from the thrown `DomainError` hierarchy. See [Result vs Throw](./result-vs-throw.md#vovalidated-collects-every-violation) for that distinction and for rendering it as RFC 9457 via `@shirudo/ddd-kit/http`.
+
 ## Class-based: `ValueObject<T>`
 
 When the value object has methods, or when you want construction to throw rather than return a Result:
@@ -103,4 +127,5 @@ voEqualsExcept(a, b, {
 | Methods on the value object (`add`, `subtract`, `convertTo`) | `ValueObject` |
 | Construction must throw on invalid input | `ValueObject` |
 | Parsing untrusted input at the App boundary | `voWithValidation` |
+| Reporting every invalid field at once | `voValidated` |
 | Equality ignoring some keys | `voEqualsExcept` |

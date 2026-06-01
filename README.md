@@ -62,7 +62,7 @@ const email = createEmail("user@example.com");
 
 ### Value Objects
 
-Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voEqualsExcept()` for comparing while ignoring specified keys (useful for metadata), and `voWithValidation()` for creating validated value objects at the App-Service boundary (returns Result). For Domain construction, prefer the `ValueObject` base class — its constructor throws on invariant violation via the `validate()` hook.
+Value Objects are immutable objects that are defined by their attributes rather than identity. They ensure data integrity by preventing modification after creation. Use the `vo()` helper function to create deeply frozen value objects that cannot be mutated, even nested objects and arrays. The library provides `voEquals()` for value-based equality comparison, `voEqualsExcept()` for comparing while ignoring specified keys (useful for metadata), `voWithValidation()` for creating validated value objects at the App-Service boundary (returns Result), and `voValidated()` when you need to collect *every* invalid field into one `ValidationError` instead of failing on the first. For Domain construction, prefer the `ValueObject` base class — its constructor throws on invariant violation via the `validate()` hook.
 
 ### Entities
 
@@ -136,7 +136,7 @@ The `Result<T, E>` type provides functional error handling without exceptions. I
 ### Creating a Value Object
 
 ```typescript
-import { vo, voEquals, voEqualsExcept, voWithValidation, type VO } from "@shirudo/ddd-kit";
+import { vo, voEquals, voEqualsExcept, voWithValidation, voValidated, type VO } from "@shirudo/ddd-kit";
 
 // Simple value object (Functional Style)
 type Money = VO<{
@@ -180,6 +180,20 @@ if (result.isOk()) {
 // For Domain construction, use the `ValueObject` base class — its constructor
 // throws via the `validate()` hook, so Domain code keeps a throw-based contract.
 // Reserve `voWithValidation` for parsing untrusted input at the App boundary.
+
+// To report every invalid field at once, use `voValidated` — it collects all
+// violations into one `ValidationError` (a Result-axis value, not a throw):
+const parsed = voValidated(
+  { amount: -1, currency: "US" },
+  (issues, m) => {
+    if (m.amount < 0)
+      issues.addIssue({ message: "must be non-negative", path: ["amount"] });
+    if (m.currency.length !== 3)
+      issues.addIssue({ message: "must be a 3-letter code", path: ["currency"] });
+  }
+);
+// On failure: parsed.error.publicIssues() lists every violation.
+// Render RFC 9457 with `toProblemDetails` from `@shirudo/ddd-kit/http`.
 
 // Value object with nested structures (deep freeze)
 const address = vo({
@@ -1128,13 +1142,15 @@ For composition utilities (`map`, `flatMap`, `mapErr`, `match`, `unwrapOr`, `pip
 - **Infrastructure boundary returns `Result`** where corruption is an expected recoverable failure: `EventSourcedAggregate.loadFromHistory()`, `restoreFromSnapshotWithEvents()`.
 - **App-Service boundary returns `Result`**: `CommandBus.execute()`, `QueryBus.execute()`, `CommandHandler<C,R>`, `QueryHandler<Q,R>`, `withCommit()`. This is where you map errors to HTTP statuses, logs, etc.
 - **`voWithValidation`** is the explicit Result variant for parsing untrusted input at the App boundary. For Domain construction, use the `ValueObject` base class (constructor throws via `validate()`).
+- **`voValidated`** collects multiple field violations into one `ValidationError` (a Result-axis value you destructure, never catch). The opt-in `@shirudo/ddd-kit/http` entry point renders it as RFC 9457 via `toProblemDetails`.
 
 ## API Documentation
 
 This package is written in TypeScript and provides full type definitions. All types and functions are exported from the main entry point. You can explore the available APIs through your IDE's autocomplete or by examining the type definitions in `node_modules/@shirudo/ddd-kit/dist/index.d.ts`.
 
 Key exports include:
-- `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()` - Value Object utilities (`voWithValidation` is for the App-Service boundary; Domain construction goes through the `ValueObject` base class which throws via `validate()`)
+- `vo()`, `voEquals()`, `voEqualsExcept()`, `voWithValidation()`, `voValidated()` - Value Object utilities (`voWithValidation` / `voValidated` are for the App-Service boundary — the latter collects every field violation into one `ValidationError`; Domain construction goes through the `ValueObject` base class which throws via `validate()`)
+- `toProblemDetails()` from `@shirudo/ddd-kit/http` - renders a `ValidationError` as an RFC 9457 Problem Details object (opt-in subpath; keeps transport out of the core)
 - `IAggregateRoot<TId>` - Marker interface for Aggregate Root Entities
 - `AggregateRoot<TState, TId, TEvent?>` - Base class for creating Aggregate Root Entities without Event Sourcing (extends `Entity`, implements `IAggregateRoot<TId, TEvent>`). Optional `TEvent` parameter enables type-safe domain events
 - `EventSourcedAggregate<TState, TEvent, TId>` - Base class for Event-Sourced Aggregate Roots (extends `Entity`, implements `IEventSourcedAggregate<TId, TEvent>`)
