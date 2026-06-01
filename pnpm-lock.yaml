@@ -15,8 +15,8 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0
       '@shirudo/result':
-        specifier: ^0.0.6
-        version: 0.0.6
+        specifier: ^1.0.0
+        version: 1.0.1
       tsup:
         specifier: ^8.5.0
         version: 8.5.0(postcss@8.5.15)(typescript@5.9.2)(yaml@2.9.0)
@@ -695,8 +695,8 @@ packages:
     resolution: {integrity: sha512-vZHJ2Yu/KTHAe63zSSPf372wHUTW0fyoQCbDuAVfXnIgy7BdAr5NdVRXlOUlMUCJt8EPQqTZl7Xs5aTxImL5cQ==}
     engines: {node: '>=18'}
 
-  '@shirudo/result@0.0.6':
-    resolution: {integrity: sha512-meBe7kSb7KJsMyt9VHR/GrCBsew9fL46cCvS4UQfoDFKgzx6IWMT6lkmiY1/O8zsei5X0aLR9G3SlpEttZy+tA==}
+  '@shirudo/result@1.0.1':
+    resolution: {integrity: sha512-Pqpeiy8aziZy9equEMtqxCugwAuLzKIW9TXEkltjbRWJ0/zLdYq9bi9oK6o1yfASpIHrbsM9mivbMZIqND03wQ==}
     engines: {node: '>=20'}
 
   '@types/chai@5.2.2':
@@ -2349,7 +2349,7 @@ snapshots:
 
   '@shirudo/base-error@5.0.0': {}
 
-  '@shirudo/result@0.0.6': {}
+  '@shirudo/result@1.0.1': {}
 
   '@types/chai@5.2.2':
     dependencies:

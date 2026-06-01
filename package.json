@@ -1,6 +1,6 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
@@ -53,7 +53,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.1.4",
 		"@shirudo/base-error": "^5.0.0",
-		"@shirudo/result": "^0.0.6",
+		"@shirudo/result": "^1.0.0",
 		"tsup": "^8.5.0",
 		"typedoc": "^0.28.19",
 		"typedoc-plugin-markdown": "^4.11.0",
@@ -74,6 +74,6 @@
 	},
 	"peerDependencies": {
 		"@shirudo/base-error": "^5.0.0",
-		"@shirudo/result": "^0.0.6"
+		"@shirudo/result": "^1.0.0"
 	}
 }

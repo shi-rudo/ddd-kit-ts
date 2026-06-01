@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-01
+
+### Fixed — `@shirudo/result` peer dependency aligned to `^1.0.0`
+
+1.0.0 still declared `@shirudo/result` as `^0.0.6`, a pre-1.0 prerelease of the companion Result library. Bumped the peer (and dev) dependency to `^1.0.0` so a stable ddd-kit pairs with stable `@shirudo/result`, and consumers on `@shirudo/result` 1.x no longer hit a peer-range conflict. The API surface ddd-kit uses (`ok`, `err`, `Result`, `isOk`/`isErr`, `.value`/`.error`) is unchanged between `0.0.6` and `1.0.1` — the full suite (468 tests) passes unchanged. No code changes.
+
 ## [1.0.0] - 2026-06-01
 
 First stable release. The API is now under Semantic Versioning — breaking changes will bump the major and ship with a migration path here. The kit's surface (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, CQRS handlers, the outbox/`withCommit` unit-of-work) is frozen as of this release; the two changes below land with it.
