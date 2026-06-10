@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `vo()` / `ValueObject` no longer crash on props containing a non-empty TypedArray
+
+`deepFreeze` called `Object.freeze` on every nested object, but the spec forbids freezing an ArrayBuffer view with elements — so `vo({ data: new Uint8Array([1, 2, 3]) })` (and any class-based `ValueObject` with a TypedArray prop) threw `TypeError: Cannot freeze array buffer views with elements`, even though `deepEqual`/`deepOmit` explicitly support TypedArrays. `deepFreeze` now treats ArrayBuffer views (TypedArrays, DataView) as atomic and passes them through unfrozen, mirroring `deepEqual`'s atomic treatment; the surrounding object graph is still deeply frozen. Documented limitation: view contents remain mutable — freezing cannot protect the underlying buffer.
+
 ### Fixed — `EventBusImpl.publish` no longer lets a synchronously throwing handler bypass the error-aggregation contract
 
 `EventHandler` permits plain synchronous handlers (`Promise<void> | void`), but `publish` invoked handlers directly inside `.map(...)` — a synchronous throw escaped before `Promise.allSettled` received the array. Consequences: peer handlers subscribed after the thrower were skipped, remaining events in the batch were never dispatched, the raw error surfaced instead of the documented single-Error/`AggregateError`, and already-started peer promises were orphaned (their rejections became unhandled promise rejections, process-fatal in Node by default). The handler invocation is now wrapped in an async closure so a sync throw becomes a rejection and gets the same allSettled treatment as a rejecting async handler — restoring the contract documented on `EventBus.publish`: peers run, the batch completes, errors are collected and thrown at the end.

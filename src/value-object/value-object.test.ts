@@ -48,6 +48,22 @@ describe("ValueObject Class", () => {
             }).toThrow();
         });
 
+        it("should accept props containing a non-empty TypedArray", () => {
+            interface BlobProps {
+                data: Uint8Array;
+            }
+
+            class Blob extends ValueObject<BlobProps> {
+                constructor(props: BlobProps) {
+                    super(props);
+                }
+            }
+
+            const blob = new Blob({ data: new Uint8Array([1, 2, 3]) });
+            expect(Array.from(blob.props.data)).toEqual([1, 2, 3]);
+            expect(Object.isFrozen(blob.props)).toBe(true);
+        });
+
         it("should deeply freeze nested properties", () => {
             interface NestedProps {
                 nested: {

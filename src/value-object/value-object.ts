@@ -20,9 +20,20 @@ export type VO<T> = Readonly<T>;
  * Note: `deepFreeze` mutates its argument in place — it sets `[[Frozen]]`
  * on the object you pass in. Callers that need to avoid touching the
  * input (e.g. `vo()`) should deep-clone first.
+ *
+ * Limitation: ArrayBuffer views (TypedArrays, DataView) are passed through
+ * unfrozen — the spec forbids freezing a view with elements, and freezing
+ * cannot protect the underlying buffer. Their contents remain mutable.
  */
 export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
     if (obj === null || typeof obj !== "object") {
+        return obj as Readonly<T>;
+    }
+    // ArrayBuffer views are atomic: Object.freeze on a typed array with
+    // elements throws per spec, and freezing cannot protect the underlying
+    // buffer anyway — so views are returned as-is (their contents stay
+    // mutable). Mirrors deepEqual, which also treats views atomically.
+    if (ArrayBuffer.isView(obj)) {
         return obj as Readonly<T>;
     }
     if (visited.has(obj as object)) {

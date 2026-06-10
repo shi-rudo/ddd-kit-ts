@@ -516,6 +516,51 @@ describe("VO", () => {
 		});
 	});
 
+	describe("TypedArray and DataView handling", () => {
+		it("creates a VO containing a non-empty TypedArray without throwing", () => {
+			// Object.freeze on an ArrayBuffer view with elements throws per
+			// spec — deepFreeze must skip views instead of crashing.
+			const v = vo({ data: new Uint8Array([1, 2, 3]) });
+
+			expect(Array.from(v.data)).toEqual([1, 2, 3]);
+		});
+
+		it("still freezes the surrounding object graph when a TypedArray is present", () => {
+			const v = vo({ data: new Float64Array([1.5]), label: "raw" });
+
+			expect(Object.isFrozen(v)).toBe(true);
+			expect(() => {
+				(v as any).label = "changed";
+			}).toThrow();
+		});
+
+		it("handles TypedArrays nested below the top level", () => {
+			const v = vo({ chunk: { bytes: new Int32Array([7, 8]) } });
+
+			expect(Object.isFrozen(v.chunk)).toBe(true);
+			expect(Array.from(v.chunk.bytes)).toEqual([7, 8]);
+		});
+
+		it("handles empty TypedArrays and DataView", () => {
+			const v = vo({
+				empty: new Uint8Array(0),
+				view: new DataView(new ArrayBuffer(4)),
+			});
+
+			expect(v.empty.length).toBe(0);
+			expect(v.view.byteLength).toBe(4);
+		});
+
+		it("voWithValidation succeeds for valid input containing a TypedArray", () => {
+			const result = voWithValidation(
+				{ data: new Uint8Array([9]) },
+				(t) => t.data.length > 0,
+			);
+
+			expect(result.isOk()).toBe(true);
+		});
+	});
+
 	describe("Type safety", () => {
 		it("should preserve TypeScript types", () => {
 			type Money = VO<{
