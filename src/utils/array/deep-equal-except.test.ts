@@ -251,6 +251,25 @@ describe("deepEqualExcept – Built-ins & Interaction with deepEqual", () => {
 	});
 });
 
+describe("deepEqualExcept – Uncloneable built-ins (Promise, WeakMap, WeakSet)", () => {
+	it("is reflexive for an object containing a Promise", () => {
+		const obj = { p: Promise.resolve(1), name: "job" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("compares shared Promise references as equal across two objects", () => {
+		const p = Promise.resolve(1);
+		const a = { p, id: 1 };
+		const b = { p, id: 2 };
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["id"] })).toBe(true);
+	});
+
+	it("is reflexive for objects containing WeakMap and WeakSet", () => {
+		const obj = { wm: new WeakMap(), ws: new WeakSet() };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+});
+
 describe("deepEqualExcept – Circular References", () => {
 	it("works with cycles when only ignored keys differ", () => {
 		const a: any = { id: 1, value: "x" };

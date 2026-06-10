@@ -27,8 +27,9 @@ export interface DeepOmitOptions {
  * Walks the object tree and skips keys that match `ignoreKeys` /
  * `ignoreKeyPredicate`. Built-in atomic types (Date, RegExp, Map, Set,
  * TypedArrays, ArrayBuffer, DataView) are cloned by type rather than walked
- * — their internal structure has no key filtering to apply. Cycles are
- * preserved: a cycle `a → a` clones to `a' → a'`.
+ * — their internal structure has no key filtering to apply. Promise,
+ * WeakMap and WeakSet cannot be cloned at all and are passed through by
+ * reference. Cycles are preserved: a cycle `a → a` clones to `a' → a'`.
  *
  * **Prototype-pollution safety.** `__proto__` and `constructor` keys
  * encountered as *own* properties of the input (typical of `JSON.parse`
@@ -157,10 +158,17 @@ function assignOwn(target: object, key: PropertyKey, value: unknown): void {
 /**
  * Clones a built-in atomic type by case. Falls back to `structuredClone`
  * for anything not explicitly enumerated (e.g. ArrayBuffer, DataView,
- * Boolean/Number/String wrappers).
+ * Boolean/Number/String wrappers). Promise/WeakMap/WeakSet have no
+ * meaningful by-value copy and `structuredClone` rejects them — they are
+ * passed through by reference (which also keeps `deepEqualExcept`
+ * reflexive, since `deepEqual` compares them by reference).
  */
 function cloneBuiltIn(obj: object, tag: string): unknown {
 	switch (tag) {
+		case "[object Promise]":
+		case "[object WeakMap]":
+		case "[object WeakSet]":
+			return obj;
 		case "[object Date]":
 			return new Date((obj as Date).getTime());
 		case "[object RegExp]": {

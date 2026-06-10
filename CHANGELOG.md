@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `deepOmit` (and `deepEqualExcept` / `voEqualsExcept`) no longer crash on Promise, WeakMap, WeakSet
+
+`isBuiltInObject` classifies `Promise`/`WeakMap`/`WeakSet` as atomic built-ins, but `cloneBuiltIn` fell through to `structuredClone` for them — which rejects all three with `DataCloneError` (`#<Promise> could not be cloned`). Any `deepOmit` call over a graph containing one of these crashed, and `deepEqualExcept`/`voEqualsExcept` inherited the crash. These types have no meaningful by-value copy, so `cloneBuiltIn` now passes them through by reference — which also keeps `deepEqualExcept` reflexive for them, since `deepEqual` compares unhandled built-ins by reference.
+
 ### Fixed — `vo()` / `ValueObject` no longer crash on props containing a non-empty TypedArray
 
 `deepFreeze` called `Object.freeze` on every nested object, but the spec forbids freezing an ArrayBuffer view with elements — so `vo({ data: new Uint8Array([1, 2, 3]) })` (and any class-based `ValueObject` with a TypedArray prop) threw `TypeError: Cannot freeze array buffer views with elements`, even though `deepEqual`/`deepOmit` explicitly support TypedArrays. `deepFreeze` now treats ArrayBuffer views (TypedArrays, DataView) as atomic and passes them through unfrozen, mirroring `deepEqual`'s atomic treatment; the surrounding object graph is still deeply frozen. Documented limitation: view contents remain mutable — freezing cannot protect the underlying buffer.

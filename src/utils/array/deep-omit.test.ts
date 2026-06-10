@@ -232,6 +232,45 @@ describe("deepOmit – Built-ins are cloned atomically (distinct, equal-by-value
 	});
 });
 
+describe("deepOmit – Uncloneable built-ins are passed through by reference", () => {
+	// structuredClone cannot clone Promise/WeakMap/WeakSet, and there is no
+	// meaningful by-value copy of them — they must alias instead of crash.
+	it("passes a Promise through by reference instead of throwing", () => {
+		const p = Promise.resolve(1);
+		const result = deepOmit({ p, id: 7 }, { ignoreKeys: ["id"] }) as {
+			p: Promise<number>;
+		};
+		expect(result.p).toBe(p);
+		expect("id" in result).toBe(false);
+	});
+
+	it("passes a WeakMap through by reference instead of throwing", () => {
+		const wm = new WeakMap<object, number>();
+		const result = deepOmit({ wm }, { ignoreKeys: [] }) as {
+			wm: WeakMap<object, number>;
+		};
+		expect(result.wm).toBe(wm);
+	});
+
+	it("passes a WeakSet through by reference instead of throwing", () => {
+		const ws = new WeakSet<object>();
+		const result = deepOmit({ ws }, { ignoreKeys: [] }) as {
+			ws: WeakSet<object>;
+		};
+		expect(result.ws).toBe(ws);
+	});
+
+	it("handles uncloneables nested below the top level", () => {
+		const p = Promise.resolve("x");
+		const result = deepOmit(
+			{ job: { promise: p, secret: 1 } },
+			{ ignoreKeys: ["secret"] },
+		) as { job: { promise: Promise<string> } };
+		expect(result.job.promise).toBe(p);
+		expect("secret" in result.job).toBe(false);
+	});
+});
+
 describe("deepOmit – Circular References", () => {
 	it("does not break on self-references", () => {
 		const a: any = { id: 1, value: "x" };
