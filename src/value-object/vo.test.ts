@@ -821,3 +821,40 @@ describe("VO", () => {
 	});
 });
 
+
+describe("voWithValidation – error path never throws", () => {
+	it("returns err for cyclic input when no custom message is given", () => {
+		const cyclic: { name: string; self?: unknown } = { name: "a" };
+		cyclic.self = cyclic;
+
+		// The default error message used JSON.stringify, which throws on
+		// circular structures — the Result contract must hold instead.
+		const result = voWithValidation(cyclic, () => false);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toContain("Validation failed");
+		}
+	});
+
+	it("returns err for BigInt-bearing input when no custom message is given", () => {
+		const result = voWithValidation({ big: 1n }, () => false);
+
+		expect(result.isErr()).toBe(true);
+	});
+});
+
+describe("deepFreeze – mutator shadows are shared module-level functions", () => {
+	it("installs the same thrower function instance across freezes", () => {
+		const a = vo({ d: new Date(1) });
+		const b = vo({ d: new Date(2) });
+
+		const setTimeA = Object.getOwnPropertyDescriptor(a.d, "setTime")?.value;
+		const setTimeB = Object.getOwnPropertyDescriptor(b.d, "setTime")?.value;
+
+		// createDomainEvent freezes a Date per event — per-instance closures
+		// are pure allocation churn on that hot path.
+		expect(typeof setTimeA).toBe("function");
+		expect(setTimeA).toBe(setTimeB);
+	});
+});

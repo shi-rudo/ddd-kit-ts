@@ -222,10 +222,12 @@ function deepEqualInner(
 		}
 
 		default: {
-			// Unhandled but brand-trusted built-ins (Error, Promise,
-			// ArrayBuffer, SharedArrayBuffer): compared by reference — their
-			// internal structure is unknown, and this keeps new built-ins
-			// from falling through to plain-object comparison.
+			// Unhandled but brand-trusted built-ins: compared by reference —
+			// their internal structure is unknown, and this keeps new
+			// built-ins from falling through to plain-object comparison.
+			// This branch IS the REFERENCE_COMPARED_TAGS contract exported
+			// from is-built-in.ts (and consumed by deepOmit's cloneBuiltIn):
+			// adding a by-value case above means removing the tag there.
 			return objA === objB;
 		}
 	}
