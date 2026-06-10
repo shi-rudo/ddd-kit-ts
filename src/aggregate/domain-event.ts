@@ -396,7 +396,11 @@ export function createDomainEvent<T extends string, P>(
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: payload as P,
-		occurredAt: options?.occurredAt ?? currentClockFactory(),
+		// Defensive copy — the event must not share the caller's live Date
+		// instance, or a later mutation of it would bleed into the event.
+		occurredAt: options?.occurredAt
+			? new Date(options.occurredAt.getTime())
+			: currentClockFactory(),
 		version: options?.version ?? 1,
 		metadata: options?.metadata,
 	};

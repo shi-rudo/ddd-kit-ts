@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `deepFreeze` now actually delivers deep immutability for Date, Map and Set
+
+`Object.freeze` does not protect internal slots: `event.occurredAt.setTime(0)` succeeded on a frozen event and `vo({ m: new Map() }).m.set(…)` succeeded on a frozen VO — a mutating subscriber could poison the timestamp (or any Map/Set payload) for every subsequent handler, exactly the scenario the deep-freeze guarantee claims to prevent. `deepFreeze` now shadows the mutator methods of Date (`setTime`, `set*`), Map (`set`/`delete`/`clear`) and Set (`add`/`delete`/`clear`) with throwing own properties and recursively freezes Map/Set contents (entries are not own keys, so the regular key walk missed them). The shadows are non-enumerable: invisible to `Object.keys`/spread/`deepEqual`, and `structuredClone` drops them, so `vo()` round-trips are unaffected. Reads work unchanged. Pre-frozen built-ins are skipped (best effort). Additionally, `createDomainEvent` now defensively copies `options.occurredAt` — the event no longer shares the caller's live Date instance. Tests that asserted identity (`event.occurredAt === when`) were updated to value equality; that identity was the bug.
+
 ### Fixed — `withCommit` no longer rejects when a post-commit `bus.publish` fails; new optional `onPublishError` hook
 
 The `EventBus.publish` contract throws after dispatching when any subscriber failed — so a single throwing in-process subscriber made `withCommit` reject AFTER the transaction had committed and `markPersisted` had run. The caller received a use-case failure for a committed write (and lost the result, e.g. the new order's id); a typical caller retries, double-executing the write. This also contradicted `withCommit`'s own documentation, which frames publish failure as recoverable eventual consistency: the outbox already holds the events and an outbox dispatcher will deliver them.

@@ -22,6 +22,8 @@ voEquals(a, b); // true
 
 `structuredClone` refuses function values, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
 
+Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map/Set contents recursively — a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged.
+
 ::: info ArrayBuffer views stay mutable
 The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway — so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
 :::

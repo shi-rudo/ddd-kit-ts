@@ -561,6 +561,66 @@ describe("VO", () => {
 		});
 	});
 
+	describe("Date/Map/Set internal-slot immutability", () => {
+		// Object.freeze does not protect internal slots — a frozen Date can
+		// still be setTime()d, a frozen Map still set()s. deepFreeze must
+		// block the mutators so the "deeply immutable" guarantee holds.
+		it("blocks Date mutators on a frozen VO", () => {
+			const v = vo({ when: new Date(1000) });
+
+			expect(() => (v.when as Date).setTime(0)).toThrow(TypeError);
+			expect(() => (v.when as Date).setFullYear(1999)).toThrow(TypeError);
+			expect(v.when.getTime()).toBe(1000);
+		});
+
+		it("blocks Map mutators while reads keep working", () => {
+			const v = vo({ m: new Map([["k", 1]]) });
+
+			expect(() => v.m.set("x", 2)).toThrow(TypeError);
+			expect(() => v.m.delete("k")).toThrow(TypeError);
+			expect(() => v.m.clear()).toThrow(TypeError);
+			expect(v.m.get("k")).toBe(1);
+			expect(v.m.size).toBe(1);
+		});
+
+		it("blocks Set mutators while reads keep working", () => {
+			const v = vo({ s: new Set([1]) });
+
+			expect(() => v.s.add(2)).toThrow(TypeError);
+			expect(() => v.s.delete(1)).toThrow(TypeError);
+			expect(() => v.s.clear()).toThrow(TypeError);
+			expect(v.s.has(1)).toBe(true);
+		});
+
+		it("deep-freezes objects stored inside Map values and Set members", () => {
+			const v = vo({
+				m: new Map([["k", { a: 1 }]]),
+				s: new Set([{ b: 2 }]),
+			});
+
+			const inMap = v.m.get("k") as { a: number };
+			expect(Object.isFrozen(inMap)).toBe(true);
+			const [inSet] = v.s;
+			expect(Object.isFrozen(inSet)).toBe(true);
+		});
+
+		it("frozen VOs still round-trip through vo() and compare equal", () => {
+			// The mutator shadows are non-enumerable expandos; structuredClone
+			// drops them and spread skips them — re-wrapping must not throw.
+			const a = vo({ d: new Date(5), m: new Map([["k", 1]]) });
+			const b = vo({ ...a });
+
+			expect(voEquals(a, b)).toBe(true);
+		});
+
+		it("skips mutator-blocking on a Date the caller froze beforehand", () => {
+			// A pre-frozen Date cannot receive shadow properties — deepFreeze
+			// must not crash on it (best effort, not a hard guarantee).
+			const preFrozen = Object.freeze(new Date(42));
+			expect(() => vo({ d: preFrozen })).not.toThrow();
+		});
+	});
+
 	describe("Type safety", () => {
 		it("should preserve TypeScript types", () => {
 			type Money = VO<{

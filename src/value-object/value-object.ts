@@ -12,6 +12,56 @@ import { err, ok, type Result } from "@shirudo/result";
 export type VO<T> = Readonly<T>;
 
 /**
+ * `Object.freeze` does not protect internal slots: a frozen Date still
+ * accepts `setTime`, a frozen Map still accepts `set`. To make the
+ * "deeply immutable" guarantee real, the mutator methods are shadowed
+ * with own throwing functions BEFORE the freeze. The shadows are
+ * non-enumerable, so they are invisible to `Object.keys`/spread (deep
+ * equality is unaffected) and `structuredClone` drops them (a `vo()`
+ * round-trip never sees them).
+ */
+const DATE_MUTATORS: readonly string[] = [
+    "setTime",
+    "setMilliseconds",
+    "setUTCMilliseconds",
+    "setSeconds",
+    "setUTCSeconds",
+    "setMinutes",
+    "setUTCMinutes",
+    "setHours",
+    "setUTCHours",
+    "setDate",
+    "setUTCDate",
+    "setMonth",
+    "setUTCMonth",
+    "setFullYear",
+    "setUTCFullYear",
+    "setYear",
+];
+
+function shadowMutators(
+    obj: object,
+    typeName: string,
+    methods: readonly string[],
+): void {
+    // A pre-frozen built-in cannot receive shadow properties — skip it
+    // (best effort; the caller chose to freeze it themselves).
+    if (Object.isFrozen(obj)) return;
+    for (const method of methods) {
+        Object.defineProperty(obj, method, {
+            value: function throwFrozenMutation(): never {
+                throw new TypeError(
+                    `Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
+                );
+            },
+            writable: false,
+            enumerable: false,
+            configurable: false,
+        });
+    }
+}
+
+/**
  * Deep freezes an object and all its nested properties recursively, then
  * returns it. Iterates both string-keyed and symbol-keyed own properties
  * so the freeze symmetry matches `deepEqual` (which also considers symbol
@@ -20,6 +70,12 @@ export type VO<T> = Readonly<T>;
  * Note: `deepFreeze` mutates its argument in place — it sets `[[Frozen]]`
  * on the object you pass in. Callers that need to avoid touching the
  * input (e.g. `vo()`) should deep-clone first.
+ *
+ * Date/Map/Set keep internal-slot mutability under `Object.freeze`
+ * (`setTime`, `set`, `add`, … still work on frozen instances), so their
+ * mutator methods are shadowed with throwing own properties and Map/Set
+ * contents are frozen recursively. The shadows are non-enumerable —
+ * invisible to `Object.keys`, spread, `deepEqual`, and `structuredClone`.
  *
  * Limitation: ArrayBuffer views (TypedArrays, DataView) are passed through
  * unfrozen — the spec forbids freezing a view with elements, and freezing
@@ -40,6 +96,25 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
         return obj as Readonly<T>;
     }
     visited.add(obj as object);
+
+    // Date/Map/Set keep internal-slot mutability under Object.freeze —
+    // shadow their mutators and freeze Map/Set contents (entries are not
+    // own keys, so the key walk below would miss them).
+    const tag = Object.prototype.toString.call(obj);
+    if (tag === "[object Date]") {
+        shadowMutators(obj as object, "Date", DATE_MUTATORS);
+    } else if (tag === "[object Map]") {
+        for (const [key, value] of obj as unknown as Map<unknown, unknown>) {
+            deepFreeze(key, visited);
+            deepFreeze(value, visited);
+        }
+        shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
+    } else if (tag === "[object Set]") {
+        for (const member of obj as unknown as Set<unknown>) {
+            deepFreeze(member, visited);
+        }
+        shadowMutators(obj as object, "Set", ["add", "delete", "clear"]);
+    }
 
     // Reflect.ownKeys returns both string and symbol own keys.
     const keys = Reflect.ownKeys(obj);

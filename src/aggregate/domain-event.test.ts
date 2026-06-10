@@ -121,7 +121,9 @@ describe("DomainEvent", () => {
 				occurredAt: when,
 				version: 7,
 			});
-			expect(event.occurredAt).toBe(when);
+			// Value equality, NOT identity — the event defensively copies the
+			// caller's Date so later mutation of `when` cannot bleed in.
+			expect(event.occurredAt.getTime()).toBe(when.getTime());
 			expect(event.version).toBe(7);
 		});
 	});
@@ -432,6 +434,36 @@ describe("DomainEvent", () => {
 		it("payload-less events still produce a frozen event", () => {
 			const event = createDomainEvent("PayloadFree");
 			expect(Object.isFrozen(event)).toBe(true);
+		});
+
+		it("blocks occurredAt mutation so a subscriber cannot poison the timestamp", () => {
+			const event = createDomainEvent("Demo", { x: 1 });
+			const before = event.occurredAt.getTime();
+
+			expect(() => event.occurredAt.setTime(0)).toThrow(TypeError);
+			expect(event.occurredAt.getTime()).toBe(before);
+		});
+
+		it("does not share the caller's Date instance passed as options.occurredAt", () => {
+			const when = new Date("2020-01-01T00:00:00Z");
+			const event = createDomainEvent("Demo", { x: 1 }, { occurredAt: when });
+
+			expect(event.occurredAt.getTime()).toBe(
+				new Date("2020-01-01T00:00:00Z").getTime(),
+			);
+			// Mutating the caller's Date later must not bleed into the event.
+			when.setTime(0);
+			expect(event.occurredAt.getTime()).not.toBe(0);
+		});
+
+		it("blocks Map/Set mutators inside frozen payloads", () => {
+			const event = createDomainEvent("Demo", {
+				tags: new Set(["a"]),
+				counts: new Map([["x", 1]]),
+			});
+
+			expect(() => event.payload.tags.add("b")).toThrow(TypeError);
+			expect(() => event.payload.counts.set("y", 2)).toThrow(TypeError);
 		});
 	});
 
