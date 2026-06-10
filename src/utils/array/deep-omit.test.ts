@@ -405,3 +405,46 @@ describe("deepOmit – Symbol.toStringTag spoofing", () => {
 		expect(result.m.get("k")).toBe(1);
 	});
 });
+
+describe("deepOmit – shared references (DAG) vs cycles with path-sensitive predicates", () => {
+	it("evaluates the predicate per path when the same object is shared under two keys", () => {
+		const shared = { x: 1, y: 2 };
+		const result = deepOmit(
+			{ a: shared, b: shared },
+			{
+				ignoreKeyPredicate: (key, path) => key === "x" && path[0] === "a",
+			},
+		) as { a: { x?: number; y: number }; b: { x?: number; y: number } };
+
+		// Path-sensitive: "x" is ignored under "a" only.
+		expect("x" in result.a).toBe(false);
+		expect(result.b.x).toBe(1);
+		expect(result.a.y).toBe(2);
+		expect(result.b.y).toBe(2);
+	});
+
+	it("still terminates on cycles when a predicate is used", () => {
+		const node: any = { id: 1, secret: "s" };
+		node.self = node;
+
+		const result = deepOmit(node, {
+			ignoreKeyPredicate: (key) => key === "secret",
+		}) as any;
+
+		expect(result.id).toBe(1);
+		expect("secret" in result).toBe(false);
+		expect(result.self).toBe(result); // cycle preserved
+	});
+
+	it("keeps deduping shared references when no predicate is involved (regression guard)", () => {
+		const shared = { x: 1, y: 2 };
+		const result = deepOmit(
+			{ a: shared, b: shared },
+			{ ignoreKeys: ["x"] },
+		) as { a: object; b: object };
+
+		// ignoreKeys is path-independent — structure sharing is safe and kept.
+		expect(result.a).toBe(result.b);
+		expect(result.a).toEqual({ y: 2 });
+	});
+});

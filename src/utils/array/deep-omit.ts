@@ -33,6 +33,11 @@ export interface DeepOmitOptions {
  * reference, so `deepEqualExcept(x, x)` stays reflexive. Cycles are
  * preserved: a cycle `a → a` clones to `a' → a'`.
  *
+ * **Shared references.** Without `ignoreKeyPredicate`, an object reached
+ * via several paths dedupes to a single clone. With a predicate, each
+ * path gets its own clone — the predicate may decide differently per
+ * path, so memoising the first path's result would be wrong.
+ *
  * **Prototype-pollution safety.** `__proto__` and `constructor` keys
  * encountered as *own* properties of the input (typical of `JSON.parse`
  * output) are copied as inert data properties via `Object.defineProperty`
@@ -55,7 +60,14 @@ export function deepOmit<T>(value: T, options: DeepOmitOptions): T {
 	const ignoreKeys = options.ignoreKeys
 		? new Set<Key>(options.ignoreKeys)
 		: undefined;
-	return omitInternal(value, options, ignoreKeys, [], visited) as T;
+	// With a path-sensitive predicate, a clone computed under one path must
+	// NOT be reused for the same object reached via another path (the
+	// predicate may decide differently there). The cache then only tracks
+	// in-progress ancestors — pure cycle detection — instead of memoising
+	// completed subtrees. Without a predicate, results are path-independent
+	// and shared references keep deduplicating to one clone.
+	const pathSensitive = options.ignoreKeyPredicate !== undefined;
+	return omitInternal(value, options, ignoreKeys, [], visited, pathSensitive) as T;
 }
 
 function omitInternal(
@@ -64,15 +76,17 @@ function omitInternal(
 	ignoreKeys: ReadonlySet<Key> | undefined,
 	path: PathSegment[],
 	visited: WeakMap<object, unknown>,
+	pathSensitive: boolean,
 ): unknown {
 	if (value === null) return value;
 	if (typeof value !== "object") return value;
 
 	const obj = value as object;
 
-	// Cycles: return cached clone if already visited. Use `has` (not
-	// `cached !== undefined`) so a legitimately-undefined cached clone
-	// would not be misclassified as "never seen".
+	// Cycles (and, in the path-independent case, shared references): return
+	// the cached clone. Use `has` (not `cached !== undefined`) so a
+	// legitimately-undefined cached clone would not be misclassified as
+	// "never seen".
 	if (visited.has(obj)) {
 		return visited.get(obj);
 	}
@@ -85,9 +99,17 @@ function omitInternal(
 		visited.set(obj, clone);
 		for (let i = 0; i < arr.length; i++) {
 			path.push(i);
-			clone[i] = omitInternal(arr[i], options, ignoreKeys, path, visited);
+			clone[i] = omitInternal(
+				arr[i],
+				options,
+				ignoreKeys,
+				path,
+				visited,
+				pathSensitive,
+			);
 			path.pop();
 		}
+		if (pathSensitive) visited.delete(obj);
 		return clone;
 	}
 
@@ -121,6 +143,7 @@ function omitInternal(
 				ignoreKeys,
 				path,
 				visited,
+				pathSensitive,
 			),
 		);
 		path.pop();
@@ -137,11 +160,13 @@ function omitInternal(
 				ignoreKeys,
 				path,
 				visited,
+				pathSensitive,
 			),
 		);
 		path.pop();
 	}
 
+	if (pathSensitive) visited.delete(obj);
 	return clone;
 }
 

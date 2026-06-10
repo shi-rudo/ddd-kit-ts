@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `deepOmit` no longer reuses path-sensitive predicate results across shared references
+
+The visited cache served two purposes at once — cycle detection and structure sharing — so an object reached via two paths got the clone computed under the *first* path, even when `ignoreKeyPredicate` decides per path: `deepOmit({ a: s, b: s }, { ignoreKeyPredicate: (k, p) => k === "x" && p[0] === "a" })` wrongly dropped `b.x` too. With a predicate, the cache now only tracks in-progress ancestors (pure cycle detection) and every path gets its own clone; cycles still terminate and are preserved. Without a predicate, results are path-independent and shared references keep deduplicating to a single clone, exactly as before. Transitively fixes `deepEqualExcept`/`voEqualsExcept` with path-sensitive predicates over DAG-shaped inputs.
+
 ### Fixed — `deepEqual` / `deepOmit` no longer crash (or mis-compare) on `Symbol.toStringTag` spoofing
 
 Type detection was purely tag-based, then type-specific code ran unverified: `deepEqual({ [Symbol.toStringTag]: "Date" }, …)` crashed with `objA.getTime is not a function`, spoofed `"Map"` with `mapA is not iterable` (same class of crash in `deepOmit`'s `cloneBuiltIn`), and two plain objects spoofing `"Array"` compared equal regardless of content (both sides got `length === undefined`, so the element loop never ran). Tags are now brand-verified through internal-slot probes (`Date.prototype.getTime`, the `Map`/`Set` `size` getters, `ArrayBuffer.isView`, wrapper `valueOf`s, …) — the one check `Symbol.toStringTag` cannot spoof, still cross-realm safe. Spoofed objects are compared/cloned as the plain objects they are; a genuine built-in never equals a spoofed lookalike; arrays are detected via `Array.isArray` in both modules. Real built-ins behave exactly as before.
