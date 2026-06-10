@@ -64,6 +64,26 @@ describe("ValueObject Class", () => {
             expect(Object.isFrozen(blob.props)).toBe(true);
         });
 
+        it("does not freeze the caller's props object or nested objects", () => {
+            interface TaggedProps {
+                amount: number;
+                meta: { tag: string };
+            }
+
+            class Tagged extends ValueObject<TaggedProps> {}
+
+            const meta = { tag: "a" };
+            const props: TaggedProps = { amount: 100, meta };
+            const v = new Tagged(props);
+
+            // The caller's graph must stay mutable...
+            expect(Object.isFrozen(props)).toBe(false);
+            expect(Object.isFrozen(meta)).toBe(false);
+            meta.tag = "changed";
+            // ...and later mutation must not bleed into the VO.
+            expect(v.props.meta.tag).toBe("a");
+        });
+
         it("should deeply freeze nested properties", () => {
             interface NestedProps {
                 nested: {

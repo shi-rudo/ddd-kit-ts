@@ -221,6 +221,57 @@ describe("Entity", () => {
 		});
 	});
 
+	describe("caller-owned state objects are not frozen in place", () => {
+		type BoxState = { qty: number; meta?: { tag: string } };
+
+		class BoxEntity extends Entity<BoxState, ItemId> {
+			constructor(id: ItemId, state: BoxState) {
+				super(id, state);
+			}
+
+			replace(state: BoxState): void {
+				this.setState(state);
+			}
+		}
+
+		it("does not freeze the caller's initialState", () => {
+			const state: BoxState = { qty: 1 };
+			const box = new BoxEntity("item-1" as ItemId, state);
+
+			expect(Object.isFrozen(state)).toBe(false);
+			state.qty = 2; // caller's object stays mutable...
+			expect(box.state.qty).toBe(1); // ...without bleeding into the entity
+		});
+
+		it("does not freeze the caller's newState passed via setState", () => {
+			const box = new BoxEntity("item-1" as ItemId, { qty: 1 });
+			const next: BoxState = { qty: 5 };
+
+			box.replace(next);
+
+			expect(Object.isFrozen(next)).toBe(false);
+			next.qty = 9;
+			expect(box.state.qty).toBe(5);
+		});
+
+		it("keeps the entity's own state shallowly frozen", () => {
+			const box = new BoxEntity("item-1" as ItemId, { qty: 1 });
+
+			expect(Object.isFrozen(box.state)).toBe(true);
+			expect(() => {
+				(box.state as { qty: number }).qty = 99;
+			}).toThrow();
+		});
+
+		it("keeps nested objects shared and unfrozen (documented shallow-freeze design)", () => {
+			const meta = { tag: "a" };
+			const box = new BoxEntity("item-1" as ItemId, { qty: 1, meta });
+
+			expect(Object.isFrozen(meta)).toBe(false);
+			expect(box.state.meta).toBe(meta);
+		});
+	});
+
 	describe("Helper functions compatibility", () => {
 		it("should work with class instances", () => {
 			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);

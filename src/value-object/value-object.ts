@@ -3,6 +3,7 @@ import {
     deepEqualExcept,
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
+import { deepOmit } from "../utils/array/deep-omit";
 import { err, ok, type Result } from "@shirudo/result";
 
 // ============================================================================
@@ -317,7 +318,9 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 
     /**
      * Creates a new ValueObject.
-     * The properties are deeply frozen to ensure immutability.
+     * The properties are deep-cloned (prototype-preserving) and then deeply
+     * frozen — the caller's own object graph is never frozen or mutated,
+     * and later mutation of the input does not bleed into the value object.
      *
      * @param props - The properties of the value object
      * @example
@@ -335,7 +338,10 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
      */
     constructor(props: T) {
         this.validate(props);
-        this.props = deepFreeze({ ...props });
+        // Deep-clone before freezing (prototype-preserving, unlike
+        // structuredClone) — a shallow `{ ...props }` would deep-freeze
+        // the caller's nested objects in place.
+        this.props = deepFreeze(deepOmit(props, {}));
     }
 
     /**
