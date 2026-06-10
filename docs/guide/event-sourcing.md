@@ -121,6 +121,27 @@ const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapsho
 
 **All-or-nothing**: if any event mid-replay throws a `DomainError`, the aggregate is rolled back to its pre-call state and version. Partial restoration is never observable to the caller.
 
+### Snapshot state must be plain data — `toSnapshotState` / `fromSnapshotState`
+
+A snapshot is a persistence artifact: it round-trips through your snapshot store as plain data, so prototypes cannot survive it. The default `createSnapshot` therefore **fails fast** (with the offending path) if the state graph contains class instances, functions, or uncloneables — instead of producing a snapshot that silently lost its child entities' methods and breaks on the first call after restore.
+
+If your state carries class-based child entities, declare a plain DTO shape via the `TSnapshotState` generic and override the two hooks:
+
+```ts
+type OrderSnapshotState = { items: Array<{ sku: string; qty: number }> };
+
+class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId, OrderSnapshotState> {
+  protected override toSnapshotState(state: OrderState): OrderSnapshotState {
+    return { items: state.items.map((i) => i.toPlainData()) };
+  }
+  protected override fromSnapshotState(stored: OrderSnapshotState): OrderState {
+    return { items: stored.items.map(OrderItem.fromPlainData) };
+  }
+}
+```
+
+The override owns isolation: return fresh objects, not references into live state. `AggregateRoot.restoreFromSnapshot` honours the same hooks.
+
 ### Snapshot policies — when to snapshot
 
 `createSnapshot` and `restoreFromSnapshotWithEvents` give you the **mechanism**; the **policy** is yours. For an aggregate with a few dozen events, replay from the beginning is cheap and you can skip snapshots entirely. For long-lived aggregates (subscriptions accumulating monthly billing events for years, devices emitting telemetry, etc.), the replay cost dominates load latency and snapshots become essential.

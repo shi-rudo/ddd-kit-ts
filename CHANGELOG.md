@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — snapshots of states with class-based child entities no longer silently corrupt; new `toSnapshotState` / `fromSnapshotState` hooks
+
+`createSnapshot` and both restore paths ran `structuredClone` over the state. For the documented class-children pattern (`OrderState` containing `OrderItem extends Entity`) the clone silently stripped prototypes — snapshot and restore *appeared* to succeed, and the aggregate crashed on the first child-entity method call, arbitrarily far from the cause. Function-valued state members crashed `createSnapshot` outright with a cryptic `DataCloneError`. A prototype-preserving clone was rejected as a fix: a snapshot is a persistence artifact, and prototypes cannot survive the snapshot-store round-trip anyway — the snapshot state *must* be plain data.
+
+Two changes: (1) the default `toSnapshotState` now walks the state graph and **fails fast with the offending path** ("state.items[0] is a class instance (OrderItem) — override toSnapshotState()/fromSnapshotState()…") for class instances, functions and Promise/WeakMap/WeakSet; (2) new overridable hooks `toSnapshotState(state)` / `fromSnapshotState(stored)` plus a trailing `TSnapshotState` generic (default `TState`) on `BaseAggregate`/`AggregateRoot`/`EventSourcedAggregate` let aggregates map class children to a plain DTO shape and reconstruct them on restore — honest across the persistence boundary. Plain-data states are unaffected. Additive API: confirms the next release is a minor (1.1.0).
+
 ### Fixed — `loadFromHistory` rolls back on mid-stream failure (all-or-nothing)
 
 When a replayed event threw mid-stream, `loadFromHistory` returned `err` but left the aggregate partially mutated: `_state` already reflected the events before the failure while `version` was never advanced — state and version were mutually inconsistent, and reusing or re-loading the aggregate produced wrong results. Its sibling `restoreFromSnapshotWithEvents` always promised (and implemented) all-or-nothing rollback. `loadFromHistory` now snapshots the pre-call state and restores it in the catch path — for `DomainError`s (returned as `err`) and for propagating non-domain throws alike. Partial replay is never observable.

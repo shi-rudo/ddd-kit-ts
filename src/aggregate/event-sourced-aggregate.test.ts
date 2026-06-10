@@ -812,6 +812,103 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("Snapshots with class-based child entities (toSnapshotState/fromSnapshotState)", () => {
+		class LineItem {
+			constructor(
+				readonly sku: string,
+				public qty: number,
+			) {}
+
+			toPlainData(): { sku: string; qty: number } {
+				return { sku: this.sku, qty: this.qty };
+			}
+
+			static fromPlainData(d: { sku: string; qty: number }): LineItem {
+				return new LineItem(d.sku, d.qty);
+			}
+		}
+
+		type CartState = { items: LineItem[] };
+		type CartSnapshotState = { items: Array<{ sku: string; qty: number }> };
+		type ItemAdded = DomainEvent<"ItemAdded", { sku: string }>;
+		type CartEvent = ItemAdded;
+
+		class Cart extends EventSourcedAggregate<
+			CartState,
+			CartEvent,
+			TestId,
+			CartSnapshotState
+		> {
+			protected readonly aggregateType = "Cart";
+
+			constructor(id: TestId, state: CartState) {
+				super(id, state);
+			}
+
+			protected readonly handlers = {
+				ItemAdded: (state: CartState, e: ItemAdded): CartState => ({
+					items: [...state.items, new LineItem(e.payload.sku, 1)],
+				}),
+			};
+
+			protected override toSnapshotState(state: CartState): CartSnapshotState {
+				return { items: state.items.map((i) => i.toPlainData()) };
+			}
+
+			protected override fromSnapshotState(
+				stored: CartSnapshotState,
+			): CartState {
+				return { items: stored.items.map(LineItem.fromPlainData) };
+			}
+		}
+
+		it("restoreFromSnapshotWithEvents revives class children and replays events on top", () => {
+			const cart = new Cart("agg-1" as TestId, {
+				items: [new LineItem("sku-a", 2)],
+			});
+			const snapshot = cart.createSnapshot();
+			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
+				Object.prototype,
+			);
+
+			const restored = new Cart("agg-1" as TestId, { items: [] });
+			const result = restored.restoreFromSnapshotWithEvents(snapshot, [
+				createDomainEvent("ItemAdded", { sku: "sku-b" }) as ItemAdded,
+			]);
+
+			expect(result.isOk()).toBe(true);
+			expect(restored.state.items[0]).toBeInstanceOf(LineItem);
+			expect(restored.state.items[0]?.toPlainData()).toEqual({
+				sku: "sku-a",
+				qty: 2,
+			});
+			expect(restored.state.items[1]?.sku).toBe("sku-b");
+		});
+
+		it("default createSnapshot fails fast on a Promise in state instead of DataCloneError", () => {
+			type JobState = { pending: Promise<number> };
+			class JobAggregate extends EventSourcedAggregate<
+				JobState,
+				CartEvent,
+				TestId
+			> {
+				protected readonly aggregateType = "JobAggregate";
+				constructor(id: TestId, state: JobState) {
+					super(id, state);
+				}
+				protected readonly handlers = {
+					ItemAdded: (s: JobState): JobState => s,
+				};
+			}
+			const agg = new JobAggregate("agg-1" as TestId, {
+				pending: Promise.resolve(1),
+			});
+
+			expect(() => agg.createSnapshot()).toThrow(/Promise/);
+			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
+		});
+	});
+
 	describe("persistedVersion + markRestored (Insert-vs-Update + OCC baseline)", () => {
 		it("persistedVersion is undefined on a freshly-constructed aggregate", () => {
 			const agg = new TestEventSourcedAggregate("id-1" as TestId, {

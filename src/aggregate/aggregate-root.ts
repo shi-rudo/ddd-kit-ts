@@ -74,7 +74,8 @@ export abstract class AggregateRoot<
 	TState,
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
-> extends BaseAggregate<TState, TId, TEvent> {
+	TSnapshotState = TState,
+> extends BaseAggregate<TState, TId, TEvent, TSnapshotState> {
 	private readonly _autoVersionBump: boolean;
 
 	protected constructor(
@@ -165,10 +166,10 @@ export abstract class AggregateRoot<
 	 *
 	 * @param snapshot - The snapshot to restore from
 	 */
-	public restoreFromSnapshot(snapshot: AggregateSnapshot<TState>): void {
-		const cloned = structuredClone(snapshot.state);
-		this.validateState(cloned);
-		this._state = freezeShallow(cloned);
+	public restoreFromSnapshot(snapshot: AggregateSnapshot<TSnapshotState>): void {
+		const restored = this.fromSnapshotState(snapshot.state);
+		this.validateState(restored);
+		this._state = freezeShallow(restored);
 		this.markRestored(snapshot.version);
 	}
 }

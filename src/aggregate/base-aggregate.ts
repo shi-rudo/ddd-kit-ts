@@ -29,11 +29,16 @@ import {
  * @template TEvent - The domain-event union. Defaults to `never` so
  *   aggregates without a declared event type cannot emit events
  *   (emitting any event becomes a compile error).
+ * @template TSnapshotState - The plain-data shape stored in snapshots.
+ *   Defaults to `TState` for plain-data states. Aggregates whose state
+ *   carries class-based child entities declare a plain DTO shape here
+ *   and override {@link toSnapshotState} / {@link fromSnapshotState}.
  */
 export abstract class BaseAggregate<
 		TState,
 		TId extends Id<string>,
 		TEvent extends AnyDomainEvent = never,
+		TSnapshotState = TState,
 	>
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId, TEvent>
@@ -217,13 +222,47 @@ export abstract class BaseAggregate<
 	 * Creates a snapshot of the current aggregate state — the state at
 	 * this moment plus the version. Useful for ES snapshot policies and
 	 * for state-stored backup / restore.
+	 *
+	 * The state is converted via {@link toSnapshotState}; the default
+	 * requires plain, serialisable data and fails fast otherwise.
 	 */
-	public createSnapshot(): AggregateSnapshot<TState> {
+	public createSnapshot(): AggregateSnapshot<TSnapshotState> {
 		return {
-			state: structuredClone(this._state),
+			state: this.toSnapshotState(this._state),
 			version: this.version,
 			snapshotAt: new Date(),
 		};
+	}
+
+	/**
+	 * Converts live aggregate state into the plain-data shape stored in a
+	 * snapshot. The default validates that the state graph is plain,
+	 * serialisable data (no class instances, functions, Promise/WeakMap/
+	 * WeakSet) and then `structuredClone`s it — class instances would
+	 * silently lose their prototype here AND on every snapshot-store
+	 * round-trip, so the default fails fast with the offending path
+	 * instead of producing a snapshot that breaks on first method call
+	 * after restore.
+	 *
+	 * Override this together with {@link fromSnapshotState} (and the
+	 * `TSnapshotState` generic) when the state carries class-based child
+	 * entities. The override owns isolation: return fresh objects, not
+	 * references into live state.
+	 */
+	protected toSnapshotState(state: TState): TSnapshotState {
+		assertSnapshotSafe(state, "", new WeakSet());
+		return structuredClone(state) as unknown as TSnapshotState;
+	}
+
+	/**
+	 * Converts the plain-data snapshot shape back into live aggregate
+	 * state. The default `structuredClone`s the stored state so the
+	 * restored aggregate never aliases the snapshot object. Override
+	 * together with {@link toSnapshotState} to reconstruct class-based
+	 * child entities.
+	 */
+	protected fromSnapshotState(stored: TSnapshotState): TState {
+		return structuredClone(stored) as unknown as TState;
 	}
 
 	/**
@@ -271,4 +310,111 @@ export abstract class BaseAggregate<
 			aggregateType: this.aggregateType,
 		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
+}
+
+/**
+ * Built-in tags `structuredClone` handles AND that survive a typical
+ * snapshot-store round-trip well enough to allow by default. Treated
+ * atomically — never walked for own keys (a deep-frozen Date carries
+ * non-enumerable shadow methods that must not trip the function check).
+ */
+const SNAPSHOT_SAFE_TAGS: ReadonlySet<string> = new Set([
+	"[object Date]",
+	"[object RegExp]",
+	"[object Error]",
+	"[object ArrayBuffer]",
+	"[object SharedArrayBuffer]",
+	"[object DataView]",
+	"[object Boolean]",
+	"[object Number]",
+	"[object String]",
+]);
+
+/**
+ * Walks a state graph and throws a descriptive error (with the offending
+ * path) when it contains anything `structuredClone` would either reject
+ * (functions, Promise/WeakMap/WeakSet) or silently degrade (class
+ * instances lose their prototype and methods). Used by the default
+ * `toSnapshotState` so snapshot corruption surfaces at snapshot time,
+ * not on the first method call after a much later restore.
+ */
+function assertSnapshotSafe(
+	value: unknown,
+	path: string,
+	seen: WeakSet<object>,
+): void {
+	if (typeof value === "function") {
+		throw new Error(
+			`createSnapshot: state${path} is a function — snapshot state must be ` +
+				`plain, serialisable data. Override toSnapshotState()/` +
+				`fromSnapshotState() to map it.`,
+		);
+	}
+	if (value === null || typeof value !== "object") return;
+	const obj = value as object;
+	if (seen.has(obj)) return;
+	seen.add(obj);
+
+	if (Array.isArray(obj)) {
+		for (let i = 0; i < obj.length; i++) {
+			assertSnapshotSafe(obj[i], `${path}[${i}]`, seen);
+		}
+		return;
+	}
+
+	const tag = Object.prototype.toString.call(obj);
+	if (tag === "[object Map]") {
+		let i = 0;
+		for (const [key, entryValue] of obj as Map<unknown, unknown>) {
+			assertSnapshotSafe(key, `${path}<map key #${i}>`, seen);
+			assertSnapshotSafe(entryValue, `${path}<map value #${i}>`, seen);
+			i++;
+		}
+		return;
+	}
+	if (tag === "[object Set]") {
+		let i = 0;
+		for (const member of obj as Set<unknown>) {
+			assertSnapshotSafe(member, `${path}<set member #${i}>`, seen);
+			i++;
+		}
+		return;
+	}
+	if (
+		tag === "[object Promise]" ||
+		tag === "[object WeakMap]" ||
+		tag === "[object WeakSet]"
+	) {
+		throw new Error(
+			`createSnapshot: state${path} is a ${tag.slice(8, -1)} — it cannot ` +
+				`be cloned or persisted. Override toSnapshotState()/` +
+				`fromSnapshotState() to map it.`,
+		);
+	}
+	if (ArrayBuffer.isView(obj) || SNAPSHOT_SAFE_TAGS.has(tag)) return;
+
+	if (tag === "[object Object]") {
+		const proto = Object.getPrototypeOf(obj);
+		if (proto !== Object.prototype && proto !== null) {
+			const name: string =
+				(proto.constructor && proto.constructor.name) || "anonymous class";
+			throw new Error(
+				`createSnapshot: state${path} is a class instance (${name}) — ` +
+					`structuredClone would strip its prototype and methods, producing ` +
+					`a snapshot that breaks on the first method call after restore. ` +
+					`Override toSnapshotState()/fromSnapshotState() to map child ` +
+					`entities to plain data.`,
+			);
+		}
+		for (const key of Reflect.ownKeys(obj)) {
+			assertSnapshotSafe(
+				(obj as Record<PropertyKey, unknown>)[key],
+				`${path}.${String(key)}`,
+				seen,
+			);
+		}
+		return;
+	}
+	// Unknown exotic tag: let structuredClone decide — it throws clearly
+	// for unsupported types.
 }

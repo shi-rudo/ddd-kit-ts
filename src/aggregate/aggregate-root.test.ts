@@ -253,6 +253,107 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
+	describe("Snapshots with class-based child entities (toSnapshotState/fromSnapshotState)", () => {
+		class LineItem {
+			constructor(
+				readonly sku: string,
+				public qty: number,
+			) {}
+
+			increase(): void {
+				this.qty += 1;
+			}
+
+			toPlainData(): { sku: string; qty: number } {
+				return { sku: this.sku, qty: this.qty };
+			}
+
+			static fromPlainData(d: { sku: string; qty: number }): LineItem {
+				return new LineItem(d.sku, d.qty);
+			}
+		}
+
+		type CartState = { items: LineItem[] };
+		type CartSnapshotState = { items: Array<{ sku: string; qty: number }> };
+
+		class NaiveCart extends AggregateRoot<CartState, TestId> {
+			protected readonly aggregateType = "NaiveCart";
+			constructor(id: TestId, state: CartState) {
+				super(id, state);
+			}
+		}
+
+		class Cart extends AggregateRoot<CartState, TestId, never, CartSnapshotState> {
+			protected readonly aggregateType = "Cart";
+			constructor(id: TestId, state: CartState) {
+				super(id, state);
+			}
+
+			protected override toSnapshotState(state: CartState): CartSnapshotState {
+				return { items: state.items.map((i) => i.toPlainData()) };
+			}
+
+			protected override fromSnapshotState(
+				stored: CartSnapshotState,
+			): CartState {
+				return { items: stored.items.map(LineItem.fromPlainData) };
+			}
+		}
+
+		it("default createSnapshot fails fast with a descriptive error on class instances", () => {
+			const cart = new NaiveCart("agg-1" as TestId, {
+				items: [new LineItem("sku-a", 1)],
+			});
+
+			// Without the guard, structuredClone silently strips the prototype
+			// and the snapshot breaks on first method call after restore.
+			expect(() => cart.createSnapshot()).toThrow(/class instance \(LineItem\)/);
+			expect(() => cart.createSnapshot()).toThrow(/toSnapshotState/);
+			expect(() => cart.createSnapshot()).toThrow(/items\[0\]/);
+		});
+
+		it("default createSnapshot fails fast on function-valued state members", () => {
+			type FnState = { calc: () => number };
+			class FnAggregate extends AggregateRoot<FnState, TestId> {
+				protected readonly aggregateType = "FnAggregate";
+				constructor(id: TestId, state: FnState) {
+					super(id, state);
+				}
+			}
+			const agg = new FnAggregate("agg-1" as TestId, { calc: () => 42 });
+
+			// Previously: cryptic DataCloneError from structuredClone.
+			expect(() => agg.createSnapshot()).toThrow(/function/);
+			expect(() => agg.createSnapshot()).toThrow(/calc/);
+		});
+
+		it("overridden hooks produce a plain snapshot and revive class children on restore", () => {
+			const cart = new Cart("agg-1" as TestId, {
+				items: [new LineItem("sku-a", 2)],
+			});
+
+			const snapshot = cart.createSnapshot();
+			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
+				Object.prototype,
+			);
+
+			const restored = new Cart("agg-1" as TestId, { items: [] });
+			restored.restoreFromSnapshot(snapshot);
+
+			expect(restored.state.items[0]).toBeInstanceOf(LineItem);
+			restored.state.items[0]?.increase();
+			expect(restored.state.items[0]?.qty).toBe(3);
+		});
+
+		it("plain-data states snapshot exactly as before (no behaviour change)", () => {
+			const aggregate = TestAggregate.create("agg-1" as TestId, 10);
+			const snapshot = aggregate.createSnapshot();
+
+			expect(snapshot.state).toEqual({ value: 10, status: "inactive" });
+			expect(snapshot.version).toBe(aggregate.version);
+		});
+	});
+
 	describe("State immutability", () => {
 		it("should expose state as readonly", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);

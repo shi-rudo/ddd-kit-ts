@@ -72,8 +72,9 @@ export abstract class EventSourcedAggregate<
 		TState,
 		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
+		TSnapshotState = TState,
 	>
-	extends BaseAggregate<TState, TId, TEvent>
+	extends BaseAggregate<TState, TId, TEvent, TSnapshotState>
 	implements IEventSourcedAggregate<TId, TEvent>
 {
 	/**
@@ -188,14 +189,14 @@ export abstract class EventSourcedAggregate<
 	 * restoration is never observable to the caller.
 	 */
 	public restoreFromSnapshotWithEvents(
-		snapshot: AggregateSnapshot<TState>,
+		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		this._state = freezeShallow(structuredClone(snapshot.state));
+		this._state = freezeShallow(this.fromSnapshotState(snapshot.state));
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {
