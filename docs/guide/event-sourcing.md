@@ -123,7 +123,7 @@ const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapsho
 
 ### Snapshot state must be plain data — `toSnapshotState` / `fromSnapshotState`
 
-A snapshot is a persistence artifact: it round-trips through your snapshot store as plain data, so prototypes cannot survive it. The default `createSnapshot` therefore **fails fast** (with the offending path) if the state graph contains class instances, functions, or uncloneables — instead of producing a snapshot that silently lost its child entities' methods and breaks on the first call after restore.
+A snapshot is a persistence artifact: it round-trips through your snapshot store as plain data, so prototypes cannot survive it. The default `createSnapshot` therefore **fails fast** (with the offending path) if the state graph contains class instances, functions, uncloneables (Promise/WeakMap/WeakSet), Errors (subclasses and custom fields do not survive `structuredClone`), or symbol-keyed properties (silently dropped by `structuredClone`) — instead of producing a snapshot that silently lost state and breaks on the first call after restore.
 
 If your state carries class-based child entities, declare a plain DTO shape via the `TSnapshotState` generic and override the two hooks:
 

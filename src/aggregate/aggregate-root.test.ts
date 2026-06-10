@@ -352,6 +352,94 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(snapshot.state).toEqual({ value: 10, status: "inactive" });
 			expect(snapshot.version).toBe(aggregate.version);
 		});
+
+		it("fails fast on Error values in state (custom fields and subclasses do not survive structuredClone)", () => {
+			class MyDomainishError extends Error {
+				readonly code = 42;
+			}
+			type ErrState = { lastError: Error };
+			class ErrAggregate extends AggregateRoot<ErrState, TestId> {
+				protected readonly aggregateType = "ErrAggregate";
+				constructor(id: TestId, state: ErrState) {
+					super(id, state);
+				}
+			}
+
+			const withSubclass = new ErrAggregate("agg-1" as TestId, {
+				lastError: new MyDomainishError("boom"),
+			});
+			// structuredClone silently downgrades the subclass to a plain
+			// Error (instanceof broken, .code gone) — must fail fast instead.
+			expect(() => withSubclass.createSnapshot()).toThrow(/Error/);
+			expect(() => withSubclass.createSnapshot()).toThrow(/lastError/);
+			expect(() => withSubclass.createSnapshot()).toThrow(/toSnapshotState/);
+
+			const withPlainError = new ErrAggregate("agg-1" as TestId, {
+				lastError: Object.assign(new Error("boom"), { code: 42 }),
+			});
+			expect(() => withPlainError.createSnapshot()).toThrow(/lastError/);
+		});
+
+		it("does not let a Symbol.toStringTag spoofer smuggle functions past the guard", () => {
+			type SpoofState = { d: { f: () => number } };
+			class SpoofAggregate extends AggregateRoot<SpoofState, TestId> {
+				protected readonly aggregateType = "SpoofAggregate";
+				constructor(id: TestId, state: SpoofState) {
+					super(id, state);
+				}
+			}
+			const agg = new SpoofAggregate("agg-1" as TestId, {
+				d: Object.assign(
+					{ f: () => 1 },
+					{ [Symbol.toStringTag]: "Date" },
+				) as unknown as SpoofState["d"],
+			});
+
+			// Previously the spoofed tag matched SNAPSHOT_SAFE_TAGS, the walk
+			// skipped the object, and structuredClone later threw a pathless
+			// DataCloneError. The guard must report the function with its path.
+			expect(() => agg.createSnapshot()).toThrow(/function/);
+			expect(() => agg.createSnapshot()).toThrow(/state\.d\.f/);
+		});
+
+		it("fails fast on enumerable symbol-keyed state (structuredClone silently drops symbol keys)", () => {
+			const region = Symbol("region");
+			type SymState = { value: number; [region]?: { zone: string } };
+			class SymAggregate extends AggregateRoot<SymState, TestId> {
+				protected readonly aggregateType = "SymAggregate";
+				constructor(id: TestId, state: SymState) {
+					super(id, state);
+				}
+			}
+			const agg = new SymAggregate("agg-1" as TestId, {
+				value: 1,
+				[region]: { zone: "eu" },
+			});
+
+			expect(() => agg.createSnapshot()).toThrow(/symbol/i);
+			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
+		});
+
+		it("ignores non-enumerable props, exactly like structuredClone does", () => {
+			type PlainState = { value: number };
+			class NonEnumAggregate extends AggregateRoot<PlainState, TestId> {
+				protected readonly aggregateType = "NonEnumAggregate";
+				constructor(id: TestId, state: PlainState) {
+					super(id, state);
+				}
+			}
+			const state: PlainState = { value: 1 };
+			Object.defineProperty(state, "recompute", {
+				value: () => 99,
+				enumerable: false,
+			});
+			const agg = new NonEnumAggregate("agg-1" as TestId, state);
+
+			// Non-enumerable members are deliberately excluded from
+			// serialization — structuredClone drops them, so the guard
+			// must not reject them.
+			expect(() => agg.createSnapshot()).not.toThrow();
+		});
 	});
 
 	describe("State immutability", () => {

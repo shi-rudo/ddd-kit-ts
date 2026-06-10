@@ -1,5 +1,6 @@
 import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
+import { isBuiltInObject } from "../utils/array/is-built-in";
 import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
 import {
 	type AnyDomainEvent,
@@ -313,30 +314,23 @@ export abstract class BaseAggregate<
 }
 
 /**
- * Built-in tags `structuredClone` handles AND that survive a typical
- * snapshot-store round-trip well enough to allow by default. Treated
- * atomically — never walked for own keys (a deep-frozen Date carries
- * non-enumerable shadow methods that must not trip the function check).
- */
-const SNAPSHOT_SAFE_TAGS: ReadonlySet<string> = new Set([
-	"[object Date]",
-	"[object RegExp]",
-	"[object Error]",
-	"[object ArrayBuffer]",
-	"[object SharedArrayBuffer]",
-	"[object DataView]",
-	"[object Boolean]",
-	"[object Number]",
-	"[object String]",
-]);
-
 /**
  * Walks a state graph and throws a descriptive error (with the offending
  * path) when it contains anything `structuredClone` would either reject
  * (functions, Promise/WeakMap/WeakSet) or silently degrade (class
- * instances lose their prototype and methods). Used by the default
- * `toSnapshotState` so snapshot corruption surfaces at snapshot time,
- * not on the first method call after a much later restore.
+ * instances lose their prototype and methods; Errors lose subclass
+ * prototypes and custom fields; symbol-keyed properties are dropped).
+ * Used by the default `toSnapshotState` so snapshot corruption surfaces
+ * at snapshot time, not on the first method call after a much later
+ * restore.
+ *
+ * Built-in detection is brand-verified via {@link isBuiltInObject} — a
+ * plain object spoofing a built-in tag through `Symbol.toStringTag` is
+ * walked like any other plain object, so nothing can smuggle unsafe
+ * members past the guard. The plain-object walk mirrors what
+ * `structuredClone` serialises: own ENUMERABLE string-keyed values
+ * (non-enumerable members are deliberately excluded from serialisation
+ * and are ignored here too).
  */
 function assertSnapshotSafe(
 	value: unknown,
@@ -363,58 +357,84 @@ function assertSnapshotSafe(
 	}
 
 	const tag = Object.prototype.toString.call(obj);
-	if (tag === "[object Map]") {
-		let i = 0;
-		for (const [key, entryValue] of obj as Map<unknown, unknown>) {
-			assertSnapshotSafe(key, `${path}<map key #${i}>`, seen);
-			assertSnapshotSafe(entryValue, `${path}<map value #${i}>`, seen);
-			i++;
+	if (isBuiltInObject(obj, tag)) {
+		if (tag === "[object Map]") {
+			let i = 0;
+			for (const [key, entryValue] of obj as Map<unknown, unknown>) {
+				assertSnapshotSafe(key, `${path}<map key #${i}>`, seen);
+				assertSnapshotSafe(entryValue, `${path}<map value #${i}>`, seen);
+				i++;
+			}
+			return;
 		}
-		return;
-	}
-	if (tag === "[object Set]") {
-		let i = 0;
-		for (const member of obj as Set<unknown>) {
-			assertSnapshotSafe(member, `${path}<set member #${i}>`, seen);
-			i++;
+		if (tag === "[object Set]") {
+			let i = 0;
+			for (const member of obj as Set<unknown>) {
+				assertSnapshotSafe(member, `${path}<set member #${i}>`, seen);
+				i++;
+			}
+			return;
 		}
-		return;
-	}
-	if (
-		tag === "[object Promise]" ||
-		tag === "[object WeakMap]" ||
-		tag === "[object WeakSet]"
-	) {
-		throw new Error(
-			`createSnapshot: state${path} is a ${tag.slice(8, -1)} — it cannot ` +
-				`be cloned or persisted. Override toSnapshotState()/` +
-				`fromSnapshotState() to map it.`,
-		);
-	}
-	if (ArrayBuffer.isView(obj) || SNAPSHOT_SAFE_TAGS.has(tag)) return;
-
-	if (tag === "[object Object]") {
-		const proto = Object.getPrototypeOf(obj);
-		if (proto !== Object.prototype && proto !== null) {
-			const name: string =
-				(proto.constructor && proto.constructor.name) || "anonymous class";
+		if (
+			tag === "[object Promise]" ||
+			tag === "[object WeakMap]" ||
+			tag === "[object WeakSet]"
+		) {
 			throw new Error(
-				`createSnapshot: state${path} is a class instance (${name}) — ` +
-					`structuredClone would strip its prototype and methods, producing ` +
-					`a snapshot that breaks on the first method call after restore. ` +
-					`Override toSnapshotState()/fromSnapshotState() to map child ` +
-					`entities to plain data.`,
+				`createSnapshot: state${path} is a ${tag.slice(8, -1)} — it cannot ` +
+					`be cloned or persisted. Override toSnapshotState()/` +
+					`fromSnapshotState() to map it.`,
 			);
 		}
+		if (tag === "[object Error]") {
+			throw new Error(
+				`createSnapshot: state${path} is an Error — structuredClone ` +
+					`downgrades Error subclasses to plain Error and silently drops ` +
+					`custom fields, so the restored value would not round-trip. ` +
+					`Override toSnapshotState()/fromSnapshotState() to map it to ` +
+					`plain data.`,
+			);
+		}
+		// Remaining brand-verified built-ins are snapshot-safe atomics:
+		// Date, RegExp, TypedArrays/DataView, ArrayBuffer(+Shared), and
+		// Boolean/Number/String wrappers. Never walked for own keys (a
+		// deep-frozen Date carries non-enumerable shadow methods that must
+		// not trip the function check).
+		return;
+	}
+
+	const proto = Object.getPrototypeOf(obj);
+	if (proto === Object.prototype || proto === null) {
 		for (const key of Reflect.ownKeys(obj)) {
+			const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+			if (!descriptor?.enumerable) continue;
+			if (typeof key === "symbol") {
+				throw new Error(
+					`createSnapshot: state${path} has a symbol-keyed property ` +
+						`(${String(key)}) — structuredClone silently drops symbol ` +
+						`keys, so the snapshot would lose state. Override ` +
+						`toSnapshotState()/fromSnapshotState() to map it.`,
+				);
+			}
 			assertSnapshotSafe(
 				(obj as Record<PropertyKey, unknown>)[key],
-				`${path}.${String(key)}`,
+				`${path}.${key}`,
 				seen,
 			);
 		}
 		return;
 	}
-	// Unknown exotic tag: let structuredClone decide — it throws clearly
-	// for unsupported types.
+
+	// Class instances and unknown exotic objects (including anything whose
+	// built-in-looking tag failed brand verification): structuredClone
+	// would strip or reject them — fail fast with the path.
+	const name: string =
+		(proto.constructor && proto.constructor.name) || "anonymous class";
+	throw new Error(
+		`createSnapshot: state${path} is a class instance (${name}) — ` +
+			`structuredClone would strip its prototype and methods, producing ` +
+			`a snapshot that breaks on the first method call after restore. ` +
+			`Override toSnapshotState()/fromSnapshotState() to map child ` +
+			`entities to plain data.`,
+	);
 }
