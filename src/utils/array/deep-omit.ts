@@ -77,10 +77,9 @@ function omitInternal(
 		return visited.get(obj);
 	}
 
-	const tag = Object.prototype.toString.call(obj);
-
-	// Arrays: recursively process elements
-	if (tag === "[object Array]") {
+	// Arrays: recursively process elements. `Array.isArray` is brand-based —
+	// immune to `Symbol.toStringTag` spoofing, unlike the tag check below.
+	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
 		const clone: unknown[] = new Array(arr.length);
 		visited.set(obj, clone);
@@ -92,7 +91,11 @@ function omitInternal(
 		return clone;
 	}
 
-	// Built-in atomic types: clone by type rather than walk.
+	const tag = Object.prototype.toString.call(obj);
+
+	// Built-in atomic types: clone by type rather than walk. The detection
+	// is brand-verified — a plain object spoofing a built-in tag falls
+	// through to the plain-object walk below.
 	if (isBuiltInObject(obj, tag)) {
 		const builtInClone = cloneBuiltIn(obj, tag);
 		visited.set(obj, builtInClone);

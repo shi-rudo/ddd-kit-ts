@@ -372,3 +372,36 @@ describe("deepOmit – Prototype pollution safety", () => {
 		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 	});
 });
+
+describe("deepOmit – Symbol.toStringTag spoofing", () => {
+	it("walks a spoofed Date as a plain object instead of crashing", () => {
+		const input = { d: { [Symbol.toStringTag]: "Date", secret: 1, keep: 2 } };
+
+		const result = deepOmit(input, { ignoreKeys: ["secret"] }) as {
+			d: { keep: number };
+		};
+
+		expect(result.d.keep).toBe(2);
+		expect("secret" in result.d).toBe(false);
+	});
+
+	it("walks a spoofed Map as a plain object instead of crashing", () => {
+		const input = { m: { [Symbol.toStringTag]: "Map", x: 1 } };
+
+		const result = deepOmit(input, { ignoreKeys: [] }) as {
+			m: { x: number };
+		};
+
+		expect(result.m.x).toBe(1);
+	});
+
+	it("still clones real built-ins by type (regression guard)", () => {
+		const input = { d: new Date(5), m: new Map([["k", 1]]) };
+		const result = deepOmit(input, {}) as { d: Date; m: Map<string, number> };
+
+		expect(result.d).not.toBe(input.d);
+		expect(result.d.getTime()).toBe(5);
+		expect(result.m).not.toBe(input.m);
+		expect(result.m.get("k")).toBe(1);
+	});
+});

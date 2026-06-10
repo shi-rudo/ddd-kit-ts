@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `deepEqual` / `deepOmit` no longer crash (or mis-compare) on `Symbol.toStringTag` spoofing
+
+Type detection was purely tag-based, then type-specific code ran unverified: `deepEqual({ [Symbol.toStringTag]: "Date" }, …)` crashed with `objA.getTime is not a function`, spoofed `"Map"` with `mapA is not iterable` (same class of crash in `deepOmit`'s `cloneBuiltIn`), and two plain objects spoofing `"Array"` compared equal regardless of content (both sides got `length === undefined`, so the element loop never ran). Tags are now brand-verified through internal-slot probes (`Date.prototype.getTime`, the `Map`/`Set` `size` getters, `ArrayBuffer.isView`, wrapper `valueOf`s, …) — the one check `Symbol.toStringTag` cannot spoof, still cross-realm safe. Spoofed objects are compared/cloned as the plain objects they are; a genuine built-in never equals a spoofed lookalike; arrays are detected via `Array.isArray` in both modules. Real built-ins behave exactly as before.
+
 ### Fixed — snapshots of states with class-based child entities no longer silently corrupt; new `toSnapshotState` / `fromSnapshotState` hooks
 
 `createSnapshot` and both restore paths ran `structuredClone` over the state. For the documented class-children pattern (`OrderState` containing `OrderItem extends Entity`) the clone silently stripped prototypes — snapshot and restore *appeared* to succeed, and the aggregate crashed on the first child-entity method call, arbitrarily far from the cause. Function-valued state members crashed `createSnapshot` outright with a cryptic `DataCloneError`. A prototype-preserving clone was rejected as a fix: a snapshot is a persistence artifact, and prototypes cannot survive the snapshot-store round-trip anyway — the snapshot state *must* be plain data.
