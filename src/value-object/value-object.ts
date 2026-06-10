@@ -130,12 +130,73 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 }
 
 /**
+ * Deep clone used by `vo()`. Plain objects and arrays are walked manually
+ * so that symbol-keyed properties survive (which `structuredClone` silently
+ * drops — they would otherwise be invisible to `voEquals`, whose `deepEqual`
+ * DOES consider symbol keys). Function values throw, preserving `vo()`'s
+ * documented data-not-behaviour gate. Built-ins (Date, Map, Set, RegExp,
+ * TypedArrays, …) delegate to `structuredClone`. Cycles are preserved.
+ * `__proto__` own keys are copied as inert data properties.
+ */
+function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown {
+    if (typeof value === "function") {
+        throw new TypeError(
+            "vo() does not accept function values — Value Objects are data, not behaviour",
+        );
+    }
+    if (value === null || typeof value !== "object") {
+        return value;
+    }
+    const obj = value as object;
+    if (visited.has(obj)) {
+        return visited.get(obj);
+    }
+
+    if (Array.isArray(obj)) {
+        const clone: unknown[] = new Array(obj.length);
+        visited.set(obj, clone);
+        for (let i = 0; i < obj.length; i++) {
+            clone[i] = cloneForVo(obj[i], visited);
+        }
+        return clone;
+    }
+
+    const proto = Object.getPrototypeOf(obj);
+    if (proto === Object.prototype || proto === null) {
+        const clone = Object.create(proto);
+        visited.set(obj, clone);
+        for (const key of Reflect.ownKeys(obj)) {
+            const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+            if (!descriptor?.enumerable) continue;
+            // defineProperty (not assignment) so an own "__proto__" key can
+            // never invoke the prototype setter.
+            Object.defineProperty(clone, key, {
+                value: cloneForVo(
+                    (obj as Record<PropertyKey, unknown>)[key],
+                    visited,
+                ),
+                writable: true,
+                enumerable: true,
+                configurable: true,
+            });
+        }
+        return clone;
+    }
+
+    // Built-ins and class instances: structuredClone semantics, unchanged.
+    const builtInClone = structuredClone(obj);
+    visited.set(obj, builtInClone);
+    return builtInClone;
+}
+
+/**
  * Creates a deeply immutable value object from the given data.
  *
- * The input is first deep-cloned with `structuredClone`, then the clone
- * is frozen — so calling `vo(input)` never freezes the caller's own
- * object graph as a side-effect. Mutating the input afterwards does not
- * bleed into the VO.
+ * The input is first deep-cloned, then the clone is frozen — so calling
+ * `vo(input)` never freezes the caller's own object graph as a
+ * side-effect. Mutating the input afterwards does not bleed into the VO.
+ * Symbol-keyed properties are preserved (matching `voEquals`); function
+ * values are rejected (Value Objects are data, not behaviour).
  *
  * @example
  * ```typescript
@@ -146,7 +207,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
  * ```
  */
 export function vo<T>(t: T): VO<T> {
-    return deepFreeze(structuredClone(t));
+    return deepFreeze(cloneForVo(t, new WeakMap()) as T);
 }
 
 /**

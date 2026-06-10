@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `vo()` no longer silently drops symbol-keyed properties
+
+`vo()` cloned via `structuredClone`, which silently drops symbol-keyed properties — yet `voEquals`/`deepEqual` DO consider symbol keys, so a symbol-keyed value vanished from the VO while still being claimed by the equality contract. (The existing test passed vacuously: `Object.isFrozen(undefined) === true`.) `vo()` now walks plain objects and arrays itself — preserving symbol keys, cycles, and `__proto__`-as-data safety — and delegates built-ins (Date, Map, Set, TypedArrays, …) to `structuredClone` unchanged. Function values still throw (`TypeError` instead of `DataCloneError`), keeping the documented data-not-behaviour gate.
+
 ### Fixed — `deepOmit` no longer reuses path-sensitive predicate results across shared references
 
 The visited cache served two purposes at once — cycle detection and structure sharing — so an object reached via two paths got the clone computed under the *first* path, even when `ignoreKeyPredicate` decides per path: `deepOmit({ a: s, b: s }, { ignoreKeyPredicate: (k, p) => k === "x" && p[0] === "a" })` wrongly dropped `b.x` too. With a predicate, the cache now only tracks in-progress ancestors (pure cycle detection) and every path gets its own clone; cycles still terminate and are preserved. Without a predicate, results are path-independent and shared references keep deduplicating to a single clone, exactly as before. Transitively fixes `deepEqualExcept`/`voEqualsExcept` with path-sensitive predicates over DAG-shaped inputs.

@@ -504,15 +504,50 @@ describe("VO", () => {
 		});
 	});
 
-	describe("deepFreeze symbol-key handling", () => {
-		it("freezes properties whose key is a Symbol, not only string keys", () => {
+	describe("symbol-keyed properties", () => {
+		it("preserves and freezes symbol-keyed properties (previously dropped by structuredClone)", () => {
 			const tag = Symbol("tag");
 			const v = vo({ [tag]: { nested: 1 } } as Record<symbol, unknown>);
 
 			const nested = (v as unknown as Record<symbol, { nested: number }>)[
 				tag
 			];
+			// NOT vacuous: the property must exist…
+			expect(nested).toEqual({ nested: 1 });
+			// …and be deeply frozen, matching deepEqual's symbol-key support.
 			expect(Object.isFrozen(nested)).toBe(true);
+		});
+
+		it("preserves symbol keys nested below the top level", () => {
+			const meta = Symbol("meta");
+			const v = vo({ outer: { [meta]: "x", plain: 1 } });
+
+			expect(
+				(v.outer as unknown as Record<symbol, string>)[meta],
+			).toBe("x");
+			expect(v.outer.plain).toBe(1);
+		});
+
+		it("voEquals considers symbol-keyed values", () => {
+			const k = Symbol("k");
+			const a = vo({ [k]: 1 } as Record<symbol, unknown>);
+			const b = vo({ [k]: 1 } as Record<symbol, unknown>);
+			const c = vo({ [k]: 2 } as Record<symbol, unknown>);
+
+			expect(voEquals(a, b)).toBe(true);
+			expect(voEquals(a, c)).toBe(false);
+		});
+
+		it("does not mutate or freeze the caller's input when symbol keys are present", () => {
+			const tag = Symbol("tag");
+			const inner = { nested: 1 };
+			const input = { [tag]: inner } as Record<symbol, { nested: number }>;
+
+			vo(input);
+
+			expect(Object.isFrozen(inner)).toBe(false);
+			inner.nested = 2;
+			expect(input[tag]?.nested).toBe(2);
 		});
 	});
 
