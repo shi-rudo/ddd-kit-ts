@@ -25,11 +25,13 @@ export interface DeepOmitOptions {
  * provided rules.
  *
  * Walks the object tree and skips keys that match `ignoreKeys` /
- * `ignoreKeyPredicate`. Built-in atomic types (Date, RegExp, Map, Set,
- * TypedArrays, ArrayBuffer, DataView) are cloned by type rather than walked
- * — their internal structure has no key filtering to apply. Promise,
- * WeakMap and WeakSet cannot be cloned at all and are passed through by
- * reference. Cycles are preserved: a cycle `a → a` clones to `a' → a'`.
+ * `ignoreKeyPredicate`. Built-in atomic types that `deepEqual` compares by
+ * value (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned by type
+ * rather than walked — their internal structure has no key filtering to
+ * apply. Types that `deepEqual` compares by reference (Error, ArrayBuffer,
+ * SharedArrayBuffer, Promise, WeakMap, WeakSet) are passed through by
+ * reference, so `deepEqualExcept(x, x)` stays reflexive. Cycles are
+ * preserved: a cycle `a → a` clones to `a' → a'`.
  *
  * **Prototype-pollution safety.** `__proto__` and `constructor` keys
  * encountered as *own* properties of the input (typical of `JSON.parse`
@@ -157,17 +159,22 @@ function assignOwn(target: object, key: PropertyKey, value: unknown): void {
 
 /**
  * Clones a built-in atomic type by case. Falls back to `structuredClone`
- * for anything not explicitly enumerated (e.g. ArrayBuffer, DataView,
- * Boolean/Number/String wrappers). Promise/WeakMap/WeakSet have no
- * meaningful by-value copy and `structuredClone` rejects them — they are
- * passed through by reference (which also keeps `deepEqualExcept`
- * reflexive, since `deepEqual` compares them by reference).
+ * for anything not explicitly enumerated (e.g. DataView, TypedArrays,
+ * Boolean/Number/String wrappers — all of which `deepEqual` compares by
+ * value). Types that `deepEqual` compares BY REFERENCE (its unhandled-
+ * built-in fallback: Error, ArrayBuffer, SharedArrayBuffer, Promise,
+ * WeakMap, WeakSet) are passed through by reference instead — cloning
+ * them would make `deepEqualExcept(x, x)` false. Promise/WeakMap/WeakSet
+ * additionally cannot be cloned at all (`structuredClone` rejects them).
  */
 function cloneBuiltIn(obj: object, tag: string): unknown {
 	switch (tag) {
 		case "[object Promise]":
 		case "[object WeakMap]":
 		case "[object WeakSet]":
+		case "[object Error]":
+		case "[object ArrayBuffer]":
+		case "[object SharedArrayBuffer]":
 			return obj;
 		case "[object Date]":
 			return new Date((obj as Date).getTime());

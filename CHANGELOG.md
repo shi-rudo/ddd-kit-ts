@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `deepEqualExcept(x, x)` no longer returns `false` for objects containing an Error or ArrayBuffer
+
+`deepEqual` compares its unhandled built-ins (Error, ArrayBuffer, SharedArrayBuffer) by reference — intentionally — but `deepOmit` cloned them via `structuredClone`, producing two distinct instances. `deepEqualExcept` (deepOmit both sides, then deepEqual) therefore reported even the *same object compared with itself* as unequal: reflexivity was broken, and `voEqualsExcept` inherited the bug. `cloneBuiltIn` now passes every type that `deepEqual` compares by reference (Error, ArrayBuffer, SharedArrayBuffer, plus the already-aliased Promise/WeakMap/WeakSet) through by reference; types `deepEqual` compares by value (Date, RegExp, Map, Set, TypedArrays, DataView, wrappers) are still cloned.
+
 ### Fixed — `deepOmit` (and `deepEqualExcept` / `voEqualsExcept`) no longer crash on Promise, WeakMap, WeakSet
 
 `isBuiltInObject` classifies `Promise`/`WeakMap`/`WeakSet` as atomic built-ins, but `cloneBuiltIn` fell through to `structuredClone` for them — which rejects all three with `DataCloneError` (`#<Promise> could not be cloned`). Any `deepOmit` call over a graph containing one of these crashed, and `deepEqualExcept`/`voEqualsExcept` inherited the crash. These types have no meaningful by-value copy, so `cloneBuiltIn` now passes them through by reference — which also keeps `deepEqualExcept` reflexive for them, since `deepEqual` compares unhandled built-ins by reference.

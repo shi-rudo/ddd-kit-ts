@@ -251,7 +251,7 @@ describe("deepEqualExcept – Built-ins & Interaction with deepEqual", () => {
 	});
 });
 
-describe("deepEqualExcept – Uncloneable built-ins (Promise, WeakMap, WeakSet)", () => {
+describe("deepEqualExcept – Reference-compared built-ins (Promise, WeakMap, WeakSet, Error, ArrayBuffer)", () => {
 	it("is reflexive for an object containing a Promise", () => {
 		const obj = { p: Promise.resolve(1), name: "job" };
 		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
@@ -267,6 +267,24 @@ describe("deepEqualExcept – Uncloneable built-ins (Promise, WeakMap, WeakSet)"
 	it("is reflexive for objects containing WeakMap and WeakSet", () => {
 		const obj = { wm: new WeakMap(), ws: new WeakSet() };
 		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("is reflexive for an object containing an ArrayBuffer", () => {
+		const obj = { buf: new ArrayBuffer(4), name: "blob" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("is reflexive for an object containing an Error", () => {
+		const obj = { e: new Error("oops"), name: "job" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("compares shared Error/ArrayBuffer references as equal across two objects", () => {
+		const e = new Error("oops");
+		const buf = new ArrayBuffer(4);
+		const a = { e, buf, id: 1 };
+		const b = { e, buf, id: 2 };
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["id"] })).toBe(true);
 	});
 });
 

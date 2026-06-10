@@ -232,9 +232,10 @@ describe("deepOmit – Built-ins are cloned atomically (distinct, equal-by-value
 	});
 });
 
-describe("deepOmit – Uncloneable built-ins are passed through by reference", () => {
-	// structuredClone cannot clone Promise/WeakMap/WeakSet, and there is no
-	// meaningful by-value copy of them — they must alias instead of crash.
+describe("deepOmit – Reference-compared built-ins are passed through by reference", () => {
+	// structuredClone cannot clone Promise/WeakMap/WeakSet, and deepEqual
+	// compares Error/ArrayBuffer by reference — cloning any of these would
+	// crash or break deepEqualExcept's reflexivity, so they must alias.
 	it("passes a Promise through by reference instead of throwing", () => {
 		const p = Promise.resolve(1);
 		const result = deepOmit({ p, id: 7 }, { ignoreKeys: ["id"] }) as {
@@ -258,6 +259,23 @@ describe("deepOmit – Uncloneable built-ins are passed through by reference", (
 			ws: WeakSet<object>;
 		};
 		expect(result.ws).toBe(ws);
+	});
+
+	it("passes an Error through by reference (deepEqual compares Errors by reference)", () => {
+		const e = new TypeError("boom");
+		const result = deepOmit({ e, id: 1 }, { ignoreKeys: ["id"] }) as {
+			e: Error;
+		};
+		expect(result.e).toBe(e);
+		expect("id" in result).toBe(false);
+	});
+
+	it("passes an ArrayBuffer through by reference (deepEqual compares ArrayBuffers by reference)", () => {
+		const buf = new ArrayBuffer(8);
+		const result = deepOmit({ buf }, { ignoreKeys: [] }) as {
+			buf: ArrayBuffer;
+		};
+		expect(result.buf).toBe(buf);
 	});
 
 	it("handles uncloneables nested below the top level", () => {
