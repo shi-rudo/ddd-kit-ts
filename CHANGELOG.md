@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `EventBusImpl.publish` no longer lets a synchronously throwing handler bypass the error-aggregation contract
+
+`EventHandler` permits plain synchronous handlers (`Promise<void> | void`), but `publish` invoked handlers directly inside `.map(...)` — a synchronous throw escaped before `Promise.allSettled` received the array. Consequences: peer handlers subscribed after the thrower were skipped, remaining events in the batch were never dispatched, the raw error surfaced instead of the documented single-Error/`AggregateError`, and already-started peer promises were orphaned (their rejections became unhandled promise rejections, process-fatal in Node by default). The handler invocation is now wrapped in an async closure so a sync throw becomes a rejection and gets the same allSettled treatment as a rejecting async handler — restoring the contract documented on `EventBus.publish`: peers run, the batch completes, errors are collected and thrown at the end.
+
 ## [1.0.1] - 2026-06-01
 
 ### Fixed — `@shirudo/result` peer dependency aligned to `^1.0.0`

@@ -379,6 +379,64 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("synchronously throwing handlers", () => {
+		it("runs peer handlers and dispatches remaining events when a handler throws synchronously", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			// EventHandler allows `Promise<void> | void` — a plain sync handler
+			// that throws must get the same allSettled treatment as a rejection.
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("sync boom");
+			});
+			bus.subscribe("OrderCreated", async (event) => {
+				seen.push(`peer:${event.payload.orderId}`);
+			});
+
+			await expect(
+				bus.publish([
+					createDomainEvent("OrderCreated", {
+						orderId: "o-1",
+					}) as OrderCreated,
+					createDomainEvent("OrderCreated", {
+						orderId: "o-2",
+					}) as OrderCreated,
+				]),
+			).rejects.toBeInstanceOf(AggregateError);
+
+			// Peer handler ran for BOTH events — the sync throw neither skipped
+			// peers nor short-circuited the batch.
+			expect(seen).toEqual(["peer:o-1", "peer:o-2"]);
+		});
+
+		it("aggregates a sync throw with an async rejection instead of orphaning the rejected promise", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			// Order matters: the async rejecter is subscribed FIRST, so its
+			// promise already exists when the second handler throws sync. If
+			// the sync throw escaped .map(), that rejection would become an
+			// unhandled promise rejection.
+			bus.subscribe("OrderCreated", async () => {
+				throw new Error("async boom");
+			});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("sync boom");
+			});
+
+			const evt = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+
+			await expect(bus.publish([evt])).rejects.toMatchObject({
+				message: "Multiple event handlers failed",
+				errors: [
+					expect.objectContaining({ message: "async boom" }),
+					expect.objectContaining({ message: "sync boom" }),
+				],
+			});
+		});
+	});
+
 	describe("duplicate subscription semantics", () => {
 		it("invokes the same handler once per subscription when subscribed twice", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
