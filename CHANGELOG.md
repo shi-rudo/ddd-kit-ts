@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `EventSourcedAggregate` handler lookup no longer walks the prototype chain
+
+The `handlers` map is an object literal, so `this.handlers[event.type]` resolved through `Object.prototype` for corrupt or adversarial stream rows: an event with `type: "toString"` invoked `Object.prototype.toString` as the handler and silently replaced the aggregate state with the string `"[object Undefined]"`; `"constructor"` silently no-opped; `"__proto__"` / `"hasOwnProperty"` crashed with a raw `TypeError` instead of the documented `MissingHandlerError`. The lookup is now guarded with `Object.hasOwn`, so every unregistered type — including `Object.prototype` member names — consistently throws `MissingHandlerError` and leaves state and version untouched, in `apply` and in the replay paths (`loadFromHistory`, `restoreFromSnapshotWithEvents`).
+
 ### Fixed — `ValueObject` and `Entity` no longer freeze caller-owned objects in place
 
 The class-based `ValueObject` constructor ran `deepFreeze({ ...props })` — the spread only copies the top level, so every nested object of the caller's input was frozen **by reference**: the caller's own graph silently became immutable (later writes throw in strict mode). The constructor now deep-clones `props` first via `deepOmit` (prototype-preserving, unlike `structuredClone` — function-valued and class-instance props keep working), then freezes the clone; later mutation of the input no longer bleeds into the VO. Similarly, `Entity`'s constructor and `setState` froze the very state object the caller passed; they now take a shallow copy first for plain objects and arrays (class instances and primitives pass through unchanged — spreading would strip an instance's prototype). The shallow-freeze design is unchanged: nested state objects stay shared, there is still no deep clone on reads.

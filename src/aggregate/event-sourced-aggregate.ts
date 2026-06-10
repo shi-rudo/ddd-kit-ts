@@ -118,9 +118,16 @@ export abstract class EventSourcedAggregate<
 	private dispatchAndCommit(event: TEvent, isNew: boolean): void {
 		this.validateEvent(event);
 
-		const handler = this.handlers[event.type as keyof typeof this.handlers] as
-			| Handler<TState, TEvent>
-			| undefined;
+		// Own-key guard: the handlers map is an object literal, so a plain
+		// property get for event.type === "toString" / "constructor" /
+		// "__proto__" (a corrupt or adversarial stream row) would resolve
+		// through Object.prototype and invoke a non-handler.
+		const handler = Object.hasOwn(this.handlers, event.type)
+			? (this.handlers[event.type as keyof typeof this.handlers] as Handler<
+					TState,
+					TEvent
+				>)
+			: undefined;
 		if (!handler) {
 			throw new MissingHandlerError(event.type);
 		}

@@ -413,6 +413,78 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("corrupt event types colliding with Object.prototype members", () => {
+		// The handlers map is an object literal, so a naive property get for
+		// event.type === "toString" returns Object.prototype.toString — which
+		// passes a truthiness check and gets invoked as a handler, silently
+		// corrupting state. All such types must yield MissingHandlerError.
+		class TrapAggregate extends EventSourcedAggregate<
+			TestState,
+			TestEvent,
+			TestId
+		> {
+			protected readonly aggregateType = "TrapAggregate";
+
+			constructor(id: TestId, initialState: TestState) {
+				super(id, initialState);
+			}
+
+			public testApply(event: TestEvent): void {
+				this.apply(event);
+			}
+
+			protected readonly handlers = {
+				TestEventCreated: (s: TestState): TestState => s,
+			} as unknown as Record<
+				TestEvent["type"],
+				(s: TestState, e: TestEvent) => TestState
+			>;
+		}
+
+		const corruptTypes = [
+			"toString",
+			"constructor",
+			"hasOwnProperty",
+			"__proto__",
+			"valueOf",
+		] as const;
+
+		for (const corruptType of corruptTypes) {
+			it(`throws MissingHandlerError for event.type "${corruptType}" and leaves state intact`, () => {
+				const aggregate = new TrapAggregate("test-1" as TestId, {
+					value: 7,
+					status: "inactive",
+				});
+
+				const corrupt = createDomainEvent(corruptType, {
+					evil: true,
+				}) as unknown as TestEvent;
+
+				expect(() => aggregate.testApply(corrupt)).toThrow(
+					MissingHandlerError,
+				);
+				expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
+				expect(aggregate.version).toBe(0);
+			});
+		}
+
+		it("propagates MissingHandlerError from loadFromHistory for a corrupt stream row", () => {
+			const aggregate = new TrapAggregate("test-1" as TestId, {
+				value: 7,
+				status: "inactive",
+			});
+
+			const corrupt = createDomainEvent("toString", {
+				evil: true,
+			}) as unknown as TestEvent;
+
+			expect(() => aggregate.loadFromHistory([corrupt])).toThrow(
+				MissingHandlerError,
+			);
+			expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
+		});
+	});
+
 	describe("loadFromHistory", () => {
 		it("should set version to history length on a fresh aggregate", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
