@@ -38,6 +38,18 @@ describe("CommandBus", () => {
 			bus.register("CancelOrder", async () => ok("cancelled"));
 			// Should not throw
 		});
+
+		it("throws on duplicate registration instead of silently replacing the handler", () => {
+			const bus = new CommandBus();
+
+			bus.register("CreateOrder", async () => ok("a"));
+
+			// Silent overwrite turns the first handler into dead code with
+			// no signal — wiring bugs must surface at startup.
+			expect(() =>
+				bus.register("CreateOrder", async () => ok("b")),
+			).toThrow(/already registered/);
+		});
 	});
 
 	describe("execute", () => {
@@ -220,3 +232,21 @@ describe("CommandBus", () => {
 	});
 });
 
+
+describe("CommandBus – non-Error throws keep their diagnostics", () => {
+	it("serialises a structured thrown object into the error string", async () => {
+		const bus = new CommandBus();
+		bus.register("CreateOrder", async () => {
+			throw { code: "DB_CONN", detail: "pool exhausted" };
+		});
+
+		const result = await bus.execute({ type: "CreateOrder" });
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			// '[object Object]' would destroy all diagnostic information.
+			expect(result.error).toContain("DB_CONN");
+			expect(result.error).toContain("pool exhausted");
+		}
+	});
+});

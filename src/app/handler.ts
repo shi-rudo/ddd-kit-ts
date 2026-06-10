@@ -162,7 +162,16 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// Done AFTER the tx commits so a rolled-back transaction never silently
 	// "consumes" the in-memory pending events.
 	for (const agg of aggregates) {
-		agg.markPersisted(agg.version);
+		try {
+			agg.markPersisted(agg.version);
+		} catch {
+			// Only the user-overridable onPersisted hook can throw here, and
+			// it runs AFTER the framework cleanup (events already flushed for
+			// THIS aggregate). Aborting the loop would leave the remaining
+			// aggregates un-marked — double-emitting their events on the next
+			// commit — and reject a committed write. Hook failures are
+			// observer failures: the post-commit invariant wins.
+		}
 	}
 
 	if (deps.bus && events.length > 0) {

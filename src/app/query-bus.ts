@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@shirudo/result";
+import { describeThrown } from "./describe-thrown";
 import type { Query, QueryHandler } from "./query";
 
 /**
@@ -150,6 +151,13 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		queryType: K,
 		handler: QueryHandler<Q, TMap[K]>,
 	): void {
+		// Silent replacement would turn the first handler into dead code
+		// with no signal — wiring bugs must surface at registration time.
+		if (this.handlers.has(queryType)) {
+			throw new Error(
+				`QueryBus: a handler for query type "${queryType}" is already registered`,
+			);
+		}
 		this.handlers.set(queryType, (query) => handler(query as Q));
 	}
 
@@ -166,9 +174,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
-			return err(
-				error instanceof Error ? error.message : String(error),
-			);
+			return err(describeThrown(error));
 		}
 	}
 
