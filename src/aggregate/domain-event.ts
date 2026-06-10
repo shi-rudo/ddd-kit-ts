@@ -474,5 +474,23 @@ export function copyMetadata(
 export function mergeMetadata(
 	...metadataObjects: Array<EventMetadata | undefined>
 ): EventMetadata {
-	return Object.assign({}, ...metadataObjects.filter(Boolean));
+	// Copy via defineProperty, not Object.assign: assign uses [[Set]],
+	// which invokes the `__proto__` setter for an own "__proto__" key —
+	// typical of JSON.parse'd metadata from outbox rows or message
+	// envelopes — and would install an attacker-controlled prototype.
+	const merged: Record<PropertyKey, unknown> = {};
+	for (const metadata of metadataObjects) {
+		if (!metadata) continue;
+		for (const key of Reflect.ownKeys(metadata)) {
+			const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
+			if (!descriptor?.enumerable) continue;
+			Object.defineProperty(merged, key, {
+				value: (metadata as Record<PropertyKey, unknown>)[key],
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		}
+	}
+	return merged as EventMetadata;
 }
