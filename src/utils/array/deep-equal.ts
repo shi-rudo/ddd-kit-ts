@@ -5,6 +5,17 @@ const objToString = objProto.toString;
 const objHasOwn = objProto.hasOwnProperty;
 
 /**
+ * SameValueZero: `===` plus NaN-equals-NaN (and `+0 === -0`, unlike
+ * `Object.is`). The numeric semantics `deepEqual` documents for primitives,
+ * applied consistently inside TypedArrays, Dates and Number wrappers.
+ */
+function sameValueZero(a: unknown, b: unknown): boolean {
+	return (
+		a === b || (Number.isNaN(a as number) && Number.isNaN(b as number))
+	);
+}
+
+/**
  * Performs a deep equality check between two values.
  *
  * This function compares values recursively, handling:
@@ -121,7 +132,7 @@ function deepEqualInner(
 		if (len !== arrB.length) return false;
 
 		for (let i = 0; i < len; i++) {
-			if (arrA[i] !== arrB[i]) return false;
+			if (!sameValueZero(arrA[i], arrB[i])) return false;
 		}
 		return true;
 	}
@@ -188,9 +199,9 @@ function deepEqualInner(
 		}
 
 		case "[object Date]": {
-			const timeA = (objA as Date).getTime();
-			const timeB = (objB as Date).getTime();
-			return timeA === timeB;
+			// SameValueZero so two invalid Dates (getTime() === NaN) compare
+			// equal, matching the primitive NaN semantics.
+			return sameValueZero((objA as Date).getTime(), (objB as Date).getTime());
 		}
 
 		case "[object RegExp]": {
@@ -202,8 +213,12 @@ function deepEqualInner(
 		case "[object Boolean]":
 		case "[object Number]":
 		case "[object String]": {
-			// Wrapper objects (new Boolean/Number/String)
-			return (objA as any).valueOf() === (objB as any).valueOf();
+			// Wrapper objects (new Boolean/Number/String); SameValueZero so
+			// two NaN Number wrappers compare equal.
+			return sameValueZero(
+				(objA as { valueOf(): unknown }).valueOf(),
+				(objB as { valueOf(): unknown }).valueOf(),
+			);
 		}
 
 		default: {
