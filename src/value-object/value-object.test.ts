@@ -64,6 +64,41 @@ describe("ValueObject Class", () => {
             expect(Object.isFrozen(blob.props)).toBe(true);
         });
 
+        it("does not freeze (or shadow) caller-owned objects inside Map/Set props", () => {
+            interface BagProps {
+                m: Map<string, Date>;
+                e: Error;
+            }
+
+            class Bag extends ValueObject<BagProps> {}
+
+            const d = new Date(1000);
+            const e = new Error("mine");
+            const bag = new Bag({ m: new Map([["k", d]]), e });
+
+            // The caller's Date must stay fully usable — no in-place freeze,
+            // no permanently installed throwing setTime shadow.
+            expect(Object.isFrozen(d)).toBe(false);
+            d.setTime(5);
+            expect(d.getTime()).toBe(5);
+            // The caller's Error must not be frozen or aliased into props.
+            expect(Object.isFrozen(e)).toBe(false);
+            expect(bag.props.e).not.toBe(e);
+            // The VO's own copy is still immutable.
+            expect(() => bag.props.m.get("k")?.setTime(99)).toThrow(TypeError);
+        });
+
+        it("rejects function-valued props with a descriptive TypeError (aligned with vo())", () => {
+            interface FnProps {
+                calc: () => number;
+            }
+            class FnVO extends ValueObject<FnProps> {}
+
+            expect(() => new FnVO({ calc: () => 42 })).toThrow(
+                /does not accept function values/,
+            );
+        });
+
         it("does not freeze the caller's props object or nested objects", () => {
             interface TaggedProps {
                 amount: number;

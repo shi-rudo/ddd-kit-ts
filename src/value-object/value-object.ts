@@ -3,7 +3,7 @@ import {
     deepEqualExcept,
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
-import { deepOmit } from "../utils/array/deep-omit";
+import { isBuiltInObject } from "../utils/array/is-built-in";
 import { err, ok, type Result } from "@shirudo/result";
 
 // ============================================================================
@@ -45,9 +45,10 @@ function shadowMutators(
     typeName: string,
     methods: readonly string[],
 ): void {
-    // A pre-frozen built-in cannot receive shadow properties — skip it
-    // (best effort; the caller chose to freeze it themselves).
-    if (Object.isFrozen(obj)) return;
+    // A non-extensible built-in (frozen, sealed, or preventExtensions'd)
+    // cannot receive shadow properties — skip it (best effort; the caller
+    // chose to lock it themselves).
+    if (!Object.isExtensible(obj)) return;
     for (const method of methods) {
         Object.defineProperty(obj, method, {
             value: function throwFrozenMutation(): never {
@@ -100,21 +101,28 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 
     // Date/Map/Set keep internal-slot mutability under Object.freeze —
     // shadow their mutators and freeze Map/Set contents (entries are not
-    // own keys, so the key walk below would miss them).
+    // own keys, so the key walk below would miss them). Brand-verified via
+    // isBuiltInObject: a plain object spoofing one of these tags through
+    // Symbol.toStringTag is just frozen as a plain object.
     const tag = Object.prototype.toString.call(obj);
-    if (tag === "[object Date]") {
-        shadowMutators(obj as object, "Date", DATE_MUTATORS);
-    } else if (tag === "[object Map]") {
-        for (const [key, value] of obj as unknown as Map<unknown, unknown>) {
-            deepFreeze(key, visited);
-            deepFreeze(value, visited);
+    if (isBuiltInObject(obj as object, tag)) {
+        if (tag === "[object Date]") {
+            shadowMutators(obj as object, "Date", DATE_MUTATORS);
+        } else if (tag === "[object Map]") {
+            for (const [key, value] of obj as unknown as Map<
+                unknown,
+                unknown
+            >) {
+                deepFreeze(key, visited);
+                deepFreeze(value, visited);
+            }
+            shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
+        } else if (tag === "[object Set]") {
+            for (const member of obj as unknown as Set<unknown>) {
+                deepFreeze(member, visited);
+            }
+            shadowMutators(obj as object, "Set", ["add", "delete", "clear"]);
         }
-        shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
-    } else if (tag === "[object Set]") {
-        for (const member of obj as unknown as Set<unknown>) {
-            deepFreeze(member, visited);
-        }
-        shadowMutators(obj as object, "Set", ["add", "delete", "clear"]);
     }
 
     // Reflect.ownKeys returns both string and symbol own keys.
@@ -130,13 +138,21 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 }
 
 /**
- * Deep clone used by `vo()`. Plain objects and arrays are walked manually
- * so that symbol-keyed properties survive (which `structuredClone` silently
- * drops — they would otherwise be invisible to `voEquals`, whose `deepEqual`
- * DOES consider symbol keys). Function values throw, preserving `vo()`'s
- * documented data-not-behaviour gate. Built-ins (Date, Map, Set, RegExp,
- * TypedArrays, …) delegate to `structuredClone`. Cycles are preserved.
- * `__proto__` own keys are copied as inert data properties.
+ * Deep clone used by `vo()` and the `ValueObject` constructor.
+ *
+ * Plain objects, class instances (prototype-preserving — the constructor
+ * is NOT re-invoked), arrays, and Map/Set entries are walked manually so
+ * that symbol-keyed properties survive (which `structuredClone` silently
+ * drops — they would otherwise be invisible to `voEquals`, whose
+ * `deepEqual` DOES consider symbol keys) and shared references / cycles
+ * keep their identity across Map/Set boundaries. Function values throw,
+ * preserving `vo()`'s documented data-not-behaviour gate; Promise /
+ * WeakMap / WeakSet throw a descriptive `TypeError` (they have no
+ * meaningful value semantics). Atomic built-ins (Date, RegExp,
+ * TypedArrays, ArrayBuffer, wrappers, Error) delegate to
+ * `structuredClone`, brand-verified so a `Symbol.toStringTag` spoofer is
+ * walked as the plain object it is. `__proto__` own keys are copied as
+ * inert data properties.
  */
 function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown {
     if (typeof value === "function") {
@@ -161,32 +177,59 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         return clone;
     }
 
-    const proto = Object.getPrototypeOf(obj);
-    if (proto === Object.prototype || proto === null) {
-        const clone = Object.create(proto);
-        visited.set(obj, clone);
-        for (const key of Reflect.ownKeys(obj)) {
-            const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-            if (!descriptor?.enumerable) continue;
-            // defineProperty (not assignment) so an own "__proto__" key can
-            // never invoke the prototype setter.
-            Object.defineProperty(clone, key, {
-                value: cloneForVo(
-                    (obj as Record<PropertyKey, unknown>)[key],
-                    visited,
-                ),
-                writable: true,
-                enumerable: true,
-                configurable: true,
-            });
+    const tag = Object.prototype.toString.call(obj);
+    if (isBuiltInObject(obj, tag)) {
+        if (tag === "[object Map]") {
+            const clone = new Map<unknown, unknown>();
+            visited.set(obj, clone);
+            for (const [key, entry] of obj as Map<unknown, unknown>) {
+                clone.set(cloneForVo(key, visited), cloneForVo(entry, visited));
+            }
+            return clone;
         }
-        return clone;
+        if (tag === "[object Set]") {
+            const clone = new Set<unknown>();
+            visited.set(obj, clone);
+            for (const member of obj as Set<unknown>) {
+                clone.add(cloneForVo(member, visited));
+            }
+            return clone;
+        }
+        if (
+            tag === "[object Promise]" ||
+            tag === "[object WeakMap]" ||
+            tag === "[object WeakSet]"
+        ) {
+            throw new TypeError(
+                `vo() cannot clone a ${tag.slice(8, -1)} — Value Objects are plain data`,
+            );
+        }
+        // Atomic built-ins: Date, RegExp, TypedArrays, ArrayBuffer,
+        // wrappers, Error.
+        const builtInClone = structuredClone(obj);
+        visited.set(obj, builtInClone);
+        return builtInClone;
     }
 
-    // Built-ins and class instances: structuredClone semantics, unchanged.
-    const builtInClone = structuredClone(obj);
-    visited.set(obj, builtInClone);
-    return builtInClone;
+    // Plain objects AND class instances: prototype-preserving key walk.
+    const clone = Object.create(Object.getPrototypeOf(obj));
+    visited.set(obj, clone);
+    for (const key of Reflect.ownKeys(obj)) {
+        const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+        if (!descriptor?.enumerable) continue;
+        // defineProperty (not assignment) so an own "__proto__" key can
+        // never invoke the prototype setter.
+        Object.defineProperty(clone, key, {
+            value: cloneForVo(
+                (obj as Record<PropertyKey, unknown>)[key],
+                visited,
+            ),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+        });
+    }
+    return clone;
 }
 
 /**
@@ -399,10 +442,12 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
      */
     constructor(props: T) {
         this.validate(props);
-        // Deep-clone before freezing (prototype-preserving, unlike
-        // structuredClone) — a shallow `{ ...props }` would deep-freeze
-        // the caller's nested objects in place.
-        this.props = deepFreeze(deepOmit(props, {}));
+        // Same clone as vo(): prototype-preserving, Map/Set contents
+        // walked (so the caller's entries are never frozen or shadowed in
+        // place), function values rejected. A shallow `{ ...props }` or
+        // deepOmit (which aliases reference-compared built-ins by design)
+        // would let deepFreeze reach caller-owned objects.
+        this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
     }
 
     /**

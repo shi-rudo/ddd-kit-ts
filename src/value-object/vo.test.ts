@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	deepFreeze,
 	vo,
 	voEquals,
 	voEqualsExcept,
@@ -653,6 +654,87 @@ describe("VO", () => {
 			// must not crash on it (best effort, not a hard guarantee).
 			const preFrozen = Object.freeze(new Date(42));
 			expect(() => vo({ d: preFrozen })).not.toThrow();
+		});
+	});
+
+	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
+		it("preserves symbol-keyed properties inside Map values", () => {
+			const s = Symbol("s");
+			const v = vo({ m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]) });
+
+			expect(v.m.get("k")?.[s]).toBe(1);
+		});
+
+		it("rejects functions inside Map values with the documented TypeError", () => {
+			expect(() => vo({ m: new Map([["f", () => 1]]) })).toThrow(
+				/vo\(\) does not accept function values/,
+			);
+		});
+
+		it("preserves identity for objects shared between the plain graph and a Map value", () => {
+			const shared = { n: 1 };
+			const v = vo({ a: shared, m: new Map([["k", shared]]) });
+
+			expect(v.a).toBe(v.m.get("k"));
+		});
+
+		it("preserves cycles that pass through a Map", () => {
+			const cfg: { name: string; lookup?: Map<string, unknown> } = {
+				name: "a",
+			};
+			cfg.lookup = new Map([["self", cfg]]);
+
+			const v = vo(cfg);
+
+			expect(v.lookup?.get("self")).toBe(v);
+		});
+
+		it("rejects Promise/WeakMap/WeakSet with a descriptive TypeError instead of DataCloneError", () => {
+			expect(() => vo({ p: Promise.resolve(1) })).toThrow(
+				/Value Objects are plain data/,
+			);
+			expect(() => vo({ w: new WeakMap() })).toThrow(
+				/Value Objects are plain data/,
+			);
+		});
+
+		it("preserves class-instance prototypes instead of silently stripping them", () => {
+			class Money {
+				constructor(readonly amount: number) {}
+				double(): number {
+					return this.amount * 2;
+				}
+			}
+			const v = vo({ price: new Money(5) });
+
+			expect(v.price).toBeInstanceOf(Money);
+			expect(v.price.double()).toBe(10);
+			expect(Object.isFrozen(v.price)).toBe(true);
+		});
+	});
+
+	describe("Symbol.toStringTag spoofing and exotic freeze targets", () => {
+		it("treats a plain object spoofing the Map tag as a plain object instead of crashing", () => {
+			const v = vo({ m: { [Symbol.toStringTag]: "Map", x: 1 } });
+
+			expect(v.m.x).toBe(1);
+			expect(Object.isFrozen(v.m)).toBe(true);
+		});
+
+		it("does not install Date mutator shadows on a plain object spoofing the Date tag", () => {
+			const v = vo({ d: { [Symbol.toStringTag]: "Date", x: 1 } });
+
+			expect(v.d.x).toBe(1);
+			expect(Object.hasOwn(v.d, "setTime")).toBe(false);
+		});
+
+		it("deepFreeze does not crash on a sealed (non-extensible, not frozen) Date", () => {
+			const d = Object.assign(new Date(42), { note: "x" });
+			Object.seal(d);
+
+			// Cannot receive shadow properties — must be skipped (best
+			// effort), not crash with 'object is not extensible'.
+			expect(() => deepFreeze({ when: d })).not.toThrow();
 		});
 	});
 
