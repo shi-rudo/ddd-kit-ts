@@ -135,7 +135,7 @@ Order of operations:
 3. Transaction commits
 4. **After** the commit, `bus.publish(events)` fires for in-process subscribers
 
-Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, the outbox dispatcher will still deliver the events (eventual consistency).
+Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject — the transaction has committed, so the caller always receives the committed `result` (a rejection here would invite a double-executing retry). The error is reported to the optional `onPublishError(error, events)` dep (wire it to your logger/metrics); delivery is still guaranteed because the outbox dispatcher picks the events up (eventual consistency).
 
 See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract, and [Read-Side Projections](./projections.md) for the canonical CQRS read-side flow (dispatcher → projection handlers → read-model tables → `QueryBus`).
 

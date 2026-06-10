@@ -22,6 +22,10 @@ voEquals(a, b); // true
 
 `structuredClone` refuses function values, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
 
+::: info ArrayBuffer views stay mutable
+The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway — so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
+:::
+
 ### Validation at the App boundary
 
 ```ts
@@ -118,6 +122,8 @@ voEqualsExcept(a, b, {
   // OR: ignoreKeyPredicate: (key, path) => path.includes("metadata"),
 });
 ```
+
+`voEqualsExcept` compares deep-omitted copies of both sides. Built-ins that `deepEqual` compares **by value** (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned into those copies; built-ins it compares **by reference** (Error, ArrayBuffer, Promise, WeakMap, WeakSet) are passed through by reference instead — cloning them would make even `voEqualsExcept(x, x, …)` false. Reflexivity always holds.
 
 ## When to reach for `vo()` vs `ValueObject<T>`
 
