@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-10
+
+Bug-fix and hardening release from a full-library audit (23 fixes: 5 P1 + 8 P2 + 10 P3) plus an adversarial code review of the fix branch itself (7 more). Two additive API surfaces make this a minor: the optional `withCommit` dep **`onPublishError(error, events)`**, and the snapshot mapping hooks **`toSnapshotState`/`fromSnapshotState`** with the trailing `TSnapshotState` generic on `BaseAggregate`/`AggregateRoot`/`EventSourcedAggregate`. Behavioral contract changes to know about: `withCommit` never rejects after the commit; `CommandBus`/`QueryBus` throw on duplicate registration; `vo()`/`ValueObject` reject function-valued props with a `TypeError`; `createSnapshot` fails fast on non-plain-data state. Test suite grew from 470 to 569.
+
 ### Fixed — remaining audit P3s: empty-history sentinel, metadata prototype pollution, NaN consistency, `voWithValidation` error path
 
 Four more low-severity fixes. (1) `loadFromHistory([])` no longer calls `markRestored` — it replaced the never-persisted sentinel with `persistedVersion = 0`, flipping repository routing from INSERT to UPDATE against a nonexistent row. (2) `mergeMetadata` copies keys via `defineProperty` instead of `Object.assign`, whose `[[Set]]` semantics invoked the `__proto__` setter for parsed-JSON metadata (outbox rows, message envelopes) and installed an attacker-controlled prototype. (3) `deepEqual`'s documented NaN semantics now hold everywhere numbers are compared: NaN elements in TypedArrays, two invalid Dates, and two NaN `Number` wrappers compare equal (SameValueZero — `+0 === -0` is preserved, unlike `Object.is`). (4) `voWithValidation`'s default failure message used `JSON.stringify`, which throws for cyclic or BigInt-bearing input — the error path of a Result-returning function never throws now (best-effort rendering with fallback). Documented: non-data values (functions, Promise/WeakMap/WeakSet) still throw a `TypeError` from `vo()` — they cannot occur in parsed JSON and signal programming errors, not validation failures.
