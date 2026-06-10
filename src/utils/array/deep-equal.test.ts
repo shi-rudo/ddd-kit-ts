@@ -357,3 +357,65 @@ describe("deepEqual – Typ-Mismatches", () => {
 		expect(deepEqual(new Uint8Array(), [])).toBe(false);
 	});
 });
+
+describe("deepEqual – Symbol.toStringTag spoofing", () => {
+	// Type detection is tag-based (cross-realm safe), but a plain object can
+	// set Symbol.toStringTag to any built-in name. Spoofed objects must be
+	// brand-checked and fall back to plain-object comparison — not crash.
+	it("does not crash on plain objects spoofing the Date tag", () => {
+		const a = { [Symbol.toStringTag]: "Date" };
+		const b = { [Symbol.toStringTag]: "Date" };
+
+		// Treated as plain objects: same keys/values → equal.
+		expect(deepEqual(a, b)).toBe(true);
+	});
+
+	it("compares spoofed objects by their actual content, not the spoofed type", () => {
+		const a = { [Symbol.toStringTag]: "Map", x: 1 };
+		const b = { [Symbol.toStringTag]: "Map", x: 2 };
+
+		expect(deepEqual(a, b)).toBe(false);
+	});
+
+	it("does not crash on spoofed Map/Set/DataView/Number tags", () => {
+		for (const tagName of ["Map", "Set", "DataView", "Number", "Boolean", "String", "RegExp"]) {
+			const a = { [Symbol.toStringTag]: tagName, v: 1 };
+			const b = { [Symbol.toStringTag]: tagName, v: 1 };
+			expect(deepEqual(a, b)).toBe(true);
+		}
+	});
+
+	it("a real Date never equals a spoofed Date", () => {
+		expect(deepEqual(new Date(0), { [Symbol.toStringTag]: "Date" })).toBe(
+			false,
+		);
+	});
+
+	it("a real Map never equals a spoofed Map", () => {
+		expect(deepEqual(new Map(), { [Symbol.toStringTag]: "Map" })).toBe(false);
+	});
+
+	it("plain objects spoofing the Array tag are not compared as arrays", () => {
+		// Without a brand check both sides have length undefined and the
+		// element loop never runs — everything would compare equal.
+		const a = { [Symbol.toStringTag]: "Array", x: 1 };
+		const b = { [Symbol.toStringTag]: "Array", x: 2 };
+
+		expect(deepEqual(a, b)).toBe(false);
+	});
+
+	it("real arrays with a spoofed tag still compare element-wise", () => {
+		const a = Object.assign([1, 2], { [Symbol.toStringTag]: "Date" });
+		const b = Object.assign([1, 2], { [Symbol.toStringTag]: "Date" });
+		const c = Object.assign([1, 3], { [Symbol.toStringTag]: "Date" });
+
+		expect(deepEqual(a, b)).toBe(true);
+		expect(deepEqual(a, c)).toBe(false);
+	});
+
+	it("real built-ins still compare by value (regression guard)", () => {
+		expect(deepEqual(new Date(5), new Date(5))).toBe(true);
+		expect(deepEqual(new Map([["k", 1]]), new Map([["k", 1]]))).toBe(true);
+		expect(deepEqual(new Number(5), new Number(5))).toBe(true);
+	});
+});

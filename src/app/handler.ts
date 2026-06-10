@@ -58,6 +58,16 @@ import type { TransactionScope } from "../repo/scope";
  * outbox still holds the events and an outbox-dispatcher will deliver
  * them (eventual consistency).
  *
+ * **A `bus.publish` failure never rejects `withCommit`.** Once the
+ * transaction has committed, the write succeeded — surfacing a subscriber
+ * failure as a rejection would hand the caller a use-case failure for a
+ * committed write (a typical caller retries, double-executing it). The
+ * in-process fast path is best-effort by design; the error is reported to
+ * the optional `onPublishError(error, events)` hook (wire it to your
+ * logger/metrics) and otherwise dropped — delivery is still guaranteed via
+ * the outbox. The hook is an observer: if it throws, its error is
+ * swallowed so the post-commit invariant holds.
+ *
  * If the transaction rolls back, `markPersisted` is **not** called — the
  * aggregate keeps its pending events, so the caller can retry or discard.
  *
@@ -90,6 +100,15 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		outbox: Outbox<Evt>;
 		bus?: EventBus<Evt>;
 		scope: TransactionScope<TCtx>;
+		/**
+		 * Observer for post-commit `bus.publish` failures. Called with the
+		 * error and the events that were published. Must not be relied on
+		 * for delivery — the outbox dispatcher is the reliable path.
+		 */
+		onPublishError?: (
+			error: unknown,
+			events: ReadonlyArray<Evt>,
+		) => void;
 	},
 	fn: (ctx: TCtx) => Promise<{
 		result: R;
@@ -147,7 +166,20 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	}
 
 	if (deps.bus && events.length > 0) {
-		await deps.bus.publish(events);
+		try {
+			await deps.bus.publish(events);
+		} catch (error) {
+			// The tx has committed and the outbox holds the events — an
+			// outbox dispatcher will deliver them. Rejecting here would turn
+			// a committed write into an apparent use-case failure (callers
+			// would retry and double-execute).
+			try {
+				deps.onPublishError?.(error, events);
+			} catch {
+				// Observer-only hook: its own failure must not break the
+				// post-commit invariant either.
+			}
+		}
 	}
 
 	return result;

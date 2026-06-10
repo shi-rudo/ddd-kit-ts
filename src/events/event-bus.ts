@@ -126,9 +126,12 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 			const handlersForType = this.handlers.get(event.type);
 			if (handlersForType) {
 				// Snapshot so a handler unsubscribing during dispatch doesn't
-				// shift indices while we iterate.
+				// shift indices while we iterate. The async wrapper converts a
+				// synchronous throw (EventHandler may return void) into a
+				// rejection — otherwise it would escape before allSettled sees
+				// the array, skipping peers and orphaning their promises.
 				const results = await Promise.allSettled(
-					handlersForType.slice().map((handler) => handler(event)),
+					handlersForType.slice().map(async (handler) => handler(event)),
 				);
 				for (const result of results) {
 					if (result.status === "rejected") {

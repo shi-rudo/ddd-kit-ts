@@ -126,24 +126,39 @@ function deepEqualInner(
 		return true;
 	}
 
-	// 5. Tag-based type detection (robust across realms)
+	// 5. Arrays — `Array.isArray` is brand-based and immune to
+	// `Symbol.toStringTag` spoofing (a spoofed tag would otherwise route a
+	// real array away from element comparison, or a plain object into it).
+	if (Array.isArray(objA) || Array.isArray(objB)) {
+		if (!Array.isArray(objA) || !Array.isArray(objB)) return false;
+		const arrA = objA as unknown[];
+		const arrB = objB as unknown[];
+		const len = arrA.length;
+		if (len !== arrB.length) return false;
+
+		for (let i = 0; i < len; i++) {
+			if (!deepEqualInner(arrA[i], arrB[i], visited)) return false;
+		}
+		return true;
+	}
+
+	// 6. Tag-based type detection (robust across realms), brand-verified —
+	// a plain object spoofing a built-in tag is compared as a plain object
+	// instead of crashing type-specific code below.
 	const tagA = objToString.call(objA);
 	const tagB = objToString.call(objB);
 	if (tagA !== tagB) return false;
 
+	const builtInA = isBuiltInObject(objA, tagA);
+	const builtInB = isBuiltInObject(objB, tagB);
+	// A genuine built-in never equals a spoofed lookalike.
+	if (builtInA !== builtInB) return false;
+
+	if (!builtInA) {
+		return comparePlainObjects(objA, objB, visited);
+	}
+
 	switch (tagA) {
-		case "[object Array]": {
-			const arrA = objA as unknown[];
-			const arrB = objB as unknown[];
-			const len = arrA.length;
-			if (len !== arrB.length) return false;
-
-			for (let i = 0; i < len; i++) {
-				if (!deepEqualInner(arrA[i], arrB[i], visited)) return false;
-			}
-			return true;
-		}
-
 		case "[object Map]": {
 			const mapA = objA as Map<unknown, unknown>;
 			const mapB = objB as Map<unknown, unknown>;
@@ -192,50 +207,57 @@ function deepEqualInner(
 		}
 
 		default: {
-			// 6. Check if this is an unhandled built-in type (future-proof)
-			// If both are built-ins but not handled above, they should be compared by reference
-			// (since we don't know their internal structure)
-			if (isBuiltInObject(objA, tagA) && isBuiltInObject(objB, tagB)) {
-				// Unhandled built-in types: compare by reference as fallback
-				// This ensures new built-ins don't fall through to plain object comparison
-				return objA === objB;
-			}
-
-			// 7. Fallback: plain / custom objects → compare own enumerable keys + values
-			const recA = objA as Record<string | symbol, unknown>;
-			const recB = objB as Record<string | symbol, unknown>;
-
-			const stringKeysA = Object.keys(objA as object);
-			const stringKeysB = Object.keys(objB as object);
-			if (stringKeysA.length !== stringKeysB.length) return false;
-
-			const symbolKeysA = Object.getOwnPropertySymbols(objA as object);
-			const symbolKeysB = Object.getOwnPropertySymbols(objB as object);
-			if (symbolKeysA.length !== symbolKeysB.length) return false;
-
-			// Build the B-side symbol set once; the previous impl rebuilt the
-			// array and ran .includes per key, which was quadratic.
-			const symbolKeysBSet = new Set<symbol>(symbolKeysB);
-
-			for (const key of stringKeysA) {
-				if (!objHasOwn.call(objB, key)) return false;
-			}
-			for (const key of symbolKeysA) {
-				if (!symbolKeysBSet.has(key)) return false;
-			}
-
-			for (const key of stringKeysA) {
-				if (!deepEqualInner(recA[key], recB[key], visited)) {
-					return false;
-				}
-			}
-			for (const key of symbolKeysA) {
-				if (!deepEqualInner(recA[key], recB[key], visited)) {
-					return false;
-				}
-			}
-
-			return true;
+			// Unhandled but brand-trusted built-ins (Error, Promise,
+			// ArrayBuffer, SharedArrayBuffer): compared by reference — their
+			// internal structure is unknown, and this keeps new built-ins
+			// from falling through to plain-object comparison.
+			return objA === objB;
 		}
 	}
+}
+
+/**
+ * Plain / custom objects: compare own enumerable string keys + own symbol
+ * keys and their values. Used both as the final fallback and for objects
+ * whose built-in-looking tag failed brand verification.
+ */
+function comparePlainObjects(
+	objA: object,
+	objB: object,
+	visited: VisitedPairs,
+): boolean {
+	const recA = objA as Record<string | symbol, unknown>;
+	const recB = objB as Record<string | symbol, unknown>;
+
+	const stringKeysA = Object.keys(objA);
+	const stringKeysB = Object.keys(objB);
+	if (stringKeysA.length !== stringKeysB.length) return false;
+
+	const symbolKeysA = Object.getOwnPropertySymbols(objA);
+	const symbolKeysB = Object.getOwnPropertySymbols(objB);
+	if (symbolKeysA.length !== symbolKeysB.length) return false;
+
+	// Build the B-side symbol set once; the previous impl rebuilt the
+	// array and ran .includes per key, which was quadratic.
+	const symbolKeysBSet = new Set<symbol>(symbolKeysB);
+
+	for (const key of stringKeysA) {
+		if (!objHasOwn.call(objB, key)) return false;
+	}
+	for (const key of symbolKeysA) {
+		if (!symbolKeysBSet.has(key)) return false;
+	}
+
+	for (const key of stringKeysA) {
+		if (!deepEqualInner(recA[key], recB[key], visited)) {
+			return false;
+		}
+	}
+	for (const key of symbolKeysA) {
+		if (!deepEqualInner(recA[key], recB[key], visited)) {
+			return false;
+		}
+	}
+
+	return true;
 }

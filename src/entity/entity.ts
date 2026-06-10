@@ -155,7 +155,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
-		this._state = freezeShallow(initialState);
+		this._state = freezeShallow(shallowCopyOwned(initialState));
 		this.validateState(this._state);
 	}
 
@@ -193,7 +193,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected setState(newState: TState): void {
 		this.validateState(newState);
-		this._state = freezeShallow(newState);
+		this._state = freezeShallow(shallowCopyOwned(newState));
 	}
 }
 
@@ -213,6 +213,22 @@ export function freezeShallow<T>(value: T): T {
 		return Object.freeze(value);
 	}
 	return value;
+}
+
+/**
+ * Returns a shallow copy for plain objects and arrays so the subsequent
+ * `freezeShallow` never locks the caller's own object in place (their later
+ * writes to it would throw in strict mode). Class instances and primitives
+ * pass through unchanged — a spread would strip an instance's prototype,
+ * and handing a class instance as state is an ownership transfer. Nested
+ * objects stay shared by design (shallow-freeze, no deep clone).
+ */
+function shallowCopyOwned<T>(value: T): T {
+	if (value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) return [...value] as T;
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return value;
+	return Object.assign(Object.create(proto), value) as T;
 }
 
 

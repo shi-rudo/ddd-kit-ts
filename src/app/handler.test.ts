@@ -427,4 +427,126 @@ describe("withCommit", () => {
 		// for empty-event commits.
 		expect(agg.markPersistedCalls).toBe(1);
 	});
+
+	describe("post-commit bus.publish failure", () => {
+		function createFailingBus(error: unknown): EventBus<TestEvent> {
+			return {
+				publish: async () => {
+					throw error;
+				},
+				subscribe: () => () => {},
+				once: () => new Promise(() => {}),
+			};
+		}
+
+		function createAggWithEvent(): MockAggregate {
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "order-1" },
+				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			);
+			return createMockAggregate([event]);
+		}
+
+		it("returns the committed result even when an in-process subscriber fails", async () => {
+			// The tx committed and the outbox holds the events — a publish
+			// failure is eventual consistency, not use-case failure. A
+			// rejection here would make callers retry a committed write.
+			const agg = createAggWithEvent();
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createFailingBus(new Error("smtp down")),
+					scope: createMockScope(),
+				},
+				async () => ({ result: "order-123", aggregates: [agg] }),
+			);
+
+			expect(result).toBe("order-123");
+			// The commit lifecycle completed: pending events are flushed.
+			expect(agg.markPersistedCalls).toBe(1);
+		});
+
+		it("reports the publish error and the affected events via onPublishError", async () => {
+			const agg = createAggWithEvent();
+			const publishError = new Error("subscriber blew up");
+			const reported: Array<{ error: unknown; events: ReadonlyArray<TestEvent> }> =
+				[];
+
+			await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createFailingBus(publishError),
+					scope: createMockScope(),
+					onPublishError: (error, events) => {
+						reported.push({ error, events });
+					},
+				},
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(reported).toHaveLength(1);
+			expect(reported[0]?.error).toBe(publishError);
+			expect(reported[0]?.events.map((e) => e.type)).toEqual(["OrderCreated"]);
+		});
+
+		it("does not invoke onPublishError when publish succeeds", async () => {
+			const agg = createAggWithEvent();
+			let reported = 0;
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createMockBus(),
+					scope: createMockScope(),
+					onPublishError: () => {
+						reported += 1;
+					},
+				},
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(result).toBe("ok");
+			expect(reported).toBe(0);
+		});
+
+		it("still resolves when the onPublishError hook itself throws", async () => {
+			const agg = createAggWithEvent();
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createFailingBus(new Error("smtp down")),
+					scope: createMockScope(),
+					onPublishError: () => {
+						throw new Error("observer hook is broken too");
+					},
+				},
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(result).toBe("ok");
+		});
+
+		it("pre-commit failures still reject (outbox.add inside the tx)", async () => {
+			const agg = createAggWithEvent();
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {
+					throw new Error("outbox write failed");
+				},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+
+			await expect(
+				withCommit(
+					{ outbox, bus: createMockBus(), scope: createMockScope() },
+					async () => ({ result: "ok", aggregates: [agg] }),
+				),
+			).rejects.toThrow("outbox write failed");
+			// Rolled back — pending events must survive for a retry.
+			expect(agg.markPersistedCalls).toBe(0);
+		});
+	});
 });

@@ -48,6 +48,77 @@ describe("ValueObject Class", () => {
             }).toThrow();
         });
 
+        it("should accept props containing a non-empty TypedArray", () => {
+            interface BlobProps {
+                data: Uint8Array;
+            }
+
+            class Blob extends ValueObject<BlobProps> {
+                constructor(props: BlobProps) {
+                    super(props);
+                }
+            }
+
+            const blob = new Blob({ data: new Uint8Array([1, 2, 3]) });
+            expect(Array.from(blob.props.data)).toEqual([1, 2, 3]);
+            expect(Object.isFrozen(blob.props)).toBe(true);
+        });
+
+        it("does not freeze (or shadow) caller-owned objects inside Map/Set props", () => {
+            interface BagProps {
+                m: Map<string, Date>;
+                e: Error;
+            }
+
+            class Bag extends ValueObject<BagProps> {}
+
+            const d = new Date(1000);
+            const e = new Error("mine");
+            const bag = new Bag({ m: new Map([["k", d]]), e });
+
+            // The caller's Date must stay fully usable — no in-place freeze,
+            // no permanently installed throwing setTime shadow.
+            expect(Object.isFrozen(d)).toBe(false);
+            d.setTime(5);
+            expect(d.getTime()).toBe(5);
+            // The caller's Error must not be frozen or aliased into props.
+            expect(Object.isFrozen(e)).toBe(false);
+            expect(bag.props.e).not.toBe(e);
+            // The VO's own copy is still immutable.
+            expect(() => bag.props.m.get("k")?.setTime(99)).toThrow(TypeError);
+        });
+
+        it("rejects function-valued props with a descriptive TypeError (aligned with vo())", () => {
+            interface FnProps {
+                calc: () => number;
+            }
+            class FnVO extends ValueObject<FnProps> {}
+
+            expect(() => new FnVO({ calc: () => 42 })).toThrow(
+                /does not accept function values/,
+            );
+        });
+
+        it("does not freeze the caller's props object or nested objects", () => {
+            interface TaggedProps {
+                amount: number;
+                meta: { tag: string };
+            }
+
+            class Tagged extends ValueObject<TaggedProps> {}
+
+            const meta = { tag: "a" };
+            const props: TaggedProps = { amount: 100, meta };
+            const v = new Tagged(props);
+
+            // The caller's graph must stay mutable...
+            expect(Object.isFrozen(props)).toBe(false);
+            expect(Object.isFrozen(meta)).toBe(false);
+            meta.tag = "changed";
+            // ...and later mutation must not bleed into the VO.
+            expect(v.props.meta.tag).toBe("a");
+        });
+
         it("should deeply freeze nested properties", () => {
             interface NestedProps {
                 nested: {

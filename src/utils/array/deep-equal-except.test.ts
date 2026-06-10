@@ -251,6 +251,43 @@ describe("deepEqualExcept – Built-ins & Interaction with deepEqual", () => {
 	});
 });
 
+describe("deepEqualExcept – Reference-compared built-ins (Promise, WeakMap, WeakSet, Error, ArrayBuffer)", () => {
+	it("is reflexive for an object containing a Promise", () => {
+		const obj = { p: Promise.resolve(1), name: "job" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("compares shared Promise references as equal across two objects", () => {
+		const p = Promise.resolve(1);
+		const a = { p, id: 1 };
+		const b = { p, id: 2 };
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["id"] })).toBe(true);
+	});
+
+	it("is reflexive for objects containing WeakMap and WeakSet", () => {
+		const obj = { wm: new WeakMap(), ws: new WeakSet() };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("is reflexive for an object containing an ArrayBuffer", () => {
+		const obj = { buf: new ArrayBuffer(4), name: "blob" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("is reflexive for an object containing an Error", () => {
+		const obj = { e: new Error("oops"), name: "job" };
+		expect(deepEqualExcept(obj, obj, { ignoreKeys: [] })).toBe(true);
+	});
+
+	it("compares shared Error/ArrayBuffer references as equal across two objects", () => {
+		const e = new Error("oops");
+		const buf = new ArrayBuffer(4);
+		const a = { e, buf, id: 1 };
+		const b = { e, buf, id: 2 };
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["id"] })).toBe(true);
+	});
+});
+
 describe("deepEqualExcept – Circular References", () => {
 	it("works with cycles when only ignored keys differ", () => {
 		const a: any = { id: 1, value: "x" };

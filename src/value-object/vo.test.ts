@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	deepFreeze,
 	vo,
 	voEquals,
 	voEqualsExcept,
@@ -504,15 +505,236 @@ describe("VO", () => {
 		});
 	});
 
-	describe("deepFreeze symbol-key handling", () => {
-		it("freezes properties whose key is a Symbol, not only string keys", () => {
+	describe("symbol-keyed properties", () => {
+		it("preserves and freezes symbol-keyed properties (previously dropped by structuredClone)", () => {
 			const tag = Symbol("tag");
 			const v = vo({ [tag]: { nested: 1 } } as Record<symbol, unknown>);
 
 			const nested = (v as unknown as Record<symbol, { nested: number }>)[
 				tag
 			];
+			// NOT vacuous: the property must exist…
+			expect(nested).toEqual({ nested: 1 });
+			// …and be deeply frozen, matching deepEqual's symbol-key support.
 			expect(Object.isFrozen(nested)).toBe(true);
+		});
+
+		it("preserves symbol keys nested below the top level", () => {
+			const meta = Symbol("meta");
+			const v = vo({ outer: { [meta]: "x", plain: 1 } });
+
+			expect(
+				(v.outer as unknown as Record<symbol, string>)[meta],
+			).toBe("x");
+			expect(v.outer.plain).toBe(1);
+		});
+
+		it("voEquals considers symbol-keyed values", () => {
+			const k = Symbol("k");
+			const a = vo({ [k]: 1 } as Record<symbol, unknown>);
+			const b = vo({ [k]: 1 } as Record<symbol, unknown>);
+			const c = vo({ [k]: 2 } as Record<symbol, unknown>);
+
+			expect(voEquals(a, b)).toBe(true);
+			expect(voEquals(a, c)).toBe(false);
+		});
+
+		it("does not mutate or freeze the caller's input when symbol keys are present", () => {
+			const tag = Symbol("tag");
+			const inner = { nested: 1 };
+			const input = { [tag]: inner } as Record<symbol, { nested: number }>;
+
+			vo(input);
+
+			expect(Object.isFrozen(inner)).toBe(false);
+			inner.nested = 2;
+			expect(input[tag]?.nested).toBe(2);
+		});
+	});
+
+	describe("TypedArray and DataView handling", () => {
+		it("creates a VO containing a non-empty TypedArray without throwing", () => {
+			// Object.freeze on an ArrayBuffer view with elements throws per
+			// spec — deepFreeze must skip views instead of crashing.
+			const v = vo({ data: new Uint8Array([1, 2, 3]) });
+
+			expect(Array.from(v.data)).toEqual([1, 2, 3]);
+		});
+
+		it("still freezes the surrounding object graph when a TypedArray is present", () => {
+			const v = vo({ data: new Float64Array([1.5]), label: "raw" });
+
+			expect(Object.isFrozen(v)).toBe(true);
+			expect(() => {
+				(v as any).label = "changed";
+			}).toThrow();
+		});
+
+		it("handles TypedArrays nested below the top level", () => {
+			const v = vo({ chunk: { bytes: new Int32Array([7, 8]) } });
+
+			expect(Object.isFrozen(v.chunk)).toBe(true);
+			expect(Array.from(v.chunk.bytes)).toEqual([7, 8]);
+		});
+
+		it("handles empty TypedArrays and DataView", () => {
+			const v = vo({
+				empty: new Uint8Array(0),
+				view: new DataView(new ArrayBuffer(4)),
+			});
+
+			expect(v.empty.length).toBe(0);
+			expect(v.view.byteLength).toBe(4);
+		});
+
+		it("voWithValidation succeeds for valid input containing a TypedArray", () => {
+			const result = voWithValidation(
+				{ data: new Uint8Array([9]) },
+				(t) => t.data.length > 0,
+			);
+
+			expect(result.isOk()).toBe(true);
+		});
+	});
+
+	describe("Date/Map/Set internal-slot immutability", () => {
+		// Object.freeze does not protect internal slots — a frozen Date can
+		// still be setTime()d, a frozen Map still set()s. deepFreeze must
+		// block the mutators so the "deeply immutable" guarantee holds.
+		it("blocks Date mutators on a frozen VO", () => {
+			const v = vo({ when: new Date(1000) });
+
+			expect(() => (v.when as Date).setTime(0)).toThrow(TypeError);
+			expect(() => (v.when as Date).setFullYear(1999)).toThrow(TypeError);
+			expect(v.when.getTime()).toBe(1000);
+		});
+
+		it("blocks Map mutators while reads keep working", () => {
+			const v = vo({ m: new Map([["k", 1]]) });
+
+			expect(() => v.m.set("x", 2)).toThrow(TypeError);
+			expect(() => v.m.delete("k")).toThrow(TypeError);
+			expect(() => v.m.clear()).toThrow(TypeError);
+			expect(v.m.get("k")).toBe(1);
+			expect(v.m.size).toBe(1);
+		});
+
+		it("blocks Set mutators while reads keep working", () => {
+			const v = vo({ s: new Set([1]) });
+
+			expect(() => v.s.add(2)).toThrow(TypeError);
+			expect(() => v.s.delete(1)).toThrow(TypeError);
+			expect(() => v.s.clear()).toThrow(TypeError);
+			expect(v.s.has(1)).toBe(true);
+		});
+
+		it("deep-freezes objects stored inside Map values and Set members", () => {
+			const v = vo({
+				m: new Map([["k", { a: 1 }]]),
+				s: new Set([{ b: 2 }]),
+			});
+
+			const inMap = v.m.get("k") as { a: number };
+			expect(Object.isFrozen(inMap)).toBe(true);
+			const [inSet] = v.s;
+			expect(Object.isFrozen(inSet)).toBe(true);
+		});
+
+		it("frozen VOs still round-trip through vo() and compare equal", () => {
+			// The mutator shadows are non-enumerable expandos; structuredClone
+			// drops them and spread skips them — re-wrapping must not throw.
+			const a = vo({ d: new Date(5), m: new Map([["k", 1]]) });
+			const b = vo({ ...a });
+
+			expect(voEquals(a, b)).toBe(true);
+		});
+
+		it("skips mutator-blocking on a Date the caller froze beforehand", () => {
+			// A pre-frozen Date cannot receive shadow properties — deepFreeze
+			// must not crash on it (best effort, not a hard guarantee).
+			const preFrozen = Object.freeze(new Date(42));
+			expect(() => vo({ d: preFrozen })).not.toThrow();
+		});
+	});
+
+	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
+		it("preserves symbol-keyed properties inside Map values", () => {
+			const s = Symbol("s");
+			const v = vo({ m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]) });
+
+			expect(v.m.get("k")?.[s]).toBe(1);
+		});
+
+		it("rejects functions inside Map values with the documented TypeError", () => {
+			expect(() => vo({ m: new Map([["f", () => 1]]) })).toThrow(
+				/vo\(\) does not accept function values/,
+			);
+		});
+
+		it("preserves identity for objects shared between the plain graph and a Map value", () => {
+			const shared = { n: 1 };
+			const v = vo({ a: shared, m: new Map([["k", shared]]) });
+
+			expect(v.a).toBe(v.m.get("k"));
+		});
+
+		it("preserves cycles that pass through a Map", () => {
+			const cfg: { name: string; lookup?: Map<string, unknown> } = {
+				name: "a",
+			};
+			cfg.lookup = new Map([["self", cfg]]);
+
+			const v = vo(cfg);
+
+			expect(v.lookup?.get("self")).toBe(v);
+		});
+
+		it("rejects Promise/WeakMap/WeakSet with a descriptive TypeError instead of DataCloneError", () => {
+			expect(() => vo({ p: Promise.resolve(1) })).toThrow(
+				/Value Objects are plain data/,
+			);
+			expect(() => vo({ w: new WeakMap() })).toThrow(
+				/Value Objects are plain data/,
+			);
+		});
+
+		it("preserves class-instance prototypes instead of silently stripping them", () => {
+			class Money {
+				constructor(readonly amount: number) {}
+				double(): number {
+					return this.amount * 2;
+				}
+			}
+			const v = vo({ price: new Money(5) });
+
+			expect(v.price).toBeInstanceOf(Money);
+			expect(v.price.double()).toBe(10);
+			expect(Object.isFrozen(v.price)).toBe(true);
+		});
+	});
+
+	describe("Symbol.toStringTag spoofing and exotic freeze targets", () => {
+		it("treats a plain object spoofing the Map tag as a plain object instead of crashing", () => {
+			const v = vo({ m: { [Symbol.toStringTag]: "Map", x: 1 } });
+
+			expect(v.m.x).toBe(1);
+			expect(Object.isFrozen(v.m)).toBe(true);
+		});
+
+		it("does not install Date mutator shadows on a plain object spoofing the Date tag", () => {
+			const v = vo({ d: { [Symbol.toStringTag]: "Date", x: 1 } });
+
+			expect(v.d.x).toBe(1);
+			expect(Object.hasOwn(v.d, "setTime")).toBe(false);
+		});
+
+		it("deepFreeze does not crash on a sealed (non-extensible, not frozen) Date", () => {
+			const d = Object.assign(new Date(42), { note: "x" });
+			Object.seal(d);
+
+			// Cannot receive shadow properties — must be skipped (best
+			// effort), not crash with 'object is not extensible'.
+			expect(() => deepFreeze({ when: d })).not.toThrow();
 		});
 	});
 

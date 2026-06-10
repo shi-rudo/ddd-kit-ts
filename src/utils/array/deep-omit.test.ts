@@ -232,6 +232,63 @@ describe("deepOmit – Built-ins are cloned atomically (distinct, equal-by-value
 	});
 });
 
+describe("deepOmit – Reference-compared built-ins are passed through by reference", () => {
+	// structuredClone cannot clone Promise/WeakMap/WeakSet, and deepEqual
+	// compares Error/ArrayBuffer by reference — cloning any of these would
+	// crash or break deepEqualExcept's reflexivity, so they must alias.
+	it("passes a Promise through by reference instead of throwing", () => {
+		const p = Promise.resolve(1);
+		const result = deepOmit({ p, id: 7 }, { ignoreKeys: ["id"] }) as {
+			p: Promise<number>;
+		};
+		expect(result.p).toBe(p);
+		expect("id" in result).toBe(false);
+	});
+
+	it("passes a WeakMap through by reference instead of throwing", () => {
+		const wm = new WeakMap<object, number>();
+		const result = deepOmit({ wm }, { ignoreKeys: [] }) as {
+			wm: WeakMap<object, number>;
+		};
+		expect(result.wm).toBe(wm);
+	});
+
+	it("passes a WeakSet through by reference instead of throwing", () => {
+		const ws = new WeakSet<object>();
+		const result = deepOmit({ ws }, { ignoreKeys: [] }) as {
+			ws: WeakSet<object>;
+		};
+		expect(result.ws).toBe(ws);
+	});
+
+	it("passes an Error through by reference (deepEqual compares Errors by reference)", () => {
+		const e = new TypeError("boom");
+		const result = deepOmit({ e, id: 1 }, { ignoreKeys: ["id"] }) as {
+			e: Error;
+		};
+		expect(result.e).toBe(e);
+		expect("id" in result).toBe(false);
+	});
+
+	it("passes an ArrayBuffer through by reference (deepEqual compares ArrayBuffers by reference)", () => {
+		const buf = new ArrayBuffer(8);
+		const result = deepOmit({ buf }, { ignoreKeys: [] }) as {
+			buf: ArrayBuffer;
+		};
+		expect(result.buf).toBe(buf);
+	});
+
+	it("handles uncloneables nested below the top level", () => {
+		const p = Promise.resolve("x");
+		const result = deepOmit(
+			{ job: { promise: p, secret: 1 } },
+			{ ignoreKeys: ["secret"] },
+		) as { job: { promise: Promise<string> } };
+		expect(result.job.promise).toBe(p);
+		expect("secret" in result.job).toBe(false);
+	});
+});
+
 describe("deepOmit – Circular References", () => {
 	it("does not break on self-references", () => {
 		const a: any = { id: 1, value: "x" };
@@ -313,5 +370,95 @@ describe("deepOmit – Prototype pollution safety", () => {
 		);
 		deepOmit(malicious, {});
 		expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+	});
+});
+
+describe("deepOmit – Symbol.toStringTag spoofing", () => {
+	it("walks a spoofed Date as a plain object instead of crashing", () => {
+		const input = { d: { [Symbol.toStringTag]: "Date", secret: 1, keep: 2 } };
+
+		const result = deepOmit(input, { ignoreKeys: ["secret"] }) as {
+			d: { keep: number };
+		};
+
+		expect(result.d.keep).toBe(2);
+		expect("secret" in result.d).toBe(false);
+	});
+
+	it("walks a spoofed Map as a plain object instead of crashing", () => {
+		const input = { m: { [Symbol.toStringTag]: "Map", x: 1 } };
+
+		const result = deepOmit(input, { ignoreKeys: [] }) as {
+			m: { x: number };
+		};
+
+		expect(result.m.x).toBe(1);
+	});
+
+	it("still clones real built-ins by type (regression guard)", () => {
+		const input = { d: new Date(5), m: new Map([["k", 1]]) };
+		const result = deepOmit(input, {}) as { d: Date; m: Map<string, number> };
+
+		expect(result.d).not.toBe(input.d);
+		expect(result.d.getTime()).toBe(5);
+		expect(result.m).not.toBe(input.m);
+		expect(result.m.get("k")).toBe(1);
+	});
+});
+
+describe("deepOmit – shared references (DAG) vs cycles with path-sensitive predicates", () => {
+	it("evaluates the predicate per path when the same object is shared under two keys", () => {
+		const shared = { x: 1, y: 2 };
+		const result = deepOmit(
+			{ a: shared, b: shared },
+			{
+				ignoreKeyPredicate: (key, path) => key === "x" && path[0] === "a",
+			},
+		) as { a: { x?: number; y: number }; b: { x?: number; y: number } };
+
+		// Path-sensitive: "x" is ignored under "a" only.
+		expect("x" in result.a).toBe(false);
+		expect(result.b.x).toBe(1);
+		expect(result.a.y).toBe(2);
+		expect(result.b.y).toBe(2);
+	});
+
+	it("still terminates on cycles when a predicate is used", () => {
+		const node: any = { id: 1, secret: "s" };
+		node.self = node;
+
+		const result = deepOmit(node, {
+			ignoreKeyPredicate: (key) => key === "secret",
+		}) as any;
+
+		expect(result.id).toBe(1);
+		expect("secret" in result).toBe(false);
+		expect(result.self).toBe(result); // cycle preserved
+	});
+
+	it("keeps deduping shared references when no predicate is involved (regression guard)", () => {
+		const shared = { x: 1, y: 2 };
+		const result = deepOmit(
+			{ a: shared, b: shared },
+			{ ignoreKeys: ["x"] },
+		) as { a: object; b: object };
+
+		// ignoreKeys is path-independent — structure sharing is safe and kept.
+		expect(result.a).toBe(result.b);
+		expect(result.a).toEqual({ y: 2 });
+	});
+
+	it("aborts with a descriptive error instead of hanging on exponentially shared graphs", () => {
+		// Per-path cloning is semantically forced with a predicate, so a
+		// diamond chain (every level shares one node via two keys) expands
+		// 2^depth — the walk must fail loudly, not freeze the process.
+		let node: Record<string, unknown> = { leaf: 1 };
+		for (let i = 0; i < 24; i++) {
+			node = { a: node, b: node };
+		}
+
+		expect(() =>
+			deepOmit(node, { ignoreKeyPredicate: () => false }),
+		).toThrow(/shared references/);
 	});
 });

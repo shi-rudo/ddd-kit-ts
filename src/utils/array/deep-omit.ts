@@ -25,10 +25,22 @@ export interface DeepOmitOptions {
  * provided rules.
  *
  * Walks the object tree and skips keys that match `ignoreKeys` /
- * `ignoreKeyPredicate`. Built-in atomic types (Date, RegExp, Map, Set,
- * TypedArrays, ArrayBuffer, DataView) are cloned by type rather than walked
- * — their internal structure has no key filtering to apply. Cycles are
+ * `ignoreKeyPredicate`. Built-in atomic types that `deepEqual` compares by
+ * value (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned by type
+ * rather than walked — their internal structure has no key filtering to
+ * apply. Types that `deepEqual` compares by reference (Error, ArrayBuffer,
+ * SharedArrayBuffer, Promise, WeakMap, WeakSet) are passed through by
+ * reference, so `deepEqualExcept(x, x)` stays reflexive. Cycles are
  * preserved: a cycle `a → a` clones to `a' → a'`.
+ *
+ * **Shared references.** Without `ignoreKeyPredicate`, an object reached
+ * via several paths dedupes to a single clone. With a predicate, each
+ * path gets its own clone — the predicate may decide differently per
+ * path, so memoising the first path's result would be wrong. This is
+ * inherently exponential for diamond-shaped sharing (a node reachable
+ * via 2^n paths is cloned 2^n times); the walk aborts with a descriptive
+ * error after {@link PATH_SENSITIVE_VISIT_BUDGET} node visits instead of
+ * hanging the process.
  *
  * **Prototype-pollution safety.** `__proto__` and `constructor` keys
  * encountered as *own* properties of the input (typical of `JSON.parse`
@@ -52,8 +64,24 @@ export function deepOmit<T>(value: T, options: DeepOmitOptions): T {
 	const ignoreKeys = options.ignoreKeys
 		? new Set<Key>(options.ignoreKeys)
 		: undefined;
-	return omitInternal(value, options, ignoreKeys, [], visited) as T;
+	// With a path-sensitive predicate, a clone computed under one path must
+	// NOT be reused for the same object reached via another path (the
+	// predicate may decide differently there). The cache then only tracks
+	// in-progress ancestors — pure cycle detection — instead of memoising
+	// completed subtrees. Without a predicate, results are path-independent
+	// and shared references keep deduplicating to one clone. The budget
+	// bounds the per-path expansion (exponential on diamond sharing).
+	const budget = options.ignoreKeyPredicate ? { visits: 0 } : undefined;
+	return omitInternal(value, options, ignoreKeys, [], visited, budget) as T;
 }
+
+/**
+ * Maximum object-node visits for a single path-sensitive `deepOmit` walk.
+ * Per-path cloning expands exponentially on diamond-shaped sharing; past
+ * this bound the walk throws instead of hanging the process. One million
+ * visits covers any realistically tree-shaped input.
+ */
+const PATH_SENSITIVE_VISIT_BUDGET = 1_000_000;
 
 function omitInternal(
 	value: unknown,
@@ -61,35 +89,59 @@ function omitInternal(
 	ignoreKeys: ReadonlySet<Key> | undefined,
 	path: PathSegment[],
 	visited: WeakMap<object, unknown>,
+	budget: { visits: number } | undefined,
 ): unknown {
 	if (value === null) return value;
 	if (typeof value !== "object") return value;
 
 	const obj = value as object;
 
-	// Cycles: return cached clone if already visited. Use `has` (not
-	// `cached !== undefined`) so a legitimately-undefined cached clone
-	// would not be misclassified as "never seen".
+	// Cycles (and, in the path-independent case, shared references): return
+	// the cached clone. Use `has` (not `cached !== undefined`) so a
+	// legitimately-undefined cached clone would not be misclassified as
+	// "never seen".
 	if (visited.has(obj)) {
 		return visited.get(obj);
 	}
 
-	const tag = Object.prototype.toString.call(obj);
+	if (budget && ++budget.visits > PATH_SENSITIVE_VISIT_BUDGET) {
+		throw new Error(
+			`deepOmit: exceeded ${PATH_SENSITIVE_VISIT_BUDGET} node visits. ` +
+				`With ignoreKeyPredicate, objects reached via shared references ` +
+				`are cloned once per path (the predicate may decide differently ` +
+				`per path), which expands exponentially on diamond-shaped ` +
+				`sharing. Restructure the input to a tree, or use ignoreKeys ` +
+				`for path-independent filtering.`,
+		);
+	}
 
-	// Arrays: recursively process elements
-	if (tag === "[object Array]") {
+	// Arrays: recursively process elements. `Array.isArray` is brand-based —
+	// immune to `Symbol.toStringTag` spoofing, unlike the tag check below.
+	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
 		const clone: unknown[] = new Array(arr.length);
 		visited.set(obj, clone);
 		for (let i = 0; i < arr.length; i++) {
 			path.push(i);
-			clone[i] = omitInternal(arr[i], options, ignoreKeys, path, visited);
+			clone[i] = omitInternal(
+				arr[i],
+				options,
+				ignoreKeys,
+				path,
+				visited,
+				budget,
+			);
 			path.pop();
 		}
+		if (budget) visited.delete(obj);
 		return clone;
 	}
 
-	// Built-in atomic types: clone by type rather than walk.
+	const tag = Object.prototype.toString.call(obj);
+
+	// Built-in atomic types: clone by type rather than walk. The detection
+	// is brand-verified — a plain object spoofing a built-in tag falls
+	// through to the plain-object walk below.
 	if (isBuiltInObject(obj, tag)) {
 		const builtInClone = cloneBuiltIn(obj, tag);
 		visited.set(obj, builtInClone);
@@ -115,6 +167,7 @@ function omitInternal(
 				ignoreKeys,
 				path,
 				visited,
+				budget,
 			),
 		);
 		path.pop();
@@ -131,11 +184,13 @@ function omitInternal(
 				ignoreKeys,
 				path,
 				visited,
+				budget,
 			),
 		);
 		path.pop();
 	}
 
+	if (budget) visited.delete(obj);
 	return clone;
 }
 
@@ -156,11 +211,23 @@ function assignOwn(target: object, key: PropertyKey, value: unknown): void {
 
 /**
  * Clones a built-in atomic type by case. Falls back to `structuredClone`
- * for anything not explicitly enumerated (e.g. ArrayBuffer, DataView,
- * Boolean/Number/String wrappers).
+ * for anything not explicitly enumerated (e.g. DataView, TypedArrays,
+ * Boolean/Number/String wrappers — all of which `deepEqual` compares by
+ * value). Types that `deepEqual` compares BY REFERENCE (its unhandled-
+ * built-in fallback: Error, ArrayBuffer, SharedArrayBuffer, Promise,
+ * WeakMap, WeakSet) are passed through by reference instead — cloning
+ * them would make `deepEqualExcept(x, x)` false. Promise/WeakMap/WeakSet
+ * additionally cannot be cloned at all (`structuredClone` rejects them).
  */
 function cloneBuiltIn(obj: object, tag: string): unknown {
 	switch (tag) {
+		case "[object Promise]":
+		case "[object WeakMap]":
+		case "[object WeakSet]":
+		case "[object Error]":
+		case "[object ArrayBuffer]":
+		case "[object SharedArrayBuffer]":
+			return obj;
 		case "[object Date]":
 			return new Date((obj as Date).getTime());
 		case "[object RegExp]": {

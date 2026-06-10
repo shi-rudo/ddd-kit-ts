@@ -18,9 +18,15 @@ const b = vo({ amount: 100, currency: "EUR" });
 voEquals(a, b); // true
 ```
 
-`vo()` deep-clones its input via `structuredClone` before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object.
+`vo()` deep-clones its input before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object. Symbol-keyed properties are preserved — they participate in `voEquals` like any other key.
 
-`structuredClone` refuses function values, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
+Function values are rejected with a `TypeError`, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
+
+Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map/Set contents recursively — a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged.
+
+::: info ArrayBuffer views stay mutable
+The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway — so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
+:::
 
 ### Validation at the App boundary
 
@@ -118,6 +124,8 @@ voEqualsExcept(a, b, {
   // OR: ignoreKeyPredicate: (key, path) => path.includes("metadata"),
 });
 ```
+
+`voEqualsExcept` compares deep-omitted copies of both sides. Built-ins that `deepEqual` compares **by value** (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned into those copies; built-ins it compares **by reference** (Error, ArrayBuffer, Promise, WeakMap, WeakSet) are passed through by reference instead — cloning them would make even `voEqualsExcept(x, x, …)` false. Reflexivity always holds.
 
 ## When to reach for `vo()` vs `ValueObject<T>`
 

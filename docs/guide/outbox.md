@@ -129,7 +129,7 @@ Order of operations:
 4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
 5. `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired).
 
-Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
+Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject — the write is committed, so the caller always receives the committed `result`; surfacing a subscriber failure as a rejection would make a typical caller retry and double-execute the write. The error is reported to the optional `onPublishError(error, events)` dep (observer-only — wire it to your logger/metrics). The events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
 
 If the transaction rolls back, `markPersisted` is **not** called — the aggregate keeps its pending events, so the caller can retry or discard.
 

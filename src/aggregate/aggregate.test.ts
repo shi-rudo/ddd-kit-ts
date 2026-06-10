@@ -29,7 +29,7 @@ describe("Domain Events", () => {
 				occurredAt: customDate,
 			});
 
-			expect(event.occurredAt).toBe(customDate);
+			expect(event.occurredAt).toEqual(customDate);
 		});
 
 		it("should create event with custom version", () => {
@@ -67,7 +67,7 @@ describe("Domain Events", () => {
 
 			expect(event.type).toBe("OrderCreated");
 			expect(event.payload).toEqual({ orderId: "123" });
-			expect(event.occurredAt).toBe(customDate);
+			expect(event.occurredAt).toEqual(customDate);
 			expect(event.version).toBe(2);
 			expect(event.metadata).toEqual(metadata);
 		});
@@ -124,7 +124,7 @@ describe("Domain Events", () => {
 			);
 
 			expect(event.metadata).toEqual(metadata);
-			expect(event.occurredAt).toBe(customDate);
+			expect(event.occurredAt).toEqual(customDate);
 		});
 
 		it("should support custom metadata fields", () => {

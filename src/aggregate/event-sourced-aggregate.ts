@@ -72,8 +72,9 @@ export abstract class EventSourcedAggregate<
 		TState,
 		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
+		TSnapshotState = TState,
 	>
-	extends BaseAggregate<TState, TId, TEvent>
+	extends BaseAggregate<TState, TId, TEvent, TSnapshotState>
 	implements IEventSourcedAggregate<TId, TEvent>
 {
 	/**
@@ -118,9 +119,16 @@ export abstract class EventSourcedAggregate<
 	private dispatchAndCommit(event: TEvent, isNew: boolean): void {
 		this.validateEvent(event);
 
-		const handler = this.handlers[event.type as keyof typeof this.handlers] as
-			| Handler<TState, TEvent>
-			| undefined;
+		// Own-key guard: the handlers map is an object literal, so a plain
+		// property get for event.type === "toString" / "constructor" /
+		// "__proto__" (a corrupt or adversarial stream row) would resolve
+		// through Object.prototype and invoke a non-handler.
+		const handler = Object.hasOwn(this.handlers, event.type)
+			? (this.handlers[event.type as keyof typeof this.handlers] as Handler<
+					TState,
+					TEvent
+				>)
+			: undefined;
 		if (!handler) {
 			throw new MissingHandlerError(event.type);
 		}
@@ -141,6 +149,12 @@ export abstract class EventSourcedAggregate<
 	 * infrastructure boundary, where event-stream corruption is an expected
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
+	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
+	 * is rolled back to its pre-call value — same contract as
+	 * `restoreFromSnapshotWithEvents`. Partial replay is never observable.
+	 * (Version needs no rollback: replay dispatches with `isNew = false`,
+	 * which never bumps it; only the final `markRestored` advances it.)
+	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
 	 * an aggregate already at v=1 (e.g. after a creation event) loading
@@ -149,11 +163,13 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
+		const previousState = this._state;
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
 				this.dispatchAndCommit(event, false);
 			} catch (e) {
+				this._state = previousState;
 				if (e instanceof DomainError) return err(e);
 				throw e;
 			}
@@ -173,14 +189,14 @@ export abstract class EventSourcedAggregate<
 	 * restoration is never observable to the caller.
 	 */
 	public restoreFromSnapshotWithEvents(
-		snapshot: AggregateSnapshot<TState>,
+		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		this._state = freezeShallow(structuredClone(snapshot.state));
+		this._state = freezeShallow(this.fromSnapshotState(snapshot.state));
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {

@@ -413,7 +413,120 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("corrupt event types colliding with Object.prototype members", () => {
+		// The handlers map is an object literal, so a naive property get for
+		// event.type === "toString" returns Object.prototype.toString — which
+		// passes a truthiness check and gets invoked as a handler, silently
+		// corrupting state. All such types must yield MissingHandlerError.
+		class TrapAggregate extends EventSourcedAggregate<
+			TestState,
+			TestEvent,
+			TestId
+		> {
+			protected readonly aggregateType = "TrapAggregate";
+
+			constructor(id: TestId, initialState: TestState) {
+				super(id, initialState);
+			}
+
+			public testApply(event: TestEvent): void {
+				this.apply(event);
+			}
+
+			protected readonly handlers = {
+				TestEventCreated: (s: TestState): TestState => s,
+			} as unknown as Record<
+				TestEvent["type"],
+				(s: TestState, e: TestEvent) => TestState
+			>;
+		}
+
+		const corruptTypes = [
+			"toString",
+			"constructor",
+			"hasOwnProperty",
+			"__proto__",
+			"valueOf",
+		] as const;
+
+		for (const corruptType of corruptTypes) {
+			it(`throws MissingHandlerError for event.type "${corruptType}" and leaves state intact`, () => {
+				const aggregate = new TrapAggregate("test-1" as TestId, {
+					value: 7,
+					status: "inactive",
+				});
+
+				const corrupt = createDomainEvent(corruptType, {
+					evil: true,
+				}) as unknown as TestEvent;
+
+				expect(() => aggregate.testApply(corrupt)).toThrow(
+					MissingHandlerError,
+				);
+				expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
+				expect(aggregate.version).toBe(0);
+			});
+		}
+
+		it("propagates MissingHandlerError from loadFromHistory for a corrupt stream row", () => {
+			const aggregate = new TrapAggregate("test-1" as TestId, {
+				value: 7,
+				status: "inactive",
+			});
+
+			const corrupt = createDomainEvent("toString", {
+				evil: true,
+			}) as unknown as TestEvent;
+
+			expect(() => aggregate.loadFromHistory([corrupt])).toThrow(
+				MissingHandlerError,
+			);
+			expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
+		});
+	});
+
 	describe("loadFromHistory", () => {
+		it("rolls back state when a mid-stream event throws a DomainError (all-or-nothing)", () => {
+			const aggregate = new ValidatingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			const result = aggregate.loadFromHistory([
+				createDomainEvent("TestEventUpdated", {
+					newValue: 99,
+				}) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			]);
+
+			expect(result.isErr()).toBe(true);
+			// The valid first event must not leak into state — same
+			// all-or-nothing contract as restoreFromSnapshotWithEvents.
+			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
+			expect(aggregate.version).toBe(0);
+			// Never-persisted sentinel survives → follow-up save() routes to INSERT.
+			expect(aggregate.persistedVersion).toBeUndefined();
+		});
+
+		it("rolls back state when a mid-stream row propagates a non-domain error", () => {
+			const aggregate = new ValidatingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			expect(() =>
+				aggregate.loadFromHistory([
+					createDomainEvent("TestEventUpdated", {
+						newValue: 99,
+					}) as TestEventUpdated,
+					// Unregistered type → MissingHandlerError (propagates, not err)
+					createDomainEvent("Bogus", {}) as unknown as TestEvent,
+				]),
+			).toThrow(MissingHandlerError);
+
+			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
+		});
+
 		it("should set version to history length on a fresh aggregate", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
 			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
@@ -696,6 +809,103 @@ describe("EventSourcedAggregate", () => {
 			// And the aggregate is back to its pre-call state (atomic restore)
 			expect(aggregate2.state).toEqual(originalState);
 			expect(aggregate2.version).toBe(originalVersion);
+		});
+	});
+
+	describe("Snapshots with class-based child entities (toSnapshotState/fromSnapshotState)", () => {
+		class LineItem {
+			constructor(
+				readonly sku: string,
+				public qty: number,
+			) {}
+
+			toPlainData(): { sku: string; qty: number } {
+				return { sku: this.sku, qty: this.qty };
+			}
+
+			static fromPlainData(d: { sku: string; qty: number }): LineItem {
+				return new LineItem(d.sku, d.qty);
+			}
+		}
+
+		type CartState = { items: LineItem[] };
+		type CartSnapshotState = { items: Array<{ sku: string; qty: number }> };
+		type ItemAdded = DomainEvent<"ItemAdded", { sku: string }>;
+		type CartEvent = ItemAdded;
+
+		class Cart extends EventSourcedAggregate<
+			CartState,
+			CartEvent,
+			TestId,
+			CartSnapshotState
+		> {
+			protected readonly aggregateType = "Cart";
+
+			constructor(id: TestId, state: CartState) {
+				super(id, state);
+			}
+
+			protected readonly handlers = {
+				ItemAdded: (state: CartState, e: ItemAdded): CartState => ({
+					items: [...state.items, new LineItem(e.payload.sku, 1)],
+				}),
+			};
+
+			protected override toSnapshotState(state: CartState): CartSnapshotState {
+				return { items: state.items.map((i) => i.toPlainData()) };
+			}
+
+			protected override fromSnapshotState(
+				stored: CartSnapshotState,
+			): CartState {
+				return { items: stored.items.map(LineItem.fromPlainData) };
+			}
+		}
+
+		it("restoreFromSnapshotWithEvents revives class children and replays events on top", () => {
+			const cart = new Cart("agg-1" as TestId, {
+				items: [new LineItem("sku-a", 2)],
+			});
+			const snapshot = cart.createSnapshot();
+			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
+				Object.prototype,
+			);
+
+			const restored = new Cart("agg-1" as TestId, { items: [] });
+			const result = restored.restoreFromSnapshotWithEvents(snapshot, [
+				createDomainEvent("ItemAdded", { sku: "sku-b" }) as ItemAdded,
+			]);
+
+			expect(result.isOk()).toBe(true);
+			expect(restored.state.items[0]).toBeInstanceOf(LineItem);
+			expect(restored.state.items[0]?.toPlainData()).toEqual({
+				sku: "sku-a",
+				qty: 2,
+			});
+			expect(restored.state.items[1]?.sku).toBe("sku-b");
+		});
+
+		it("default createSnapshot fails fast on a Promise in state instead of DataCloneError", () => {
+			type JobState = { pending: Promise<number> };
+			class JobAggregate extends EventSourcedAggregate<
+				JobState,
+				CartEvent,
+				TestId
+			> {
+				protected readonly aggregateType = "JobAggregate";
+				constructor(id: TestId, state: JobState) {
+					super(id, state);
+				}
+				protected readonly handlers = {
+					ItemAdded: (s: JobState): JobState => s,
+				};
+			}
+			const agg = new JobAggregate("agg-1" as TestId, {
+				pending: Promise.resolve(1),
+			});
+
+			expect(() => agg.createSnapshot()).toThrow(/Promise/);
+			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
 		});
 	});
 
