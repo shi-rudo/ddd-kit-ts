@@ -163,6 +163,13 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
+		// Empty stream: nothing was loaded — leave the lifecycle markers
+		// alone. markRestored(version) here would replace the
+		// never-persisted sentinel (persistedVersion === undefined) on a
+		// fresh aggregate, flipping repository routing from INSERT to
+		// UPDATE against a row that does not exist.
+		if (history.length === 0) return ok();
+
 		const previousState = this._state;
 		const startVersion = this.version;
 		for (const event of history) {

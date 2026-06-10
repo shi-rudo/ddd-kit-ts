@@ -419,3 +419,26 @@ describe("deepEqual – Symbol.toStringTag spoofing", () => {
 		expect(deepEqual(new Number(5), new Number(5))).toBe(true);
 	});
 });
+
+describe("deepEqual – NaN consistency across containers", () => {
+	// deepEqual(NaN, NaN) is true for primitives; the same SameValueZero
+	// semantics must hold wherever numbers are compared.
+	it("treats NaN elements in TypedArrays as equal", () => {
+		expect(
+			deepEqual(new Float64Array([1, NaN]), new Float64Array([1, NaN])),
+		).toBe(true);
+		expect(
+			deepEqual(new Float64Array([NaN]), new Float64Array([1])),
+		).toBe(false);
+	});
+
+	it("treats two invalid Dates as equal", () => {
+		expect(deepEqual(new Date(NaN), new Date(NaN))).toBe(true);
+		expect(deepEqual(new Date(NaN), new Date(0))).toBe(false);
+	});
+
+	it("treats two NaN Number wrappers as equal", () => {
+		expect(deepEqual(new Number(NaN), new Number(NaN))).toBe(true);
+		expect(deepEqual(new Number(NaN), new Number(1))).toBe(false);
+	});
+});

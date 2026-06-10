@@ -61,6 +61,23 @@ const stringValueOf = String.prototype.valueOf;
 const PROBE_KEY = {};
 
 /**
+ * Tags that `deepEqual` compares BY REFERENCE (its unhandled-built-in
+ * fallback) and that `deepOmit` must therefore ALIAS rather than clone —
+ * a clone would break `deepEqualExcept(x, x)` reflexivity. Single source
+ * of truth so the two modules cannot drift: if `deepEqual` ever learns a
+ * by-value comparison for one of these, remove it here and add a clone
+ * case in `deepOmit`'s `cloneBuiltIn` in the same change.
+ */
+export const REFERENCE_COMPARED_TAGS: ReadonlySet<string> = new Set([
+	"[object Error]",
+	"[object ArrayBuffer]",
+	"[object SharedArrayBuffer]",
+	"[object Promise]",
+	"[object WeakMap]",
+	"[object WeakSet]",
+]);
+
+/**
  * Verifies that `obj` genuinely is the type its tag claims, via an
  * internal-slot probe. Tags without a cheap probe (Promise, Error,
  * SharedArrayBuffer) are trusted — their downstream handling is

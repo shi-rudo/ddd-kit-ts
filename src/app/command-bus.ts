@@ -1,5 +1,6 @@
 import { err, type Result } from "@shirudo/result";
 import type { Command, CommandHandler } from "./command";
+import { describeThrown } from "./describe-thrown";
 
 /**
  * Internal adapter shape for handlers stored in the map.
@@ -140,6 +141,13 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 		commandType: K,
 		handler: CommandHandler<C, TMap[K]>,
 	): void {
+		// Silent replacement would turn the first handler into dead code
+		// with no signal — wiring bugs must surface at registration time.
+		if (this.handlers.has(commandType)) {
+			throw new Error(
+				`CommandBus: a handler for command type "${commandType}" is already registered`,
+			);
+		}
 		this.handlers.set(commandType, (cmd) => handler(cmd as C));
 	}
 
@@ -159,9 +167,7 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 		try {
 			return (await handler(command)) as Result<R, string>;
 		} catch (error) {
-			return err(
-				error instanceof Error ? error.message : String(error),
-			);
+			return err(describeThrown(error));
 		}
 	}
 }

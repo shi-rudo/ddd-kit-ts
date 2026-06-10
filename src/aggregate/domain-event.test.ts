@@ -4,6 +4,7 @@ import {
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventWithMetadata,
+	mergeMetadata,
 	resetClockFactory,
 	resetEventIdFactory,
 	setClockFactory,
@@ -464,6 +465,27 @@ describe("DomainEvent", () => {
 
 			expect(() => event.payload.tags.add("b")).toThrow(TypeError);
 			expect(() => event.payload.counts.set("y", 2)).toThrow(TypeError);
+		});
+	});
+
+	describe("mergeMetadata prototype-pollution safety", () => {
+		it("treats a parsed __proto__ key as inert data, not a prototype write", () => {
+			const hostile = JSON.parse(
+				'{"__proto__": {"isAdmin": true}}',
+			) as Record<string, unknown>;
+
+			const merged = mergeMetadata(
+				{ correlationId: "corr-1" },
+				hostile,
+			) as Record<string, unknown>;
+
+			// The merge must not install a prototype: reading a key that only
+			// exists on the injected proto must yield undefined…
+			expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+			expect(merged.isAdmin).toBeUndefined();
+			// …and the global prototype must stay clean.
+			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+			expect(merged.correlationId).toBe("corr-1");
 		});
 	});
 

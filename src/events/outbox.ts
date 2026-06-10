@@ -48,7 +48,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent> implements Outbox<Evt> {
 		limit?: number,
 	): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
 		const all = [...this.pending.values()];
-		return typeof limit === "number" ? all.slice(0, limit) : all;
+		if (typeof limit !== "number") return all;
+		// Clamp: slice's end-relative indexing would turn a negative limit
+		// (e.g. a dispatcher's batchSize - inFlight going negative) into
+		// "everything but the last records".
+		return all.slice(0, Math.max(0, limit));
 	}
 
 	async markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void> {

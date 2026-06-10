@@ -40,6 +40,34 @@ const DATE_MUTATORS: readonly string[] = [
     "setYear",
 ];
 
+// One thrower function per (typeName, method) for the lifetime of the
+// module — createDomainEvent deep-freezes a Date per event, so fresh
+// per-instance closures would be pure allocation churn on a hot path.
+const mutationThrowers = new Map<string, () => never>();
+
+function mutationThrower(typeName: string, method: string): () => never {
+    const key = `${typeName}.${method}`;
+    let thrower = mutationThrowers.get(key);
+    if (!thrower) {
+        thrower = function throwFrozenMutation(): never {
+            throw new TypeError(
+                `Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
+            );
+        };
+        mutationThrowers.set(key, thrower);
+    }
+    return thrower;
+}
+
+// Reused descriptor — Object.defineProperty reads it synchronously, so a
+// single mutable module-level object avoids one allocation per method.
+const shadowDescriptor = {
+    value: undefined as unknown,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+};
+
 function shadowMutators(
     obj: object,
     typeName: string,
@@ -50,16 +78,8 @@ function shadowMutators(
     // chose to lock it themselves).
     if (!Object.isExtensible(obj)) return;
     for (const method of methods) {
-        Object.defineProperty(obj, method, {
-            value: function throwFrozenMutation(): never {
-                throw new TypeError(
-                    `Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
-                );
-            },
-            writable: false,
-            enumerable: false,
-            configurable: false,
-        });
+        shadowDescriptor.value = mutationThrower(typeName, method);
+        Object.defineProperty(obj, method, shadowDescriptor);
     }
 }
 
@@ -78,6 +98,12 @@ function shadowMutators(
  * mutator methods are shadowed with throwing own properties and Map/Set
  * contents are frozen recursively. The shadows are non-enumerable —
  * invisible to `Object.keys`, spread, `deepEqual`, and `structuredClone`.
+ *
+ * The shadowing is deny-by-enumeration: only the mutators known at
+ * release time are blocked. If the runtime grows a NEW mutator (e.g. the
+ * stage-3 `Map.prototype.getOrInsert` upsert proposal), it is not blocked
+ * until the list is updated — treat the mutator blocking as a guard rail,
+ * not a security boundary.
  *
  * Limitation: ArrayBuffer views (TypedArrays, DataView) are passed through
  * unfrozen — the spec forbids freezing a view with elements, and freezing
@@ -337,6 +363,11 @@ export function voEqualsExcept<T>(
  * Creates a value object with optional validation.
  * Returns a Result type instead of throwing an error.
  *
+ * Note: the Result covers VALIDATION failures only. Non-data values in
+ * the input (functions, Promise/WeakMap/WeakSet) still throw a
+ * `TypeError` from `vo()` — they cannot occur in parsed JSON and signal
+ * a programming error, not a validation failure.
+ *
  * @param t - The data to convert into a value object
  * @param validate - Validation function that returns true if valid
  * @param errorMessage - Optional custom error message if validation fails
@@ -364,10 +395,25 @@ export function voWithValidation<T>(
 ): Result<VO<T>, string> {
     if (!validate(t)) {
         return err(
-            errorMessage ?? `Validation failed for value object: ${JSON.stringify(t)}`,
+            errorMessage ?? `Validation failed for value object: ${describeValue(t)}`,
         );
     }
     return ok(vo(t));
+}
+
+/**
+ * Best-effort rendering of a value for the default validation-failure
+ * message. `JSON.stringify` throws for cyclic and BigInt-bearing values —
+ * the error path of a Result-returning function must never throw itself.
+ */
+function describeValue(value: unknown): string {
+    try {
+        const json = JSON.stringify(value);
+        if (json !== undefined) return json;
+    } catch {
+        // Cyclic or BigInt-bearing values cannot be JSON-serialised.
+    }
+    return String(value);
 }
 
 // ============================================================================

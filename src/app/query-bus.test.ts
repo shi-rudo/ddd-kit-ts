@@ -278,3 +278,30 @@ describe("QueryBus", () => {
 		});
 	});
 });
+
+describe("QueryBus – registration and throw diagnostics", () => {
+	it("throws on duplicate registration instead of silently replacing the handler", () => {
+		const bus = new QueryBus();
+
+		bus.register("GetOrder", async () => null);
+
+		expect(() => bus.register("GetOrder", async () => null)).toThrow(
+			/already registered/,
+		);
+	});
+
+	it("serialises a structured thrown object into the error string", async () => {
+		const bus = new QueryBus();
+		bus.register("GetOrder", async () => {
+			throw { code: 503, hint: "replica lag" };
+		});
+
+		const result = await bus.execute({ type: "GetOrder" });
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toContain("503");
+			expect(result.error).toContain("replica lag");
+		}
+	});
+});

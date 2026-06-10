@@ -184,6 +184,12 @@ export abstract class BaseAggregate<
 	 * call `super.onPersisted(version)` — there is nothing in the parent
 	 * implementation to preserve.
 	 *
+	 * **Observer contract: errors are swallowed.** `withCommit` invokes
+	 * `markPersisted` after the transaction has committed; a throwing hook
+	 * must neither abort the loop for peer aggregates nor make the
+	 * committed write look failed, so `withCommit` catches and discards
+	 * hook errors. Handle failures inside the hook if you need them.
+	 *
 	 * **`onPersisted` deliberately receives only the version, not the
 	 * drained events.** Event-driven post-persist logic (aggregate-level
 	 * audit logging, per-event-type side effects) belongs in `EventBus`

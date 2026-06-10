@@ -570,6 +570,22 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(0);
 		});
 
+		it("keeps the never-persisted sentinel on empty history (save must still INSERT)", () => {
+			const initialState: TestState = { value: 10, status: "inactive" };
+			const aggregate = new TestEventSourcedAggregate(
+				"test-1" as TestId,
+				initialState,
+			);
+			expect(aggregate.persistedVersion).toBeUndefined();
+
+			const result = aggregate.loadFromHistory([]);
+
+			expect(result.isOk()).toBe(true);
+			// markRestored(0) would flip repository routing from INSERT to
+			// UPDATE against a row that does not exist.
+			expect(aggregate.persistedVersion).toBeUndefined();
+		});
+
 		it("should leave the aggregate's pre-existing version untouched on empty history", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			expect(aggregate.version).toBe(1);

@@ -428,6 +428,51 @@ describe("withCommit", () => {
 		expect(agg.markPersistedCalls).toBe(1);
 	});
 
+	describe("post-commit markPersisted isolation", () => {
+		it("marks every aggregate persisted even when one onPersisted hook throws", async () => {
+			const eventA = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const eventB = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "b" },
+				{ aggregateId: "b", aggregateType: "MockOrder" },
+			);
+			const aggA = createMockAggregate([eventA]);
+			const throwingA: MockAggregate = {
+				...aggA,
+				get pendingEvents() {
+					return aggA.pendingEvents;
+				},
+				get markPersistedCalls() {
+					return aggA.markPersistedCalls;
+				},
+				markPersisted(v) {
+					aggA.markPersisted(v);
+					// User-overridable onPersisted hooks can throw — the
+					// post-commit loop must not abort for the peers.
+					throw new Error("cache eviction failed");
+				},
+			};
+			const aggB = createMockAggregate([eventB]);
+			const bus = createMockBus();
+
+			const result = await withCommit(
+				{ outbox: createMockOutbox(), bus, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [throwingA, aggB] }),
+			);
+
+			// Committed result survives; B's pending events were flushed
+			// (no double emission on the next commit); publish still ran.
+			expect(result).toBe("ok");
+			expect(aggB.markPersistedCalls).toBe(1);
+			expect(aggB.pendingEvents).toHaveLength(0);
+			expect(bus.published).toHaveLength(1);
+		});
+	});
+
 	describe("post-commit bus.publish failure", () => {
 		function createFailingBus(error: unknown): EventBus<TestEvent> {
 			return {

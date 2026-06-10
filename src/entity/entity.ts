@@ -150,6 +150,14 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected _state: TState;
 
+	/**
+	 * **State ownership.** Plain-object and array states are shallow-copied
+	 * before the freeze, so the caller's own object stays mutable. A CLASS
+	 * INSTANCE passed as state is an ownership transfer: it is frozen
+	 * in place (a copy would strip its prototype) — do not keep mutating
+	 * the instance after handing it to the entity. The same contract
+	 * applies to {@link setState}.
+	 */
 	protected constructor(id: TId, initialState: TState) {
 		if (id === null || id === undefined) {
 			throw new Error("Entity ID cannot be null or undefined");
@@ -188,6 +196,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * Sets the state of the entity.
 	 * This is a convenience method for state mutations.
 	 * Automatically validates the newState using `validateState()`.
+	 *
+	 * Plain-object and array states are shallow-copied before the freeze
+	 * (the caller's object stays mutable); a class-instance state is an
+	 * ownership transfer and is frozen in place — see the constructor.
 	 *
 	 * @param newState - The new state
 	 */

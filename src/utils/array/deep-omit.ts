@@ -1,4 +1,4 @@
-import { isBuiltInObject } from "./is-built-in";
+import { isBuiltInObject, REFERENCE_COMPARED_TAGS } from "./is-built-in";
 
 export type Key = string | symbol;
 export type PathSegment = string | number | symbol;
@@ -213,21 +213,15 @@ function assignOwn(target: object, key: PropertyKey, value: unknown): void {
  * Clones a built-in atomic type by case. Falls back to `structuredClone`
  * for anything not explicitly enumerated (e.g. DataView, TypedArrays,
  * Boolean/Number/String wrappers — all of which `deepEqual` compares by
- * value). Types that `deepEqual` compares BY REFERENCE (its unhandled-
- * built-in fallback: Error, ArrayBuffer, SharedArrayBuffer, Promise,
- * WeakMap, WeakSet) are passed through by reference instead — cloning
- * them would make `deepEqualExcept(x, x)` false. Promise/WeakMap/WeakSet
- * additionally cannot be cloned at all (`structuredClone` rejects them).
+ * value). Types that `deepEqual` compares BY REFERENCE (the shared
+ * {@link REFERENCE_COMPARED_TAGS} set) are passed through by reference
+ * instead — cloning them would make `deepEqualExcept(x, x)` false.
+ * Promise/WeakMap/WeakSet additionally cannot be cloned at all
+ * (`structuredClone` rejects them).
  */
 function cloneBuiltIn(obj: object, tag: string): unknown {
+	if (REFERENCE_COMPARED_TAGS.has(tag)) return obj;
 	switch (tag) {
-		case "[object Promise]":
-		case "[object WeakMap]":
-		case "[object WeakSet]":
-		case "[object Error]":
-		case "[object ArrayBuffer]":
-		case "[object SharedArrayBuffer]":
-			return obj;
 		case "[object Date]":
 			return new Date((obj as Date).getTime());
 		case "[object RegExp]": {

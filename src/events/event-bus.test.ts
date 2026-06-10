@@ -379,6 +379,27 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("non-Error rejection reasons", () => {
+		it("preserves the original reason as the Error cause", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const reason = { code: "RATE_LIMIT", retryAfter: 30 };
+
+			bus.subscribe("OrderCreated", async () => {
+				throw reason;
+			});
+
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "o-1",
+			}) as OrderCreated;
+
+			// The wrapping Error must carry the structured payload — a bare
+			// '[object Object]' string destroys all diagnostic information.
+			await expect(bus.publish([event])).rejects.toMatchObject({
+				cause: reason,
+			});
+		});
+	});
+
 	describe("synchronously throwing handlers", () => {
 		it("runs peer handlers and dispatches remaining events when a handler throws synchronously", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
