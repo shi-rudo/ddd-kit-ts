@@ -428,8 +428,7 @@ function assertSnapshotSafe(
 	// Class instances and unknown exotic objects (including anything whose
 	// built-in-looking tag failed brand verification): structuredClone
 	// would strip or reject them — fail fast with the path.
-	const name: string =
-		(proto.constructor && proto.constructor.name) || "anonymous class";
+	const name: string = proto.constructor?.name || "anonymous class";
 	throw new Error(
 		`createSnapshot: state${path} is a class instance (${name}) — ` +
 			`structuredClone would strip its prototype and methods, producing ` +

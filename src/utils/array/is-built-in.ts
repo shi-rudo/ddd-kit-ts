@@ -33,23 +33,28 @@ const BUILT_IN_TAGS: ReadonlySet<string> = new Set([
 // and throws a TypeError when `this` is not a genuine instance — the only
 // check a plain object cannot spoof via `Symbol.toStringTag`. Captured once
 // so a tampered prototype cannot redirect the probe later.
+function intrinsicGetter(
+	proto: object,
+	prop: string,
+): (this: unknown) => unknown {
+	const get = Object.getOwnPropertyDescriptor(proto, prop)?.get;
+	// Spec-guaranteed accessors on intrinsic prototypes — unreachable
+	// unless the environment itself is broken.
+	if (!get) throw new Error(`missing intrinsic getter for ${prop}`);
+	return get;
+}
+
 const dateGetTime = Date.prototype.getTime;
-const mapSizeGet = Object.getOwnPropertyDescriptor(Map.prototype, "size")!.get!;
-const setSizeGet = Object.getOwnPropertyDescriptor(Set.prototype, "size")!.get!;
+const mapSizeGet = intrinsicGetter(Map.prototype, "size");
+const setSizeGet = intrinsicGetter(Set.prototype, "size");
 const weakMapHas = WeakMap.prototype.has;
 const weakSetHas = WeakSet.prototype.has;
-const dataViewByteLengthGet = Object.getOwnPropertyDescriptor(
-	DataView.prototype,
-	"byteLength",
-)!.get!;
-const arrayBufferByteLengthGet = Object.getOwnPropertyDescriptor(
+const dataViewByteLengthGet = intrinsicGetter(DataView.prototype, "byteLength");
+const arrayBufferByteLengthGet = intrinsicGetter(
 	ArrayBuffer.prototype,
 	"byteLength",
-)!.get!;
-const regExpSourceGet = Object.getOwnPropertyDescriptor(
-	RegExp.prototype,
-	"source",
-)!.get!;
+);
+const regExpSourceGet = intrinsicGetter(RegExp.prototype, "source");
 const booleanValueOf = Boolean.prototype.valueOf;
 const numberValueOf = Number.prototype.valueOf;
 const stringValueOf = String.prototype.valueOf;
