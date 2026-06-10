@@ -447,4 +447,18 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 		expect(result.a).toBe(result.b);
 		expect(result.a).toEqual({ y: 2 });
 	});
+
+	it("aborts with a descriptive error instead of hanging on exponentially shared graphs", () => {
+		// Per-path cloning is semantically forced with a predicate, so a
+		// diamond chain (every level shares one node via two keys) expands
+		// 2^depth — the walk must fail loudly, not freeze the process.
+		let node: Record<string, unknown> = { leaf: 1 };
+		for (let i = 0; i < 24; i++) {
+			node = { a: node, b: node };
+		}
+
+		expect(() =>
+			deepOmit(node, { ignoreKeyPredicate: () => false }),
+		).toThrow(/shared references/);
+	});
 });
