@@ -60,6 +60,20 @@ describe("InMemoryOutbox", () => {
 		expect(firstTwo).toHaveLength(2);
 	});
 
+	it("getPending with a zero or negative limit returns nothing", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		await outbox.add([
+			createDomainEvent("OrderCreated", { orderId: "o-1" }),
+			createDomainEvent("OrderCreated", { orderId: "o-2" }),
+			createDomainEvent("OrderCreated", { orderId: "o-3" }),
+		]);
+
+		// A dispatcher computing `batchSize - inFlight` can go negative —
+		// slice's end-relative indexing must not dispatch the whole backlog.
+		expect(await outbox.getPending(0)).toHaveLength(0);
+		expect(await outbox.getPending(-1)).toHaveLength(0);
+	});
+
 	it("re-adding the same eventId is naturally idempotent", async () => {
 		// Re-adds (via at-least-once consumers, transactional outbox-
 		// dispatcher retries, etc.) overwrite the existing entry keyed on

@@ -138,7 +138,12 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 						errors.push(
 							result.reason instanceof Error
 								? result.reason
-								: new Error(String(result.reason)),
+								: // Attach the raw reason as cause — a handler
+									// rejecting with a structured payload must stay
+									// diagnosable, not collapse to '[object Object]'.
+									new Error(String(result.reason), {
+										cause: result.reason,
+									}),
 						);
 					}
 				}
