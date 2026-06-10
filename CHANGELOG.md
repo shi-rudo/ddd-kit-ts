@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `loadFromHistory` rolls back on mid-stream failure (all-or-nothing)
+
+When a replayed event threw mid-stream, `loadFromHistory` returned `err` but left the aggregate partially mutated: `_state` already reflected the events before the failure while `version` was never advanced — state and version were mutually inconsistent, and reusing or re-loading the aggregate produced wrong results. Its sibling `restoreFromSnapshotWithEvents` always promised (and implemented) all-or-nothing rollback. `loadFromHistory` now snapshots the pre-call state and restores it in the catch path — for `DomainError`s (returned as `err`) and for propagating non-domain throws alike. Partial replay is never observable.
+
 ### Fixed — `EventSourcedAggregate` handler lookup no longer walks the prototype chain
 
 The `handlers` map is an object literal, so `this.handlers[event.type]` resolved through `Object.prototype` for corrupt or adversarial stream rows: an event with `type: "toString"` invoked `Object.prototype.toString` as the handler and silently replaced the aggregate state with the string `"[object Undefined]"`; `"constructor"` silently no-opped; `"__proto__"` / `"hasOwnProperty"` crashed with a raw `TypeError` instead of the documented `MissingHandlerError`. The lookup is now guarded with `Object.hasOwn`, so every unregistered type — including `Object.prototype` member names — consistently throws `MissingHandlerError` and leaves state and version untouched, in `apply` and in the replay paths (`loadFromHistory`, `restoreFromSnapshotWithEvents`).

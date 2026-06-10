@@ -148,6 +148,12 @@ export abstract class EventSourcedAggregate<
 	 * infrastructure boundary, where event-stream corruption is an expected
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
+	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
+	 * is rolled back to its pre-call value — same contract as
+	 * `restoreFromSnapshotWithEvents`. Partial replay is never observable.
+	 * (Version needs no rollback: replay dispatches with `isNew = false`,
+	 * which never bumps it; only the final `markRestored` advances it.)
+	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
 	 * an aggregate already at v=1 (e.g. after a creation event) loading
@@ -156,11 +162,13 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
+		const previousState = this._state;
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
 				this.dispatchAndCommit(event, false);
 			} catch (e) {
+				this._state = previousState;
 				if (e instanceof DomainError) return err(e);
 				throw e;
 			}

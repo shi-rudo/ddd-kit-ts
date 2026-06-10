@@ -486,6 +486,47 @@ describe("EventSourcedAggregate", () => {
 	});
 
 	describe("loadFromHistory", () => {
+		it("rolls back state when a mid-stream event throws a DomainError (all-or-nothing)", () => {
+			const aggregate = new ValidatingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			const result = aggregate.loadFromHistory([
+				createDomainEvent("TestEventUpdated", {
+					newValue: 99,
+				}) as TestEventUpdated,
+				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+			]);
+
+			expect(result.isErr()).toBe(true);
+			// The valid first event must not leak into state — same
+			// all-or-nothing contract as restoreFromSnapshotWithEvents.
+			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
+			expect(aggregate.version).toBe(0);
+			// Never-persisted sentinel survives → follow-up save() routes to INSERT.
+			expect(aggregate.persistedVersion).toBeUndefined();
+		});
+
+		it("rolls back state when a mid-stream row propagates a non-domain error", () => {
+			const aggregate = new ValidatingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			expect(() =>
+				aggregate.loadFromHistory([
+					createDomainEvent("TestEventUpdated", {
+						newValue: 99,
+					}) as TestEventUpdated,
+					// Unregistered type → MissingHandlerError (propagates, not err)
+					createDomainEvent("Bogus", {}) as unknown as TestEvent,
+				]),
+			).toThrow(MissingHandlerError);
+
+			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
+		});
+
 		it("should set version to history length on a fresh aggregate", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
 			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, initialState);
