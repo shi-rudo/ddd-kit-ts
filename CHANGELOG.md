@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `withCommit` no longer rejects when a post-commit `bus.publish` fails; new optional `onPublishError` hook
+
+The `EventBus.publish` contract throws after dispatching when any subscriber failed — so a single throwing in-process subscriber made `withCommit` reject AFTER the transaction had committed and `markPersisted` had run. The caller received a use-case failure for a committed write (and lost the result, e.g. the new order's id); a typical caller retries, double-executing the write. This also contradicted `withCommit`'s own documentation, which frames publish failure as recoverable eventual consistency: the outbox already holds the events and an outbox dispatcher will deliver them.
+
+`bus.publish` failures after the commit are now caught and never reject `withCommit` — the committed `result` is always returned. The error is reported to the new optional `deps.onPublishError(error, events)` hook (wire it to your logger/metrics); the hook is observer-only, so its own failures are swallowed too. Pre-commit failures (use-case errors, the recordEvent guard, `outbox.add`) reject exactly as before and roll the transaction back. Note: `onPublishError` is additive public API — the next release should be a minor (1.1.0), not a patch.
+
 ### Fixed — `deepEqualExcept(x, x)` no longer returns `false` for objects containing an Error or ArrayBuffer
 
 `deepEqual` compares its unhandled built-ins (Error, ArrayBuffer, SharedArrayBuffer) by reference — intentionally — but `deepOmit` cloned them via `structuredClone`, producing two distinct instances. `deepEqualExcept` (deepOmit both sides, then deepEqual) therefore reported even the *same object compared with itself* as unequal: reflexivity was broken, and `voEqualsExcept` inherited the bug. `cloneBuiltIn` now passes every type that `deepEqual` compares by reference (Error, ArrayBuffer, SharedArrayBuffer, plus the already-aliased Promise/WeakMap/WeakSet) through by reference; types `deepEqual` compares by value (Date, RegExp, Map, Set, TypedArrays, DataView, wrappers) are still cloned.
