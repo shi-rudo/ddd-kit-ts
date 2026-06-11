@@ -17,9 +17,13 @@
  * "there is nothing meaningful here" statement, not an accidental
  * `unknown` fallback.
  *
- * Intentionally **not** Fowler's full Unit of Work (no change tracking,
- * no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time
- * flush). Change tracking is the ORM's job.
+ * Intentionally minimal: the scope itself does no change tracking and
+ * no commit-time flush. Those concerns live in the layers above - the
+ * aggregate detects its own changes (`changedKeys` / `hasChanges`),
+ * `withCommit` orchestrates the commit lifecycle, and the opt-in
+ * `UnitOfWork` facade adds tx-bound repositories and enrollment. See
+ * "TransactionScope stays minimal; the Unit of Work lives above it" in
+ * docs/guide/design-decisions.md.
  *
  * @example Drizzle implementation
  * ```typescript

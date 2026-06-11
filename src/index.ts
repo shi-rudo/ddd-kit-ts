@@ -10,6 +10,7 @@ export * from "./app/command-bus";
 // App handlers
 export * from "./app/handler";
 export * from "./app/query";
+export * from "./app/unit-of-work";
 export * from "./app/query-bus";
 export * from "./core/errors";
 export * from "./core/id";
