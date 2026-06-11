@@ -139,9 +139,17 @@ If you find yourself wanting a version lower down, one of these is the DDD-align
 
 The absence of an entity-level version is a guard rail: a generic `version` on `Entity` would invite consumers to split work across what should be a single aggregate.
 
-## TransactionScope, not "Unit of Work"
+## TransactionScope stays minimal; the Unit of Work lives above it
 
-The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T>`: honest naming for what it actually does. The library does **not** ship a Fowler-style UoW (no `registerDirty` / `registerNew` / `registerDeleted` change tracking). That's the ORM's job; Prisma, Drizzle, TypeORM all handle it differently, and competing with them only creates incompatibility.
+The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T>`: honest naming for what it actually does — delegate to the ORM's native transaction. The scope itself does no change tracking (`registerDirty` / `registerNew` / `registerDeleted`); ORMs handle row-level change detection differently (Prisma, Drizzle, TypeORM), and competing with them at that level only creates incompatibility.
+
+Earlier versions of this page said flatly "no Fowler-style UoW". That stance has been **consciously revised** — not because the original reasoning was wrong, but because the pieces it argued against landed in different places than Fowler's pattern puts them:
+
+- **Change detection lives on the aggregate, not in the scope.** `AggregateRoot.changedKeys` / `hasChanges` detect changes by a shallow reference diff against the state captured at the persistence-lifecycle markers — the aggregate reports *what* changed, the repository decides *what to write* (see [Partial writes for multi-table aggregates](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges)). This is deliberately NOT ORM-style change tracking: no proxies, no entity metadata, no registration calls — it falls out of the kit's immutable-`setState` convention for free.
+- **Commit orchestration lives in `withCommit`** (the Vernon / Axon / EventFlow unit-of-work pattern): pending events are harvested into the outbox inside the transaction, `markPersisted` fires after the commit, the in-process publish happens last.
+- **An opt-in `UnitOfWork` facade is the planned next layer** on top of `withCommit`: tx-bound repositories handed to the use case via a registry, a per-operation identity map, and repository-side aggregate enrollment (`save()` / `delete()` enroll the aggregate with the UoW). Enrollment-by-repository removes `withCommit`'s known footgun — forgetting to list an aggregate in the returned `aggregates` array silently drops its events; with enrollment, the mistake becomes impossible per call site and is tested once per repository implementation instead.
+
+What stays true: `TransactionScope` remains the minimal port everything above builds on, and nothing forces the higher layers on you — `withCommit` with hand-rolled, tx-bound repositories remains a fully supported way to use the kit.
 
 `withCommit` publishes events **after** `transactional` resolves, so an in-process EventBus subscriber never sees events from a rolled-back transaction.
 

@@ -13,6 +13,10 @@ Repositories for aggregates whose state spans multiple tables (root row + N chil
 
 **Behavioral note for `markRestored` overriders:** the marker now also captures the dirty-tracking baseline on `AggregateRoot`. A pre-existing subclass override that re-implements version sync without calling `super.markRestored(version)` was functionally equivalent before; after this release it leaves the baseline uncaptured, so `changedKeys` reports all keys and `hasChanges` never returns `false` for that aggregate (the safe degradation direction — full writes, never skipped ones). Call `super` first.
 
+### Changed: design-decisions guide — the "no Fowler UoW" stance is consciously revised
+
+`docs/guide/design-decisions.md` no longer claims the kit categorically ships no Fowler-style Unit of Work. The revised section ("TransactionScope stays minimal; the Unit of Work lives above it") explains where the pieces actually landed: change detection on the aggregate (`changedKeys` / `hasChanges`, deliberately not ORM-style), commit orchestration in `withCommit`, and an opt-in `UnitOfWork` facade (tx-bound repository registry, per-operation identity map, repository-side aggregate enrollment) as the planned next layer. `TransactionScope` remains the minimal port; `withCommit` with hand-rolled repositories remains fully supported.
+
 ## [1.1.0] - 2026-06-10
 
 Bug-fix and hardening release from a full-library audit (23 fixes: 5 P1 + 8 P2 + 10 P3) plus an adversarial code review of the fix branch itself (7 more). Two additive API surfaces make this a minor: the optional `withCommit` dep **`onPublishError(error, events)`**, and the snapshot mapping hooks **`toSnapshotState`/`fromSnapshotState`** with the trailing `TSnapshotState` generic on `BaseAggregate`/`AggregateRoot`/`EventSourcedAggregate`. Behavioral contract changes to know about: `withCommit` never rejects after the commit; `CommandBus`/`QueryBus` throw on duplicate registration; `vo()`/`ValueObject` reject function-valued props with a `TypeError`; `createSnapshot` fails fast on non-plain-data state. Test suite grew from 470 to 569.
