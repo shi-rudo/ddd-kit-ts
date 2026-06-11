@@ -4,7 +4,7 @@ In DDD, Entities are objects with identity and state. Unlike Value Objects (comp
 
 ## Class-based: `Entity<TState, TId>`
 
-Use this for child entities inside an aggregate that have their own state and business methods.
+Use this for child entities inside an aggregate that have their own state and business methods. An `Entity` has identity and state but **no own `version`** — optimistic-concurrency versioning lives on the aggregate root; see [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for why, and what to do if you think you need a versioned child.
 
 ```ts
 import { Entity, type Id } from "@shirudo/ddd-kit";

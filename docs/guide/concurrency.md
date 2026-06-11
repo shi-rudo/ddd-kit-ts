@@ -74,6 +74,8 @@ async function save(order: Order): Promise<void> {
 
 The Use Case catches `ConcurrencyConflictError` at the App-Service boundary and decides: retry the operation (re-load, re-mutate), surface the conflict to the caller (HTTP 409), or accept last-write-wins for that path.
 
+The `version` lives on the aggregate root, not on its child entities or value objects — OCC is enforced at the consistency boundary. See [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for the rationale and the alternatives when you think a child needs its own version.
+
 ## EventBus is sequential per event-type, parallel per handler
 
 `EventBus.publish(events)`:

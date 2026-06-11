@@ -121,6 +121,24 @@ Even in a DI-leaning codebase, `withEventIdFactory` / `withClockFactory` remain 
 
 `Entity.state` is **shallowly frozen** on every assignment. Direct property writes (`entity.state.foo = …`) throw in strict mode, but writes to nested objects bypass the freeze. For deep immutability either model nested data with `vo()` (deep-freezes by construction) or reach for Immer / Immutable.js at the App layer. The shallow contract is deliberate — deep freezing on every state write would dominate hot paths.
 
+## Version lives on the aggregate boundary, not on entities or value objects
+
+`version` / `persistedVersion` enter the class hierarchy at `BaseAggregate`, between `Entity` and the two aggregate flavours — `Entity<TState, TId>` has identity and state but **no own version**. That split is deliberate, and the reasons differ for the two building blocks below it.
+
+**Value Objects carry no version — it would contradict what a VO is.** A VO has no identity and no lifecycle: it is replaced wholesale, never mutated, and two VOs with equal attributes *are* the same value (`voEquals`). A version presupposes "the same thing over time whose changes you count" — i.e. identity. The moment you want a versioned VO, you actually want an Entity. (The only version-like concept near VOs is the schema/event `version` used for [upcasting](./event-upcasting.md) — a serialisation concern at the persistence edge, not a VO attribute.)
+
+**Child entities carry no version because OCC belongs to the consistency boundary.** The `version` the kit tracks is an optimistic-concurrency token (`WHERE version = persistedVersion` on save — see [Concurrency](./concurrency.md)). Per Evans and Vernon (IDDD §10) the aggregate is the unit of consistency and persistence: loaded, mutated, and saved transactionally as one whole, with OCC on the root. Giving a child entity its own version would imply it can be modified concurrently and independently — exactly what the aggregate boundary forbids. A child entity inherits its "versioning" through the version of *its* aggregate.
+
+If you find yourself wanting a version lower down, one of these is the DDD-aligned move:
+
+| What you actually want | Do this instead |
+|---|---|
+| A child entity that can be edited concurrently on its own | Promote it to its **own aggregate root** — then it has its own OCC version |
+| "Which change was this?" per entity, for audit | **Domain events** (they carry `version` + `occurredAt`), not a field on the entity |
+| Migrate the shape of an embedded structure | **Event upcasting**, or a schema-version field inside the plain-data state — not a library concept |
+
+The absence of an entity-level version is a guard rail: a generic `version` on `Entity` would invite consumers to split work across what should be a single aggregate.
+
 ## TransactionScope, not "Unit of Work"
 
 The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T>` — honest naming for what it actually does. The library does **not** ship a Fowler-style UoW (no `registerDirty` / `registerNew` / `registerDeleted` change tracking). That's the ORM's job — Prisma, Drizzle, TypeORM all handle it differently, and competing with them only creates incompatibility.
