@@ -33,6 +33,8 @@ export class NestedUnitOfWorkError extends BaseError<"NestedUnitOfWorkError"> {
 				"A nested run() would open an independent transaction, not join the " +
 				"outer one - merge the work into a single run() callback. For " +
 				"concurrent operations, construct one UnitOfWork per operation.",
+			undefined,
+			{ name: "NestedUnitOfWorkError" },
 		);
 	}
 }
@@ -59,6 +61,8 @@ export class TransactionClosedError extends BaseError<"TransactionClosedError"> 
 			`Unit of work is closed: ${operation} was called after the ` +
 				"transaction committed or rolled back. Do not use the context or " +
 				"session outside the run() callback.",
+			undefined,
+			{ name: "TransactionClosedError" },
 		);
 	}
 }
@@ -87,6 +91,7 @@ export class CommitError extends InfrastructureError<"CommitError"> {
 				"harvest, outbox write, or transaction commit rejected. The " +
 				"transaction did not commit; see cause.",
 			cause,
+			{ name: "CommitError" },
 		);
 	}
 }
@@ -114,6 +119,7 @@ export class RollbackError extends InfrastructureError<"RollbackError"> {
 				"different error (possible rollback failure). The callback's error " +
 				"is the cause; the scope's error is in rollbackCause.",
 			cause,
+			{ name: "RollbackError" },
 		);
 	}
 }
@@ -134,10 +140,12 @@ export class RollbackError extends InfrastructureError<"RollbackError"> {
  *   `identityMap.isDeleted` as not-found (`null`), and registers the
  *   hydrated instance after - two loads of the same aggregate in one
  *   unit of work must return the same instance.
- * - `save(aggregate)` calls {@link enrollSaved} (after the write, or
- *   before - order inside the transaction does not matter; enrollment
- *   is idempotent per instance, mirroring `withCommit`'s reference
- *   dedupe).
+ * - `save(aggregate)` calls {@link enrollSaved} BEFORE the row write:
+ *   the deleted-gate then throws `AggregateDeletedError` before any SQL
+ *   runs (instead of the write surfacing as a confusing
+ *   `ConcurrencyConflictError` against the deleted row). Enrollment is
+ *   idempotent per instance, mirroring `withCommit`'s reference dedupe,
+ *   and a failed write rolls the whole unit of work back anyway.
  * - `delete(aggregate)` calls {@link enrollDeleted} - ONE call does all
  *   the deletion bookkeeping: the identity-map entry is removed and
  *   tombstoned automatically (keyed on the instance's concrete class),

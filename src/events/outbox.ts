@@ -14,7 +14,13 @@ import type { Outbox, OutboxRecord } from "./ports";
  * For production, back the outbox with a transactional store so the
  * outbox row participates in the same transaction as the aggregate
  * write (see `TransactionScope` + `withCommit`). This class lives in
- * memory only: events are lost on process restart.
+ * memory only: events are lost on process restart — and, sharper:
+ * events `add()`ed inside a transaction that later rolls back are NOT
+ * removed (the Map knows nothing about your scope's rollback). Tests
+ * that assert rollback purity need an outbox that participates in the
+ * test store's transactional semantics; see the reference adapter at
+ * https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts
+ * (repo-only, not shipped to npm).
  *
  * @example
  * ```ts

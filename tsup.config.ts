@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     utils: "src/utils.ts",
     http: "src/http.ts",
+    testing: "src/testing.ts",
   },
   format: ["esm"], // ES modules only
   dts: true, // Generate .d.ts files
@@ -14,7 +15,7 @@ export default defineConfig({
   minify: false, // Libraries ship unminified; the consumer's bundler handles minification
   treeshake: true, // Enable tree-shaking
   target: "es2022", // Matches tsconfig.json
-  outDir: "dist", // Preserve module structure
-  keepNames: true, // Do not bundle external dependencies (a library should leave its deps external)
-  noExternal: [],
+  outDir: "dist",
+  keepNames: true, // Preserve class/function names (error-name matching relies on them)
+  noExternal: [], // Do not bundle external dependencies (a library leaves its deps external)
 });

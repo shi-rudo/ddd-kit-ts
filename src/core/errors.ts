@@ -57,7 +57,9 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 		public readonly eventType: string,
 		cause?: unknown,
 	) {
-		super(`Missing handler for event type: ${eventType}`, cause);
+		super(`Missing handler for event type: ${eventType}`, cause, {
+			name: "MissingHandlerError",
+		});
 	}
 }
 
@@ -80,6 +82,8 @@ export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
 			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
 				"cannot be saved or registered again. Deletion is final within an " +
 				"operation; if the aggregate must live, do not delete it.",
+			undefined,
+			{ name: "AggregateDeletedError" },
 		);
 	}
 }
@@ -103,7 +107,9 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 		public readonly id: string,
 		cause?: unknown,
 	) {
-		super(`Aggregate not found: ${aggregateType}(${id})`, cause);
+		super(`Aggregate not found: ${aggregateType}(${id})`, cause, {
+			name: "AggregateNotFoundError",
+		});
 		this.withUserMessage(
 			`The requested ${aggregateType} could not be found.`,
 		);
@@ -116,6 +122,13 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
  * updated the aggregate concurrently. The canonical optimistic-
  * concurrency signal; the App-Service typically reloads, re-applies
  * the use case, and retries, or surfaces HTTP 409 to the caller.
+ *
+ * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
+ * `withCommit` invocation): reload, re-apply, save. Do NOT catch this
+ * inside the same `run()` callback and continue — the failed aggregate
+ * is already enrolled (its events would be committed for a write that
+ * never happened) and the identity map still serves the same stale
+ * instance to any in-place "reload".
  *
  * `InfrastructureError` because the persistence layer (not a domain
  * rule) detects the race. Marks itself as `retryable: true` so the
@@ -139,6 +152,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyCo
 		super(
 			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
 			cause,
+			{ name: "ConcurrencyConflictError" },
 		);
 		this.withUserMessage(
 			"This resource was updated by another request. Please reload and try again.",

@@ -1,5 +1,31 @@
 import type { Id } from "../core/id";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import type { AnyDomainEvent } from "../aggregate/domain-event";
+
+/**
+ * The canonical shape of a unit-of-work-facing repository. Unlike
+ * `IRepository` below (id-canonical CRUD for `withCommit`-style
+ * setups), `delete` takes the AGGREGATE: the unit of work needs the
+ * instance for deletion-event harvest, the identity-map tombstone, and
+ * the deleted-cannot-be-resaved gate. Ids stay branded (`TId extends
+ * Id<string>`) end-to-end.
+ *
+ * Implementing this interface is optional — the `UnitOfWork` registry
+ * is structurally typed — but it is the single source of truth the
+ * guide's examples and the repository contract test suite
+ * (`@shirudo/ddd-kit/testing`, whose `ContractRepository` is the
+ * minimal structural subset of this shape) are written against.
+ */
+export interface IUnitOfWorkRepository<
+	TAgg extends IAggregateRoot<TId, Evt>,
+	TId extends Id<string>,
+	Evt extends AnyDomainEvent = AnyDomainEvent,
+> {
+	getById(id: TId): Promise<TAgg | null>;
+	getByIdOrFail(id: TId): Promise<TAgg>;
+	save(aggregate: TAgg): Promise<void>;
+	delete(aggregate: TAgg): Promise<void>;
+}
 
 /**
  * Core repository contract for Aggregate Roots.

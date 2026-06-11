@@ -60,7 +60,8 @@ These sentences are the contract. Internalize them before building repositories:
 6. **Domain events are persisted through the outbox in the same transaction.** Never publish from inside the callback.
 7. **External side effects must not run inside the Unit of Work transaction** — see below.
 8. **Nested Unit of Work scopes are not allowed.** A nested `run()` throws; it would not join the outer transaction.
-9. **Do not reuse aggregate instances after a rollback.** They keep their in-memory mutations and pending events (deliberately, so a *fresh load* and retry is possible), but their state no longer corresponds to any row. Discard them; reload inside the next unit of work.
+9. **Do not reuse aggregate instances after a rollback.** They keep their in-memory mutations and pending events (deliberately, so a *fresh load* and retry is possible), but their state no longer corresponds to any row. Discard them; reload inside the next unit of work. One carve-out: a **never-persisted** aggregate whose first save rolled back has no row to reload — retrying its first save with the same instance is fine (its `persistedVersion` is still `undefined`, so it routes to INSERT again).
+10. **A repository write rejection aborts the unit of work — never catch it and continue.** `save()` enrolls the aggregate *before* the row write, and the session has no un-enroll: catching a `ConcurrencyConflictError` inside `run()` and carrying on would commit the failed aggregate's events to the outbox and `markPersisted` it for a write that never happened — and the identity map would serve the same stale instance to any "reload" anyway. Retrying an OCC conflict means a **fresh `run()`**: reload, re-apply, save.
 
 ## No side effects inside the transaction
 
@@ -100,11 +101,14 @@ class DrizzleRestaurantRepository {
 
   async save(restaurant: Restaurant): Promise<void> {
     if (!restaurant.hasChanges) return;        // safe no-op skip
+    // Enroll FIRST: the deleted-gate throws AggregateDeletedError
+    // before any SQL runs. Enrollment is idempotent; a failed write
+    // rolls the whole unit of work back anyway.
+    this.session.enrollSaved(restaurant);
     // root row first (OCC), then changedKeys-scoped child tables —
     // see "Partial writes for multi-table aggregates" in the
     // Repository guide
     await this.writeRows(restaurant);
-    this.session.enrollSaved(restaurant);
   }
 
   async delete(restaurant: Restaurant): Promise<void> {
@@ -185,6 +189,35 @@ Sequential reuse of an instance is fine; sharing one instance across concurrent 
 After `run()` settles, the context getters (`repositories`, `rawTransaction`) and the session throw `TransactionClosedError`. That is the honest extent of the guarantee: the kit can only invalidate what it controls. A repository or raw `tx` handle captured into an outer variable *before* close keeps working as far as the kit can see — whether the underlying handle rejects is ORM-specific. Don't let references escape the callback.
 
 The same honesty applies inside the callback: **do not mutate an aggregate after `save()`** — the post-commit `markPersisted` re-baselines dirty tracking against the *current* state, so a late mutation is silently marked clean (see the [`withCommit` ordering notes](./outbox.md)). Mutate first, save last.
+
+## Proving the contract: the repository contract test suite
+
+Rule 3 above has a consequence: since the OCC predicate lives in *your* repository's SQL, only a test can prove your adapter holds the contract. The kit ships that test as an opt-in entry point:
+
+```ts
+import { describe, it } from "vitest"; // or jest, or node:test
+import { createRepositoryContractTests } from "@shirudo/ddd-kit/testing";
+
+describe("DrizzleOrderRepository: repository contract", () => {
+  for (const test of createRepositoryContractTests(harness)) {
+    (test.skipped ? it.skip : it)(test.name, test.run);
+  }
+});
+```
+
+You supply a `RepositoryContractHarness`: per test it creates an isolated environment with your real adapter wired through your real `UnitOfWork` (the suite requires unit-of-work semantics — identity map, deletion gates; `withCommit`-only setups without equivalents are outside its scope), plus aggregate factories/mutators and read access to the committed outbox. Optional capabilities (`mutateVersionOnly`, `mutateChildCollection`, `createAggregateWithId`, `snapshotState`, `deletesAreVersionChecked`) widen the suite — tests for absent capabilities come back **marked `skipped`** with a `run()` that fails loud: bound with `it.skip` they stay visible in every report, and a naive binding can never turn a coverage gap into a green check. Provide everything your adapter supports; each capability closes a real OCC hole. The suite is framework-agnostic (assertions throw plain `Error`s; error matching is by *name* along the cause chain — the kit pins its error names against minification — so it works across bundle entries, subclassed errors, and even two installed kit versions) and covers the full contract: insert routing on `persistedVersion`, version arithmetic, rollback leaving nothing behind, identity-map sameness, deletion finality, the event lifecycle, stale deletes — and the **mandatory two-writer test**:
+
+```txt
+Two writers load the aggregate at version N.
+Writer A mutates and commits → succeeds.
+Writer B commits its stale instance → ConcurrencyConflictError.
+Final persisted state equals A's. The outbox contains only A's events.
+```
+
+Two hard rules:
+
+- **SQL/ORM adapters must run the suite against a real database** (testcontainers or equivalent). The kit's own [in-memory reference adapter](https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts) — it follows every documented pattern, including real version predicates on update *and* delete — passes the suite, but it proves only itself: your `WHERE version = ?` is what needs proving. (The file lives in the repo, not in the npm package: it is a copyable example, not shipped code.)
+- **An adapter that has not passed the suite has not demonstrated OCC.** Treat the suite as the compliance bar for any repository you wire into the unit of work — with one documented limitation: the suite runs sequential-deterministic, so lock interaction (`SELECT … FOR UPDATE`-style blocking, SERIALIZABLE engines surfacing raw serialization failures your adapter must map to `ConcurrencyConflictError`) needs adapter-specific tests on top.
 
 ## What v1 deliberately does not do
 
