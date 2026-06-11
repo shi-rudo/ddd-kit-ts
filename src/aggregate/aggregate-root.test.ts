@@ -1103,4 +1103,532 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.persistedVersion).toBe(4);
 		});
 	});
+
+	describe("dirty tracking (changedKeys / hasChanges)", () => {
+		type Item = { id: string; qty: number };
+		type DirtyState = {
+			name: string;
+			items: Item[];
+			note?: string;
+		};
+
+		class DirtyAggregate extends AggregateRoot<DirtyState, TestId> {
+			protected readonly aggregateType = "DirtyAggregate";
+			constructor(id: TestId, state: DirtyState) {
+				super(id, state);
+			}
+
+			static reconstitute(
+				id: TestId,
+				state: DirtyState,
+				version: Version,
+			): DirtyAggregate {
+				const agg = new DirtyAggregate(id, state);
+				agg.markRestored(version);
+				return agg;
+			}
+
+			rename(name: string): void {
+				this.setState({ ...this.state, name }, true);
+			}
+			replaceItems(items: Item[]): void {
+				this.setState({ ...this.state, items }, true);
+			}
+			setNote(note: string | undefined): void {
+				this.setState({ ...this.state, note }, true);
+			}
+			removeNote(): void {
+				const { note: _note, ...rest } = this.state;
+				this.setState(rest, true);
+			}
+			/** Identical per-key values, new top-level object, version bump. */
+			touch(): void {
+				this.setState({ ...this.state }, true);
+			}
+			setWholeState(state: DirtyState): void {
+				this.setState(state, true);
+			}
+		}
+
+		const baseState = (): DirtyState => ({
+			name: "alpha",
+			items: [{ id: "i1", qty: 2 }],
+		});
+
+		describe("insert path (never persisted)", () => {
+			it("lists every current state key and reports hasChanges", () => {
+				const agg = new DirtyAggregate("d-1" as TestId, baseState());
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["name", "items"]));
+				expect(agg.hasChanges).toBe(true);
+			});
+
+			it("reports hasChanges true even for an empty-object state", () => {
+				class EmptyAggregate extends AggregateRoot<
+					Record<string, never>,
+					TestId
+				> {
+					protected readonly aggregateType = "EmptyAggregate";
+					constructor(id: TestId) {
+						super(id, {});
+					}
+				}
+				const agg = new EmptyAggregate("d-1" as TestId);
+
+				expect(agg.changedKeys.size).toBe(0);
+				// persistedVersion is undefined: the aggregate still needs its
+				// INSERT, so hasChanges must not report "nothing to do".
+				expect(agg.hasChanges).toBe(true);
+			});
+
+			it("tracks keys of the CURRENT state across pre-persist mutations", () => {
+				const agg = new DirtyAggregate("d-1" as TestId, baseState());
+				agg.setNote("hello");
+
+				expect(new Set(agg.changedKeys)).toEqual(
+					new Set(["name", "items", "note"]),
+				);
+			});
+		});
+
+		describe("baseline capture", () => {
+			it("reconstitute yields empty changedKeys and hasChanges false", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					3 as Version,
+				);
+
+				expect(agg.changedKeys.size).toBe(0);
+				expect(agg.hasChanges).toBe(false);
+			});
+
+			it("restoreFromSnapshot captures the restored state as baseline", () => {
+				const agg = new DirtyAggregate("d-1" as TestId, baseState());
+				agg.restoreFromSnapshot({
+					state: { name: "beta", items: [{ id: "i9", qty: 1 }] },
+					version: 5 as Version,
+					snapshotAt: new Date(),
+				});
+
+				expect(agg.changedKeys.size).toBe(0);
+				expect(agg.hasChanges).toBe(false);
+			});
+
+			it("restoreFromSnapshot AFTER mutations resets the baseline", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.rename("mutated");
+				expect(agg.changedKeys.has("name")).toBe(true);
+
+				agg.restoreFromSnapshot({
+					state: { name: "fresh", items: [] },
+					version: 2 as Version,
+					snapshotAt: new Date(),
+				});
+
+				expect(agg.changedKeys.size).toBe(0);
+				expect(agg.hasChanges).toBe(false);
+			});
+		});
+
+		describe("diff semantics", () => {
+			it("flags only the replaced key; spread-preserved collection refs stay clean", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.rename("beta");
+
+				// THE partial-write selling point: `{ ...state, name }` copies
+				// the items array BY REFERENCE, so the items table needs no write.
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["name"]));
+			});
+
+			it("identical per-key values yield empty changedKeys but hasChanges true via the version delta", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.touch();
+
+				expect(agg.changedKeys.size).toBe(0);
+				// The version was bumped past persistedVersion. Skipping save()
+				// here would let withCommit's markPersisted desync the OCC
+				// baseline from the DB row → false ConcurrencyConflictError on
+				// the next save. hasChanges must therefore stay true.
+				expect(agg.version).not.toBe(agg.persistedVersion);
+				expect(agg.hasChanges).toBe(true);
+			});
+
+			it("a deep-equal but newly-referenced value reports dirty (false-positive direction only)", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.replaceItems([...agg.state.items]);
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["items"]));
+			});
+
+			it("an added key is dirty", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.setNote("added");
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["note"]));
+			});
+
+			it("a removed key is dirty", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					{ ...baseState(), note: "present" },
+					1 as Version,
+				);
+				agg.removeNote();
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["note"]));
+			});
+
+			it("a removed key whose value was undefined is dirty (presence, not value)", () => {
+				// Naive `baseline[k] !== current[k]` compares
+				// `undefined !== undefined` and misses this removal; the diff
+				// must compare key PRESENCE as well.
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					{ ...baseState(), note: undefined },
+					1 as Version,
+				);
+				agg.removeNote();
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["note"]));
+			});
+
+			it("in-place nested mutation is invisible (documented shallow contract)", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				// Top-level freeze does not freeze the nested array; pushing
+				// into it bypasses freezeShallow AND the diff. Same contract.
+				(agg.state.items as Item[]).push({ id: "i2", qty: 9 });
+
+				expect(agg.changedKeys.size).toBe(0);
+			});
+		});
+
+		describe("edge-shaped states (keyless, undefined-admitting, event-only)", () => {
+			it("keyless primitive state: hasChanges falls back to reference comparison", () => {
+				class PrimitiveAggregate extends AggregateRoot<string, TestId> {
+					protected readonly aggregateType = "PrimitiveAggregate";
+					constructor(id: TestId, state: string) {
+						super(id, state);
+					}
+					static reconstitute(
+						id: TestId,
+						state: string,
+						version: Version,
+					): PrimitiveAggregate {
+						const agg = new PrimitiveAggregate(id, state);
+						agg.markRestored(version);
+						return agg;
+					}
+					replaceNoBump(next: string): void {
+						this.setState(next, false);
+					}
+				}
+
+				const agg = PrimitiveAggregate.reconstitute(
+					"d-1" as TestId,
+					"alpha",
+					1 as Version,
+				);
+				expect(agg.hasChanges).toBe(false);
+
+				// The per-key diff cannot see primitives (no own keys)…
+				agg.replaceNoBump("beta");
+				expect(agg.changedKeys.size).toBe(0);
+				// …but hasChanges must not report a false negative: the
+				// reference fallback catches the replaced state even without
+				// a version bump.
+				expect(agg.hasChanges).toBe(true);
+
+				// Same primitive value compares equal: still a safe skip.
+				const clean = PrimitiveAggregate.reconstitute(
+					"d-2" as TestId,
+					"alpha",
+					1 as Version,
+				);
+				clean.replaceNoBump("alpha");
+				expect(clean.hasChanges).toBe(false);
+			});
+
+			it("a TState that admits undefined does not conflate with the never-persisted sentinel", () => {
+				type MaybeState = { value: number } | undefined;
+				class MaybeAggregate extends AggregateRoot<MaybeState, TestId> {
+					protected readonly aggregateType = "MaybeAggregate";
+					constructor(id: TestId, state: MaybeState) {
+						super(id, state);
+					}
+					static reconstitute(
+						id: TestId,
+						state: MaybeState,
+						version: Version,
+					): MaybeAggregate {
+						const agg = new MaybeAggregate(id, state);
+						agg.markRestored(version);
+						return agg;
+					}
+					set(next: MaybeState): void {
+						this.setState(next, true);
+					}
+				}
+
+				const agg = MaybeAggregate.reconstitute(
+					"d-1" as TestId,
+					undefined,
+					1 as Version,
+				);
+				// Restored with undefined state: the baseline IS captured, so
+				// the aggregate is clean — not stuck on the insert path.
+				expect(agg.hasChanges).toBe(false);
+				expect(agg.changedKeys.size).toBe(0);
+
+				agg.set({ value: 1 });
+				// keyof an undefined-admitting union collapses to never at the
+				// type level; the runtime set still carries the key.
+				expect((agg.changedKeys as ReadonlySet<string>).has("value")).toBe(
+					true,
+				);
+				expect(agg.hasChanges).toBe(true);
+			});
+
+			it("an event recorded without a state change makes hasChanges true (pending-events clause)", () => {
+				type Deleted = DomainEvent<"Deleted", { reason: string }>;
+				class DeletingDirty extends AggregateRoot<
+					DirtyState,
+					TestId,
+					Deleted
+				> {
+					protected readonly aggregateType = "DeletingDirty";
+					constructor(id: TestId, state: DirtyState) {
+						super(id, state);
+					}
+					static reconstitute(
+						id: TestId,
+						state: DirtyState,
+						version: Version,
+					): DeletingDirty {
+						const agg = new DeletingDirty(id, state);
+						agg.markRestored(version);
+						return agg;
+					}
+					recordDeletion(reason: string): void {
+						// Sanctioned decoupled path: event only, no state change,
+						// no version bump (repository.md hard-delete pattern).
+						this.addDomainEvent(this.recordEvent("Deleted", { reason }));
+					}
+				}
+
+				const agg = DeletingDirty.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				expect(agg.hasChanges).toBe(false);
+
+				agg.recordDeletion("gdpr");
+
+				expect(agg.changedKeys.size).toBe(0);
+				expect(agg.version).toBe(agg.persistedVersion);
+				// The unflushed event still needs its trip through withCommit.
+				expect(agg.hasChanges).toBe(true);
+
+				agg.markPersisted(agg.version);
+				expect(agg.hasChanges).toBe(false);
+			});
+		});
+
+		describe("persistence lifecycle", () => {
+			it("markPersisted re-baselines: changedKeys empties, hasChanges false", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.rename("beta");
+				expect(agg.changedKeys.has("name")).toBe(true);
+
+				agg.markPersisted(agg.version);
+
+				expect(agg.changedKeys.size).toBe(0);
+				expect(agg.hasChanges).toBe(false);
+			});
+
+			it("two consecutive mutate→markPersisted cycles diff against the moved baseline", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+
+				agg.rename("beta");
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["name"]));
+				agg.markPersisted(agg.version);
+
+				agg.replaceItems([{ id: "i2", qty: 1 }]);
+				// Cycle 2 must diff against the post-save baseline: "name"
+				// (changed in cycle 1) is clean now, only "items" is dirty.
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["items"]));
+			});
+
+			it("the markRestored override preserves version + persistedVersion semantics", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					5 as Version,
+				);
+
+				expect(agg.version).toBe(5);
+				expect(agg.persistedVersion).toBe(5);
+				expect(agg.changedKeys.size).toBe(0);
+			});
+
+			it("clearPendingEvents does not touch the baseline", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.rename("beta");
+				const before = new Set(agg.changedKeys);
+
+				agg.clearPendingEvents();
+
+				expect(new Set(agg.changedKeys)).toEqual(before);
+			});
+
+			it("a failed validateState leaves changedKeys unchanged", () => {
+				class GuardedAggregate extends DirtyAggregate {
+					protected override validateState(state: DirtyState): void {
+						if (state.name === "") throw new Error("name required");
+					}
+					static reconstituteGuarded(
+						id: TestId,
+						state: DirtyState,
+						version: Version,
+					): GuardedAggregate {
+						const agg = new GuardedAggregate(id, state);
+						agg.markRestored(version);
+						return agg;
+					}
+				}
+				const agg = GuardedAggregate.reconstituteGuarded(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.setNote("ok");
+				const before = new Set(agg.changedKeys);
+
+				expect(() => agg.rename("")).toThrow("name required");
+
+				expect(new Set(agg.changedKeys)).toEqual(before);
+			});
+
+			it("commit() marks the mutated key and records the event", () => {
+				type Renamed = DomainEvent<"Renamed", { name: string }>;
+				class CommittingDirty extends AggregateRoot<
+					DirtyState,
+					TestId,
+					Renamed
+				> {
+					protected readonly aggregateType = "CommittingDirty";
+					constructor(id: TestId, state: DirtyState) {
+						super(id, state);
+					}
+					static reconstitute(
+						id: TestId,
+						state: DirtyState,
+						version: Version,
+					): CommittingDirty {
+						const agg = new CommittingDirty(id, state);
+						agg.markRestored(version);
+						return agg;
+					}
+					renameWithEvent(name: string): void {
+						this.commit(
+							{ ...this.state, name },
+							this.recordEvent("Renamed", { name }),
+						);
+					}
+				}
+				const agg = CommittingDirty.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+
+				agg.renameWithEvent("beta");
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(["name"]));
+				expect(agg.pendingEvents).toHaveLength(1);
+				expect(agg.hasChanges).toBe(true);
+			});
+		});
+
+		describe("encapsulation", () => {
+			it("repeated access between mutations is consistent", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.rename("beta");
+
+				expect(new Set(agg.changedKeys)).toEqual(new Set(agg.changedKeys));
+				expect(agg.changedKeys.has("name")).toBe(true);
+				expect(agg.changedKeys.has("name")).toBe(true);
+			});
+
+			it("recomputes after the baseline moves: no stale set is ever served", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+				agg.replaceItems([{ id: "i2", qty: 1 }]);
+				// Read the dirty set…
+				expect(agg.changedKeys.has("items")).toBe(true);
+
+				// …then move the baseline; the next read must reflect it.
+				agg.markPersisted(agg.version);
+				expect(agg.changedKeys.size).toBe(0);
+			});
+
+			it("mutating a returned set cannot poison subsequent reads", () => {
+				const agg = DirtyAggregate.reconstitute(
+					"d-1" as TestId,
+					baseState(),
+					1 as Version,
+				);
+
+				const leaked = agg.changedKeys as Set<string>;
+				leaked.add("items");
+
+				expect(agg.changedKeys.size).toBe(0);
+			});
+		});
+	});
+
 });

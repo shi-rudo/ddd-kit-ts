@@ -132,6 +132,16 @@ export abstract class BaseAggregate<
 	 * Factory-vs-Reconstitution distinction (Vernon §11) is honoured
 	 * structurally: two separate markers, one for each transition.
 	 *
+	 * **If you override this, call `super.markRestored(version)` FIRST**,
+	 * same discipline as {@link markPersisted}. The marker is load-bearing
+	 * twice over: it syncs `version`/`persistedVersion`, and on
+	 * `AggregateRoot` it also captures the dirty-tracking baseline for
+	 * `changedKeys`/`hasChanges`. An override that skips `super` leaves
+	 * that baseline uncaptured: `changedKeys` permanently reports ALL
+	 * keys and `hasChanges` never returns `false`, so a partial-write
+	 * repository silently degrades to full writes on every save — on top
+	 * of the broken version sync.
+	 *
 	 * @param version - The version the row currently holds in the DB
 	 *
 	 * @example

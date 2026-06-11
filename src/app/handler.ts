@@ -71,6 +71,16 @@ import type { TransactionScope } from "../repo/scope";
  * If the transaction rolls back, `markPersisted` is **not** called: the
  * aggregate keeps its pending events, so the caller can retry or discard.
  *
+ * **Do not mutate an aggregate after `repository.save(...)` inside `fn`.**
+ * `withCommit` cannot see what `save` wrote; the post-commit
+ * `markPersisted` syncs `persistedVersion` to the CURRENT in-memory
+ * version and (on `AggregateRoot`) re-baselines dirty tracking against
+ * the CURRENT state. A mutation between `save` and the callback's return
+ * therefore desyncs OCC (next save throws a false
+ * `ConcurrencyConflictError`) — and under a partial-write repository
+ * using `changedKeys`, an un-bumped mutation is silently marked clean
+ * and never written. Mutate first, save last.
+ *
  * **Duplicate aggregates are deduped by reference.** If the returned
  * `aggregates` array contains the same instance twice (e.g. a use
  * case touches an order via two repository references that happen to

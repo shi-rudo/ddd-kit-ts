@@ -168,6 +168,70 @@ The "what becomes the new persisted version" formula:
 
 After a successful save, `withCommit` calls `aggregate.markPersisted(aggregate.version)`, which syncs both fields and clears `pendingEvents`.
 
+### Partial writes for multi-table aggregates: `changedKeys` / `hasChanges`
+
+An aggregate whose state spans multiple tables (a root row plus N child-collection tables) used to leave `save()` with two bad options: write **everything** on every save (write amplification: eight collection tables rewritten because one opening-hours field changed), or have the application service orchestrate per-collection writes manually, which moves persistence knowledge out of the repository and reopens the door to forgotten OCC version bumps. Teams that take the second path end up with workarounds like a `markCollectionsRevised()` domain method whose only job is to "touch" the version, opt-in per service method and silently forgettable.
+
+`AggregateRoot` solves this with built-in dirty tracking:
+
+- **`aggregate.changedKeys: ReadonlySet<keyof TState & string>`**: the top-level state keys whose value (or presence) changed since the aggregate was loaded (`markRestored`) or last saved (`markPersisted`). A never-persisted aggregate reports **all** keys: the insert path.
+- **`aggregate.hasChanges: boolean`**: `true` when the aggregate has never been persisted, the version moved past `persistedVersion`, there are unflushed `pendingEvents`, any key is dirty, or — for keyless states the per-key diff cannot see (primitive `TState`, zero-own-key objects) — the state reference changed.
+
+There is no proxy magic and no deep diff. `setState()` replaces state immutably and the state object is shallow-frozen, so an unchanged top-level sub-object keeps its reference identity across mutations; `changedKeys` is a shallow per-key `!==` comparison against the state reference captured at load time. O(top-level keys), exact under the kit's own immutability convention.
+
+```ts
+// Drizzle-flavoured save for a Restaurant aggregate with collection
+// tables. The repo is tx-bound (constructor(private readonly tx: DrizzleTx),
+// same convention as the Identity Map example above), so every statement
+// below shares ONE transaction: when the OCC check throws, the child-table
+// writes roll back with it.
+async save(restaurant: Restaurant): Promise<void> {
+  const { id, state, changedKeys } = restaurant;
+
+  // The root row rides EVERY save — and it goes FIRST. On the insert
+  // path the parent row must exist before child rows reference it (FK
+  // constraints); on the update path the OCC predicate fails fast
+  // before any child table is touched. This is where the version bump
+  // lives, so a collection-only change still bumps the version — by
+  // construction, not by a manual "touch" method.
+  const baseline = restaurant.persistedVersion;
+  if (baseline === undefined) {
+    await this.insertRootRow(restaurant);
+  } else {
+    const result = await this.tx
+      .update(restaurants)
+      .set({ ...rootColumns(state), version: restaurant.version })
+      .where(and(eq(restaurants.id, id), eq(restaurants.version, baseline)));
+    if (result.rowsAffected === 0) {
+      throw new ConcurrencyConflictError("Restaurant", id, baseline, -1);
+    }
+  }
+
+  // Child-collection tables: write ONLY what changed (table-granular).
+  if (changedKeys.has("openingHours")) {
+    await this.replaceOpeningHours(id, state.openingHours); // delete + reinsert
+  }
+  if (changedKeys.has("menuSections")) {
+    await this.replaceMenuSections(id, state.menuSections);
+  }
+}
+```
+
+Rules that make this sound:
+
+1. **The root-row write (with the OCC version predicate) rides every save, and it goes first.** Only the child-table writes are scoped by `changedKeys`. Root-first ordering serves both paths: on insert, the parent row exists before child rows reference it; on update, an OCC conflict aborts the save before any child table is touched.
+2. **The whole save shares one transaction.** A multi-statement save must run on the transaction handle the repository was constructed with (the `withCommit` scope), never on a bare connection — otherwise a `ConcurrencyConflictError` from the root-row predicate leaves already-executed child writes committed against the winner's root row.
+3. **The OCC guarantee assumes version-bumping mutations.** `commit()` always bumps; `setState(newState, true)` bumps. A no-bump `setState(newState, false)` marks keys dirty but does **not** advance the version, so the save writes data without moving the OCC predicate — a concurrent writer holding the same version still passes its own check. Reserve no-bump mutations for data a concurrent writer may safely overwrite (cosmetic caches, denormalized counters); never use them for domain-meaningful changes.
+4. **`changedKeys` is table-granular, not row-granular.** A dirty `openingHours` key means "this collection changed", not which rows. Delete + reinsert the child table, or run your own row diff inside that branch.
+5. **Skipping `save()` entirely is safe exactly when `hasChanges === false`.** The version clause is what protects OCC: a state-only check would break in four steps — (1) `setState({...state}, true)` with identical values bumps the version but leaves `changedKeys` empty; (2) the repo skips `save()`; (3) `withCommit` still calls `markPersisted(version)` after commit, so `persistedVersion` now claims a version the DB row never got; (4) the next uncontended save's OCC predicate matches zero rows → false `ConcurrencyConflictError`. The pending-events clause protects the decoupled `addDomainEvent` path (an event recorded with no state change, like the deletion pattern below): the aggregate still needs its trip through `withCommit`, so it must not look like "nothing to do".
+6. **Don't mutate the aggregate after `save()` inside the `withCommit` callback.** Post-commit `markPersisted` re-baselines the diff against the *current* state; a mutation between `save()` and commit would be silently marked clean and lost on the next save. (See the `withCommit` JSDoc: mutate first, save last.)
+
+::: warning The same immutability contract as `freezeShallow`
+Dirty tracking is exactly as sound as the kit's existing immutability convention: it requires a plain-record `TState` mutated via `setState` / `commit` (whole-state replacement). Mutating a **nested** object in place bypasses the shallow freeze *and* the diff (one stale key); a **class-instance** `TState` mutated through its own methods defeats tracking entirely, because the state reference never changes. A **keyless** `TState` (primitive, bare `Date`) has nothing for `changedKeys` to report — `hasChanges` covers it with a reference-comparison fallback, so the skip-save signal stays sound, but partial writes are meaningless for such states anyway. The failure direction of the design is deliberate: a deep-equal value under a *new* reference reports a false positive (one harmless extra write), never silent data loss — but only under this contract.
+:::
+
+`EventSourcedAggregate` deliberately has no `changedKeys`: its `pendingEvents` *are* the change record. Repositories that need dirty information type against the concrete state-stored aggregate class, not `IAggregateRoot`.
+
 ### Deletion and Domain Events
 
 `delete(id)` is **pure persistence**: it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from.

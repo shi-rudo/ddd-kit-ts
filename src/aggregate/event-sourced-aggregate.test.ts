@@ -616,6 +616,21 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("dirty-tracking isolation", () => {
+		it("has no changedKeys/hasChanges: pendingEvents IS the change record", () => {
+			// Dirty tracking lives on AggregateRoot only. An event-sourced
+			// aggregate's change record is its pendingEvents; partial-write
+			// repos type against the concrete state-stored class instead.
+			const aggregate = TestEventSourcedAggregate.create(
+				"test-1" as TestId,
+				10,
+			);
+
+			expect("changedKeys" in aggregate).toBe(false);
+			expect("hasChanges" in aggregate).toBe(false);
+		});
+	});
+
 	describe("markPersisted (post-save hook)", () => {
 		it("updates the version and clears pending events", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);

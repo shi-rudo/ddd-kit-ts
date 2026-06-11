@@ -76,6 +76,10 @@ The Use Case catches `ConcurrencyConflictError` at the App-Service boundary and 
 
 The `version` lives on the aggregate root, not on its child entities or value objects; OCC is enforced at the consistency boundary. See [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for the rationale and the alternatives when you think a child needs its own version.
 
+::: tip Multi-table aggregates: the version bump must ride every save
+A classic OCC failure mode in aggregates that span multiple tables: collection writes are orchestrated outside the aggregate, so a collection-only change never bumps the root version, and teams patch over it with a manual "touch" method (`markCollectionsRevised()`-style) that every service method must remember to call. The kit's answer is [`changedKeys` / `hasChanges` on `AggregateRoot`](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges): the repository scopes child-table writes by dirty key while the root-row version write rides every save, and the touch-method workaround dissolves. One precondition: the bump rides the save only for **version-bumping mutations** — `commit()` (always bumps) or `setState(newState, true)`. A no-bump `setState(newState, false)` dirties the key without advancing the version, so the OCC predicate doesn't move; reserve no-bump mutations for data a concurrent writer may safely overwrite.
+:::
+
 ## EventBus is sequential per event-type, parallel per handler
 
 `EventBus.publish(events)`:
