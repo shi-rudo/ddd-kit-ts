@@ -18,7 +18,7 @@ import {
  * `recordEvent` helper that auto-injects `aggregateId` +
  * `aggregateType` on every event the aggregate emits.
  *
- * Consumers do NOT extend this class directly — extend
+ * Consumers do NOT extend this class directly; extend
  * `AggregateRoot` for state-stored aggregates or
  * `EventSourcedAggregate` for event-sourced ones. The split between
  * those two reflects the canonical Vernon §8 (state-stored) /
@@ -58,7 +58,7 @@ export abstract class BaseAggregate<
 	 *
 	 * The string is *the* identifier downstream consumers (outbox
 	 * dispatchers, projection handlers, audit logs) use to route by
-	 * aggregate kind. Use the same canonical name across your system —
+	 * aggregate kind. Use the same canonical name across your system;
 	 * matching the class name is the obvious choice, but the value
 	 * comes from this explicit declaration, not `constructor.name`
 	 * (which is fragile under minification, bundler transforms, and
@@ -76,7 +76,7 @@ export abstract class BaseAggregate<
 	 *
 	 * Distinct from {@link version}, which is the in-memory
 	 * post-mutation value. Mutations bump `_version` but never touch
-	 * `_persistedVersion` — that field only moves on {@link markRestored}
+	 * `_persistedVersion`; that field only moves on {@link markRestored}
 	 * (Post-Load) and {@link markPersisted} (Post-Save).
 	 */
 	private _persistedVersion: Version | undefined = undefined;
@@ -101,7 +101,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Clears the pending-event list. Called by `markPersisted` after a
-	 * successful write — the events have been handed off to the outbox
+	 * successful write: the events have been handed off to the outbox
 	 * / event store and are no longer the aggregate's responsibility.
 	 */
 	public clearPendingEvents(): void {
@@ -122,12 +122,12 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * **Lifecycle marker — Post-Load.** Syncs both `_version` and
+	 * **Lifecycle marker, Post-Load.** Syncs both `_version` and
 	 * `_persistedVersion` to the DB-stored version. Used by
 	 * `reconstitute(...)` factories to assemble an in-memory aggregate
 	 * from a persisted row.
 	 *
-	 * Does NOT fire {@link onPersisted} — that hook has post-save
+	 * Does NOT fire {@link onPersisted}; that hook has post-save
 	 * semantics (metrics, audit, cache eviction), not post-load. The
 	 * Factory-vs-Reconstitution distinction (Vernon §11) is honoured
 	 * structurally: two separate markers, one for each transition.
@@ -149,14 +149,14 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * **Framework lifecycle method — `@sealed`.** Called by `withCommit`
+	 * **Framework lifecycle method (`@sealed`).** Called by `withCommit`
 	 * (or by your own orchestration code, after harvesting `pendingEvents`)
 	 * to push the persisted version back into the in-memory aggregate and
 	 * clear `pendingEvents`. TypeScript has no `final` keyword, but
 	 * subclasses **should not** override this method directly.
 	 *
 	 * Overriding without calling `super.markPersisted(version)` silently
-	 * leaks `pendingEvents` — the next `withCommit` will re-dispatch them
+	 * leaks `pendingEvents`: the next `withCommit` will re-dispatch them
 	 * through the outbox, double-emitting events. This bug has been hit
 	 * in production by consumers; the {@link onPersisted} hook below is
 	 * the safer extension point.
@@ -166,7 +166,7 @@ export abstract class BaseAggregate<
 	 * runs, then add your logic afterwards.
 	 *
 	 * @param version - The version assigned by the persistence layer
-	 * @see onPersisted — the safe extension point for subclasses
+	 * @see onPersisted, the safe extension point for subclasses
 	 */
 	public markPersisted(version: Version): void {
 		this.markRestored(version);
@@ -175,13 +175,13 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Subclass extension point — fires AFTER {@link markPersisted} has
+	 * Subclass extension point: fires AFTER {@link markPersisted} has
 	 * updated the version and cleared `pendingEvents`. Override this for
 	 * post-persist logging, metrics, or cache-eviction without risk of
 	 * breaking the framework's pendingEvents cleanup.
 	 *
 	 * The default implementation is a no-op. Subclasses do NOT need to
-	 * call `super.onPersisted(version)` — there is nothing in the parent
+	 * call `super.onPersisted(version)`: there is nothing in the parent
 	 * implementation to preserve.
 	 *
 	 * **Observer contract: errors are swallowed.** `withCommit` invokes
@@ -193,7 +193,7 @@ export abstract class BaseAggregate<
 	 * **`onPersisted` deliberately receives only the version, not the
 	 * drained events.** Event-driven post-persist logic (aggregate-level
 	 * audit logging, per-event-type side effects) belongs in `EventBus`
-	 * subscribers or the outbox dispatcher — that is the proper
+	 * subscribers or the outbox dispatcher; that is the proper
 	 * Aggregate-Boundary separation. Building event-aware logic into
 	 * `onPersisted` couples aggregate lifecycle to event processing and
 	 * recreates the boundary problems Vernon's aggregate discipline is
@@ -202,7 +202,7 @@ export abstract class BaseAggregate<
 	 * **The hook must return synchronously.** `markPersisted` is `void`-
 	 * typed and calls `onPersisted` without `await`. TypeScript's
 	 * permissive `void` will accept an `async`-override returning
-	 * `Promise<void>`, but the returned promise is fire-and-forget —
+	 * `Promise<void>`, but the returned promise is fire-and-forget:
 	 * any rejection becomes an unhandled rejection and `withCommit`
 	 * proceeds without waiting. For asynchronous work, subscribe to the
 	 * relevant domain event on the `EventBus` instead; that is the
@@ -215,7 +215,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Appends a domain event to the pending list. Prefer the higher-level
 	 * `AggregateRoot.commit()` (state-stored) or `EventSourcedAggregate.apply()`
-	 * (event-sourced) call sites — both wrap `addDomainEvent` in the
+	 * (event-sourced) call sites, both of which wrap `addDomainEvent` in the
 	 * canonical record-AFTER-mutation order (Vernon §8). Calling
 	 * `addDomainEvent` directly is appropriate only when state and event
 	 * recording have already been decoupled deliberately (e.g. a
@@ -226,7 +226,7 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Creates a snapshot of the current aggregate state — the state at
+	 * Creates a snapshot of the current aggregate state: the state at
 	 * this moment plus the version. Useful for ES snapshot policies and
 	 * for state-stored backup / restore.
 	 *
@@ -245,7 +245,7 @@ export abstract class BaseAggregate<
 	 * Converts live aggregate state into the plain-data shape stored in a
 	 * snapshot. The default validates that the state graph is plain,
 	 * serialisable data (no class instances, functions, Promise/WeakMap/
-	 * WeakSet) and then `structuredClone`s it — class instances would
+	 * WeakSet) and then `structuredClone`s it: class instances would
 	 * silently lose their prototype here AND on every snapshot-store
 	 * round-trip, so the default fails fast with the offending path
 	 * instead of producing a snapshot that breaks on first method call
@@ -278,8 +278,8 @@ export abstract class BaseAggregate<
 	 * into the event's metadata fields. This is the canonical path for
 	 * recording events from inside aggregate domain methods.
 	 *
-	 * Downstream consumers — outbox dispatchers, projection handlers,
-	 * audit logs — route by these two fields. Calling
+	 * Downstream consumers (outbox dispatchers, projection handlers,
+	 * audit logs) route by these two fields. Calling
 	 * `createDomainEvent(...)` directly inside an aggregate method
 	 * leaves them unset and is caught at the `withCommit` harvest
 	 * boundary, but `this.recordEvent(...)` makes the right thing
@@ -303,8 +303,8 @@ export abstract class BaseAggregate<
 	 * @param payload - payload for that event subtype
 	 * @param options - any remaining `createDomainEvent` options
 	 *   (`eventId`, `occurredAt`, `metadata`, `version`); `aggregateId`
-	 *   and `aggregateType` are deliberately omitted — the helper sets
-	 *   them.
+	 *   and `aggregateType` are deliberately omitted, because the helper
+	 *   sets them.
 	 */
 	protected recordEvent<E extends TEvent>(
 		type: E["type"],
@@ -330,7 +330,7 @@ export abstract class BaseAggregate<
  * at snapshot time, not on the first method call after a much later
  * restore.
  *
- * Built-in detection is brand-verified via {@link isBuiltInObject} — a
+ * Built-in detection is brand-verified via {@link isBuiltInObject}: a
  * plain object spoofing a built-in tag through `Symbol.toStringTag` is
  * walked like any other plain object, so nothing can smuggle unsafe
  * members past the guard. The plain-object walk mirrors what
@@ -345,7 +345,7 @@ function assertSnapshotSafe(
 ): void {
 	if (typeof value === "function") {
 		throw new Error(
-			`createSnapshot: state${path} is a function — snapshot state must be ` +
+			`createSnapshot: state${path} is a function: snapshot state must be ` +
 				`plain, serialisable data. Override toSnapshotState()/` +
 				`fromSnapshotState() to map it.`,
 		);
@@ -387,14 +387,14 @@ function assertSnapshotSafe(
 			tag === "[object WeakSet]"
 		) {
 			throw new Error(
-				`createSnapshot: state${path} is a ${tag.slice(8, -1)} — it cannot ` +
+				`createSnapshot: state${path} is a ${tag.slice(8, -1)}: it cannot ` +
 					`be cloned or persisted. Override toSnapshotState()/` +
 					`fromSnapshotState() to map it.`,
 			);
 		}
 		if (tag === "[object Error]") {
 			throw new Error(
-				`createSnapshot: state${path} is an Error — structuredClone ` +
+				`createSnapshot: state${path} is an Error: structuredClone ` +
 					`downgrades Error subclasses to plain Error and silently drops ` +
 					`custom fields, so the restored value would not round-trip. ` +
 					`Override toSnapshotState()/fromSnapshotState() to map it to ` +
@@ -417,7 +417,7 @@ function assertSnapshotSafe(
 			if (typeof key === "symbol") {
 				throw new Error(
 					`createSnapshot: state${path} has a symbol-keyed property ` +
-						`(${String(key)}) — structuredClone silently drops symbol ` +
+						`(${String(key)}): structuredClone silently drops symbol ` +
 						`keys, so the snapshot would lose state. Override ` +
 						`toSnapshotState()/fromSnapshotState() to map it.`,
 				);
@@ -433,10 +433,10 @@ function assertSnapshotSafe(
 
 	// Class instances and unknown exotic objects (including anything whose
 	// built-in-looking tag failed brand verification): structuredClone
-	// would strip or reject them — fail fast with the path.
+	// would strip or reject them: fail fast with the path.
 	const name: string = proto.constructor?.name || "anonymous class";
 	throw new Error(
-		`createSnapshot: state${path} is a class instance (${name}) — ` +
+		`createSnapshot: state${path} is a class instance (${name}): ` +
 			`structuredClone would strip its prototype and methods, producing ` +
 			`a snapshot that breaks on the first method call after restore. ` +
 			`Override toSnapshotState()/fromSnapshotState() to map child ` +

@@ -1,11 +1,11 @@
 # Aggregate Roots
 
-An Aggregate Root is the entry-point Entity of an aggregate — the only object outside code is allowed to hold a reference to. All access to child entities and value objects goes through the root.
+An Aggregate Root is the entry-point Entity of an aggregate: the only object outside code is allowed to hold a reference to. All access to child entities and value objects goes through the root.
 
 The kit ships two flavours:
 
-- **`AggregateRoot<TState, TId, TEvent>`** — state stored directly. Behaviour mutates state and optionally records domain events.
-- **`EventSourcedAggregate<TState, TEvent, TId>`** — state is derived from events. See [Event Sourcing](./event-sourcing.md).
+- **`AggregateRoot<TState, TId, TEvent>`**: state stored directly. Behaviour mutates state and optionally records domain events.
+- **`EventSourcedAggregate<TState, TEvent, TId>`**: state is derived from events. See [Event Sourcing](./event-sourcing.md).
 
 ## State + Version + Domain Events
 
@@ -54,12 +54,12 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 ```
 
 ::: warning `aggregateType` and `recordEvent` are required as of rc.8
-Every concrete `AggregateRoot` / `EventSourcedAggregate` subclass must declare `protected readonly aggregateType = "..."` as a string literal — both bases declare it `abstract readonly`, so omitting it is a compile error. Use `this.recordEvent(type, payload)` from inside aggregate methods (and `instance.recordEvent(...)` from inside static factories) to record events; the helper auto-injects `aggregateId` and `aggregateType` into the event metadata. Calling `createDomainEvent(...)` directly inside an aggregate method is still legal, but `withCommit`'s harvest guard throws if either field is missing — `recordEvent` makes the right thing impossible to forget. Outbox dispatchers and projection handlers route by both fields.
+Every concrete `AggregateRoot` / `EventSourcedAggregate` subclass must declare `protected readonly aggregateType = "..."` as a string literal; both bases declare it `abstract readonly`, so omitting it is a compile error. Use `this.recordEvent(type, payload)` from inside aggregate methods (and `instance.recordEvent(...)` from inside static factories) to record events; the helper auto-injects `aggregateId` and `aggregateType` into the event metadata. Calling `createDomainEvent(...)` directly inside an aggregate method is still legal, but `withCommit`'s harvest guard throws if either field is missing, so `recordEvent` makes the right thing impossible to forget. Outbox dispatchers and projection handlers route by both fields.
 :::
 
 ### Construction: static factory methods, not public constructors
 
-The example above uses `Order.draft(...)`, not `new Order(...)`. That is the convention everywhere in the kit's examples — and the canonical **Factory Method on the Aggregate Root** form of Vernon IDDD §11's *Factories*. (§11 also covers standalone factory classes — `OrderFactory.place(customerId, ...)` — for cases where construction needs dependencies the aggregate shouldn't know about. Both are valid; for most aggregates a static method on the class is enough.)
+The example above uses `Order.draft(...)`, not `new Order(...)`. That is the convention everywhere in the kit's examples, and the canonical **Factory Method on the Aggregate Root** form of Vernon IDDD §11's *Factories*. (§11 also covers standalone factory classes, such as `OrderFactory.place(customerId, ...)`, for cases where construction needs dependencies the aggregate shouldn't know about. Both are valid; for most aggregates a static method on the class is enough.)
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -67,13 +67,13 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
   // Static factory: named with a domain verb, ideally a specific one
   // (place / draft / register / open / submit). `Order.create(...)`
-  // works but is the weakest choice — it borrows the JS boilerplate
+  // works but is the weakest choice: it borrows the JS boilerplate
   // verb instead of the ubiquitous language. Reach for the more
   // specific verb when there is one.
   static place(id: OrderId, customerId: string): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
     // Optional: record the creation event inside the factory.
-    // `order.recordEvent(...)` is legal here — static methods have
+    // `order.recordEvent(...)` is legal here; static methods have
     // access to the protected helper on instances of their own class.
     order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
     return order;
@@ -84,19 +84,19 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 The factory shape buys two things Vernon §11 specifically calls out, plus one event-sourcing concern that comes along for the ride:
 
 1. **Domain language (Vernon §11).** `Order.place(...)` reads like the ubiquitous language; `new Order(...)` reads like JavaScript boilerplate. The factory names the *act of creation* as a first-class domain operation. This is §11's primary argument.
-2. **Whole-object validity at construction (Vernon §11).** The factory can refuse to create an invalid aggregate — `Order.place` throws if `customerId` is blank — *before* the object exists. A constructor can do the same, but a factory makes it the obvious place and removes the temptation to scatter partial-init logic across multiple methods.
-3. **Atomic creation event (ES / CQRS, not §11).** If your bounded context records a birth event (`OrderPlaced`, `UserRegistered`, `AccountOpened`), the factory is the natural home — the aggregate is born into a state that includes "having been created", and the event lands in `pendingEvents` immediately so the next `withCommit` picks it up. The library does NOT auto-emit a creation event; this is the consumer's call per bounded context.
+2. **Whole-object validity at construction (Vernon §11).** The factory can refuse to create an invalid aggregate (`Order.place` throws if `customerId` is blank) *before* the object exists. A constructor can do the same, but a factory makes it the obvious place and removes the temptation to scatter partial-init logic across multiple methods.
+3. **Atomic creation event (ES / CQRS, not §11).** If your bounded context records a birth event (`OrderPlaced`, `UserRegistered`, `AccountOpened`), the factory is the natural home: the aggregate is born into a state that includes "having been created", and the event lands in `pendingEvents` immediately so the next `withCommit` picks it up. The library does NOT auto-emit a creation event; this is the consumer's call per bounded context.
 
 `AggregateRoot` and `EventSourcedAggregate` both declare `protected constructor(...)`, so `new Order(...)` from outside the aggregate's own file is a compile error. The static factory is the only public construction path.
 
 ### Reconstitution: loading existing aggregates from persistence
 
-`Order.place(...)` creates a *new* aggregate — the order is being born into the system, and the factory records the creation event. But when `Repository.getById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
+`Order.place(...)` creates a *new* aggregate: the order is being born into the system, and the factory records the creation event. But when `Repository.getById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
 
 Vernon IDDD §11 distinguishes these two paths explicitly:
 
-- **Factory** — for *new* aggregates. Records creation events, validates new-state invariants.
-- **Reconstitution** — for *existing* aggregates loaded from persistence. No events, just state assembly.
+- **Factory**: for *new* aggregates. Records creation events, validates new-state invariants.
+- **Reconstitution**: for *existing* aggregates loaded from persistence. No events, just state assembly.
 
 Terminology varies across DDD authors and the broader CQRS/ES community: Vernon uses *reconstitute* and *materialize* interchangeably, Khononov prefers *reconstitute*, Greg Young uses *rehydrate* (especially in event-sourcing contexts). They all describe the same operation.
 
@@ -114,7 +114,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
   /**
    * Reconstitution: assemble an in-memory Order from a persisted row.
-   * No events recorded — the order already exists in the world.
+   * No events recorded: the order already exists in the world.
    */
   static reconstitute(
     id: OrderId,
@@ -128,10 +128,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`markRestored(version)` is the Post-Load symmetric of `markPersisted(version)` (Post-Save). It syncs both `version` and `persistedVersion` to the loaded DB version, so the next `repository.save(order)` sees `persistedVersion !== undefined` and routes to UPDATE (with the loaded version as the OCC baseline). Unlike `markPersisted`, it does NOT fire the `onPersisted` hook — load-time semantics are distinct from save-time semantics. The Factory-vs-Reconstitution distinction is Vernon's (IDDD §11).
+`markRestored(version)` is the Post-Load symmetric of `markPersisted(version)` (Post-Save). It syncs both `version` and `persistedVersion` to the loaded DB version, so the next `repository.save(order)` sees `persistedVersion !== undefined` and routes to UPDATE (with the loaded version as the OCC baseline). Unlike `markPersisted`, it does NOT fire the `onPersisted` hook: load-time semantics are distinct from save-time semantics. The Factory-vs-Reconstitution distinction is Vernon's (IDDD §11).
 
 ::: warning Why `persistedVersion`, not `version === 0`, drives Insert vs Update
-A naive Repository might route INSERT vs UPDATE on `aggregate.version === 0`. That breaks the moment a fresh aggregate is mutated before its first save. `Order.place(...)` typically calls `commit(state, event)` which bumps `version` to 1; a follow-up `order.updateProfile(...)` bumps it to 2 — but no DB row exists yet. Routing on `version === 0` would misroute to UPDATE, hit zero rows, and throw a spurious `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the persistence layer's state, not in-memory mutations. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+A naive Repository might route INSERT vs UPDATE on `aggregate.version === 0`. That breaks the moment a fresh aggregate is mutated before its first save. `Order.place(...)` typically calls `commit(state, event)` which bumps `version` to 1; a follow-up `order.updateProfile(...)` bumps it to 2, but no DB row exists yet. Routing on `version === 0` would misroute to UPDATE, hit zero rows, and throw a spurious `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the persistence layer's state, not in-memory mutations. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 :::
 
 The Repository's `getById` becomes mechanical:
@@ -152,7 +152,7 @@ async getById(id: OrderId): Promise<Order | null> {
 }
 ```
 
-`pendingEvents` is empty after reconstitution — `addDomainEvent` is never called along this path — so the next `withCommit` sees an aggregate with no events to harvest, exactly as the persistence layer represents it.
+`pendingEvents` is empty after reconstitution (`addDomainEvent` is never called along this path), so the next `withCommit` sees an aggregate with no events to harvest, exactly as the persistence layer represents it.
 
 #### Event-sourced aggregates: `loadFromHistory` is the reconstitution path
 
@@ -170,25 +170,25 @@ async getById(id: OrderId): Promise<Order | null> {
 }
 ```
 
-`loadFromHistory` calls each event's handler to fold state forward, advances the version by `events.length`, and records **nothing** in `pendingEvents` — events flowing through `loadFromHistory` are historical facts, not new ones. See [Event Sourcing → Replay](./event-sourcing.md#replay-loadfromhistory) for the full contract, and [Snapshots](./event-sourcing.md#snapshots-restorefromsnapshotwithevents) for the faster path past a threshold.
+`loadFromHistory` calls each event's handler to fold state forward, advances the version by `events.length`, and records **nothing** in `pendingEvents`: events flowing through `loadFromHistory` are historical facts, not new ones. See [Event Sourcing → Replay](./event-sourcing.md#replay-loadfromhistory) for the full contract, and [Snapshots](./event-sourcing.md#snapshots-restorefromsnapshotwithevents) for the faster path past a threshold.
 
-The "empty canvas" `blankInitialState` is the inert starting state your handlers fold events into — typically a minimal valid `OrderState` with no items, status `"draft"`, etc. Convention: expose it via a static `Order.empty(id)` if it's needed often, or inline it in the repository if it's only used in one place.
+The "empty canvas" `blankInitialState` is the inert starting state your handlers fold events into: typically a minimal valid `OrderState` with no items, status `"draft"`, etc. Convention: expose it via a static `Order.empty(id)` if it's needed often, or inline it in the repository if it's only used in one place.
 
 #### Why reconstitution must NOT record events
 
-A reconstituted aggregate is, by definition, the same domain object it was before the process restarted. Recording an `OrderRehydrated` event would tell the rest of the system "this thing just happened" — when nothing did. Subscribers, projections, and the outbox would react to a non-event; the read model would double-count; sagas would re-trigger. The cardinal rule of reconstitution is *no side effects on the event pipeline*.
+A reconstituted aggregate is, by definition, the same domain object it was before the process restarted. Recording an `OrderRehydrated` event would tell the rest of the system "this thing just happened", when nothing did. Subscribers, projections, and the outbox would react to a non-event; the read model would double-count; sagas would re-trigger. The cardinal rule of reconstitution is *no side effects on the event pipeline*.
 
-The kit's two reconstitution paths enforce this structurally: `markRestored` writes the version baseline without firing the `onPersisted` hook, and `loadFromHistory` folds state without recording new events. Both leave `pendingEvents` empty and align `persistedVersion` so the next `repository.save(order)` routes to UPDATE — load and save are mechanically distinct lifecycle markers (Vernon §11).
+The kit's two reconstitution paths enforce this structurally: `markRestored` writes the version baseline without firing the `onPersisted` hook, and `loadFromHistory` folds state without recording new events. Both leave `pendingEvents` empty and align `persistedVersion` so the next `repository.save(order)` routes to UPDATE; load and save are mechanically distinct lifecycle markers (Vernon §11).
 
 ### `commit(newState, events)`
 
 The canonical record-after-mutation helper:
 
-1. Calls `setState(newState, /* bumpVersion */ true)` — runs `validateState`, throws on rejection
+1. Calls `setState(newState, /* bumpVersion */ true)`, which runs `validateState` and throws on rejection
 2. Only if state mutated successfully, appends the event(s) via `addDomainEvent`
 3. Always bumps the version
 
-If `validateState` throws, **no event is recorded and no version is bumped** — atomicity preserved without ceremony. Use this instead of calling `setState` + `addDomainEvent` separately to make the "event for a fact that never happened" footgun impossible.
+If `validateState` throws, **no event is recorded and no version is bumped**: atomicity preserved without ceremony. Use this instead of calling `setState` + `addDomainEvent` separately to make the "event for a fact that never happened" footgun impossible.
 
 `commit()` accepts a single event or an array. Pass `[]` (or omit) for state-only mutations:
 
@@ -198,23 +198,23 @@ this.commit(newState, [eventA, eventB]); // two events in one transition
 ```
 
 ::: info `commit()` always bumps the version
-The `bumpVersion` parameter was deliberately removed. Recording a domain event implies "something version-worthy happened" — if you need to mutate state without bumping (cosmetic caches, internal state), call `setState(newState, false)` directly.
+The `bumpVersion` parameter was deliberately removed. Recording a domain event implies "something version-worthy happened". If you need to mutate state without bumping (cosmetic caches, internal state), call `setState(newState, false)` directly.
 :::
 
 ## Where invariants live
 
-DDD aggregates enforce **business rules** at the type and runtime level. The kit gives you four distinct locations to put them — pick by *what the rule is about*, not by what feels familiar.
+DDD aggregates enforce **business rules** at the type and runtime level. The kit gives you four distinct locations to put them; pick by *what the rule is about*, not by what feels familiar.
 
 | Location | What it guards | Throws on violation | Library hook |
 |---|---|---|---|
-| **1. Per-state (structural invariant)** | "the state itself must always be valid in isolation" — `total >= 0`, `items.length <= 100`, status is one of N values | `DomainError` subclass | `validateState(newState)` runs on every `setState` / `commit` |
-| **2. Per-event (event-sourced only)** | "this event must be valid against the current state" — `OrderShipped` only after `OrderConfirmed` | `DomainError` subclass | `validateEvent(event)` runs at the start of `apply()` |
-| **3. Per-method (domain method guard)** | "this operation only makes sense from certain states" — `confirm()` rejects if already shipped | `DomainError` subclass | Inline `if (...) throw ...` at the top of the domain method, before any state mutation |
+| **1. Per-state (structural invariant)** | "the state itself must always be valid in isolation": `total >= 0`, `items.length <= 100`, status is one of N values | `DomainError` subclass | `validateState(newState)` runs on every `setState` / `commit` |
+| **2. Per-event (event-sourced only)** | "this event must be valid against the current state": `OrderShipped` only after `OrderConfirmed` | `DomainError` subclass | `validateEvent(event)` runs at the start of `apply()` |
+| **3. Per-method (domain method guard)** | "this operation only makes sense from certain states": `confirm()` rejects if already shipped | `DomainError` subclass | Inline `if (...) throw ...` at the top of the domain method, before any state mutation |
 | **4. Cross-aggregate (process manager / saga)** | "after Order is placed, Payment must eventually be received within 30 minutes" | Compensating commands, not exceptions | `EventBus` subscribers + a Process Manager aggregate. See [CQRS & Buses → Process Managers](./cqrs-and-buses.md#process-managers-sagas) and [examples/saga/](https://github.com/shi-rudo/2-ts/tree/main/examples/saga). |
 
 ### Per-state (`validateState`)
 
-The state must always be valid on its own — independent of any history. If a state can never be reached without breaking a rule, `validateState` catches it:
+The state must always be valid on its own, independent of any history. If a state can never be reached without breaking a rule, `validateState` catches it:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -235,7 +235,7 @@ Runs on **every** `setState` call (including via `commit`). Catches both legitim
 
 ### Per-event (`validateEvent` on `EventSourcedAggregate`)
 
-The event must be valid against the *current* state at the moment of `apply()`. This is the canonical place for "lifecycle invariants" — operations that depend on prior history:
+The event must be valid against the *current* state at the moment of `apply()`. This is the canonical place for "lifecycle invariants": operations that depend on prior history:
 
 ```ts
 class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
@@ -252,9 +252,9 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
 }
 ```
 
-Runs **before** the handler computes `nextState`. Atomic — if it throws, no state mutates and no event lands in `pendingEvents`.
+Runs **before** the handler computes `nextState`. Atomic: if it throws, no state mutates and no event lands in `pendingEvents`.
 
-State-stored `AggregateRoot` has no `validateEvent` because there's no `apply()` — equivalent guards go in the domain method (location 3).
+State-stored `AggregateRoot` has no `validateEvent` because there's no `apply()`; equivalent guards go in the domain method (location 3).
 
 ### Per-method (domain-method guard)
 
@@ -287,7 +287,7 @@ For event-sourced aggregates, the same lifecycle rule could go in either `valida
 
 ### Cross-aggregate (process manager / saga)
 
-Some invariants span aggregates: "every confirmed order must result in a payment within 30 minutes", "every shipment failure must trigger a refund". These cannot be enforced transactionally — DDD aggregate boundaries are also transaction boundaries (Vernon §10: *modify one aggregate per transaction*). The right mechanism is **eventual consistency**: an `EventBus` subscriber listens for the triggering event, checks the cross-aggregate invariant, and dispatches a compensating command if it's violated.
+Some invariants span aggregates: "every confirmed order must result in a payment within 30 minutes", "every shipment failure must trigger a refund". These cannot be enforced transactionally: DDD aggregate boundaries are also transaction boundaries (Vernon §10: *modify one aggregate per transaction*). The right mechanism is **eventual consistency**: an `EventBus` subscriber listens for the triggering event, checks the cross-aggregate invariant, and dispatches a compensating command if it's violated.
 
 ```ts
 // In a Process Manager aggregate (see examples/saga/)
@@ -314,17 +314,17 @@ const before = await repo.getById(id);
 const after = await repo.getById(id);
 
 if (!sameVersion(before!, after!)) {
-  // version mismatch — another writer modified the aggregate
+  // version mismatch: another writer modified the aggregate
 }
 ```
 
-Repository implementations should throw `ConcurrencyConflictError` (an `InfrastructureError` subclass) on save when the expected version doesn't match. `save()` itself is **pure persistence** — it does not touch the aggregate's in-memory state. The `withCommit` orchestrator harvests `pendingEvents` and calls `markPersisted` after the transaction commits. See [Repository](./repository.md) and [Outbox & Transactions](./outbox.md) for the full lifecycle.
+Repository implementations should throw `ConcurrencyConflictError` (an `InfrastructureError` subclass) on save when the expected version doesn't match. `save()` itself is **pure persistence**: it does not touch the aggregate's in-memory state. The `withCommit` orchestrator harvests `pendingEvents` and calls `markPersisted` after the transaction commits. See [Repository](./repository.md) and [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ## Snapshots
 
 ```ts
 const snapshot = order.createSnapshot();
-// { state, version, snapshotAt: Date } — state is deep-cloned
+// { state, version, snapshotAt: Date }; state is deep-cloned
 
 const fresh = new Order(id, blankState);
 fresh.restoreFromSnapshot(snapshot);

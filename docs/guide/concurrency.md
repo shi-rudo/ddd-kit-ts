@@ -15,7 +15,7 @@ The cardinal rule: **each operation loads fresh aggregate instances, makes chang
 ## The race-condition trap
 
 ```ts
-// ❌ DANGEROUS — race condition
+// ❌ DANGEROUS: race condition
 class OrderService {
   private cachedOrder: Order; // NEVER cache aggregates
 
@@ -35,7 +35,7 @@ What goes wrong:
 - `await` yields control to the event loop
 - Other async operations can run while we wait
 - The cached aggregate now holds stale data
-- Last write wins — silent data loss
+- Last write wins, silent data loss
 
 ## Solution 1: Operation-scoped aggregates (canonical)
 
@@ -49,7 +49,7 @@ async function updateQuantity(orderId: OrderId, itemId: ItemId, quantity: number
 }
 ```
 
-The kit's `withCommit` makes this the default shape — the transactional callback explicitly loads, mutates, returns. Nothing leaks across operations.
+The kit's `withCommit` makes this the default shape: the transactional callback explicitly loads, mutates, returns. Nothing leaks across operations.
 
 ## Solution 2: Optimistic concurrency control (OCC)
 
@@ -74,7 +74,7 @@ async function save(order: Order): Promise<void> {
 
 The Use Case catches `ConcurrencyConflictError` at the App-Service boundary and decides: retry the operation (re-load, re-mutate), surface the conflict to the caller (HTTP 409), or accept last-write-wins for that path.
 
-The `version` lives on the aggregate root, not on its child entities or value objects — OCC is enforced at the consistency boundary. See [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for the rationale and the alternatives when you think a child needs its own version.
+The `version` lives on the aggregate root, not on its child entities or value objects; OCC is enforced at the consistency boundary. See [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for the rationale and the alternatives when you think a child needs its own version.
 
 ## EventBus is sequential per event-type, parallel per handler
 
@@ -82,17 +82,17 @@ The `version` lives on the aggregate root, not on its child entities or value ob
 
 1. Events run in **input order**, sequentially. `publish([a, b, c])` dispatches `a`, awaits all of its handlers, then dispatches `b`, and so on.
 2. Handlers within a single event run in **parallel** via `Promise.allSettled`.
-3. Errors are collected and thrown **after** the whole batch dispatches — single `Error` if one handler failed, `AggregateError` ("Multiple event handlers failed") otherwise.
+3. Errors are collected and thrown **after** the whole batch dispatches: a single `Error` if one handler failed, an `AggregateError` ("Multiple event handlers failed") otherwise.
 
-The bus does not provide retry, backpressure, or dead-letter handling — for cross-process delivery use the `Outbox` port and a dedicated dispatcher.
+The bus does not provide retry, backpressure, or dead-letter handling; for cross-process delivery use the `Outbox` port and a dedicated dispatcher.
 
 ## The kit's invariants in summary
 
-- `EventSourcedAggregate.apply()` is atomic — handler throws? state and events stay in sync
-- `AggregateRoot.commit(state, events)` is atomic — validateState throws? no event recorded
-- `withCommit` publishes events **after** the transaction commits — rolled-back state never produces visible events
-- `loadFromHistory` and `restoreFromSnapshotWithEvents` are atomic — mid-replay failure rolls back to the pre-call state
-- Domain events are deeply frozen — a mutating subscriber can't poison its peers
+- `EventSourcedAggregate.apply()` is atomic: handler throws? state and events stay in sync
+- `AggregateRoot.commit(state, events)` is atomic: validateState throws? no event recorded
+- `withCommit` publishes events **after** the transaction commits, so rolled-back state never produces visible events
+- `loadFromHistory` and `restoreFromSnapshotWithEvents` are atomic: a mid-replay failure rolls back to the pre-call state
+- Domain events are deeply frozen, so a mutating subscriber can't poison its peers
 - Repositories enforce OCC via `ConcurrencyConflictError`
 
 If you stick to operation-scoped aggregates + the above invariants, the kit's concurrency story is well-defined.

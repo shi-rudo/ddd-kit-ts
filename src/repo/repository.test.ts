@@ -21,7 +21,7 @@ describe("IAggregateRoot interface contract", () => {
 	it("declares markPersisted so Repository.save can call it through the interface", () => {
 		// What a Repository.save implementer actually does after persisting:
 		// push the new version back into the aggregate. That call has to
-		// type-check against IAggregateRoot — the interface — not against
+		// type-check against IAggregateRoot (the interface), not against
 		// the abstract class. If markPersisted only existed on the class,
 		// this function below would not compile.
 		function postSave<TId extends Id<string>, A extends IAggregateRoot<TId>>(
@@ -44,7 +44,7 @@ describe("IAggregateRoot interface contract", () => {
 });
 
 describe("Repository contract", () => {
-	describe("IRepository — id-only access", () => {
+	describe("IRepository: id-only access", () => {
 		it("can be implemented by a write-side repo without any querying", async () => {
 			class InMemoryOrders implements IRepository<Order, OrderId> {
 				private readonly byId = new Map<OrderId, Order>();
@@ -167,7 +167,7 @@ describe("Repository contract", () => {
 		});
 	});
 
-	describe("Error hierarchy — InfrastructureError vs DomainError", () => {
+	describe("Error hierarchy: InfrastructureError vs DomainError", () => {
 		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
 			const error = new AggregateNotFoundError("Order", "o-1");
 			expect(error).toBeInstanceOf(InfrastructureError);
@@ -244,7 +244,7 @@ describe("Repository contract", () => {
 		});
 	});
 
-	describe("IQueryableRepository — owns its filter language", () => {
+	describe("IQueryableRepository: owns its filter language", () => {
 		it("accepts an in-memory predicate filter", async () => {
 			type Predicate<T> = (t: T) => boolean;
 
@@ -330,7 +330,7 @@ describe("Repository contract", () => {
 			}
 
 			const repo = new StructuralOrders();
-			// This should typecheck — the structural filter survives.
+			// This should typecheck: the structural filter survives.
 			void repo.find({ customerId: "c-1", minTotal: 100 });
 		});
 	});

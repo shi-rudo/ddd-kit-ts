@@ -50,7 +50,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
  * for every left-hand object we keep the set of right-hand objects we
  * have already paired it with. Encountering an already-known pair returns
  * the cycle hypothesis (assume equal); a new (a, b') pair with b' ≠ any
- * previously cached b for that a is walked normally — the previous shape
+ * previously cached b for that a is walked normally. The previous shape
  * (`WeakMap<object, object>`) could only remember one B per A, which
  * could short-circuit unrelated comparisons that happened to revisit the
  * same A with a different B.
@@ -137,7 +137,7 @@ function deepEqualInner(
 		return true;
 	}
 
-	// 5. Arrays — `Array.isArray` is brand-based and immune to
+	// 5. Arrays: `Array.isArray` is brand-based and immune to
 	// `Symbol.toStringTag` spoofing (a spoofed tag would otherwise route a
 	// real array away from element comparison, or a plain object into it).
 	if (Array.isArray(objA) || Array.isArray(objB)) {
@@ -153,7 +153,7 @@ function deepEqualInner(
 		return true;
 	}
 
-	// 6. Tag-based type detection (robust across realms), brand-verified —
+	// 6. Tag-based type detection (robust across realms), brand-verified:
 	// a plain object spoofing a built-in tag is compared as a plain object
 	// instead of crashing type-specific code below.
 	const tagA = objToString.call(objA);
@@ -222,8 +222,8 @@ function deepEqualInner(
 		}
 
 		default: {
-			// Unhandled but brand-trusted built-ins: compared by reference —
-			// their internal structure is unknown, and this keeps new
+			// Unhandled but brand-trusted built-ins: compared by reference.
+			// Their internal structure is unknown, and this keeps new
 			// built-ins from falling through to plain-object comparison.
 			// This branch IS the REFERENCE_COMPARED_TAGS contract exported
 			// from is-built-in.ts (and consumed by deepOmit's cloneBuiltIn):

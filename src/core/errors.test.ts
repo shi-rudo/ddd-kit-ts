@@ -14,7 +14,7 @@ import {
 } from "./errors";
 
 describe("DomainError", () => {
-	it("is abstract — only consumer subclasses are constructible", () => {
+	it("is abstract; only consumer subclasses are constructible", () => {
 		class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {
 			constructor(orderId: string) {
 				super(`Order ${orderId} is already shipped`);
@@ -27,7 +27,7 @@ describe("DomainError", () => {
 		expect(e.message).toBe("Order o-1 is already shipped");
 	});
 
-	it("is not an InfrastructureError — App-layer catches stay separable", () => {
+	it("is not an InfrastructureError, so App-layer catches stay separable", () => {
 		class OrderError extends DomainError {
 			constructor() {
 				super("nope");
@@ -67,7 +67,7 @@ describe("DomainError", () => {
 });
 
 describe("InfrastructureError", () => {
-	it("is not a DomainError — distinct hierarchy from business-rule violations", () => {
+	it("is not a DomainError: distinct hierarchy from business-rule violations", () => {
 		class DriverTimeout extends InfrastructureError<"DriverTimeout"> {
 			constructor() {
 				super("timeout");
@@ -83,7 +83,7 @@ describe("InfrastructureError", () => {
 describe("MissingHandlerError", () => {
 	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
 		// `catch (e instanceof DomainError)` at the App layer must NOT
-		// swallow a forgotten event handler — that's a programming bug
+		// swallow a forgotten event handler: that's a programming bug
 		// that should crash loud during development.
 		const e = new MissingHandlerError("OrderShipped");
 		expect(e).not.toBeInstanceOf(DomainError);
@@ -113,7 +113,7 @@ describe("AggregateNotFoundError", () => {
 		expect(userMsg).not.toContain("o-1");
 	});
 
-	it("is NOT retryable — the row isn't there; retry won't help", () => {
+	it("is NOT retryable: the row isn't there; retry won't help", () => {
 		expect(isRetryable(new AggregateNotFoundError("Order", "o-1"))).toBe(false);
 	});
 
@@ -135,7 +135,7 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.message).toContain("actual 5");
 	});
 
-	it("marks itself retryable so isRetryable picks it up — the OCC reload-and-retry pattern", () => {
+	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
 		const e = new ConcurrencyConflictError("Order", "o-1", 3, 5);
 		expect(e.retryable).toBe(true);
 		expect(isRetryable(e)).toBe(true);

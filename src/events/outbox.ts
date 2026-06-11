@@ -5,7 +5,7 @@ import type { Outbox, OutboxRecord } from "./ports";
  * In-memory reference implementation of `Outbox<Evt>`.
  *
  * Intended for tests, single-process workers, and quick-start demos.
- * Uses the event's own `eventId` as the dispatch id — the common, clean
+ * Uses the event's own `eventId` as the dispatch id: the common, clean
  * choice. Storage is a `Map<string, OutboxRecord<Evt>>` keyed by
  * `eventId`, so re-adding the same event is naturally idempotent (the
  * duplicate entry overwrites itself; `getPending` returns each event at
@@ -14,7 +14,7 @@ import type { Outbox, OutboxRecord } from "./ports";
  * For production, back the outbox with a transactional store so the
  * outbox row participates in the same transaction as the aggregate
  * write (see `TransactionScope` + `withCommit`). This class lives in
- * memory only — events are lost on process restart.
+ * memory only: events are lost on process restart.
  *
  * @example
  * ```ts

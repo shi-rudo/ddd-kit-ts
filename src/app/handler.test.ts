@@ -343,7 +343,7 @@ describe("withCommit", () => {
 		// A use case that touches the same aggregate via two repository
 		// references (same identity-map entry) would otherwise double-
 		// harvest its events through the outbox and call markPersisted
-		// twice. Dedupe is by JavaScript object identity — distinct
+		// twice. Dedupe is by JavaScript object identity; distinct
 		// instances with the same logical id are NOT detected here.
 		const event = createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
@@ -423,7 +423,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(bus.published).toHaveLength(0);
-		// markPersisted still runs — keeps the lifecycle consistent even
+		// markPersisted still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
 		expect(agg.markPersistedCalls).toBe(1);
 	});
@@ -451,7 +451,7 @@ describe("withCommit", () => {
 				},
 				markPersisted(v) {
 					aggA.markPersisted(v);
-					// User-overridable onPersisted hooks can throw — the
+					// User-overridable onPersisted hooks can throw; the
 					// post-commit loop must not abort for the peers.
 					throw new Error("cache eviction failed");
 				},
@@ -494,7 +494,7 @@ describe("withCommit", () => {
 		}
 
 		it("returns the committed result even when an in-process subscriber fails", async () => {
-			// The tx committed and the outbox holds the events — a publish
+			// The tx committed and the outbox holds the events; a publish
 			// failure is eventual consistency, not use-case failure. A
 			// rejection here would make callers retry a committed write.
 			const agg = createAggWithEvent();
@@ -590,7 +590,7 @@ describe("withCommit", () => {
 					async () => ({ result: "ok", aggregates: [agg] }),
 				),
 			).rejects.toThrow("outbox write failed");
-			// Rolled back — pending events must survive for a retry.
+			// Rolled back: pending events must survive for a retry.
 			expect(agg.markPersistedCalls).toBe(0);
 		});
 	});

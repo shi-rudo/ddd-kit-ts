@@ -60,19 +60,19 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
 
 `apply()` runs three steps in lockstep:
 
-1. **`validateEvent(event)`** — throws a `DomainError` subclass if the event violates an invariant in the current state
-2. **handler lookup** — throws `MissingHandlerError` if no handler is registered for `event.type`
-3. **atomic commit** — computes `nextState`, then assigns state, pushes the event onto `pendingEvents`, and bumps the version in one tick
+1. **`validateEvent(event)`:** throws a `DomainError` subclass if the event violates an invariant in the current state
+2. **handler lookup:** throws `MissingHandlerError` if no handler is registered for `event.type`
+3. **atomic commit:** computes `nextState`, then assigns state, pushes the event onto `pendingEvents`, and bumps the version in one tick
 
 If any step throws, **no state is mutated** and no event is queued. The "event for a fact that never happened" footgun is structurally impossible.
 
 ::: tip Why no `commit()` helper here
-`EventSourcedAggregate` doesn't need a `commit()` helper because `apply()` already enforces the record-after-mutation ordering at the structural level — state is computed by the handler *from* the event, so the two can never be out of sync.
+`EventSourcedAggregate` doesn't need a `commit()` helper because `apply()` already enforces the record-after-mutation ordering at the structural level: state is computed by the handler *from* the event, so the two can never be out of sync.
 :::
 
 ## Persistence: pure-persistence `save()` + `withCommit` lifecycle
 
-After `apply()`, the new event lands in `pendingEvents`. The repository is responsible for **persistence only** — appending the events to the event store with optimistic-concurrency. The `withCommit` orchestrator harvests pending events into the outbox and calls `markPersisted` after the transaction commits.
+After `apply()`, the new event lands in `pendingEvents`. The repository is responsible for **persistence only**: appending the events to the event store with optimistic-concurrency. The `withCommit` orchestrator harvests pending events into the outbox and calls `markPersisted` after the transaction commits.
 
 ```ts
 class OrderRepository implements IRepository<Order, OrderId> {
@@ -80,7 +80,7 @@ class OrderRepository implements IRepository<Order, OrderId> {
     const events = order.pendingEvents;
     const expectedVersion = order.version - events.length;
     await this.eventStore.append(order.id, expectedVersion, events);
-    // Do NOT call markPersisted here — withCommit handles it after the
+    // Do NOT call markPersisted here; withCommit handles it after the
     // transaction commits. Calling it inside save clears pendingEvents
     // before withCommit can harvest them, and the outbox would receive
     // nothing.
@@ -121,9 +121,9 @@ const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapsho
 
 **All-or-nothing**: if any event mid-replay throws a `DomainError`, the aggregate is rolled back to its pre-call state and version. Partial restoration is never observable to the caller.
 
-### Snapshot state must be plain data — `toSnapshotState` / `fromSnapshotState`
+### Snapshot state must be plain data: `toSnapshotState` / `fromSnapshotState`
 
-A snapshot is a persistence artifact: it round-trips through your snapshot store as plain data, so prototypes cannot survive it. The default `createSnapshot` therefore **fails fast** (with the offending path) if the state graph contains class instances, functions, uncloneables (Promise/WeakMap/WeakSet), Errors (subclasses and custom fields do not survive `structuredClone`), or symbol-keyed properties (silently dropped by `structuredClone`) — instead of producing a snapshot that silently lost state and breaks on the first call after restore.
+A snapshot is a persistence artifact: it round-trips through your snapshot store as plain data, so prototypes cannot survive it. The default `createSnapshot` therefore **fails fast** (with the offending path) if the state graph contains class instances, functions, uncloneables (Promise/WeakMap/WeakSet), Errors (subclasses and custom fields do not survive `structuredClone`), or symbol-keyed properties (silently dropped by `structuredClone`), instead of producing a snapshot that silently lost state and breaks on the first call after restore.
 
 If your state carries class-based child entities, declare a plain DTO shape via the `TSnapshotState` generic and override the two hooks:
 
@@ -142,7 +142,7 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId, Order
 
 The override owns isolation: return fresh objects, not references into live state. `AggregateRoot.restoreFromSnapshot` honours the same hooks.
 
-### Snapshot policies — when to snapshot
+### Snapshot policies: when to snapshot
 
 `createSnapshot` and `restoreFromSnapshotWithEvents` give you the **mechanism**; the **policy** is yours. For an aggregate with a few dozen events, replay from the beginning is cheap and you can skip snapshots entirely. For long-lived aggregates (subscriptions accumulating monthly billing events for years, devices emitting telemetry, etc.), the replay cost dominates load latency and snapshots become essential.
 
@@ -225,7 +225,7 @@ Trade-offs:
 
 - **Pro:** zero impact on the write path. Snapshot pressure becomes a scheduling concern, not a hot-path one.
 - **Pro:** snapshots can be batched, throttled, run on a separate worker pool, prioritised by aggregate size.
-- **Con:** more operational machinery — a separate process to monitor, deploy, and reason about.
+- **Con:** more operational machinery, a separate process to monitor, deploy, and reason about.
 - **Con:** aggregates between snapshots may have replay latency until the sweep catches them.
 
 Pick this at scale, or when the write path's latency budget is tight, or when you want to snapshot only when you have spare capacity.
@@ -236,14 +236,14 @@ No `SnapshotPolicy` port, no default frequency, no built-in sweeper. Every event
 
 #### A note on snapshot invalidation
 
-When you change an event schema (see [Event Upcasting](./event-upcasting.md)), existing snapshots may also need to be invalidated — the snapshot captured a state shape derived from the old event schema, and a code change to handlers can desync the snapshot from the events that would now replay differently. Two patterns: stamp snapshots with a schema-version number and discard mismatched ones on load (fall back to full replay), or rebuild affected snapshots during the upcast deploy. Neither is wrong; pick by how often you change schemas.
+When you change an event schema (see [Event Upcasting](./event-upcasting.md)), existing snapshots may also need to be invalidated: the snapshot captured a state shape derived from the old event schema, and a code change to handlers can desync the snapshot from the events that would now replay differently. Two patterns: stamp snapshots with a schema-version number and discard mismatched ones on load (fall back to full replay), or rebuild affected snapshots during the upcast deploy. Neither is wrong; pick by how often you change schemas.
 
 ## Versioning
 
-Every `apply()` bumps the aggregate version by one — this is the canonical event-sourcing invariant (Vernon IDDD §9, Greg Young): the aggregate version IS the event count, no opt-out. `loadFromHistory(N events)` advances the version by `N`.
+Every `apply()` bumps the aggregate version by one; this is the canonical event-sourcing invariant (Vernon IDDD §9, Greg Young): the aggregate version IS the event count, no opt-out. `loadFromHistory(N events)` advances the version by `N`.
 
-If your event store has its own stream-position concept (EventStoreDB `streamRevision`, Marten / Equinox stream offsets), treat that as a store-layer detail — keep it separate from the aggregate's domain version. The domain version is what optimistic-concurrency callers compare against; the stream position is how your store happens to lay out events on disk.
+If your event store has its own stream-position concept (EventStoreDB `streamRevision`, Marten / Equinox stream offsets), treat that as a store-layer detail; keep it separate from the aggregate's domain version. The domain version is what optimistic-concurrency callers compare against; the stream position is how your store happens to lay out events on disk.
 
 ## Schema evolution
 
-Domain events carry a `version: number` field but the library deliberately does **not** ship a built-in upcaster — upcasting strategies (sync vs async, chained vs schema-registry, load-path vs projection-rebuild) vary too much. See [Event Upcasting](./event-upcasting.md) for the recommended consumer pattern.
+Domain events carry a `version: number` field but the library deliberately does **not** ship a built-in upcaster; upcasting strategies (sync vs async, chained vs schema-registry, load-path vs projection-rebuild) vary too much. See [Event Upcasting](./event-upcasting.md) for the recommended consumer pattern.

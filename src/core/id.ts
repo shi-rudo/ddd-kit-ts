@@ -16,15 +16,15 @@ export type Id<Tag extends string> = string & { readonly __brand: Tag };
 
 /**
  * Produces fresh ids of a single, fixed tag. The tag is bound at the
- * generator type — `IdGenerator<"UserId">.next()` returns `Id<"UserId">`
+ * generator type: `IdGenerator<"UserId">.next()` returns `Id<"UserId">`
  * with no caller-side generic to abuse.
  *
  * **Your factory must produce unique ids under concurrent calls.**
- * The kit makes no attempt to dedupe or detect collisions — a collision
+ * The kit makes no attempt to dedupe or detect collisions: a collision
  * silently overwrites earlier rows (under unique-key constraints) or
  * silently aliases two different entities (without them). Safe choices:
  * `crypto.randomUUID()` (UUIDv4, the default for events), ULID, UUIDv7,
- * KSUID — all collision-resistant by design. Unsafe choices: `Date.now()`
+ * KSUID: all collision-resistant by design. Unsafe choices: `Date.now()`
  * alone (duplicates within the same millisecond), a process-local
  * counter without persistence (resets to 1 on restart, collides with
  * prior runs), a sequential id derived from non-atomic state.
@@ -38,7 +38,7 @@ export type Id<Tag extends string> = string & { readonly __brand: Tag };
  * ```
  *
  * The previous shape (`IdGenerator { next<T extends string>(): Id<T> }`)
- * let callers pick `T` themselves — `gen.next<"AnyTag">()` typechecked
+ * let callers pick `T` themselves: `gen.next<"AnyTag">()` typechecked
  * even when the generator produced different-tag ids, silently defeating
  * the brand.
  */

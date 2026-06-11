@@ -1,6 +1,6 @@
 # Outbox & Transactions
 
-The transactional outbox is the canonical pattern for "domain event must persist atomically with the state change, even if downstream delivery is asynchronous". The kit ships two small ports — `TransactionScope` and `Outbox<Evt>` — plus a `withCommit` helper that wires them together.
+The transactional outbox is the canonical pattern for "domain event must persist atomically with the state change, even if downstream delivery is asynchronous". The kit ships two small ports (`TransactionScope` and `Outbox<Evt>`) plus a `withCommit` helper that wires them together.
 
 ## `TransactionScope<TCtx>`
 
@@ -12,11 +12,11 @@ interface TransactionScope<TCtx> {
 }
 ```
 
-`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle — `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
+`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle: `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
 
-`TCtx` has no default: every implementor names it explicitly so "what lives in my unit-of-work boundary" is a conscious decision. Context-free scopes spell it out as `TransactionScope<undefined>` — that's the honest "there is nothing meaningful here" statement, not an inherited `unknown` fallback.
+`TCtx` has no default: every implementor names it explicitly so "what lives in my unit-of-work boundary" is a conscious decision. Context-free scopes spell it out as `TransactionScope<undefined>`; that's the honest "there is nothing meaningful here" statement, not an inherited `unknown` fallback.
 
-The use case binds its repositories to `ctx` — typically by constructing tx-scoped repos from a factory. `IRepository`'s methods take only the id / aggregate; the transaction handle is wired into the repo at construction, not threaded through every call.
+The use case binds its repositories to `ctx`, typically by constructing tx-scoped repos from a factory. `IRepository`'s methods take only the id / aggregate; the transaction handle is wired into the repo at construction, not threaded through every call.
 
 ```ts
 // Drizzle implementation
@@ -58,14 +58,14 @@ await withCommit({ scope, outbox }, async () => ({
 ```
 
 ::: info Not Fowler's full Unit of Work
-`TransactionScope` is intentionally **not** Fowler's UoW — no change tracking, no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time flush. That's the ORM's job; competing with Prisma / Drizzle / TypeORM on their home turf only creates incompatibility. The kit stays out of it.
+`TransactionScope` is intentionally **not** Fowler's UoW: no change tracking, no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time flush. That's the ORM's job; competing with Prisma / Drizzle / TypeORM on their home turf only creates incompatibility. The kit stays out of it.
 :::
 
 ## `Outbox<Evt>`
 
 ```ts
 interface OutboxRecord<Evt extends AnyDomainEvent> {
-  dispatchId: string;     // opaque — the impl chooses (eventId, UUID, row PK, …)
+  dispatchId: string;     // opaque: the impl chooses (eventId, UUID, row PK, …)
   event: Evt;
 }
 
@@ -86,11 +86,11 @@ Lifecycle:
 
 ### Idempotency
 
-Both `add` and `markDispatched` should be idempotent — the dispatcher may retry on partial failure. A unique constraint on `(eventId)` for the outbox row is the standard pattern; the implementation can reuse the event's own `eventId` as the `dispatchId` (the common, clean choice).
+Both `add` and `markDispatched` should be idempotent; the dispatcher may retry on partial failure. A unique constraint on `(eventId)` for the outbox row is the standard pattern; the implementation can reuse the event's own `eventId` as the `dispatchId` (the common, clean choice).
 
 ### Reference implementation
 
-The kit ships an in-memory reference outbox — use it for tests, single-process workers, and quick-start demos:
+The kit ships an in-memory reference outbox; use it for tests, single-process workers, and quick-start demos:
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
@@ -100,7 +100,7 @@ type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 const outbox = new InMemoryOutbox<OrderCreated>();
 ```
 
-It uses each event's own `eventId` as the `dispatchId` (the standard choice) and keys storage on `eventId`, so re-adds are naturally idempotent. For production, swap it for an outbox that writes to your transactional store — the outbox row should participate in the same transaction as the aggregate write so events and state commit atomically.
+It uses each event's own `eventId` as the `dispatchId` (the standard choice) and keys storage on `eventId`, so re-adds are naturally idempotent. For production, swap it for an outbox that writes to your transactional store: the outbox row should participate in the same transaction as the aggregate write so events and state commit atomically.
 
 ## `withCommit`: putting it together
 
@@ -123,27 +123,27 @@ const orderId = await withCommit(
 
 Order of operations:
 
-1. **`scope.transactional(fn)`** — `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence** — it does NOT clear pending events.
-2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)` — events persist atomically with the state change. Skipped when no events were recorded. **Harvest order:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. See the [ordering note](#two-ordering-guarantees-not-one) below before designing subscribers against it.
+1. **`scope.transactional(fn)`:** `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence**; it does NOT clear pending events.
+2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)`, so events persist atomically with the state change. Skipped when no events were recorded. **Harvest order:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. See the [ordering note](#two-ordering-guarantees-not-one) below before designing subscribers against it.
 3. **Transaction commits.**
 4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
-5. `bus.publish(events)` fires for in-process subscribers (optional — `bus` is omitted when no in-process fast path is wired).
+5. `bus.publish(events)` fires for in-process subscribers (optional; `bus` is omitted when no in-process fast path is wired).
 
-Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject — the write is committed, so the caller always receives the committed `result`; surfacing a subscriber failure as a rejection would make a typical caller retry and double-execute the write. The error is reported to the optional `onPublishError(error, events)` dep (observer-only — wire it to your logger/metrics). The events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
+Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject: the write is committed, so the caller always receives the committed `result`; surfacing a subscriber failure as a rejection would make a typical caller retry and double-execute the write. The error is reported to the optional `onPublishError(error, events)` dep (observer-only; wire it to your logger/metrics). The events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
 
-If the transaction rolls back, `markPersisted` is **not** called — the aggregate keeps its pending events, so the caller can retry or discard.
+If the transaction rolls back, `markPersisted` is **not** called: the aggregate keeps its pending events, so the caller can retry or discard.
 
 ### Two ordering guarantees, not one
 
 The events harvested in step 2 carry two different ordering guarantees that consumers conflate at their peril:
 
-- **Within a single aggregate — causal order.** `apply` / `commit` / `addDomainEvent` push to `pendingEvents` in domain-method invocation order, and that order reflects real causality: the second event happened *because* the first one did. Subscribers (in-process handlers, projection handlers, event-store replay) MUST process these in order. Out-of-order processing within an aggregate breaks state derivation. Vernon IDDD §10; Greg Young's ES talks treat this as inviolable.
+- **Within a single aggregate: causal order.** `apply` / `commit` / `addDomainEvent` push to `pendingEvents` in domain-method invocation order, and that order reflects real causality: the second event happened *because* the first one did. Subscribers (in-process handlers, projection handlers, event-store replay) MUST process these in order. Out-of-order processing within an aggregate breaks state derivation. Vernon IDDD §10; Greg Young's ES talks treat this as inviolable.
 
-- **Across aggregates within one `withCommit` — incidental, not domain.** The order in which `aggregates: [a, b, c]` were written into the array is deterministic, and the in-process `EventBus.publish` and sequential outbox-dispatchers preserve it. But this is an *implementation* artifact, not a domain guarantee. DDD treats aggregates as independent consistency boundaries; events across them are eventually consistent (Vernon §10). Parallel outbox dispatchers, message brokers, or cross-process delivery may reorder events from `a` against events from `b` at delivery time.
+- **Across aggregates within one `withCommit`: incidental, not domain.** The order in which `aggregates: [a, b, c]` were written into the array is deterministic, and the in-process `EventBus.publish` and sequential outbox-dispatchers preserve it. But this is an *implementation* artifact, not a domain guarantee. DDD treats aggregates as independent consistency boundaries; events across them are eventually consistent (Vernon §10). Parallel outbox dispatchers, message brokers, or cross-process delivery may reorder events from `a` against events from `b` at delivery time.
 
 **Practical rule:** if a subscriber depends on the order in which events from *different aggregates* arrive, that's the wrong design. Use `EventMetadata.causationId` to express explicit causation across events (the event from `b` carries the `eventId` of the event from `a` that triggered it), or use a Process Manager to coordinate. Don't engineer against the harvest-order luck of being in the same batch.
 
-For the downstream side — outbox-dispatcher → projection-handlers → read-model tables → `QueryBus` — see [Read-Side Projections](./projections.md).
+For the downstream side (outbox-dispatcher → projection-handlers → read-model tables → `QueryBus`), see [Read-Side Projections](./projections.md).
 
 ::: tip Why the use case returns `aggregates`, not `events`
 The Vernon / Axon / EventFlow pattern: `Repository.save` is pure persistence; "this aggregate has been committed" is the orchestrator's call to make, not the repo's. Returning aggregates lets `withCommit` harvest pending events itself and call `markPersisted` at the right moment (post-commit, before publish). The earlier pattern of returning `events: order.pendingEvents` directly was a footgun: if `repo.save` cleared events early, the harvest would see an empty list and the outbox would receive nothing.

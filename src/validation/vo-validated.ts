@@ -13,7 +13,7 @@ import { type VO, vo } from "../value-object/value-object";
  * was recorded the input is frozen into a `VO<T>` and returned as `Ok`;
  * otherwise the populated `ValidationError` is returned as `Err`.
  *
- * `ValidationError` comes from `@shirudo/base-error` — import it from there to
+ * `ValidationError` comes from `@shirudo/base-error`; import it from there to
  * narrow the `Err` branch, exactly as `Result` is imported from
  * `@shirudo/result`. It serializes to RFC 9457 Problem Details; use
  * {@link validationProblemDetails} at the HTTP boundary to surface the issues.

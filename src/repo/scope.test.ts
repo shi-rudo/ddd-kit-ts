@@ -42,7 +42,7 @@ describe("TransactionScope contract", () => {
 	});
 
 	it("context-free scopes use TransactionScope<undefined> as the explicit no-ctx idiom", async () => {
-		// No default for TCtx — context-free scopes spell it out so
+		// No default for TCtx: context-free scopes spell it out so
 		// "there is nothing meaningful here" is a conscious statement.
 		const scope: TransactionScope<undefined> = {
 			transactional: <T>(fn: (_ctx: undefined) => Promise<T>) => fn(undefined),

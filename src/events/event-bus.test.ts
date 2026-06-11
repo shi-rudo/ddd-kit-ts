@@ -274,7 +274,7 @@ describe("EventBusImpl", () => {
 		it("a mutating handler cannot poison the event seen by subsequent handlers", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 
-			// Handler A tries to mutate the event — it must throw because
+			// Handler A tries to mutate the event; it must throw because
 			// createDomainEvent freezes the event deeply.
 			let handlerAThrew = false;
 			bus.subscribe("OrderCreated", async (event) => {
@@ -345,7 +345,7 @@ describe("EventBusImpl", () => {
 
 			await expect(bus.publish([evt])).rejects.toThrow("b failed");
 
-			// Peers ran even though one threw — allSettled semantics.
+			// Peers ran even though one threw: allSettled semantics.
 			expect(aDone).toBe(true);
 			expect(cDone).toBe(true);
 		});
@@ -374,7 +374,7 @@ describe("EventBusImpl", () => {
 				]),
 			).rejects.toBeInstanceOf(AggregateError);
 
-			// All three events dispatched — failures don't short-circuit the batch.
+			// All three events dispatched: failures don't short-circuit the batch.
 			expect(seen).toEqual(["o-1", "o-2", "o-3"]);
 		});
 	});
@@ -392,7 +392,7 @@ describe("EventBusImpl", () => {
 				orderId: "o-1",
 			}) as OrderCreated;
 
-			// The wrapping Error must carry the structured payload — a bare
+			// The wrapping Error must carry the structured payload; a bare
 			// '[object Object]' string destroys all diagnostic information.
 			await expect(bus.publish([event])).rejects.toMatchObject({
 				cause: reason,
@@ -405,7 +405,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			const seen: string[] = [];
 
-			// EventHandler allows `Promise<void> | void` — a plain sync handler
+			// EventHandler allows `Promise<void> | void`: a plain sync handler
 			// that throws must get the same allSettled treatment as a rejection.
 			bus.subscribe("OrderCreated", () => {
 				throw new Error("sync boom");
@@ -425,7 +425,7 @@ describe("EventBusImpl", () => {
 				]),
 			).rejects.toBeInstanceOf(AggregateError);
 
-			// Peer handler ran for BOTH events — the sync throw neither skipped
+			// Peer handler ran for BOTH events: the sync throw neither skipped
 			// peers nor short-circuited the batch.
 			expect(seen).toEqual(["peer:o-1", "peer:o-2"]);
 		});
@@ -474,7 +474,7 @@ describe("EventBusImpl", () => {
 			}) as OrderCreated;
 			await bus.publish([event]);
 
-			// Set-coalescing would yield 1; Array semantics yield 2 — the standard
+			// Set-coalescing would yield 1; Array semantics yield 2: the standard
 			// pub/sub expectation (Node EventEmitter, RxJS subjects, etc.).
 			expect(calls).toBe(2);
 		});
@@ -513,7 +513,7 @@ describe("EventBusImpl", () => {
 		it("infers the handler event type from the eventType argument", () => {
 			const bus = new EventBusImpl<OrderEvt>();
 
-			// Type inference from the eventType — handler is typed as OrderCreated
+			// Type inference from the eventType: handler is typed as OrderCreated
 			bus.subscribe("OrderCreated", (event) => {
 				// Narrowed: event.payload has orderId, no trackingNumber
 				const _orderId: string = event.payload.orderId;

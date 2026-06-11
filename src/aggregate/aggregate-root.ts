@@ -4,7 +4,7 @@ import { BaseAggregate } from "./base-aggregate";
 import type { AggregateSnapshot } from "./aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 
-// Re-export for backwards compatibility — `IAggregateRoot` lives in
+// Re-export for backwards compatibility: `IAggregateRoot` lives in
 // `aggregate.ts` (the type hub) but consumers historically imported it
 // from `@shirudo/ddd-kit` / `./aggregate-root`. Keep both paths working.
 export type { IAggregateRoot } from "./aggregate";
@@ -17,7 +17,7 @@ export interface AggregateConfig {
 	 * Whether `setState()` should bump the version automatically when the
 	 * caller omits the per-call `bumpVersion` argument.
 	 *
-	 * Defaults to **`false`** — `setState()` already takes an explicit
+	 * Defaults to **`false`**: `setState()` already takes an explicit
 	 * `bumpVersion` argument per call, so the config is just the default
 	 * the per-call argument falls back to. Set to `true` only if you have
 	 * a subclass that never passes `bumpVersion` and you want every state
@@ -29,8 +29,8 @@ export interface AggregateConfig {
 /**
  * Base class for Aggregate Roots without Event Sourcing.
  *
- * In DDD (Evans), an Aggregate is a cluster of objects — root entity, child entities,
- * and value objects — treated as a unit for consistency. The **Aggregate Root** is the
+ * In DDD (Evans), an Aggregate is a cluster of objects (root entity, child entities,
+ * and value objects) treated as a unit for consistency. The **Aggregate Root** is the
  * root entity that represents the aggregate externally and is the only entry point
  * for external code. This class serves as both: it IS the root entity and it contains
  * the aggregate state (`TState`) which holds child entities and value objects.
@@ -49,7 +49,7 @@ export interface AggregateConfig {
  *
  * @template TState - The type of the aggregate state (contains child entities and value objects)
  * @template TId - The type of the aggregate root identifier
- * @template TEvent - The type of domain events recorded by this aggregate. Defaults to `never` — aggregates without a declared event type cannot emit events (emitting any event becomes a compile error). Supply a concrete event union to opt in.
+ * @template TEvent - The type of domain events recorded by this aggregate. Defaults to `never`: aggregates without a declared event type cannot emit events (emitting any event becomes a compile error). Supply a concrete event union to opt in.
  *
  * @example
  * ```typescript
@@ -94,7 +94,7 @@ export abstract class AggregateRoot<
 	 * "event for a fact that never happened" footgun.
 	 *
 	 * Order of operations:
-	 *  1. `setState(newState, true)` — runs `validateState` first.
+	 *  1. `setState(newState, true)`: runs `validateState` first.
 	 *     If it throws, the method propagates and **no event is recorded
 	 *     and no version is bumped**.
 	 *  2. Each event in `events` is appended via `addDomainEvent`.
@@ -160,7 +160,7 @@ export abstract class AggregateRoot<
 	}
 
 	/**
-	 * Restores the aggregate from a snapshot — loads state and aligns
+	 * Restores the aggregate from a snapshot: loads state and aligns
 	 * `version` + `persistedVersion` to the snapshot version. Validates
 	 * the restored state.
 	 *

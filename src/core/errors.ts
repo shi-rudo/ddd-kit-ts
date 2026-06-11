@@ -4,13 +4,13 @@ import { BaseError } from "@shirudo/base-error";
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
- * violated. Consumers derive their own concrete errors — e.g.
- * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}` —
+ * violated. Consumers derive their own concrete errors (e.g.
+ * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}`)
  * for `instanceof`-style catching at the App-Service boundary, where
  * they typically map to HTTP 400 / business-rule responses.
  *
  * The library itself does **not** ship any concrete `DomainError`
- * subclass — the kit can't know your invariants.
+ * subclass: the kit can't know your invariants.
  *
  * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
  * surface (timestamps, cause chains, `toJSON()`, `getUserMessage()`,
@@ -22,7 +22,7 @@ export abstract class DomainError<
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
- * App-Service can recover from — typically by retrying, by returning
+ * App-Service can recover from: typically by retrying, by returning
  * HTTP 404 / 409, or by surfacing a "please try again" UX. These are
  * not domain-invariant violations (the business rules were not
  * broken); they describe race conditions and missing rows at the
@@ -38,10 +38,10 @@ export abstract class InfrastructureError<
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
  * registered for the event's type. This means the aggregate's subclass
- * forgot to add an entry to its `handlers` map — a programming /
+ * forgot to add an entry to its `handlers` map: a programming /
  * configuration bug, not a domain or infrastructure failure.
  *
- * Deliberately **not** on `DomainError` or `InfrastructureError` —
+ * Deliberately **not** on `DomainError` or `InfrastructureError`:
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
@@ -72,7 +72,7 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
  * losing context. Cause-chain helpers (`getRootCause`,
  * `findInCauseChain`) from `@shirudo/base-error` traverse the chain.
  *
- * Not retryable — retrying won't make the row appear.
+ * Not retryable: retrying won't make the row appear.
  */
 export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
 	constructor(
@@ -89,7 +89,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 
 /**
  * Thrown by `IRepository.save()` when the aggregate's expected version
- * does not match the version currently persisted — i.e. another writer
+ * does not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-
  * concurrency signal; the App-Service typically reloads, re-applies
  * the use case, and retries, or surfaces HTTP 409 to the caller.

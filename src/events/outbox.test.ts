@@ -68,7 +68,7 @@ describe("InMemoryOutbox", () => {
 			createDomainEvent("OrderCreated", { orderId: "o-3" }),
 		]);
 
-		// A dispatcher computing `batchSize - inFlight` can go negative —
+		// A dispatcher computing `batchSize - inFlight` can go negative:
 		// slice's end-relative indexing must not dispatch the whole backlog.
 		expect(await outbox.getPending(0)).toHaveLength(0);
 		expect(await outbox.getPending(-1)).toHaveLength(0);

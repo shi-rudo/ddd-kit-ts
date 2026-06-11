@@ -7,7 +7,7 @@ import type { IAggregateRoot } from "../aggregate/aggregate-root";
  * In DDD a Repository is a "collection illusion" for aggregates: load by
  * identity, save the whole aggregate, delete by identity. Querying by
  * arbitrary criteria is a separate concern (CQRS read-side, ad-hoc bulk
- * operations) and lives on the `IQueryableRepository` extension below — so
+ * operations) and lives on the `IQueryableRepository` extension below, so
  * write-side repositories don't have to implement query plumbing they
  * don't need.
  *
@@ -44,7 +44,7 @@ export interface IRepository<
 
 	/**
 	 * Persists the aggregate (insert or update). Implementations are
-	 * responsible for **persistence only** — they must NOT touch the
+	 * responsible for **persistence only**; they must NOT touch the
 	 * aggregate's in-memory state:
 	 *
 	 *  1. Throw `ConcurrencyConflictError` from `@shirudo/ddd-kit` when the
@@ -52,14 +52,14 @@ export interface IRepository<
 	 *     stored (optimistic concurrency).
 	 *  2. Write the aggregate to durable storage.
 	 *
-	 * **Insert vs update — `persistedVersion` convention.** Every aggregate
+	 * **Insert vs update: the `persistedVersion` convention.** Every aggregate
 	 * exposes two version fields with distinct roles:
 	 *
-	 *  - `aggregate.version` — in-memory post-mutation value, bumped by
+	 *  - `aggregate.version`: in-memory post-mutation value, bumped by
 	 *    `setState(_, true)` / `commit()` / `apply()`. NOT the right
 	 *    routing key, because mutations can advance it past zero while
 	 *    the DB row still does not exist.
-	 *  - `aggregate.persistedVersion` — what the persistence layer holds.
+	 *  - `aggregate.persistedVersion`: what the persistence layer holds.
 	 *    `undefined` until the aggregate has been persisted or restored
 	 *    at least once. This is the routing key.
 	 *
@@ -69,14 +69,14 @@ export interface IRepository<
 	 *  - otherwise → **UPDATE** with the OCC predicate
 	 *    `WHERE id = ? AND version = aggregate.persistedVersion` (the
 	 *    load-time / last-save baseline, not the post-mutation in-memory
-	 *    value). If the row count is `0`, another writer raced you —
+	 *    value). If the row count is `0`, another writer raced you:
 	 *    throw `ConcurrencyConflictError`.
 	 *
 	 * Do **not** call `aggregate.markPersisted(...)` here. The library's
 	 * `withCommit` orchestrator handles the post-save lifecycle (harvest
 	 * pending events into the outbox, then mark persisted after commit).
 	 * Calling `markPersisted` inside `save` clears pending events too early
-	 * and breaks the harvest path — and is also why the Vernon/Axon/
+	 * and breaks the harvest path, and is also why the Vernon/Axon/
 	 * EventFlow pattern separates persistence from commit-events.
 	 *
 	 * If you are not using `withCommit` (custom orchestration), call
@@ -86,7 +86,7 @@ export interface IRepository<
 	save(aggregate: TAgg): Promise<void>;
 
 	/**
-	 * Removes the aggregate's row by id. Pure persistence — does NOT
+	 * Removes the aggregate's row by id. Pure persistence: does NOT
 	 * harvest pending events from the aggregate (the contract takes
 	 * only the id, so there is no aggregate to harvest from).
 	 *
@@ -94,7 +94,7 @@ export interface IRepository<
 	 * is the right domain verb. Most are actually state transitions
 	 * (*cancel*, *archive*, *close*, *deactivate*, *terminate*) with
 	 * proper domain names that should be modelled as state changes plus
-	 * a recorded event — not as row removal.
+	 * a recorded event, not as row removal.
 	 *
 	 * `delete(id)` belongs in the toolkit for three distinct cases, in
 	 * decreasing order of common occurrence (see
@@ -120,7 +120,7 @@ export interface IRepository<
 	 *    subscriber cares. If the entity has identity in the ubiquitous
 	 *    language, you probably want path 1 or 2 instead.
 	 *
-	 * In pure event-sourced systems `delete` is rarely meaningful —
+	 * In pure event-sourced systems `delete` is rarely meaningful:
 	 * end-of-lifecycle there is a `Closed` / `Terminated` event in the
 	 * stream, and identity persists in the event log. `delete` applies
 	 * primarily to state-stored aggregates and snapshot / projection
@@ -135,7 +135,7 @@ export interface IRepository<
  * Prisma `WhereInput`, a MongoDB filter document, a plain
  * `(t: TAgg) => boolean` predicate for in-memory repos, or anything else.
  *
- * The library does not prescribe a Specification or query DSL — the
+ * The library does not prescribe a Specification or query DSL: the
  * Repository implementation owns its query language. This avoids the
  * phantom-interface trap of a library-level `ISpecification<T>` with no
  * methods and lets each Repository expose the strongest possible types for
@@ -176,13 +176,13 @@ export interface IQueryableRepository<
 	findOne(filter: TFilter): Promise<TAgg | null>;
 
 	/**
-	 * Returns **every** aggregate matching the filter — no pagination,
+	 * Returns **every** aggregate matching the filter: no pagination,
 	 * no cursor. For unbounded result sets, prefer a read-side projection
 	 * (CQRS read model) over loading aggregates in bulk; aggregates are
 	 * write-side objects and rehydrating thousands of them by id is rarely
 	 * what you want. If you need pagination on the write side, declare a
 	 * domain-specific paged method on your concrete repository (e.g.
-	 * `findPage(filter, cursor)`) — the library does not prescribe a
+	 * `findPage(filter, cursor)`): the library does not prescribe a
 	 * pagination contract because cursor/offset/keyset semantics vary too
 	 * much across storage backends.
 	 */

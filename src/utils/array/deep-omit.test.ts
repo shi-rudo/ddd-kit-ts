@@ -234,7 +234,7 @@ describe("deepOmit – Built-ins are cloned atomically (distinct, equal-by-value
 
 describe("deepOmit – Reference-compared built-ins are passed through by reference", () => {
 	// structuredClone cannot clone Promise/WeakMap/WeakSet, and deepEqual
-	// compares Error/ArrayBuffer by reference — cloning any of these would
+	// compares Error/ArrayBuffer by reference; cloning any of these would
 	// crash or break deepEqualExcept's reflexivity, so they must alias.
 	it("passes a Promise through by reference instead of throwing", () => {
 		const p = Promise.resolve(1);
@@ -443,7 +443,7 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 			{ ignoreKeys: ["x"] },
 		) as { a: object; b: object };
 
-		// ignoreKeys is path-independent — structure sharing is safe and kept.
+		// ignoreKeys is path-independent, so structure sharing is safe and kept.
 		expect(result.a).toBe(result.b);
 		expect(result.a).toEqual({ y: 2 });
 	});
@@ -451,7 +451,7 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 	it("aborts with a descriptive error instead of hanging on exponentially shared graphs", () => {
 		// Per-path cloning is semantically forced with a predicate, so a
 		// diamond chain (every level shares one node via two keys) expands
-		// 2^depth — the walk must fail loudly, not freeze the process.
+		// 2^depth; the walk must fail loudly, not freeze the process.
 		let node: Record<string, unknown> = { leaf: 1 };
 		for (let i = 0; i < 24; i++) {
 			node = { a: node, b: node };

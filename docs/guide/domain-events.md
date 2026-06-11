@@ -1,6 +1,6 @@
 # Domain Events
 
-A domain event represents something that has **just happened** in the domain. The kit treats events as facts of the past — immutable, identifiable, and (by convention) recorded after the state change they describe.
+A domain event represents something that has **just happened** in the domain. The kit treats events as facts of the past: immutable, identifiable, and (by convention) recorded after the state change they describe.
 
 ## Shape
 
@@ -31,10 +31,10 @@ const event = createDomainEvent("OrderConfirmed", { orderId: "o-1" }, {
 }) as OrderConfirmed;
 ```
 
-The returned event is **deeply frozen**. Mutating it (or any nested object) throws — a mutating EventBus subscriber cannot poison subsequent handlers.
+The returned event is **deeply frozen**. Mutating it (or any nested object) throws, so a mutating EventBus subscriber cannot poison subsequent handlers.
 
 ::: tip Inside an aggregate method? Prefer `this.recordEvent(...)`
-`createDomainEvent` is the construction primitive and stays the right call for system events, integration events, and anything outside an aggregate (process managers / sagas, outbox dispatch, tests). **Inside an aggregate domain method**, use the `this.recordEvent(type, payload, options?)` helper on `AggregateRoot` / `EventSourcedAggregate` instead — it auto-injects `aggregateId = this.id` and `aggregateType = this.aggregateType`. `withCommit`'s harvest guard throws on any event with either field missing, so calling `createDomainEvent(...)` from inside an aggregate is a footgun the helper closes. See [Aggregate Roots → State + Version + Domain Events](./aggregates.md#state-version-domain-events).
+`createDomainEvent` is the construction primitive and stays the right call for system events, integration events, and anything outside an aggregate (process managers / sagas, outbox dispatch, tests). **Inside an aggregate domain method**, use the `this.recordEvent(type, payload, options?)` helper on `AggregateRoot` / `EventSourcedAggregate` instead; it auto-injects `aggregateId = this.id` and `aggregateType = this.aggregateType`. `withCommit`'s harvest guard throws on any event with either field missing, so calling `createDomainEvent(...)` from inside an aggregate is a footgun the helper closes. See [Aggregate Roots → State + Version + Domain Events](./aggregates.md#state-version-domain-events).
 :::
 
 ### Auto-generated fields and override hooks
@@ -47,19 +47,19 @@ The returned event is **deeply frozen**. Mutating it (or any nested object) thro
 | `metadata` | `undefined` | `options.metadata` |
 
 ::: tip Prefer time-ordered ids in production
-`crypto.randomUUID()` is always **UUID v4** — purely random, no time component. Fine for tests and small workloads, but it scatters across B-tree indexes and amplifies writes once the event store grows. For production, swap in UUID v7 (RFC 9562), ULID, or KSUID via `setEventIdFactory` — all three are time-ordered, so `ORDER BY eventId ASC` matches creation order and indexes stay clustered. See [Edge Runtimes → Event ids](./edge-runtimes.md#event-ids-ulid-ksuid-snowflake) for the drop-ins.
+`crypto.randomUUID()` is always **UUID v4**: purely random, no time component. Fine for tests and small workloads, but it scatters across B-tree indexes and amplifies writes once the event store grows. For production, swap in UUID v7 (RFC 9562), ULID, or KSUID via `setEventIdFactory`; all three are time-ordered, so `ORDER BY eventId ASC` matches creation order and indexes stay clustered. See [Edge Runtimes → Event ids](./edge-runtimes.md#event-ids-ulid-ksuid-snowflake) for the drop-ins.
 :::
 
 #### Where to bootstrap the factory
 
-Both `setEventIdFactory` and `setClockFactory` are **process-wide singletons** — call them **once, at your app's entry point**, before any code constructs a domain event. Subsequent calls overwrite the previous factory (last setter wins), so a per-request `setEventIdFactory(...)` is almost always a bug. For per-request / per-tenant variance, use the per-call `options.eventId` / `options.occurredAt` overrides on `createDomainEvent` instead.
+Both `setEventIdFactory` and `setClockFactory` are **process-wide singletons**: call them **once, at your app's entry point**, before any code constructs a domain event. Subsequent calls overwrite the previous factory (last setter wins), so a per-request `setEventIdFactory(...)` is almost always a bug. For per-request / per-tenant variance, use the per-call `options.eventId` / `options.occurredAt` overrides on `createDomainEvent` instead.
 
 The right place depends on your runtime:
 
-**Node / Bun entry point** — at the top of your main module, before any handler or use case imports a domain event:
+**Node / Bun entry point:** at the top of your main module, before any handler or use case imports a domain event:
 
 ```ts
-// src/main.ts  (or index.ts, server.ts — your process entry)
+// src/main.ts  (or index.ts, server.ts: your process entry)
 import { setEventIdFactory } from "@shirudo/ddd-kit";
 import { v7 as uuidv7 } from "uuid";
 
@@ -70,7 +70,7 @@ import { startServer } from "./server";
 startServer();
 ```
 
-**Cloudflare Workers / Vercel Edge** — at module top level in the worker file. Module top-level code runs **once per isolate boot**, not per request, so the factory is set once and lives for the lifetime of that isolate:
+**Cloudflare Workers / Vercel Edge:** at module top level in the worker file. Module top-level code runs **once per isolate boot**, not per request, so the factory is set once and lives for the lifetime of that isolate:
 
 ```ts
 // worker.ts
@@ -87,7 +87,7 @@ export default {
 };
 ```
 
-**Test setup file** — once per test file, or globally via your test runner's setup config. The reset helpers exist so each test sees the default again unless it opts in:
+**Test setup file:** once per test file, or globally via your test runner's setup config. The reset helpers exist so each test sees the default again unless it opts in:
 
 ```ts
 // vitest.setup.ts  (referenced from vitest.config.ts `setupFiles`)
@@ -113,18 +113,18 @@ it("emits a deterministic event", () => {
 });
 ```
 
-::: warning Module-scoped — last setter wins
-Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation serving multiple tenants, two libraries that both call `setEventIdFactory` at import time), **don't mutate the global per request** — that's a race waiting to happen. Use the per-call `options.eventId` / `options.occurredAt` on `createDomainEvent` instead; it always wins over the factory.
+::: warning Module-scoped: last setter wins
+Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation serving multiple tenants, two libraries that both call `setEventIdFactory` at import time), **don't mutate the global per request**; that's a race waiting to happen. Use the per-call `options.eventId` / `options.occurredAt` on `createDomainEvent` instead; it always wins over the factory.
 :::
 
 #### Custom id formats (UUID v7, ULID, KSUID)
 
 ```ts
-// UUID v7 — RFC 9562 standards-track, time-ordered
+// UUID v7: RFC 9562 standards-track, time-ordered
 import { v7 as uuidv7 } from "uuid";
 setEventIdFactory(() => uuidv7());
 
-// ULID — 26-char Crockford base32, time-ordered, URL-safe
+// ULID: 26-char Crockford base32, time-ordered, URL-safe
 import { ulid } from "ulid";
 setEventIdFactory(() => ulid()); // call once at bootstrap
 ```
@@ -166,8 +166,8 @@ const md = mergeMetadata(
 
 A domain event represents something that has **just happened**. The state change must already have committed before the event is recorded.
 
-- `EventSourcedAggregate.apply()` enforces this structurally — state and event commit atomically.
-- `AggregateRoot.commit(newState, events)` enforces this via the helper — state mutates first (and throws on validateState), only then are events appended.
-- Direct `setState` + `addDomainEvent` is fine but the ordering is convention only — keep them in that order, and never record an event before the state change that justifies it.
+- `EventSourcedAggregate.apply()` enforces this structurally: state and event commit atomically.
+- `AggregateRoot.commit(newState, events)` enforces this via the helper: state mutates first (and throws on validateState), only then are events appended.
+- Direct `setState` + `addDomainEvent` is fine but the ordering is convention only; keep them in that order, and never record an event before the state change that justifies it.
 
 Recording before mutation is a footgun: if a subsequent invariant throws, the event has been queued for a fact that never actually happened.

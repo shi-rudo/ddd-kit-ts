@@ -195,7 +195,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.state.value).toBe(10); // Original unchanged
 		});
 
-		it("should deep copy nested state in snapshot — no shared references", () => {
+		it("should deep copy nested state in snapshot: no shared references", () => {
 			type StateWithChildren = {
 				items: { id: string; qty: number }[];
 				status: string;
@@ -222,7 +222,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.state.items).toHaveLength(2);
 		});
 
-		it("should deep-clone the snapshot when restoring — caller mutations don't leak in", () => {
+		it("should deep-clone the snapshot when restoring: caller mutations don't leak in", () => {
 			type StateWithChildren = {
 				items: { id: string; qty: number }[];
 				status: string;
@@ -244,7 +244,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const agg = new AggWithChildren("a-1" as TestId, { items: [], status: "open" });
 			agg.restoreFromSnapshot(snapshot);
 
-			// Mutate the original snapshot AFTER restore — the aggregate must be isolated.
+			// Mutate the original snapshot AFTER restore. The aggregate must be isolated.
 			snapshot.state.items[0]!.qty = 999;
 			snapshot.state.items.push({ id: "i2", qty: 5 });
 
@@ -369,7 +369,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				lastError: new MyDomainishError("boom"),
 			});
 			// structuredClone silently downgrades the subclass to a plain
-			// Error (instanceof broken, .code gone) — must fail fast instead.
+			// Error (instanceof broken, .code gone), so it must fail fast instead.
 			expect(() => withSubclass.createSnapshot()).toThrow(/Error/);
 			expect(() => withSubclass.createSnapshot()).toThrow(/lastError/);
 			expect(() => withSubclass.createSnapshot()).toThrow(/toSnapshotState/);
@@ -436,7 +436,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const agg = new NonEnumAggregate("agg-1" as TestId, state);
 
 			// Non-enumerable members are deliberately excluded from
-			// serialization — structuredClone drops them, so the guard
+			// serialization: structuredClone drops them, so the guard
 			// must not reject them.
 			expect(() => agg.createSnapshot()).not.toThrow();
 		});
@@ -471,7 +471,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("commit() — record-after-mutation helper", () => {
+	describe("commit(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
 		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
@@ -484,7 +484,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.commit({ ...this.state, value }, ev);
 			}
 			recordOnly(ev: Ev): void {
-				// Forces "record before mutation" — would only be possible by
+				// Forces "record before mutation", which would only be possible by
 				// calling addDomainEvent directly. commit() never does this.
 				this.addDomainEvent(ev);
 			}
@@ -533,7 +533,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				"negative",
 			);
 
-			// State unchanged AND no event queued — the validateState-throws-
+			// State unchanged AND no event queued: the validateState-throws-
 			// before-addDomainEvent path is enforced by commit().
 			expect(agg.state.value).toBe(10);
 			expect(agg.pendingEvents).toHaveLength(0);
@@ -783,7 +783,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 				protected override onPersisted(_version: Version): void {
 					this.sideEffectFired = true;
-					// pendingEvents is already empty here — by design.
+					// pendingEvents is already empty here, by design.
 				}
 			}
 
@@ -895,7 +895,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect((agg.pendingEvents[0] as Extract<TestEvent, { type: "ValueUpdated" }>).payload).toEqual({ newValue: 42 });
 			expect(agg.pendingEvents[1]?.type).toBe("Activated");
 
-			// pendingEvents is typed — access event-specific fields without cast
+			// pendingEvents is typed: access event-specific fields without cast
 			const firstEvent = agg.pendingEvents[0]!;
 			expect(firstEvent.type).toBe("ValueUpdated");
 		});

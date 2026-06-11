@@ -2,7 +2,7 @@
  * Renders a thrown value into the buses' string error channel without
  * destroying diagnostics: an `Error` contributes its message; anything
  * else (driver SDKs commonly throw structured objects like
- * `{ code: "DB_CONN" }`) is JSON-serialised so the fields stay readable —
+ * `{ code: "DB_CONN" }`) is JSON-serialised so the fields stay readable;
  * `String(error)` would collapse it to `"[object Object]"`.
  */
 export function describeThrown(error: unknown): string {

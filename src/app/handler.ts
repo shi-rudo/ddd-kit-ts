@@ -14,7 +14,7 @@ import type { TransactionScope } from "../repo/scope";
  * committed" is the orchestrator's call to make, not the repo's.
  *
  * Order of operations:
- *  1. `fn(ctx)` runs inside `scope.transactional(...)` — domain mutations
+ *  1. `fn(ctx)` runs inside `scope.transactional(...)`; domain mutations
  *     + repo writes happen here. `ctx` is whatever transaction handle the
  *     `scope` exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or
  *     `undefined` for context-free scopes).
@@ -32,14 +32,14 @@ import type { TransactionScope } from "../repo/scope";
  *     that exact order.
  *
  *     **Two ordering guarantees, not one.** Within a single aggregate
- *     the order is *causal* — events are recorded in the order the
+ *     the order is *causal*: events are recorded in the order the
  *     domain methods ran, and subscribers (handlers, projections,
  *     replay) MUST process them in that order. Across aggregates the
  *     order in this batch is deterministic but *not* a domain
  *     guarantee. Greg Young / Vernon IDDD §10: aggregates are
  *     independent consistency boundaries; events across them are
  *     eventually consistent. Subscribers should NOT engineer
- *     dependencies on cross-aggregate ordering — use
+ *     dependencies on cross-aggregate ordering; use
  *     `EventMetadata.causationId` to express true causation, or a
  *     process manager to coordinate. The in-process EventBus delivers
  *     this batch in order, sequential outbox-dispatchers preserve it
@@ -47,7 +47,7 @@ import type { TransactionScope } from "../repo/scope";
  *     across aggregates at delivery time.
  *  3. The transaction commits.
  *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
- *     fires on each returned aggregate — only now are pending events
+ *     fires on each returned aggregate; only now are pending events
  *     considered flushed.
  *  5. `bus.publish(events)` fires for the in-process fast path (skipped
  *     when no events or no `bus` is wired).
@@ -59,22 +59,22 @@ import type { TransactionScope } from "../repo/scope";
  * them (eventual consistency).
  *
  * **A `bus.publish` failure never rejects `withCommit`.** Once the
- * transaction has committed, the write succeeded — surfacing a subscriber
+ * transaction has committed, the write succeeded; surfacing a subscriber
  * failure as a rejection would hand the caller a use-case failure for a
  * committed write (a typical caller retries, double-executing it). The
  * in-process fast path is best-effort by design; the error is reported to
  * the optional `onPublishError(error, events)` hook (wire it to your
- * logger/metrics) and otherwise dropped — delivery is still guaranteed via
+ * logger/metrics) and otherwise dropped; delivery is still guaranteed via
  * the outbox. The hook is an observer: if it throws, its error is
  * swallowed so the post-commit invariant holds.
  *
- * If the transaction rolls back, `markPersisted` is **not** called — the
+ * If the transaction rolls back, `markPersisted` is **not** called: the
  * aggregate keeps its pending events, so the caller can retry or discard.
  *
  * **Duplicate aggregates are deduped by reference.** If the returned
- * `aggregates` array contains the same instance twice — e.g. a use
+ * `aggregates` array contains the same instance twice (e.g. a use
  * case touches an order via two repository references that happen to
- * resolve to the same identity-map entry — `withCommit` dedupes by
+ * resolve to the same identity-map entry), `withCommit` dedupes by
  * JavaScript object identity before harvesting. Each event lands in
  * the outbox exactly once and `markPersisted` fires exactly once. Two
  * *different* instances with the same logical id cannot be detected
@@ -90,7 +90,7 @@ import type { TransactionScope } from "../repo/scope";
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
  *   const order = await orderRepository.getByIdOrFail(orderId);
  *   order.confirm();
- *   await orderRepository.save(order);             // pure persistence — does NOT call markPersisted
+ *   await orderRepository.save(order);             // pure persistence; does NOT call markPersisted
  *   return { result: order.id, aggregates: [order] };
  * });
  * ```
@@ -103,7 +103,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		/**
 		 * Observer for post-commit `bus.publish` failures. Called with the
 		 * error and the events that were published. Must not be relied on
-		 * for delivery — the outbox dispatcher is the reliable path.
+		 * for delivery: the outbox dispatcher is the reliable path.
 		 */
 		onPublishError?: (
 			error: unknown,
@@ -122,7 +122,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// aggregate via two repository references (same identity-map
 			// entry) would otherwise double-harvest its events and call
 			// markPersisted twice. Distinct instances with the same logical
-			// id are NOT detected here — that's a different misuse class.
+			// id are NOT detected here; that's a different misuse class.
 			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
 			const harvested = uniqueAggregates.flatMap(
 				(agg) => agg.pendingEvents,
@@ -132,7 +132,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// dispatchers, projection handlers, audit logs) route by these
 			// fields; missing them silently breaks routing. The
 			// `this.recordEvent(...)` helper on AggregateRoot /
-			// EventSourcedAggregate injects them automatically — this guard
+			// EventSourcedAggregate injects them automatically; this guard
 			// catches the case where someone called `createDomainEvent(...)`
 			// directly inside an aggregate method and forgot the options.
 			for (const event of harvested) {
@@ -145,7 +145,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							" and ",
 						)}. ` +
 							`Use this.recordEvent(type, payload) inside aggregate methods ` +
-							`instead of createDomainEvent(...) — recordEvent auto-injects ` +
+							`instead of createDomainEvent(...); recordEvent auto-injects ` +
 							`aggregateId and aggregateType. Outbox dispatchers and ` +
 							`projection handlers rely on these fields for routing.`,
 					);
@@ -168,8 +168,8 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// Only the user-overridable onPersisted hook can throw here, and
 			// it runs AFTER the framework cleanup (events already flushed for
 			// THIS aggregate). Aborting the loop would leave the remaining
-			// aggregates un-marked — double-emitting their events on the next
-			// commit — and reject a committed write. Hook failures are
+			// aggregates un-marked (double-emitting their events on the next
+			// commit) and reject a committed write. Hook failures are
 			// observer failures: the post-commit invariant wins.
 		}
 	}
@@ -178,7 +178,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		try {
 			await deps.bus.publish(events);
 		} catch (error) {
-			// The tx has committed and the outbox holds the events — an
+			// The tx has committed and the outbox holds the events; an
 			// outbox dispatcher will deliver them. Rejecting here would turn
 			// a committed write into an apparent use-case failure (callers
 			// would retry and double-execute).

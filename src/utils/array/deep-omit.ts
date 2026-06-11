@@ -27,7 +27,7 @@ export interface DeepOmitOptions {
  * Walks the object tree and skips keys that match `ignoreKeys` /
  * `ignoreKeyPredicate`. Built-in atomic types that `deepEqual` compares by
  * value (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned by type
- * rather than walked — their internal structure has no key filtering to
+ * rather than walked, since their internal structure has no key filtering to
  * apply. Types that `deepEqual` compares by reference (Error, ArrayBuffer,
  * SharedArrayBuffer, Promise, WeakMap, WeakSet) are passed through by
  * reference, so `deepEqualExcept(x, x)` stays reflexive. Cycles are
@@ -35,7 +35,7 @@ export interface DeepOmitOptions {
  *
  * **Shared references.** Without `ignoreKeyPredicate`, an object reached
  * via several paths dedupes to a single clone. With a predicate, each
- * path gets its own clone — the predicate may decide differently per
+ * path gets its own clone, because the predicate may decide differently per
  * path, so memoising the first path's result would be wrong. This is
  * inherently exponential for diamond-shaped sharing (a node reachable
  * via 2^n paths is cloned 2^n times); the walk aborts with a descriptive
@@ -49,7 +49,7 @@ export interface DeepOmitOptions {
  *
  * **Class instances.** When the input is a class instance, the clone is
  * built via `Object.create(proto)` so the prototype is preserved, but the
- * constructor is NOT re-invoked — so class invariants enforced by the
+ * constructor is NOT re-invoked, so class invariants enforced by the
  * constructor are not re-checked. `deepOmit` is therefore best used for
  * comparison/serialisation (`voEqualsExcept`, `deepEqualExcept`), not as
  * a general-purpose clone for behaviour-carrying objects.
@@ -67,7 +67,7 @@ export function deepOmit<T>(value: T, options: DeepOmitOptions): T {
 	// With a path-sensitive predicate, a clone computed under one path must
 	// NOT be reused for the same object reached via another path (the
 	// predicate may decide differently there). The cache then only tracks
-	// in-progress ancestors — pure cycle detection — instead of memoising
+	// in-progress ancestors (pure cycle detection) instead of memoising
 	// completed subtrees. Without a predicate, results are path-independent
 	// and shared references keep deduplicating to one clone. The budget
 	// bounds the per-path expansion (exponential on diamond sharing).
@@ -115,7 +115,7 @@ function omitInternal(
 		);
 	}
 
-	// Arrays: recursively process elements. `Array.isArray` is brand-based —
+	// Arrays: recursively process elements. `Array.isArray` is brand-based,
 	// immune to `Symbol.toStringTag` spoofing, unlike the tag check below.
 	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
@@ -140,7 +140,7 @@ function omitInternal(
 	const tag = Object.prototype.toString.call(obj);
 
 	// Built-in atomic types: clone by type rather than walk. The detection
-	// is brand-verified — a plain object spoofing a built-in tag falls
+	// is brand-verified: a plain object spoofing a built-in tag falls
 	// through to the plain-object walk below.
 	if (isBuiltInObject(obj, tag)) {
 		const builtInClone = cloneBuiltIn(obj, tag);
@@ -196,7 +196,7 @@ function omitInternal(
 
 /**
  * Assigns `value` as an OWN data property on `target` without going through
- * any inherited setter — critically, never invokes the `__proto__` setter
+ * any inherited setter; critically, it never invokes the `__proto__` setter
  * even when `key === "__proto__"`. Required to defeat prototype-pollution
  * payloads that ship `__proto__` as a parsed-JSON own key.
  */
@@ -212,10 +212,10 @@ function assignOwn(target: object, key: PropertyKey, value: unknown): void {
 /**
  * Clones a built-in atomic type by case. Falls back to `structuredClone`
  * for anything not explicitly enumerated (e.g. DataView, TypedArrays,
- * Boolean/Number/String wrappers — all of which `deepEqual` compares by
+ * Boolean/Number/String wrappers, all of which `deepEqual` compares by
  * value). Types that `deepEqual` compares BY REFERENCE (the shared
  * {@link REFERENCE_COMPARED_TAGS} set) are passed through by reference
- * instead — cloning them would make `deepEqualExcept(x, x)` false.
+ * instead; cloning them would make `deepEqualExcept(x, x)` false.
  * Promise/WeakMap/WeakSet additionally cannot be cloned at all
  * (`structuredClone` rejects them).
  */

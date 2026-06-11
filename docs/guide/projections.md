@@ -1,6 +1,6 @@
 # Read-Side Projections
 
-In CQRS the write side and the read side have different shapes. Aggregates are optimised for **invariants and mutation** (Vernon IDDD §10 — small, single-transaction-bounded). Read models are optimised for **the queries your UI actually asks** (denormalised, often spanning multiple aggregate types, often duplicated across views).
+In CQRS the write side and the read side have different shapes. Aggregates are optimised for **invariants and mutation** (Vernon IDDD §10: small, single-transaction-bounded). Read models are optimised for **the queries your UI actually asks** (denormalised, often spanning multiple aggregate types, often duplicated across views).
 
 The bridge between the two is the **transactional outbox + projection** pipeline. The pieces ship in this kit; their composition is your call. This page documents the canonical wiring.
 
@@ -50,19 +50,19 @@ The whole right column is **eventually consistent** with the left. Sub-second la
 
 You don't always. Rules of thumb:
 
-- **Small app, no scale problems** — skip projections. A `QueryHandler` that calls `orderRepository.getById(id)` and returns the aggregate is fine. The pieces in this guide are dormant until you need them.
-- **The read query needs fields from multiple aggregates** — projections start paying for themselves. Loading three aggregates per request to derive one view is the wrong shape.
-- **You need to scale reads independently from writes** — projections are the canonical answer.
-- **Read patterns differ from write patterns** (search, full-text, aggregations, list views) — yes.
+- **Small app, no scale problems**: skip projections. A `QueryHandler` that calls `orderRepository.getById(id)` and returns the aggregate is fine. The pieces in this guide are dormant until you need them.
+- **The read query needs fields from multiple aggregates**: projections start paying for themselves. Loading three aggregates per request to derive one view is the wrong shape.
+- **You need to scale reads independently from writes**: projections are the canonical answer.
+- **Read patterns differ from write patterns** (search, full-text, aggregations, list views): yes.
 
 ### Projection vs Process Manager (Saga)
 
 Both projections and process managers consume events from the outbox. They are different things:
 
-- A **projection** updates a read model — a table you `SELECT` from. It does not issue commands, does not change domain state, does not have invariants. Pure state-of-the-world for queries.
+- A **projection** updates a read model: a table you `SELECT` from. It does not issue commands, does not change domain state, does not have invariants. Pure state-of-the-world for queries.
 - A **process manager / saga** orchestrates multi-step business workflows by **issuing commands** in response to events (e.g. on `OrderConfirmed`, dispatch a `RequestPayment` command; on `PaymentReceived`, dispatch `RequestShipping`). Its own state lives in an aggregate; the kit treats it as a regular aggregate that happens to be driven by events instead of direct user commands.
 
-A single application has many of both. They share the dispatcher pipeline but serve different purposes — this page is about projections only.
+A single application has many of both. They share the dispatcher pipeline but serve different purposes; this page is about projections only.
 
 ## The read-model schema
 
@@ -80,11 +80,11 @@ CREATE TABLE order_list_views (
 );
 ```
 
-You'll typically have several read-model tables per bounded context — one per view shape. `order_list_views`, `order_detail_views`, `order_invoice_views` are three separate tables, each populated by a different projection handler reading the same event stream.
+You'll typically have several read-model tables per bounded context, one per view shape. `order_list_views`, `order_detail_views`, `order_invoice_views` are three separate tables, each populated by a different projection handler reading the same event stream.
 
 ## The dispatcher loop
 
-A background process polls the outbox, dispatches each pending event to one or more projection handlers, and marks the events dispatched on success. The kit doesn't ship a dispatcher — implementations differ too much across runtimes — but the pattern is straightforward.
+A background process polls the outbox, dispatches each pending event to one or more projection handlers, and marks the events dispatched on success. The kit doesn't ship a dispatcher (implementations differ too much across runtimes), but the pattern is straightforward.
 
 ### Polling-based dispatcher
 
@@ -112,7 +112,7 @@ async function dispatcherLoop<Evt extends AnyDomainEvent>(
         await handle(record.event);
         dispatched.push(record.dispatchId);
       } catch (err) {
-        // Log and continue — the event stays pending and will be
+        // Log and continue; the event stays pending and will be
         // re-attempted on the next tick. For a poison message you
         // want a max-retry counter on the outbox row or a dead-letter
         // strategy; both are storage-specific and out of scope here.
@@ -127,7 +127,7 @@ async function dispatcherLoop<Evt extends AnyDomainEvent>(
 }
 ```
 
-Run this in a long-lived worker, a `setInterval` in a single-process Node app, or a cron job for batchier workloads. Edge runtimes typically delegate to a separate worker — `setInterval` in a Cloudflare Worker invocation won't survive past the request.
+Run this in a long-lived worker, a `setInterval` in a single-process Node app, or a cron job for batchier workloads. Edge runtimes typically delegate to a separate worker: `setInterval` in a Cloudflare Worker invocation won't survive past the request.
 
 ### Queue-based alternative
 
@@ -136,7 +136,7 @@ For higher throughput or multi-tenant fanout, replace polling with a queue:
 1. The outbox dispatcher pushes each pending event to a durable queue (SQS, NATS, Redis Streams) and marks dispatched on enqueue success.
 2. Projection handlers subscribe to the queue and process events independently.
 
-This shifts the back-pressure problem from "polling rate" to "queue capacity" and lets you parallelise projections across consumers — at the cost of an extra moving piece.
+This shifts the back-pressure problem from "polling rate" to "queue capacity" and lets you parallelise projections across consumers, at the cost of an extra moving piece.
 
 ## Projection handlers
 
@@ -204,11 +204,11 @@ class OrderListProjection {
 
 A few things to notice:
 
-1. **Routing is on `event.type`** — same pattern as `EventSourcedAggregate.handlers`. The dispatcher hands the projection a typed `OrderEvent`; the handler narrows via the discriminator.
+1. **Routing is on `event.type`**, the same pattern as `EventSourcedAggregate.handlers`. The dispatcher hands the projection a typed `OrderEvent`; the handler narrows via the discriminator.
 2. **One projection class per read-model table.** `OrderListProjection` only touches `order_list_views`. A separate `OrderDetailProjection` would handle the same events but write to `order_detail_views`. This keeps each projection's failure mode isolated.
-3. **Many projections from one outbox.** The dispatcher can route the same event to multiple projections — each gets its own `markDispatched` accounting (use a separate "subscription cursor" per projection, or extend `Outbox` with multi-consumer tracking if your store supports it).
+3. **Many projections from one outbox.** The dispatcher can route the same event to multiple projections, and each gets its own `markDispatched` accounting (use a separate "subscription cursor" per projection, or extend `Outbox` with multi-consumer tracking if your store supports it).
 
-### Idempotency — the `last_event_id` trick
+### Idempotency: the `last_event_id` trick
 
 The dispatcher may retry on partial failure (process killed between `handle` succeeding and `markDispatched` succeeding). The projection handler MUST be safe to apply the same event twice.
 
@@ -216,19 +216,19 @@ The simplest pattern is the `last_event_id` column above:
 
 - Every UPDATE / UPSERT carries `WHERE last_event_id <> incoming.eventId`.
 - A retry of the same event is a no-op (the predicate fails; zero rows affected).
-- This works regardless of whether the events are commutative (`OrderItemAdded` adding `+5` to a total is NOT commutative — applying it twice would double-count).
+- This works regardless of whether the events are commutative (`OrderItemAdded` adding `+5` to a total is NOT commutative: applying it twice would double-count).
 
-For projections that span aggregates (a `customer_with_recent_orders_view` updated by both `CustomerCreated` and `OrderCreated`), the **same single column still works**: `eventId` is globally unique, so `WHERE last_event_id <> incoming.eventId` skips duplicates regardless of source. Per-aggregate tracking columns are only needed if you also need **per-stream ordering guarantees** ("apply `CustomerCreated` before any `OrderCreated` for that customer") — and that's a separate concern from idempotency. The simplest pattern for ordering is a `processed_events(projection_id, event_id)` audit table queried before applying.
+For projections that span aggregates (a `customer_with_recent_orders_view` updated by both `CustomerCreated` and `OrderCreated`), the **same single column still works**: `eventId` is globally unique, so `WHERE last_event_id <> incoming.eventId` skips duplicates regardless of source. Per-aggregate tracking columns are only needed if you also need **per-stream ordering guarantees** ("apply `CustomerCreated` before any `OrderCreated` for that customer"), and that's a separate concern from idempotency. The simplest pattern for ordering is a `processed_events(projection_id, event_id)` audit table queried before applying.
 
 ### Pure projections
 
-Projections do not have invariants. They do not return `DomainError`. They do not validate. They are stateless functions of `(currentRow, event) → newRow`. The closest the kit gets to encoding this is: a `ProjectionHandler<E>` is just `(event: E) => Promise<void>`. There is no library type for it because there is nothing to constrain — projections are just functions.
+Projections do not have invariants. They do not return `DomainError`. They do not validate. They are stateless functions of `(currentRow, event) → newRow`. The closest the kit gets to encoding this is: a `ProjectionHandler<E>` is just `(event: E) => Promise<void>`. There is no library type for it because there is nothing to constrain; projections are just functions.
 
 If a projection handler throws, **let it throw**. The dispatcher will leave the event in the outbox and retry next tick. Don't catch-and-swallow inside the handler; that silently drops events from the read model.
 
 ## QueryHandlers read from projections
 
-Once a read model exists, the `QueryHandler` reads from it directly — **not** from the aggregate repository:
+Once a read model exists, the `QueryHandler` reads from it directly, **not** from the aggregate repository:
 
 ```ts
 import type { QueryHandler } from "@shirudo/ddd-kit";
@@ -276,13 +276,13 @@ Both shapes coexist in one codebase. Single-id lookups can hit the aggregate; li
 
 The write→outbox→dispatcher→projection→query chain has measurable lag. In a healthy in-process system, sub-second is typical. Under load, it can stretch.
 
-The library does not hide this — eventual consistency is a fact of distributed systems, not a bug to abstract over. UX strategies:
+The library does not hide this: eventual consistency is a fact of distributed systems, not a bug to abstract over. UX strategies:
 
-1. **Optimistic UI updates** — after a successful command, update the local UI without waiting for the projection. The next refresh confirms.
-2. **Read-your-own-writes via the aggregate** — for the user who just wrote, query the aggregate directly (write-side) instead of the projection. Inconsistent everywhere else, but the writer sees their own action immediately.
-3. **Bounded wait** — poll the projection for up to N ms; if the expected change hasn't landed, return the stale view.
+1. **Optimistic UI updates**: after a successful command, update the local UI without waiting for the projection. The next refresh confirms.
+2. **Read-your-own-writes via the aggregate**: for the user who just wrote, query the aggregate directly (write-side) instead of the projection. Inconsistent everywhere else, but the writer sees their own action immediately.
+3. **Bounded wait**: poll the projection for up to N ms; if the expected change hasn't landed, return the stale view.
 
-Vernon discusses these in IDDD §4. None of them require library support — they are application-layer decisions.
+Vernon discusses these in IDDD §4. None of them require library support; they are application-layer decisions.
 
 ## The full topology
 
@@ -308,7 +308,7 @@ const orderListProjection = new OrderListProjection(db);
 const controller = new AbortController();
 void dispatcherLoop(outbox, orderListProjection.handle, controller.signal);
 
-// Command path — writes go through withCommit -> outbox
+// Command path: writes go through withCommit -> outbox
 commands.register("CreateOrder", async (cmd) => {
   return withCommit({ outbox, bus, scope }, async (tx) => {
     const orderRepository = makeOrderRepository(tx);
@@ -321,7 +321,7 @@ commands.register("CreateOrder", async (cmd) => {
   });
 });
 
-// Query path — reads from the projection
+// Query path: reads from the projection
 queries.register("GetOrderList", getOrderListHandler);
 ```
 
@@ -339,8 +339,8 @@ If all three hold, the read model converges to a function of the event history. 
 - **No outbox-dispatcher implementation.** Runtime-specific (Node `setInterval`, Cloudflare cron triggers, AWS Lambda + EventBridge, etc.). Pseudocode above is the contract.
 - **No read-model storage abstraction.** Projections write to your existing database. Pick whatever DDL/ORM your write side already uses, or a separate read-store if you want true scale separation.
 - **No event-replay tooling for rebuilding projections.** Projections converge to the event history; rebuilding (after a schema change, or when adding a new view) means re-applying the history. The source you replay from depends on whether you keep one:
-  - **Event-sourced aggregates** — the event store IS the durable history. Replay reads from it directly. The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
-  - **State-stored aggregates** — there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table the dispatcher copies events to before delivery.
+  - **Event-sourced aggregates**: the event store IS the durable history. Replay reads from it directly. The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
+  - **State-stored aggregates**: there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table the dispatcher copies events to before delivery.
   Either path is a consumer decision. The kit's outbox is a transient handoff buffer, not a durable event log.
 
 The kit's role is the **write-side guarantee** (`withCommit` → outbox is transactional; projections see every event ≥ once). Everything to the right of the outbox is consumer territory.

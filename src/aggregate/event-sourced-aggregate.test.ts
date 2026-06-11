@@ -313,7 +313,7 @@ describe("EventSourcedAggregate", () => {
 
 		it("MissingHandlerError is a BaseError but NOT a DomainError (programming bug)", () => {
 			// MissingHandlerError signals a subclass forgot to register a
-			// handler — that's a configuration / programming error, not a
+			// handler: that's a configuration / programming error, not a
 			// domain-invariant violation. It must not be catchable via
 			// `instanceof DomainError` at the App-Service boundary, so a
 			// 'catch domain errors → HTTP 400' handler can't mask the bug.
@@ -406,7 +406,7 @@ describe("EventSourcedAggregate", () => {
 				),
 			).toThrow("handler boom");
 
-			// State and version unchanged — no pending event added
+			// State and version unchanged, no pending event added
 			expect(aggregate.stateSnapshot()).toEqual(before);
 			expect(aggregate.versionSnapshot()).toBe(versionBefore);
 			expect(aggregate.pendingEvents).toHaveLength(0);
@@ -415,7 +415,7 @@ describe("EventSourcedAggregate", () => {
 
 	describe("corrupt event types colliding with Object.prototype members", () => {
 		// The handlers map is an object literal, so a naive property get for
-		// event.type === "toString" returns Object.prototype.toString — which
+		// event.type === "toString" returns Object.prototype.toString, which
 		// passes a truthiness check and gets invoked as a handler, silently
 		// corrupting state. All such types must yield MissingHandlerError.
 		class TrapAggregate extends EventSourcedAggregate<
@@ -500,7 +500,7 @@ describe("EventSourcedAggregate", () => {
 			]);
 
 			expect(result.isErr()).toBe(true);
-			// The valid first event must not leak into state — same
+			// The valid first event must not leak into state, the same
 			// all-or-nothing contract as restoreFromSnapshotWithEvents.
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 			expect(aggregate.version).toBe(0);
@@ -660,7 +660,7 @@ describe("EventSourcedAggregate", () => {
 		});
 
 		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
-			// NEGATIVE example — this is the bug pattern observed in
+			// NEGATIVE example: this is the bug pattern observed in
 			// production usage. Override markPersisted directly, forget
 			// super, framework cleanup never runs, next withCommit
 			// re-dispatches the same events.
@@ -683,7 +683,7 @@ describe("EventSourcedAggregate", () => {
 			// THE BUG: events still in pendingEvents.
 			expect(buggy.pendingEvents.length).toBeGreaterThan(0);
 
-			// ✅ Same intent via onPersisted — framework cleans up first.
+			// ✅ Same intent via onPersisted: framework cleans up first.
 			class FixedAggregate extends TestEventSourcedAggregate {
 				public sideEffectFired = false;
 				protected override onPersisted(_version: Version): void {
@@ -768,7 +768,7 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate2.version).toBe(2);
 		});
 
-		it("should deep-clone the snapshot when restoring — caller mutations don't leak in", () => {
+		it("should deep-clone the snapshot when restoring: caller mutations don't leak in", () => {
 			const snapshot: AggregateSnapshot<TestState> = {
 				state: { value: 42, status: "active" },
 				version: 5 as Version,
@@ -781,7 +781,7 @@ describe("EventSourcedAggregate", () => {
 
 			expect(result.isOk()).toBe(true);
 
-			// Mutate the original snapshot AFTER restore — the aggregate must be isolated.
+			// Mutate the original snapshot AFTER restore. The aggregate must be isolated.
 			snapshot.state.value = 999;
 			snapshot.state.status = "inactive";
 
@@ -1089,7 +1089,7 @@ describe("EventSourcedAggregate", () => {
 
 			const result = agg.loadFromHistory(history);
 			expect(result.isErr()).toBe(true);
-			// The "never persisted" sentinel survives a failed load — a
+			// The "never persisted" sentinel survives a failed load: a
 			// follow-up save() must still route to INSERT, not UPDATE
 			// against a baseline that loadFromHistory never wrote.
 			expect(agg.persistedVersion).toBeUndefined();

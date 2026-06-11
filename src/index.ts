@@ -24,8 +24,8 @@ export * from "./repo/repository";
 export * from "./repo/scope";
 // Utils
 export * from "./utils";
-// Result types come from the peer dependency `@shirudo/result` — import directly from there.
-// `ValidationError` comes from the peer dependency `@shirudo/base-error` — import directly from there.
+// Result types come from the peer dependency `@shirudo/result`; import directly from there.
+// `ValidationError` comes from the peer dependency `@shirudo/base-error`; import directly from there.
 // RFC 9457 Problem Details presenters live in the opt-in `@shirudo/ddd-kit/http` entry point.
 // Validation
 export * from "./validation";

@@ -45,7 +45,7 @@ describe("CommandBus", () => {
 			bus.register("CreateOrder", async () => ok("a"));
 
 			// Silent overwrite turns the first handler into dead code with
-			// no signal — wiring bugs must surface at startup.
+			// no signal; wiring bugs must surface at startup.
 			expect(() =>
 				bus.register("CreateOrder", async () => ok("b")),
 			).toThrow(/already registered/);
@@ -219,7 +219,7 @@ describe("CommandBus", () => {
 			};
 			const bus = new CommandBus<Commands>();
 
-			// no @ts-expect-error — must compile cleanly
+			// no @ts-expect-error: must compile cleanly
 			bus.register("CreateOrder", async () => ok("order-123"));
 		});
 
