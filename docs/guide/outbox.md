@@ -57,8 +57,8 @@ await withCommit({ scope, outbox }, async () => ({
 }));
 ```
 
-::: info Not Fowler's full Unit of Work
-`TransactionScope` is intentionally **not** Fowler's UoW: no change tracking, no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time flush. That's the ORM's job; competing with Prisma / Drizzle / TypeORM on their home turf only creates incompatibility. The kit stays out of it.
+::: info The scope stays minimal; the Unit of Work lives above it
+`TransactionScope` itself does no change tracking (`registerDirty` / `registerNew` / `registerDeleted`) and no commit-time flush — row-level change detection is the ORM's home turf. The kit's equivalents live in the layers above: the aggregate detects its own changes ([`changedKeys` / `hasChanges`](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges)), `withCommit` orchestrates the commit lifecycle, and the opt-in [`UnitOfWork` facade](./unit-of-work.md) adds tx-bound repositories, enrollment, and a per-operation identity map. See [the revised design decision](./design-decisions.md#transactionscope-stays-minimal-the-unit-of-work-lives-above-it).
 :::
 
 ## `Outbox<Evt>`

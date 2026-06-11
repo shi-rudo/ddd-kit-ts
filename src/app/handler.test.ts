@@ -314,6 +314,44 @@ describe("withCommit", () => {
 		expect(b.pendingEvents).toHaveLength(0);
 	});
 
+	it("deleted-marked aggregates: events harvested, pendingEvents cleared, but markPersisted (and onPersisted) never fires", async () => {
+		// Deletion events must reach the outbox atomically with the row
+		// removal, but the post-save lifecycle is a semantic lie for a
+		// deleted row: a user onPersisted hook doing cache-fill would
+		// resurrect the deleted aggregate in the cache.
+		const deletionEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "del-1" },
+			{ aggregateId: "del-1", aggregateType: "MockOrder" },
+		);
+		const savedEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "sav-1" },
+			{ aggregateId: "sav-1", aggregateType: "MockOrder" },
+		);
+		const deletedAgg = createMockAggregate([deletionEvent]);
+		const savedAgg = createMockAggregate([savedEvent]);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({
+				result: "ok",
+				aggregates: [savedAgg, deletedAgg],
+				deleted: [deletedAgg],
+			}),
+		);
+
+		// Both aggregates' events were harvested, in array order.
+		expect(outbox.added).toEqual([[savedEvent, deletionEvent]]);
+		// Saved aggregate: full post-commit lifecycle.
+		expect(savedAgg.markPersistedCalls).toBe(1);
+		// Deleted aggregate: events cleared (no re-emission on a later
+		// commit), but NO markPersisted → no onPersisted hook.
+		expect(deletedAgg.markPersistedCalls).toBe(0);
+		expect(deletedAgg.pendingEvents).toHaveLength(0);
+	});
+
 	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
 		// Subscribers will come to rely on this. Concatenation is:
 		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.

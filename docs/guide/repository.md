@@ -63,6 +63,10 @@ The reconstituted aggregate has `pendingEvents` empty by construction, so no spu
 
 This is Fowler's **Identity Map** pattern (*Patterns of Enterprise Application Architecture*, 2002), implicitly assumed by Evans, Vernon, Khononov, and the broader DDD/CQRS-ES literature. The library relies on it for `withCommit`'s aggregate-dedupe to be conceptually sound, but the kit's interface doesn't enforce it; your `IRepository` implementation has to maintain it.
 
+::: tip The Unit of Work ships an `IdentityMap`
+Repositories built for the [`UnitOfWork` facade](./unit-of-work.md#identity-map) get a per-operation `session.identityMap` (class-keyed, deletion-tombstoned, cleared on close) instead of hand-rolling the per-UoW `Map` shown below. The hand-rolled pattern remains correct for `withCommit`-only setups.
+:::
+
 **The contract.** Two `getById(id)` calls (or `getByIdOrFail(id)`) within the same Unit of Work (typically the same `withCommit` invocation, or any sequence sharing a transactional scope) MUST return the **same in-memory instance**.
 
 **Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `getById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** (i.e. your repository violates the Identity Map contract), the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
@@ -120,6 +124,10 @@ Every aggregate exposes two version fields with distinct roles:
 
 The two diverge as soon as a domain method mutates the aggregate: `version` advances; `persistedVersion` stays at the load-time / last-save baseline.
 
+::: warning `version` is a mutation sequence, not a commit revision
+Every version-bumping mutation (`commit()`, `setState(_, true)`, each `apply()` on an event-sourced aggregate) advances `version` by one. Three domain methods in one unit of work advance it by three: a baseline of 7 commits as 10, **not** 8. This is deliberate — it matches the event-sourced convention where version IS the mutation count — and it is OCC-correct either way, because the predicate compares against the load-time baseline (`WHERE version = 7`), never against deltas. If your tests assume `+1 per commit`, they are testing the wrong convention.
+:::
+
 ```ts
 // Drizzle-flavoured save
 async save(aggregate: Order): Promise<void> {
@@ -176,6 +184,8 @@ An aggregate whose state spans multiple tables (a root row plus N child-collecti
 
 - **`aggregate.changedKeys: ReadonlySet<keyof TState & string>`**: the top-level state keys whose value (or presence) changed since the aggregate was loaded (`markRestored`) or last saved (`markPersisted`). A never-persisted aggregate reports **all** keys: the insert path.
 - **`aggregate.hasChanges: boolean`**: `true` when the aggregate has never been persisted, the version moved past `persistedVersion`, there are unflushed `pendingEvents`, any key is dirty, or — for keyless states the per-key diff cannot see (primitive `TState`, zero-own-key objects) — the state reference changed.
+
+To be precise about the two signals, because the names invite conflation: **`hasChanges` means commit-relevant work exists** (skip the save only when it is `false`); **`changedKeys` is the state-write signal** (which tables to touch). `pendingEvents` can make `hasChanges` true **without** requiring a row update or a version bump — an event recorded via the decoupled `addDomainEvent` path (the deletion pattern below) must still ride through `withCommit` to reach the outbox, even though no row changes. Events alone never bump the version and never appear in `changedKeys`.
 
 There is no proxy magic and no deep diff. `setState()` replaces state immutably and the state object is shallow-frozen, so an unchanged top-level sub-object keeps its reference identity across mutations; `changedKeys` is a shallow per-key `!==` comparison against the state reference captured at load time. O(top-level keys), exact under the kit's own immutability convention.
 
@@ -235,6 +245,10 @@ Dirty tracking is exactly as sound as the kit's existing immutability convention
 ### Deletion and Domain Events
 
 `delete(id)` is **pure persistence**: it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from.
+
+::: tip OCC applies to deletes too
+When a delete races with concurrent updates in a way your domain cares about (cancel-vs-modify races), guard the delete with the same version predicate as updates: `DELETE FROM orders WHERE id = $id AND version = $persistedVersion`, throwing `ConcurrencyConflictError` on zero affected rows. An unguarded delete is last-write-wins by construction — acceptable for GC-style cleanup (Pattern 3), rarely acceptable for user-initiated deletion of contended aggregates.
+:::
 
 Before reaching for it, ask whether *"delete"* is the right domain verb at all. Most user-facing "deletes" are something else in the domain language: *cancel*, *archive*, *close*, *deactivate*, *terminate*, *withdraw*, *expire*. Those are **state transitions**, not row removals; they have proper names in the ubiquitous language and they record events. If your use case has a proper name, use it.
 

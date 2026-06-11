@@ -1,9 +1,10 @@
 import { BaseError } from "@shirudo/base-error";
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { InfrastructureError } from "../core/errors";
+import { AggregateDeletedError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
+import { type AggregateClass, IdentityMap } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
 import { withCommit } from "./handler";
 
@@ -63,23 +64,6 @@ export class TransactionClosedError extends BaseError<"TransactionClosedError"> 
 }
 
 /**
- * Thrown by `UnitOfWorkSession.enrollSaved` when the aggregate was
- * already enrolled as deleted in the same unit of work. Deletion is
- * final within an operation: saving a deleted aggregate would write a
- * row the delete just removed (or resurrect it), which is always a
- * use-case bug. Extends `BaseError` directly: crash loud.
- */
-export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
-	constructor(public readonly aggregateId: string) {
-		super(
-			`Aggregate ${aggregateId} was enrolled as deleted in this unit of ` +
-				"work and cannot be saved again. Deletion is final within an " +
-				"operation; if the aggregate must live, do not delete it.",
-		);
-	}
-}
-
-/**
  * The unit of work failed AFTER the work callback completed
  * successfully: during the event harvest, the outbox write, or the
  * transaction commit itself. The kit cannot see inside
@@ -89,7 +73,12 @@ export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
  * `InfrastructureError`: the business logic ran to completion; the
  * persistence boundary failed. The transaction rolled back (or never
  * committed), no aggregate was marked persisted, and pending events
- * survive on the aggregates, so the operation is safe to retry.
+ * survive on the aggregates — the operation left no partial state
+ * behind. **Whether a retry helps depends on the cause**: a commit-
+ * time serialization failure is transient, but `withCommit`'s harvest
+ * guard (an event missing `aggregateId` / `aggregateType` — a
+ * programming bug) also lands here and will fail deterministically on
+ * every retry. Inspect the `cause` before routing into retry logic.
  */
 export class CommitError extends InfrastructureError<"CommitError"> {
 	constructor(cause: unknown) {
@@ -141,14 +130,21 @@ export class RollbackError extends InfrastructureError<"RollbackError"> {
  * tests pin it once.
  *
  * Contract for repository implementations:
+ * - `getById(id)` checks `identityMap.get` BEFORE hydrating, treats
+ *   `identityMap.isDeleted` as not-found (`null`), and registers the
+ *   hydrated instance after - two loads of the same aggregate in one
+ *   unit of work must return the same instance.
  * - `save(aggregate)` calls {@link enrollSaved} (after the write, or
  *   before - order inside the transaction does not matter; enrollment
  *   is idempotent per instance, mirroring `withCommit`'s reference
  *   dedupe).
- * - `delete(aggregate)` calls {@link enrollDeleted}: the aggregate's
- *   recorded deletion events are still harvested into the outbox, and
- *   saving the same instance later in this unit of work throws
- *   {@link AggregateDeletedError}.
+ * - `delete(aggregate)` calls {@link enrollDeleted} - ONE call does all
+ *   the deletion bookkeeping: the identity-map entry is removed and
+ *   tombstoned automatically (keyed on the instance's concrete class),
+ *   the recorded deletion events are still harvested into the outbox,
+ *   and saving or re-registering the aggregate (same instance OR a
+ *   re-created one with the same type+id) later in this unit of work
+ *   throws `AggregateDeletedError`.
  *
  * The use case can also enroll manually via `context.session` for the
  * rare write that bypasses a repository.
@@ -156,6 +152,14 @@ export class RollbackError extends InfrastructureError<"RollbackError"> {
 export interface UnitOfWorkSession<
 	Evt extends AnyDomainEvent = AnyDomainEvent,
 > {
+	/**
+	 * The per-operation Identity Map (Fowler): one aggregate type+id,
+	 * one in-memory instance. Created fresh per `run()`, cleared on
+	 * close; accessing it after close throws
+	 * {@link TransactionClosedError}.
+	 */
+	readonly identityMap: IdentityMap;
+
 	/** Enroll an aggregate that was (or will be) written in this unit of work. */
 	enrollSaved(aggregate: IAggregateRoot<Id<string>, Evt>): void;
 
@@ -163,15 +167,15 @@ export interface UnitOfWorkSession<
 	 * Enroll an aggregate whose row was (or will be) deleted in this
 	 * unit of work. Its pending events (e.g. a recorded deletion event)
 	 * are harvested like any other; re-saving the instance afterwards
-	 * throws {@link AggregateDeletedError}.
+	 * throws `AggregateDeletedError`.
 	 */
 	enrollDeleted(aggregate: IAggregateRoot<Id<string>, Evt>): void;
 }
 
 /**
  * What the work callback receives: repositories already bound to the
- * live transaction, the raw transaction handle (for writes no
- * repository covers), and the enrollment session.
+ * live transaction, the enrollment session, and — deliberately named to
+ * look like the escape hatch it is — the raw transaction handle.
  *
  * All members throw {@link TransactionClosedError} once `run()` has
  * settled; do not let the context escape the callback.
@@ -182,7 +186,19 @@ export interface UnitOfWorkContext<
 	Evt extends AnyDomainEvent = AnyDomainEvent,
 > {
 	readonly repositories: TRepos;
-	readonly transaction: TCtx;
+
+	/**
+	 * **Escape hatch — you are leaving the unit of work's guarantees.**
+	 * A write issued on the raw handle bypasses the repository contract,
+	 * enrollment (its aggregate's events are NOT harvested unless you
+	 * also call `session.enrollSaved`), and the identity map (a later
+	 * `getById` of the same aggregate hydrates a SECOND instance —
+	 * double harvest, double `markPersisted`). Use it only for writes no
+	 * repository covers, pair it with manual enrollment, and prefer
+	 * adding a repository method whenever one could exist.
+	 */
+	readonly rawTransaction: TCtx;
+
 	readonly session: UnitOfWorkSession<Evt>;
 }
 
@@ -244,11 +260,16 @@ export interface UnitOfWorkDeps<
  *   {@link TransactionClosedError}, {@link CommitError},
  *   {@link RollbackError}, {@link AggregateDeletedError}.
  *
+ * - **A per-operation Identity Map** on the session: repositories
+ *   check it before hydrating and register after, so one type+id maps
+ *   to one in-memory instance per unit of work (the contract
+ *   `withCommit`'s reference-dedupe relies on, now shipped instead of
+ *   merely documented).
+ *
  * What it deliberately does NOT do (v1): no auto-flush (explicit
  * `save()` only - `hasChanges` makes a redundant save a cheap no-op),
- * no savepoints, no nested-transaction joining, no identity map yet
- * (planned as the next phase). `withCommit` with hand-rolled repos
- * remains fully supported; this facade is opt-in.
+ * no savepoints, no nested-transaction joining. `withCommit` with
+ * hand-rolled repos remains fully supported; this facade is opt-in.
  *
  * **Instance discipline:** one instance owns one logical operation at
  * a time. `run()` while a run is active throws
@@ -308,7 +329,7 @@ export class UnitOfWork<
 		}
 		this._active = true;
 
-		const session = new Session<Evt>();
+		let session: Session<Evt> | undefined;
 		let workCompleted = false;
 		let workThrew = false;
 		let workError: unknown;
@@ -322,12 +343,33 @@ export class UnitOfWork<
 					onPublishError: this.deps.onPublishError,
 				},
 				async (tx) => {
-					const repositories = this.buildRepositories(tx, session);
-					const context = makeContext(repositories, tx, session);
+					// Fresh state per scope invocation: a TransactionScope that
+					// retries its callback (serialization-failure retry wrappers)
+					// re-runs this fn, and state from the rolled-back attempt —
+					// enrollments, identity-map entries, error flags — must not
+					// leak into the retry. The previous attempt's session is
+					// closed so its leaked contexts turn loud.
+					session?.close();
+					const s = new Session<Evt>();
+					session = s;
+					workCompleted = false;
+					workThrew = false;
+					workError = undefined;
+
+					const repositories = this.buildRepositories(tx, s);
+					const context = makeContext(repositories, tx, s);
 					try {
 						const result = await work(context);
 						workCompleted = true;
-						return { result, aggregates: session.enrolledAggregates };
+						// Seal immediately: the aggregates snapshot below is what
+						// gets harvested. A late enrollment (an un-awaited
+						// repo.save() promise still in flight) must throw
+						// TransactionClosedError instead of being silently
+						// accepted-but-never-harvested.
+						const aggregates = s.enrolledAggregates;
+						const deleted = s.deletedAggregates;
+						s.close();
+						return { result, aggregates, deleted };
 					} catch (error) {
 						workThrew = true;
 						workError = error;
@@ -355,7 +397,7 @@ export class UnitOfWork<
 			// (e.g. the scope failed to even open a transaction).
 			throw error;
 		} finally {
-			session.close();
+			session?.close();
 			this._active = false;
 		}
 	}
@@ -380,11 +422,28 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	// then preserves per-aggregate emission order).
 	private readonly _enrolled = new Set<IAggregateRoot<Id<string>, Evt>>();
 	private readonly _deleted = new Set<IAggregateRoot<Id<string>, Evt>>();
+	private readonly _identityMap = new IdentityMap();
 	private _closed = false;
+
+	public get identityMap(): IdentityMap {
+		this.assertOpen("session.identityMap");
+		return this._identityMap;
+	}
 
 	public enrollSaved(aggregate: IAggregateRoot<Id<string>, Evt>): void {
 		this.assertOpen("session.enrollSaved");
-		if (this._deleted.has(aggregate)) {
+		// Two gates, one invariant: the instance set catches the same
+		// reference; the identity-map tombstone (keyed on the instance's
+		// concrete class) catches a DIFFERENT instance with the same
+		// type+id — e.g. one re-created via the static factory after the
+		// delete. Both mean "deleted is final within this operation".
+		if (
+			this._deleted.has(aggregate) ||
+			this._identityMap.isDeleted(
+				aggregate.constructor as AggregateClass<unknown>,
+				aggregate.id,
+			)
+		) {
 			throw new AggregateDeletedError(String(aggregate.id));
 		}
 		this._enrolled.add(aggregate);
@@ -393,10 +452,22 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	public enrollDeleted(aggregate: IAggregateRoot<Id<string>, Evt>): void {
 		this.assertOpen("session.enrollDeleted");
 		this._deleted.add(aggregate);
+		// One call does ALL the deletion bookkeeping: the identity-map
+		// entry is removed and tombstoned automatically (keyed on the
+		// instance's concrete class), so repositories do not need a
+		// second manual identityMap.delete() call — a forgotten leg of a
+		// two-call protocol would silently weaken the deletion gate.
+		// Assumption (documented on IdentityMap): repositories key the
+		// map with the same concrete class their factories produce.
+		this._identityMap.delete(
+			aggregate.constructor as AggregateClass<unknown>,
+			aggregate.id,
+		);
 		// Deleted aggregates stay in the harvest set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
-		// delete with event harvest). The post-commit markPersisted on a
-		// discarded instance is harmless.
+		// delete with event harvest). withCommit receives them in the
+		// `deleted` marker set and skips markPersisted for them, so the
+		// post-save onPersisted hook never fires for a deletion.
 		this._enrolled.add(aggregate);
 	}
 
@@ -406,8 +477,19 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		return [...this._enrolled];
 	}
 
+	public get deletedAggregates(): ReadonlyArray<
+		IAggregateRoot<Id<string>, Evt>
+	> {
+		return [...this._deleted];
+	}
+
 	public close(): void {
 		this._closed = true;
+		// Defensive: a leaked direct IdentityMap reference must not serve
+		// stale instances into a later operation (that would silently
+		// bypass OCC). The session getter already throws after close;
+		// clearing covers refs captured before.
+		this._identityMap.clear();
 	}
 
 	public assertOpen(operation: string): void {
@@ -427,8 +509,8 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
 			session.assertOpen("context.repositories");
 			return repositories;
 		},
-		get transaction(): TCtx {
-			session.assertOpen("context.transaction");
+		get rawTransaction(): TCtx {
+			session.assertOpen("context.rawTransaction");
 			return transaction;
 		},
 		session,
@@ -437,10 +519,17 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
 
 /**
  * Walks `error`'s standard `cause` chain looking for `target` by
- * reference. Bounded and cycle-safe: arbitrary driver errors may carry
- * arbitrary cause shapes.
+ * reference. Bounded and cycle-safe, and hardened for arbitrary driver
+ * errors: a `target` of `undefined`/`null` never matches (every error
+ * without a `cause` property would otherwise "contain" a thrown
+ * `undefined`), and a throwing `cause` getter (lazy deserialization,
+ * revoked Proxy) is treated as no-match instead of replacing the real
+ * failure with the getter's exception.
  */
 function causeChainContains(error: unknown, target: unknown): boolean {
+	if (target === undefined || target === null) {
+		return false;
+	}
 	const seen = new Set<unknown>();
 	let current: unknown = error;
 	while (
@@ -449,7 +538,12 @@ function causeChainContains(error: unknown, target: unknown): boolean {
 		!seen.has(current)
 	) {
 		seen.add(current);
-		const next: unknown = (current as { cause?: unknown }).cause;
+		let next: unknown;
+		try {
+			next = (current as { cause?: unknown }).cause;
+		} catch {
+			return false;
+		}
 		if (next === target) {
 			return true;
 		}

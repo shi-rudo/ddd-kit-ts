@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
-import { ConcurrencyConflictError } from "../core/errors";
+import {
+	AggregateDeletedError,
+	ConcurrencyConflictError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {
-	AggregateDeletedError,
 	CommitError,
 	NestedUnitOfWorkError,
 	RollbackError,
@@ -211,10 +213,10 @@ describe("UnitOfWork", () => {
 				},
 			});
 
-			await uow.run(async ({ repositories, transaction }) => {
+			await uow.run(async ({ repositories, rawTransaction }) => {
 				expect(repositories.a.handle).toBe(tx);
 				expect(repositories.b.handle).toBe(tx);
-				expect(transaction).toBe(tx);
+				expect(rawTransaction).toBe(tx);
 				return undefined;
 			});
 
@@ -375,6 +377,92 @@ describe("UnitOfWork", () => {
 		});
 	});
 
+	describe("session seal + scope retries", () => {
+		it("an enrollment arriving AFTER the callback resolved throws instead of being silently dropped", async () => {
+			// The un-awaited-save footgun: `void repo.save(order)` inside the
+			// callback can execute its enrollSaved while withCommit is still
+			// writing the outbox. The harvest snapshot is already taken; a
+			// silently-accepted enrollment would never reach the outbox. The
+			// session is sealed the moment the callback resolves, so the late
+			// enrollment crashes loud instead.
+			const lateAggregate = createMockAggregate("late-1", [
+				testEvent("late-1"),
+			]);
+			let leakedSession!: UnitOfWorkSession<TestEvent>;
+			let lateEnrollError: unknown;
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {},
+				getPending: async () => [],
+				markDispatched: async () => {},
+			};
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					const result = await fn(undefined);
+					// We are now past the callback (and past harvest), still
+					// inside the transaction - the window in question.
+					try {
+						leakedSession.enrollSaved(lateAggregate);
+					} catch (e) {
+						lateEnrollError = e;
+					}
+					return result;
+				},
+			};
+			const { uow } = createUow({ scope, outbox });
+
+			await uow.run(async ({ session }) => {
+				leakedSession = session;
+				return undefined;
+			});
+
+			expect(lateEnrollError).toBeInstanceOf(TransactionClosedError);
+		});
+
+		it("a retrying TransactionScope gets a FRESH session per attempt: rolled-back enrollments never reach the outbox", async () => {
+			// Serialization-retry wrappers (CockroachDB-style) re-invoke the
+			// transactional callback. State from the aborted attempt -
+			// enrollments, identity-map entries, error flags - must not leak
+			// into the retry.
+			const retryableFailure = new Error("40001 serialization failure");
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch (e) {
+						if (e === retryableFailure) {
+							return await fn(undefined); // retry
+						}
+						throw e;
+					}
+				},
+			};
+			const outbox = createMockOutbox();
+			const { uow } = createUow({ scope, outbox });
+			const event1 = testEvent("a-1");
+			const event2 = testEvent("a-2");
+			const attempt1Aggregate = createMockAggregate("a-1", [event1]);
+			const attempt2Aggregate = createMockAggregate("a-2", [event2]);
+			let attempt = 0;
+
+			const result = await uow.run(async ({ repositories }) => {
+				attempt += 1;
+				if (attempt === 1) {
+					await repositories.orders.save(attempt1Aggregate);
+					throw retryableFailure; // attempt 1 rolls back
+				}
+				await repositories.orders.save(attempt2Aggregate);
+				return "second-attempt";
+			});
+
+			expect(result).toBe("second-attempt");
+			// Only the committed attempt's events were harvested; the
+			// rolled-back attempt's enrollment did not leak into the retry.
+			expect(outbox.added).toEqual([[event2]]);
+			expect(attempt1Aggregate.markPersistedCalls).toBe(0);
+			expect(attempt2Aggregate.markPersistedCalls).toBe(1);
+		});
+	});
+
 	describe("close: context invalidation", () => {
 		it("context.repositories access after run() settles throws TransactionClosedError", async () => {
 			const { uow } = createUow();
@@ -386,7 +474,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(() => leaked.repositories).toThrow(TransactionClosedError);
-			expect(() => leaked.transaction).toThrow(TransactionClosedError);
+			expect(() => leaked.rawTransaction).toThrow(TransactionClosedError);
 		});
 
 		it("session.enrollSaved after close throws TransactionClosedError (also after rollback)", async () => {
@@ -446,6 +534,205 @@ describe("UnitOfWork", () => {
 			expect(await uow.run(async () => "second attempt")).toBe(
 				"second attempt",
 			);
+		});
+	});
+
+	describe("identity map integration", () => {
+		class OrderAggregate implements IAggregateRoot<TestId, TestEvent> {
+			public readonly version = 1 as Version;
+			public readonly persistedVersion: Version | undefined = undefined;
+			public markPersistedCalls = 0;
+			private pending: TestEvent[];
+
+			constructor(
+				public readonly id: TestId,
+				events: TestEvent[] = [],
+			) {
+				this.pending = [...events];
+			}
+
+			get pendingEvents(): ReadonlyArray<TestEvent> {
+				return this.pending;
+			}
+			clearPendingEvents(): void {
+				this.pending = [];
+			}
+			markPersisted(_v: Version): void {
+				this.pending = [];
+				this.markPersistedCalls += 1;
+			}
+		}
+
+		/** Identity-map-aware repository over an in-memory row store. */
+		class CachingOrderRepository {
+			public hydrations = 0;
+
+			constructor(
+				private readonly rows: Map<string, TestEvent[]>,
+				private readonly session: UnitOfWorkSession<TestEvent>,
+			) {}
+
+			async getById(id: TestId): Promise<OrderAggregate | null> {
+				const cached = this.session.identityMap.get(OrderAggregate, id);
+				if (cached) return cached;
+				// Deleted in this unit of work = uniformly not-found, even
+				// when the physical delete is deferred and the row is still
+				// visible inside the transaction.
+				if (this.session.identityMap.isDeleted(OrderAggregate, id)) {
+					return null;
+				}
+
+				const row = this.rows.get(id);
+				if (!row) return null;
+				this.hydrations += 1;
+				const order = new OrderAggregate(id, row);
+				this.session.identityMap.set(OrderAggregate, id, order);
+				return order;
+			}
+
+			async save(order: OrderAggregate): Promise<void> {
+				this.session.enrollSaved(order);
+			}
+
+			async delete(order: OrderAggregate): Promise<void> {
+				// ONE call: enrollDeleted tombstones the identity map itself
+				// (keyed on the instance's concrete class) - no second manual
+				// identityMap.delete() leg to forget.
+				this.session.enrollDeleted(order);
+			}
+		}
+
+		function createCachingUow(rows: Map<string, TestEvent[]>) {
+			const outbox = createMockOutbox();
+			const repos: CachingOrderRepository[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					orders: (_tx: undefined, session: UnitOfWorkSession<TestEvent>) => {
+						const repo = new CachingOrderRepository(rows, session);
+						repos.push(repo);
+						return repo;
+					},
+				},
+			});
+			return { uow, outbox, repos };
+		}
+
+		it("two getById calls return the SAME instance with one hydration; saving via both refs marks persisted once", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			const { uow, outbox, repos } = createCachingUow(rows);
+
+			await uow.run(async ({ repositories }) => {
+				const a = await repositories.orders.getById("o-1" as TestId);
+				const b = await repositories.orders.getById("o-1" as TestId);
+
+				expect(a).not.toBeNull();
+				expect(b).toBe(a);
+
+				await repositories.orders.save(a as OrderAggregate);
+				await repositories.orders.save(b as OrderAggregate);
+				return undefined;
+			});
+
+			expect(repos[0]?.hydrations).toBe(1);
+			// One instance → one harvest, one markPersisted.
+			expect(outbox.added).toEqual([[event]]);
+		});
+
+		it("session.identityMap access after close throws TransactionClosedError", async () => {
+			const { uow } = createCachingUow(new Map());
+			let leakedSession!: UnitOfWorkSession<TestEvent>;
+
+			await uow.run(async ({ session }) => {
+				leakedSession = session;
+				return undefined;
+			});
+
+			expect(() => leakedSession.identityMap).toThrow(TransactionClosedError);
+		});
+
+		it("a directly-leaked IdentityMap reference is cleared on close (no stale instances into a later operation)", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			const { uow } = createCachingUow(rows);
+			let leakedMap!: ReturnType<
+				() => UnitOfWorkSession<TestEvent>["identityMap"]
+			>;
+
+			await uow.run(async ({ repositories, session }) => {
+				await repositories.orders.getById("o-1" as TestId);
+				leakedMap = session.identityMap; // captured while open
+				expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(true);
+				return undefined;
+			});
+
+			expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(false);
+		});
+
+		it("after delete, getById reads uniformly as null - even when the physical delete is deferred", async () => {
+			const event = testEvent("o-1");
+			// The row store deliberately keeps the row: simulates a repo
+			// whose physical delete is deferred within the transaction.
+			const rows = new Map([["o-1", [event]]]);
+			const { uow } = createCachingUow(rows);
+
+			const probe = await uow.run(async ({ repositories }) => {
+				const order = await repositories.orders.getById("o-1" as TestId);
+				await repositories.orders.delete(order as OrderAggregate);
+
+				// Row still visible in the tx; the isDeleted check makes a
+				// read-only probe behave like not-found instead of crashing
+				// at registration.
+				return repositories.orders.getById("o-1" as TestId);
+			});
+
+			expect(probe).toBeNull();
+		});
+
+		it("deletion is final across INSTANCES: saving a re-created aggregate with the same class+id throws", async () => {
+			const rows = new Map([["o-1", [testEvent("o-1")]]]);
+			const { uow } = createCachingUow(rows);
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					const order = await repositories.orders.getById("o-1" as TestId);
+					await repositories.orders.delete(order as OrderAggregate);
+
+					// A DIFFERENT instance with the same logical identity, e.g.
+					// re-created via a static factory after the delete. The
+					// instance-keyed gate cannot see it; the class+id tombstone
+					// (recorded automatically by enrollDeleted) must.
+					const resurrected = new OrderAggregate("o-1" as TestId);
+					await repositories.orders.save(resurrected);
+					return undefined;
+				}),
+			).rejects.toBeInstanceOf(AggregateDeletedError);
+		});
+
+		it("a deleted aggregate's events are harvested, but markPersisted (and thus onPersisted) never fires for it", async () => {
+			const event = testEvent("o-1");
+			const rows = new Map([["o-1", [event]]]);
+			const { uow, outbox } = createCachingUow(rows);
+			let deletedOrder!: OrderAggregate;
+
+			await uow.run(async ({ repositories }) => {
+				deletedOrder = (await repositories.orders.getById(
+					"o-1" as TestId,
+				)) as OrderAggregate;
+				await repositories.orders.delete(deletedOrder);
+				return undefined;
+			});
+
+			// Deletion event reached the outbox...
+			expect(outbox.added).toEqual([[event]]);
+			// ...but the post-save lifecycle did NOT run for the deleted
+			// aggregate: no markPersisted, no onPersisted cache-fill lie.
+			expect(deletedOrder.markPersistedCalls).toBe(0);
+			// Pending events are still cleared so a later commit cannot
+			// re-emit them.
+			expect(deletedOrder.pendingEvents).toHaveLength(0);
 		});
 	});
 
@@ -517,6 +804,74 @@ describe("UnitOfWork", () => {
 					throw original;
 				}),
 			).rejects.toBe(wrapper);
+		});
+
+		it("a callback that throws undefined does not let a no-cause scope error masquerade as a wrapper (RollbackError, not pass-through)", async () => {
+			// `(plainError).cause` is undefined; with a thrown-undefined
+			// callback error, a naive chain walk would find
+			// undefined === undefined and pass the rollback failure through
+			// as a mere wrapper of the callback error.
+			const rollbackFailure = new Error("ROLLBACK failed"); // no cause
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch {
+						throw rollbackFailure;
+					}
+				},
+			};
+			const { uow } = createUow({ scope });
+
+			const rejection = await uow
+				.run(async () => {
+					throw undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(RollbackError);
+			expect((rejection as RollbackError).rollbackCause).toBe(
+				rollbackFailure,
+			);
+		});
+
+		it("a throwing `cause` getter on the scope's error cannot replace the real failure", async () => {
+			const original = new Error("callback failed");
+			const hostile = new Error("driver error");
+			Object.defineProperty(hostile, "cause", {
+				get() {
+					throw new Error("lazy deserialization blew up");
+				},
+			});
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch {
+						throw hostile;
+					}
+				},
+			};
+			const { uow } = createUow({ scope });
+
+			const rejection = await uow
+				.run(async () => {
+					throw original;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			// The getter's exception must not become the rejection; the
+			// hostile error is treated as not-wrapping → RollbackError with
+			// both failures preserved.
+			expect(rejection).toBeInstanceOf(RollbackError);
+			expect((rejection as RollbackError).cause).toBe(original);
+			expect((rejection as RollbackError).rollbackCause).toBe(hostile);
 		});
 
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {

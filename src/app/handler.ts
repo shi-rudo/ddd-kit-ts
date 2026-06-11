@@ -48,7 +48,10 @@ import type { TransactionScope } from "../repo/scope";
  *  3. The transaction commits.
  *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
  *     fires on each returned aggregate; only now are pending events
- *     considered flushed.
+ *     considered flushed. Aggregates listed in the optional `deleted`
+ *     marker array are the exception: their pending events are cleared
+ *     directly WITHOUT `markPersisted`, so the post-save `onPersisted`
+ *     hook never fires for a row that was just deleted.
  *  5. `bus.publish(events)` fires for the in-process fast path (skipped
  *     when no events or no `bus` is wired).
  *
@@ -123,9 +126,20 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	fn: (ctx: TCtx) => Promise<{
 		result: R;
 		aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+		/**
+		 * Optional marker: which of `aggregates` were DELETED in this unit
+		 * of work. Their pending events are harvested like any other
+		 * (deletion events must reach the outbox), but the post-commit
+		 * lifecycle differs: `markPersisted` is NOT called on them — it
+		 * would fire the user-overridable `onPersisted` hook, whose
+		 * post-save semantics (cache fill, read-model warm-up) are a lie
+		 * for a row that was just deleted. Their pending events are
+		 * cleared directly instead, so a later commit cannot re-emit them.
+		 */
+		deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
 	}>,
 ): Promise<R> {
-	const { result, aggregates, events } = await deps.scope.transactional(
+	const { result, aggregates, deleted, events } = await deps.scope.transactional(
 		async (ctx) => {
 			const fnResult = await fn(ctx);
 			// Dedupe by object identity. A use case that touches the same
@@ -164,16 +178,28 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			if (harvested.length > 0) {
 				await deps.outbox.add(harvested);
 			}
-			return { ...fnResult, aggregates: uniqueAggregates, events: harvested };
+			return {
+				...fnResult,
+				aggregates: uniqueAggregates,
+				deleted: new Set(fnResult.deleted ?? []),
+				events: harvested,
+			};
 		},
 	);
 
 	// Post-commit: mark each aggregate as persisted (clears pendingEvents).
 	// Done AFTER the tx commits so a rolled-back transaction never silently
-	// "consumes" the in-memory pending events.
+	// "consumes" the in-memory pending events. DELETED aggregates get their
+	// pending events cleared without markPersisted: the row is gone, and
+	// firing the post-save onPersisted hook for a deletion would hand the
+	// hook a semantic lie (see the `deleted` field JSDoc above).
 	for (const agg of aggregates) {
 		try {
-			agg.markPersisted(agg.version);
+			if (deleted.has(agg)) {
+				agg.clearPendingEvents();
+			} else {
+				agg.markPersisted(agg.version);
+			}
 		} catch {
 			// Only the user-overridable onPersisted hook can throw here, and
 			// it runs AFTER the framework cleanup (events already flushed for

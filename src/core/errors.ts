@@ -62,6 +62,29 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 }
 
 /**
+ * Thrown when an aggregate that was deleted within the current unit of
+ * work is saved or re-registered again in the same operation: by
+ * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same
+ * instance, and by `IdentityMap.set` for a type+id that was deleted.
+ * Deletion is final within an operation; saving afterwards would write
+ * a row the delete just removed (or resurrect it), which is always a
+ * use-case bug.
+ *
+ * Extends `BaseError` directly (same reasoning as
+ * {@link MissingHandlerError}): a programming bug that should crash
+ * loud, not be absorbed by a generic infrastructure-error handler.
+ */
+export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
+	constructor(public readonly aggregateId: string) {
+		super(
+			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
+				"cannot be saved or registered again. Deletion is final within an " +
+				"operation; if the aggregate must live, do not delete it.",
+		);
+	}
+}
+
+/**
  * Thrown by `IRepository.getByIdOrFail()` when an aggregate with the
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the

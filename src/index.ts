@@ -21,6 +21,7 @@ export * from "./events/outbox";
 // Events
 export * from "./events/ports";
 // Repository
+export * from "./repo/identity-map";
 export * from "./repo/repository";
 export * from "./repo/scope";
 // Utils
