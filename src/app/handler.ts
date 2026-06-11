@@ -21,7 +21,10 @@ import type { TransactionScope } from "../repo/scope";
  *  2. **Still inside the transaction**, `withCommit` harvests every
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
- *     events were recorded.
+ *     events were recorded. Each harvested event is stamped with
+ *     `aggregateVersion` = the aggregate's commit version (onto a frozen
+ *     copy; a pre-set value wins) - consumers get the OCC version the
+ *     row was written with, for ordering and idempotency watermarks.
  *
  *     **Harvest order.** Events are concatenated in the order
  *     aggregates appear in the returned `aggregates` array, then in
@@ -82,7 +85,11 @@ import type { TransactionScope } from "../repo/scope";
  * therefore desyncs OCC (next save throws a false
  * `ConcurrencyConflictError`) — and under a partial-write repository
  * using `changedKeys`, an un-bumped mutation is silently marked clean
- * and never written. Mutate first, save last.
+ * and never written. The `aggregateVersion` stamp widens the blast
+ * radius further: harvested events would publicly claim a version the
+ * committed row does not carry, poisoning every consumer's ordering
+ * and idempotency watermarks — a cross-service inconsistency, not just
+ * a local one. Mutate first, save last.
  *
  * **Duplicate aggregates are deduped by reference.** If the returned
  * `aggregates` array contains the same instance twice (e.g. a use
@@ -148,8 +155,40 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// markPersisted twice. Distinct instances with the same logical
 			// id are NOT detected here; that's a different misuse class.
 			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
-			const harvested = uniqueAggregates.flatMap(
-				(agg) => agg.pendingEvents,
+			// Stamp each harvested event with its aggregate's COMMIT version
+			// (the value the OCC row write carries for saved aggregates).
+			// Events are deeply frozen at creation, so the stamp goes onto a
+			// frozen shallow copy - the aggregate's own pendingEvents stay
+			// untouched, and a manually pre-set aggregateVersion is never
+			// overwritten. The outbox and the bus receive the stamped copies.
+			// NOTE: the shallow copy assumes events are PLAIN DATA objects
+			// (the createDomainEvent / recordEvent contract); class-based
+			// event objects with prototype members are unsupported.
+			const harvested = uniqueAggregates.flatMap((agg) =>
+				agg.pendingEvents.map((event) => {
+					if (event.aggregateVersion === undefined) {
+						return Object.freeze({
+							...event,
+							aggregateVersion: agg.version as number,
+						}) as Evt;
+					}
+					// Pre-set values win (replay fixtures, backfills) - but a
+					// pre-set AHEAD of the commit version is always a leaked
+					// fixture or copied options object, and consumers key
+					// idempotency watermarks on this number: fail fast, same
+					// posture as the aggregateId/aggregateType guard below.
+					if (event.aggregateVersion > (agg.version as number)) {
+						throw new Error(
+							`withCommit: event "${event.type}" carries a pre-set ` +
+								`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
+								`aggregate's commit version (${agg.version}). A stale-or-` +
+								`copied pre-set would advance consumer idempotency ` +
+								`watermarks past real history; remove the manual ` +
+								`aggregateVersion or correct it.`,
+						);
+					}
+					return event;
+				}),
 			);
 			// Guard: every event harvested from an aggregate MUST carry
 			// aggregateId + aggregateType. Downstream consumers (outbox

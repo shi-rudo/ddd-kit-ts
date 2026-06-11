@@ -125,6 +125,11 @@ function createUow(overrides?: {
 	return { uow, outbox, bus, scope };
 }
 
+/** Harvested events are stamped with the aggregate's commit version. */
+function stamped(event: TestEvent, aggregateVersion = 1): TestEvent {
+	return { ...event, aggregateVersion };
+}
+
 describe("UnitOfWork", () => {
 	describe("transaction lifecycle", () => {
 		it("commits on success and returns the callback's result", async () => {
@@ -311,7 +316,7 @@ describe("UnitOfWork", () => {
 				"markPersisted",
 				"bus.publish",
 			]);
-			expect(outbox.added).toEqual([[event]]);
+			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
 
 		it("saving the same instance twice harvests its events once and markPersists once", async () => {
@@ -326,7 +331,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[event]]);
+				.toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});
 
@@ -341,7 +346,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[deletionEvent]]);
+				.toEqual([[stamped(deletionEvent)]]);
 		});
 
 		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {
@@ -372,7 +377,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[event]]);
+				.toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});
 	});
@@ -457,7 +462,7 @@ describe("UnitOfWork", () => {
 			expect(result).toBe("second-attempt");
 			// Only the committed attempt's events were harvested; the
 			// rolled-back attempt's enrollment did not leak into the retry.
-			expect(outbox.added).toEqual([[event2]]);
+			expect(outbox.added).toEqual([[stamped(event2)]]);
 			expect(attempt1Aggregate.markPersistedCalls).toBe(0);
 			expect(attempt2Aggregate.markPersistedCalls).toBe(1);
 		});
@@ -638,7 +643,7 @@ describe("UnitOfWork", () => {
 
 			expect(repos[0]?.hydrations).toBe(1);
 			// One instance → one harvest, one markPersisted.
-			expect(outbox.added).toEqual([[event]]);
+			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
 
 		it("session.identityMap access after close throws TransactionClosedError", async () => {
@@ -726,7 +731,7 @@ describe("UnitOfWork", () => {
 			});
 
 			// Deletion event reached the outbox...
-			expect(outbox.added).toEqual([[event]]);
+			expect(outbox.added).toEqual([[stamped(event)]]);
 			// ...but the post-save lifecycle did NOT run for the deleted
 			// aggregate: no markPersisted, no onPersisted cache-fill lie.
 			expect(deletedOrder.markPersistedCalls).toBe(0);

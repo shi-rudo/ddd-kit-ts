@@ -245,6 +245,20 @@ export interface EventMetadata {
  * Domain Event represents something meaningful that happened in the domain.
  * Events are immutable and carry information about what occurred.
  *
+ * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
+ * (or the aggregate's `recordEvent` helper) and deeply frozen. Class-based
+ * event objects that satisfy this shape structurally via prototype
+ * members are unsupported: the `withCommit` harvest copies events with a
+ * shallow spread (to stamp `aggregateVersion`), which only carries own
+ * enumerable properties.
+ *
+ * **Field-accretion boundary.** This type already carries the write-side
+ * transport concerns the outbox needs (`aggregateId`, `aggregateType`,
+ * `aggregateVersion`, `metadata`). That is the line: further transport
+ * fields (partition keys, tenancy, schema URNs, …) belong in an outbox
+ * envelope / `metadata`, not on the domain event — the next first-class
+ * transport field forces an `OutboxMessage` envelope port instead.
+ *
  * @template T - The event type name (e.g., "OrderCreated")
  * @template P - The event payload type
  */
@@ -290,8 +304,31 @@ export interface DomainEvent<T extends string, P = void> {
 	 * Event schema version for handling schema evolution.
 	 * Required for safe schema migration in event-sourced systems.
 	 * Use 1 for the initial schema version.
+	 *
+	 * **NOT the aggregate's version** — that is
+	 * {@link aggregateVersion}. The two are deliberately distinct
+	 * fields: this one says "which shape does the payload have"
+	 * (upcasting), the other says "which state revision of the
+	 * aggregate emitted this".
 	 */
 	version: number;
+
+	/**
+	 * The version of the producing aggregate at COMMIT time: the same
+	 * value the OCC row write carries. Stamped automatically by
+	 * `withCommit` at the harvest boundary (all events of one aggregate
+	 * in one commit share it; their relative order within the commit is
+	 * the harvest order), or set manually via
+	 * `CreateDomainEventOptions.aggregateVersion` — a pre-set value is
+	 * never overwritten.
+	 *
+	 * Consumers use it for ordering ("apply projections up to aggregate
+	 * version N"), idempotency watermarks, debugging, and integration
+	 * logs. Optional at the type level: events created outside an
+	 * aggregate (system/integration events) and events from older kit
+	 * versions don't carry it.
+	 */
+	aggregateVersion?: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -338,6 +375,15 @@ export interface CreateDomainEventOptions {
 	 * Override for the default schema version (1).
 	 */
 	version?: number;
+
+	/**
+	 * Pre-set the producing aggregate's version (see
+	 * `DomainEvent.aggregateVersion`). Normally left unset — `withCommit`
+	 * stamps it at the harvest boundary with the commit version — but
+	 * useful for replay fixtures and events constructed outside an
+	 * aggregate. A pre-set value is never overwritten by the harvest.
+	 */
+	aggregateVersion?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -402,6 +448,7 @@ export function createDomainEvent<T extends string, P>(
 			? new Date(options.occurredAt.getTime())
 			: currentClockFactory(),
 		version: options?.version ?? 1,
+		aggregateVersion: options?.aggregateVersion,
 		metadata: options?.metadata,
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent

@@ -352,7 +352,8 @@ export function createRepositoryContractTests<
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
-					const outboxAfterSeed = (await env.committedOutboxEvents()).length;
+					const seedEvents = await env.committedOutboxEvents();
+					const seedEventIds = new Set(seedEvents.map((e) => e.eventId));
 
 					// Writer B loads first - its persistedVersion baseline is
 					// now fixed at the pre-conflict version.
@@ -367,8 +368,25 @@ export function createRepositoryContractTests<
 					});
 					const outboxAfterA = await env.committedOutboxEvents();
 					assert(
-						outboxAfterA.length > outboxAfterSeed,
+						outboxAfterA.length > seedEvents.length,
 						"writer A's events must reach the outbox on commit",
+					);
+					// Writer A's NEW events must carry A's ACTUAL committed
+					// version - not merely some number. A wrong value here
+					// (hardcoded, schema version, persistedVersion) would
+					// poison every consumer's ordering/idempotency watermark.
+					const newSinceSeed = outboxAfterA.filter(
+						(event) => !seedEventIds.has(event.eventId),
+					);
+					assert(
+						newSinceSeed.length > 0 &&
+							newSinceSeed.every(
+								(event) => event.aggregateVersion === committedA.version,
+							),
+						`writer A's committed outbox events must carry aggregateVersion === ${committedA.version} (A's commit version). ` +
+							`Suspect #1: your outbox read-back (committedOutboxEvents) reconstructs events from an explicit column list ` +
+							`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
+							`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
 					);
 
 					// Writer B mutates its stale instance and tries to commit.
