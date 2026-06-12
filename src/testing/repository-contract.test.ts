@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
 import type { DomainEvent } from "../aggregate/domain-event";
-import { ConcurrencyConflictError } from "../core/errors";
+import {
+	ConcurrencyConflictError,
+	DuplicateAggregateError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import type { Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
@@ -140,6 +143,11 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 		this.session.enrollSaved(order);
 		if (order.persistedVersion === undefined) {
 			// INSERT path: routed on persistedVersion, never on version === 0.
+			// The in-memory equivalent of a unique-violation (Postgres 23505,
+			// MySQL 1062): a row with this id already exists.
+			if (this.db.rows.has(order.id)) {
+				throw new DuplicateAggregateError("ContractOrder", order.id);
+			}
 			this.db.rows.set(order.id, {
 				state: structuredClone(order.state),
 				version: order.version,
@@ -251,6 +259,7 @@ function createInMemoryHarness(
 			order.addItem(`item-${mutationCounter++}`),
 		snapshotState: (order) => structuredClone(order.state),
 		deletesAreVersionChecked: true,
+		insertsAreDuplicateChecked: true, // explicit; true is also the default
 	};
 }
 
@@ -281,6 +290,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		const skipped = minimalTests.filter((t) => t.skipped);
 		expect(skipped.map((t) => t.skipped?.capability).sort()).toEqual([
 			"createAggregateWithId",
+			"createAggregateWithId", // deletion-finality AND duplicate-insert
 			"deletesAreVersionChecked",
 			"mutateChildCollection",
 			"mutateVersionOnly",
@@ -292,6 +302,25 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		await expect(skipped[0]?.run()).rejects.toThrow(
 			/capability 'mutateVersionOnly' is not provided/,
 		);
+	});
+
+	it("a deliberately upserting adapter opts out of the duplicate-insert test ALONE via insertsAreDuplicateChecked: false", () => {
+		const upserting = createInMemoryHarness();
+		upserting.insertsAreDuplicateChecked = false;
+
+		const upsertingTests = createRepositoryContractTests(upserting);
+		const skipped = upsertingTests.filter((t) => t.skipped);
+
+		// Exactly ONE skip, named after the SEMANTIC capability - and the
+		// deletion-finality test (gated on the same mechanical
+		// createAggregateWithId) still runs.
+		expect(skipped.map((t) => t.skipped?.capability)).toEqual([
+			"insertsAreDuplicateChecked",
+		]);
+		expect(
+			upsertingTests.find((t) => t.name.startsWith("deletion is final across"))
+				?.skipped,
+		).toBeUndefined();
 	});
 
 	it("capabilities are captured at suite creation: mutating the harness afterwards does not flip tests", () => {
@@ -320,23 +349,23 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		await expect(mutantTest?.run()).rejects.toThrow(expectedFailure);
 	}
 
-	it("the suite EXPOSES a broken adapter: a repository without the version predicate fails the mandatory test", async () => {
-		// Mutant adapter: identical to the reference EXCEPT the UPDATE
-		// path's OCC predicate is missing (last-write-wins). Enrollment
-		// stays enroll-before-write per the contract; the missing
-		// predicate is the only mutation.
-		class LastWriteWinsRepository extends InMemoryOrderRepository {
-			override async save(order: ContractOrder): Promise<void> {
-				if (!order.hasChanges) return;
-				this.session.enrollSaved(order);
-				// ❌ no `WHERE version = persistedVersion` equivalent:
-				this.db.rows.set(order.id, {
-					state: structuredClone(order.state),
-					version: order.version,
-				});
-			}
+	// Mutant adapter: identical to the reference EXCEPT save() has no
+	// OCC predicate and no duplicate check (last-write-wins upsert).
+	// Enrollment stays enroll-before-write per the contract.
+	class LastWriteWinsRepository extends InMemoryOrderRepository {
+		override async save(order: ContractOrder): Promise<void> {
+			if (!order.hasChanges) return;
+			this.session.enrollSaved(order);
+			// ❌ no `WHERE version = persistedVersion` equivalent and no
+			// unique-violation mapping:
+			this.db.rows.set(order.id, {
+				state: structuredClone(order.state),
+				version: order.version,
+			});
 		}
+	}
 
+	it("the suite EXPOSES a broken adapter: a repository without the version predicate fails the mandatory test", async () => {
 		await expectMutantFails(
 			(db, session) => new LastWriteWinsRepository(db, session),
 			"MANDATORY",
@@ -357,6 +386,14 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			(db, session) => new UnpredicatedDeleteRepository(db, session),
 			"stale delete conflicts",
 			/a stale delete must reject/,
+		);
+	});
+
+	it("the suite EXPOSES a missing unique-violation mapping: an upserting insert fails the duplicate-insert test", async () => {
+		await expectMutantFails(
+			(db, session) => new LastWriteWinsRepository(db, session),
+			"duplicate insert",
+			/must reject with \(or wrap\) DuplicateAggregateError/,
 		);
 	});
 });

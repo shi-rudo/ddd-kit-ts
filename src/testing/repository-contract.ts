@@ -107,10 +107,28 @@ export interface RepositoryContractHarness<
 
 	/**
 	 * Optional: construct a NEW (never-persisted) aggregate instance
-	 * carrying a SPECIFIC id. Enables the deletion-is-final-across-
-	 * instances test (resurrection via a factory after delete).
+	 * carrying a SPECIFIC id. Enables TWO tests: deletion-is-final-
+	 * across-instances (resurrection via a factory after delete) and
+	 * the duplicate-insert test (see
+	 * {@link insertsAreDuplicateChecked} to opt out of the latter
+	 * independently).
 	 */
 	createAggregateWithId?(id: TAgg["id"]): TAgg;
+
+	/**
+	 * Semantic opt-OUT (default `true`): whether `save()`'s INSERT path
+	 * rejects an existing id with `DuplicateAggregateError` (mapping the
+	 * driver's unique-violation — Postgres `23505`, MySQL `1062`, SQLite
+	 * `SQLITE_CONSTRAINT_UNIQUE`). This is the near-mandatory contract:
+	 * `save()` is insert-or-update, never upsert — create-idempotency
+	 * belongs in the USE CASE (load, then decide), not in the save path.
+	 * Set `false` ONLY for a deliberately upserting adapter
+	 * (idempotent-create design); the duplicate-insert test is then
+	 * reported as skipped under this capability name, without costing
+	 * the deletion-finality coverage that `createAggregateWithId` also
+	 * gates.
+	 */
+	insertsAreDuplicateChecked?: boolean;
 
 	/**
 	 * Optional: a plain-data projection of the aggregate's persisted
@@ -331,6 +349,9 @@ export function createRepositoryContractTests<
 	const mutateChildCollection = harness.mutateChildCollection;
 	const createAggregateWithId = harness.createAggregateWithId;
 	const deletesAreVersionChecked = harness.deletesAreVersionChecked === true;
+	// Semantic opt-OUT, default true (the contract is near-mandatory).
+	const insertsAreDuplicateChecked =
+		harness.insertsAreDuplicateChecked !== false;
 
 	function skippedTest(name: string, capability: string): RepositoryContractTest {
 		return {
@@ -742,6 +763,69 @@ export function createRepositoryContractTests<
 			: skippedTest(
 					"deletion is final across instances: a re-created aggregate with the same id cannot be saved",
 					"createAggregateWithId",
+				),
+	);
+	tests.push(
+		createAggregateWithId && insertsAreDuplicateChecked
+			? {
+					name: "duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
+					run: () =>
+						withEnvironment(async (env) => {
+							const seeded = await seed(env);
+
+							// A second NEVER-persisted instance with the same id:
+							// two concurrent creators racing on a business-derived
+							// id, or an id-generator collision. The INSERT must
+							// surface as the kit's error class, not a raw driver
+							// error. Mutated TWICE so its version differs from the
+							// seeded row's - a clobbering insert is then visible
+							// in the version check below even without a state
+							// snapshot.
+							const duplicate = createAggregateWithId.call(
+								harness,
+								seeded.id,
+							);
+							harness.mutate(duplicate);
+							harness.mutate(duplicate);
+							const rejection = await captureRejection(
+								env.run(async ({ repository }) => {
+									await repository.save(duplicate);
+								}),
+							);
+							assert(
+								chainContainsErrorNamed(rejection, "DuplicateAggregateError"),
+								`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
+									`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
+									`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
+							);
+
+							// The existing row is untouched by the rejected insert:
+							// version AND (capability permitting) state.
+							const final = await reload(env, seeded.id);
+							assertEqual(
+								final.version,
+								seeded.version,
+								"the existing row must be untouched by the rejected duplicate insert - a duplicate check that fires AFTER the write (or outside the transaction) clobbers the existing row",
+							);
+							if (snapshotState) {
+								assert(
+									deepEqual(
+										snapshotState.call(harness, final),
+										snapshotState.call(harness, seeded),
+									),
+									"the existing row's STATE must be untouched by the rejected duplicate insert",
+								);
+							}
+						}),
+				}
+			: skippedTest(
+					"duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
+					// Name the capability that is actually missing: the
+					// mechanical one (cannot build the duplicate) or the
+					// semantic opt-out (deliberately upserting adapter).
+					createAggregateWithId
+						? "insertsAreDuplicateChecked"
+						: "createAggregateWithId",
 				),
 	);
 	tests.push(

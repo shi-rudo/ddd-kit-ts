@@ -134,11 +134,23 @@ async save(aggregate: Order): Promise<void> {
   if (aggregate.persistedVersion === undefined) {
     // INSERT: never persisted, regardless of how many in-memory mutations
     // have advanced `aggregate.version` since construction.
-    await this.db.insert(orders).values({
-      id: aggregate.id,
-      state: aggregate.state,
-      version: aggregate.version,
-    });
+    try {
+      await this.db.insert(orders).values({
+        id: aggregate.id,
+        state: aggregate.state,
+        version: aggregate.version,
+      });
+    } catch (e) {
+      // Map the driver's unique-violation to the kit's error class so the
+      // App layer can catch it. isUniqueViolation is YOUR driver predicate
+      // (not a kit export), e.g. for Postgres: e.code === "23505" - or
+      // e.cause?.code when your ORM wraps the driver error; MySQL: errno
+      // 1062; SQLite: SQLITE_CONSTRAINT_UNIQUE.
+      if (isUniqueViolation(e)) {
+        throw new DuplicateAggregateError("Order", aggregate.id, e);
+      }
+      throw e;
+    }
     return;
   }
 
@@ -410,12 +422,13 @@ const id = userIds.next(); // Id<"UserId">
 
 **Your factory must produce unique ids under concurrent calls.** The kit makes no attempt to dedupe or detect collisions. Collision-resistant choices: `crypto.randomUUID()` (UUIDv4), ULID, UUIDv7 (RFC 9562), KSUID, all designed for the job. Unsafe choices that look fine in tests but collide in production: `Date.now()` alone (duplicates within the same millisecond under load), a process-local counter without persistence (resets on restart, collides with prior runs), a sequential id derived from non-atomic state. The same requirement applies to `EventIdFactory`.
 
-## `AggregateNotFoundError` and `ConcurrencyConflictError`
+## `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError`
 
-Both are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent or stale, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, `toJSON()`, and `getUserMessage()` out of the box.
+All three are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent, stale, or already taken — not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, `toJSON()`, and `getUserMessage()` out of the box.
 
 - **`AggregateNotFoundError(aggregateType, id, cause?)`**: thrown by `getByIdOrFail`. Carries a user-safe message that does NOT leak the id. Not retryable (the row isn't there; retry won't help).
-- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry.
+- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry **in a fresh unit of work**.
+- **`DuplicateAggregateError(aggregateType, aggregateId, cause?)`**: thrown by `save`'s INSERT path when a row with the id already exists — two concurrent creators raced on a business-derived id, or the id generator collided. Same delegation model as the OCC predicate: the kit ships the class, your repository maps the driver's unique-violation signal to it (Postgres `23505`, MySQL `1062`, SQLite `SQLITE_CONSTRAINT_UNIQUE`) instead of letting a raw driver error escape. Not retryable — re-running the same INSERT cannot succeed; map to HTTP 409, or for idempotency-key flows load the existing aggregate and treat the request as already applied. The [repository contract test suite](./unit-of-work.md#proving-the-contract-the-repository-contract-test-suite) covers it (capability-gated on `createAggregateWithId`).
 
 ```ts
 import {
@@ -445,4 +458,4 @@ try {
 `isChainRetryable` from `@shirudo/base-error` filters on the strict `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for `ConcurrencyConflictError`. `isRetryable(err)` only inspects the top-level error: if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` walks the whole chain with the loose predicate.
 :::
 
-Catch them at the App-Service layer to map to HTTP 404 / HTTP 409 as appropriate.
+Catch them at the App-Service layer to map to HTTP 404 / HTTP 409 as appropriate (`ConcurrencyConflictError` and `DuplicateAggregateError` are both 409-shaped, with different retry semantics: the former retries in a fresh unit of work, the latter never).

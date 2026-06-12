@@ -29,7 +29,9 @@ export abstract class DomainError<
  * storage boundary.
  *
  * Library-internal concrete subclasses: {@link AggregateNotFoundError},
- * {@link ConcurrencyConflictError}.
+ * {@link ConcurrencyConflictError}, {@link DuplicateAggregateError},
+ * plus the unit-of-work lifecycle wrappers `CommitError` and
+ * `RollbackError` (in `src/app/unit-of-work.ts`).
  */
 export abstract class InfrastructureError<
 	Name extends string = string,
@@ -112,6 +114,42 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 		});
 		this.withUserMessage(
 			`The requested ${aggregateType} could not be found.`,
+		);
+	}
+}
+
+/**
+ * Thrown by a repository's `save()` INSERT path when a row with the
+ * aggregate's id already exists (unique-constraint violation): two
+ * concurrent creators raced on the same business-derived id, or the
+ * id generator collided. Same delegation model as
+ * {@link ConcurrencyConflictError}: the kit ships the class, the
+ * consumer repository maps its driver's unique-violation signal to it
+ * instead of letting a raw driver error escape -
+ *
+ * - Postgres: SQLSTATE `23505` (`unique_violation`)
+ * - MySQL/MariaDB: errno `1062` (`ER_DUP_ENTRY`)
+ * - SQLite: `SQLITE_CONSTRAINT_UNIQUE` (extended code 2067)
+ *
+ * `InfrastructureError` because the storage boundary detects the
+ * collision. NOT retryable: re-running the same INSERT cannot succeed.
+ * The right reactions are domain decisions - map to HTTP 409, or for
+ * idempotency-key flows load the existing aggregate and treat the
+ * request as already-applied.
+ */
+export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggregateError"> {
+	constructor(
+		public readonly aggregateType: string,
+		public readonly aggregateId: string,
+		cause?: unknown,
+	) {
+		super(
+			`Duplicate aggregate: ${aggregateType}(${aggregateId}) already exists`,
+			cause,
+			{ name: "DuplicateAggregateError" },
+		);
+		this.withUserMessage(
+			`This ${aggregateType} already exists. It may have been created by a concurrent request.`,
 		);
 	}
 }

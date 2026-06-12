@@ -33,7 +33,7 @@ if (result.isOk()) {
 
 ## Error hierarchy
 
-The kit ships two abstract bases plus three concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
+The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
 
 ```ts
 import { BaseError } from "@shirudo/base-error";
@@ -43,8 +43,11 @@ abstract class InfrastructureError<Name> extends BaseError<Name> {}   // persist
 
 class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // Repository.getByIdOrFail()
 class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // Repository.save() on version mismatch; retryable: true
+class DuplicateAggregateError   extends InfrastructureError<"DuplicateAggregateError"> {}   // Repository.save() INSERT hit an existing id; NOT retryable
 class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug: NOT a DomainError
 ```
+
+(The Unit of Work adds `CommitError` / `RollbackError` — also `InfrastructureError` subclasses — and the BaseError-direct programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
 
 | Catch | Map to | Reason |
 |---|---|---|
@@ -103,7 +106,8 @@ try {
   }
 
   if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain → 400
-  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409
+  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409 (retry in a fresh unit of work)
+  if (e instanceof DuplicateAggregateError)    return err("ALREADY_EXISTS");          // infra → 409 (never retry the same INSERT)
   if (e instanceof AggregateNotFoundError) {
     // Use the user-safe message instead of the technical one
     return err(e.getUserMessage() ?? e.message);                                      // infra → 404
@@ -119,7 +123,7 @@ try {
 Because every library error extends `BaseError<Name>`:
 
 - **`error.toJSON()`**: structured log entry with name, message, timestamp, stack, cause chain.
-- **`error.getUserMessage({ preferredLang?, fallbackLang? })`**: i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError` and `ConcurrencyConflictError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
+- **`error.getUserMessage({ preferredLang?, fallbackLang? })`**: i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
 - **`error.timestamp` / `error.timestampIso`**: epoch + ISO, useful for sorting / correlating log entries across distributed systems.
 - **`error.name`**: typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
 - **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`): for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
@@ -127,7 +131,7 @@ Because every library error extends `BaseError<Name>`:
 - **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors.
 
 ::: warning Which `@shirudo/base-error` helpers work with ddd-kit errors
-ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, and `ConcurrencyConflictError` extend `BaseError<Name>` directly; they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
+ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` extend `BaseError<Name>` directly; they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
 
 - **Works** (loose / class-based): `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `findInCauseChain`, `filterCauseChain`, `everyCauseChain`, `getRootCause`, `instanceof` checks.
 - **Returns false / undefined for ddd-kit errors** (strict `StructuredError` filter): `isStructuredError`, `isRetryableStructuredError`, `isChainRetryable`, `getRootCauseRetryable`, `getFirstRetryableCause`.

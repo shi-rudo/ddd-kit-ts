@@ -9,6 +9,7 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
+	DuplicateAggregateError,
 	InfrastructureError,
 	MissingHandlerError,
 } from "./errors";
@@ -120,6 +121,34 @@ describe("AggregateNotFoundError", () => {
 	it("preserves a wrapped driver error via cause", () => {
 		const driverErr = new Error("postgres: no rows in result set");
 		const e = new AggregateNotFoundError("Order", "o-1", driverErr);
+		expect(getRootCause(e)).toBe(driverErr);
+	});
+});
+
+describe("DuplicateAggregateError", () => {
+	it("carries aggregate type and id; exposes a user-safe message that does NOT leak the id", () => {
+		const e = new DuplicateAggregateError("Order", "o-1");
+		expect(e.aggregateType).toBe("Order");
+		expect(e.aggregateId).toBe("o-1");
+		expect(e.name).toBe("DuplicateAggregateError");
+		expect(e.message).toContain("Order(o-1)"); // technical
+		const userMsg = e.getUserMessage();
+		expect(userMsg).toBeDefined();
+		expect(userMsg).toContain("Order");
+		expect(userMsg).not.toContain("o-1");
+	});
+
+	it("is an InfrastructureError and NOT retryable: re-running the same INSERT cannot succeed", () => {
+		const e = new DuplicateAggregateError("Order", "o-1");
+		expect(e).toBeInstanceOf(InfrastructureError);
+		expect(isRetryable(e)).toBe(false);
+	});
+
+	it("preserves the wrapped driver error via cause", () => {
+		const driverErr = Object.assign(new Error("duplicate key value"), {
+			code: "23505",
+		});
+		const e = new DuplicateAggregateError("Order", "o-1", driverErr);
 		expect(getRootCause(e)).toBe(driverErr);
 	});
 });
