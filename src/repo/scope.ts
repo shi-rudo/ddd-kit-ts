@@ -6,20 +6,24 @@
  * `$transaction`, etc.). The block commits when the callback resolves
  * and rolls back if it throws.
  *
- * `TCtx` is the persistence layer's transaction handle — Drizzle's `tx`,
+ * `TCtx` is the persistence layer's transaction handle: Drizzle's `tx`,
  * Prisma's `tx`, Mongo's session, etc. The scope opens the transaction
  * and passes the handle to `fn`; the use case binds its repositories to
  * that handle (typically by constructing a tx-scoped repo from the ctx).
  *
  * No default for `TCtx`: every implementor names their context type
  * explicitly. For genuinely context-free scopes (in-memory tests, naive
- * no-tx scopes) use `TransactionScope<undefined>` — that's a conscious
+ * no-tx scopes) use `TransactionScope<undefined>`: that's a conscious
  * "there is nothing meaningful here" statement, not an accidental
  * `unknown` fallback.
  *
- * Intentionally **not** Fowler's full Unit of Work (no change tracking,
- * no `registerDirty` / `registerNew` / `registerDeleted`, no commit-time
- * flush). Change tracking is the ORM's job.
+ * Intentionally minimal: the scope itself does no change tracking and
+ * no commit-time flush. Those concerns live in the layers above - the
+ * aggregate detects its own changes (`changedKeys` / `hasChanges`),
+ * `withCommit` orchestrates the commit lifecycle, and the opt-in
+ * `UnitOfWork` facade adds tx-bound repositories and enrollment. See
+ * "TransactionScope stays minimal; the Unit of Work lives above it" in
+ * docs/guide/design-decisions.md.
  *
  * @example Drizzle implementation
  * ```typescript
@@ -31,7 +35,7 @@
  * }
  * ```
  *
- * @example Use site — bind repos to the live transaction
+ * @example Use site: bind repos to the live transaction
  * ```typescript
  * await scope.transactional(async (tx) => {
  *   // Construct tx-bound repos from ctx (your factory / DI of choice)
@@ -43,7 +47,7 @@
  * });
  * ```
  *
- * `IRepository`'s contract takes the id / aggregate only — the tx handle
+ * `IRepository`'s contract takes the id / aggregate only: the tx handle
  * is wired into a concrete repository at construction time, not threaded
  * through every call. Different ORMs have different idioms for that
  * (constructor injection, factory functions, `withTx` chains); pick one

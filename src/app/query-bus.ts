@@ -5,8 +5,8 @@ import type { Query, QueryHandler } from "./query";
 /**
  * Internal adapter shape for handlers stored in the map.
  *
- * Registered handlers are typed as `QueryHandler<Q, TMap[K]>` — narrower
- * input, specific return — and cannot be stored directly in a heterogeneous
+ * Registered handlers are typed as `QueryHandler<Q, TMap[K]>` (narrower
+ * input, specific return) and cannot be stored directly in a heterogeneous
  * map (function-parameter contravariance). The closure in `register`
  * downcasts `Query` to the handler's expected `Q` based on the
  * dispatch-key invariant (we only call this entry when `query.type` matches
@@ -87,7 +87,7 @@ export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
 	 *
 	 * When `TMap` is supplied, the `queryType` argument is restricted to its
 	 * keys and the handler signature is forced to match `TMap[K]` for the
-	 * return value — typos and wrong-typed handlers are compile errors.
+	 * return value: typos and wrong-typed handlers are compile errors.
 	 * Without `TMap` the registration is loose (any string key, any return
 	 * type) so the no-config path keeps working.
 	 *
@@ -152,7 +152,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 		handler: QueryHandler<Q, TMap[K]>,
 	): void {
 		// Silent replacement would turn the first handler into dead code
-		// with no signal — wiring bugs must surface at registration time.
+		// with no signal; wiring bugs must surface at registration time.
 		if (this.handlers.has(queryType)) {
 			throw new Error(
 				`QueryBus: a handler for query type "${queryType}" is already registered`,

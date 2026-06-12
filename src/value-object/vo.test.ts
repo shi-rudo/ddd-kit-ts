@@ -490,11 +490,11 @@ describe("VO", () => {
 
 			const v = vo(original);
 
-			// The VO is frozen — both at the top level and at the nested level.
+			// The VO is frozen, both at the top level and at the nested level.
 			expect(Object.isFrozen(v)).toBe(true);
 			expect(Object.isFrozen(v.coords)).toBe(true);
 
-			// But the caller's nested object reference must stay mutable —
+			// But the caller's nested object reference must stay mutable:
 			// vo() should not have side-effects on the input graph.
 			expect(Object.isFrozen(nested)).toBe(false);
 			expect(Object.isFrozen(original.coords)).toBe(false);
@@ -555,7 +555,7 @@ describe("VO", () => {
 	describe("TypedArray and DataView handling", () => {
 		it("creates a VO containing a non-empty TypedArray without throwing", () => {
 			// Object.freeze on an ArrayBuffer view with elements throws per
-			// spec — deepFreeze must skip views instead of crashing.
+			// spec; deepFreeze must skip views instead of crashing.
 			const v = vo({ data: new Uint8Array([1, 2, 3]) });
 
 			expect(Array.from(v.data)).toEqual([1, 2, 3]);
@@ -598,7 +598,7 @@ describe("VO", () => {
 	});
 
 	describe("Date/Map/Set internal-slot immutability", () => {
-		// Object.freeze does not protect internal slots — a frozen Date can
+		// Object.freeze does not protect internal slots: a frozen Date can
 		// still be setTime()d, a frozen Map still set()s. deepFreeze must
 		// block the mutators so the "deeply immutable" guarantee holds.
 		it("blocks Date mutators on a frozen VO", () => {
@@ -642,7 +642,7 @@ describe("VO", () => {
 
 		it("frozen VOs still round-trip through vo() and compare equal", () => {
 			// The mutator shadows are non-enumerable expandos; structuredClone
-			// drops them and spread skips them — re-wrapping must not throw.
+			// drops them and spread skips them, so re-wrapping must not throw.
 			const a = vo({ d: new Date(5), m: new Map([["k", 1]]) });
 			const b = vo({ ...a });
 
@@ -650,7 +650,7 @@ describe("VO", () => {
 		});
 
 		it("skips mutator-blocking on a Date the caller froze beforehand", () => {
-			// A pre-frozen Date cannot receive shadow properties — deepFreeze
+			// A pre-frozen Date cannot receive shadow properties, so deepFreeze
 			// must not crash on it (best effort, not a hard guarantee).
 			const preFrozen = Object.freeze(new Date(42));
 			expect(() => vo({ d: preFrozen })).not.toThrow();
@@ -732,7 +732,7 @@ describe("VO", () => {
 			const d = Object.assign(new Date(42), { note: "x" });
 			Object.seal(d);
 
-			// Cannot receive shadow properties — must be skipped (best
+			// Cannot receive shadow properties, so must be skipped (best
 			// effort), not crash with 'object is not extensible'.
 			expect(() => deepFreeze({ when: d })).not.toThrow();
 		});
@@ -828,7 +828,7 @@ describe("voWithValidation – error path never throws", () => {
 		cyclic.self = cyclic;
 
 		// The default error message used JSON.stringify, which throws on
-		// circular structures — the Result contract must hold instead.
+		// circular structures; the Result contract must hold instead.
 		const result = voWithValidation(cyclic, () => false);
 
 		expect(result.isErr()).toBe(true);
@@ -852,7 +852,7 @@ describe("deepFreeze – mutator shadows are shared module-level functions", () 
 		const setTimeA = Object.getOwnPropertyDescriptor(a.d, "setTime")?.value;
 		const setTimeB = Object.getOwnPropertyDescriptor(b.d, "setTime")?.value;
 
-		// createDomainEvent freezes a Date per event — per-instance closures
+		// createDomainEvent freezes a Date per event, so per-instance closures
 		// are pure allocation churn on that hot path.
 		expect(typeof setTimeA).toBe("function");
 		expect(setTimeA).toBe(setTimeB);

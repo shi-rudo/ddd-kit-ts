@@ -29,13 +29,13 @@ export interface ValidationProblemOptions
  * object with the collected field issues attached under an extension member.
  *
  * base-error is **safe by default**: `ValidationError.toProblemDetails()` does
- * not expose the issues on its own — they only cross to a client through the
+ * not expose the issues on its own: they only cross to a client through the
  * `publicIssues()` whitelist. This helper performs that explicit projection and
  * applies sensible validation defaults (`422`, `"Validation Failed"`), so the
  * common boundary case is a one-liner instead of a footgun.
  *
  * This is a presentation/transport concern and ships from the opt-in
- * `@shirudo/ddd-kit/http` entry point — the core kit stays transport-free.
+ * `@shirudo/ddd-kit/http` entry point: the core kit stays transport-free.
  *
  * @example
  * ```ts

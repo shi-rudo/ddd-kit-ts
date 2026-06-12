@@ -183,7 +183,7 @@ describe("Entity", () => {
 			new TrappyEntity("t-1" as Id<"TrappyId">, { quantity: 5 });
 
 			// The subclass field initializer hadn't run yet at validateState time,
-			// so `this.minQuantity` was undefined — DON'T rely on `this` in validateState.
+			// so `this.minQuantity` was undefined. DON'T rely on `this` in validateState.
 			expect(seenMinQuantity).toBeUndefined();
 		});
 
@@ -206,7 +206,7 @@ describe("Entity", () => {
 			const entity = new OrderItemEntity("id-1" as ItemId, "prod-1", 2);
 			const leaked = entity.state as { quantity: number };
 
-			// Attempt to mutate the returned snapshot — should not affect the entity
+			// Attempt to mutate the returned snapshot, which should not affect the entity
 			expect(() => {
 				leaked.quantity = 999;
 			}).toThrow(); // frozen object → strict-mode TypeError
@@ -298,7 +298,7 @@ describe("Entity", () => {
 			expect(removed[0]!.id).toBe("id-2");
 		});
 
-		it("accepts ReadonlyArray inputs — callers holding a readonly aggregate state slice don't need to cast", () => {
+		it("accepts ReadonlyArray inputs: callers holding a readonly aggregate state slice don't need to cast", () => {
 			// The state slice of a frozen aggregate is typically typed as
 			// ReadonlyArray<T>. Helpers must accept it without forcing a
 			// copy / cast at the call site.

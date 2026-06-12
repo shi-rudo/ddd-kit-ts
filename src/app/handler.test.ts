@@ -14,12 +14,15 @@ type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
 	markPersistedCalls: number;
 };
 
-function createMockAggregate(events: TestEvent[]): MockAggregate {
+function createMockAggregate(
+	events: TestEvent[],
+	version = 1,
+): MockAggregate {
 	let pending: TestEvent[] = [...events];
 	let calls = 0;
 	return {
 		id: "agg-1" as TestId,
-		version: 1 as Version,
+		version: version as Version,
 		persistedVersion: undefined,
 		get pendingEvents(): ReadonlyArray<TestEvent> {
 			return pending;
@@ -67,6 +70,11 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 	};
 }
 
+/** Harvested events are stamped with the aggregate's commit version. */
+function stamped(event: TestEvent, aggregateVersion = 1): TestEvent {
+	return { ...event, aggregateVersion };
+}
+
 describe("withCommit", () => {
 	it("returns the result from the function", async () => {
 		const result = await withCommit(
@@ -88,7 +96,7 @@ describe("withCommit", () => {
 		);
 
 		expect(outbox.added).toHaveLength(1);
-		expect(outbox.added[0]).toEqual([event]);
+		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
 	it("publishes harvested events to the bus when provided", async () => {
@@ -103,7 +111,7 @@ describe("withCommit", () => {
 		);
 
 		expect(bus.published).toHaveLength(1);
-		expect(bus.published[0]).toEqual([event]);
+		expect(bus.published[0]).toEqual([stamped(event)]);
 	});
 
 	it("works without a bus", async () => {
@@ -314,6 +322,168 @@ describe("withCommit", () => {
 		expect(b.pendingEvents).toHaveLength(0);
 	});
 
+	describe("aggregateVersion stamping at harvest", () => {
+		it("stamps each harvested event with its aggregate's commit version (outbox AND bus)", async () => {
+			const outbox = createMockOutbox();
+			const bus = createMockBus();
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "o-1", aggregateType: "MockOrder" },
+			);
+			const agg = createMockAggregate([event], 7);
+
+			await withCommit(
+				{ outbox, bus, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(7);
+			expect(bus.published[0]?.[0]?.aggregateVersion).toBe(7);
+			// The stamped copy keeps everything else intact.
+			expect(outbox.added[0]?.[0]?.eventId).toBe(event.eventId);
+		});
+
+		it("stamps per aggregate: two aggregates carry their own versions", async () => {
+			const outbox = createMockOutbox();
+			const eventA = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const eventB = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "b" },
+				{ aggregateId: "b", aggregateType: "MockOrder" },
+			);
+			const aggA = createMockAggregate([eventA], 3);
+			const aggB = createMockAggregate([eventB], 11);
+
+			await withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [aggA, aggB] }),
+			);
+
+			expect(
+				outbox.added[0]?.map((e) => [e.aggregateId, e.aggregateVersion]),
+			).toEqual([
+				["a", 3],
+				["b", 11],
+			]);
+		});
+
+		it("never overwrites a pre-set aggregateVersion (when it is ≤ the commit version)", async () => {
+			const outbox = createMockOutbox();
+			const preStamped = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{
+					aggregateId: "o-1",
+					aggregateType: "MockOrder",
+					aggregateVersion: 5,
+				},
+			);
+			const agg = createMockAggregate([preStamped], 7);
+
+			await withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(5);
+			// Pre-stamped events pass through as the SAME object (no copy).
+			expect(outbox.added[0]?.[0]).toBe(preStamped);
+		});
+
+		it("rejects a pre-set aggregateVersion AHEAD of the commit version (leaked fixture guard)", async () => {
+			// A pre-set ahead of the commit version is always a leaked
+			// replay fixture or a copied options object - and consumers key
+			// idempotency watermarks on this number, so it must fail fast
+			// (same posture as the aggregateId/aggregateType guard).
+			const leaked = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{
+					aggregateId: "o-1",
+					aggregateType: "MockOrder",
+					aggregateVersion: 42,
+				},
+			);
+			const agg = createMockAggregate([leaked], 7);
+
+			await expect(
+				withCommit(
+					{ outbox: createMockOutbox(), scope: createMockScope() },
+					async () => ({ result: "ok", aggregates: [agg] }),
+				),
+			).rejects.toThrow(
+				/aggregateVersion \(42\) AHEAD of its aggregate's commit version \(7\)/,
+			);
+			// Rolled back: pending events survive for a corrected retry.
+			expect(agg.pendingEvents).toHaveLength(1);
+		});
+
+		it("stamps onto a frozen copy; the aggregate's own pending events stay untouched", async () => {
+			const outbox = createMockOutbox();
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "o-1", aggregateType: "MockOrder" },
+			);
+			const agg = createMockAggregate([event], 7);
+
+			await withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			// The original event object was never mutated...
+			expect(event.aggregateVersion).toBeUndefined();
+			// ...and the stamped copy is frozen like the original.
+			const stamped = outbox.added[0]?.[0];
+			expect(Object.isFrozen(stamped)).toBe(true);
+			expect(stamped).not.toBe(event);
+		});
+	});
+
+	it("deleted-marked aggregates: events harvested, pendingEvents cleared, but markPersisted (and onPersisted) never fires", async () => {
+		// Deletion events must reach the outbox atomically with the row
+		// removal, but the post-save lifecycle is a semantic lie for a
+		// deleted row: a user onPersisted hook doing cache-fill would
+		// resurrect the deleted aggregate in the cache.
+		const deletionEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "del-1" },
+			{ aggregateId: "del-1", aggregateType: "MockOrder" },
+		);
+		const savedEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "sav-1" },
+			{ aggregateId: "sav-1", aggregateType: "MockOrder" },
+		);
+		const deletedAgg = createMockAggregate([deletionEvent]);
+		const savedAgg = createMockAggregate([savedEvent]);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({
+				result: "ok",
+				aggregates: [savedAgg, deletedAgg],
+				deleted: [deletedAgg],
+			}),
+		);
+
+		// Both aggregates' events were harvested, in array order.
+		expect(outbox.added).toEqual([[stamped(savedEvent), stamped(deletionEvent)]]);
+		// Saved aggregate: full post-commit lifecycle.
+		expect(savedAgg.markPersistedCalls).toBe(1);
+		// Deleted aggregate: events cleared (no re-emission on a later
+		// commit), but NO markPersisted → no onPersisted hook.
+		expect(deletedAgg.markPersistedCalls).toBe(0);
+		expect(deletedAgg.pendingEvents).toHaveLength(0);
+	});
+
 	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
 		// Subscribers will come to rely on this. Concatenation is:
 		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.
@@ -334,7 +504,7 @@ describe("withCommit", () => {
 			async () => ({ result: "ok", aggregates: [aggA, aggB, aggC] }),
 		);
 
-		const expected = [e1, e2, e3, e4];
+		const expected = [e1, e2, e3, e4].map((e) => stamped(e));
 		expect(outbox.added).toEqual([expected]);
 		expect(bus.published).toEqual([expected]);
 	});
@@ -343,7 +513,7 @@ describe("withCommit", () => {
 		// A use case that touches the same aggregate via two repository
 		// references (same identity-map entry) would otherwise double-
 		// harvest its events through the outbox and call markPersisted
-		// twice. Dedupe is by JavaScript object identity — distinct
+		// twice. Dedupe is by JavaScript object identity; distinct
 		// instances with the same logical id are NOT detected here.
 		const event = createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" });
 		const agg = createMockAggregate([event]);
@@ -357,8 +527,8 @@ describe("withCommit", () => {
 		);
 
 		// Event harvested exactly once.
-		expect(outbox.added).toEqual([[event]]);
-		expect(bus.published).toEqual([[event]]);
+		expect(outbox.added).toEqual([[stamped(event)]]);
+		expect(bus.published).toEqual([[stamped(event)]]);
 		// markPersisted called exactly once on the deduped aggregate.
 		expect(agg.markPersistedCalls).toBe(1);
 	});
@@ -423,7 +593,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(bus.published).toHaveLength(0);
-		// markPersisted still runs — keeps the lifecycle consistent even
+		// markPersisted still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
 		expect(agg.markPersistedCalls).toBe(1);
 	});
@@ -451,7 +621,7 @@ describe("withCommit", () => {
 				},
 				markPersisted(v) {
 					aggA.markPersisted(v);
-					// User-overridable onPersisted hooks can throw — the
+					// User-overridable onPersisted hooks can throw; the
 					// post-commit loop must not abort for the peers.
 					throw new Error("cache eviction failed");
 				},
@@ -494,7 +664,7 @@ describe("withCommit", () => {
 		}
 
 		it("returns the committed result even when an in-process subscriber fails", async () => {
-			// The tx committed and the outbox holds the events — a publish
+			// The tx committed and the outbox holds the events; a publish
 			// failure is eventual consistency, not use-case failure. A
 			// rejection here would make callers retry a committed write.
 			const agg = createAggWithEvent();
@@ -590,7 +760,7 @@ describe("withCommit", () => {
 					async () => ({ result: "ok", aggregates: [agg] }),
 				),
 			).rejects.toThrow("outbox write failed");
-			// Rolled back — pending events must survive for a retry.
+			// Rolled back: pending events must survive for a retry.
 			expect(agg.markPersistedCalls).toBe(0);
 		});
 	});

@@ -275,7 +275,7 @@ describe("deepEqual – Pair-tracking edge cases", () => {
 		const b: any = { tag: "n" };
 		b.next = b;
 
-		// Both structures look identical at every node — pair-set cycle
+		// Both structures look identical at every node, so the pair-set cycle
 		// hypothesis treats them as equal once the pair (aN, b) has been
 		// visited.
 		expect(deepEqual(a1, b)).toBe(true);
@@ -361,7 +361,7 @@ describe("deepEqual – Typ-Mismatches", () => {
 describe("deepEqual – Symbol.toStringTag spoofing", () => {
 	// Type detection is tag-based (cross-realm safe), but a plain object can
 	// set Symbol.toStringTag to any built-in name. Spoofed objects must be
-	// brand-checked and fall back to plain-object comparison — not crash.
+	// brand-checked and fall back to plain-object comparison, not crash.
 	it("does not crash on plain objects spoofing the Date tag", () => {
 		const a = { [Symbol.toStringTag]: "Date" };
 		const b = { [Symbol.toStringTag]: "Date" };
@@ -397,7 +397,7 @@ describe("deepEqual – Symbol.toStringTag spoofing", () => {
 
 	it("plain objects spoofing the Array tag are not compared as arrays", () => {
 		// Without a brand check both sides have length undefined and the
-		// element loop never runs — everything would compare equal.
+		// element loop never runs, so everything would compare equal.
 		const a = { [Symbol.toStringTag]: "Array", x: 1 };
 		const b = { [Symbol.toStringTag]: "Array", x: 2 };
 

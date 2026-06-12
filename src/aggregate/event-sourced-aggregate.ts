@@ -6,7 +6,7 @@ import { BaseAggregate } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
 
-// Re-export for backwards compatibility — `IEventSourcedAggregate` lives
+// Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).
 export type { IEventSourcedAggregate } from "./aggregate";
 
@@ -20,19 +20,19 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  *
  * Like `AggregateRoot`, this is both the root entity and the aggregate
  * boundary. The difference is persistence: state is derived from events,
- * not stored directly. Events are the single source of truth — all state
+ * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but does NOT
  * expose `setState()` or `commit()` from `AggregateRoot`. This enforces
- * the event sourcing pattern at the type level — there is no way to
+ * the event sourcing pattern at the type level: there is no way to
  * mutate state without going through an event handler.
  *
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
  * on invariant violations. Subclasses override `validateEvent()` to
  * throw their own concrete subclasses (e.g. `OrderAlreadyConfirmedError`).
  * Only the infrastructure-boundary methods (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) return `Result` — they catch
+ * `restoreFromSnapshotWithEvents`) return `Result`: they catch
  * `DomainError` during replay so callers can react to corrupted event
  * streams without try/catch.
  *
@@ -91,13 +91,13 @@ export abstract class EventSourcedAggregate<
 	 * Throws `DomainError` (or a subclass) on validation failure.
 	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
 	 *
-	 * State is not mutated if any step throws — the handler is invoked into
+	 * State is not mutated if any step throws: the handler is invoked into
 	 * a local and only assigned to `_state` once all checks pass.
 	 *
 	 * The method is generic in the event tag `K`, so concrete callers
 	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
-	 * dispatched handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`
-	 * — no `as` cast required at the call site.
+	 * dispatched handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`,
+	 * with no `as` cast required at the call site.
 	 *
 	 * @param event - The domain event to apply
 	 * @param isNew - Whether the event is new (needs persisting) or replayed from history
@@ -145,12 +145,12 @@ export abstract class EventSourcedAggregate<
 
 	/**
 	 * Reconstitutes the aggregate from an event history. Catches `DomainError`
-	 * thrown during replay and returns it as an `Err` — this is the
+	 * thrown during replay and returns it as an `Err`: this is the
 	 * infrastructure boundary, where event-stream corruption is an expected
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
 	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
-	 * is rolled back to its pre-call value — same contract as
+	 * is rolled back to its pre-call value, the same contract as
 	 * `restoreFromSnapshotWithEvents`. Partial replay is never observable.
 	 * (Version needs no rollback: replay dispatches with `isNew = false`,
 	 * which never bumps it; only the final `markRestored` advances it.)
@@ -163,7 +163,7 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		// Empty stream: nothing was loaded — leave the lifecycle markers
+		// Empty stream: nothing was loaded, so leave the lifecycle markers
 		// alone. markRestored(version) here would replace the
 		// never-persisted sentinel (persistedVersion === undefined) on a
 		// fresh aggregate, flipping repository routing from INSERT to

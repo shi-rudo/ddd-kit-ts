@@ -76,7 +76,7 @@ describe("ValueObject Class", () => {
             const e = new Error("mine");
             const bag = new Bag({ m: new Map([["k", d]]), e });
 
-            // The caller's Date must stay fully usable — no in-place freeze,
+            // The caller's Date must stay fully usable: no in-place freeze,
             // no permanently installed throwing setTime shadow.
             expect(Object.isFrozen(d)).toBe(false);
             d.setTime(5);

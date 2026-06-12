@@ -12,9 +12,9 @@ The kit makes a sharp architectural choice about where `Result` lives. This page
 
 ## Why throw in the domain
 
-Aggregate invariants are *programming-level guarantees about valid state*. When `order.confirm()` is called on an already-confirmed order, that's not "expected failure to handle gracefully" — that's "the calling Use Case had a bug, or it's racing with itself". Exceptions carry stack traces and class hierarchies (`instanceof OrderAlreadyConfirmedError`) that are exactly the right shape for catching at the App boundary.
+Aggregate invariants are *programming-level guarantees about valid state*. When `order.confirm()` is called on an already-confirmed order, that's not "expected failure to handle gracefully"; that's "the calling Use Case had a bug, or it's racing with itself". Exceptions carry stack traces and class hierarchies (`instanceof OrderAlreadyConfirmedError`) that are exactly the right shape for catching at the App boundary.
 
-Vernon (IDDD §10), Evans (Blue Book), and Khononov (*Learning DDD*) all model aggregate invariants as exceptions. The wider TS ecosystem (Effect, fp-ts) often uses Result-style; this kit deliberately doesn't — `Result<T, string>` for "order is already confirmed" loses the typed catch and the stack trace, and the App-Service handler ends up calling `.unwrap()` or `if (result.isErr()) throw new Error(result.error)` anyway.
+Vernon (IDDD §10), Evans (Blue Book), and Khononov (*Learning DDD*) all model aggregate invariants as exceptions. The wider TS ecosystem (Effect, fp-ts) often uses Result-style; this kit deliberately doesn't: `Result<T, string>` for "order is already confirmed" loses the typed catch and the stack trace, and the App-Service handler ends up calling `.unwrap()` or `if (result.isErr()) throw new Error(result.error)` anyway.
 
 ## Why Result at the App boundary
 
@@ -33,7 +33,7 @@ if (result.isOk()) {
 
 ## Error hierarchy
 
-The kit ships two abstract bases plus three concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
+The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
 
 ```ts
 import { BaseError } from "@shirudo/base-error";
@@ -43,18 +43,21 @@ abstract class InfrastructureError<Name> extends BaseError<Name> {}   // persist
 
 class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // Repository.getByIdOrFail()
 class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // Repository.save() on version mismatch; retryable: true
-class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug — NOT a DomainError
+class DuplicateAggregateError   extends InfrastructureError<"DuplicateAggregateError"> {}   // Repository.save() INSERT hit an existing id; NOT retryable
+class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug: NOT a DomainError
 ```
+
+(The Unit of Work adds `CommitError` / `RollbackError` — also `InfrastructureError` subclasses — and the BaseError-direct programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
 
 | Catch | Map to | Reason |
 |---|---|---|
 | `instanceof DomainError` | HTTP 400 / business rule | The Use Case violated an invariant; the caller did something the domain forbids. |
 | `instanceof InfrastructureError` | HTTP 404 / 409 (with retry hint) | The persistence layer raced or the row is missing; the domain itself didn't fail. |
-| `instanceof MissingHandlerError` | re-throw → HTTP 500 / alert | The aggregate's subclass forgot to register an event handler. Programming bug — crash loud. |
+| `instanceof MissingHandlerError` | re-throw → HTTP 500 / alert | The aggregate's subclass forgot to register an event handler. Programming bug: crash loud. |
 | `isBaseError(e)` (else) | HTTP 500 / log | Any other structured error from the kit or another `BaseError`-using library. Treated as expected-but-uncategorised. |
 | anything else | HTTP 500 | Unexpected runtime exception. |
 
-`MissingHandlerError` deliberately sits directly on `BaseError`, **not** on `DomainError` or `InfrastructureError`: a generic "catch domain errors → 400" handler must not mask a forgotten event handler. The replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also propagate it as an uncaught throw rather than wrapping it in their `Result<void, DomainError>` return — programming bugs should fail loud, not look like a recoverable infrastructure failure.
+`MissingHandlerError` deliberately sits directly on `BaseError`, **not** on `DomainError` or `InfrastructureError`: a generic "catch domain errors → 400" handler must not mask a forgotten event handler. The replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`) also propagate it as an uncaught throw rather than wrapping it in their `Result<void, DomainError>` return: programming bugs should fail loud, not look like a recoverable infrastructure failure.
 
 Use the [`isBaseError`](https://www.npmjs.com/package/@shirudo/base-error) predicate from the peer dep to detect "any structured error" without depending on the concrete library hierarchy.
 
@@ -90,7 +93,7 @@ try {
   await repo.save(order);
   return ok(order.id);
 } catch (e) {
-  // Walk the whole cause chain for retry hints — ConcurrencyConflictError
+  // Walk the whole cause chain for retry hints; ConcurrencyConflictError
   // sets retryable: true; an OCC-aware Use Case retries instead of bubbling
   // up. someChainRetryable matches the loose `retryable === true` predicate
   // anywhere in the chain, so it works whether the conflict is the thrown
@@ -103,14 +106,15 @@ try {
   }
 
   if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain → 400
-  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409
+  if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409 (retry in a fresh unit of work)
+  if (e instanceof DuplicateAggregateError)    return err("ALREADY_EXISTS");          // infra → 409 (never retry the same INSERT)
   if (e instanceof AggregateNotFoundError) {
     // Use the user-safe message instead of the technical one
     return err(e.getUserMessage() ?? e.message);                                      // infra → 404
   }
   if (e instanceof InfrastructureError)        return err(e.getUserMessage() ?? e.message);
   if (e instanceof DomainError)                return err(e.getUserMessage() ?? e.message);
-  throw e; // includes MissingHandlerError — programming bug, let it crash
+  throw e; // includes MissingHandlerError, a programming bug; let it crash
 }
 ```
 
@@ -118,21 +122,21 @@ try {
 
 Because every library error extends `BaseError<Name>`:
 
-- **`error.toJSON()`** — structured log entry: name, message, timestamp, stack, cause chain.
-- **`error.getUserMessage({ preferredLang?, fallbackLang? })`** — i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError` and `ConcurrencyConflictError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
-- **`error.timestamp` / `error.timestampIso`** — epoch + ISO, useful for sorting / correlating log entries across distributed systems.
-- **`error.name`** — typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
-- **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`) — for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
-- **`isRetryable(error)`** — single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
-- **`someChainRetryable(error)`** — whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors.
+- **`error.toJSON()`**: structured log entry with name, message, timestamp, stack, cause chain.
+- **`error.getUserMessage({ preferredLang?, fallbackLang? })`**: i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
+- **`error.timestamp` / `error.timestampIso`**: epoch + ISO, useful for sorting / correlating log entries across distributed systems.
+- **`error.name`**: typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
+- **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`): for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
+- **`isRetryable(error)`**: single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
+- **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors.
 
 ::: warning Which `@shirudo/base-error` helpers work with ddd-kit errors
-ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, and `ConcurrencyConflictError` extend `BaseError<Name>` directly — they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
+ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` extend `BaseError<Name>` directly; they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
 
 - **Works** (loose / class-based): `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `findInCauseChain`, `filterCauseChain`, `everyCauseChain`, `getRootCause`, `instanceof` checks.
 - **Returns false / undefined for ddd-kit errors** (strict `StructuredError` filter): `isStructuredError`, `isRetryableStructuredError`, `isChainRetryable`, `getRootCauseRetryable`, `getFirstRetryableCause`.
 
-If you also throw `StructuredError`-shaped errors from your own code, those keep working with the strict helpers — only the ddd-kit-supplied errors fall through the strict filter.
+If you also throw `StructuredError`-shaped errors from your own code, those keep working with the strict helpers; only the ddd-kit-supplied errors fall through the strict filter.
 :::
 
 ## What `Result` is (and isn't)
@@ -145,24 +149,24 @@ The kit does **not** re-export Result. Import from `@shirudo/result` directly:
 import { ok, err, type Result } from "@shirudo/result";
 ```
 
-This keeps the kit out of "in-house framework" territory and avoids re-export bloat. If you prefer `effect`, `neverthrow`, or fp-ts `Either`, you can use those at your App boundary instead — `CommandHandler<C, R>` stays portable; only your `commandBus.execute` adapter changes.
+This keeps the kit out of "in-house framework" territory and avoids re-export bloat. If you prefer `effect`, `neverthrow`, or fp-ts `Either`, you can use those at your App boundary instead. `CommandHandler<C, R>` stays portable; only your `commandBus.execute` adapter changes.
 
 ## `voWithValidation` is the App-boundary parser
 
 The fail-fast Result-returning helper on the value-object side (see [`voValidated`](#vovalidated-collects-every-violation) below when you need *all* violations at once). Use it for parsing untrusted input *at the App boundary*; for Domain construction prefer the `ValueObject` base class which throws on invalid input.
 
 ```ts
-// At the App boundary — parsing user input
+// At the App boundary: parsing user input
 const result = voWithValidation(body, isValid, "BAD_REQUEST");
 if (result.isErr()) return new Response(result.error, { status: 400 });
 
-// In the Domain — constructor throws
+// In the Domain: constructor throws
 new Money({ amount: -1, currency: "EUR" }); // throws DomainError
 ```
 
 ## `voValidated` collects every violation
 
-`voWithValidation` fails fast with a single string. A form parser usually wants the opposite: report *all* the broken fields at once ("email invalid **and** age negative"). `voValidated` runs your checks, collects each violation, and returns a populated `ValidationError` only if any fired — otherwise a frozen value object.
+`voWithValidation` fails fast with a single string. A form parser usually wants the opposite: report *all* the broken fields at once ("email invalid **and** age negative"). `voValidated` runs your checks, collects each violation, and returns a populated `ValidationError` only if any fired; otherwise a frozen value object.
 
 ```ts
 import { voValidated } from "@shirudo/ddd-kit";
@@ -185,16 +189,16 @@ if (result.isErr()) {
 
 ### Two error styles, one axis
 
-This is where the kit's error model has **two deliberate styles** — and the rule that keeps them straight is *how you consume them*, not a single class hierarchy:
+This is where the kit's error model has **two deliberate styles**, and the rule that keeps them straight is *how you consume them*, not a single class hierarchy:
 
 | Style | Type | You… | When |
 |---|---|---|---|
-| **Throw / catch** | `DomainError` (and subclasses) | `catch (e instanceof DomainError)` at the boundary | Aggregate invariant violated — a bug or a race |
+| **Throw / catch** | `DomainError` (and subclasses) | `catch (e instanceof DomainError)` at the boundary | Aggregate invariant violated: a bug or a race |
 | **Result / destructure** | `ValidationError` | `if (result.isErr())` then read `result.error` | Untrusted input failed field-level validation |
 
-`voValidated` returns a `ValidationError` as a **value** — you never `throw` it, so you never `catch` it. That is why it does **not** sit on the `DomainError` throw/catch hierarchy, and why a generic `catch (e instanceof DomainError)` handler is *correct* to ignore it: validation lives on the Result axis. This is a kit, not a framework — it hands you the value and stays out of your boundary.
+`voValidated` returns a `ValidationError` as a **value**: you never `throw` it, so you never `catch` it. That is why it does **not** sit on the `DomainError` throw/catch hierarchy, and why a generic `catch (e instanceof DomainError)` handler is *correct* to ignore it: validation lives on the Result axis. This is a kit, not a framework; it hands you the value and stays out of your boundary.
 
-`ValidationError` comes from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (import it from there, like `Result`). Unlike the kit's class-discriminated errors, it *is* a `StructuredError` carrying `code` / `category` and ingesting [Standard Schema](https://standardschema.dev) output — deliberately, because field validation is exactly the case that serializes to RFC 9457 with structured per-field output.
+`ValidationError` comes from [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) (import it from there, like `Result`). Unlike the kit's class-discriminated errors, it *is* a `StructuredError` carrying `code` / `category` and ingesting [Standard Schema](https://standardschema.dev) output, deliberately, because field validation is exactly the case that serializes to RFC 9457 with structured per-field output.
 
 ### Rendering RFC 9457 at the boundary
 

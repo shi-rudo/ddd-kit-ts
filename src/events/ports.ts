@@ -40,13 +40,13 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 *     awaits all of its handlers, then dispatches `b`, and so on. The
 	 *     library never reorders or parallelises across events.
 	 *  2. **Handlers within a single event run in parallel.** All handlers
-	 *     subscribed to `event.type` are awaited via `Promise.allSettled` —
+	 *     subscribed to `event.type` are awaited via `Promise.allSettled`:
 	 *     none of them sees the others' errors and none is skipped if a
 	 *     peer fails.
 	 *  3. **Errors are collected and thrown AFTER everything dispatches.**
 	 *     If one handler throws, remaining handlers for that event still
 	 *     run, and remaining events in the batch still publish. Once
-	 *     `publish` reaches the end of the batch it throws — the single
+	 *     `publish` reaches the end of the batch it throws: the single
 	 *     error directly if there was one, or an `AggregateError`
 	 *     ("Multiple event handlers failed") containing every captured
 	 *     error otherwise. Callers that need fail-fast semantics should
@@ -125,7 +125,7 @@ export interface OnceOptions {
 /**
  * One pending event in the outbox plus the opaque id the implementation
  * needs to ack it via `markDispatched`. The library does not prescribe
- * what `dispatchId` looks like — an implementation can reuse the event's
+ * what `dispatchId` looks like: an implementation can reuse the event's
  * own `eventId`, generate its own UUID, use the row's auto-increment
  * primary key, or whatever the storage layer prefers.
  */
@@ -135,7 +135,7 @@ export interface OutboxRecord<Evt extends AnyDomainEvent> {
 }
 
 /**
- * Transactional outbox port — the bridge between the write-side
+ * Transactional outbox port: the bridge between the write-side
  * transaction and the (out-of-band) event dispatcher.
  *
  * Lifecycle:
@@ -146,7 +146,7 @@ export interface OutboxRecord<Evt extends AnyDomainEvent> {
  *  3. After successful dispatch, the dispatcher calls `markDispatched()`
  *     with the records' `dispatchId`s so they don't come back next poll.
  *
- * `markDispatched` is required to be idempotent — calling it with an id
+ * `markDispatched` is required to be idempotent: calling it with an id
  * that's already marked is a no-op, not an error. This lets the
  * dispatcher safely retry on partial-failure.
  */

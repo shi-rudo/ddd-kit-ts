@@ -41,7 +41,7 @@ const DATE_MUTATORS: readonly string[] = [
 ];
 
 // One thrower function per (typeName, method) for the lifetime of the
-// module — createDomainEvent deep-freezes a Date per event, so fresh
+// module: createDomainEvent deep-freezes a Date per event, so fresh
 // per-instance closures would be pure allocation churn on a hot path.
 const mutationThrowers = new Map<string, () => never>();
 
@@ -59,7 +59,7 @@ function mutationThrower(typeName: string, method: string): () => never {
     return thrower;
 }
 
-// Reused descriptor — Object.defineProperty reads it synchronously, so a
+// Reused descriptor: Object.defineProperty reads it synchronously, so a
 // single mutable module-level object avoids one allocation per method.
 const shadowDescriptor = {
     value: undefined as unknown,
@@ -74,7 +74,7 @@ function shadowMutators(
     methods: readonly string[],
 ): void {
     // A non-extensible built-in (frozen, sealed, or preventExtensions'd)
-    // cannot receive shadow properties — skip it (best effort; the caller
+    // cannot receive shadow properties, so skip it (best effort; the caller
     // chose to lock it themselves).
     if (!Object.isExtensible(obj)) return;
     for (const method of methods) {
@@ -89,25 +89,25 @@ function shadowMutators(
  * so the freeze symmetry matches `deepEqual` (which also considers symbol
  * keys). Handles circular references by tracking visited objects.
  *
- * Note: `deepFreeze` mutates its argument in place — it sets `[[Frozen]]`
+ * Note: `deepFreeze` mutates its argument in place; it sets `[[Frozen]]`
  * on the object you pass in. Callers that need to avoid touching the
  * input (e.g. `vo()`) should deep-clone first.
  *
  * Date/Map/Set keep internal-slot mutability under `Object.freeze`
  * (`setTime`, `set`, `add`, … still work on frozen instances), so their
  * mutator methods are shadowed with throwing own properties and Map/Set
- * contents are frozen recursively. The shadows are non-enumerable —
+ * contents are frozen recursively. The shadows are non-enumerable:
  * invisible to `Object.keys`, spread, `deepEqual`, and `structuredClone`.
  *
  * The shadowing is deny-by-enumeration: only the mutators known at
  * release time are blocked. If the runtime grows a NEW mutator (e.g. the
  * stage-3 `Map.prototype.getOrInsert` upsert proposal), it is not blocked
- * until the list is updated — treat the mutator blocking as a guard rail,
+ * until the list is updated. Treat the mutator blocking as a guard rail,
  * not a security boundary.
  *
  * Limitation: ArrayBuffer views (TypedArrays, DataView) are passed through
- * unfrozen — the spec forbids freezing a view with elements, and freezing
- * cannot protect the underlying buffer. Their contents remain mutable.
+ * unfrozen, because the spec forbids freezing a view with elements, and
+ * freezing cannot protect the underlying buffer. Their contents remain mutable.
  */
 export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
     if (obj === null || typeof obj !== "object") {
@@ -115,7 +115,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
     }
     // ArrayBuffer views are atomic: Object.freeze on a typed array with
     // elements throws per spec, and freezing cannot protect the underlying
-    // buffer anyway — so views are returned as-is (their contents stay
+    // buffer anyway, so views are returned as-is (their contents stay
     // mutable). Mirrors deepEqual, which also treats views atomically.
     if (ArrayBuffer.isView(obj)) {
         return obj as Readonly<T>;
@@ -125,7 +125,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
     }
     visited.add(obj as object);
 
-    // Date/Map/Set keep internal-slot mutability under Object.freeze —
+    // Date/Map/Set keep internal-slot mutability under Object.freeze:
     // shadow their mutators and freeze Map/Set contents (entries are not
     // own keys, so the key walk below would miss them). Brand-verified via
     // isBuiltInObject: a plain object spoofing one of these tags through
@@ -166,10 +166,10 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 /**
  * Deep clone used by `vo()` and the `ValueObject` constructor.
  *
- * Plain objects, class instances (prototype-preserving — the constructor
+ * Plain objects, class instances (prototype-preserving, since the constructor
  * is NOT re-invoked), arrays, and Map/Set entries are walked manually so
  * that symbol-keyed properties survive (which `structuredClone` silently
- * drops — they would otherwise be invisible to `voEquals`, whose
+ * drops; they would otherwise be invisible to `voEquals`, whose
  * `deepEqual` DOES consider symbol keys) and shared references / cycles
  * keep their identity across Map/Set boundaries. Function values throw,
  * preserving `vo()`'s documented data-not-behaviour gate; Promise /
@@ -183,7 +183,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown {
     if (typeof value === "function") {
         throw new TypeError(
-            "vo() does not accept function values — Value Objects are data, not behaviour",
+            "vo() does not accept function values: Value Objects are data, not behaviour",
         );
     }
     if (value === null || typeof value !== "object") {
@@ -227,7 +227,7 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
             tag === "[object WeakSet]"
         ) {
             throw new TypeError(
-                `vo() cannot clone a ${tag.slice(8, -1)} — Value Objects are plain data`,
+                `vo() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
             );
         }
         // Atomic built-ins: Date, RegExp, TypedArrays, ArrayBuffer,
@@ -261,7 +261,7 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
 /**
  * Creates a deeply immutable value object from the given data.
  *
- * The input is first deep-cloned, then the clone is frozen — so calling
+ * The input is first deep-cloned, then the clone is frozen, so calling
  * `vo(input)` never freezes the caller's own object graph as a
  * side-effect. Mutating the input afterwards does not bleed into the VO.
  * Symbol-keyed properties are preserved (matching `voEquals`); function
@@ -365,7 +365,7 @@ export function voEqualsExcept<T>(
  *
  * Note: the Result covers VALIDATION failures only. Non-data values in
  * the input (functions, Promise/WeakMap/WeakSet) still throw a
- * `TypeError` from `vo()` — they cannot occur in parsed JSON and signal
+ * `TypeError` from `vo()`; they cannot occur in parsed JSON and signal
  * a programming error, not a validation failure.
  *
  * @param t - The data to convert into a value object
@@ -403,7 +403,7 @@ export function voWithValidation<T>(
 
 /**
  * Best-effort rendering of a value for the default validation-failure
- * message. `JSON.stringify` throws for cyclic and BigInt-bearing values —
+ * message. `JSON.stringify` throws for cyclic and BigInt-bearing values, and
  * the error path of a Result-returning function must never throw itself.
  */
 function describeValue(value: unknown): string {
@@ -469,7 +469,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
     /**
      * Creates a new ValueObject.
      * The properties are deep-cloned (prototype-preserving) and then deeply
-     * frozen — the caller's own object graph is never frozen or mutated,
+     * frozen, so the caller's own object graph is never frozen or mutated,
      * and later mutation of the input does not bleed into the value object.
      *
      * @param props - The properties of the value object

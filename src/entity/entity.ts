@@ -57,7 +57,7 @@
 import type { Id } from "../core/id";
 
 /**
- * Functional definition of an Entity via its capability — an object is
+ * Functional definition of an Entity via its capability: an object is
  * identifiable if it has an `id`.
  *
  * `TId` is constrained to `Id<string>` so the brand discipline that
@@ -131,7 +131,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	/**
 	 * Returns the current state of the entity.
 	 *
-	 * The state object is **shallowly frozen** — direct property writes
+	 * The state object is **shallowly frozen**: direct property writes
 	 * (`entity.state.foo = …`) throw in strict mode, but writes to nested
 	 * objects (`entity.state.address.zip = …`) bypass the freeze. For deep
 	 * immutability either model nested data with `vo()` (which freezes
@@ -154,7 +154,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * **State ownership.** Plain-object and array states are shallow-copied
 	 * before the freeze, so the caller's own object stays mutable. A CLASS
 	 * INSTANCE passed as state is an ownership transfer: it is frozen
-	 * in place (a copy would strip its prototype) — do not keep mutating
+	 * in place (a copy would strip its prototype). Do not keep mutating
 	 * the instance after handing it to the entity. The same contract
 	 * applies to {@link setState}.
 	 */
@@ -175,7 +175,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * **⚠️ Must not read subclass instance fields via `this`.** The
 	 * constructor calls `validateState(initialState)` BEFORE the subclass's
 	 * field initializers run, so `this.someField` is `undefined` at that
-	 * point — a classic TypeScript/JavaScript constructor-ordering footgun.
+	 * point, a classic TypeScript/JavaScript constructor-ordering footgun.
 	 * The `state` argument is the single source of truth; treat the method
 	 * as pure with respect to `this`.
 	 *
@@ -199,7 +199,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 *
 	 * Plain-object and array states are shallow-copied before the freeze
 	 * (the caller's object stays mutable); a class-instance state is an
-	 * ownership transfer and is frozen in place — see the constructor.
+	 * ownership transfer and is frozen in place; see the constructor.
 	 *
 	 * @param newState - The new state
 	 */
@@ -231,7 +231,7 @@ export function freezeShallow<T>(value: T): T {
  * Returns a shallow copy for plain objects and arrays so the subsequent
  * `freezeShallow` never locks the caller's own object in place (their later
  * writes to it would throw in strict mode). Class instances and primitives
- * pass through unchanged — a spread would strip an instance's prototype,
+ * pass through unchanged: a spread would strip an instance's prototype,
  * and handing a class instance as state is an ownership transfer. Nested
  * objects stay shared by design (shallow-freeze, no deep clone).
  */

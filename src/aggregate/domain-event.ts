@@ -7,7 +7,7 @@ import { deepFreeze } from "../value-object/value-object";
  * (works on Node 19+, modern browsers in secure contexts, Deno, Bun,
  * Cloudflare Workers, Vercel Edge, and any runtime that implements Web
  * Crypto). Note that `crypto.randomUUID()` returns **UUID v4** (purely
- * random) — for production event stores prefer a **time-ordered** id
+ * random); for production event stores prefer a **time-ordered** id
  * format (UUID v7 / ULID / KSUID) so B-tree indexes on the eventId
  * column stay clustered and `ORDER BY eventId` matches creation order.
  * Swap one in via `setEventIdFactory(() => uuidv7())` or `() => ulid()`.
@@ -31,7 +31,7 @@ let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
  *
  * The per-call `options.eventId` override always wins over this factory.
  *
- * **Module-scoped — last setter wins.** The factory lives as a single
+ * **Module-scoped: last setter wins.** The factory lives as a single
  * module variable; importing two libraries that both call this races on
  * load order, and parallel test workers will see each other's factory.
  * For test isolation and short-lived contexts prefer
@@ -46,7 +46,7 @@ export function setEventIdFactory(factory: EventIdFactory): void {
 
 /**
  * Internal guard for the scoped factory helpers. Throws a clear error
- * when the user-supplied `fn` returns a thenable — the helpers are
+ * when the user-supplied `fn` returns a thenable: the helpers are
  * synchronous-only, and a silent async-misuse would restore the factory
  * before the awaited body of `fn` runs, leaving the awaited code
  * reading the previous factory.
@@ -68,19 +68,19 @@ function assertNotThenable(result: unknown, helperName: string): void {
 
 /**
  * Scoped variant of {@link setEventIdFactory}: installs `factory`,
- * runs `fn`, then restores the previous factory in a `finally` block —
+ * runs `fn`, then restores the previous factory in a `finally` block,
  * so the restoration happens even if `fn` throws. Safe for parallel
  * tests and for synchronous request handlers that need a tenant-
  * specific factory without polluting the global.
  *
- * **Synchronous-only — enforced at runtime.** If `fn` returns a
+ * **Synchronous-only, enforced at runtime.** If `fn` returns a
  * thenable (a `Promise` or any object with a `then` method), the
  * helper throws *before* returning the value to the caller. This
  * catches the async-misuse footgun where the factory would be
  * restored before the awaited body of `fn` runs, leaving the awaited
  * code reading the previous factory. For async scoping across `await`
- * boundaries, use `AsyncLocalStorage` — out of scope for this helper;
- * build it on top if you need it.
+ * boundaries, use `AsyncLocalStorage`, which is out of scope for this
+ * helper; build it on top if you need it.
  *
  * Composes by nesting: an inner `withEventIdFactory` restores back to
  * the outer's factory; the outer restores to the original.
@@ -88,7 +88,7 @@ function assertNotThenable(result: unknown, helperName: string): void {
  * **When to prefer the per-call `options.eventId` instead.** If you're
  * constructing a single event and want full control over its id,
  * passing `{ eventId: "..." }` to `createDomainEvent` is the strongest
- * isolation — it bypasses the factory mechanism entirely, no global
+ * isolation: it bypasses the factory mechanism entirely, no global
  * mutation, no scope to manage. Reach for `withEventIdFactory` when
  * the events are constructed deep inside domain methods you can't
  * thread an explicit id through (typical test scenario), or when many
@@ -155,7 +155,7 @@ let currentClockFactory: ClockFactory = defaultClockFactory;
  * The per-call `options.occurredAt` override always wins over this
  * factory. Symmetric to `setEventIdFactory`.
  *
- * Module-scoped — see {@link setEventIdFactory} for the global-state
+ * Module-scoped: see {@link setEventIdFactory} for the global-state
  * caveats. For test isolation prefer {@link withClockFactory}; for
  * multi-tenant request isolation prefer the per-call
  * `options.occurredAt`.
@@ -167,7 +167,7 @@ export function setClockFactory(factory: ClockFactory): void {
 /**
  * Scoped variant of {@link setClockFactory}: installs `factory`, runs
  * `fn`, then restores the previous factory in a `finally` block.
- * Synchronous-only — same constraints (and same runtime thenable
+ * Synchronous-only, with the same constraints (and same runtime thenable
  * guard) as {@link withEventIdFactory}.
  *
  * **When to prefer the per-call `options.occurredAt` instead.** Same
@@ -245,6 +245,20 @@ export interface EventMetadata {
  * Domain Event represents something meaningful that happened in the domain.
  * Events are immutable and carry information about what occurred.
  *
+ * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
+ * (or the aggregate's `recordEvent` helper) and deeply frozen. Class-based
+ * event objects that satisfy this shape structurally via prototype
+ * members are unsupported: the `withCommit` harvest copies events with a
+ * shallow spread (to stamp `aggregateVersion`), which only carries own
+ * enumerable properties.
+ *
+ * **Field-accretion boundary.** This type already carries the write-side
+ * transport concerns the outbox needs (`aggregateId`, `aggregateType`,
+ * `aggregateVersion`, `metadata`). That is the line: further transport
+ * fields (partition keys, tenancy, schema URNs, …) belong in an outbox
+ * envelope / `metadata`, not on the domain event — the next first-class
+ * transport field forces an `OutboxMessage` envelope port instead.
+ *
  * @template T - The event type name (e.g., "OrderCreated")
  * @template P - The event payload type
  */
@@ -264,7 +278,7 @@ export interface DomainEvent<T extends string, P = void> {
 
 	/**
 	 * Identifier of the aggregate that produced the event. Optional at the
-	 * library level — set it whenever the producing aggregate is known so
+	 * library level; set it whenever the producing aggregate is known so
 	 * downstream subscribers, outboxes, and projections can scope by entity.
 	 */
 	aggregateId?: string;
@@ -290,8 +304,31 @@ export interface DomainEvent<T extends string, P = void> {
 	 * Event schema version for handling schema evolution.
 	 * Required for safe schema migration in event-sourced systems.
 	 * Use 1 for the initial schema version.
+	 *
+	 * **NOT the aggregate's version** — that is
+	 * {@link aggregateVersion}. The two are deliberately distinct
+	 * fields: this one says "which shape does the payload have"
+	 * (upcasting), the other says "which state revision of the
+	 * aggregate emitted this".
 	 */
 	version: number;
+
+	/**
+	 * The version of the producing aggregate at COMMIT time: the same
+	 * value the OCC row write carries. Stamped automatically by
+	 * `withCommit` at the harvest boundary (all events of one aggregate
+	 * in one commit share it; their relative order within the commit is
+	 * the harvest order), or set manually via
+	 * `CreateDomainEventOptions.aggregateVersion` — a pre-set value is
+	 * never overwritten.
+	 *
+	 * Consumers use it for ordering ("apply projections up to aggregate
+	 * version N"), idempotency watermarks, debugging, and integration
+	 * logs. Optional at the type level: events created outside an
+	 * aggregate (system/integration events) and events from older kit
+	 * versions don't carry it.
+	 */
+	aggregateVersion?: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -303,7 +340,7 @@ export interface DomainEvent<T extends string, P = void> {
 /**
  * Upper-bound alias for "any `DomainEvent` shape". Use as a generic
  * constraint when a type parameter should accept any concrete event
- * union. The `unknown` payload is the upper bound — concrete unions
+ * union. The `unknown` payload is the upper bound; concrete unions
  * still narrow via `Extract<Evt, { type: K }>` at the use-site.
  */
 export type AnyDomainEvent = DomainEvent<string, unknown>;
@@ -340,7 +377,16 @@ export interface CreateDomainEventOptions {
 	version?: number;
 
 	/**
-	 * Event metadata — correlation, causation, user, source, custom fields.
+	 * Pre-set the producing aggregate's version (see
+	 * `DomainEvent.aggregateVersion`). Normally left unset — `withCommit`
+	 * stamps it at the harvest boundary with the commit version — but
+	 * useful for replay fixtures and events constructed outside an
+	 * aggregate. A pre-set value is never overwritten by the harvest.
+	 */
+	aggregateVersion?: number;
+
+	/**
+	 * Event metadata: correlation, causation, user, source, custom fields.
 	 */
 	metadata?: EventMetadata;
 }
@@ -353,7 +399,7 @@ export interface CreateDomainEventOptions {
  * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
- * consumers — outbox dispatchers, projection handlers, audit logs —
+ * consumers (outbox dispatchers, projection handlers, audit logs)
  * route by. The `withCommit` harvest boundary now validates both fields
  * are present and throws if they're missing, so a direct
  * `createDomainEvent(...)` call inside an aggregate that forgets the
@@ -396,16 +442,17 @@ export function createDomainEvent<T extends string, P>(
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: payload as P,
-		// Defensive copy — the event must not share the caller's live Date
+		// Defensive copy: the event must not share the caller's live Date
 		// instance, or a later mutation of it would bleed into the event.
 		occurredAt: options?.occurredAt
 			? new Date(options.occurredAt.getTime())
 			: currentClockFactory(),
 		version: options?.version ?? 1,
+		aggregateVersion: options?.aggregateVersion,
 		metadata: options?.metadata,
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
-	// handlers — events are facts of the past and must be immutable
+	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
 	return deepFreeze(event) as DomainEvent<T, P>;
 }
@@ -475,9 +522,9 @@ export function mergeMetadata(
 	...metadataObjects: Array<EventMetadata | undefined>
 ): EventMetadata {
 	// Copy via defineProperty, not Object.assign: assign uses [[Set]],
-	// which invokes the `__proto__` setter for an own "__proto__" key —
-	// typical of JSON.parse'd metadata from outbox rows or message
-	// envelopes — and would install an attacker-controlled prototype.
+	// which invokes the `__proto__` setter for an own "__proto__" key
+	// (typical of JSON.parse'd metadata from outbox rows or message
+	// envelopes) and would install an attacker-controlled prototype.
 	const merged: Record<PropertyKey, unknown> = {};
 	for (const metadata of metadataObjects) {
 		if (!metadata) continue;

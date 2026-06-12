@@ -34,16 +34,16 @@ describe("IdGenerator<Tag> brand binding", () => {
 
 	it("rejects assigning a UserId generator where an OrderId generator is expected", () => {
 		const userGen: IdGenerator<"UserId"> = { next: () => "u-1" as UserId };
-		// @ts-expect-error: the tag parameter is invariant — UserId generator ≠ OrderId generator
+		// @ts-expect-error: the tag parameter is invariant; UserId generator ≠ OrderId generator
 		const _orderGen: IdGenerator<"OrderId"> = userGen;
 		void _orderGen;
 	});
 
 	it("does not let callers steal an unrelated brand at the call site", () => {
 		const userGen: IdGenerator<"UserId"> = { next: () => "u-1" as UserId };
-		// next() is just () => Id<"UserId"> now — no caller-picked generic to abuse.
+		// next() is just () => Id<"UserId"> now: no caller-picked generic to abuse.
 		const value = userGen.next();
-		// Assigning to OrderId would require an explicit cast — the type system
+		// Assigning to OrderId would require an explicit cast: the type system
 		// no longer hands out wrong-tagged ids for free.
 		// @ts-expect-error: Id<"UserId"> is not assignable to Id<"OrderId">
 		const _orderId: OrderId = value;

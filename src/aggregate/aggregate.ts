@@ -81,7 +81,7 @@ export interface IEventSourcedAggregate<
  * Useful for optimistic concurrency control checks.
  *
  * Note: Two aggregates with the same ID ARE the same aggregate (identity).
- * This function checks if they are at the same version — i.e., no concurrent modification.
+ * This function checks if they are at the same version: i.e., no concurrent modification.
  *
  * @example
  * ```typescript

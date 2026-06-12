@@ -6,14 +6,14 @@ The kit ships an in-memory `CommandBus` and `QueryBus` plus marker types (`Comma
 
 The bundled buses are **zero-config in-process dispatchers**. They fit:
 
-- **Edge runtimes** (Cloudflare Workers, Vercel Edge, Deno Deploy, Bun) — each worker invocation handles one command in-process; external brokers would defeat edge latency
-- **Modular monoliths** — single Node process, multiple bounded contexts; the bus routes between modules
-- **Tests and local development** — stand-in for production buses without infrastructure
+- **Edge runtimes** (Cloudflare Workers, Vercel Edge, Deno Deploy, Bun): each worker invocation handles one command in-process; external brokers would defeat edge latency
+- **Modular monoliths:** single Node process, multiple bounded contexts; the bus routes between modules
+- **Tests and local development:** stand-in for production buses without infrastructure
 - **Small CLIs and scripts**
 
 For **cross-process messaging** (RabbitMQ, NATS, Kafka, AWS SQS), don't use the in-memory bus. Keep the `CommandHandler<C, R>` / `QueryHandler<Q, R>` types as the contract and wire them to your transport. The handlers stay portable; only the dispatcher changes.
 
-The included buses intentionally have **no middleware/pipeline machinery** — wrap handlers with decorator functions when you need logging, auth, metrics. Anything more elaborate is in-house framework territory and lives outside the kit.
+The included buses intentionally have **no middleware/pipeline machinery**: wrap handlers with decorator functions when you need logging, auth, metrics. Anything more elaborate is in-house framework territory and lives outside the kit.
 
 ## Commands
 
@@ -54,7 +54,7 @@ const createOrderHandler: CommandHandler<CreateOrderCommand, string> = async (cm
 const bus = new CommandBus<Commands>();
 bus.register("CreateOrder", createOrderHandler);
 
-// Execute — return type is Result<string, string>
+// Execute: return type is Result<string, string>
 const result = await bus.execute({
   type: "CreateOrder",
   customerId: "c-1",
@@ -74,7 +74,7 @@ bus.register("Unknown", async () => ok("x"));
 bus.register("CreateOrder", async () => ok(42));
 ```
 
-Without a `TMap` the registration is loose (any key, any return type) — the no-config path keeps working for tests and prototypes.
+Without a `TMap` the registration is loose (any key, any return type); the no-config path keeps working for tests and prototypes.
 
 ## Queries
 
@@ -101,14 +101,14 @@ const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => 
 const queryBus = new QueryBus<Queries>();
 queryBus.register("GetOrder", getOrderHandler);
 
-// Safe variant — returns Result<Order | null, string>
+// Safe variant: returns Result<Order | null, string>
 const safe = await queryBus.execute({ type: "GetOrder", orderId: "o-1" });
 
-// Throw-on-failure variant — returns Order | null directly
+// Throw-on-failure variant: returns Order | null directly
 const order = await queryBus.executeUnsafe({ type: "GetOrder", orderId: "o-1" });
 ```
 
-Queries return data directly (`QueryHandler` is `(q: Q) => Promise<R>`), not a `Result` — read operations don't usually have business-level errors. Only `execute` adds the Result wrapper for "no handler registered" / unexpected throws; `executeUnsafe` skips it.
+Queries return data directly (`QueryHandler` is `(q: Q) => Promise<R>`), not a `Result`: read operations don't usually have business-level errors. Only `execute` adds the Result wrapper for "no handler registered" / unexpected throws; `executeUnsafe` skips it.
 
 ## `withCommit`: transactional Use Cases
 
@@ -130,15 +130,15 @@ const result = await withCommit(
 
 Order of operations:
 
-1. `scope.transactional(fn)` — `fn` runs inside the persistence layer's native transaction
-2. Inside the transaction: state mutations + `outbox.add(events)` — events persist **atomically** with the state change
+1. `scope.transactional(fn)`: `fn` runs inside the persistence layer's native transaction
+2. Inside the transaction: state mutations + `outbox.add(events)`, so events persist **atomically** with the state change
 3. Transaction commits
 4. **After** the commit, `bus.publish(events)` fires for in-process subscribers
 
-Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject — the transaction has committed, so the caller always receives the committed `result` (a rejection here would invite a double-executing retry). The error is reported to the optional `onPublishError(error, events)` dep (wire it to your logger/metrics); delivery is still guaranteed because the outbox dispatcher picks the events up (eventual consistency).
+Publishing *after* commit defeats the classic publish-before-commit footgun: subscribers can never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject: the transaction has committed, so the caller always receives the committed `result` (a rejection here would invite a double-executing retry). The error is reported to the optional `onPublishError(error, events)` dep (wire it to your logger/metrics); delivery is still guaranteed because the outbox dispatcher picks the events up (eventual consistency).
 
 See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract, and [Read-Side Projections](./projections.md) for the canonical CQRS read-side flow (dispatcher → projection handlers → read-model tables → `QueryBus`).
 
 ## Process Managers / Sagas
 
-For multi-step workflows that span aggregates (order → payment → shipping → confirmation, with compensating actions on failure), the kit ships no abstraction — but the building blocks compose into the canonical pattern. The Process Manager is itself an `AggregateRoot` whose `EventBus.subscribe` reflexes transition its state and dispatch the next `CommandBus` command. See [`examples/saga/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga) for a worked example with happy-path + two compensation flows.
+For multi-step workflows that span aggregates (order → payment → shipping → confirmation, with compensating actions on failure), the kit ships no abstraction, but the building blocks compose into the canonical pattern. The Process Manager is itself an `AggregateRoot` whose `EventBus.subscribe` reflexes transition its state and dispatch the next `CommandBus` command. See [`examples/saga/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga) for a worked example with happy-path + two compensation flows.

@@ -1,6 +1,6 @@
 # Value Objects
 
-Value Objects are immutable, defined by their attributes rather than identity. Equality is structural — two Money value objects with the same amount and currency are the same.
+Value Objects are immutable, defined by their attributes rather than identity. Equality is structural: two Money value objects with the same amount and currency are the same.
 
 ## Functional: `vo()`
 
@@ -18,14 +18,14 @@ const b = vo({ amount: 100, currency: "EUR" });
 voEquals(a, b); // true
 ```
 
-`vo()` deep-clones its input before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object. Symbol-keyed properties are preserved — they participate in `voEquals` like any other key.
+`vo()` deep-clones its input before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object. Symbol-keyed properties are preserved; they participate in `voEquals` like any other key.
 
 Function values are rejected with a `TypeError`, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
 
-Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map/Set contents recursively — a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. The blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated — treat it as a guard rail, not a security boundary.
+Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map/Set contents recursively, so a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. The blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated. Treat it as a guard rail, not a security boundary.
 
 ::: info ArrayBuffer views stay mutable
-The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway — so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
+The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway, so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
 :::
 
 ### Validation at the App boundary
@@ -47,7 +47,7 @@ if (result.isOk()) {
 }
 ```
 
-`voWithValidation` is the **App-boundary parser** — use it when validating untrusted input (HTTP body, queue message, file). For Domain construction, prefer the class-based `ValueObject` so the constructor itself enforces invariants and throws on violation.
+`voWithValidation` is the **App-boundary parser**: use it when validating untrusted input (HTTP body, queue message, file). For Domain construction, prefer the class-based `ValueObject` so the constructor itself enforces invariants and throws on violation.
 
 ### Collecting every violation: `voValidated`
 
@@ -71,7 +71,7 @@ if (result.isErr()) {
 }
 ```
 
-The returned `ValidationError` is a **value you destructure, not a throw you catch** — it lives on the Result axis, distinct from the thrown `DomainError` hierarchy. See [Result vs Throw](./result-vs-throw.md#vovalidated-collects-every-violation) for that distinction and for rendering it as RFC 9457 via `@shirudo/ddd-kit/http`.
+The returned `ValidationError` is a **value you destructure, not a throw you catch**: it lives on the Result axis, distinct from the thrown `DomainError` hierarchy. See [Result vs Throw](./result-vs-throw.md#vovalidated-collects-every-violation) for that distinction and for rendering it as RFC 9457 via `@shirudo/ddd-kit/http`.
 
 ## Class-based: `ValueObject<T>`
 
@@ -104,12 +104,12 @@ a.equals(b); // false (constructor-aware deep equality)
 ```
 
 `ValueObject` includes:
-- `equals(other)` — deep equality plus a constructor check, so `new Money(…)` is never equal to a `new Coupon(…)` with the same shape
-- `clone(props?)` — creates a new instance with optional overrides
-- `toJSON()` — exposes `props` for serialisation
+- `equals(other)`: deep equality plus a constructor check, so `new Money(…)` is never equal to a `new Coupon(…)` with the same shape
+- `clone(props?)`: creates a new instance with optional overrides
+- `toJSON()`: exposes `props` for serialisation
 
 ::: warning Constructor-ordering footgun
-`validate(props)` is called from the base constructor *before* the subclass's field initializers run. Treat `validate` as pure with respect to `this` — use only the `props` argument. If your invariants depend on per-instance config, put that config into `props` itself or check it in a static factory method.
+`validate(props)` is called from the base constructor *before* the subclass's field initializers run. Treat `validate` as pure with respect to `this`; use only the `props` argument. If your invariants depend on per-instance config, put that config into `props` itself or check it in a static factory method.
 :::
 
 ## Equality with ignored keys
@@ -125,7 +125,7 @@ voEqualsExcept(a, b, {
 });
 ```
 
-`voEqualsExcept` compares deep-omitted copies of both sides. Built-ins that `deepEqual` compares **by value** (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned into those copies; built-ins it compares **by reference** (Error, ArrayBuffer, Promise, WeakMap, WeakSet) are passed through by reference instead — cloning them would make even `voEqualsExcept(x, x, …)` false. Reflexivity always holds.
+`voEqualsExcept` compares deep-omitted copies of both sides. Built-ins that `deepEqual` compares **by value** (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned into those copies; built-ins it compares **by reference** (Error, ArrayBuffer, Promise, WeakMap, WeakSet) are passed through by reference instead, since cloning them would make even `voEqualsExcept(x, x, …)` false. Reflexivity always holds.
 
 ## When to reach for `vo()` vs `ValueObject<T>`
 

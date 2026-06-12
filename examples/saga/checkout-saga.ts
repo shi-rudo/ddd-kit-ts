@@ -17,15 +17,15 @@ import type { ShipmentId } from "./shipping";
  * saga id, here aligned with the orderId), state (its position in
  * the workflow), and a lifecycle.
  *
- * **This example publishes no Process-Manager events** — `TEvent`
- * defaults to `never` — so its outputs are exclusively the commands
+ * **This example publishes no Process-Manager events** (`TEvent`
+ * defaults to `never`), so its outputs are exclusively the commands
  * it dispatches to other aggregates. This is a design choice, not a
  * canonical rule: Vernon's IDDD §12 examples often publish
  * progress events (`CheckoutStarted`, `AwaitingPayment`,
  * `ProcessCompleted`) so monitoring/observability subscribers can
  * react. If you need that, give `CheckoutSaga` a `TEvent` union and
  * record events via `commit(state, event)` in the transition
- * methods — the surrounding infrastructure already supports it.
+ * methods; the surrounding infrastructure already supports it.
  */
 
 export type CheckoutSagaState = {
@@ -47,7 +47,7 @@ export class SagaInWrongStateError extends DomainError<"SagaInWrongStateError"> 
 	}
 }
 
-// TEvent stays at the default `never` — the saga has no domain events
+// TEvent stays at the default `never`: the saga has no domain events
 // of its own. Its state changes are private bookkeeping; downstream
 // effects flow through dispatched commands, not published events.
 export class CheckoutSaga extends AggregateRoot<

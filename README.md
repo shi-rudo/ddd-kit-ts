@@ -1,8 +1,8 @@
 # @shirudo/ddd-kit
 
-Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks — Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers — without a framework or runtime lock-in. ESM-only; runs on Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
+Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
-> **Stable — 1.0**
+> **Stable: 1.0**
 >
 > The public API is stable and follows [Semantic Versioning](https://semver.org/). Breaking changes bump the major and ship with a migration path in the [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md).
 
@@ -11,14 +11,16 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 
 ## Features
 
-- **Value Objects** — deep-frozen, by-attribute equality (`vo`, `ValueObject`, `voEquals`).
-- **Entities** — identity + lifecycle, with collection helpers branded by `Id<Tag>`.
-- **Aggregate Roots** — state-stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`), with optimistic-concurrency versioning.
-- **Domain Events** — typed, deeply frozen, carry metadata for traceability and schema evolution.
-- **Repositories** — technology-agnostic persistence ports with an Identity-Map contract and OCC.
-- **CQRS** — zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
-- **Outbox & unit of work** — `withCommit` harvests pending events inside the transaction and publishes them atomically.
-- **Result-first boundary** — a typed error hierarchy on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) and `Result` from [`@shirudo/result`](https://www.npmjs.com/package/@shirudo/result); `voValidated` collects field violations and renders RFC 9457 via the opt-in `@shirudo/ddd-kit/http` entry.
+- **Value Objects:** deep-frozen, by-attribute equality (`vo`, `ValueObject`, `voEquals`).
+- **Entities:** identity + lifecycle, with collection helpers branded by `Id<Tag>`.
+- **Aggregate Roots:** state-stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`), with optimistic-concurrency versioning.
+- **Domain Events:** typed, deeply frozen, carry metadata for traceability and schema evolution.
+- **Repositories:** technology-agnostic persistence ports with an Identity-Map contract and OCC.
+- **CQRS:** zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
+- **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes — honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
+- **Outbox:** `withCommit` harvests pending events inside the transaction, stamps them with the aggregate's commit version, and publishes them atomically.
+- **Repository contract tests:** `@shirudo/ddd-kit/testing` ships the suite every adapter must pass — OCC is a testable contract, not a documented pattern.
+- **Result-first boundary:** a typed error hierarchy on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) and `Result` from [`@shirudo/result`](https://www.npmjs.com/package/@shirudo/result); `voValidated` collects field violations and renders RFC 9457 via the opt-in `@shirudo/ddd-kit/http` entry.
 
 ## Installation
 
@@ -26,7 +28,7 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 ```
 
-`@shirudo/result` and `@shirudo/base-error` are peer dependencies — install them once in the consuming app.
+`@shirudo/result` and `@shirudo/base-error` are peer dependencies; install them once in the consuming app.
 
 ## Quick start
 
@@ -43,11 +45,11 @@ function createEmail(value: string): EmailAddress {
 const email = createEmail("user@example.com");
 ```
 
-For a complete walkthrough — a minimal `Order` aggregate with typed events, `commit()`, and the App-Service boundary — see [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md).
+For a complete walkthrough (a minimal `Order` aggregate with typed events, `commit()`, and the App-Service boundary), see [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md).
 
 ## Core concepts
 
-Each building block has a dedicated guide. Start with [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md) for the non-obvious calls (Result at the App boundary, no Specification pattern, no Fowler Unit of Work, class-based aggregates).
+Each building block has a dedicated guide. Start with [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md) for the non-obvious calls (Result at the App boundary, no Specification pattern, the TransactionScope/Unit-of-Work layering, class-based aggregates).
 
 | Concept | Guide |
 |---|---|
@@ -59,6 +61,7 @@ Each building block has a dedicated guide. Start with [Design Decisions](https:/
 | Errors: throw vs Result, `ValidationError`, RFC 9457 | [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md) |
 | Commands, queries, buses | [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md) |
 | Repositories, Identity Map, OCC | [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md) |
+| Unit of Work, enrollment, contract test suite | [Unit of Work](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/unit-of-work.md) |
 | Outbox, `withCommit`, transactions | [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md) |
 | Read-side projections | [Projections](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/projections.md) |
 | Concurrency & operation-scoped aggregates | [Concurrency](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/concurrency.md) |
@@ -66,10 +69,10 @@ Each building block has a dedicated guide. Start with [Design Decisions](https:/
 
 ## Documentation
 
-- **[LLM.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/LLM.md)** — hand-curated, high-signal guide for LLM coding tools and a fast human skim of the whole surface.
-- **[Common Mistakes](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/common-mistakes.md)** — the footgun catalogue; read it before writing consumer code.
-- **API reference** — full type definitions ship with the package (`node_modules/@shirudo/ddd-kit/dist/index.d.ts`); the `@shirudo/ddd-kit/http` subpath exports the RFC 9457 presenter.
-- **[CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md)** — release history with a migration path for every breaking change.
+- **[LLM.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/LLM.md):** hand-curated, high-signal guide for LLM coding tools and a fast human skim of the whole surface.
+- **[Common Mistakes](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/common-mistakes.md):** the footgun catalogue; read it before writing consumer code.
+- **API reference:** full type definitions ship with the package (`node_modules/@shirudo/ddd-kit/dist/index.d.ts`); the `@shirudo/ddd-kit/http` subpath exports the RFC 9457 presenter.
+- **[CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md):** release history with a migration path for every breaking change.
 
 ## TypeScript support
 
@@ -85,4 +88,4 @@ MIT.
 
 ## Author
 
-**Shirudo** — [@shi-rudo](https://github.com/shi-rudo) · [npm](https://www.npmjs.com/package/@shirudo/ddd-kit) · [repo](https://github.com/shi-rudo/ddd-kit-ts)
+**Shirudo:** [@shi-rudo](https://github.com/shi-rudo) · [npm](https://www.npmjs.com/package/@shirudo/ddd-kit) · [repo](https://github.com/shi-rudo/ddd-kit-ts)

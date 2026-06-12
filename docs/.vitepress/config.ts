@@ -5,7 +5,7 @@ import llmstxt from "vitepress-plugin-llms";
 
 // typedoc-vitepress-theme writes the API sidebar to this file as part of
 // `pnpm docs:api`. Read it lazily so a fresh checkout (where docs/api/ is
-// gitignored and not yet generated) still loads the config — the API
+// gitignored and not yet generated) still loads the config; the API
 // sidebar just appears empty until `docs:api` has run.
 const typedocSidebarPath = fileURLToPath(
 	new URL("../api/typedoc-sidebar.json", import.meta.url),
@@ -89,6 +89,7 @@ export default defineConfig({
 						{ text: "Result vs Throw", link: "/guide/result-vs-throw" },
 						{ text: "CQRS & Buses", link: "/guide/cqrs-and-buses" },
 						{ text: "Repository", link: "/guide/repository" },
+						{ text: "Unit of Work", link: "/guide/unit-of-work" },
 						{ text: "Outbox & Transactions", link: "/guide/outbox" },
 						{ text: "Read-Side Projections", link: "/guide/projections" },
 					],

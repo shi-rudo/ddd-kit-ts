@@ -4,13 +4,13 @@ import { BaseError } from "@shirudo/base-error";
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
- * violated. Consumers derive their own concrete errors — e.g.
- * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}` —
+ * violated. Consumers derive their own concrete errors (e.g.
+ * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}`)
  * for `instanceof`-style catching at the App-Service boundary, where
  * they typically map to HTTP 400 / business-rule responses.
  *
  * The library itself does **not** ship any concrete `DomainError`
- * subclass — the kit can't know your invariants.
+ * subclass: the kit can't know your invariants.
  *
  * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
  * surface (timestamps, cause chains, `toJSON()`, `getUserMessage()`,
@@ -22,14 +22,16 @@ export abstract class DomainError<
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
- * App-Service can recover from — typically by retrying, by returning
+ * App-Service can recover from: typically by retrying, by returning
  * HTTP 404 / 409, or by surfacing a "please try again" UX. These are
  * not domain-invariant violations (the business rules were not
  * broken); they describe race conditions and missing rows at the
  * storage boundary.
  *
  * Library-internal concrete subclasses: {@link AggregateNotFoundError},
- * {@link ConcurrencyConflictError}.
+ * {@link ConcurrencyConflictError}, {@link DuplicateAggregateError},
+ * plus the unit-of-work lifecycle wrappers `CommitError` and
+ * `RollbackError` (in `src/app/unit-of-work.ts`).
  */
 export abstract class InfrastructureError<
 	Name extends string = string,
@@ -38,10 +40,10 @@ export abstract class InfrastructureError<
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
  * registered for the event's type. This means the aggregate's subclass
- * forgot to add an entry to its `handlers` map — a programming /
+ * forgot to add an entry to its `handlers` map: a programming /
  * configuration bug, not a domain or infrastructure failure.
  *
- * Deliberately **not** on `DomainError` or `InfrastructureError` —
+ * Deliberately **not** on `DomainError` or `InfrastructureError`:
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
@@ -57,7 +59,34 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 		public readonly eventType: string,
 		cause?: unknown,
 	) {
-		super(`Missing handler for event type: ${eventType}`, cause);
+		super(`Missing handler for event type: ${eventType}`, cause, {
+			name: "MissingHandlerError",
+		});
+	}
+}
+
+/**
+ * Thrown when an aggregate that was deleted within the current unit of
+ * work is saved or re-registered again in the same operation: by
+ * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same
+ * instance, and by `IdentityMap.set` for a type+id that was deleted.
+ * Deletion is final within an operation; saving afterwards would write
+ * a row the delete just removed (or resurrect it), which is always a
+ * use-case bug.
+ *
+ * Extends `BaseError` directly (same reasoning as
+ * {@link MissingHandlerError}): a programming bug that should crash
+ * loud, not be absorbed by a generic infrastructure-error handler.
+ */
+export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
+	constructor(public readonly aggregateId: string) {
+		super(
+			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
+				"cannot be saved or registered again. Deletion is final within an " +
+				"operation; if the aggregate must live, do not delete it.",
+			undefined,
+			{ name: "AggregateDeletedError" },
+		);
 	}
 }
 
@@ -72,7 +101,7 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
  * losing context. Cause-chain helpers (`getRootCause`,
  * `findInCauseChain`) from `@shirudo/base-error` traverse the chain.
  *
- * Not retryable — retrying won't make the row appear.
+ * Not retryable: retrying won't make the row appear.
  */
 export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
 	constructor(
@@ -80,7 +109,9 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 		public readonly id: string,
 		cause?: unknown,
 	) {
-		super(`Aggregate not found: ${aggregateType}(${id})`, cause);
+		super(`Aggregate not found: ${aggregateType}(${id})`, cause, {
+			name: "AggregateNotFoundError",
+		});
 		this.withUserMessage(
 			`The requested ${aggregateType} could not be found.`,
 		);
@@ -88,11 +119,54 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 }
 
 /**
+ * Thrown by a repository's `save()` INSERT path when a row with the
+ * aggregate's id already exists (unique-constraint violation): two
+ * concurrent creators raced on the same business-derived id, or the
+ * id generator collided. Same delegation model as
+ * {@link ConcurrencyConflictError}: the kit ships the class, the
+ * consumer repository maps its driver's unique-violation signal to it
+ * instead of letting a raw driver error escape -
+ *
+ * - Postgres: SQLSTATE `23505` (`unique_violation`)
+ * - MySQL/MariaDB: errno `1062` (`ER_DUP_ENTRY`)
+ * - SQLite: `SQLITE_CONSTRAINT_UNIQUE` (extended code 2067)
+ *
+ * `InfrastructureError` because the storage boundary detects the
+ * collision. NOT retryable: re-running the same INSERT cannot succeed.
+ * The right reactions are domain decisions - map to HTTP 409, or for
+ * idempotency-key flows load the existing aggregate and treat the
+ * request as already-applied.
+ */
+export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggregateError"> {
+	constructor(
+		public readonly aggregateType: string,
+		public readonly aggregateId: string,
+		cause?: unknown,
+	) {
+		super(
+			`Duplicate aggregate: ${aggregateType}(${aggregateId}) already exists`,
+			cause,
+			{ name: "DuplicateAggregateError" },
+		);
+		this.withUserMessage(
+			`This ${aggregateType} already exists. It may have been created by a concurrent request.`,
+		);
+	}
+}
+
+/**
  * Thrown by `IRepository.save()` when the aggregate's expected version
- * does not match the version currently persisted — i.e. another writer
+ * does not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-
  * concurrency signal; the App-Service typically reloads, re-applies
  * the use case, and retries, or surfaces HTTP 409 to the caller.
+ *
+ * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
+ * `withCommit` invocation): reload, re-apply, save. Do NOT catch this
+ * inside the same `run()` callback and continue — the failed aggregate
+ * is already enrolled (its events would be committed for a write that
+ * never happened) and the identity map still serves the same stale
+ * instance to any in-place "reload".
  *
  * `InfrastructureError` because the persistence layer (not a domain
  * rule) detects the race. Marks itself as `retryable: true` so the
@@ -116,6 +190,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyCo
 		super(
 			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
 			cause,
+			{ name: "ConcurrencyConflictError" },
 		);
 		this.withUserMessage(
 			"This resource was updated by another request. Please reload and try again.",

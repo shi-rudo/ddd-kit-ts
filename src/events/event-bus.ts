@@ -40,7 +40,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 		const casted = handler as EventHandler<Evt>;
 		handlersForType.push(casted);
 
-		// Return unsubscribe — removes exactly this subscription, even if the
+		// Return unsubscribe: removes exactly this subscription, even if the
 		// same handler reference was subscribed multiple times (each call to
 		// subscribe gets its own unsubscribe).
 		let removed = false;
@@ -62,7 +62,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 		options?: OnceOptions,
 	): Promise<Extract<Evt, { type: K }>> {
 		return new Promise<Extract<Evt, { type: K }>>((resolve, reject) => {
-			// Reject synchronously if the signal is already aborted — don't
+			// Reject synchronously if the signal is already aborted; don't
 			// even subscribe.
 			if (options?.signal?.aborted) {
 				reject(options.signal.reason ?? new Error("EventBus.once aborted"));
@@ -128,7 +128,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 				// Snapshot so a handler unsubscribing during dispatch doesn't
 				// shift indices while we iterate. The async wrapper converts a
 				// synchronous throw (EventHandler may return void) into a
-				// rejection — otherwise it would escape before allSettled sees
+				// rejection; otherwise it would escape before allSettled sees
 				// the array, skipping peers and orphaning their promises.
 				const results = await Promise.allSettled(
 					handlersForType.slice().map(async (handler) => handler(event)),
@@ -138,7 +138,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 						errors.push(
 							result.reason instanceof Error
 								? result.reason
-								: // Attach the raw reason as cause — a handler
+								: // Attach the raw reason as cause: a handler
 									// rejecting with a structured payload must stay
 									// diagnosable, not collapse to '[object Object]'.
 									new Error(String(result.reason), {

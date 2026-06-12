@@ -122,7 +122,7 @@ describe("DomainEvent", () => {
 				occurredAt: when,
 				version: 7,
 			});
-			// Value equality, NOT identity — the event defensively copies the
+			// Value equality, NOT identity: the event defensively copies the
 			// caller's Date so later mutation of `when` cannot bleed in.
 			expect(event.occurredAt.getTime()).toBe(when.getTime());
 			expect(event.version).toBe(7);
@@ -233,7 +233,7 @@ describe("DomainEvent", () => {
 
 	describe("Scoped factory helpers: withEventIdFactory / withClockFactory", () => {
 		afterEach(() => {
-			// Defence in depth — every test in this block should leave
+			// Defence in depth: every test in this block should leave
 			// state clean via the scoped helper's try/finally, but reset
 			// anyway in case a future addition mutates the global directly.
 			resetEventIdFactory();
@@ -363,7 +363,7 @@ describe("DomainEvent", () => {
 		it("withEventIdFactory throws if fn returns a thenable (async-misuse guard)", () => {
 			// JS spec: try { return fn() } finally { restore } runs the
 			// finally BEFORE the Promise resolves. So an async fn would
-			// see the restored (previous) factory in its awaited body —
+			// see the restored (previous) factory in its awaited body:
 			// silent corruption. The guard catches this at write time.
 			expect(() =>
 				withEventIdFactory(
@@ -401,7 +401,7 @@ describe("DomainEvent", () => {
 		});
 	});
 
-	describe("Immutability — events are deeply frozen at construction", () => {
+	describe("Immutability: events are deeply frozen at construction", () => {
 		it("returns a top-level frozen event", () => {
 			const event = createDomainEvent("Demo", { x: 1 });
 			expect(Object.isFrozen(event)).toBe(true);

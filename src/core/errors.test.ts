@@ -9,12 +9,13 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
+	DuplicateAggregateError,
 	InfrastructureError,
 	MissingHandlerError,
 } from "./errors";
 
 describe("DomainError", () => {
-	it("is abstract — only consumer subclasses are constructible", () => {
+	it("is abstract; only consumer subclasses are constructible", () => {
 		class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {
 			constructor(orderId: string) {
 				super(`Order ${orderId} is already shipped`);
@@ -27,7 +28,7 @@ describe("DomainError", () => {
 		expect(e.message).toBe("Order o-1 is already shipped");
 	});
 
-	it("is not an InfrastructureError — App-layer catches stay separable", () => {
+	it("is not an InfrastructureError, so App-layer catches stay separable", () => {
 		class OrderError extends DomainError {
 			constructor() {
 				super("nope");
@@ -67,7 +68,7 @@ describe("DomainError", () => {
 });
 
 describe("InfrastructureError", () => {
-	it("is not a DomainError — distinct hierarchy from business-rule violations", () => {
+	it("is not a DomainError: distinct hierarchy from business-rule violations", () => {
 		class DriverTimeout extends InfrastructureError<"DriverTimeout"> {
 			constructor() {
 				super("timeout");
@@ -83,7 +84,7 @@ describe("InfrastructureError", () => {
 describe("MissingHandlerError", () => {
 	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
 		// `catch (e instanceof DomainError)` at the App layer must NOT
-		// swallow a forgotten event handler — that's a programming bug
+		// swallow a forgotten event handler: that's a programming bug
 		// that should crash loud during development.
 		const e = new MissingHandlerError("OrderShipped");
 		expect(e).not.toBeInstanceOf(DomainError);
@@ -113,13 +114,41 @@ describe("AggregateNotFoundError", () => {
 		expect(userMsg).not.toContain("o-1");
 	});
 
-	it("is NOT retryable — the row isn't there; retry won't help", () => {
+	it("is NOT retryable: the row isn't there; retry won't help", () => {
 		expect(isRetryable(new AggregateNotFoundError("Order", "o-1"))).toBe(false);
 	});
 
 	it("preserves a wrapped driver error via cause", () => {
 		const driverErr = new Error("postgres: no rows in result set");
 		const e = new AggregateNotFoundError("Order", "o-1", driverErr);
+		expect(getRootCause(e)).toBe(driverErr);
+	});
+});
+
+describe("DuplicateAggregateError", () => {
+	it("carries aggregate type and id; exposes a user-safe message that does NOT leak the id", () => {
+		const e = new DuplicateAggregateError("Order", "o-1");
+		expect(e.aggregateType).toBe("Order");
+		expect(e.aggregateId).toBe("o-1");
+		expect(e.name).toBe("DuplicateAggregateError");
+		expect(e.message).toContain("Order(o-1)"); // technical
+		const userMsg = e.getUserMessage();
+		expect(userMsg).toBeDefined();
+		expect(userMsg).toContain("Order");
+		expect(userMsg).not.toContain("o-1");
+	});
+
+	it("is an InfrastructureError and NOT retryable: re-running the same INSERT cannot succeed", () => {
+		const e = new DuplicateAggregateError("Order", "o-1");
+		expect(e).toBeInstanceOf(InfrastructureError);
+		expect(isRetryable(e)).toBe(false);
+	});
+
+	it("preserves the wrapped driver error via cause", () => {
+		const driverErr = Object.assign(new Error("duplicate key value"), {
+			code: "23505",
+		});
+		const e = new DuplicateAggregateError("Order", "o-1", driverErr);
 		expect(getRootCause(e)).toBe(driverErr);
 	});
 });
@@ -135,7 +164,7 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.message).toContain("actual 5");
 	});
 
-	it("marks itself retryable so isRetryable picks it up — the OCC reload-and-retry pattern", () => {
+	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
 		const e = new ConcurrencyConflictError("Order", "o-1", 3, 5);
 		expect(e.retryable).toBe(true);
 		expect(isRetryable(e)).toBe(true);

@@ -5,8 +5,8 @@ import { describeThrown } from "./describe-thrown";
 /**
  * Internal adapter shape for handlers stored in the map.
  *
- * Registered handlers are typed as `CommandHandler<C, TMap[K]>` — narrower
- * input, specific return — and cannot be stored directly in a heterogeneous
+ * Registered handlers are typed as `CommandHandler<C, TMap[K]>` (narrower
+ * input, specific return) and cannot be stored directly in a heterogeneous
  * map (function-parameter contravariance). The closure in `register`
  * downcasts `Command` to the handler's expected `C` based on the
  * dispatch-key invariant (we only call this entry when `cmd.type` matches
@@ -77,7 +77,7 @@ export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
 	 *
 	 * When `TMap` is supplied, the `commandType` argument is restricted to
 	 * its keys and the handler signature is forced to match `TMap[K]` for the
-	 * return value — typos and wrong-typed handlers are compile errors.
+	 * return value: typos and wrong-typed handlers are compile errors.
 	 * Without `TMap` the registration is loose (any string key, any return
 	 * type) so the no-config path keeps working.
 	 *
@@ -142,7 +142,7 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 		handler: CommandHandler<C, TMap[K]>,
 	): void {
 		// Silent replacement would turn the first handler into dead code
-		// with no signal — wiring bugs must surface at registration time.
+		// with no signal; wiring bugs must surface at registration time.
 		if (this.handlers.has(commandType)) {
 			throw new Error(
 				`CommandBus: a handler for command type "${commandType}" is already registered`,
