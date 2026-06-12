@@ -17,7 +17,9 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 - **Domain Events:** typed, deeply frozen, carry metadata for traceability and schema evolution.
 - **Repositories:** technology-agnostic persistence ports with an Identity-Map contract and OCC.
 - **CQRS:** zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
-- **Outbox & unit of work:** `withCommit` harvests pending events inside the transaction and publishes them atomically.
+- **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes — honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
+- **Outbox:** `withCommit` harvests pending events inside the transaction, stamps them with the aggregate's commit version, and publishes them atomically.
+- **Repository contract tests:** `@shirudo/ddd-kit/testing` ships the suite every adapter must pass — OCC is a testable contract, not a documented pattern.
 - **Result-first boundary:** a typed error hierarchy on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) and `Result` from [`@shirudo/result`](https://www.npmjs.com/package/@shirudo/result); `voValidated` collects field violations and renders RFC 9457 via the opt-in `@shirudo/ddd-kit/http` entry.
 
 ## Installation
@@ -47,7 +49,7 @@ For a complete walkthrough (a minimal `Order` aggregate with typed events, `comm
 
 ## Core concepts
 
-Each building block has a dedicated guide. Start with [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md) for the non-obvious calls (Result at the App boundary, no Specification pattern, no Fowler Unit of Work, class-based aggregates).
+Each building block has a dedicated guide. Start with [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md) for the non-obvious calls (Result at the App boundary, no Specification pattern, the TransactionScope/Unit-of-Work layering, class-based aggregates).
 
 | Concept | Guide |
 |---|---|
@@ -59,6 +61,7 @@ Each building block has a dedicated guide. Start with [Design Decisions](https:/
 | Errors: throw vs Result, `ValidationError`, RFC 9457 | [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md) |
 | Commands, queries, buses | [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md) |
 | Repositories, Identity Map, OCC | [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md) |
+| Unit of Work, enrollment, contract test suite | [Unit of Work](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/unit-of-work.md) |
 | Outbox, `withCommit`, transactions | [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md) |
 | Read-side projections | [Projections](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/projections.md) |
 | Concurrency & operation-scoped aggregates | [Concurrency](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/concurrency.md) |

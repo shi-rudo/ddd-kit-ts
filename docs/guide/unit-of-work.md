@@ -9,6 +9,10 @@ It is built **on top of [`withCommit`](./outbox.md)**, not beside it. The commit
 - **A per-operation Identity Map** — one aggregate type+id maps to one in-memory instance per unit of work; repositories check it before hydrating.
 - **A small lifecycle-error taxonomy** — `NestedUnitOfWorkError`, `TransactionClosedError`, `CommitError`, `RollbackError`, `AggregateDeletedError`.
 
+::: info In Fowler's taxonomy: a transaction coordinator with registration and Identity Map
+Measured against PoEAA's Unit of Work, what ships today is precisely that — Fowler's pattern *minus the commit-time flush*. The machinery for a full Unit of Work exists (enrollment ≈ `registerNew`/`registerDirty`/`registerDeleted`, `changedKeys`/`hasChanges` ≈ change detection), but writes stay **explicit** (`save()`), by design: a forgotten save fails in tests instead of being hidden by magic, and with `hasChanges` a redundant save is a cheap no-op. The name `UnitOfWork` describes the boundary it owns — one business transaction, all-or-nothing, with concurrency-problem resolution — not a claim to automatic change flushing. Auto-flush is a designed, optional later phase, to be built only against proven need.
+:::
+
 `withCommit` with hand-rolled, tx-bound repositories remains fully supported; the facade is opt-in. See [TransactionScope stays minimal; the Unit of Work lives above it](./design-decisions.md#transactionscope-stays-minimal-the-unit-of-work-lives-above-it) for the design history.
 
 ## Wiring
