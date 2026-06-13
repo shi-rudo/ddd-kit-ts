@@ -23,6 +23,7 @@ export * from "./events/ports";
 // Repository
 export * from "./repo/identity-map";
 export * from "./repo/repository";
+export * from "./repo/retrying-scope";
 export * from "./repo/scope";
 // Utils
 export * from "./utils";

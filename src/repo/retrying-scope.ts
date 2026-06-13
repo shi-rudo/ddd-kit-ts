@@ -1,0 +1,186 @@
+import { someChainRetryable } from "@shirudo/base-error";
+import { abortReason } from "../utils/abort";
+import type { TransactionScope, TransactionalOptions } from "./scope";
+
+/**
+ * Tuning for {@link RetryingTransactionScope}. All fields are optional;
+ * the defaults suit optimistic-concurrency retries (a handful of writers
+ * racing one aggregate), not high-fan-out hot-row contention.
+ */
+export interface RetryPolicy {
+	/** Total tries, including the first. Default `3` (1 initial + 2 retries). */
+	maxAttempts?: number;
+	/** First backoff delay; doubles each retry. Default `50`ms. */
+	baseDelayMs?: number;
+	/** Ceiling for the backoff delay. Default `1000`ms. */
+	maxDelayMs?: number;
+	/**
+	 * Classifier deciding whether an error is worth retrying. Default
+	 * {@link someChainRetryable} (walks the cause chain for the loose
+	 * `retryable === true` marker, so `ConcurrencyConflictError` matches
+	 * even when an adapter wraps it). Override to add driver-specific
+	 * serialization codes (Postgres 40001, MySQL 1213, SQLite SQLITE_BUSY)
+	 * that your adapter has not mapped to a retryable kit error.
+	 */
+	isRetryable?: (error: unknown) => boolean;
+	/** Observer fired before each backoff wait (logging / metrics). */
+	onRetry?: (info: {
+		attempt: number;
+		error: unknown;
+		delayMs: number;
+	}) => void;
+	/** Backoff wait. Default an abortable `setTimeout`. Injectable for tests. */
+	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	/** Jitter source in `[0, 1)`. Default `Math.random`. Injectable for tests. */
+	random?: () => number;
+}
+
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BASE_DELAY_MS = 50;
+const DEFAULT_MAX_DELAY_MS = 1000;
+
+/**
+ * Backoff delay for the attempt that just failed (1-based): exponential
+ * (`baseDelayMs * 2^(attempt-1)`), capped at `maxDelayMs`, then a +/-20%
+ * jitter band (`* random(0.8, 1.2)`) applied and re-clamped to the cap.
+ * Pure and deterministic given `random`. Result is never negative.
+ *
+ * @internal Exported only so it can be unit-tested directly; not part of
+ * the supported public API and may change without a major version.
+ */
+export function computeBackoffDelay(
+	attempt: number,
+	opts: { baseDelayMs: number; maxDelayMs: number; random: () => number },
+): number {
+	const exponential = opts.baseDelayMs * 2 ** (attempt - 1);
+	const capped = Math.min(opts.maxDelayMs, exponential);
+	const jitter = 0.8 + opts.random() * 0.4; // [0.8, 1.2)
+	return Math.max(0, Math.min(opts.maxDelayMs, Math.round(capped * jitter)));
+}
+
+function assertNonNegativeFinite(field: string, value: number): void {
+	if (!Number.isFinite(value) || value < 0) {
+		throw new Error(
+			`RetryingTransactionScope: ${field} must be a non-negative finite number, got ${value}`,
+		);
+	}
+}
+
+const ABORT_MESSAGE = "RetryingTransactionScope aborted";
+
+/** Abortable `setTimeout`; rejects with the signal reason if aborted. */
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(abortReason(signal, ABORT_MESSAGE));
+			return;
+		}
+		let onAbort: (() => void) | undefined;
+		const timer = setTimeout(() => {
+			if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		if (signal) {
+			onAbort = () => {
+				clearTimeout(timer);
+				reject(abortReason(signal, ABORT_MESSAGE));
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+		}
+	});
+}
+
+/**
+ * A {@link TransactionScope} that retries its inner scope on transient
+ * failures with exponential backoff and jitter. Compose it transparently:
+ *
+ * ```ts
+ * const scope = new RetryingTransactionScope(drizzleScope, { maxAttempts: 5 });
+ * const uow = new UnitOfWork({ scope, outbox, repositories });
+ * ```
+ *
+ * **Retries the transaction only.** Each attempt re-invokes the inner
+ * `transactional` with a fresh transaction, so the work callback must be
+ * reload-safe (load aggregates via `getById` inside it, never capture an
+ * aggregate from a previous attempt) and free of non-transactional side
+ * effects before commit. `withCommit` publishes AFTER the commit, so the
+ * in-process publish is outside the retried region and never duplicated;
+ * publish failures are handled by `onPublishError`, not retried here.
+ *
+ * **Classification is by error, not by guesswork.** Only errors the
+ * `isRetryable` predicate accepts are retried; everything else (a
+ * `DomainError`, `EventHarvestError`, `UnenrolledChangesError`,
+ * `DuplicateAggregateError`, a non-Error throw) surfaces immediately.
+ * After `maxAttempts` the last error is rethrown unchanged, so a caller
+ * can still match `ConcurrencyConflictError` and map it to HTTP 409.
+ *
+ * **Cancellation.** The `AbortSignal` from `transactional` options is
+ * checked before each attempt and aborts the backoff wait, so an
+ * `AbortSignal.timeout(ms)` bounds total elapsed time (there is
+ * deliberately no separate max-elapsed knob).
+ */
+export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
+	// Policy resolved and validated once at construction (a misconfigured
+	// policy is a wiring bug and fails fast, never at run time).
+	private readonly maxAttempts: number;
+	private readonly baseDelayMs: number;
+	private readonly maxDelayMs: number;
+	private readonly isRetryable: (error: unknown) => boolean;
+	private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+	private readonly random: () => number;
+	private readonly onRetry?: RetryPolicy["onRetry"];
+
+	constructor(
+		private readonly inner: TransactionScope<TCtx>,
+		policy: RetryPolicy = {},
+	) {
+		this.maxAttempts = policy.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+		this.baseDelayMs = policy.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+		this.maxDelayMs = policy.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+		if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1) {
+			throw new Error(
+				`RetryingTransactionScope: maxAttempts must be an integer >= 1, got ${this.maxAttempts}`,
+			);
+		}
+		assertNonNegativeFinite("baseDelayMs", this.baseDelayMs);
+		assertNonNegativeFinite("maxDelayMs", this.maxDelayMs);
+		this.isRetryable = policy.isRetryable ?? someChainRetryable;
+		this.sleep = policy.sleep ?? defaultSleep;
+		this.random = policy.random ?? Math.random;
+		this.onRetry = policy.onRetry;
+	}
+
+	async transactional<T>(
+		fn: (ctx: TCtx) => Promise<T>,
+		options?: TransactionalOptions,
+	): Promise<T> {
+		const { maxAttempts, isRetryable, sleep } = this;
+		const signal = options?.signal;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			if (signal?.aborted) {
+				throw abortReason(signal, ABORT_MESSAGE);
+			}
+			try {
+				return await this.inner.transactional(fn, options);
+			} catch (error) {
+				// Exhausted, or a failure retrying cannot fix: surface it
+				// unchanged so the caller keeps the original error type.
+				if (attempt === maxAttempts || !isRetryable(error)) {
+					throw error;
+				}
+				const delayMs = computeBackoffDelay(attempt, {
+					baseDelayMs: this.baseDelayMs,
+					maxDelayMs: this.maxDelayMs,
+					random: this.random,
+				});
+				this.onRetry?.({ attempt, error, delayMs });
+				// An abort during the wait rejects out of the loop with the
+				// signal reason: cancellation wins over another attempt.
+				await sleep(delayMs, signal);
+			}
+		}
+		// Unreachable: the loop either returns or throws on the last attempt.
+		throw new Error("RetryingTransactionScope: exhausted without result");
+	}
+}
