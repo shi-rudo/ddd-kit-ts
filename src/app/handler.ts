@@ -129,6 +129,15 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			error: unknown,
 			events: ReadonlyArray<Evt>,
 		) => void;
+		/**
+		 * Cooperative-cancellation signal. If already aborted, `withCommit`
+		 * rejects with the signal's `reason` BEFORE opening the transaction.
+		 * Otherwise the signal is forwarded to `scope.transactional`, where a
+		 * cancellation-aware scope can abort an in-flight query. The kit does
+		 * not race the work promise: aborting does not kill a running query
+		 * unless the scope honors the signal.
+		 */
+		signal?: AbortSignal;
 	},
 	fn: (ctx: TCtx) => Promise<{
 		result: R;
@@ -146,6 +155,14 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
 	}>,
 ): Promise<R> {
+	// Pre-flight: an already-aborted caller never opens a transaction.
+	// Throwing the signal's reason matches the web AbortSignal convention;
+	// the `??` fallback mirrors event-bus.ts and guards a non-spec polyfill
+	// whose `reason` is undefined (a bare `throw undefined` is unusable).
+	if (deps.signal?.aborted) {
+		throw deps.signal.reason ?? new Error("withCommit aborted before opening a transaction");
+	}
+
 	const { result, aggregates, deleted, events } = await deps.scope.transactional(
 		async (ctx) => {
 			const fnResult = await fn(ctx);
@@ -224,6 +241,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				events: harvested,
 			};
 		},
+		{ signal: deps.signal },
 	);
 
 	// Post-commit: mark each aggregate as persisted (clears pendingEvents).

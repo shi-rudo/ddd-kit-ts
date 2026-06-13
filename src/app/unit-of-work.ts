@@ -208,6 +208,27 @@ export interface UnitOfWorkContext<
 	readonly rawTransaction: TCtx;
 
 	readonly session: UnitOfWorkSession<Evt>;
+
+	/**
+	 * The cooperative-cancellation signal passed to {@link UnitOfWork.run},
+	 * or `undefined` if none was given. Poll `signal?.aborted` between
+	 * steps of a long operation and throw `signal.reason` to bail out; the
+	 * throw rolls the unit of work back like any other callback error. The
+	 * kit does not interrupt an in-flight query for you: actual query
+	 * cancellation depends on the `TransactionScope` honoring the signal.
+	 */
+	readonly signal?: AbortSignal;
+}
+
+/** Options for a single {@link UnitOfWork.run} call. */
+export interface RunOptions {
+	/**
+	 * Cooperative-cancellation signal. If already aborted, `run()` rejects
+	 * with the signal's `reason` before opening a transaction. Otherwise it
+	 * is exposed on the context (poll `context.signal`) and forwarded to the
+	 * `TransactionScope`. Use `AbortSignal.timeout(ms)` for a deadline.
+	 */
+	readonly signal?: AbortSignal;
 }
 
 /**
@@ -331,7 +352,17 @@ export class UnitOfWork<
 	 */
 	public async run<R>(
 		work: (context: UnitOfWorkContext<TCtx, TRepos, Evt>) => Promise<R>,
+		options?: RunOptions,
 	): Promise<R> {
+		// Pre-flight: an already-aborted caller rejects with the signal's
+		// reason before opening a transaction (no callback runs). Placed
+		// before the active-guard so a doubly-bad call (aborted signal on an
+		// already-running instance) is reported as aborted rather than as a
+		// nesting error. The `??` fallback mirrors event-bus.ts and guards a
+		// non-spec polyfill whose `reason` is undefined.
+		if (options?.signal?.aborted) {
+			throw options.signal.reason ?? new Error("UnitOfWork.run aborted before opening a transaction");
+		}
 		if (this._active) {
 			throw new NestedUnitOfWorkError();
 		}
@@ -349,6 +380,7 @@ export class UnitOfWork<
 					bus: this.deps.bus,
 					scope: this.deps.scope,
 					onPublishError: this.deps.onPublishError,
+					signal: options?.signal,
 				},
 				async (tx) => {
 					// Fresh state per scope invocation: a TransactionScope that
@@ -365,7 +397,7 @@ export class UnitOfWork<
 					workError = undefined;
 
 					const repositories = this.buildRepositories(tx, s);
-					const context = makeContext(repositories, tx, s);
+					const context = makeContext(repositories, tx, s, options?.signal);
 					try {
 						const result = await work(context);
 						workCompleted = true;
@@ -511,6 +543,7 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
 	repositories: TRepos,
 	transaction: TCtx,
 	session: Session<Evt>,
+	signal: AbortSignal | undefined,
 ): UnitOfWorkContext<TCtx, TRepos, Evt> {
 	return {
 		get repositories(): TRepos {
@@ -522,6 +555,9 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
 			return transaction;
 		},
 		session,
+		// The caller's own signal: exposed directly, not gated by
+		// assertOpen, so polling `aborted` after close stays harmless.
+		signal,
 	};
 }
 

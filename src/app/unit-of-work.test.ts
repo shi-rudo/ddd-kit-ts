@@ -912,4 +912,109 @@ describe("UnitOfWork", () => {
 			);
 		});
 	});
+
+	describe("cancellation (AbortSignal)", () => {
+		it("an already-aborted signal rejects run() before opening a transaction", async () => {
+			let txOpened = false;
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					txOpened = true;
+					return fn(undefined);
+				},
+			};
+			const { uow } = createUow({ scope });
+
+			const ac = new AbortController();
+			ac.abort(new Error("client gave up"));
+
+			let workRan = false;
+			await expect(
+				uow.run(
+					async () => {
+						workRan = true;
+						return "x";
+					},
+					{ signal: ac.signal },
+				),
+			).rejects.toThrow("client gave up");
+
+			expect(txOpened).toBe(false);
+			expect(workRan).toBe(false);
+		});
+
+		it("rejects with a real Error, not undefined, when a non-spec signal has no reason", async () => {
+			const { uow } = createUow();
+			// A spec-compliant AbortSignal always populates `reason` when
+			// aborted; a minimal polyfill might not. The pre-flight must not
+			// `throw undefined`.
+			const polyfillSignal = { aborted: true, reason: undefined } as AbortSignal;
+
+			await expect(
+				uow.run(async () => "x", { signal: polyfillSignal }),
+			).rejects.toBeInstanceOf(Error);
+		});
+
+		it("exposes the signal on the context for cooperative checks", async () => {
+			const { uow } = createUow();
+			const ac = new AbortController();
+
+			let seen: AbortSignal | undefined;
+			await uow.run(
+				async (ctx) => {
+					seen = ctx.signal;
+					return "ok";
+				},
+				{ signal: ac.signal },
+			);
+
+			expect(seen).toBe(ac.signal);
+		});
+
+		it("forwards the signal to the TransactionScope's transactional options", async () => {
+			let receivedOpts: { signal?: AbortSignal } | undefined;
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(
+					fn: (_ctx: undefined) => Promise<T>,
+					opts?: { signal?: AbortSignal },
+				) => {
+					receivedOpts = opts;
+					return fn(undefined);
+				},
+			};
+			const { uow } = createUow({ scope });
+			const ac = new AbortController();
+
+			await uow.run(async () => "ok", { signal: ac.signal });
+
+			expect(receivedOpts?.signal).toBe(ac.signal);
+		});
+
+		it("a cooperative abort mid-work rolls back: error passes through, no markPersisted", async () => {
+			const outbox = createMockOutbox();
+			const { uow } = createUow({ outbox });
+			const agg = createMockAggregate("order-1", [testEvent("order-1")]);
+			const ac = new AbortController();
+
+			await expect(
+				uow.run(
+					async (ctx) => {
+						await ctx.repositories.orders.save(agg);
+						ac.abort(new Error("deadline exceeded"));
+						if (ctx.signal?.aborted) throw ctx.signal.reason;
+						return "unreachable";
+					},
+					{ signal: ac.signal },
+				),
+			).rejects.toThrow("deadline exceeded");
+
+			expect(agg.markPersistedCalls).toBe(0);
+			expect(outbox.added).toHaveLength(0);
+		});
+
+		it("runs normally when no signal is supplied (backwards compatible)", async () => {
+			const { uow } = createUow();
+			const result = await uow.run(async () => "ok");
+			expect(result).toBe("ok");
+		});
+	});
 });
