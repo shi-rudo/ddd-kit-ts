@@ -13,6 +13,7 @@ import {
 	EventHarvestError,
 	InfrastructureError,
 	MissingHandlerError,
+	UnenrolledChangesError,
 } from "./errors";
 
 describe("DomainError", () => {
@@ -201,5 +202,15 @@ describe("EventHarvestError", () => {
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(e.name).toBe("EventHarvestError");
+	});
+});
+
+describe("UnenrolledChangesError", () => {
+	it("is a BaseError but NOT an InfrastructureError (crash-loud programming bug)", () => {
+		const e = new UnenrolledChangesError("order-1");
+		expect(isBaseError(e)).toBe(true);
+		expect(e).not.toBeInstanceOf(InfrastructureError);
+		expect(e.name).toBe("UnenrolledChangesError");
+		expect(e.aggregateId).toBe("order-1");
 	});
 });

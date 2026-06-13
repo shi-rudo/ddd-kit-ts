@@ -94,6 +94,44 @@ export class EventHarvestError extends BaseError<"EventHarvestError"> {
 }
 
 /**
+ * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
+ * loaded into the identity map during the operation carries unflushed
+ * `pendingEvents` but was never enrolled (no `session.enrollSaved`, and
+ * not deleted). The almost-certain cause is a repository `save()` that
+ * forgot to call `enrollSaved`, or a use case that recorded events on a
+ * loaded aggregate and never saved it. Without this guard those events
+ * would be silently dropped: never harvested into the outbox, never
+ * published.
+ *
+ * Deliberately **not** an `InfrastructureError` (same posture as
+ * {@link MissingHandlerError}): a programming bug that must crash loud,
+ * not be absorbed by a generic infrastructure-error handler. The throw
+ * happens inside the transaction, so the unit of work rolls back and
+ * leaves no partial state.
+ *
+ * **Scope of the guard.** A best-effort runtime safety net, not a proof.
+ * It only sees aggregates the identity map knows about (those loaded via
+ * `getById`), and detects new events by comparing the pending-event COUNT
+ * at load against commit, which assumes the kit's append-only event model
+ * (so it cannot see events that were recorded and then cleared within the
+ * same run). A freshly *created* aggregate that was never enrolled is
+ * invisible to the kit. The repository contract test suite remains the
+ * full mitigation. See the Unit of Work guide.
+ */
+export class UnenrolledChangesError extends BaseError<"UnenrolledChangesError"> {
+	constructor(public readonly aggregateId: string) {
+		super(
+			`Aggregate ${aggregateId} was loaded in this unit of work and has ` +
+				"pending events, but was never enrolled (no save), so its events " +
+				"would be silently dropped. Call repository.save(aggregate), and " +
+				"ensure save() calls session.enrollSaved before the row write.",
+			undefined,
+			{ name: "UnenrolledChangesError" },
+		);
+	}
+}
+
+/**
  * Thrown when an aggregate that was deleted within the current unit of
  * work is saved or re-registered again in the same operation: by
  * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same

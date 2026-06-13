@@ -69,6 +69,10 @@ export class IdentityMap {
 		Map<string, unknown>
 	>();
 	private readonly _deleted = new Map<AggregateClass<unknown>, Set<string>>();
+	// pendingEvents length captured when an instance was first registered
+	// (load time), so the unit of work can tell events RECORDED AFTER load
+	// apart from a "dirty" reconstitution that already carried events.
+	private readonly _pendingAtRegistration = new WeakMap<object, number>();
 
 	/** The cached instance for type+id, or `undefined` (also after {@link delete}). */
 	public get<TAgg>(
@@ -133,6 +137,46 @@ export class IdentityMap {
 			);
 		}
 		store.set(id, aggregate);
+		// Capture the load-time pending count once (idempotent re-set keeps
+		// the first value), so the unit of work can later tell events
+		// RECORDED AFTER load apart from a reconstitution that already
+		// carried events. Assumes pendingEvents is append-only between load
+		// and commit (the kit's recordEvent model); only markPersisted /
+		// clearPendingEvents shrink it, and those run post-commit.
+		if (
+			aggregate !== null &&
+			typeof aggregate === "object" &&
+			!this._pendingAtRegistration.has(aggregate as object)
+		) {
+			const pending = pendingEventsOf(aggregate);
+			if (pending) {
+				this._pendingAtRegistration.set(aggregate as object, pending.length);
+			}
+		}
+	}
+
+	/**
+	 * Registered instances that have recorded MORE pending events than they
+	 * carried when first registered (loaded). Used by the unit of work's
+	 * end-of-run guard: an aggregate that gained events after load but was
+	 * never enrolled would silently drop them. A read-only load, or a
+	 * reconstitution that already carried events, shows no increase and is
+	 * not reported.
+	 */
+	public instancesWithNewPendingEvents(): unknown[] {
+		const result: unknown[] = [];
+		for (const store of this._stores.values()) {
+			for (const instance of store.values()) {
+				const pending = pendingEventsOf(instance);
+				if (!pending) continue;
+				const atRegistration =
+					this._pendingAtRegistration.get(instance as object) ?? 0;
+				if (pending.length > atRegistration) {
+					result.push(instance);
+				}
+			}
+		}
+		return result;
 	}
 
 	/**
@@ -157,4 +201,17 @@ export class IdentityMap {
 		this._stores.clear();
 		this._deleted.clear();
 	}
+}
+
+/**
+ * Duck-types a stored value as an aggregate and returns its `pendingEvents`
+ * array, or `undefined` for anything that is not aggregate-shaped. Single
+ * source of truth so the load-time capture in {@link IdentityMap.set} and
+ * the end-of-run scan in {@link IdentityMap.instancesWithNewPendingEvents}
+ * cannot drift apart.
+ */
+function pendingEventsOf(value: unknown): readonly unknown[] | undefined {
+	if (value === null || typeof value !== "object") return undefined;
+	const pending = (value as { pendingEvents?: unknown }).pendingEvents;
+	return Array.isArray(pending) ? pending : undefined;
 }

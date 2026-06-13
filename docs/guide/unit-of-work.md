@@ -7,7 +7,7 @@ It is built **on top of [`withCommit`](./outbox.md)**, not beside it. The commit
 - **Tx-bound repositories via a registry**: the callback receives ready-made repositories instead of a raw transaction handle.
 - **Enrollment instead of a returned aggregates array**: repositories enroll what they write, so "forgot to list the aggregate" (the `withCommit` footgun that silently drops events) cannot happen per call site.
 - **A per-operation Identity Map**: one aggregate type+id maps to one in-memory instance per unit of work; repositories check it before hydrating.
-- **A small lifecycle-error taxonomy**: `NestedUnitOfWorkError`, `TransactionClosedError`, `CommitError`, `RollbackError`, `AggregateDeletedError`, `EventHarvestError`.
+- **A small lifecycle-error taxonomy**: `NestedUnitOfWorkError`, `TransactionClosedError`, `CommitError`, `RollbackError`, `AggregateDeletedError`, `EventHarvestError`, `UnenrolledChangesError`.
 
 ::: info In Fowler's taxonomy: a transaction coordinator with registration and Identity Map
 Measured against PoEAA's Unit of Work, what ships today is precisely that: Fowler's pattern *minus the commit-time flush*. The machinery for a full Unit of Work exists (enrollment ≈ `registerNew`/`registerDirty`/`registerDeleted`, `changedKeys`/`hasChanges` ≈ change detection), but writes stay **explicit** (`save()`), by design: a forgotten save fails in tests instead of being hidden by magic, and with `hasChanges` a redundant save is a cheap no-op. The name `UnitOfWork` describes the boundary it owns (one business transaction, all-or-nothing, with concurrency-problem resolution), not a claim to automatic change flushing. Auto-flush is a designed, optional later phase, to be built only against proven need.
@@ -176,6 +176,7 @@ Semantics worth knowing:
 | `NestedUnitOfWorkError` | `run()` while the same instance is already running (nesting or instance-sharing across concurrent operations) | `BaseError`: programming bug, crash loud |
 | `TransactionClosedError` | context/session used after `run()` settled | `BaseError`: programming bug |
 | `AggregateDeletedError` | save (or identity-map re-registration) after delete of the same aggregate in one unit of work: same instance via the enrollment gate, *or* a different instance with the same class+id via the deletion tombstone (e.g. re-created through a factory, or re-hydrated by a deferred-write repository that skips the `isDeleted` check) | `BaseError`: programming bug |
+| `UnenrolledChangesError` | a **loaded** aggregate (registered in the identity map via `getById`) recorded new events after load but was never enrolled (a forgotten `save`/`enrollSaved`), so its events would be silently dropped. A runtime safety net that converts the silent loss into a rolling-back throw; it only sees loaded aggregates, so a freshly *created* one that is never enrolled is not caught (the contract suite is the full mitigation) | `BaseError`: programming bug |
 
 Scopes that rethrow the callback's error (Drizzle, Prisma) never produce `RollbackError`; scopes that *wrap* it are detected via the standard `cause` chain and passed through unchanged.
 

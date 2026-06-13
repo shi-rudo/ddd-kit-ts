@@ -7,6 +7,7 @@ import {
 	ConcurrencyConflictError,
 	EventHarvestError,
 	InfrastructureError,
+	UnenrolledChangesError,
 } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
@@ -1078,6 +1079,108 @@ describe("UnitOfWork", () => {
 			const { uow } = createUow();
 			const result = await uow.run(async () => "ok");
 			expect(result).toBe("ok");
+		});
+	});
+
+	describe("enrollment guard: events recorded after load but never enrolled", () => {
+		// A dummy class token to register instances under, simulating a
+		// repository's getById path (identityMap.set after hydration).
+		class MockOrder {}
+
+		/** A loadable aggregate with a directly-pushable pending list. */
+		function loadable(id: string, initialEvents: TestEvent[] = []) {
+			const pending: TestEvent[] = [...initialEvents];
+			return {
+				id: id as TestId,
+				version: 1 as Version,
+				persistedVersion: undefined as Version | undefined,
+				get pendingEvents(): ReadonlyArray<TestEvent> {
+					return pending;
+				},
+				clearPendingEvents(): void {
+					pending.length = 0;
+				},
+				markPersisted(_v: Version): void {
+					pending.length = 0;
+				},
+				record(e: TestEvent): void {
+					pending.push(e);
+				},
+			};
+		}
+
+		it("throws UnenrolledChangesError when events are recorded after load and never enrolled", async () => {
+			const agg = loadable("o-1"); // loaded clean
+			const { uow } = createUow();
+
+			const rejection = await uow
+				.run(async ({ session }) => {
+					session.identityMap.set(MockOrder, agg.id, agg); // getById
+					agg.record(testEvent("o-1")); // a domain method records an event
+					// ...but the repo's save (and thus enrollSaved) is never called
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+			expect(rejection).not.toBeInstanceOf(InfrastructureError);
+		});
+
+		it("does not throw when the mutated aggregate was enrolled", async () => {
+			const agg = loadable("o-1");
+			const { uow } = createUow();
+
+			const result = await uow.run(async ({ session }) => {
+				session.identityMap.set(MockOrder, agg.id, agg);
+				agg.record(testEvent("o-1"));
+				session.enrollSaved(agg); // saved
+				return "ok";
+			});
+
+			expect(result).toBe("ok");
+		});
+
+		it("does not throw on a read-only load (no events recorded)", async () => {
+			const agg = loadable("o-1");
+			const { uow } = createUow();
+
+			const result = await uow.run(async ({ session }) => {
+				session.identityMap.set(MockOrder, agg.id, agg);
+				return "read-only";
+			});
+
+			expect(result).toBe("read-only");
+		});
+
+		it("does not false-positive on a dirty reconstitution that already carried events but gained none", async () => {
+			// Reconstituted with events already in pendingEvents; the use case
+			// only reads it. No NEW events after load, so no enrollment is owed.
+			const agg = loadable("o-1", [testEvent("o-1")]);
+			const { uow } = createUow();
+
+			const result = await uow.run(async ({ session }) => {
+				session.identityMap.set(MockOrder, agg.id, agg);
+				return "read-only-dirty";
+			});
+
+			expect(result).toBe("read-only-dirty");
+		});
+
+		it("does not throw when the mutated aggregate was deleted", async () => {
+			const agg = loadable("o-1");
+			const { uow } = createUow();
+
+			const result = await uow.run(async ({ session }) => {
+				session.identityMap.set(MockOrder, agg.id, agg);
+				agg.record(testEvent("o-1"));
+				session.enrollDeleted(agg);
+				return "deleted";
+			});
+
+			expect(result).toBe("deleted");
 		});
 	});
 });
