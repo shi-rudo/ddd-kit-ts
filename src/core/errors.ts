@@ -66,6 +66,34 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 }
 
 /**
+ * Thrown by `withCommit` when an event harvested from an aggregate cannot
+ * be safely committed: it is missing `aggregateId` / `aggregateType`
+ * (downstream routing would break), or it carries a pre-set
+ * `aggregateVersion` AHEAD of the aggregate's commit version (a leaked or
+ * copied fixture that would advance consumer idempotency watermarks past
+ * real history). Both are programming bugs in how the aggregate recorded
+ * the event, deterministic, and fail identically on every retry.
+ *
+ * Deliberately **not** an {@link InfrastructureError} (same reasoning as
+ * {@link MissingHandlerError}): the failure happens after the work
+ * callback completed, but it is NOT transient. A `catch (e instanceof
+ * InfrastructureError)` retry handler, or a retrying `TransactionScope`,
+ * must NOT mask it or loop on it forever; it should crash loud so the
+ * recordEvent / createDomainEvent misuse surfaces in development. This is
+ * why `withCommit` throws it directly and `UnitOfWork.run` passes it
+ * through unchanged instead of wrapping it in `CommitError`.
+ */
+export class EventHarvestError extends BaseError<"EventHarvestError"> {
+	constructor(
+		message: string,
+		/** The `type` of the offending event, for programmatic routing. */
+		public readonly eventType?: string,
+	) {
+		super(message, undefined, { name: "EventHarvestError" });
+	}
+}
+
+/**
  * Thrown when an aggregate that was deleted within the current unit of
  * work is saved or re-registered again in the same operation: by
  * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same

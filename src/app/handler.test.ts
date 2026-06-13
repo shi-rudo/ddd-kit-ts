@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
@@ -550,6 +551,21 @@ describe("withCommit", () => {
 				async () => ({ result: "ok", aggregates: [agg] }),
 			),
 		).rejects.toThrow(/aggregateId/);
+	});
+
+	it("the harvest guard throws EventHarvestError, not a retryable InfrastructureError", async () => {
+		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
+			aggregateType: "MockOrder",
+		});
+		const agg = createMockAggregate([badEvent]);
+
+		const rejection = await withCommit(
+			{ outbox: createMockOutbox(), scope: createMockScope() },
+			async () => ({ result: "ok", aggregates: [agg] }),
+		).catch((e) => e);
+
+		expect(rejection).toBeInstanceOf(EventHarvestError);
+		expect(rejection).not.toBeInstanceOf(InfrastructureError);
 	});
 
 	it("throws if a harvested event is missing aggregateType (recordEvent guard)", async () => {

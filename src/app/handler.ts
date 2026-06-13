@@ -1,5 +1,6 @@
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
@@ -195,13 +196,14 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					// idempotency watermarks on this number: fail fast, same
 					// posture as the aggregateId/aggregateType guard below.
 					if (event.aggregateVersion > (agg.version as number)) {
-						throw new Error(
+						throw new EventHarvestError(
 							`withCommit: event "${event.type}" carries a pre-set ` +
 								`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
 								`aggregate's commit version (${agg.version}). A stale-or-` +
 								`copied pre-set would advance consumer idempotency ` +
 								`watermarks past real history; remove the manual ` +
 								`aggregateVersion or correct it.`,
+								event.type,
 						);
 					}
 					return event;
@@ -220,7 +222,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				if (!event.aggregateId) missing.push("aggregateId");
 				if (!event.aggregateType) missing.push("aggregateType");
 				if (missing.length > 0) {
-					throw new Error(
+					throw new EventHarvestError(
 						`withCommit: event "${event.type}" is missing ${missing.join(
 							" and ",
 						)}. ` +
@@ -228,6 +230,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							`instead of createDomainEvent(...); recordEvent auto-injects ` +
 							`aggregateId and aggregateType. Outbox dispatchers and ` +
 							`projection handlers rely on these fields for routing.`,
+							event.type,
 					);
 				}
 			}

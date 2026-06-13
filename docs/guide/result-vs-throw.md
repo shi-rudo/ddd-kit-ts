@@ -47,7 +47,7 @@ class DuplicateAggregateError   extends InfrastructureError<"DuplicateAggregateE
 class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug: NOT a DomainError
 ```
 
-(The Unit of Work adds `CommitError` / `RollbackError` (also `InfrastructureError` subclasses) and the BaseError-direct programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
+(The Unit of Work adds `CommitError` / `RollbackError` (also `InfrastructureError` subclasses) and the BaseError-direct programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`, `EventHarvestError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
 
 | Catch | Map to | Reason |
 |---|---|---|

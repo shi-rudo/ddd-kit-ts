@@ -1,7 +1,11 @@
 import { BaseError } from "@shirudo/base-error";
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { AggregateDeletedError, InfrastructureError } from "../core/errors";
+import {
+	AggregateDeletedError,
+	EventHarvestError,
+	InfrastructureError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import { type AggregateClass, IdentityMap } from "../repo/identity-map";
@@ -69,27 +73,31 @@ export class TransactionClosedError extends BaseError<"TransactionClosedError"> 
 
 /**
  * The unit of work failed AFTER the work callback completed
- * successfully: during the event harvest, the outbox write, or the
- * transaction commit itself. The kit cannot see inside
- * `TransactionScope.transactional`, so these three are deliberately
- * one error class - the underlying failure is attached as `cause`.
+ * successfully, at the persistence boundary: the outbox write or the
+ * transaction commit itself rejected. The kit cannot see inside
+ * `TransactionScope.transactional`, so these are deliberately one error
+ * class; the underlying failure is attached as `cause`.
  *
  * `InfrastructureError`: the business logic ran to completion; the
  * persistence boundary failed. The transaction rolled back (or never
  * committed), no aggregate was marked persisted, and pending events
- * survive on the aggregates; the operation left no partial state
- * behind. **Whether a retry helps depends on the cause**: a commit-
- * time serialization failure is transient, but `withCommit`'s harvest
- * guard (an event missing `aggregateId` / `aggregateType`, a
- * programming bug) also lands here and will fail deterministically on
- * every retry. Inspect the `cause` before routing into retry logic.
+ * survive on the aggregates; the operation left no partial state behind.
+ * A `CommitError` is the **potentially transient** post-completion
+ * failure (a commit-time serialization failure is the classic case), so
+ * it is the one a retrying caller should consider re-running. The
+ * deterministic post-completion failure, a harvest-guard violation (an
+ * event missing `aggregateId` / `aggregateType`, or an `aggregateVersion`
+ * ahead of the commit version), is a programming bug and surfaces as
+ * {@link EventHarvestError} instead, which does NOT extend
+ * `InfrastructureError`, so it stays out of retry paths by construction.
  */
 export class CommitError extends InfrastructureError<"CommitError"> {
 	constructor(cause: unknown) {
 		super(
-			"Unit of work failed after the work callback completed: the event " +
-				"harvest, outbox write, or transaction commit rejected. The " +
-				"transaction did not commit; see cause.",
+			"Unit of work failed after the work callback completed: the outbox " +
+				"write or the transaction commit rejected. The transaction did " +
+				"not commit; this failure may be transient, inspect the cause " +
+				"(e.g. someChainRetryable) before retrying.",
 			cause,
 			{ name: "CommitError" },
 		);
@@ -431,6 +439,23 @@ export class UnitOfWork<
 				throw new RollbackError(workError, error);
 			}
 			if (workCompleted) {
+				// A harvest-guard violation (an event missing aggregateId /
+				// aggregateType, or an aggregateVersion ahead of the commit
+				// version) is a deterministic programming bug, not a transient
+				// commit failure. Surface the EventHarvestError itself: it does
+				// not extend InfrastructureError, so a retry-on-Infrastructure
+				// handler skips it instead of looping forever. The guard throws
+				// inside scope.transactional(), so a wrapping scope can nest it
+				// in its cause chain; walk the chain (same treatment the
+				// RollbackError path uses) rather than a bare instanceof, and
+				// re-throw the harvest error so the non-retryable type is never
+				// masked by the wrapper. Only genuinely post-completion failures
+				// the caller could not foresee (outbox write, the commit itself)
+				// become CommitError.
+				const harvestError = findHarvestErrorInChain(error);
+				if (harvestError) {
+					throw harvestError;
+				}
 				throw new CommitError(error);
 			}
 			// Neither flag set: withCommit rejected before the callback ran
@@ -570,6 +595,40 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
  * revoked Proxy) is treated as no-match instead of replacing the real
  * failure with the getter's exception.
  */
+/**
+ * Walks `error`'s `cause` chain and returns the first `EventHarvestError`,
+ * or `undefined`. Cycle-safe and getter-throw-safe, like
+ * {@link causeChainContains}. `withCommit` throws the harvest-guard error
+ * INSIDE `scope.transactional`, so a wrapping scope can nest it; matching
+ * only the top-level error would let the wrapper mask the non-retryable
+ * type. `withCommit` and `run()` share this module, so the local
+ * `instanceof` is reliable for the un-wrapped link.
+ */
+function findHarvestErrorInChain(
+	error: unknown,
+): EventHarvestError | undefined {
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+	while (
+		current !== null &&
+		typeof current === "object" &&
+		!seen.has(current)
+	) {
+		seen.add(current);
+		if (current instanceof EventHarvestError) {
+			return current;
+		}
+		let next: unknown;
+		try {
+			next = (current as { cause?: unknown }).cause;
+		} catch {
+			return undefined;
+		}
+		current = next;
+	}
+	return undefined;
+}
+
 function causeChainContains(error: unknown, target: unknown): boolean {
 	if (target === undefined || target === null) {
 		return false;
