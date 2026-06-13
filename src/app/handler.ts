@@ -4,6 +4,7 @@ import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
+import { abortReason } from "../utils/abort";
 
 /**
  * Helper for executing a write Use Case inside a transaction scope.
@@ -161,7 +162,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// the `??` fallback mirrors event-bus.ts and guards a non-spec polyfill
 	// whose `reason` is undefined (a bare `throw undefined` is unusable).
 	if (deps.signal?.aborted) {
-		throw deps.signal.reason ?? new Error("withCommit aborted before opening a transaction");
+		throw abortReason(deps.signal, "withCommit aborted before opening a transaction");
 	}
 
 	const { result, aggregates, deleted, events } = await deps.scope.transactional(

@@ -1,4 +1,5 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import { abortReason } from "../utils/abort";
 import type { EventBus, EventHandler, OnceOptions } from "./ports";
 
 /**
@@ -65,7 +66,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 			// Reject synchronously if the signal is already aborted; don't
 			// even subscribe.
 			if (options?.signal?.aborted) {
-				reject(options.signal.reason ?? new Error("EventBus.once aborted"));
+				reject(abortReason(options.signal, "EventBus.once aborted"));
 				return;
 			}
 
@@ -91,9 +92,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 			if (options?.signal) {
 				abortListener = () => {
 					cleanup();
-					reject(
-						options.signal!.reason ?? new Error("EventBus.once aborted"),
-					);
+					reject(abortReason(options.signal!, "EventBus.once aborted"));
 				};
 				options.signal.addEventListener("abort", abortListener);
 			}

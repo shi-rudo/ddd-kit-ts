@@ -11,6 +11,7 @@ import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import { type AggregateClass, IdentityMap } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
+import { abortReason } from "../utils/abort";
 import { withCommit } from "./handler";
 
 /**
@@ -370,7 +371,7 @@ export class UnitOfWork<
 		// nesting error. The `??` fallback mirrors event-bus.ts and guards a
 		// non-spec polyfill whose `reason` is undefined.
 		if (options?.signal?.aborted) {
-			throw options.signal.reason ?? new Error("UnitOfWork.run aborted before opening a transaction");
+			throw abortReason(options.signal, "UnitOfWork.run aborted before opening a transaction");
 		}
 		if (this._active) {
 			throw new NestedUnitOfWorkError();
