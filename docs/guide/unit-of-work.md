@@ -52,6 +52,8 @@ const result = await uow.run(async ({ repositories }) => {
 
 Every factory is invoked once per `run()` with the **same** transaction handle, so all writes of one unit of work share one transaction by construction. The context also exposes `session` (manual enrollment) and `rawTransaction`, deliberately named to look like what it is: an **escape hatch**. A write on the raw handle leaves the unit of work's guarantees: no enrollment (events silently skipped unless you call `session.enrollSaved` yourself), no identity-map registration (a later `getById` hydrates a second instance: double harvest, double `markPersisted`). Prefer adding a repository method; reach for `rawTransaction` only for writes no repository could reasonably cover.
 
+A **read-only `run()`** is fine. A callback that only reads and enrolls nothing produces an empty harvest: no `outbox.add`, no `markPersisted`, no publish. The transaction still opens and commits, which at the storage layer is a no-op for reads. You get the callback's result back. Reach for it when several reads should share one consistent snapshot; for a single read, calling the repository directly is lighter.
+
 ## The rules
 
 These sentences are the contract. Internalize them before building repositories:
@@ -60,7 +62,7 @@ These sentences are the contract. Internalize them before building repositories:
 2. **Repositories do not commit.** `save()`/`delete()` write rows and enroll aggregates; commit and rollback belong to `run()`.
 3. **Optimistic concurrency is enforced at the aggregate-root level**, and it is a **repository contract, not a kit guarantee**: the kit ships the boundary, the `persistedVersion` baseline, the documented predicate, and `ConcurrencyConflictError`; *your* repository must implement `WHERE version = $persistedVersion` on every update (and OCC-checked deletes where deletion races matter). A repository that skips the predicate silently disables OCC for its aggregate.
 4. **Child-entity changes increment the aggregate-root version.** There is no per-child versioning.
-5. **`version` is a mutation sequence, not a commit revision.** Three domain methods bump it three times: a baseline of 7 commits as 10, and the OCC predicate still uses `WHERE version = 7` (the load-time `persistedVersion`). If you expect `+1 per commit`, your tests will be wrong; see [Versioning convention](./repository.md#insert-vs-update-the-persistedversion-convention).
+5. **`version` is a mutation sequence, not a commit revision.** Each domain method that records an event bumps it by one, so an aggregate loaded at version 7 and mutated three times commits as version 10, while the OCC predicate still uses `WHERE version = 7` (the load-time `persistedVersion`). If you expect `+1 per commit`, your tests will be wrong; see [Versioning convention](./repository.md#insert-vs-update-the-persistedversion-convention).
 6. **Domain events are persisted through the outbox in the same transaction.** Never publish from inside the callback.
 7. **External side effects must not run inside the Unit of Work transaction**; see below.
 8. **Nested Unit of Work scopes are not allowed.** A nested `run()` throws; it would not join the outer transaction.
@@ -104,11 +106,13 @@ class DrizzleRestaurantRepository {
   ) {}
 
   async save(restaurant: Restaurant): Promise<void> {
-    if (!restaurant.hasChanges) return;        // safe no-op skip
-    // Enroll FIRST: the deleted-gate throws AggregateDeletedError
-    // before any SQL runs. Enrollment is idempotent; a failed write
-    // rolls the whole unit of work back anyway.
+    // Enroll BEFORE the hasChanges skip, not after: the deleted-gate
+    // throws AggregateDeletedError regardless of dirty state, so a clean
+    // save of an aggregate deleted earlier in this unit of work cannot
+    // slip through the early return. Enrollment is idempotent; a failed
+    // write rolls the whole unit of work back anyway.
     this.session.enrollSaved(restaurant);
+    if (!restaurant.hasChanges) return;        // skip the SQL write only
     // root row first (OCC), then changedKeys-scoped child tables;
     // see "Partial writes for multi-table aggregates" in the
     // Repository guide
@@ -128,7 +132,7 @@ Semantics:
 
 - **Enrollment is idempotent per instance**: saving the same aggregate instance twice harvests its events once and calls `markPersisted` once (the same reference-dedupe `withCommit` performs).
 - **Deleted aggregates still get their events harvested, but the post-save lifecycle is not a lie for them.** The [hard-delete-with-event-harvest pattern](./repository.md#2-hard-delete-with-event-harvest) maps 1:1: `restaurant.recordDeletion(reason)` then `repositories.restaurants.delete(restaurant)`, and the deletion event reaches the outbox atomically with the row removal. After the commit, `markPersisted` is **skipped** for deleted aggregates (their pending events are cleared directly), so a user `onPersisted` hook doing cache fill or read-model warm-up never fires for a row that no longer exists.
-- **Deletion is final within an operation, across instances.** `enrollDeleted` tombstones the aggregate's class+id in the identity map; saving the same instance *or a re-created instance with the same identity* afterwards throws `AggregateDeletedError`. Resurrecting a row the delete just removed is always a use-case bug.
+- **Deletion is final within an operation, across instances.** `enrollDeleted` tombstones the aggregate's class+id in the identity map; saving the same instance *or a re-created instance with the same identity* afterwards throws `AggregateDeletedError`. Resurrecting a row the delete just removed is always a use-case bug. One caveat: the gate fires only when your `save()` actually reaches `enrollSaved`, so enroll before any `hasChanges`/no-op early return (as the example above does). A `save()` that returns on `!hasChanges` *before* enrolling lets a clean save of a deleted aggregate slip through silently.
 
 This moves the event-handoff responsibility from *every call site* (the `withCommit` model: forget to return the aggregate → events silently dropped) to *every repository implementation*: implemented once, pinned by that repository's tests once.
 
@@ -194,7 +198,39 @@ After `run()` settles, the context getters (`repositories`, `rawTransaction`) an
 
 The same honesty applies inside the callback: **do not mutate an aggregate after `save()`**: the post-commit `markPersisted` re-baselines dirty tracking against the *current* state, so a late mutation is silently marked clean (see the [`withCommit` ordering notes](./outbox.md)). Mutate first, save last.
 
+## Cancellation and deadlines
+
+`run()` takes an optional second argument carrying an `AbortSignal`. Use a plain `AbortController` for caller-driven cancellation, or `AbortSignal.timeout(ms)` for a deadline:
+
+```ts
+const result = await uow.run(
+  async ({ repositories, signal }) => {
+    const order = await repositories.orders.getByIdOrFail(orderId);
+    order.confirm();
+    // Poll between steps of a long operation and bail out cleanly.
+    if (signal?.aborted) throw signal.reason;
+    await repositories.orders.save(order);
+    return order.id;
+  },
+  { signal: AbortSignal.timeout(5_000) },
+);
+```
+
+Three things happen, in order of how much the kit can promise:
+
+1. **Pre-flight (enforced).** If the signal is already aborted when `run()` is called, it rejects with the signal's `reason` *before* opening a transaction. No connection is taken, no callback runs. This matches the web convention (`fetch` rejects the same way), and `AbortSignal.timeout(ms)`'s reason is a `TimeoutError` `DOMException`.
+2. **Cooperative checks (your job).** The signal is exposed on the context as `context.signal`. Poll `signal?.aborted` between steps of a long callback and `throw signal.reason` to bail; the throw rolls the unit of work back exactly like any other callback error (no harvest, no `markPersisted`, nothing in the outbox), and the error passes through `run()` unchanged.
+3. **Query cancellation (scope-dependent).** The signal is forwarded to `TransactionScope.transactional(fn, { signal })`. A scope whose driver supports cancellation (an interactive-transaction timeout, an AbortSignal-aware query call) can use it to abort a query already in flight.
+
+What the kit deliberately does **not** do: it does not race the work promise against the signal. Aborting mid-query does not kill a running statement unless your scope honors the signal in step 3, because abandoning the `await` would leave the transaction running uncontrolled toward an unmanaged commit or rollback. Cancellation here is cooperative by design, not a kill switch. For a hard ceiling on a runaway query, pair the signal with a statement/transaction timeout in your scope or driver config. When no signal is passed, behavior is unchanged.
+
+The same `{ signal }` option is available on `withCommit` directly, with identical semantics, for the hand-rolled-repository path.
+
 ## Proving the contract: the repository contract test suite
+
+::: danger Running the contract suite is mandatory, not recommended
+Every guarantee on this page, exactly-once event harvest, correct `markPersisted`, and optimistic concurrency, is only as real as your repository's adherence to the enrollment, identity-map, and OCC contract. None of it is enforced structurally. A repository that skips the `WHERE version = ?` predicate silently disables OCC; one that forgets `enrollSaved` silently drops that aggregate's events (no error, they simply never reach the outbox). The contract test suite is the only thing that proves an adapter actually holds the contract. Run it against every repository you wire into a `UnitOfWork`: an adapter that has not passed it has not earned the unit-of-work guarantees, and should be treated as unproven, not as working.
+:::
 
 Rule 3 above has a consequence: since the OCC predicate lives in *your* repository's SQL, only a test can prove your adapter holds the contract. The kit ships that test as an opt-in entry point:
 

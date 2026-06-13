@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: cooperative `AbortSignal` for `UnitOfWork.run` and `withCommit`
+
+`UnitOfWork.run(work, { signal })` and `withCommit({ ..., signal })` now accept an optional `AbortSignal` (use `AbortSignal.timeout(ms)` for a deadline). If the signal is already aborted, the call rejects with the signal's `reason` before opening a transaction. Otherwise the signal is forwarded to `TransactionScope.transactional(fn, { signal })` (new `TransactionalOptions`, an additive optional second argument that existing one-argument scopes still satisfy) and exposed on the unit-of-work context as `context.signal`, so a long callback can poll `aborted` between steps and throw `signal.reason` to roll back. The kit does not race the work promise: actual cancellation of an in-flight query happens only when the scope's driver honors the signal, so this is cooperative by design, not a kill switch. Fully additive; no behavior change when no signal is passed.
+
 ## [1.2.0] - 2026-06-12
 
 The unit-of-work release. One coherent feature line, built and adversarially reviewed in stages: aggregate-level **dirty tracking** (`changedKeys` / `hasChanges`) makes partial writes for multi-table aggregates affordable; the opt-in **`UnitOfWork` facade** over `withCommit` adds tx-bound repositories, repository-side enrollment, and a per-operation **`IdentityMap`**; the **repository contract test suite** (new `@shirudo/ddd-kit/testing` entry point) turns OCC from a documented pattern into a testable contract; harvested events carry **`aggregateVersion`**; and **`DuplicateAggregateError`** completes the 409 story alongside the OCC conflict. Everything is additive: no breaking API changes; `withCommit` with hand-rolled repositories remains fully supported. Two behavioral notes for existing consumers: the outbox/bus now receive frozen stamped *copies* of harvested events (reference identity with `pendingEvents` no longer holds; `eventId` is the stable handle), and `markRestored` overriders must call `super` first (see the entry below). Test suite grew from 569 to 667.
