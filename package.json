@@ -1,6 +1,6 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "1.2.0",
+	"version": "1.3.0",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
