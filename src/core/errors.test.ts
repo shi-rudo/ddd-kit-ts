@@ -10,6 +10,7 @@ import {
 	ConcurrencyConflictError,
 	DomainError,
 	DuplicateAggregateError,
+	EventHarvestError,
 	InfrastructureError,
 	MissingHandlerError,
 } from "./errors";
@@ -191,5 +192,14 @@ describe("ConcurrencyConflictError", () => {
 		expect(json.name).toBe("ConcurrencyConflictError");
 		expect(json.message).toContain("Order(o-1)");
 		expect(json.timestamp).toBeDefined();
+	});
+});
+
+describe("EventHarvestError", () => {
+	it("is a BaseError but NOT an InfrastructureError (deterministic, not retryable)", () => {
+		const e = new EventHarvestError("bad event");
+		expect(isBaseError(e)).toBe(true);
+		expect(e).not.toBeInstanceOf(InfrastructureError);
+		expect(e.name).toBe("EventHarvestError");
 	});
 });

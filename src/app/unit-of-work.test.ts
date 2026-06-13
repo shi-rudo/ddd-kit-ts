@@ -5,6 +5,8 @@ import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
 	ConcurrencyConflictError,
+	EventHarvestError,
+	InfrastructureError,
 } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
@@ -788,6 +790,67 @@ describe("UnitOfWork", () => {
 
 			expect(rejection).toBeInstanceOf(CommitError);
 			expect((rejection as CommitError).cause).toBe(commitFailure);
+		});
+
+		it("a deterministic harvest-guard violation surfaces as EventHarvestError, not a retryable CommitError", async () => {
+			// An event missing aggregateId is a recordEvent/createDomainEvent
+			// misuse: deterministic, fails identically on every retry. It must
+			// NOT be wrapped in CommitError (an InfrastructureError a retry
+			// loop would spin on forever).
+			const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
+				aggregateType: "MockOrder",
+			}) as TestEvent;
+			const agg = createMockAggregate("x", [badEvent]);
+			const { uow } = createUow();
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					await repositories.orders.save(agg);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).not.toBeInstanceOf(CommitError);
+			expect(rejection).not.toBeInstanceOf(InfrastructureError);
+			expect(agg.markPersistedCalls).toBe(0);
+		});
+
+		it("a wrapping scope that nests the harvest-guard error still surfaces EventHarvestError, not CommitError", async () => {
+			// The harvest guard throws inside scope.transactional(), so a
+			// scope that wraps its callback's rejection nests the
+			// EventHarvestError in its cause chain. run() must still treat it
+			// as the deterministic, non-retryable failure it is.
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch (e) {
+						throw new Error("driver wrapped the failure", { cause: e });
+					}
+				},
+			};
+			const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
+				aggregateType: "MockOrder",
+			}) as TestEvent;
+			const agg = createMockAggregate("x", [badEvent]);
+			const { uow } = createUow({ scope });
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					await repositories.orders.save(agg);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(rejection).toBeInstanceOf(EventHarvestError);
+			expect(rejection).not.toBeInstanceOf(InfrastructureError);
 		});
 
 		it("a scope that WRAPS the callback's error passes the wrapper through (not a RollbackError)", async () => {
