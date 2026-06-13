@@ -163,7 +163,7 @@ export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggre
  *
  * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
  * `withCommit` invocation): reload, re-apply, save. Do NOT catch this
- * inside the same `run()` callback and continue — the failed aggregate
+ * inside the same `run()` callback and continue: the failed aggregate
  * is already enrolled (its events would be committed for a write that
  * never happened) and the identity map still serves the same stale
  * instance to any in-place "reload".

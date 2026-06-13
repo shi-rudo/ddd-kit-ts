@@ -121,7 +121,7 @@ export abstract class AggregateRoot<
 	 * If you override this, call `super.markRestored(version)` FIRST:
 	 * skipping it leaves the baseline uncaptured, so `changedKeys`
 	 * permanently reports ALL keys and `hasChanges` never returns `false`
-	 * — partial-write repositories silently degrade to full writes — on
+	 * (partial-write repositories silently degrade to full writes), on
 	 * top of breaking version sync.
 	 */
 	protected override markRestored(version: Version): void {
@@ -145,7 +145,7 @@ export abstract class AggregateRoot<
 	 * **How it works.** `setState()` replaces state immutably and the
 	 * state object is shallow-frozen, so unchanged top-level sub-objects
 	 * keep reference identity across mutations. The diff is therefore a
-	 * shallow per-key `!==` against the baseline reference — O(top-level
+	 * shallow per-key `!==` against the baseline reference: O(top-level
 	 * keys), no proxies, no deep diff. A key also counts as dirty when its
 	 * *presence* differs (added or removed, even with an `undefined`
 	 * value). Computed fresh on every access (a new `Set` each time), so
@@ -158,12 +158,12 @@ export abstract class AggregateRoot<
 	 * class-instance `TState` mutated through its own methods defeats
 	 * tracking entirely (the reference never changes). A keyless `TState`
 	 * (primitive, bare `Date`) has no keys to report, so `changedKeys`
-	 * stays empty for it — use {@link hasChanges}, whose reference
+	 * stays empty for it; use {@link hasChanges}, whose reference
 	 * fallback covers keyless states. A deep-equal but newly-referenced
 	 * value reports a false POSITIVE (harmless extra write); under the
 	 * contract above there are no false negatives.
 	 *
-	 * Granularity is per top-level key — table-granular, not row-granular:
+	 * Granularity is per top-level key, table-granular, not row-granular:
 	 * a dirty collection key means "this child table changed", not which
 	 * rows. `EventSourcedAggregate` deliberately has no `changedKeys`;
 	 * its `pendingEvents` are the change record.
@@ -181,16 +181,16 @@ export abstract class AggregateRoot<
 	 * Safe skip signal: `false` only when there is genuinely nothing to
 	 * persist or flush. `true` when the aggregate has never been
 	 * persisted, the version moved past `persistedVersion`, there are
-	 * unflushed {@link pendingEvents}, any state key is dirty, or — for
+	 * unflushed {@link pendingEvents}, any state key is dirty, or, for
 	 * keyless states the per-key diff cannot see (primitive `TState`,
-	 * zero-own-key objects like a bare `Date`) — the state reference
+	 * zero-own-key objects like a bare `Date`), the state reference
 	 * changed since the baseline.
 	 *
 	 * The version clause is deliberate: `setState({...state}, true)` with
 	 * identical per-key values yields empty {@link changedKeys} but a
 	 * bumped version. If a repository skipped `save()` on a state-only
 	 * check, `withCommit` would still call `markPersisted(version)` after
-	 * commit, desyncing `persistedVersion` from the DB row — and the next
+	 * commit, desyncing `persistedVersion` from the DB row; and the next
 	 * uncontended save would throw a false `ConcurrencyConflictError`.
 	 *
 	 * The pending-events clause covers the sanctioned decoupled
@@ -206,7 +206,7 @@ export abstract class AggregateRoot<
 		if (this.pendingEvents.length > 0) return true;
 		if (this.changedKeys.size > 0) return true;
 		// Keyless states are invisible to the per-key diff; fall back to
-		// the state reference itself — setState always replaces it.
+		// the state reference itself; setState always replaces it.
 		const baseline = this._baselineState;
 		return (
 			baseline !== this._state &&

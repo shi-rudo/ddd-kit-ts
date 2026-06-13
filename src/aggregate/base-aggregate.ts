@@ -139,7 +139,7 @@ export abstract class BaseAggregate<
 	 * `changedKeys`/`hasChanges`. An override that skips `super` leaves
 	 * that baseline uncaptured: `changedKeys` permanently reports ALL
 	 * keys and `hasChanges` never returns `false`, so a partial-write
-	 * repository silently degrades to full writes on every save — on top
+	 * repository silently degrades to full writes on every save, on top
 	 * of the broken version sync.
 	 *
 	 * @param version - The version the row currently holds in the DB

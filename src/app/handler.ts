@@ -83,12 +83,12 @@ import type { TransactionScope } from "../repo/scope";
  * version and (on `AggregateRoot`) re-baselines dirty tracking against
  * the CURRENT state. A mutation between `save` and the callback's return
  * therefore desyncs OCC (next save throws a false
- * `ConcurrencyConflictError`) — and under a partial-write repository
+ * `ConcurrencyConflictError`); and under a partial-write repository
  * using `changedKeys`, an un-bumped mutation is silently marked clean
  * and never written. The `aggregateVersion` stamp widens the blast
  * radius further: harvested events would publicly claim a version the
  * committed row does not carry, poisoning every consumer's ordering
- * and idempotency watermarks — a cross-service inconsistency, not just
+ * and idempotency watermarks: a cross-service inconsistency, not just
  * a local one. Mutate first, save last.
  *
  * **Duplicate aggregates are deduped by reference.** If the returned
@@ -137,7 +137,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		 * Optional marker: which of `aggregates` were DELETED in this unit
 		 * of work. Their pending events are harvested like any other
 		 * (deletion events must reach the outbox), but the post-commit
-		 * lifecycle differs: `markPersisted` is NOT called on them — it
+		 * lifecycle differs: `markPersisted` is NOT called on them. It
 		 * would fire the user-overridable `onPersisted` hook, whose
 		 * post-save semantics (cache fill, read-model warm-up) are a lie
 		 * for a row that was just deleted. Their pending events are

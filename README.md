@@ -17,9 +17,9 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 - **Domain Events:** typed, deeply frozen, carry metadata for traceability and schema evolution.
 - **Repositories:** technology-agnostic persistence ports with an Identity-Map contract and OCC.
 - **CQRS:** zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
-- **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes — honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
+- **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes. Honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
 - **Outbox:** `withCommit` harvests pending events inside the transaction, stamps them with the aggregate's commit version, and publishes them atomically.
-- **Repository contract tests:** `@shirudo/ddd-kit/testing` ships the suite every adapter must pass — OCC is a testable contract, not a documented pattern.
+- **Repository contract tests:** `@shirudo/ddd-kit/testing` ships the suite every adapter must pass: OCC is a testable contract, not a documented pattern.
 - **Result-first boundary:** a typed error hierarchy on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) and `Result` from [`@shirudo/result`](https://www.npmjs.com/package/@shirudo/result); `voValidated` collects field violations and renders RFC 9457 via the opt-in `@shirudo/ddd-kit/http` entry.
 
 ## Installation

@@ -7,9 +7,9 @@ import { deepEqual } from "../utils/array/deep-equal";
  * The repository surface the contract suite exercises: the minimal
  * structural subset of the canonical `IUnitOfWorkRepository` (exported
  * from the main entry) that the tests need. `getById` is typed over
- * the aggregate's own branded id (`TAgg["id"]`), so concrete adapters
- * — including arrow-function-property style repositories, which are
- * checked contravariantly — match without casts.
+ * the aggregate's own branded id (`TAgg["id"]`), so concrete adapters,
+ * including arrow-function-property style repositories, which are
+ * checked contravariantly, match without casts.
  */
 export interface ContractRepository<
 	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
@@ -34,7 +34,7 @@ export interface RepositoryContractEnvironment<
 	 * transaction, hand the suite a tx-bound repository, commit on
 	 * resolve, roll back on throw, and run the post-commit lifecycle
 	 * (event harvest into the outbox, `markPersisted`). Wire this
-	 * through your real `UnitOfWork` / `withCommit` setup — the commit
+	 * through your real `UnitOfWork` / `withCommit` setup: the commit
 	 * boundary IS part of what the suite proves.
 	 */
 	run<R>(
@@ -43,7 +43,7 @@ export interface RepositoryContractEnvironment<
 
 	/**
 	 * All events currently persisted in the outbox (committed writes
-	 * only — a rolled-back transaction's events must not appear here).
+	 * only; a rolled-back transaction's events must not appear here).
 	 */
 	committedOutboxEvents(): Promise<ReadonlyArray<Evt>>;
 
@@ -55,7 +55,7 @@ export interface RepositoryContractEnvironment<
  * What an adapter supplies to run the contract suite.
  *
  * The harness MUST provide isolation per environment (fresh
- * tables/keyspace or a truncate) — tests assume they see only their
+ * tables/keyspace or a truncate); tests assume they see only their
  * own writes. **For SQL/ORM adapters this must run against a real
  * database** (testcontainers or equivalent), not an in-memory fake:
  * the mandatory two-writer test proves YOUR `WHERE version = ?`
@@ -63,11 +63,11 @@ export interface RepositoryContractEnvironment<
  *
  * Optional capabilities widen the suite: tests for an absent
  * capability come back **marked `skipped`** with a `run()` that
- * rejects loudly — bind them with `it.skip` so the gap stays visible
+ * rejects loudly: bind them with `it.skip` so the gap stays visible
  * in every report (see {@link RepositoryContractTest}); a naive
  * binding fails instead of green-no-op'ing. Capabilities are captured
  * once at suite creation. Provide every capability your adapter can
- * support — each one closes a real OCC hole.
+ * support; each one closes a real OCC hole.
  */
 export interface RepositoryContractHarness<
 	TAgg extends IAggregateRoot<Id<string>, Evt>,
@@ -92,7 +92,7 @@ export interface RepositoryContractHarness<
 	/**
 	 * Optional: a version-bumping mutation whose state is deep-equal to
 	 * the previous state (`setState({...state}, true)`). Enables the
-	 * version-only-change-still-persists test — the skip-save/OCC-desync
+	 * version-only-change-still-persists test: the skip-save/OCC-desync
 	 * trap.
 	 */
 	mutateVersionOnly?(aggregate: TAgg): void;
@@ -118,9 +118,9 @@ export interface RepositoryContractHarness<
 	/**
 	 * Semantic opt-OUT (default `true`): whether `save()`'s INSERT path
 	 * rejects an existing id with `DuplicateAggregateError` (mapping the
-	 * driver's unique-violation — Postgres `23505`, MySQL `1062`, SQLite
+	 * driver's unique-violation: Postgres `23505`, MySQL `1062`, SQLite
 	 * `SQLITE_CONSTRAINT_UNIQUE`). This is the near-mandatory contract:
-	 * `save()` is insert-or-update, never upsert — create-idempotency
+	 * `save()` is insert-or-update, never upsert. Create-idempotency
 	 * belongs in the USE CASE (load, then decide), not in the save path.
 	 * Set `false` ONLY for a deliberately upserting adapter
 	 * (idempotent-create design); the duplicate-insert test is then
@@ -134,12 +134,12 @@ export interface RepositoryContractHarness<
 	 * Optional: a plain-data projection of the aggregate's persisted
 	 * state, compared with deep equality. Enables the mandatory test's
 	 * state assertion (without it, only the version and the outbox are
-	 * compared — an adapter whose predicate guards the version write
+	 * compared, and an adapter whose predicate guards the version write
 	 * but not the state write would slip through).
 	 *
 	 * **The projection must be roundtrip-stable**: it compares a
 	 * DB-reloaded aggregate against an in-memory one, so normalize
-	 * anything your store changes in transit — dates to ISO strings at
+	 * anything your store changes in transit: dates to ISO strings at
 	 * your store's precision (MySQL DATETIME truncates millis), no
 	 * `undefined`-valued keys (JSON columns drop them), decimals/bigints
 	 * to one consistent representation. A mismatch here fails the
@@ -151,7 +151,7 @@ export interface RepositoryContractHarness<
 	 * Optional flag: declare it when your `delete(aggregate)` runs an
 	 * OCC predicate (`DELETE … WHERE id = ? AND version = ?`). Enables
 	 * the stale-delete conflict test. Unpredicated deletes are
-	 * last-write-wins by construction — acceptable for GC-style
+	 * last-write-wins by construction: acceptable for GC-style
 	 * cleanup, rarely for user-initiated deletion of contended
 	 * aggregates (see the repository guide).
 	 */
@@ -164,7 +164,7 @@ export interface RepositoryContractHarness<
  * entry is still returned with {@link skipped} set and a `run` that
  * REJECTS with an explanatory error: bind it with your runner's skip
  * (`(test.skipped ? it.skip : it)(test.name, test.run)`) so the gap is
- * visible in every test report — a missing capability must never look
+ * visible in every test report: a missing capability must never look
  * like green coverage, and a naive binding that ignores `skipped`
  * fails loud instead of passing silently.
  */
@@ -179,7 +179,7 @@ export interface RepositoryContractTest {
  * The repository contract test suite: the proof that an adapter
  * actually delivers the guarantees the kit's Unit of Work documents.
  *
- * The kit is ORM-agnostic — the OCC version predicate lives in YOUR
+ * The kit is ORM-agnostic: the OCC version predicate lives in YOUR
  * repository's SQL. That makes optimistic concurrency a **repository
  * contract, not a kit guarantee**: the kit ships the boundary, the
  * `persistedVersion` baseline, `ConcurrencyConflictError`, and this
@@ -229,12 +229,12 @@ export interface RepositoryContractTest {
  *
  * **`env.run` must provide unit-of-work semantics.** Three core tests
  * (identity-map sameness, getById-null-after-delete, deletion
- * finality) exercise the session machinery — `session.identityMap`,
+ * finality) exercise the session machinery: `session.identityMap`,
  * the `isDeleted` probe, the deleted-gate. Wiring `run` through the
  * kit's `UnitOfWork` gives you all of it; a hand-rolled `withCommit`
  * wiring must provide equivalents or those tests will fail. A
  * `withCommit`-only setup that deliberately makes no identity-map /
- * deletion-finality claims is outside this suite's scope — the suite
+ * deletion-finality claims is outside this suite's scope; the suite
  * is the compliance bar for unit-of-work repositories.
  *
  * **Error matching is by NAME along the `cause` chain, not by
@@ -248,20 +248,21 @@ export interface RepositoryContractTest {
  * tests prove YOUR adapter's SQL and transaction wiring. The
  * identity-map, deletion-finality, and event-lifecycle tests prove
  * your READ-PATH and unit-of-work WIRING (they exercise kit-provided
- * machinery — `session.identityMap`, the deleted-gate, `withCommit`'s
- * harvest — and fail when your repository bypasses or mis-wires it).
+ * machinery, namely `session.identityMap`, the deleted-gate, and
+ * `withCommit`'s harvest, and fail when your repository bypasses or
+ * mis-wires it).
  * A deletion-finality failure usually means a missing
  * `identityMap.isDeleted` check or an `enrollSaved` placed after the
  * row write, not a broken DELETE statement.
  *
  * **Known limitation: no truly concurrent runs.** The mandatory
- * two-writer test is deliberately sequential-deterministic — writer B
+ * two-writer test is deliberately sequential-deterministic: writer B
  * loads, writer A loads/mutates/commits, then B commits its stale
  * instance. The stale `persistedVersion` baseline travels with B's
  * instance, so the version predicate is exercised exactly as in a true
  * race, without depending on lock timing, pool sizes, or
  * engine-specific blocking. The flip side: lock interaction is NOT
- * covered — a `SELECT … FOR UPDATE`-style repository that blocks
+ * covered. A `SELECT … FOR UPDATE`-style repository that blocks
  * instead of conflicting, or a SERIALIZABLE engine surfacing raw
  * serialization failures (Postgres 40001) your adapter must map to
  * `ConcurrencyConflictError`, needs adapter-specific tests on top of

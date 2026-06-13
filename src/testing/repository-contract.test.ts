@@ -19,10 +19,10 @@ import {
 /**
  * The in-memory REFERENCE adapter: the example consumers copy when
  * wiring their own harness (linked from docs/guide/unit-of-work.md).
- * It follows every documented repository pattern — identity-map read
+ * It follows every documented repository pattern (identity-map read
  * path with the isDeleted probe, hasChanges skip, enroll-before-write,
  * persistedVersion insert/update routing, and REAL version predicates
- * on update AND delete (the affectedRows-0 equivalent) — against a
+ * on update AND delete, the affectedRows-0 equivalent) against a
  * store with genuine transactional rollback (snapshot/restore).
  *
  * It is an EXAMPLE, not a proof: passing the suite in memory proves
@@ -85,7 +85,7 @@ type Row = { state: OrderState; version: number };
 /**
  * In-memory storage with genuine transactional semantics via
  * snapshot/restore. NOTE: snapshot() clones the WHOLE store per
- * transaction — O(total rows). Fine for a contract-test store with a
+ * transaction: O(total rows). Fine for a contract-test store with a
  * handful of rows; do not copy this pattern for large long-lived
  * fakes.
  */
@@ -202,7 +202,7 @@ type RepoFactory = (
 /**
  * The harness consumers copy. `repoFactory` is parameterized only so
  * the mutant test below can swap in a broken repository against the
- * SAME wiring — your harness hard-wires your real adapter.
+ * SAME wiring; your harness hard-wires your real adapter.
  */
 function createInMemoryHarness(
 	repoFactory: RepoFactory = (db, session) =>
