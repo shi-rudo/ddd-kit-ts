@@ -5,6 +5,7 @@ import {
 	AggregateDeletedError,
 	EventHarvestError,
 	InfrastructureError,
+	UnenrolledChangesError,
 } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
@@ -408,6 +409,11 @@ export class UnitOfWork<
 					const context = makeContext(repositories, tx, s, options?.signal);
 					try {
 						const result = await work(context);
+						// Catch a forgotten enrollment before sealing: a loaded
+						// aggregate with pending events that was never enrolled
+						// would otherwise drop its events silently. Throws inside
+						// the transaction, so the unit of work rolls back.
+						s.assertAllChangesEnrolled();
 						workCompleted = true;
 						// Seal immediately: the aggregates snapshot below is what
 						// gets harvested. A late enrollment (an un-awaited
@@ -534,6 +540,31 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// `deleted` marker set and skips markPersisted for them, so the
 		// post-save onPersisted hook never fires for a deletion.
 		this._enrolled.add(aggregate);
+	}
+
+	/**
+	 * End-of-run safety net: a loaded aggregate (registered in the identity
+	 * map via `getById`) that carries pending events but was never enrolled
+	 * is almost certainly a forgotten `save()` / `enrollSaved`, whose events
+	 * would otherwise be silently dropped. Convert that silent loss into a
+	 * loud, rolling-back {@link UnenrolledChangesError}. Only sees loaded
+	 * aggregates; a freshly created one that was never enrolled is invisible
+	 * to the kit (the contract test suite remains the full mitigation).
+	 */
+	public assertAllChangesEnrolled(): void {
+		for (const instance of this._identityMap.instancesWithNewPendingEvents()) {
+			if (
+				this._enrolled.has(instance as IAggregateRoot<Id<string>, Evt>) ||
+				this._deleted.has(instance as IAggregateRoot<Id<string>, Evt>)
+			) {
+				continue;
+			}
+			// Events were recorded on a loaded aggregate after it was
+			// registered, yet it was never enrolled: a forgotten save whose
+			// events would be silently dropped.
+			const id = (instance as { id?: unknown }).id;
+			throw new UnenrolledChangesError(String(id));
+		}
 	}
 
 	public get enrolledAggregates(): ReadonlyArray<
