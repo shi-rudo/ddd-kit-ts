@@ -1400,7 +1400,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					1 as Version,
 				);
 				// Restored with undefined state: the baseline IS captured, so
-				// the aggregate is clean — not stuck on the insert path.
+				// the aggregate is clean, not stuck on the insert path.
 				expect(agg.hasChanges).toBe(false);
 				expect(agg.changedKeys.size).toBe(0);
 

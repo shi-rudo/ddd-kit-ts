@@ -256,7 +256,7 @@ export interface EventMetadata {
  * transport concerns the outbox needs (`aggregateId`, `aggregateType`,
  * `aggregateVersion`, `metadata`). That is the line: further transport
  * fields (partition keys, tenancy, schema URNs, …) belong in an outbox
- * envelope / `metadata`, not on the domain event — the next first-class
+ * envelope / `metadata`, not on the domain event: the next first-class
  * transport field forces an `OutboxMessage` envelope port instead.
  *
  * @template T - The event type name (e.g., "OrderCreated")
@@ -305,7 +305,7 @@ export interface DomainEvent<T extends string, P = void> {
 	 * Required for safe schema migration in event-sourced systems.
 	 * Use 1 for the initial schema version.
 	 *
-	 * **NOT the aggregate's version** — that is
+	 * **NOT the aggregate's version**: that is
 	 * {@link aggregateVersion}. The two are deliberately distinct
 	 * fields: this one says "which shape does the payload have"
 	 * (upcasting), the other says "which state revision of the
@@ -319,7 +319,7 @@ export interface DomainEvent<T extends string, P = void> {
 	 * `withCommit` at the harvest boundary (all events of one aggregate
 	 * in one commit share it; their relative order within the commit is
 	 * the harvest order), or set manually via
-	 * `CreateDomainEventOptions.aggregateVersion` — a pre-set value is
+	 * `CreateDomainEventOptions.aggregateVersion`; a pre-set value is
 	 * never overwritten.
 	 *
 	 * Consumers use it for ordering ("apply projections up to aggregate
@@ -378,8 +378,8 @@ export interface CreateDomainEventOptions {
 
 	/**
 	 * Pre-set the producing aggregate's version (see
-	 * `DomainEvent.aggregateVersion`). Normally left unset — `withCommit`
-	 * stamps it at the harvest boundary with the commit version — but
+	 * `DomainEvent.aggregateVersion`). Normally left unset (`withCommit`
+	 * stamps it at the harvest boundary with the commit version), but
 	 * useful for replay fixtures and events constructed outside an
 	 * aggregate. A pre-set value is never overwritten by the harvest.
 	 */

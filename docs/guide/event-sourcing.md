@@ -89,10 +89,10 @@ class OrderRepository implements IRepository<Order, OrderId> {
 }
 ```
 
-`markPersisted` is library-internal under the canonical `withCommit` path. It stays on `IAggregateRoot` for consumers running their own orchestration (call it manually **after** harvesting `pendingEvents`; stamp `aggregateVersion = aggregate.version` onto the harvested events if your consumers rely on it — `withCommit` does this automatically). See [Outbox & Transactions](./outbox.md) for the full lifecycle.
+`markPersisted` is library-internal under the canonical `withCommit` path. It stays on `IAggregateRoot` for consumers running their own orchestration (call it manually **after** harvesting `pendingEvents`; stamp `aggregateVersion = aggregate.version` onto the harvested events if your consumers rely on it; `withCommit` does this automatically). See [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ::: warning Stream events and outbox events are not byte-identical
-`save()` appends the **unstamped** `pendingEvents` originals to the event store, while `withCommit` hands the outbox **stamped copies** carrying [`aggregateVersion`](./outbox.md) (the commit version — for ES, all events of one commit share it). Consequence: a projection rebuilt **from the stream** sees `aggregateVersion === undefined`, while the same projection fed live **from the outbox** sees it populated. Do not key projection logic on `aggregateVersion` if your rebuild path reads the stream — for event-sourced systems, the **store's own position / `expectedVersion` is the ordering authority**; per-event positions are the store's job, not the outbox's.
+`save()` appends the **unstamped** `pendingEvents` originals to the event store, while `withCommit` hands the outbox **stamped copies** carrying [`aggregateVersion`](./outbox.md) (the commit version; for ES, all events of one commit share it). Consequence: a projection rebuilt **from the stream** sees `aggregateVersion === undefined`, while the same projection fed live **from the outbox** sees it populated. Do not key projection logic on `aggregateVersion` if your rebuild path reads the stream. For event-sourced systems, the **store's own position / `expectedVersion` is the ordering authority**; per-event positions are the store's job, not the outbox's.
 :::
 
 ## Replay: `loadFromHistory`

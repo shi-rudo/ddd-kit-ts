@@ -10,8 +10,8 @@ import type { AnyDomainEvent } from "../aggregate/domain-event";
  * the deleted-cannot-be-resaved gate. Ids stay branded (`TId extends
  * Id<string>`) end-to-end.
  *
- * Implementing this interface is optional — the `UnitOfWork` registry
- * is structurally typed — but it is the single source of truth the
+ * Implementing this interface is optional (the `UnitOfWork` registry
+ * is structurally typed), but it is the single source of truth the
  * guide's examples and the repository contract test suite
  * (`@shirudo/ddd-kit/testing`, whose `ContractRepository` is the
  * minimal structural subset of this shape) are written against.

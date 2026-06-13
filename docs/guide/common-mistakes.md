@@ -69,7 +69,7 @@ Use `aggregate.persistedVersion === undefined` for the INSERT marker: that field
 
 ### Repository that returns a fresh aggregate instance for every `getById(id)` call within one `withCommit`
 
-Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same logical id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work — the [`UnitOfWork` facade ships one as `session.identityMap`](./unit-of-work.md#identity-map), with a deletion-tombstone guard hand-rolled maps usually lack; hand-rolling remains for `withCommit`-only setups. See [Repository](./repository.md).
+Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same logical id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work: the [`UnitOfWork` facade ships one as `session.identityMap`](./unit-of-work.md#identity-map), with a deletion-tombstone guard hand-rolled maps usually lack; hand-rolling remains for `withCommit`-only setups. See [Repository](./repository.md).
 
 ### Setting `setEventIdFactory` / `setClockFactory` per-test without `withEventIdFactory` / `withClockFactory`
 

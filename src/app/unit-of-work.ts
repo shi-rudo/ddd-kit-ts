@@ -77,10 +77,10 @@ export class TransactionClosedError extends BaseError<"TransactionClosedError"> 
  * `InfrastructureError`: the business logic ran to completion; the
  * persistence boundary failed. The transaction rolled back (or never
  * committed), no aggregate was marked persisted, and pending events
- * survive on the aggregates — the operation left no partial state
+ * survive on the aggregates; the operation left no partial state
  * behind. **Whether a retry helps depends on the cause**: a commit-
  * time serialization failure is transient, but `withCommit`'s harvest
- * guard (an event missing `aggregateId` / `aggregateType` — a
+ * guard (an event missing `aggregateId` / `aggregateType`, a
  * programming bug) also lands here and will fail deterministically on
  * every retry. Inspect the `cause` before routing into retry logic.
  */
@@ -182,8 +182,8 @@ export interface UnitOfWorkSession<
 
 /**
  * What the work callback receives: repositories already bound to the
- * live transaction, the enrollment session, and — deliberately named to
- * look like the escape hatch it is — the raw transaction handle.
+ * live transaction, the enrollment session, and, deliberately named to
+ * look like the escape hatch it is, the raw transaction handle.
  *
  * All members throw {@link TransactionClosedError} once `run()` has
  * settled; do not let the context escape the callback.
@@ -196,11 +196,11 @@ export interface UnitOfWorkContext<
 	readonly repositories: TRepos;
 
 	/**
-	 * **Escape hatch — you are leaving the unit of work's guarantees.**
+	 * **Escape hatch: you are leaving the unit of work's guarantees.**
 	 * A write issued on the raw handle bypasses the repository contract,
 	 * enrollment (its aggregate's events are NOT harvested unless you
 	 * also call `session.enrollSaved`), and the identity map (a later
-	 * `getById` of the same aggregate hydrates a SECOND instance —
+	 * `getById` of the same aggregate hydrates a SECOND instance:
 	 * double harvest, double `markPersisted`). Use it only for writes no
 	 * repository covers, pair it with manual enrollment, and prefer
 	 * adding a repository method whenever one could exist.
@@ -353,8 +353,8 @@ export class UnitOfWork<
 				async (tx) => {
 					// Fresh state per scope invocation: a TransactionScope that
 					// retries its callback (serialization-failure retry wrappers)
-					// re-runs this fn, and state from the rolled-back attempt —
-					// enrollments, identity-map entries, error flags — must not
+					// re-runs this fn, and state from the rolled-back attempt
+					// (enrollments, identity-map entries, error flags) must not
 					// leak into the retry. The previous attempt's session is
 					// closed so its leaked contexts turn loud.
 					session?.close();
@@ -443,7 +443,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// Two gates, one invariant: the instance set catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
 		// concrete class) catches a DIFFERENT instance with the same
-		// type+id — e.g. one re-created via the static factory after the
+		// type+id: e.g. one re-created via the static factory after the
 		// delete. Both mean "deleted is final within this operation".
 		if (
 			this._deleted.has(aggregate) ||
@@ -463,7 +463,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// One call does ALL the deletion bookkeeping: the identity-map
 		// entry is removed and tombstoned automatically (keyed on the
 		// instance's concrete class), so repositories do not need a
-		// second manual identityMap.delete() call — a forgotten leg of a
+		// second manual identityMap.delete() call; a forgotten leg of a
 		// two-call protocol would silently weaken the deletion gate.
 		// Assumption (documented on IdentityMap): repositories key the
 		// map with the same concrete class their factories produce.

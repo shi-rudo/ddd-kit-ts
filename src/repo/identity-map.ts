@@ -15,9 +15,9 @@ import type { Id } from "../core/id";
  * witness accepts those classes while still inferring `TAgg`.
  */
 export type AggregateClass<TAgg> =
-	// biome-ignore lint/suspicious/noExplicitAny: variance — a class reference is only used as a map key and instance witness here.
+	// biome-ignore lint/suspicious/noExplicitAny: variance; a class reference is only used as a map key and instance witness here.
 	| (abstract new (...args: any[]) => TAgg)
-	// biome-ignore lint/complexity/noBannedTypes: Function is deliberate — a construct signature cannot accept protected-constructor classes (the kit's aggregate convention); the prototype witness keeps TAgg inference.
+	// biome-ignore lint/complexity/noBannedTypes: Function is deliberate; a construct signature cannot accept protected-constructor classes (the kit's aggregate convention); the prototype witness keeps TAgg inference.
 	| (Function & { prototype: TAgg });
 
 /**
@@ -32,7 +32,7 @@ export type AggregateClass<TAgg> =
  * `markPersisted`) is keyed on JavaScript object identity.
  *
  * Storage is two-level (per-type stores created lazily), so
- * `Restaurant:123` and `Booking:123` can never collide — the type key
+ * `Restaurant:123` and `Booking:123` can never collide: the type key
  * is the aggregate CLASS, not the id alone and not a name string.
  *
  * Repository read-path contract:
@@ -55,7 +55,7 @@ export type AggregateClass<TAgg> =
  *
  * Deletion is final within an operation: {@link delete} removes the
  * entry AND records a tombstone, so a later {@link set} of the same
- * type+id throws `AggregateDeletedError` — a second instance of a
+ * type+id throws `AggregateDeletedError`: a second instance of a
  * deleted aggregate can never sneak back into the unit of work, even
  * through a repository whose row delete is deferred.
  *
@@ -86,7 +86,7 @@ export class IdentityMap {
 	/**
 	 * Whether type+id was {@link delete}d in this unit of work. The
 	 * read path checks this BEFORE hydrating and returns `null`, so
-	 * "deleted in this operation" reads uniformly as not-found —
+	 * "deleted in this operation" reads uniformly as not-found,
 	 * regardless of whether the repository's physical delete already
 	 * removed the row or is deferred within the transaction. Without
 	 * the check, a read-only probe of a deleted aggregate would crash
