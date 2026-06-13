@@ -7,12 +7,19 @@ The transactional outbox is the canonical pattern for "domain event must persist
 A minimal transaction-scope abstraction generic over the persistence layer's transaction handle:
 
 ```ts
+interface TransactionalOptions {
+  readonly signal?: AbortSignal;
+}
+
 interface TransactionScope<TCtx> {
-  transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>;
+  transactional<T>(
+    fn: (ctx: TCtx) => Promise<T>,
+    options?: TransactionalOptions,
+  ): Promise<T>;
 }
 ```
 
-`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle: `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests.
+`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle: `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests. The `options` argument is additive and optional: a one-parameter implementation still satisfies the interface, and a cancellation-aware scope can honor `options.signal` to abort an in-flight query (see [Cancellation and deadlines](./unit-of-work.md#cancellation-and-deadlines)).
 
 `TCtx` has no default: every implementor names it explicitly so "what lives in my unit-of-work boundary" is a conscious decision. Context-free scopes spell it out as `TransactionScope<undefined>`; that's the honest "there is nothing meaningful here" statement, not an inherited `unknown` fallback.
 
