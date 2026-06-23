@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: generic error channel for `CommandBus` / `QueryBus` (`Result<T, E>`, default `E = string`)
+
+The App-Service boundary has always been documented as returning `Result<T, E>`, but `CommandBus`, `QueryBus`, and `CommandHandler` hardcoded `Result<T, string>`, so a thrown `DomainError` was flattened to a string and the documented typed channel was unreachable through the bus. The error type is now a real generic `E` that **defaults to `string`**, so existing code (`new CommandBus<Map>()`, `CommandHandler<C, R>`) compiles and behaves exactly as before.
+
+To carry typed failures, widen `E` and pass an `errorMapper` (`(thrown: unknown) => E`) that maps thrown values (a handler throw, or dispatch to an unregistered type) into the channel; base-error's `toStructuredError` fits this slot directly. The mapper is **required at construction once `E` is widened** (enforced at the type level), so a typed channel can never silently fall back to string values; with the default `string` channel the built-in `describeThrown` mapper applies and construction stays argument-free. A handler may also return `err(typedError)` directly and it passes through unchanged. New exported types: `CommandBusOptions`, `QueryBusOptions`. `QueryHandler` is unchanged (it still returns a bare value; its only error source is a throw, routed through the mapper); `QueryBus.executeUnsafe` still throws the raw error. Additive; nothing changes unless you widen `E`.
+
 ### Added: `toPublicErrorView` for transport-neutral error presentation (`@shirudo/ddd-kit/presentation`)
 
 New opt-in entry point `@shirudo/ddd-kit/presentation` with `toPublicErrorView(error, options?)`: it maps a kit error (or any caught value) to a base-error `PublicErrorView` (`code`, `message`, `locale`, optional `details`), the **transport-neutral**, client-safe representation. It carries no HTTP status, header, or exit code on purpose: that mapping is the consumer's, exactly where base-error puts it. Feed the view into base-error's `defineProblemDetailsAdapter` (HTTP / RFC 9457), a gRPC status table, or a CLI exit-code map, whichever boundary you are at.

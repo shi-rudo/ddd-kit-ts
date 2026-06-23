@@ -26,10 +26,31 @@ const result = await commandBus.execute({ type: "ConfirmOrder", orderId });
 if (result.isOk()) {
   return new Response(JSON.stringify({ orderId: result.value }), { status: 200 });
 } else {
-  // result.error is typed; map domain errors to status codes
+  // result.error is a string by default; map it to a status code
   return new Response(result.error, { status: 400 });
 }
 ```
+
+### The error channel: `string` by default, widen it when you want typed failures
+
+`CommandBus`, `QueryBus`, and `CommandHandler` are generic over the error type `E`, which **defaults to `string`**: with no configuration, `execute` returns `Result<T, string>` and a thrown value is rendered to a string (via the internal `describeThrown`). That keeps the no-config path simple.
+
+To carry typed failures across the bus, widen `E` and supply an `errorMapper` that turns a thrown value into `E` (base-error's `toStructuredError` fits this slot directly). The mapper is then mandatory at construction, so a typed channel can never silently fall back to strings:
+
+```ts
+import { toStructuredError, type StructuredError } from "@shirudo/base-error";
+
+const commandBus = new CommandBus<Commands, StructuredError>({
+  errorMapper: toStructuredError,
+});
+
+const result = await commandBus.execute({ type: "ConfirmOrder", orderId });
+if (result.isErr()) {
+  // result.error is StructuredError: narrow on result.error.code, map to a status
+}
+```
+
+A handler may also return `err(typedError)` directly; that value passes through unchanged. Note this is orthogonal to the throw axis: the bus catches a thrown `DomainError` and routes it through `errorMapper`, so if you want the raw typed exception at the boundary, catch it yourself rather than going through the bus.
 
 ## Error hierarchy
 

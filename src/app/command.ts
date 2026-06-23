@@ -53,6 +53,8 @@ export interface Command {
  *
  * @template C - The command type (must extend Command)
  * @template R - The result type
+ * @template E - The error channel type. Defaults to `string`; widen it (e.g.
+ *   to a `DomainError` union) to carry typed failures through the bus.
  *
  * @example
  * ```typescript
@@ -87,7 +89,7 @@ export interface Command {
  * });
  * ```
  */
-export type CommandHandler<C extends Command, R> = (
+export type CommandHandler<C extends Command, R, E = string> = (
 	cmd: C,
-) => Promise<Result<R, string>>;
+) => Promise<Result<R, E>>;
 

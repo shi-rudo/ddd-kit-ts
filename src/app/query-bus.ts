@@ -34,6 +34,32 @@ type StoredQueryHandler = (query: Query) => Promise<unknown>;
 type QueryTypeMap = Record<string, unknown>;
 
 /**
+ * Construction options for {@link QueryBus}.
+ *
+ * @template E - The error channel type of the bus.
+ */
+export interface QueryBusOptions<E = string> {
+	/**
+	 * Maps a thrown value (a handler that throws, or dispatch to an
+	 * unregistered query type) into the bus's error channel `E`. Defaults to
+	 * {@link describeThrown}, which renders any thrown value as a `string`.
+	 * base-error's `toStructuredError` fits this slot directly when `E` is a
+	 * `StructuredError`.
+	 */
+	errorMapper?: (thrown: unknown) => E;
+}
+
+/**
+ * Constructor arguments for {@link QueryBus}. When `E` is the default `string`,
+ * options are optional (the built-in {@link describeThrown} mapper applies).
+ * When `E` is widened, an `errorMapper` is required, so a typed channel can
+ * never silently fall back to string values.
+ */
+type QueryBusArgs<E> = [E] extends [string]
+	? [options?: QueryBusOptions<E>]
+	: [options: QueryBusOptions<E> & { errorMapper: (thrown: unknown) => E }];
+
+/**
  * Query Bus interface for dispatching queries to their handlers.
  * Provides a centralized way to execute queries with handler registration.
  *
@@ -56,7 +82,10 @@ type QueryTypeMap = Record<string, unknown>;
  * // result: Result<unknown, string>
  * ```
  */
-export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
+export interface IQueryBus<
+	TMap extends QueryTypeMap = QueryTypeMap,
+	E = string,
+> {
 	/**
 	 * Executes a query by dispatching it to the registered handler.
 	 * When a type map is provided, the return type is inferred from the query type.
@@ -66,8 +95,8 @@ export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
 	 */
 	execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
-	): Promise<Result<TMap[Q["type"]], string>>;
-	execute<Q extends Query, R>(query: Q): Promise<Result<R, string>>;
+	): Promise<Result<TMap[Q["type"]], E>>;
+	execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
 
 	/**
 	 * Executes a query by dispatching it to the registered handler.
@@ -139,10 +168,19 @@ export interface IQueryBus<TMap extends QueryTypeMap = QueryTypeMap> {
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */
-export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
-	implements IQueryBus<TMap>
+export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
+	implements IQueryBus<TMap, E>
 {
 	private readonly handlers = new Map<string, StoredQueryHandler>();
+	private readonly errorMapper: (thrown: unknown) => E;
+
+	constructor(...args: QueryBusArgs<E>) {
+		// describeThrown produces a string; that is the correct mapper only for
+		// the default E = string. QueryBusArgs makes errorMapper mandatory once
+		// E is widened, so this fallback is never reached with a non-string E.
+		this.errorMapper =
+			args[0]?.errorMapper ?? (describeThrown as (thrown: unknown) => E);
+	}
 
 	register<
 		K extends keyof TMap & string,
@@ -163,18 +201,22 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap>
 
 	async execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
-	): Promise<Result<TMap[Q["type"]], string>>;
-	async execute<Q extends Query, R>(query: Q): Promise<Result<R, string>>;
-	async execute<Q extends Query, R>(query: Q): Promise<Result<R, string>> {
+	): Promise<Result<TMap[Q["type"]], E>>;
+	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
+	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
 		const handler = this.handlers.get(query.type);
 		if (!handler) {
-			return err(`No handler registered for query type: ${query.type}`);
+			return err(
+				this.errorMapper(
+					new Error(`No handler registered for query type: ${query.type}`),
+				),
+			);
 		}
 		try {
 			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
-			return err(describeThrown(error));
+			return err(this.errorMapper(error));
 		}
 	}
 

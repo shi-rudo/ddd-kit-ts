@@ -13,9 +13,9 @@ import { describeThrown } from "./describe-thrown";
  * the key it was registered under). Result is widened to `unknown` here
  * and narrowed back via the public overloads on `execute`.
  */
-type StoredCommandHandler = (
+type StoredCommandHandler<E> = (
 	cmd: Command,
-) => Promise<Result<unknown, string>>;
+) => Promise<Result<unknown, E>>;
 
 /**
  * Type map for command types to their return types.
@@ -34,6 +34,32 @@ type StoredCommandHandler = (
  * ```
  */
 type CommandTypeMap = Record<string, unknown>;
+
+/**
+ * Construction options for {@link CommandBus}.
+ *
+ * @template E - The error channel type of the bus.
+ */
+export interface CommandBusOptions<E = string> {
+	/**
+	 * Maps a thrown value (a handler that throws, or dispatch to an
+	 * unregistered command type) into the bus's error channel `E`. Defaults to
+	 * {@link describeThrown}, which renders any thrown value as a `string`.
+	 * base-error's `toStructuredError` fits this slot directly when `E` is a
+	 * `StructuredError`.
+	 */
+	errorMapper?: (thrown: unknown) => E;
+}
+
+/**
+ * Constructor arguments for {@link CommandBus}. When `E` is the default
+ * `string`, options are optional (the built-in {@link describeThrown} mapper
+ * applies). When `E` is widened, an `errorMapper` is required, so a typed
+ * channel can never silently fall back to string values.
+ */
+type CommandBusArgs<E> = [E] extends [string]
+	? [options?: CommandBusOptions<E>]
+	: [options: CommandBusOptions<E> & { errorMapper: (thrown: unknown) => E }];
 
 /**
  * Command Bus interface for dispatching commands to their handlers.
@@ -59,18 +85,21 @@ type CommandTypeMap = Record<string, unknown>;
  * // result: Result<unknown, string>
  * ```
  */
-export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
+export interface ICommandBus<
+	TMap extends CommandTypeMap = CommandTypeMap,
+	E = string,
+> {
 	/**
 	 * Executes a command by dispatching it to the registered handler.
 	 * When a type map is provided, the return type is inferred from the command type.
 	 *
 	 * @param command - The command to execute
-	 * @returns Result containing the success value or error message
+	 * @returns Result containing the success value or an error of type `E`
 	 */
 	execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
-	): Promise<Result<TMap[C["type"]], string>>;
-	execute<C extends Command, R>(command: C): Promise<Result<R, string>>;
+	): Promise<Result<TMap[C["type"]], E>>;
+	execute<C extends Command, R>(command: C): Promise<Result<R, E>>;
 
 	/**
 	 * Registers a handler for a specific command type.
@@ -89,7 +118,7 @@ export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
 		C extends Command & { type: K } = Command & { type: K },
 	>(
 		commandType: K,
-		handler: CommandHandler<C, TMap[K]>,
+		handler: CommandHandler<C, TMap[K], E>,
 	): void;
 }
 
@@ -129,17 +158,26 @@ export interface ICommandBus<TMap extends CommandTypeMap = CommandTypeMap> {
  * const result = await bus.execute({ type: "CreateOrder", ... });
  * ```
  */
-export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
-	implements ICommandBus<TMap>
+export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap, E = string>
+	implements ICommandBus<TMap, E>
 {
-	private readonly handlers = new Map<string, StoredCommandHandler>();
+	private readonly handlers = new Map<string, StoredCommandHandler<E>>();
+	private readonly errorMapper: (thrown: unknown) => E;
+
+	constructor(...args: CommandBusArgs<E>) {
+		// describeThrown produces a string; that is the correct mapper only for
+		// the default E = string. CommandBusArgs makes errorMapper mandatory once
+		// E is widened, so this fallback is never reached with a non-string E.
+		this.errorMapper =
+			args[0]?.errorMapper ?? (describeThrown as (thrown: unknown) => E);
+	}
 
 	register<
 		K extends keyof TMap & string,
 		C extends Command & { type: K } = Command & { type: K },
 	>(
 		commandType: K,
-		handler: CommandHandler<C, TMap[K]>,
+		handler: CommandHandler<C, TMap[K], E>,
 	): void {
 		// Silent replacement would turn the first handler into dead code
 		// with no signal; wiring bugs must surface at registration time.
@@ -153,21 +191,21 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap>
 
 	async execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
-	): Promise<Result<TMap[C["type"]], string>>;
-	async execute<C extends Command, R>(
-		command: C,
-	): Promise<Result<R, string>>;
-	async execute<C extends Command, R>(
-		command: C,
-	): Promise<Result<R, string>> {
+	): Promise<Result<TMap[C["type"]], E>>;
+	async execute<C extends Command, R>(command: C): Promise<Result<R, E>>;
+	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
 		const handler = this.handlers.get(command.type);
 		if (!handler) {
-			return err(`No handler registered for command type: ${command.type}`);
+			return err(
+				this.errorMapper(
+					new Error(`No handler registered for command type: ${command.type}`),
+				),
+			);
 		}
 		try {
-			return (await handler(command)) as Result<R, string>;
+			return (await handler(command)) as Result<R, E>;
 		} catch (error) {
-			return err(describeThrown(error));
+			return err(this.errorMapper(error));
 		}
 	}
 }
