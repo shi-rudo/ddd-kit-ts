@@ -139,6 +139,56 @@ Publishing *after* commit defeats the classic publish-before-commit footgun: sub
 
 See [Outbox & Transactions](./outbox.md) for the full outbox/dispatcher contract, and [Read-Side Projections](./projections.md) for the canonical CQRS read-side flow (dispatcher → projection handlers → read-model tables → `QueryBus`).
 
+## Correlation IDs (and other cross-cutting concerns)
+
+The bus is a transport-free, in-process dispatcher: it has no concept of an HTTP header, so it does not read, generate, or inject a correlation ID. That stays a boundary concern, which keeps the kit headless and edge-safe. The headless pattern has three steps.
+
+**1. Capture the id at the transport boundary and carry it on the command.** Your HTTP adapter (not the kit) reads `x-correlation-id`, generating one if absent, and puts it on the command. Generation lives where the request does, so you control the id scheme (ULID, UUID, vendor trace id):
+
+```ts
+// HTTP handler (your code, at the edge)
+const correlationId =
+  request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+
+const result = await commandBus.execute({
+  type: "ConfirmOrder",
+  orderId,
+  correlationId, // a plain field on your Command
+});
+```
+
+**2. Propagate it into event metadata.** `EventMetadata` already carries `correlationId`, `causationId`, `userId`, and `source`. Stamp it when the aggregate records the event, then chain causation with `copyMetadata`:
+
+```ts
+import { createDomainEventWithMetadata, copyMetadata } from "@shirudo/ddd-kit";
+
+const placed = createDomainEventWithMetadata(
+  "OrderConfirmed",
+  { orderId },
+  { correlationId: cmd.correlationId, source: "orders" },
+);
+
+// a downstream event caused by `placed` inherits the correlation, adds causation:
+const shipped = createDomainEventWithMetadata(
+  "ShipmentRequested",
+  { orderId },
+  copyMetadata(placed, { causationId: placed.eventId }),
+);
+```
+
+**3. Auto-propagate by wrapping the handler, not the bus.** The buses ship no middleware on purpose (see [Scope](#scope-in-process-only)); the endorsed extension point is a handler decorator. A thin wrapper can pull the id off the command and make it ambient for logging without touching the bus API:
+
+```ts
+const withCorrelation =
+  <C extends { correlationId?: string }, R>(handler: CommandHandler<C, R>): CommandHandler<C, R> =>
+  (cmd) =>
+    logger.runWith({ correlationId: cmd.correlationId }, () => handler(cmd));
+
+commandBus.register("ConfirmOrder", withCorrelation(confirmOrderHandler));
+```
+
+For ambient propagation across `await` boundaries, use `AsyncLocalStorage` (Node) in your application layer, not in the library: the kit stays free of Node globals so it runs unchanged on edge runtimes. See [Edge Runtimes](./edge-runtimes.md).
+
 ## Process Managers / Sagas
 
 For multi-step workflows that span aggregates (order → payment → shipping → confirmation, with compensating actions on failure), the kit ships no abstraction, but the building blocks compose into the canonical pattern. The Process Manager is itself an `AggregateRoot` whose `EventBus.subscribe` reflexes transition its state and dispatch the next `CommandBus` command. See [`examples/saga/`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga) for a worked example with happy-path + two compensation flows.
