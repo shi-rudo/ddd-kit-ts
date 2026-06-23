@@ -105,15 +105,11 @@ describe("MissingHandlerError", () => {
 });
 
 describe("AggregateNotFoundError", () => {
-	it("carries aggregate type and id; exposes a user-safe message that does NOT leak the id", () => {
+	it("carries aggregate type and id in the technical message", () => {
 		const e = new AggregateNotFoundError("Order", "o-1");
 		expect(e.aggregateType).toBe("Order");
 		expect(e.id).toBe("o-1");
 		expect(e.message).toContain("Order(o-1)"); // technical
-		const userMsg = e.getUserMessage();
-		expect(userMsg).toBeDefined();
-		expect(userMsg).toContain("Order");
-		expect(userMsg).not.toContain("o-1");
 	});
 
 	it("is NOT retryable: the row isn't there; retry won't help", () => {
@@ -128,16 +124,12 @@ describe("AggregateNotFoundError", () => {
 });
 
 describe("DuplicateAggregateError", () => {
-	it("carries aggregate type and id; exposes a user-safe message that does NOT leak the id", () => {
+	it("carries aggregate type and id in the technical message", () => {
 		const e = new DuplicateAggregateError("Order", "o-1");
 		expect(e.aggregateType).toBe("Order");
 		expect(e.aggregateId).toBe("o-1");
 		expect(e.name).toBe("DuplicateAggregateError");
 		expect(e.message).toContain("Order(o-1)"); // technical
-		const userMsg = e.getUserMessage();
-		expect(userMsg).toBeDefined();
-		expect(userMsg).toContain("Order");
-		expect(userMsg).not.toContain("o-1");
 	});
 
 	it("is an InfrastructureError and NOT retryable: re-running the same INSERT cannot succeed", () => {

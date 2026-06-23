@@ -13,8 +13,10 @@ import { BaseError } from "@shirudo/base-error";
  * subclass: the kit can't know your invariants.
  *
  * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
- * surface (timestamps, cause chains, `toJSON()`, `getUserMessage()`,
- * `isRetryable`, …).
+ * surface (timestamps, cause chains, `toJSON()`, `isRetryable`, …). For
+ * client-safe / localized messages, project errors through the opt-in
+ * `@shirudo/base-error/presentation` subpath at the boundary; the technical
+ * core deliberately carries no user-facing message.
  */
 export abstract class DomainError<
 	Name extends string = string,
@@ -178,9 +180,6 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
 		super(`Aggregate not found: ${aggregateType}(${id})`, cause, {
 			name: "AggregateNotFoundError",
 		});
-		this.withUserMessage(
-			`The requested ${aggregateType} could not be found.`,
-		);
 	}
 }
 
@@ -213,9 +212,6 @@ export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggre
 			`Duplicate aggregate: ${aggregateType}(${aggregateId}) already exists`,
 			cause,
 			{ name: "DuplicateAggregateError" },
-		);
-		this.withUserMessage(
-			`This ${aggregateType} already exists. It may have been created by a concurrent request.`,
 		);
 	}
 }
@@ -257,9 +253,6 @@ export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyCo
 			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
 			cause,
 			{ name: "ConcurrencyConflictError" },
-		);
-		this.withUserMessage(
-			"This resource was updated by another request. Please reload and try again.",
 		);
 	}
 }

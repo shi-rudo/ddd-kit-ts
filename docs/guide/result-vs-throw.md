@@ -33,7 +33,7 @@ if (result.isOk()) {
 
 ## Error hierarchy
 
-The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, user-safe messages, retryable hints, and `toJSON()` for structured logging out of the box.
+The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, retryable hints, and `toJSON()` for structured logging out of the box. Client-safe, localized messages are a separate boundary concern: project errors through the opt-in `@shirudo/base-error/presentation` subpath.
 
 ```ts
 import { BaseError } from "@shirudo/base-error";
@@ -108,12 +108,9 @@ try {
   if (e instanceof OrderAlreadyConfirmedError) return err("ALREADY_CONFIRMED");      // domain → 400
   if (e instanceof ConcurrencyConflictError)   return err("CONFLICT");                // infra → 409 (retry in a fresh unit of work)
   if (e instanceof DuplicateAggregateError)    return err("ALREADY_EXISTS");          // infra → 409 (never retry the same INSERT)
-  if (e instanceof AggregateNotFoundError) {
-    // Use the user-safe message instead of the technical one
-    return err(e.getUserMessage() ?? e.message);                                      // infra → 404
-  }
-  if (e instanceof InfrastructureError)        return err(e.getUserMessage() ?? e.message);
-  if (e instanceof DomainError)                return err(e.getUserMessage() ?? e.message);
+  if (e instanceof AggregateNotFoundError)     return err("NOT_FOUND");               // infra → 404
+  if (e instanceof InfrastructureError)        return err("INFRASTRUCTURE_ERROR");
+  if (e instanceof DomainError)                return err("DOMAIN_ERROR");
   throw e; // includes MissingHandlerError, a programming bug; let it crash
 }
 ```
@@ -122,13 +119,12 @@ try {
 
 Because every library error extends `BaseError<Name>`:
 
-- **`error.toJSON()`**: structured log entry with name, message, timestamp, stack, cause chain.
-- **`error.getUserMessage({ preferredLang?, fallbackLang? })`**: i18n-aware end-user message, separate from the technical `error.message`. `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` ship with default English user messages; consumers can override per language with `addLocalizedMessage`.
+- **`error.toJSON()` / `error.toLogObject()`**: structured **log** entry with name, message, timestamp, stack, cause chain. Log-only: never return it to a client. For client-safe, localized output, project the error through the opt-in `@shirudo/base-error/presentation` subpath (`PublicErrorPresenter`) at the boundary; the technical core carries no user-facing message.
 - **`error.timestamp` / `error.timestampIso`**: epoch + ISO, useful for sorting / correlating log entries across distributed systems.
 - **`error.name`**: typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
 - **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`): for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
 - **`isRetryable(error)`**: single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
-- **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors.
+- **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors. The kit's [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) uses `someChainRetryable` as its default retry classifier.
 
 ::: warning Which `@shirudo/base-error` helpers work with ddd-kit errors
 ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` extend `BaseError<Name>` directly; they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
@@ -202,7 +198,7 @@ This is where the kit's error model has **two deliberate styles**, and the rule 
 
 ### Rendering RFC 9457 at the boundary
 
-`@shirudo/base-error` is **safe by default**: `ValidationError.toProblemDetails()` does not expose the issues on its own. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free:
+`@shirudo/base-error` is **safe by default**: a `ValidationError` does not expose its issues on its own; they only cross to a client through the `publicIssues()` whitelist. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free. It returns base-error's own `ProblemDetails` type (from `@shirudo/base-error/problem-details`), so the RFC 9457 shape stays a single source of truth:
 
 ```ts
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
@@ -210,6 +206,8 @@ import { toProblemDetails } from "@shirudo/ddd-kit/http";
 if (result.isErr()) {
   return Response.json(toProblemDetails(result.error), { status: 422 });
 }
-// → { type, title: "Validation Failed", status: 422,
+// → { type: "about:blank", title: "Validation Failed", status: 422,
 //     errors: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] }
 ```
+
+For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a `PublicErrorView`), reach for base-error's `defineProblemDetailsAdapter` directly; `toProblemDetails` is the narrow validation shortcut.

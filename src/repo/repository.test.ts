@@ -109,14 +109,10 @@ describe("Repository contract", () => {
 			expect(typeof e.timestampIso).toBe("string");
 		});
 
-		it("AggregateNotFoundError exposes a user-safe message separate from the technical one", () => {
+		it("AggregateNotFoundError carries the aggregate type and id in its technical message", () => {
 			const e = new AggregateNotFoundError("Order", "o-1");
 
 			expect(e.message).toContain("Order(o-1)"); // technical
-			const userMsg = e.getUserMessage();
-			expect(userMsg).toBeDefined();
-			expect(userMsg).toContain("Order");
-			expect(userMsg).not.toContain("o-1"); // no leaky id
 		});
 
 		it("ConcurrencyConflictError marks itself retryable via @shirudo/base-error isRetryable", async () => {

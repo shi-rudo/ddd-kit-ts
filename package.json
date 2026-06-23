@@ -1,6 +1,6 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "1.3.0",
+	"version": "2.0.0",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
@@ -11,21 +11,24 @@
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
 		},
 		"./utils": {
-			"import": "./dist/utils.js",
-			"types": "./dist/utils.d.ts"
+			"types": "./dist/utils.d.ts",
+			"import": "./dist/utils.js"
 		},
 		"./http": {
-			"import": "./dist/http.js",
-			"types": "./dist/http.d.ts"
+			"types": "./dist/http.d.ts",
+			"import": "./dist/http.js"
 		},
 		"./testing": {
-			"import": "./dist/testing.js",
-			"types": "./dist/testing.d.ts"
+			"types": "./dist/testing.d.ts",
+			"import": "./dist/testing.js"
 		}
+	},
+	"engines": {
+		"node": ">=20"
 	},
 	"sideEffects": false,
 	"files": [
@@ -56,7 +59,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.1.4",
-		"@shirudo/base-error": "^5.0.0",
+		"@shirudo/base-error": "^7.1.1",
 		"@shirudo/result": "^1.0.0",
 		"tsup": "^8.5.0",
 		"typedoc": "^0.28.19",
@@ -77,7 +80,7 @@
 		"url": "https://github.com/shi-rudo/ddd-kit-ts/issues"
 	},
 	"peerDependencies": {
-		"@shirudo/base-error": "^5.0.0",
+		"@shirudo/base-error": "^7.1.1",
 		"@shirudo/result": "^1.0.0"
 	}
 }

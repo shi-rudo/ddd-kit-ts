@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-23
+
+The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The only consumer-visible breaks are the dropped default user messages on three errors and the moved Problem Details types; the retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.
+
+### Changed (breaking): upgrade the `@shirudo/base-error` peer dependency from `^5.0.0` to `^7.1.1`
+
+base-error v6 made its core purely technical: it removed the localization layer (`withUserMessage` / `getUserMessage` / `addLocalizedMessage`), every public serializer (`toPublicJSON`, `toProblemDetails`, `toErrorResponse`), and the `ProblemDetails` / `ProblemDetailsOptions` types from the package root. Client-safe, localized output now lives in the opt-in `@shirudo/base-error/presentation` subpath (`PublicErrorPresenter`); RFC 9457 mapping lives in `@shirudo/base-error/problem-details`.
+
+- **`AggregateNotFoundError`, `DuplicateAggregateError`, and `ConcurrencyConflictError` no longer ship a default user message.** They previously called the removed `withUserMessage(...)`, so `error.getUserMessage()` returned a client-safe string. That method is gone. The errors still carry their full technical `message`, `name`, `cause` chain, timestamps, and the `retryable` marker. To present a user-facing or localized message at the boundary, register the kit's errors in a base-error `PublicErrorRegistry` and project them through `PublicErrorPresenter` (the `@shirudo/base-error/presentation` subpath); the technical core deliberately stays free of presentation strings.
+- **`toProblemDetails` (`@shirudo/ddd-kit/http`) no longer delegates to the removed `ValidationError.toProblemDetails()`.** It now builds the RFC 9457 body directly from `error.publicIssues()` and returns base-error's own `ProblemDetails` type, imported from the new `@shirudo/base-error/problem-details` subpath, so the RFC 9457 shape stays a single source of truth across the ecosystem rather than being re-declared by the kit. Defaults are unchanged (`type: "about:blank"`, `title: "Validation Failed"`, `status: 422`), as are the `member` / `extensions` options and the output shape. `ValidationProblemOptions` no longer extends the removed `ProblemDetailsOptions`; it declares the standard RFC 9457 members (`type`, `title`, `status`, `detail`, `instance`) plus `member` and `extensions` explicitly, and `extensions` is now typed JSON-safe (`ProblemDetailsExtensions`). `traceId` is a plain extension member (pass it via `extensions`), not a recognized top-level field. For the general error-to-Problem-Details mapping, base-error's `defineProblemDetailsAdapter` over a `PublicErrorView` is the catalog-driven path; this helper stays the narrow validation shortcut.
+
+### Packaging
+
+- Declared `engines.node` `">=20"` to match base-error v7's requirement, so an unsupported Node fails at install instead of at runtime.
+- Ordered every `package.json` export condition `types`-first (before `import`), so consumer type resolution under `node16` / `nodenext` finds the declarations reliably.
+
+The retry surface is unaffected: `someChainRetryable`, `isRetryable`, `isBaseError`, `ValidationError`, and the `retryable = true` marker on `ConcurrencyConflictError` all behave as before. No source changes are needed in consumer code that does not call `getUserMessage()` or rely on the removed base-error serializers.
+
+### Migration
+
+1. **Bump the peer dependency** (and the kit) and ensure you are on Node.js `>=20`:
+
+   ```sh
+   pnpm add @shirudo/ddd-kit@^2.0.0 @shirudo/base-error@^7.1.1
+   ```
+
+2. **Replace `getUserMessage()` on kit errors.** The method is gone from `AggregateNotFoundError`, `DuplicateAggregateError`, `ConcurrencyConflictError`, and every other kit error. For logs, read `error.message` (or `error.toLogObject()`). For a client-safe, localized message, project at the boundary through the presentation subpath:
+
+   ```ts
+   // before (1.x)
+   return err(e.getUserMessage() ?? e.message);
+
+   // after (2.0): technical fallback
+   return err(e.message);
+
+   // after (2.0): client-safe / localized
+   import { PublicErrorPresenter, PublicErrorRegistry } from "@shirudo/base-error/presentation";
+   const presenter = new PublicErrorPresenter(registry); // registry maps error name/code → public message
+   return err(presenter.present(e).message);
+   ```
+
+3. **Update Problem Details type imports.** `ProblemDetails` and `ProblemDetailsOptions` are no longer exported from the `@shirudo/base-error` root. `ProblemDetails` now comes from `@shirudo/base-error/problem-details`; `ProblemDetailsOptions` was removed (the adapter takes a `ProblemDetailsContext` instead).
+
+   ```ts
+   // before (1.x)
+   import type { ProblemDetails } from "@shirudo/base-error";
+   // after (2.0)
+   import type { ProblemDetails } from "@shirudo/base-error/problem-details";
+   ```
+
+4. **`toProblemDetails(...)` call sites need no change.** The defaults, `member` / `extensions` options, and the emitted body shape are identical. The only type-level change: `extensions` is now JSON-safe (`ProblemDetailsExtensions`); pass `traceId` and similar through `extensions` as before.
+
+5. **Replace removed base-error serializers** if you called them directly on errors: `toPublicJSON()` / `toProblemDetails()` / `toErrorResponse()` are gone. Use `@shirudo/base-error/presentation` (`PublicErrorPresenter`) for client output and `@shirudo/base-error/problem-details` (`defineProblemDetailsAdapter`) for RFC 9457 mapping.
+
+If your code only throws/catches the kit's errors by class, reads `error.message` / `error.name`, or uses the retry helpers (`someChainRetryable`, `isRetryable`), no source change is required beyond step 1.
+
 ## [1.3.0] - 2026-06-13
 
 A unit-of-work robustness release: closes the backlog from a full review of the 1.2.0 unit of work. Everything is additive, no breaking API changes. Four new error/seam surfaces harden the write path: cooperative cancellation (`AbortSignal` on `UnitOfWork.run` / `withCommit`), a non-retryable `EventHarvestError` so harvest-guard violations stay out of retry loops, an `UnenrolledChangesError` safety net for events recorded on a loaded aggregate but never enrolled, and `RetryingTransactionScope`, a reference retry wrapper (error classification, exponential backoff with jitter, abort-bounded) so consumers stop hand-rolling the OCC retry loop. The repository contract test suite is now documented as mandatory for proving an adapter holds the OCC and enrollment contract. Test suite grew from 667 to 699.
