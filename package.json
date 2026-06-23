@@ -22,6 +22,10 @@
 			"types": "./dist/http.d.ts",
 			"import": "./dist/http.js"
 		},
+		"./presentation": {
+			"types": "./dist/presentation.d.ts",
+			"import": "./dist/presentation.js"
+		},
 		"./testing": {
 			"types": "./dist/testing.d.ts",
 			"import": "./dist/testing.js"

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: `toPublicErrorView` for transport-neutral error presentation (`@shirudo/ddd-kit/presentation`)
+
+New opt-in entry point `@shirudo/ddd-kit/presentation` with `toPublicErrorView(error, options?)`: it maps a kit error (or any caught value) to a base-error `PublicErrorView` (`code`, `message`, `locale`, optional `details`), the **transport-neutral**, client-safe representation. It carries no HTTP status, header, or exit code on purpose: that mapping is the consumer's, exactly where base-error puts it. Feed the view into base-error's `defineProblemDetailsAdapter` (HTTP / RFC 9457), a gRPC status table, or a CLI exit-code map, whichever boundary you are at.
+
+The helper is total over `unknown`: an unmapped or non-kit value degrades to a generic `INTERNAL_ERROR` view rather than leaking the technical message or throwing. The kit's class-based errors (`AggregateNotFoundError`, `ConcurrencyConflictError`, `DuplicateAggregateError`) match by their pinned `error.name` (no `instanceof`, so it survives minification and duplicate installs) and carry safe, occurrence-free English messages; a `ValidationError` is detected by its `publicIssues()` whitelist and its issues ride along in `details.issues`. This is the opt-in home for the client-safe messages that 2.0 removed from the technical core: the core stays presentation-free, the boundary opts in. For richer, multi-locale messages, register the kit's errors in a base-error `PublicErrorRegistry` and use `PublicErrorPresenter`; this helper is the lean, single-locale default. Additive; nothing changes if you do not import it.
+
 ## [2.0.0] - 2026-06-23
 
 The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The only consumer-visible breaks are the dropped default user messages on three errors and the moved Problem Details types; the retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.

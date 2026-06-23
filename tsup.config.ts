@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     utils: "src/utils.ts",
     http: "src/http.ts",
+    presentation: "src/presentation.ts",
     testing: "src/testing.ts",
   },
   format: ["esm"], // ES modules only
