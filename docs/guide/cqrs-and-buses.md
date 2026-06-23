@@ -160,19 +160,19 @@ const result = await commandBus.execute({
 **2. Propagate it into event metadata.** `EventMetadata` already carries `correlationId`, `causationId`, `userId`, and `source`. Stamp it when the aggregate records the event, then chain causation with `copyMetadata`:
 
 ```ts
-import { createDomainEventWithMetadata, copyMetadata } from "@shirudo/ddd-kit";
+import { createDomainEvent, copyMetadata } from "@shirudo/ddd-kit";
 
-const placed = createDomainEventWithMetadata(
+const placed = createDomainEvent(
   "OrderConfirmed",
   { orderId },
-  { correlationId: cmd.correlationId, source: "orders" },
+  { metadata: { correlationId: cmd.correlationId, source: "orders" } },
 );
 
 // a downstream event caused by `placed` inherits the correlation, adds causation:
-const shipped = createDomainEventWithMetadata(
+const shipped = createDomainEvent(
   "ShipmentRequested",
   { orderId },
-  copyMetadata(placed, { causationId: placed.eventId }),
+  { metadata: copyMetadata(placed, { causationId: placed.eventId }) },
 );
 ```
 

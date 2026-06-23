@@ -174,7 +174,7 @@ describe("UnitOfWork", () => {
 
 		it("a repository ConcurrencyConflictError passes through as the same instance (stays distinguishable)", async () => {
 			const { uow } = createUow();
-			const conflict = new ConcurrencyConflictError("Order", "o-1", 3, 4);
+			const conflict = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 4 });
 
 			await expect(
 				uow.run(async () => {
@@ -944,7 +944,7 @@ describe("UnitOfWork", () => {
 		});
 
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {
-			const original = new ConcurrencyConflictError("Order", "o-1", 3, 4);
+			const original = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 4 });
 			const rollbackFailure = new Error("ROLLBACK failed: connection lost");
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {

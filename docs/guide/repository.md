@@ -147,7 +147,7 @@ async save(aggregate: Order): Promise<void> {
       // e.cause?.code when your ORM wraps the driver error; MySQL: errno
       // 1062; SQLite: SQLITE_CONSTRAINT_UNIQUE.
       if (isUniqueViolation(e)) {
-        throw new DuplicateAggregateError("Order", aggregate.id, e);
+        throw new DuplicateAggregateError({ aggregateType: "Order", aggregateId: aggregate.id, cause: e });
       }
       throw e;
     }
@@ -165,12 +165,12 @@ async save(aggregate: Order): Promise<void> {
     // The row's version no longer matches `baseline`: concurrent writer.
     const current = await this.db.select({ version: orders.version })
       .from(orders).where(eq(orders.id, aggregate.id)).get();
-    throw new ConcurrencyConflictError(
-      "Order",
-      aggregate.id,
-      baseline,
-      current?.version ?? -1,
-    );
+    throw new ConcurrencyConflictError({
+      aggregateType: "Order",
+      aggregateId: aggregate.id,
+      expectedVersion: baseline,
+      actualVersion: current?.version ?? -1,
+    });
   }
 }
 ```
@@ -225,7 +225,7 @@ async save(restaurant: Restaurant): Promise<void> {
       .set({ ...rootColumns(state), version: restaurant.version })
       .where(and(eq(restaurants.id, id), eq(restaurants.version, baseline)));
     if (result.rowsAffected === 0) {
-      throw new ConcurrencyConflictError("Restaurant", id, baseline, -1);
+      throw new ConcurrencyConflictError({ aggregateType: "Restaurant", aggregateId: id, expectedVersion: baseline, actualVersion: -1 });
     }
   }
 
@@ -426,9 +426,9 @@ const id = userIds.next(); // Id<"UserId">
 
 All three are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent, stale, or already taken, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, and `toJSON()` out of the box. For client-safe, localized messages, project them through the opt-in `@shirudo/base-error/presentation` subpath at the boundary; the technical core carries no user-facing message.
 
-- **`AggregateNotFoundError(aggregateType, id, cause?)`**: thrown by `getByIdOrFail`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
-- **`ConcurrencyConflictError(aggregateType, aggregateId, expectedVersion, actualVersion, cause?)`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry **in a fresh unit of work**. Wrap your scope in [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) to automate exactly that (classification via `someChainRetryable`, exponential backoff with jitter, abort-bounded) instead of hand-rolling the loop.
-- **`DuplicateAggregateError(aggregateType, aggregateId, cause?)`**: thrown by `save`'s INSERT path when a row with the id already exists: two concurrent creators raced on a business-derived id, or the id generator collided. Same delegation model as the OCC predicate: the kit ships the class, your repository maps the driver's unique-violation signal to it (Postgres `23505`, MySQL `1062`, SQLite `SQLITE_CONSTRAINT_UNIQUE`) instead of letting a raw driver error escape. Not retryable: re-running the same INSERT cannot succeed; map to HTTP 409, or for idempotency-key flows load the existing aggregate and treat the request as already applied. The [repository contract test suite](./unit-of-work.md#proving-the-contract-the-repository-contract-test-suite) covers it (capability-gated on `createAggregateWithId`).
+- **`AggregateNotFoundError({ aggregateType, id, cause? })`**: thrown by `getByIdOrFail`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
+- **`ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, actualVersion, cause? })`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry **in a fresh unit of work**. Wrap your scope in [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) to automate exactly that (classification via `someChainRetryable`, exponential backoff with jitter, abort-bounded) instead of hand-rolling the loop.
+- **`DuplicateAggregateError({ aggregateType, aggregateId, cause? })`**: thrown by `save`'s INSERT path when a row with the id already exists: two concurrent creators raced on a business-derived id, or the id generator collided. Same delegation model as the OCC predicate: the kit ships the class, your repository maps the driver's unique-violation signal to it (Postgres `23505`, MySQL `1062`, SQLite `SQLITE_CONSTRAINT_UNIQUE`) instead of letting a raw driver error escape. Not retryable: re-running the same INSERT cannot succeed; map to HTTP 409, or for idempotency-key flows load the existing aggregate and treat the request as already applied. The [repository contract test suite](./unit-of-work.md#proving-the-contract-the-repository-contract-test-suite) covers it (capability-gated on `createAggregateWithId`).
 
 ```ts
 import {

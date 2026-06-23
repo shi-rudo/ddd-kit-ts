@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import {
 	createDomainEvent,
-	createDomainEventWithMetadata,
 	copyMetadata,
 	mergeMetadata,
 	sameVersion,
@@ -73,7 +72,7 @@ describe("Domain Events", () => {
 		});
 	});
 
-	describe("createDomainEventWithMetadata()", () => {
+	describe("createDomainEvent()", () => {
 		it("should create event with metadata", () => {
 			const metadata: EventMetadata = {
 				correlationId: "corr-123",
@@ -82,10 +81,10 @@ describe("Domain Events", () => {
 				source: "order-service",
 			};
 
-			const event = createDomainEventWithMetadata(
+			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "123" },
-				metadata,
+				{ metadata },
 			);
 
 			expect(event.type).toBe("OrderCreated");
@@ -99,11 +98,10 @@ describe("Domain Events", () => {
 				correlationId: "corr-123",
 			};
 
-			const event = createDomainEventWithMetadata(
+			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "123" },
-				metadata,
-				{ version: 2 },
+				{ version: 2, metadata },
 			);
 
 			expect(event.metadata).toEqual(metadata);
@@ -116,11 +114,10 @@ describe("Domain Events", () => {
 				correlationId: "corr-123",
 			};
 
-			const event = createDomainEventWithMetadata(
+			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "123" },
-				metadata,
-				{ occurredAt: customDate },
+				{ occurredAt: customDate, metadata },
 			);
 
 			expect(event.metadata).toEqual(metadata);
@@ -134,10 +131,10 @@ describe("Domain Events", () => {
 				anotherField: 42,
 			};
 
-			const event = createDomainEventWithMetadata(
+			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "123" },
-				metadata,
+				{ metadata },
 			);
 
 			expect(event.metadata?.customField).toBe("custom-value");
@@ -386,23 +383,27 @@ describe("Domain Events", () => {
 	describe("Event correlation chain", () => {
 		it("should maintain correlation chain across events", () => {
 			// Initial event
-			const initialEvent = createDomainEventWithMetadata(
+			const initialEvent = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "123" },
 				{
-					correlationId: "corr-123",
-					causationId: "cmd-456",
-					userId: "user-789",
+					metadata: {
+						correlationId: "corr-123",
+						causationId: "cmd-456",
+						userId: "user-789",
+					},
 				},
 			);
 
 			// Follow-up event maintaining correlation
-			const followUpEvent = createDomainEventWithMetadata(
+			const followUpEvent = createDomainEvent(
 				"OrderShipped",
 				{ orderId: "123", trackingNumber: "TRACK-789" },
-				copyMetadata(initialEvent, {
-					causationId: initialEvent.type, // New causation
-				}),
+				{
+					metadata: copyMetadata(initialEvent, {
+						causationId: initialEvent.type, // New causation
+					}),
+				},
 			);
 
 			expect(followUpEvent.metadata?.correlationId).toBe("corr-123");

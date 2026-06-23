@@ -21,7 +21,7 @@ The helper is total over `unknown`: an unmapped or non-kit value degrades to a g
 
 ## [2.0.0] - 2026-06-23
 
-The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The only consumer-visible breaks are the dropped default user messages on three errors and the moved Problem Details types; the retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.
+The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The major also irons out two long-standing footguns while the door is open: the swap-prone positional error constructors move to options objects, and the redundant `createDomainEventWithMetadata` is removed. The retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.
 
 ### Changed (breaking): upgrade the `@shirudo/base-error` peer dependency from `^5.0.0` to `^7.1.1`
 
@@ -36,6 +36,20 @@ base-error v6 made its core purely technical: it removed the localization layer 
 - Ordered every `package.json` export condition `types`-first (before `import`), so consumer type resolution under `node16` / `nodenext` finds the declarations reliably.
 
 The retry surface is unaffected: `someChainRetryable`, `isRetryable`, `isBaseError`, `ValidationError`, and the `retryable = true` marker on `ConcurrencyConflictError` all behave as before. No source changes are needed in consumer code that does not call `getUserMessage()` or rely on the removed base-error serializers.
+
+### Changed (breaking): error constructors take a single options object
+
+`AggregateNotFoundError`, `DuplicateAggregateError`, and `ConcurrencyConflictError` had adjacent positional parameters of the same type (two strings, and for the conflict two strings plus two numbers), which a repository adapter could silently transpose at the call site. They now take one options object, so every field is named and a swap is impossible:
+
+- `new AggregateNotFoundError({ aggregateType, id, cause? })`
+- `new DuplicateAggregateError({ aggregateType, aggregateId, cause? })`
+- `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, actualVersion, cause? })`
+
+The public readonly fields, `name`, message format, `cause` chain, and the `retryable` marker are unchanged; only the constructor signature changed. This sets the kit's convention: positional parameters for one or two clearly distinct values, an options object for three or more, multiple optionals, or any adjacent same-typed parameters.
+
+### Removed (breaking): `createDomainEventWithMetadata`
+
+`createDomainEventWithMetadata(type, payload, metadata, options?)` was a thin wrapper over `createDomainEvent` whose two trailing object parameters (`metadata`, `options`) were themselves transposable. It is removed; `createDomainEvent` already accepts metadata through its options object.
 
 ### Migration
 
@@ -72,6 +86,28 @@ The retry surface is unaffected: `someChainRetryable`, `isRetryable`, `isBaseErr
 4. **`toProblemDetails(...)` call sites need no change.** The defaults, `member` / `extensions` options, and the emitted body shape are identical. The only type-level change: `extensions` is now JSON-safe (`ProblemDetailsExtensions`); pass `traceId` and similar through `extensions` as before.
 
 5. **Replace removed base-error serializers** if you called them directly on errors: `toPublicJSON()` / `toProblemDetails()` / `toErrorResponse()` are gone. Use `@shirudo/base-error/presentation` (`PublicErrorPresenter`) for client output and `@shirudo/base-error/problem-details` (`defineProblemDetailsAdapter`) for RFC 9457 mapping.
+
+6. **Pass error constructor arguments as an options object.** Wherever your repository (or tests) construct the kit's errors, replace positional arguments with named fields:
+
+   ```ts
+   // before (1.x)
+   throw new AggregateNotFoundError("Order", id);
+   throw new ConcurrencyConflictError("Order", id, expected, actual);
+   // after (2.0)
+   throw new AggregateNotFoundError({ aggregateType: "Order", id });
+   throw new ConcurrencyConflictError({
+     aggregateType: "Order", aggregateId: id, expectedVersion: expected, actualVersion: actual,
+   });
+   ```
+
+7. **Replace `createDomainEventWithMetadata` with `createDomainEvent`.** Move the metadata into the options object:
+
+   ```ts
+   // before (1.x)
+   createDomainEventWithMetadata("OrderConfirmed", payload, { correlationId });
+   // after (2.0)
+   createDomainEvent("OrderConfirmed", payload, { metadata: { correlationId } });
+   ```
 
 If your code only throws/catches the kit's errors by class, reads `error.message` / `error.name`, or uses the retry helpers (`someChainRetryable`, `isRetryable`), no source change is required beyond step 1.
 

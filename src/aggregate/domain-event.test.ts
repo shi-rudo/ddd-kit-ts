@@ -3,7 +3,6 @@ import {
 	type DomainEvent,
 	copyMetadata,
 	createDomainEvent,
-	createDomainEventWithMetadata,
 	mergeMetadata,
 	resetClockFactory,
 	resetEventIdFactory,
@@ -40,12 +39,11 @@ describe("DomainEvent", () => {
 			expect(event.eventId.length).toBeGreaterThan(0);
 		});
 
-		it("preserves the consumer-supplied eventId through createDomainEventWithMetadata", () => {
-			const event = createDomainEventWithMetadata(
+		it("preserves the consumer-supplied eventId through createDomainEvent", () => {
+			const event = createDomainEvent(
 				"Demo",
 				{ x: 1 },
-				{ correlationId: "corr-1" },
-				{ eventId: "evt-X" },
+				{ eventId: "evt-X", metadata: { correlationId: "corr-1" } },
 			);
 			expect(event.eventId).toBe("evt-X");
 		});
@@ -76,12 +74,15 @@ describe("DomainEvent", () => {
 			expect(b.aggregateType).toBe("X");
 		});
 
-		it("propagates aggregateId/aggregateType through createDomainEventWithMetadata", () => {
-			const event = createDomainEventWithMetadata(
+		it("propagates aggregateId/aggregateType through createDomainEvent", () => {
+			const event = createDomainEvent(
 				"OrderShipped",
 				{ trackingNumber: "T-1" },
-				{ correlationId: "corr-1" },
-				{ aggregateId: "order-42", aggregateType: "Order" },
+				{
+					aggregateId: "order-42",
+					aggregateType: "Order",
+					metadata: { correlationId: "corr-1" },
+				},
 			);
 			expect(event.aggregateId).toBe("order-42");
 			expect(event.aggregateType).toBe("Order");

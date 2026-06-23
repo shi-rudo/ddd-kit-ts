@@ -146,7 +146,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			// The in-memory equivalent of a unique-violation (Postgres 23505,
 			// MySQL 1062): a row with this id already exists.
 			if (this.db.rows.has(order.id)) {
-				throw new DuplicateAggregateError("ContractOrder", order.id);
+				throw new DuplicateAggregateError({ aggregateType: "ContractOrder", aggregateId: order.id });
 			}
 			this.db.rows.set(order.id, {
 				state: structuredClone(order.state),
@@ -157,12 +157,12 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			// equivalent of `WHERE id = ? AND version = ?` affecting 0 rows.
 			const row = this.db.rows.get(order.id);
 			if (!row || row.version !== order.persistedVersion) {
-				throw new ConcurrencyConflictError(
-					"ContractOrder",
-					order.id,
-					order.persistedVersion,
-					row?.version ?? -1,
-				);
+				throw new ConcurrencyConflictError({
+					aggregateType: "ContractOrder",
+					aggregateId: order.id,
+					expectedVersion: order.persistedVersion,
+					actualVersion: row?.version ?? -1,
+				});
 			}
 			this.db.rows.set(order.id, {
 				state: structuredClone(order.state),
@@ -181,12 +181,12 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			order.persistedVersion !== undefined &&
 			(!row || row.version !== order.persistedVersion)
 		) {
-			throw new ConcurrencyConflictError(
-				"ContractOrder",
-				order.id,
-				order.persistedVersion,
-				row?.version ?? -1,
-			);
+			throw new ConcurrencyConflictError({
+				aggregateType: "ContractOrder",
+				aggregateId: order.id,
+				expectedVersion: order.persistedVersion,
+				actualVersion: row?.version ?? -1,
+			});
 		}
 		this.db.rows.delete(order.id);
 		// ONE call: enrollDeleted tombstones the identity map itself.

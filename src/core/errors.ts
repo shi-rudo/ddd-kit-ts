@@ -171,15 +171,25 @@ export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
  *
  * Not retryable: retrying won't make the row appear.
  */
+export interface AggregateNotFoundErrorOptions {
+	readonly aggregateType: string;
+	readonly id: string;
+	/** Optional lower-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
 export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
-	constructor(
-		public readonly aggregateType: string,
-		public readonly id: string,
-		cause?: unknown,
-	) {
-		super(`Aggregate not found: ${aggregateType}(${id})`, cause, {
-			name: "AggregateNotFoundError",
-		});
+	readonly aggregateType: string;
+	readonly id: string;
+
+	constructor(options: AggregateNotFoundErrorOptions) {
+		super(
+			`Aggregate not found: ${options.aggregateType}(${options.id})`,
+			options.cause,
+			{ name: "AggregateNotFoundError" },
+		);
+		this.aggregateType = options.aggregateType;
+		this.id = options.id;
 	}
 }
 
@@ -202,17 +212,25 @@ export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFou
  * idempotency-key flows load the existing aggregate and treat the
  * request as already-applied.
  */
+export interface DuplicateAggregateErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
 export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggregateError"> {
-	constructor(
-		public readonly aggregateType: string,
-		public readonly aggregateId: string,
-		cause?: unknown,
-	) {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+
+	constructor(options: DuplicateAggregateErrorOptions) {
 		super(
-			`Duplicate aggregate: ${aggregateType}(${aggregateId}) already exists`,
-			cause,
+			`Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
+			options.cause,
 			{ name: "DuplicateAggregateError" },
 		);
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
 	}
 }
 
@@ -234,6 +252,15 @@ export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggre
  * rule) detects the race. Marks itself as `retryable: true` so the
  * `isRetryable` predicate from `@shirudo/base-error` picks it up.
  */
+export interface ConcurrencyConflictErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly expectedVersion: number;
+	readonly actualVersion: number;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
 export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyConflictError"> {
 	/**
 	 * Marks this error as retryable so `isRetryable(err)` returns
@@ -242,17 +269,20 @@ export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyCo
 	 */
 	readonly retryable = true as const;
 
-	constructor(
-		public readonly aggregateType: string,
-		public readonly aggregateId: string,
-		public readonly expectedVersion: number,
-		public readonly actualVersion: number,
-		cause?: unknown,
-	) {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly expectedVersion: number;
+	readonly actualVersion: number;
+
+	constructor(options: ConcurrencyConflictErrorOptions) {
 		super(
-			`Concurrency conflict on ${aggregateType}(${aggregateId}): expected version ${expectedVersion}, actual ${actualVersion}`,
-			cause,
+			`Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
+			options.cause,
 			{ name: "ConcurrencyConflictError" },
 		);
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.expectedVersion = options.expectedVersion;
+		this.actualVersion = options.actualVersion;
 	}
 }

@@ -40,7 +40,7 @@ function inMemoryRepo<
 		},
 		async getByIdOrFail(id) {
 			const a = store.get(id);
-			if (!a) throw new AggregateNotFoundError(name, id);
+			if (!a) throw new AggregateNotFoundError({ aggregateType: name, id });
 			return a;
 		},
 		async exists(id) {

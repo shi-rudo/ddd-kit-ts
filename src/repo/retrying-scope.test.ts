@@ -32,7 +32,7 @@ function flakyScope(
 /** No-wait sleep so tests never touch real timers. */
 const instantSleep = async () => {};
 
-const conflict = () => new ConcurrencyConflictError("Order", "o-1", 1, 2);
+const conflict = () => new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 1, actualVersion: 2 });
 
 describe("computeBackoffDelay", () => {
 	const opts = (random: () => number) => ({

@@ -18,9 +18,8 @@ const defaultEventIdFactory: EventIdFactory = () => crypto.randomUUID();
 let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
 
 /**
- * Replaces the global event-id factory used by `createDomainEvent` and
- * `createDomainEventWithMetadata`. Call once during application bootstrap,
- * for example:
+ * Replaces the global event-id factory used by `createDomainEvent`. Call
+ * once during application bootstrap, for example:
  *
  * ```ts
  * import { ulid } from "ulid";
@@ -142,9 +141,8 @@ const defaultClockFactory: ClockFactory = () => new Date();
 let currentClockFactory: ClockFactory = defaultClockFactory;
 
 /**
- * Replaces the global clock factory used by `createDomainEvent` and
- * `createDomainEventWithMetadata`. Call once during application bootstrap
- * (or per-test in deterministic test suites):
+ * Replaces the global clock factory used by `createDomainEvent`. Call once
+ * during application bootstrap (or per-test in deterministic test suites):
  *
  * ```ts
  * import { setClockFactory } from "@shirudo/ddd-kit";
@@ -455,31 +453,6 @@ export function createDomainEvent<T extends string, P>(
 	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
 	return deepFreeze(event) as DomainEvent<T, P>;
-}
-
-/**
- * Creates a domain event with metadata for traceability.
- * Convenience function for creating events with correlation and causation IDs.
- *
- * @example
- * ```typescript
- * const event = createDomainEventWithMetadata(
- *   "OrderCreated",
- *   { orderId: "123" },
- *   { correlationId: "corr-123", causationId: "cmd-456", userId: "user-789" }
- * );
- * ```
- */
-export function createDomainEventWithMetadata<T extends string, P>(
-	type: T,
-	payload: P,
-	metadata: EventMetadata,
-	options?: Omit<CreateDomainEventOptions, "metadata">,
-): DomainEvent<T, P> {
-	return createDomainEvent(type, payload, {
-		...options,
-		metadata,
-	});
 }
 
 /**

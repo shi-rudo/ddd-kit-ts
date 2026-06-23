@@ -65,7 +65,7 @@ async function save(order: Order): Promise<void> {
     .returning();
 
   if (writeResult.length === 0) {
-    throw new ConcurrencyConflictError("Order", order.id, expectedVersion, order.version);
+    throw new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: order.id, expectedVersion, actualVersion: order.version });
   }
 
   order.markPersisted(order.version);
