@@ -326,12 +326,27 @@ function createDomainMachineSnapshot<TState extends string, TContext>(
 function copyDomainMachineOutputs<TOutput>(
 	outputs: readonly TOutput[] | undefined,
 ): readonly TOutput[] {
-	return Object.freeze([...(outputs ?? [])]);
+	try {
+		const copiedOutputs = (outputs ?? []).map((output) =>
+			cloneDomainMachineDataValue(output, createDomainTransitionOutputError),
+		);
+		return deepFreeze(copiedOutputs) as readonly TOutput[];
+	} catch (cause) {
+		if (cause instanceof InvalidDomainTransitionResultError) {
+			throw cause;
+		}
+		throw new InvalidDomainTransitionResultError(
+			"Domain transition result outputs must contain cloneable, deeply immutable data.",
+			cause,
+		);
+	}
 }
 
 function copyDomainMachineContext<TContext>(context: TContext): TContext {
 	try {
-		return deepFreeze(cloneDomainMachineContextValue(context)) as TContext;
+		return deepFreeze(
+			cloneDomainMachineDataValue(context, createDomainMachineContextError),
+		) as TContext;
 	} catch (cause) {
 		if (cause instanceof InvalidDomainMachineContextError) {
 			throw cause;
@@ -343,14 +358,30 @@ function copyDomainMachineContext<TContext>(context: TContext): TContext {
 	}
 }
 
-function cloneDomainMachineContextValue<TValue>(
+function createDomainMachineContextError(
+	message: string,
+	cause?: unknown,
+): InvalidDomainMachineContextError {
+	return new InvalidDomainMachineContextError(message, cause);
+}
+
+function createDomainTransitionOutputError(
+	message: string,
+	cause?: unknown,
+): InvalidDomainTransitionResultError {
+	return new InvalidDomainTransitionResultError(message, cause);
+}
+
+function cloneDomainMachineDataValue<TValue>(
 	value: TValue,
+	errorFactory: (
+		message: string,
+		cause?: unknown,
+	) => InvalidDomainMachineContextError | InvalidDomainTransitionResultError,
 	seen = new WeakMap<object, unknown>(),
 ): TValue {
 	if (typeof value === "function") {
-		throw new InvalidDomainMachineContextError(
-			"Domain machine context cannot contain function values.",
-		);
+		throw errorFactory("Domain machine data cannot contain function values.");
 	}
 	if (value === null || typeof value !== "object") return value;
 
@@ -362,7 +393,11 @@ function cloneDomainMachineContextValue<TValue>(
 		const cloned: unknown[] = new Array(value.length);
 		seen.set(source, cloned);
 		for (let index = 0; index < value.length; index++) {
-			cloned[index] = cloneDomainMachineContextValue(value[index], seen);
+			cloned[index] = cloneDomainMachineDataValue(
+				value[index],
+				errorFactory,
+				seen,
+			);
 		}
 		return cloned as TValue;
 	}
@@ -374,8 +409,8 @@ function cloneDomainMachineContextValue<TValue>(
 			tag === "[object SharedArrayBuffer]" ||
 			ArrayBuffer.isView(source)
 		) {
-			throw new InvalidDomainMachineContextError(
-				"Domain machine context cannot contain ArrayBuffer or ArrayBuffer view values.",
+			throw errorFactory(
+				"Domain machine data cannot contain ArrayBuffer or ArrayBuffer view values.",
 			);
 		}
 		if (
@@ -383,8 +418,8 @@ function cloneDomainMachineContextValue<TValue>(
 			tag === "[object WeakMap]" ||
 			tag === "[object WeakSet]"
 		) {
-			throw new InvalidDomainMachineContextError(
-				`Domain machine context cannot contain ${tag.slice(8, -1)} values.`,
+			throw errorFactory(
+				`Domain machine data cannot contain ${tag.slice(8, -1)} values.`,
 			);
 		}
 		if (tag !== "[object Map]" && tag !== "[object Set]") {
@@ -399,8 +434,8 @@ function cloneDomainMachineContextValue<TValue>(
 		seen.set(source, cloned);
 		for (const [key, entryValue] of source as Map<unknown, unknown>) {
 			cloned.set(
-				cloneDomainMachineContextValue(key, seen),
-				cloneDomainMachineContextValue(entryValue, seen),
+				cloneDomainMachineDataValue(key, errorFactory, seen),
+				cloneDomainMachineDataValue(entryValue, errorFactory, seen),
 			);
 		}
 		return cloned as TValue;
@@ -410,7 +445,7 @@ function cloneDomainMachineContextValue<TValue>(
 		const cloned = new Set<unknown>();
 		seen.set(source, cloned);
 		for (const entryValue of source as Set<unknown>) {
-			cloned.add(cloneDomainMachineContextValue(entryValue, seen));
+			cloned.add(cloneDomainMachineDataValue(entryValue, errorFactory, seen));
 		}
 		return cloned as TValue;
 	}
@@ -422,10 +457,17 @@ function cloneDomainMachineContextValue<TValue>(
 		const descriptor = Object.getOwnPropertyDescriptor(source, key);
 		if (!descriptor) continue;
 
-		if ("value" in descriptor) {
-			descriptor.value = cloneDomainMachineContextValue(descriptor.value, seen);
+		if (!("value" in descriptor)) {
+			throw errorFactory(
+				"Domain machine data cannot contain accessor properties.",
+			);
 		}
 
+		descriptor.value = cloneDomainMachineDataValue(
+			descriptor.value,
+			errorFactory,
+			seen,
+		);
 		Object.defineProperty(cloned, key, descriptor);
 	}
 

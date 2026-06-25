@@ -925,6 +925,40 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects context accessor properties because context must be data", () => {
+		const getterContext = {};
+		Object.defineProperty(getterContext, "value", {
+			enumerable: true,
+			get: () => "not data",
+		});
+		const setterContext = {};
+		Object.defineProperty(setterContext, "value", {
+			enumerable: true,
+			set: () => {
+				/* accessor presence is the invalid part */
+			},
+		});
+
+		for (const context of [getterContext, setterContext]) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				typeof context,
+				{ readonly type: "Close" }
+			> = {
+				initial: "open",
+				initialContext: () => context,
+				states: {
+					open: { on: { Close: { target: "closed" } } },
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() => new DomainStateMachine(definition)).toThrow(
+				InvalidDomainMachineContextError,
+			);
+		}
+	});
+
 	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
 		const definition = checkoutDefinition();
 		const machine = new DomainStateMachine(definition);
@@ -981,6 +1015,55 @@ describe("DomainStateMachine", () => {
 				orderId: "order-1",
 			});
 		}).toThrow();
+	});
+
+	it("copies and deeply freezes transition output values", () => {
+		type NestedOutput = {
+			readonly type: "Nested";
+			readonly data: { value: string };
+		};
+		const output: NestedOutput = {
+			type: "Nested",
+			data: { value: "initial" },
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			NestedOutput
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [output] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		const result = transitionDomainState(
+			definition,
+			createInitialDomainMachineSnapshot(definition),
+			{ type: "Close" },
+		);
+		expect(result.outputs).toHaveLength(1);
+		const [copiedOutput] = result.outputs as readonly [NestedOutput];
+
+		output.data.value = "mutated-outside";
+		expect(copiedOutput).toEqual({
+			type: "Nested",
+			data: { value: "initial" },
+		});
+		expect(copiedOutput).not.toBe(output);
+		expect(() => {
+			(copiedOutput.data as { value: string }).value = "mutated";
+		}).toThrow(TypeError);
 	});
 
 	it("uses BaseError/DomainError hierarchy consistently", () => {
