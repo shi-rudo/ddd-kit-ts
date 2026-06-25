@@ -288,7 +288,8 @@ describe("DomainStateMachine", () => {
 		});
 
 		expect(result.to).toBe("cancelled");
-		expect(result.snapshot.context).toBe(initial.context);
+		expect(result.snapshot.context).toEqual(initial.context);
+		expect(result.snapshot.context).not.toBe(initial.context);
 		expect(result.outputs).toEqual([
 			{
 				type: "CancelOrder",
@@ -652,6 +653,109 @@ describe("DomainStateMachine", () => {
 		expect(machine.state).toBe("awaiting-shipping");
 	});
 
+	it("does not let context references mutate the wrapper outside transitions", () => {
+		type GuardedState = "awaiting-payment" | "paid";
+		type GuardedContext = {
+			readonly payment: { readonly id?: string };
+			readonly audit: readonly string[];
+		};
+		type GuardedEvent =
+			| { readonly type: "SetPayment"; readonly paymentId: string }
+			| { readonly type: "Pay" };
+		const initialContext: GuardedContext = {
+			payment: {},
+			audit: ["created"],
+		};
+		let reducerContext: GuardedContext | undefined;
+		const definition: DomainMachineDefinition<
+			GuardedState,
+			GuardedContext,
+			GuardedEvent
+		> = {
+			initial: "awaiting-payment",
+			initialContext: () => initialContext,
+			states: {
+				"awaiting-payment": {
+					on: {
+						SetPayment: {
+							target: "awaiting-payment",
+							reduce: ({ context, event }) => {
+								reducerContext = {
+									payment: { id: event.paymentId },
+									audit: [...context.audit, "payment-set"],
+								};
+								return { context: reducerContext };
+							},
+						},
+						Pay: {
+							target: "paid",
+							guard: ({ context }) => context.payment.id !== undefined,
+						},
+					},
+				},
+				paid: { terminal: true },
+			},
+		};
+
+		const machine = new DomainStateMachine(definition);
+
+		(initialContext.payment as { id?: string }).id = "outside";
+		expect(machine.can({ type: "Pay" })).toBe(false);
+		expect(() => {
+			(machine.context.payment as { id?: string }).id = "outside";
+		}).toThrow();
+		expect(() => {
+			(machine.snapshot.context.audit as string[]).push("outside");
+		}).toThrow();
+
+		const setPayment = machine.dispatch({
+			type: "SetPayment",
+			paymentId: "payment-1",
+		});
+
+		expect(machine.can({ type: "Pay" })).toBe(true);
+		expect(() => {
+			(setPayment.snapshot.context.payment as { id?: string }).id = "outside";
+		}).toThrow();
+		(reducerContext?.payment as { id?: string }).id = "outside";
+		expect(machine.context.payment.id).toBe("payment-1");
+	});
+
+	it("does not let reconstitution snapshot context mutation corrupt the wrapper", () => {
+		type NestedContext = { readonly nested: { readonly value: string } };
+		const snapshot: DomainMachineSnapshot<"open" | "closed", NestedContext> = {
+			state: "open",
+			context: { nested: { value: "initial" } },
+		};
+		const machine = new DomainStateMachine<
+			"open" | "closed",
+			NestedContext,
+			{ readonly type: "Close" }
+		>(
+			{
+				initial: "open",
+				initialContext: () => ({ nested: { value: "new" } }),
+				states: {
+					open: {
+						on: {
+							Close: {
+								target: "closed",
+								guard: ({ context }) => context.nested.value === "initial",
+							},
+						},
+					},
+					closed: { terminal: true },
+				},
+			},
+			snapshot,
+		);
+
+		(snapshot.context.nested as { value: string }).value = "mutated";
+
+		expect(machine.can({ type: "Close" })).toBe(true);
+		expect(machine.context.nested.value).toBe("initial");
+	});
+
 	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
 		const definition = checkoutDefinition();
 		const machine = new DomainStateMachine(definition);
@@ -774,5 +878,11 @@ describe("DomainStateMachine", () => {
 			never
 		>;
 		void (null as unknown as InvalidDefinition);
+
+		const assertConstructorRejectsUndefined = () => {
+			// @ts-expect-error Explicit undefined is not a valid reconstitution snapshot.
+			new DomainStateMachine(definition, undefined);
+		};
+		void assertConstructorRejectsUndefined;
 	});
 });

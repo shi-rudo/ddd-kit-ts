@@ -1,5 +1,6 @@
 import { BaseError } from "@shirudo/base-error";
 import { DomainError } from "../core/errors";
+import { deepFreeze } from "../value-object/value-object";
 
 export type DomainMachineEvent = {
 	readonly type: string;
@@ -242,6 +243,13 @@ export class DomainStateMachine<
 
 	constructor(
 		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	);
+	constructor(
+		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+		snapshot: DomainMachineSnapshot<TState, TContext>,
+	);
+	constructor(
+		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 		...snapshotInput: [] | [DomainMachineSnapshot<TState, TContext> | undefined]
 	) {
 		validateDomainMachineDefinition(definition);
@@ -269,7 +277,9 @@ export class DomainStateMachine<
 	}
 
 	get context(): Readonly<TContext> {
-		return this.#snapshot.context;
+		return copyDomainMachineContext(
+			this.#snapshot.context,
+		) as Readonly<TContext>;
 	}
 
 	isTerminal(): boolean {
@@ -300,7 +310,7 @@ function createDomainMachineSnapshot<TState extends string, TContext>(
 ): DomainMachineSnapshot<TState, TContext> {
 	return Object.freeze({
 		state: snapshot.state,
-		context: snapshot.context,
+		context: copyDomainMachineContext(snapshot.context),
 	});
 }
 
@@ -308,6 +318,70 @@ function copyDomainMachineOutputs<TOutput>(
 	outputs: readonly TOutput[] | undefined,
 ): readonly TOutput[] {
 	return Object.freeze([...(outputs ?? [])]);
+}
+
+function copyDomainMachineContext<TContext>(context: TContext): TContext {
+	return deepFreeze(cloneDomainMachineContextValue(context)) as TContext;
+}
+
+function cloneDomainMachineContextValue<TValue>(
+	value: TValue,
+	seen = new WeakMap<object, unknown>(),
+): TValue {
+	if (value === null || typeof value !== "object") return value;
+
+	const source = value as object;
+	const existing = seen.get(source);
+	if (existing !== undefined) return existing as TValue;
+
+	const tag = Object.prototype.toString.call(source);
+	if (
+		tag === "[object Date]" ||
+		tag === "[object RegExp]" ||
+		tag === "[object ArrayBuffer]" ||
+		ArrayBuffer.isView(source)
+	) {
+		return structuredClone(value);
+	}
+
+	if (source instanceof Map) {
+		const cloned = new Map<unknown, unknown>();
+		seen.set(source, cloned);
+		for (const [key, entryValue] of source) {
+			cloned.set(
+				cloneDomainMachineContextValue(key, seen),
+				cloneDomainMachineContextValue(entryValue, seen),
+			);
+		}
+		return cloned as TValue;
+	}
+
+	if (source instanceof Set) {
+		const cloned = new Set<unknown>();
+		seen.set(source, cloned);
+		for (const entryValue of source) {
+			cloned.add(cloneDomainMachineContextValue(entryValue, seen));
+		}
+		return cloned as TValue;
+	}
+
+	const cloned = Array.isArray(value)
+		? []
+		: Object.create(Object.getPrototypeOf(source));
+	seen.set(source, cloned);
+
+	for (const key of Reflect.ownKeys(source)) {
+		const descriptor = Object.getOwnPropertyDescriptor(source, key);
+		if (!descriptor) continue;
+
+		if ("value" in descriptor) {
+			descriptor.value = cloneDomainMachineContextValue(descriptor.value, seen);
+		}
+
+		Object.defineProperty(cloned, key, descriptor);
+	}
+
+	return cloned as TValue;
 }
 
 function copyDomainMachineDefinition<

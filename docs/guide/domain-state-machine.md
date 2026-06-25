@@ -116,10 +116,9 @@ its own context reference.
 
 The stateful wrapper defensively copies its machine definition at construction
 time, so later mutation of the caller's definition object cannot change that
-machine's behavior. Snapshots and output arrays returned by the API are shallow
-frozen copies. The context object itself remains application-owned: model it
-immutably, and use value objects or your aggregate's own state discipline for
-nested data.
+machine's behavior. Machine contexts are copied into snapshots and deep-frozen
+so callers cannot mutate lifecycle data outside a transition. Snapshots and
+output arrays returned by the API are frozen copies.
 
 ## Allow and forbid transitions
 
@@ -272,10 +271,13 @@ Missing transitions and rejected guards are domain-rule violations:
 - `DomainTransitionGuardRejectedError extends DomainError`
 
 Broken machine definitions and invalid snapshots are programmer or
-reconstitution failures:
+reconstitution failures. Malformed runtime events and malformed reducer results
+are treated the same way:
 
 - `InvalidDomainMachineDefinitionError extends BaseError`
 - `InvalidDomainMachineSnapshotError extends BaseError`
+- `InvalidDomainMachineEventError extends BaseError`
+- `InvalidDomainTransitionResultError extends BaseError`
 
 This matches the rest of the kit: domain operations throw `DomainError`, while
 invalid wiring fails loudly as a structured `BaseError`.
