@@ -114,6 +114,13 @@ result.snapshot.context.paymentId; // "payment-1"
 `initialContext` is a factory, not a shared object. Each fresh machine gets
 its own context reference.
 
+The stateful wrapper defensively copies its machine definition at construction
+time, so later mutation of the caller's definition object cannot change that
+machine's behavior. Snapshots and output arrays returned by the API are shallow
+frozen copies. The context object itself remains application-owned: model it
+immutably, and use value objects or your aggregate's own state discipline for
+nested data.
+
 ## Pure transitions
 
 The stateful wrapper is convenience. The core operation is pure:

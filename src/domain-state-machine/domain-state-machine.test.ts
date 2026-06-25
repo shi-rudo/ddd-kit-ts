@@ -326,6 +326,109 @@ describe("DomainStateMachine", () => {
 		expect(machine.snapshot).toEqual(second.snapshot);
 	});
 
+	it("does not expose its internal snapshot reference through the snapshot getter", () => {
+		const machine = new DomainStateMachine(checkoutDefinition());
+		const exposed = machine.snapshot;
+
+		expect(Object.isFrozen(exposed)).toBe(true);
+		expect(() => {
+			(exposed as { state: CheckoutState }).state = "completed";
+		}).toThrow();
+
+		expect(machine.state).toBe("awaiting-payment");
+		expect(machine.snapshot).not.toBe(exposed);
+	});
+
+	it("does not expose its internal snapshot through dispatch results", () => {
+		const machine = new DomainStateMachine(checkoutDefinition());
+		const result = machine.dispatch({
+			type: "PaymentRequested",
+			paymentId: "payment-1",
+		});
+
+		expect(Object.isFrozen(result.snapshot)).toBe(true);
+		expect(() => {
+			(result.snapshot as { state: CheckoutState }).state = "completed";
+		}).toThrow();
+
+		expect(machine.state).toBe("awaiting-payment");
+		expect(machine.context.paymentId).toBe("payment-1");
+	});
+
+	it("copies reconstitution snapshots so caller mutation cannot corrupt the wrapper", () => {
+		const snapshot: DomainMachineSnapshot<CheckoutState, CheckoutContext> = {
+			state: "awaiting-shipping",
+			context: {
+				orderId: "order-1",
+				totalCents: 1000,
+				paymentId: "payment-1",
+			},
+		};
+		const machine = new DomainStateMachine(checkoutDefinition(), snapshot);
+
+		(snapshot as { state: CheckoutState }).state = "completed";
+
+		expect(machine.state).toBe("awaiting-shipping");
+	});
+
+	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
+		const definition = checkoutDefinition();
+		const machine = new DomainStateMachine(definition);
+		const paymentRequested = definition.states["awaiting-payment"].on
+			?.PaymentRequested as { target: CheckoutState };
+
+		paymentRequested.target = "completed";
+
+		const result = machine.dispatch({
+			type: "PaymentRequested",
+			paymentId: "payment-1",
+		});
+
+		expect(result.to).toBe("awaiting-payment");
+		expect(machine.state).toBe("awaiting-payment");
+	});
+
+	it("copies and freezes transition output arrays", () => {
+		const outputs: CheckoutOutput[] = [
+			{ type: "RequestShipping", orderId: "order-1" },
+		];
+		const definition: DomainMachineDefinition<
+			CheckoutState,
+			CheckoutContext,
+			CheckoutEvent,
+			CheckoutOutput
+		> = {
+			...checkoutDefinition(),
+			states: {
+				...checkoutDefinition().states,
+				"awaiting-payment": {
+					on: {
+						PaymentRequested: {
+							target: "awaiting-shipping",
+							reduce: () => ({ outputs }),
+						},
+					},
+				},
+			},
+		};
+
+		const result = transitionDomainState(
+			definition,
+			createInitialDomainMachineSnapshot(definition),
+			{ type: "PaymentRequested", paymentId: "payment-1" },
+		);
+
+		expect(result.outputs).toEqual(outputs);
+		expect(result.outputs).not.toBe(outputs);
+		expect(Object.isFrozen(result.outputs)).toBe(true);
+		expect(() => {
+			(result.outputs as CheckoutOutput[]).push({
+				type: "ConfirmOrder",
+				orderId: "order-1",
+			});
+		}).toThrow();
+	});
+
 	it("uses BaseError/DomainError hierarchy consistently", () => {
 		const invalid = new InvalidDomainTransitionError("completed", "Cancel");
 		const rejected = new DomainTransitionGuardRejectedError(

@@ -119,10 +119,10 @@ export function createInitialDomainMachineSnapshot<
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineDefinition(definition);
-	return {
+	return createDomainMachineSnapshot({
 		state: definition.initial,
 		context: definition.initialContext(),
-	};
+	});
 }
 
 export function canTransitionDomainState<
@@ -193,16 +193,16 @@ export function transitionDomainState<
 		context: snapshot.context,
 		event,
 	});
-	const nextSnapshot = {
+	const nextSnapshot = createDomainMachineSnapshot({
 		state: transition.target,
 		context: result?.context ?? snapshot.context,
-	};
+	});
 
 	return {
 		from,
 		to: transition.target,
 		snapshot: nextSnapshot,
-		outputs: result?.outputs ?? [],
+		outputs: copyDomainMachineOutputs(result?.outputs),
 	};
 }
 
@@ -212,10 +212,17 @@ export class DomainStateMachine<
 	TEvent extends DomainMachineEvent,
 	TOutput = never,
 > {
+	private readonly definition: DomainMachineDefinition<
+		TState,
+		TContext,
+		TEvent,
+		TOutput
+	>;
+
 	#snapshot: DomainMachineSnapshot<TState, TContext>;
 
 	constructor(
-		private readonly definition: DomainMachineDefinition<
+		definition: DomainMachineDefinition<
 			TState,
 			TContext,
 			TEvent,
@@ -224,13 +231,16 @@ export class DomainStateMachine<
 		snapshot?: DomainMachineSnapshot<TState, TContext>,
 	) {
 		validateDomainMachineDefinition(definition);
+		this.definition = copyDomainMachineDefinition(definition);
 		this.#snapshot =
-			snapshot ?? createInitialDomainMachineSnapshot(this.definition);
+			snapshot !== undefined
+				? createDomainMachineSnapshot(snapshot)
+				: createInitialDomainMachineSnapshot(this.definition);
 		validateDomainMachineSnapshot(this.definition, this.#snapshot);
 	}
 
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
-		return this.#snapshot;
+		return createDomainMachineSnapshot(this.#snapshot);
 	}
 
 	get state(): TState {
@@ -256,8 +266,77 @@ export class DomainStateMachine<
 			event,
 		);
 		this.#snapshot = result.snapshot;
-		return result;
+		return {
+			...result,
+			snapshot: createDomainMachineSnapshot(result.snapshot),
+			outputs: copyDomainMachineOutputs(result.outputs),
+		};
 	}
+}
+
+function createDomainMachineSnapshot<TState extends string, TContext>(
+	snapshot: DomainMachineSnapshot<TState, TContext>,
+): DomainMachineSnapshot<TState, TContext> {
+	return Object.freeze({
+		state: snapshot.state,
+		context: snapshot.context,
+	});
+}
+
+function copyDomainMachineOutputs<TOutput>(
+	outputs: readonly TOutput[] | undefined,
+): readonly TOutput[] {
+	return Object.freeze([...(outputs ?? [])]);
+}
+
+function copyDomainMachineDefinition<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+): DomainMachineDefinition<TState, TContext, TEvent, TOutput> {
+	const copiedStates = {} as {
+		[TName in TState]: DomainStateNode<TState, TContext, TEvent, TOutput>;
+	};
+
+	for (const state of Object.keys(definition.states) as TState[]) {
+		const node = definition.states[state];
+		const copiedTransitions = {} as {
+			[TType in TEvent["type"]]?: DomainTransition<
+				TState,
+				TContext,
+				Extract<TEvent, { readonly type: TType }>,
+				TOutput
+			>;
+		};
+
+		for (const eventType of Object.keys(node.on ?? {}) as TEvent["type"][]) {
+			const transition = node.on?.[eventType];
+			if (transition) {
+				copiedTransitions[eventType] = Object.freeze({ ...transition }) as
+					| DomainTransition<
+							TState,
+							TContext,
+							Extract<TEvent, { readonly type: typeof eventType }>,
+							TOutput
+					  >
+					| undefined;
+			}
+		}
+
+		copiedStates[state] = Object.freeze({
+			terminal: node.terminal,
+			on: Object.freeze(copiedTransitions),
+		});
+	}
+
+	return Object.freeze({
+		initial: definition.initial,
+		initialContext: definition.initialContext,
+		states: Object.freeze(copiedStates),
+	});
 }
 
 function getTransition<
