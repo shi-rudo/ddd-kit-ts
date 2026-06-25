@@ -159,7 +159,6 @@ export function canTransitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
-	const currentEvent = copyDomainMachineEvent(event);
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
 	const stateNode = definition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
@@ -167,10 +166,11 @@ export function canTransitionDomainState<
 	const transition = getTransition(
 		definition,
 		currentSnapshot.state,
-		currentEvent,
+		event,
 	);
 	if (!transition) return false;
 
+	const currentEvent = copyDomainMachineEvent(event);
 	return (
 		transition.guard?.({
 			state: currentSnapshot.state,
@@ -194,19 +194,19 @@ export function transitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	validateDomainMachineEvent(event);
 
-	const currentEvent = copyDomainMachineEvent(event);
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
 	const from = currentSnapshot.state;
 	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
 			? undefined
-			: getTransition(definition, from, currentEvent);
+			: getTransition(definition, from, event);
 
 	if (!transition) {
-		throw new InvalidDomainTransitionError(from, currentEvent.type);
+		throw new InvalidDomainTransitionError(from, event.type);
 	}
 
+	const currentEvent = copyDomainMachineEvent(event);
 	const allowed =
 		transition.guard?.({
 			state: from,

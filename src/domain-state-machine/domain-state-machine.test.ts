@@ -254,6 +254,37 @@ describe("DomainStateMachine", () => {
 		).toBe(false);
 	});
 
+	it("reports can=false for forbidden transitions before validating unused event payloads", () => {
+		const definition = checkoutDefinition();
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+		const completed: DomainMachineSnapshot<CheckoutState, CheckoutContext> = {
+			state: "completed",
+			context: { orderId: "order-1", totalCents: 1000 },
+		};
+
+		expect(
+			canTransitionDomainState(
+				definition,
+				snapshot,
+				{
+					type: "ShippingCompleted",
+					callback: () => "not data",
+				} as unknown as CheckoutEvent,
+			),
+		).toBe(false);
+		expect(
+			canTransitionDomainState(
+				definition,
+				completed,
+				{
+					type: "Cancel",
+					reason: "too-late",
+					callback: () => "not data",
+				} as unknown as CheckoutEvent,
+			),
+		).toBe(false);
+	});
+
 	it("updates state and context through the pure transition function", () => {
 		const definition = checkoutDefinition();
 		const initial = createInitialDomainMachineSnapshot(definition);
@@ -358,6 +389,37 @@ describe("DomainStateMachine", () => {
 				type: "PaymentReceived",
 			}),
 		).toThrow(DomainTransitionGuardRejectedError);
+	});
+
+	it("throws invalid transition errors before validating unused event payloads", () => {
+		const definition = checkoutDefinition();
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+		const completed: DomainMachineSnapshot<CheckoutState, CheckoutContext> = {
+			state: "completed",
+			context: { orderId: "order-1", totalCents: 1000 },
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				snapshot,
+				{
+					type: "ShippingCompleted",
+					callback: () => "not data",
+				} as unknown as CheckoutEvent,
+			),
+		).toThrow(InvalidDomainTransitionError);
+		expect(() =>
+			transitionDomainState(
+				definition,
+				completed,
+				{
+					type: "Cancel",
+					reason: "too-late",
+					callback: () => "not data",
+				} as unknown as CheckoutEvent,
+			),
+		).toThrow(InvalidDomainTransitionError);
 	});
 
 	it("blocks transitions from terminal states", () => {
