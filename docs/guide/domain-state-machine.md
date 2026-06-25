@@ -121,6 +121,62 @@ frozen copies. The context object itself remains application-owned: model it
 immutably, and use value objects or your aggregate's own state discipline for
 nested data.
 
+## Allow and forbid transitions
+
+Model the lifecycle from the current state outward. The `on` block is the list
+of transitions that are meaningful from that state.
+
+- If a transition is never allowed from a state, do not define it there.
+- If a transition is meaningful but currently depends on state or context, use a
+  `guard`.
+- If no transition should ever leave a state, mark the state as `terminal`.
+
+```ts
+const orderLifecycle = {
+  initial: "draft",
+  initialContext: () => ({ paid: false, itemCount: 0 }),
+  states: {
+    draft: {
+      on: {
+        Submit: {
+          target: "submitted",
+          guard: ({ context }) => context.itemCount > 0,
+        },
+        Cancel: { target: "cancelled" },
+      },
+    },
+    submitted: {
+      on: {
+        Pay: {
+          target: "paid",
+          reduce: ({ context }) => ({
+            context: { ...context, paid: true },
+          }),
+        },
+      },
+    },
+    paid: {
+      on: {
+        Ship: { target: "shipped" },
+      },
+    },
+    shipped: { terminal: true },
+    cancelled: { terminal: true },
+  },
+};
+```
+
+In this example, `Ship` is not defined from `draft`, so that transition is not a
+valid part of the lifecycle. `Submit` is defined from `draft`, but its guard can
+reject empty orders. `shipped` and `cancelled` are terminal states, so no event
+can transition out of them.
+
+Use `can(event)` when the application needs to ask whether a transition is
+currently available. Use `dispatch(event)` or `transitionDomainState(...)` when a
+domain method wants to enforce the rule; missing transitions throw
+`InvalidDomainTransitionError`, and rejected guards throw
+`DomainTransitionGuardRejectedError`.
+
 ## Pure transitions
 
 The stateful wrapper is convenience. The core operation is pure:
