@@ -120,6 +120,11 @@ machine's behavior. Machine contexts are copied into snapshots and deep-frozen
 so callers cannot mutate lifecycle data outside a transition. Snapshots and
 output arrays returned by the API are frozen copies.
 
+Machine context is data, not behavior. Use cloneable domain data such as
+primitives, arrays, objects, `Date`, `RegExp`, `Map`, and `Set`. Do not put
+functions, promises, weak collections, external resources, or binary buffers in
+context; those values cannot be made reliably immutable and are rejected.
+
 ## Allow and forbid transitions
 
 Model the lifecycle from the current state outward. The `on` block is the list
@@ -198,6 +203,11 @@ transitioned.to; // "cancelled"
 transitioned.outputs; // [{ type: "CancelOrder", ... }]
 ```
 
+`transitionDomainState(...)` and `canTransitionDomainState(...)` defensively copy
+and freeze the input snapshot before running guards or reducers. A buggy callback
+cannot mutate the caller-owned snapshot; if it writes to `context`, the frozen
+copy fails loudly.
+
 This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:
 
@@ -271,10 +281,11 @@ Missing transitions and rejected guards are domain-rule violations:
 - `DomainTransitionGuardRejectedError extends DomainError`
 
 Broken machine definitions and invalid snapshots are programmer or
-reconstitution failures. Malformed runtime events and malformed reducer results
-are treated the same way:
+reconstitution failures. Invalid context values, malformed runtime events, and
+malformed reducer results are treated the same way:
 
 - `InvalidDomainMachineDefinitionError extends BaseError`
+- `InvalidDomainMachineContextError extends BaseError`
 - `InvalidDomainMachineSnapshotError extends BaseError`
 - `InvalidDomainMachineEventError extends BaseError`
 - `InvalidDomainTransitionResultError extends BaseError`

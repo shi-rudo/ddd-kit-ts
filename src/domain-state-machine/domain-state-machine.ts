@@ -1,5 +1,6 @@
 import { BaseError } from "@shirudo/base-error";
 import { DomainError } from "../core/errors";
+import { isBuiltInObject } from "../utils/array/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 
 export type DomainMachineEvent = {
@@ -105,6 +106,12 @@ export class InvalidDomainMachineDefinitionError extends BaseError<"InvalidDomai
 	}
 }
 
+export class InvalidDomainMachineContextError extends BaseError<"InvalidDomainMachineContextError"> {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, { name: "InvalidDomainMachineContextError" });
+	}
+}
+
 export class InvalidDomainMachineSnapshotError extends BaseError<"InvalidDomainMachineSnapshotError"> {
 	constructor(message: string, cause?: unknown) {
 		super(message, cause, { name: "InvalidDomainMachineSnapshotError" });
@@ -152,16 +159,17 @@ export function canTransitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
-	const stateNode = definition.states[snapshot.state];
+	const currentSnapshot = createDomainMachineSnapshot(snapshot);
+	const stateNode = definition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(definition, snapshot.state, event);
+	const transition = getTransition(definition, currentSnapshot.state, event);
 	if (!transition) return false;
 
 	return (
 		transition.guard?.({
-			state: snapshot.state,
-			context: snapshot.context,
+			state: currentSnapshot.state,
+			context: currentSnapshot.context,
 			event,
 		}) ?? true
 	);
@@ -181,7 +189,8 @@ export function transitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	validateDomainMachineEvent(event);
 
-	const from = snapshot.state;
+	const currentSnapshot = createDomainMachineSnapshot(snapshot);
+	const from = currentSnapshot.state;
 	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
@@ -195,7 +204,7 @@ export function transitionDomainState<
 	const allowed =
 		transition.guard?.({
 			state: from,
-			context: snapshot.context,
+			context: currentSnapshot.context,
 			event,
 		}) ?? true;
 
@@ -205,14 +214,14 @@ export function transitionDomainState<
 
 	const result = transition.reduce?.({
 		state: from,
-		context: snapshot.context,
+		context: currentSnapshot.context,
 		event,
 	});
 	validateDomainTransitionResult(result);
 	const nextContext =
 		result !== undefined && hasOwn(result, "context")
 			? (result as { readonly context: TContext }).context
-			: snapshot.context;
+			: currentSnapshot.context;
 	const nextSnapshot = createDomainMachineSnapshot({
 		state: transition.target,
 		context: nextContext,
@@ -321,33 +330,74 @@ function copyDomainMachineOutputs<TOutput>(
 }
 
 function copyDomainMachineContext<TContext>(context: TContext): TContext {
-	return deepFreeze(cloneDomainMachineContextValue(context)) as TContext;
+	try {
+		return deepFreeze(cloneDomainMachineContextValue(context)) as TContext;
+	} catch (cause) {
+		if (cause instanceof InvalidDomainMachineContextError) {
+			throw cause;
+		}
+		throw new InvalidDomainMachineContextError(
+			"Domain machine context must contain cloneable, deeply immutable data.",
+			cause,
+		);
+	}
 }
 
 function cloneDomainMachineContextValue<TValue>(
 	value: TValue,
 	seen = new WeakMap<object, unknown>(),
 ): TValue {
+	if (typeof value === "function") {
+		throw new InvalidDomainMachineContextError(
+			"Domain machine context cannot contain function values.",
+		);
+	}
 	if (value === null || typeof value !== "object") return value;
 
 	const source = value as object;
 	const existing = seen.get(source);
 	if (existing !== undefined) return existing as TValue;
 
-	const tag = Object.prototype.toString.call(source);
-	if (
-		tag === "[object Date]" ||
-		tag === "[object RegExp]" ||
-		tag === "[object ArrayBuffer]" ||
-		ArrayBuffer.isView(source)
-	) {
-		return structuredClone(value);
+	if (Array.isArray(value)) {
+		const cloned: unknown[] = new Array(value.length);
+		seen.set(source, cloned);
+		for (let index = 0; index < value.length; index++) {
+			cloned[index] = cloneDomainMachineContextValue(value[index], seen);
+		}
+		return cloned as TValue;
 	}
 
-	if (source instanceof Map) {
+	const tag = Object.prototype.toString.call(source);
+	if (isBuiltInObject(source, tag)) {
+		if (
+			tag === "[object ArrayBuffer]" ||
+			tag === "[object SharedArrayBuffer]" ||
+			ArrayBuffer.isView(source)
+		) {
+			throw new InvalidDomainMachineContextError(
+				"Domain machine context cannot contain ArrayBuffer or ArrayBuffer view values.",
+			);
+		}
+		if (
+			tag === "[object Promise]" ||
+			tag === "[object WeakMap]" ||
+			tag === "[object WeakSet]"
+		) {
+			throw new InvalidDomainMachineContextError(
+				`Domain machine context cannot contain ${tag.slice(8, -1)} values.`,
+			);
+		}
+		if (tag !== "[object Map]" && tag !== "[object Set]") {
+			const cloned = structuredClone(value);
+			seen.set(source, cloned);
+			return cloned;
+		}
+	}
+
+	if (isBuiltInObject(source, tag) && tag === "[object Map]") {
 		const cloned = new Map<unknown, unknown>();
 		seen.set(source, cloned);
-		for (const [key, entryValue] of source) {
+		for (const [key, entryValue] of source as Map<unknown, unknown>) {
 			cloned.set(
 				cloneDomainMachineContextValue(key, seen),
 				cloneDomainMachineContextValue(entryValue, seen),
@@ -356,18 +406,16 @@ function cloneDomainMachineContextValue<TValue>(
 		return cloned as TValue;
 	}
 
-	if (source instanceof Set) {
+	if (isBuiltInObject(source, tag) && tag === "[object Set]") {
 		const cloned = new Set<unknown>();
 		seen.set(source, cloned);
-		for (const entryValue of source) {
+		for (const entryValue of source as Set<unknown>) {
 			cloned.add(cloneDomainMachineContextValue(entryValue, seen));
 		}
 		return cloned as TValue;
 	}
 
-	const cloned = Array.isArray(value)
-		? []
-		: Object.create(Object.getPrototypeOf(source));
+	const cloned = Object.create(Object.getPrototypeOf(source));
 	seen.set(source, cloned);
 
 	for (const key of Reflect.ownKeys(source)) {

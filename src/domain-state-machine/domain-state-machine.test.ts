@@ -4,6 +4,7 @@ import { DomainError } from "../core/errors";
 import {
 	DomainStateMachine,
 	InvalidDomainMachineDefinitionError,
+	InvalidDomainMachineContextError,
 	InvalidDomainMachineEventError,
 	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionResultError,
@@ -756,6 +757,174 @@ describe("DomainStateMachine", () => {
 		expect(machine.context.nested.value).toBe("initial");
 	});
 
+	it("does not let pure transition guards mutate caller-owned snapshot context", () => {
+		type NestedContext = { readonly nested: { readonly allowed: boolean } };
+		const snapshot: DomainMachineSnapshot<"open" | "closed", NestedContext> = {
+			state: "open",
+			context: { nested: { allowed: false } },
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			NestedContext,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ nested: { allowed: false } }),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							guard: ({ context }) => {
+								(context.nested as { allowed: boolean }).allowed = true;
+								return true;
+							},
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			canTransitionDomainState(definition, snapshot, { type: "Close" }),
+		).toThrow(TypeError);
+		expect(snapshot.context.nested.allowed).toBe(false);
+	});
+
+	it("does not let pure transition reducers mutate caller-owned snapshot context", () => {
+		type AuditContext = { readonly audit: readonly string[] };
+		const snapshot: DomainMachineSnapshot<"open" | "closed", AuditContext> = {
+			state: "open",
+			context: { audit: [] },
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			AuditContext,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ audit: [] }),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: ({ context }) => {
+								(context.audit as string[]).push("mutated");
+								return undefined;
+							},
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(definition, snapshot, { type: "Close" }),
+		).toThrow(TypeError);
+		expect(snapshot.context.audit).toEqual([]);
+	});
+
+	it("preserves and freezes complex context graphs across snapshots", () => {
+		const symbolKey = Symbol("context");
+		type SharedValue = { value: string };
+		type CyclicValue = { name: string; self?: CyclicValue };
+		type ComplexContext = {
+			readonly [symbolKey]: { readonly code: string };
+			readonly shared: SharedValue;
+			readonly lookup: ReadonlyMap<string, unknown>;
+			readonly selected: ReadonlySet<unknown>;
+			readonly cycle: CyclicValue;
+		};
+		const shared: SharedValue = { value: "initial" };
+		const cycle: CyclicValue = { name: "root" };
+		cycle.self = cycle;
+		const originalContext: ComplexContext = {
+			[symbolKey]: { code: "secret" },
+			shared,
+			lookup: new Map<string, unknown>([
+				["shared", shared],
+				["cycle", cycle],
+			]),
+			selected: new Set<unknown>([shared]),
+			cycle,
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			ComplexContext,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => originalContext,
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							guard: ({ context }) =>
+								context.lookup.get("shared") === context.shared &&
+								context.cycle.self === context.cycle &&
+								context[symbolKey].code === "secret",
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		const machine = new DomainStateMachine(definition);
+		const exposed = machine.context as ComplexContext;
+
+		expect(exposed.lookup.get("shared")).toBe(exposed.shared);
+		expect(exposed.cycle.self).toBe(exposed.cycle);
+		expect(exposed[symbolKey].code).toBe("secret");
+		expect(machine.can({ type: "Close" })).toBe(true);
+
+		shared.value = "outside";
+		expect(machine.context.shared.value).toBe("initial");
+		expect(() =>
+			(exposed.lookup as Map<string, unknown>).set("outside", "mutation"),
+		).toThrow(TypeError);
+		expect(() => (exposed.selected as Set<unknown>).add("mutation")).toThrow(
+			TypeError,
+		);
+		expect(() => {
+			(exposed[symbolKey] as { code: string }).code = "mutated";
+		}).toThrow(TypeError);
+	});
+
+	it("rejects context values that cannot be made deeply immutable", () => {
+		const invalidContexts = [
+			{ callback: () => "not data" },
+			{ bytes: new Uint8Array([1, 2, 3]) },
+			{ buffer: new ArrayBuffer(8) },
+			{ deferred: Promise.resolve("later") },
+			{ weak: new WeakMap<object, string>() },
+			{ weak: new WeakSet<object>() },
+		];
+
+		for (const context of invalidContexts) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				typeof context,
+				{ readonly type: "Close" }
+			> = {
+				initial: "open",
+				initialContext: () => context,
+				states: {
+					open: { on: { Close: { target: "closed" } } },
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() => new DomainStateMachine(definition)).toThrow(
+				InvalidDomainMachineContextError,
+			);
+		}
+	});
+
 	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
 		const definition = checkoutDefinition();
 		const machine = new DomainStateMachine(definition);
@@ -821,6 +990,7 @@ describe("DomainStateMachine", () => {
 			"PaymentReceived",
 		);
 		const badDefinition = new InvalidDomainMachineDefinitionError("bad");
+		const badContext = new InvalidDomainMachineContextError("bad");
 		const badSnapshot = new InvalidDomainMachineSnapshotError("bad");
 		const badEvent = new InvalidDomainMachineEventError("bad");
 		const badResult = new InvalidDomainTransitionResultError("bad");
@@ -828,12 +998,14 @@ describe("DomainStateMachine", () => {
 		expect(invalid).toBeInstanceOf(DomainError);
 		expect(rejected).toBeInstanceOf(DomainError);
 		expect(badDefinition).not.toBeInstanceOf(DomainError);
+		expect(badContext).not.toBeInstanceOf(DomainError);
 		expect(badSnapshot).not.toBeInstanceOf(DomainError);
 		expect(badEvent).not.toBeInstanceOf(DomainError);
 		expect(badResult).not.toBeInstanceOf(DomainError);
 		expect(isBaseError(invalid)).toBe(true);
 		expect(isBaseError(rejected)).toBe(true);
 		expect(isBaseError(badDefinition)).toBe(true);
+		expect(isBaseError(badContext)).toBe(true);
 		expect(isBaseError(badSnapshot)).toBe(true);
 		expect(isBaseError(badEvent)).toBe(true);
 		expect(isBaseError(badResult)).toBe(true);
