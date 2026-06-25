@@ -41,7 +41,11 @@ shape rather than the full event union.
 The stateful wrapper defensively copies its definition at construction time, so
 mutating the caller's definition object later cannot alter machine behavior.
 Snapshots and output arrays returned by the API are shallow-frozen copies, and
-constructor snapshots are copied before being stored. The context object remains
+constructor snapshots are copied before being stored. Definition copies preserve
+own special-property keys such as `__proto__`, and malformed runtime definitions
+fail as structured definition errors rather than leaking raw `TypeError`s.
+Explicit `null` or `undefined` context updates are preserved when the `context`
+property is present in a reducer result. The context object remains
 application-owned by design: model it immutably, use value objects where deep
 immutability matters, and keep aggregate methods as the public domain language
 instead of exposing generic `dispatch(...)` calls to application code.

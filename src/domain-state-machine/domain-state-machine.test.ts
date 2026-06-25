@@ -262,6 +262,49 @@ describe("DomainStateMachine", () => {
 		]);
 	});
 
+	it("preserves explicit null and undefined context updates", () => {
+		type NullableState = "filled" | "empty";
+		type NullableContext = string | null | undefined;
+		type NullableEvent =
+			| { readonly type: "ClearToNull" }
+			| { readonly type: "ClearToUndefined" };
+		const definition: DomainMachineDefinition<
+			NullableState,
+			NullableContext,
+			NullableEvent
+		> = {
+			initial: "filled",
+			initialContext: () => "value",
+			states: {
+				filled: {
+					on: {
+						ClearToNull: {
+							target: "empty",
+							reduce: () => ({ context: null }),
+						},
+						ClearToUndefined: {
+							target: "empty",
+							reduce: () => ({ context: undefined }),
+						},
+					},
+				},
+				empty: { terminal: true },
+			},
+		};
+		const initial = createInitialDomainMachineSnapshot(definition);
+
+		expect(
+			transitionDomainState(definition, initial, {
+				type: "ClearToNull",
+			}).snapshot.context,
+		).toBeNull();
+		expect(
+			transitionDomainState(definition, initial, {
+				type: "ClearToUndefined",
+			}).snapshot.context,
+		).toBeUndefined();
+	});
+
 	it("throws domain errors for missing or guard-rejected transitions", () => {
 		const definition = checkoutDefinition();
 		const snapshot = createInitialDomainMachineSnapshot(definition);
@@ -309,6 +352,122 @@ describe("DomainStateMachine", () => {
 			expect(machine.can(event)).toBe(false);
 			expect(() => machine.dispatch(event)).toThrow(InvalidDomainTransitionError);
 			expect(machine.state).toBe("awaiting-payment");
+		}
+	});
+
+	it("preserves own __proto__ transition keys through wrapper definition copies", () => {
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly value: string },
+			{ readonly type: "__proto__" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ value: "initial" }),
+			states: {
+				open: {
+					on: {
+						["__proto__"]: {
+							target: "closed",
+							reduce: ({ context }) => ({
+								context: { ...context, value: "transitioned" },
+							}),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				{ type: "__proto__" },
+			).to,
+		).toBe("closed");
+
+		const machine = new DomainStateMachine(definition);
+		const result = machine.dispatch({ type: "__proto__" });
+
+		expect(result.to).toBe("closed");
+		expect(result.snapshot.context.value).toBe("transitioned");
+	});
+
+	it("preserves own __proto__ state keys through wrapper definition copies", () => {
+		const definition: DomainMachineDefinition<
+			"__proto__" | "closed",
+			{ readonly value: string },
+			{ readonly type: "Close" }
+		> = {
+			initial: "__proto__",
+			initialContext: () => ({ value: "initial" }),
+			states: {
+				["__proto__"]: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: ({ context }) => ({
+								context: { ...context, value: "transitioned" },
+							}),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		const machine = new DomainStateMachine(definition);
+		const result = machine.dispatch({ type: "Close" });
+
+		expect(result.from).toBe("__proto__");
+		expect(result.to).toBe("closed");
+		expect(result.snapshot.context.value).toBe("transitioned");
+	});
+
+	it("throws structured definition errors for malformed runtime definitions", () => {
+		const malformedDefinitions = [
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: undefined,
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: undefined },
+			},
+			{
+				initial: "open",
+				initialContext: "not-a-function",
+				states: { open: {} },
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: { on: "not-an-object" } },
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: { on: { Close: undefined } } },
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: { on: { Close: { target: undefined } } } },
+			},
+		];
+
+		for (const definition of malformedDefinitions) {
+			expect(() => {
+				new DomainStateMachine(
+					definition as unknown as DomainMachineDefinition<
+						"open",
+						Record<string, never>,
+						{ readonly type: "Close" }
+					>,
+				);
+			}).toThrow(InvalidDomainMachineDefinitionError);
 		}
 	});
 

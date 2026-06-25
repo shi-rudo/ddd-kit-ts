@@ -193,9 +193,13 @@ export function transitionDomainState<
 		context: snapshot.context,
 		event,
 	});
+	const nextContext =
+		result !== undefined && hasOwn(result, "context")
+			? (result as { readonly context: TContext }).context
+			: snapshot.context;
 	const nextSnapshot = createDomainMachineSnapshot({
 		state: transition.target,
-		context: result?.context ?? snapshot.context,
+		context: nextContext,
 	});
 
 	return {
@@ -297,13 +301,13 @@ function copyDomainMachineDefinition<
 >(
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 ): DomainMachineDefinition<TState, TContext, TEvent, TOutput> {
-	const copiedStates = {} as {
+	const copiedStates = Object.create(null) as {
 		[TName in TState]: DomainStateNode<TState, TContext, TEvent, TOutput>;
 	};
 
 	for (const state of Object.keys(definition.states) as TState[]) {
 		const node = definition.states[state];
-		const copiedTransitions = {} as {
+		const copiedTransitions = Object.create(null) as {
 			[TType in TEvent["type"]]?: DomainTransition<
 				TState,
 				TContext,
@@ -315,20 +319,24 @@ function copyDomainMachineDefinition<
 		for (const eventType of Object.keys(node.on ?? {}) as TEvent["type"][]) {
 			const transition = node.on?.[eventType];
 			if (transition) {
-				copiedTransitions[eventType] = Object.freeze({ ...transition }) as
-					| DomainTransition<
-							TState,
-							TContext,
-							Extract<TEvent, { readonly type: typeof eventType }>,
-							TOutput
-					  >
-					| undefined;
+				Object.defineProperty(copiedTransitions, eventType, {
+					value: Object.freeze({ ...transition }) as DomainTransition<
+						TState,
+						TContext,
+						Extract<TEvent, { readonly type: typeof eventType }>,
+						TOutput
+					>,
+					enumerable: true,
+				});
 			}
 		}
 
-		copiedStates[state] = Object.freeze({
-			terminal: node.terminal,
-			on: Object.freeze(copiedTransitions),
+		Object.defineProperty(copiedStates, state, {
+			value: Object.freeze({
+				terminal: node.terminal,
+				on: Object.freeze(copiedTransitions),
+			}),
+			enumerable: true,
 		});
 	}
 
@@ -365,22 +373,75 @@ function validateDomainMachineDefinition<
 >(
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 ): void {
-	if (!hasOwn(definition.states, definition.initial)) {
+	const candidate = definition as unknown;
+	if (!isRecord(candidate)) {
 		throw new InvalidDomainMachineDefinitionError(
-			`Initial domain machine state "${definition.initial}" is not defined.`,
+			"Domain machine definition must be an object.",
 		);
 	}
 
-	const states = definition.states;
-	for (const state of Object.keys(states) as TState[]) {
-		const transitions = (states[state].on ?? {}) as Partial<
-			Record<string, DomainTransition<TState, TContext, TEvent, TOutput>>
-		>;
-		for (const eventType of Object.keys(transitions)) {
-			const transition = transitions[eventType];
-			if (transition && !hasOwn(states, transition.target)) {
+	const initial = candidate.initial;
+	if (typeof initial !== "string") {
+		throw new InvalidDomainMachineDefinitionError(
+			"Domain machine initial state must be a string.",
+		);
+	}
+
+	if (typeof candidate.initialContext !== "function") {
+		throw new InvalidDomainMachineDefinitionError(
+			"Domain machine initialContext must be a function.",
+		);
+	}
+
+	const statesCandidate = candidate.states;
+	if (!isRecord(statesCandidate)) {
+		throw new InvalidDomainMachineDefinitionError(
+			"Domain machine states must be an object.",
+		);
+	}
+	const states: Record<PropertyKey, unknown> = statesCandidate;
+
+	if (!hasOwn(states, initial)) {
+		throw new InvalidDomainMachineDefinitionError(
+			`Initial domain machine state "${initial}" is not defined.`,
+		);
+	}
+
+	for (const state of Object.keys(states)) {
+		const node: unknown = states[state];
+		if (!isRecord(node)) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine state "${state}" must be an object.`,
+			);
+		}
+
+		const transitions: unknown = node.on;
+		if (transitions !== undefined && !isRecord(transitions)) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine state "${state}" transitions must be an object.`,
+			);
+		}
+
+		for (const eventType of Object.keys(transitions ?? {})) {
+			const transition: unknown = (transitions as Record<PropertyKey, unknown>)[
+				eventType
+			];
+			if (!isRecord(transition)) {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" targets unknown state "${transition.target}".`,
+					`Domain transition from "${state}" on "${eventType}" must be an object.`,
+				);
+			}
+
+			const target: unknown = transition.target;
+			if (typeof target !== "string") {
+				throw new InvalidDomainMachineDefinitionError(
+					`Domain transition from "${state}" on "${eventType}" must target a string state.`,
+				);
+			}
+
+			if (!hasOwn(states, target)) {
+				throw new InvalidDomainMachineDefinitionError(
+					`Domain transition from "${state}" on "${eventType}" targets unknown state "${target}".`,
 				);
 			}
 		}
@@ -401,6 +462,10 @@ function validateDomainMachineSnapshot<
 			`Domain machine snapshot state "${snapshot.state}" is not defined.`,
 		);
 	}
+}
+
+function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): key is keyof T {
