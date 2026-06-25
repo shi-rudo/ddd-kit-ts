@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-25
+
+The domain-state-machine release. This minor adds a small, framework-free
+`DomainStateMachine` building block for finite, named domain states with typed
+context. It is meant for aggregate lifecycles, process managers, and
+long-running business workflows where the allowed transitions should be explicit
+without turning the kit into a workflow engine.
+
+### Added: `DomainStateMachine`
+
+New root export:
+
+- `DomainStateMachine`
+- `DomainMachineDefinition`
+- `DomainMachineSnapshot`
+- `DomainMachineEvent`
+- `DomainStateNode`
+- `DomainTransition`
+- `DomainTransitionResult`
+- `DomainTransitionOutcome`
+- `createInitialDomainMachineSnapshot`
+- `canTransitionDomainState`
+- `transitionDomainState`
+
+The machine supports synchronous guards, synchronous reducers, terminal states,
+typed transition outputs, validated reconstitution snapshots, and a pure
+transition function for aggregate methods that want to decide first and commit
+afterward. Transition callbacks are typed by the specific event selected by the
+`on` key, so `PaymentReceived` guards/reducers see the `PaymentReceived` event
+shape rather than the full event union.
+
+The stateful wrapper defensively copies its definition at construction time, so
+mutating the caller's definition object later cannot alter machine behavior.
+Snapshots and output arrays returned by the API are shallow-frozen copies, and
+constructor snapshots are copied before being stored. The context object remains
+application-owned by design: model it immutably, use value objects where deep
+immutability matters, and keep aggregate methods as the public domain language
+instead of exposing generic `dispatch(...)` calls to application code.
+
+Domain-rule failures throw `DomainError` subclasses:
+
+- `InvalidDomainTransitionError`
+- `DomainTransitionGuardRejectedError`
+
+Definition and reconstitution failures throw structured `BaseError` subclasses:
+
+- `InvalidDomainMachineDefinitionError`
+- `InvalidDomainMachineSnapshotError`
+
+### Documentation and release hygiene
+
+- Added the Domain State Machine guide and sidebar entry.
+- Enabled Biome's VCS ignore-file integration so generated `dist` and
+  VitePress output stay out of `pnpm run lint`.
+- Quoted YAML frontmatter strings in the docs home page that contained `:`
+  characters, so the docs build parses consistently.
+- Ignored known TypeDoc-generated guide-relative dead links in VitePress' API
+  media output; the canonical guide links remain intact.
+
 ## [2.0.0] - 2026-06-23
 
 The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The major also irons out two long-standing footguns while the door is open: the swap-prone positional error constructors move to options objects, and the redundant `createDomainEventWithMetadata` is removed. Two additive features round it out: a generic `Result<T, E>` error channel for the buses (default `string`), and a transport-neutral `@shirudo/ddd-kit/presentation` entry. The retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.

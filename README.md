@@ -2,7 +2,7 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
-> **Stable: 1.0**
+> **Stable: 2.1**
 >
 > The public API is stable and follows [Semantic Versioning](https://semver.org/). Breaking changes bump the major and ship with a migration path in the [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md).
 
