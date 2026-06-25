@@ -4,7 +4,9 @@ import { DomainError } from "../core/errors";
 import {
 	DomainStateMachine,
 	InvalidDomainMachineDefinitionError,
+	InvalidDomainMachineEventError,
 	InvalidDomainMachineSnapshotError,
+	InvalidDomainTransitionResultError,
 	InvalidDomainTransitionError,
 	DomainTransitionGuardRejectedError,
 	canTransitionDomainState,
@@ -172,6 +174,40 @@ describe("DomainStateMachine", () => {
 					context: { orderId: "order-1", totalCents: 1000 },
 				}),
 		).toThrow(InvalidDomainMachineSnapshotError);
+	});
+
+	it("throws structured errors for malformed runtime snapshots", () => {
+		const definition = checkoutDefinition();
+		const malformedSnapshots = [
+			null,
+			undefined,
+			{},
+			{ state: "awaiting-payment" },
+			{ state: 123, context: { orderId: "order-1", totalCents: 1000 } },
+		];
+
+		for (const snapshot of malformedSnapshots) {
+			expect(() =>
+				transitionDomainState(
+					definition,
+					snapshot as unknown as DomainMachineSnapshot<
+						CheckoutState,
+						CheckoutContext
+					>,
+					{ type: "PaymentReceived" },
+				),
+			).toThrow(InvalidDomainMachineSnapshotError);
+			expect(
+				() =>
+					new DomainStateMachine(
+						definition,
+						snapshot as unknown as DomainMachineSnapshot<
+							CheckoutState,
+							CheckoutContext
+						>,
+					),
+			).toThrow(InvalidDomainMachineSnapshotError);
+		}
 	});
 
 	it("rejects definitions with missing initial states or unknown targets", () => {
@@ -350,7 +386,9 @@ describe("DomainStateMachine", () => {
 			const event = { type } as CheckoutEvent;
 
 			expect(machine.can(event)).toBe(false);
-			expect(() => machine.dispatch(event)).toThrow(InvalidDomainTransitionError);
+			expect(() => machine.dispatch(event)).toThrow(
+				InvalidDomainTransitionError,
+			);
 			expect(machine.state).toBe("awaiting-payment");
 		}
 	});
@@ -456,6 +494,23 @@ describe("DomainStateMachine", () => {
 				initialContext: () => ({}),
 				states: { open: { on: { Close: { target: undefined } } } },
 			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: { terminal: "true" } },
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: { open: { on: { Close: { target: "open", guard: "yes" } } } },
+			},
+			{
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: { on: { Close: { target: "open", reduce: "yes" } } },
+				},
+			},
 		];
 
 		for (const definition of malformedDefinitions) {
@@ -468,6 +523,61 @@ describe("DomainStateMachine", () => {
 					>,
 				);
 			}).toThrow(InvalidDomainMachineDefinitionError);
+		}
+	});
+
+	it("returns false or throws structured errors for malformed runtime events", () => {
+		const machine = new DomainStateMachine(checkoutDefinition());
+		const malformedEvents = [null, undefined, {}, { type: 123 }];
+
+		for (const event of malformedEvents) {
+			expect(machine.can(event as unknown as CheckoutEvent)).toBe(false);
+			expect(() => machine.dispatch(event as unknown as CheckoutEvent)).toThrow(
+				InvalidDomainMachineEventError,
+			);
+		}
+	});
+
+	it("throws structured errors for malformed reducer results", () => {
+		const malformedResults = [
+			null,
+			"invalid",
+			{ outputs: "not-an-array" },
+			{ outputs: 123 },
+		];
+
+		for (const malformedResult of malformedResults) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				Record<string, never>,
+				{ readonly type: "Close" },
+				{ readonly type: "Closed" }
+			> = {
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: {
+						on: {
+							Close: {
+								target: "closed",
+								reduce: () =>
+									malformedResult as unknown as {
+										readonly outputs?: readonly { readonly type: "Closed" }[];
+									},
+							},
+						},
+					},
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() =>
+				transitionDomainState(
+					definition,
+					createInitialDomainMachineSnapshot(definition),
+					{ type: "Close" },
+				),
+			).toThrow(InvalidDomainTransitionResultError);
 		}
 	});
 
@@ -608,15 +718,21 @@ describe("DomainStateMachine", () => {
 		);
 		const badDefinition = new InvalidDomainMachineDefinitionError("bad");
 		const badSnapshot = new InvalidDomainMachineSnapshotError("bad");
+		const badEvent = new InvalidDomainMachineEventError("bad");
+		const badResult = new InvalidDomainTransitionResultError("bad");
 
 		expect(invalid).toBeInstanceOf(DomainError);
 		expect(rejected).toBeInstanceOf(DomainError);
 		expect(badDefinition).not.toBeInstanceOf(DomainError);
 		expect(badSnapshot).not.toBeInstanceOf(DomainError);
+		expect(badEvent).not.toBeInstanceOf(DomainError);
+		expect(badResult).not.toBeInstanceOf(DomainError);
 		expect(isBaseError(invalid)).toBe(true);
 		expect(isBaseError(rejected)).toBe(true);
 		expect(isBaseError(badDefinition)).toBe(true);
 		expect(isBaseError(badSnapshot)).toBe(true);
+		expect(isBaseError(badEvent)).toBe(true);
+		expect(isBaseError(badResult)).toBe(true);
 	});
 
 	it("types transition callbacks to the event selected by the on-key", () => {

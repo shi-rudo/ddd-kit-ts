@@ -110,6 +110,18 @@ export class InvalidDomainMachineSnapshotError extends BaseError<"InvalidDomainM
 	}
 }
 
+export class InvalidDomainMachineEventError extends BaseError<"InvalidDomainMachineEventError"> {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, { name: "InvalidDomainMachineEventError" });
+	}
+}
+
+export class InvalidDomainTransitionResultError extends BaseError<"InvalidDomainTransitionResultError"> {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, { name: "InvalidDomainTransitionResultError" });
+	}
+}
+
 export function createInitialDomainMachineSnapshot<
 	TState extends string,
 	TContext,
@@ -137,6 +149,7 @@ export function canTransitionDomainState<
 ): boolean {
 	validateDomainMachineDefinition(definition);
 	validateDomainMachineSnapshot(definition, snapshot);
+	if (!isDomainMachineEvent(event)) return false;
 
 	const stateNode = definition.states[snapshot.state];
 	if (stateNode.terminal === true) return false;
@@ -165,6 +178,7 @@ export function transitionDomainState<
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
 	validateDomainMachineDefinition(definition);
 	validateDomainMachineSnapshot(definition, snapshot);
+	validateDomainMachineEvent(event);
 
 	const from = snapshot.state;
 	const stateNode = definition.states[from];
@@ -193,6 +207,7 @@ export function transitionDomainState<
 		context: snapshot.context,
 		event,
 	});
+	validateDomainTransitionResult(result);
 	const nextContext =
 		result !== undefined && hasOwn(result, "context")
 			? (result as { readonly context: TContext }).context
@@ -226,20 +241,22 @@ export class DomainStateMachine<
 	#snapshot: DomainMachineSnapshot<TState, TContext>;
 
 	constructor(
-		definition: DomainMachineDefinition<
-			TState,
-			TContext,
-			TEvent,
-			TOutput
-		>,
-		snapshot?: DomainMachineSnapshot<TState, TContext>,
+		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+		...snapshotInput: [] | [DomainMachineSnapshot<TState, TContext> | undefined]
 	) {
 		validateDomainMachineDefinition(definition);
 		this.definition = copyDomainMachineDefinition(definition);
-		this.#snapshot =
-			snapshot !== undefined
-				? createDomainMachineSnapshot(snapshot)
-				: createInitialDomainMachineSnapshot(this.definition);
+		if (snapshotInput.length === 1) {
+			const [snapshot] = snapshotInput;
+			const suppliedSnapshot = snapshot as DomainMachineSnapshot<
+				TState,
+				TContext
+			>;
+			validateDomainMachineSnapshot(this.definition, suppliedSnapshot);
+			this.#snapshot = createDomainMachineSnapshot(suppliedSnapshot);
+		} else {
+			this.#snapshot = createInitialDomainMachineSnapshot(this.definition);
+		}
 		validateDomainMachineSnapshot(this.definition, this.#snapshot);
 	}
 
@@ -415,6 +432,13 @@ function validateDomainMachineDefinition<
 			);
 		}
 
+		const terminal: unknown = node.terminal;
+		if (terminal !== undefined && typeof terminal !== "boolean") {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine state "${state}" terminal flag must be a boolean.`,
+			);
+		}
+
 		const transitions: unknown = node.on;
 		if (transitions !== undefined && !isRecord(transitions)) {
 			throw new InvalidDomainMachineDefinitionError(
@@ -444,6 +468,20 @@ function validateDomainMachineDefinition<
 					`Domain transition from "${state}" on "${eventType}" targets unknown state "${target}".`,
 				);
 			}
+
+			const guard: unknown = transition.guard;
+			if (guard !== undefined && typeof guard !== "function") {
+				throw new InvalidDomainMachineDefinitionError(
+					`Domain transition from "${state}" on "${eventType}" guard must be a function.`,
+				);
+			}
+
+			const reduce: unknown = transition.reduce;
+			if (reduce !== undefined && typeof reduce !== "function") {
+				throw new InvalidDomainMachineDefinitionError(
+					`Domain transition from "${state}" on "${eventType}" reduce must be a function.`,
+				);
+			}
 		}
 	}
 }
@@ -457,9 +495,63 @@ function validateDomainMachineSnapshot<
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): void {
+	if (!isRecord(snapshot)) {
+		throw new InvalidDomainMachineSnapshotError(
+			"Domain machine snapshot must be an object.",
+		);
+	}
+
+	if (typeof snapshot.state !== "string") {
+		throw new InvalidDomainMachineSnapshotError(
+			"Domain machine snapshot state must be a string.",
+		);
+	}
+
+	if (!hasOwn(snapshot, "context")) {
+		throw new InvalidDomainMachineSnapshotError(
+			"Domain machine snapshot context must be present.",
+		);
+	}
+
 	if (!hasOwn(definition.states, snapshot.state)) {
 		throw new InvalidDomainMachineSnapshotError(
 			`Domain machine snapshot state "${snapshot.state}" is not defined.`,
+		);
+	}
+}
+
+function validateDomainMachineEvent(
+	event: unknown,
+): asserts event is DomainMachineEvent {
+	if (!isDomainMachineEvent(event)) {
+		throw new InvalidDomainMachineEventError(
+			"Domain machine event must be an object with a string type.",
+		);
+	}
+}
+
+function isDomainMachineEvent(event: unknown): event is DomainMachineEvent {
+	return isRecord(event) && typeof event.type === "string";
+}
+
+function validateDomainTransitionResult<TContext, TOutput>(
+	result: DomainTransitionResult<TContext, TOutput> | undefined,
+): void {
+	if (result === undefined) return;
+
+	if (!isRecord(result)) {
+		throw new InvalidDomainTransitionResultError(
+			"Domain transition result must be an object when returned.",
+		);
+	}
+
+	if (
+		hasOwn(result, "outputs") &&
+		result.outputs !== undefined &&
+		!Array.isArray(result.outputs)
+	) {
+		throw new InvalidDomainTransitionResultError(
+			"Domain transition result outputs must be an array when provided.",
 		);
 	}
 }
