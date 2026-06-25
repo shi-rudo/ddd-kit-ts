@@ -349,7 +349,10 @@ function getTransition<
 	state: TState,
 	event: TEvent,
 ): DomainTransition<TState, TContext, TEvent, TOutput> | undefined {
-	return definition.states[state].on?.[event.type as TEvent["type"]] as
+	const transitions = definition.states[state].on;
+	if (!transitions || !hasOwn(transitions, event.type)) return undefined;
+
+	return transitions[event.type as TEvent["type"]] as
 		| DomainTransition<TState, TContext, TEvent, TOutput>
 		| undefined;
 }

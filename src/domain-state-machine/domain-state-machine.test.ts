@@ -300,6 +300,18 @@ describe("DomainStateMachine", () => {
 		).toThrow(InvalidDomainTransitionError);
 	});
 
+	it("rejects runtime event names inherited from Object.prototype", () => {
+		const machine = new DomainStateMachine(checkoutDefinition());
+
+		for (const type of ["toString", "constructor", "__proto__"]) {
+			const event = { type } as CheckoutEvent;
+
+			expect(machine.can(event)).toBe(false);
+			expect(() => machine.dispatch(event)).toThrow(InvalidDomainTransitionError);
+			expect(machine.state).toBe("awaiting-payment");
+		}
+	});
+
 	it("mutates only the wrapper's current snapshot", () => {
 		const machine = new DomainStateMachine(checkoutDefinition());
 
