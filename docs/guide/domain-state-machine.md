@@ -147,15 +147,57 @@ This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:
 
 ```ts
-cancel(reason: string): void {
-  const result = transitionDomainState(checkoutLifecycle, this.state, {
+import {
+  AggregateRoot,
+  type DomainMachineSnapshot,
+} from "@shirudo/ddd-kit";
+
+type CheckoutSagaState = DomainMachineSnapshot<
+  CheckoutState,
+  CheckoutContext
+>;
+
+class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
+  protected readonly aggregateType = "CheckoutSaga";
+
+  cancel(reason: string): readonly CheckoutOutput[] {
+    const result = transitionDomainState(checkoutLifecycle, this.state, {
+      type: "Cancel",
+      reason,
+    });
+
+    this.commit(result.snapshot);
+
+    return result.outputs;
+  }
+}
+```
+
+That example stores the whole machine snapshot as aggregate state. If your
+aggregate state has additional fields, nest the snapshot under a property and
+replace that property when committing:
+
+```ts
+cancel(reason: string): readonly CheckoutOutput[] {
+  const result = transitionDomainState(checkoutLifecycle, this.state.lifecycle, {
     type: "Cancel",
     reason,
   });
 
-  this.commit(result.snapshot.context);
+  this.commit({
+    ...this.state,
+    lifecycle: result.snapshot,
+  });
+
+  return result.outputs;
 }
 ```
+
+The returned `outputs` are plain values. A process manager can translate them
+to commands in the application layer, or an aggregate can translate selected
+outputs into domain events before calling `commit(...)`. Keep that mapping
+explicit; the machine does not publish, persist, retry, or dispatch anything by
+itself.
 
 ## Error semantics
 
