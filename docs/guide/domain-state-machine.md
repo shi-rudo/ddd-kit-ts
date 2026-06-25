@@ -193,11 +193,20 @@ cancel(reason: string): readonly CheckoutOutput[] {
 }
 ```
 
-The returned `outputs` are plain values. A process manager can translate them
-to commands in the application layer, or an aggregate can translate selected
-outputs into domain events before calling `commit(...)`. Keep that mapping
-explicit; the machine does not publish, persist, retry, or dispatch anything by
-itself.
+The returned `outputs` are plain values, not emitted domain events and not
+EventBus messages. A process manager can translate them to commands in the
+application layer. If an aggregate wants to publish a domain event, keep using
+the aggregate path:
+
+```ts
+this.commit(
+  result.snapshot,
+  this.recordEvent("CheckoutCancelled", { orderId: this.id, reason }),
+);
+```
+
+Keep that mapping explicit; the machine does not publish, persist, retry,
+record, or dispatch anything by itself.
 
 ## Error semantics
 
