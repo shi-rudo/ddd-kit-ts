@@ -120,11 +120,11 @@ machine's behavior. Machine contexts are copied into snapshots and deep-frozen
 so callers cannot mutate lifecycle data outside a transition. Snapshots and
 outputs returned by the API are copied and deep-frozen.
 
-Machine context is data, not behavior. Use cloneable domain data such as
-primitives, arrays, objects, `Date`, `RegExp`, `Map`, and `Set`. Do not put
-accessor properties, functions, promises, weak collections, external resources,
-or binary buffers in context; those values cannot be made reliably immutable and
-are rejected.
+Machine context, events, and outputs are data, not behavior. Use cloneable
+domain data such as primitives, arrays, objects, `Date`, `RegExp`, `Map`, and
+`Set`. Do not put accessor properties, functions, promises, weak collections,
+external resources, or binary buffers in those values; they cannot be made
+reliably immutable and are rejected.
 
 ## Allow and forbid transitions
 
@@ -205,9 +205,9 @@ transitioned.outputs; // [{ type: "CancelOrder", ... }]
 ```
 
 `transitionDomainState(...)` and `canTransitionDomainState(...)` defensively copy
-and freeze the input snapshot before running guards or reducers. A buggy callback
-cannot mutate the caller-owned snapshot; if it writes to `context`, the frozen
-copy fails loudly.
+and freeze the input snapshot and event before running guards or reducers. A
+buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
+`event`, the frozen copy fails loudly.
 
 This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:

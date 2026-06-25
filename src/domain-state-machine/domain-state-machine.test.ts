@@ -827,6 +827,90 @@ describe("DomainStateMachine", () => {
 		expect(snapshot.context.audit).toEqual([]);
 	});
 
+	it("does not let pure transition guards mutate caller-owned event data", () => {
+		type EventWithPayload = {
+			readonly type: "Check";
+			readonly payload: { readonly allowed: boolean };
+		};
+		const event: EventWithPayload = {
+			type: "Check",
+			payload: { allowed: false },
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			EventWithPayload
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Check: {
+							target: "closed",
+							guard: ({ event }) => {
+								(event.payload as { allowed: boolean }).allowed = true;
+								return true;
+							},
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			canTransitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				event,
+			),
+		).toThrow(TypeError);
+		expect(event.payload.allowed).toBe(false);
+	});
+
+	it("does not let pure transition reducers mutate caller-owned event data", () => {
+		type EventWithPayload = {
+			readonly type: "Close";
+			readonly payload: { readonly audit: readonly string[] };
+		};
+		const event: EventWithPayload = {
+			type: "Close",
+			payload: { audit: [] },
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			EventWithPayload
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: ({ event }) => {
+								(event.payload.audit as string[]).push("mutated");
+								return undefined;
+							},
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				event,
+			),
+		).toThrow(TypeError);
+		expect(event.payload.audit).toEqual([]);
+	});
+
 	it("preserves and freezes complex context graphs across snapshots", () => {
 		const symbolKey = Symbol("context");
 		type SharedValue = { value: string };
@@ -959,6 +1043,38 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects event values that cannot be made deeply immutable", () => {
+		const invalidEvents = [
+			{ type: "Close", callback: () => "not data" },
+			{ type: "Close", bytes: new Uint8Array([1, 2, 3]) },
+			{ type: "Close", deferred: Promise.resolve("later") },
+			{ type: "Close", weak: new WeakMap<object, string>() },
+		];
+
+		for (const event of invalidEvents) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				Record<string, never>,
+				typeof event
+			> = {
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: { on: { Close: { target: "closed" } } },
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() =>
+				transitionDomainState(
+					definition,
+					createInitialDomainMachineSnapshot(definition),
+					event,
+				),
+			).toThrow(InvalidDomainMachineEventError);
+		}
+	});
+
 	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
 		const definition = checkoutDefinition();
 		const machine = new DomainStateMachine(definition);
@@ -1064,6 +1180,46 @@ describe("DomainStateMachine", () => {
 		expect(() => {
 			(copiedOutput.data as { value: string }).value = "mutated";
 		}).toThrow(TypeError);
+	});
+
+	it("rejects transition output values that cannot be made deeply immutable", () => {
+		const invalidOutputs = [
+			{ callback: () => "not data" },
+			{ bytes: new Uint8Array([1, 2, 3]) },
+			{ deferred: Promise.resolve("later") },
+			{ weak: new WeakSet<object>() },
+		];
+
+		for (const output of invalidOutputs) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				Record<string, never>,
+				{ readonly type: "Close" },
+				typeof output
+			> = {
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: {
+						on: {
+							Close: {
+								target: "closed",
+								reduce: () => ({ outputs: [output] }),
+							},
+						},
+					},
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() =>
+				transitionDomainState(
+					definition,
+					createInitialDomainMachineSnapshot(definition),
+					{ type: "Close" },
+				),
+			).toThrow(InvalidDomainTransitionResultError);
+		}
 	});
 
 	it("uses BaseError/DomainError hierarchy consistently", () => {

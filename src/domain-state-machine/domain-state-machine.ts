@@ -159,18 +159,23 @@ export function canTransitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
+	const currentEvent = copyDomainMachineEvent(event);
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
 	const stateNode = definition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(definition, currentSnapshot.state, event);
+	const transition = getTransition(
+		definition,
+		currentSnapshot.state,
+		currentEvent,
+	);
 	if (!transition) return false;
 
 	return (
 		transition.guard?.({
 			state: currentSnapshot.state,
 			context: currentSnapshot.context,
-			event,
+			event: currentEvent,
 		}) ?? true
 	);
 }
@@ -189,33 +194,34 @@ export function transitionDomainState<
 	validateDomainMachineSnapshot(definition, snapshot);
 	validateDomainMachineEvent(event);
 
+	const currentEvent = copyDomainMachineEvent(event);
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
 	const from = currentSnapshot.state;
 	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
 			? undefined
-			: getTransition(definition, from, event);
+			: getTransition(definition, from, currentEvent);
 
 	if (!transition) {
-		throw new InvalidDomainTransitionError(from, event.type);
+		throw new InvalidDomainTransitionError(from, currentEvent.type);
 	}
 
 	const allowed =
 		transition.guard?.({
 			state: from,
 			context: currentSnapshot.context,
-			event,
+			event: currentEvent,
 		}) ?? true;
 
 	if (!allowed) {
-		throw new DomainTransitionGuardRejectedError(from, event.type);
+		throw new DomainTransitionGuardRejectedError(from, currentEvent.type);
 	}
 
 	const result = transition.reduce?.({
 		state: from,
 		context: currentSnapshot.context,
-		event,
+		event: currentEvent,
 	});
 	validateDomainTransitionResult(result);
 	const nextContext =
@@ -342,6 +348,24 @@ function copyDomainMachineOutputs<TOutput>(
 	}
 }
 
+function copyDomainMachineEvent<TEvent extends DomainMachineEvent>(
+	event: TEvent,
+): TEvent {
+	try {
+		return deepFreeze(
+			cloneDomainMachineDataValue(event, createDomainMachineEventError),
+		) as TEvent;
+	} catch (cause) {
+		if (cause instanceof InvalidDomainMachineEventError) {
+			throw cause;
+		}
+		throw new InvalidDomainMachineEventError(
+			"Domain machine event must contain cloneable, deeply immutable data.",
+			cause,
+		);
+	}
+}
+
 function copyDomainMachineContext<TContext>(context: TContext): TContext {
 	try {
 		return deepFreeze(
@@ -365,6 +389,13 @@ function createDomainMachineContextError(
 	return new InvalidDomainMachineContextError(message, cause);
 }
 
+function createDomainMachineEventError(
+	message: string,
+	cause?: unknown,
+): InvalidDomainMachineEventError {
+	return new InvalidDomainMachineEventError(message, cause);
+}
+
 function createDomainTransitionOutputError(
 	message: string,
 	cause?: unknown,
@@ -377,7 +408,10 @@ function cloneDomainMachineDataValue<TValue>(
 	errorFactory: (
 		message: string,
 		cause?: unknown,
-	) => InvalidDomainMachineContextError | InvalidDomainTransitionResultError,
+	) =>
+		| InvalidDomainMachineContextError
+		| InvalidDomainMachineEventError
+		| InvalidDomainTransitionResultError,
 	seen = new WeakMap<object, unknown>(),
 ): TValue {
 	if (typeof value === "function") {
@@ -695,7 +729,14 @@ function validateDomainMachineEvent(
 }
 
 function isDomainMachineEvent(event: unknown): event is DomainMachineEvent {
-	return isRecord(event) && typeof event.type === "string";
+	if (!isRecord(event)) return false;
+
+	const typeDescriptor = Object.getOwnPropertyDescriptor(event, "type");
+	return (
+		typeDescriptor !== undefined &&
+		"value" in typeDescriptor &&
+		typeof typeDescriptor.value === "string"
+	);
 }
 
 function validateDomainTransitionResult<TContext, TOutput>(
