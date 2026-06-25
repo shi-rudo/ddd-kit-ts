@@ -66,6 +66,7 @@ describe("isBuiltInObject", () => {
 		it("user class named after a built-in is NOT a built-in", () => {
 			// Naming a class 'Date' must not collide with the real Date;
 			// the tag-based detection is constructor-name agnostic.
+			// biome-ignore lint/suspicious/noShadowRestrictedNames: this fixture intentionally shadows Date.
 			class Date {
 				constructor(public iso: string) {}
 			}

@@ -1,0 +1,177 @@
+# Domain State Machine
+
+`DomainStateMachine` models finite, named domain states with typed context.
+It is useful when an aggregate, process manager, or long-running business
+workflow has an explicit lifecycle and the allowed transitions should be
+visible in one place.
+
+It is deliberately small:
+
+- no nested or parallel states
+- no async guards or reducers
+- no timers, retries, persistence, or bus integration
+- no replacement for aggregate methods or domain events
+
+Keep the public domain API in the ubiquitous language. For example, expose
+`saga.advanceToShipping()` and let that method use a machine internally; do
+not force application code to speak in generic `dispatch(...)` calls.
+
+## Define a lifecycle
+
+```ts
+import {
+  DomainStateMachine,
+  type DomainMachineDefinition,
+} from "@shirudo/ddd-kit";
+
+type CheckoutState =
+  | "awaiting-payment"
+  | "awaiting-shipping"
+  | "completed"
+  | "cancelled";
+
+type CheckoutContext = {
+  orderId: string;
+  paymentId?: string;
+  shipmentId?: string;
+};
+
+type CheckoutEvent =
+  | { type: "PaymentRequested"; paymentId: string }
+  | { type: "PaymentReceived" }
+  | { type: "ShippingCompleted" }
+  | { type: "Cancel"; reason: string };
+
+type CheckoutOutput =
+  | { type: "RequestShipping"; orderId: string }
+  | { type: "ConfirmOrder"; orderId: string }
+  | { type: "CancelOrder"; orderId: string; reason: string };
+
+const checkoutLifecycle: DomainMachineDefinition<
+  CheckoutState,
+  CheckoutContext,
+  CheckoutEvent,
+  CheckoutOutput
+> = {
+  initial: "awaiting-payment",
+  initialContext: () => ({ orderId: "order-1" }),
+  states: {
+    "awaiting-payment": {
+      on: {
+        PaymentRequested: {
+          target: "awaiting-payment",
+          reduce: ({ context, event }) => ({
+            context: { ...context, paymentId: event.paymentId },
+          }),
+        },
+        PaymentReceived: {
+          target: "awaiting-shipping",
+          guard: ({ context }) => context.paymentId !== undefined,
+          reduce: ({ context }) => ({
+            outputs: [{ type: "RequestShipping", orderId: context.orderId }],
+          }),
+        },
+        Cancel: {
+          target: "cancelled",
+          reduce: ({ context, event }) => ({
+            outputs: [
+              {
+                type: "CancelOrder",
+                orderId: context.orderId,
+                reason: event.reason,
+              },
+            ],
+          }),
+        },
+      },
+    },
+    "awaiting-shipping": {
+      on: {
+        ShippingCompleted: {
+          target: "completed",
+          reduce: ({ context }) => ({
+            outputs: [{ type: "ConfirmOrder", orderId: context.orderId }],
+          }),
+        },
+        Cancel: { target: "cancelled" },
+      },
+    },
+    completed: { terminal: true },
+    cancelled: { terminal: true },
+  },
+};
+
+const machine = new DomainStateMachine(checkoutLifecycle);
+const result = machine.dispatch({
+  type: "PaymentRequested",
+  paymentId: "payment-1",
+});
+
+result.snapshot.state; // "awaiting-payment"
+result.snapshot.context.paymentId; // "payment-1"
+```
+
+`initialContext` is a factory, not a shared object. Each fresh machine gets
+its own context reference.
+
+## Pure transitions
+
+The stateful wrapper is convenience. The core operation is pure:
+
+```ts
+import {
+  createInitialDomainMachineSnapshot,
+  transitionDomainState,
+} from "@shirudo/ddd-kit";
+
+const snapshot = createInitialDomainMachineSnapshot(checkoutLifecycle);
+
+const transitioned = transitionDomainState(checkoutLifecycle, snapshot, {
+  type: "Cancel",
+  reason: "payment-failed",
+});
+
+transitioned.from; // "awaiting-payment"
+transitioned.to; // "cancelled"
+transitioned.outputs; // [{ type: "CancelOrder", ... }]
+```
+
+This shape is useful inside aggregates and process managers because the domain
+method can decide with values first, then commit the new aggregate state:
+
+```ts
+cancel(reason: string): void {
+  const result = transitionDomainState(checkoutLifecycle, this.state, {
+    type: "Cancel",
+    reason,
+  });
+
+  this.commit(result.snapshot.context);
+}
+```
+
+## Error semantics
+
+Missing transitions and rejected guards are domain-rule violations:
+
+- `InvalidDomainTransitionError extends DomainError`
+- `DomainTransitionGuardRejectedError extends DomainError`
+
+Broken machine definitions and invalid snapshots are programmer or
+reconstitution failures:
+
+- `InvalidDomainMachineDefinitionError extends BaseError`
+- `InvalidDomainMachineSnapshotError extends BaseError`
+
+This matches the rest of the kit: domain operations throw `DomainError`, while
+invalid wiring fails loudly as a structured `BaseError`.
+
+## State vs context
+
+The machine has finite control states (`TState extends string`) and arbitrary
+typed context. That makes it closer to an extended finite state machine than a
+mathematical FSM, but the public API keeps the DDD-facing name:
+`DomainStateMachine`.
+
+Use it when lifecycle transitions are a real domain concept. For a simple
+two-state aggregate method, a direct `if` guard is usually clearer.

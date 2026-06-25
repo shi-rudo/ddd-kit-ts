@@ -14,6 +14,7 @@ export * from "./app/unit-of-work";
 export * from "./app/query-bus";
 export * from "./core/errors";
 export * from "./core/id";
+export * from "./domain-state-machine/domain-state-machine";
 // Entities
 export * from "./entity/entity";
 export * from "./events/event-bus";
