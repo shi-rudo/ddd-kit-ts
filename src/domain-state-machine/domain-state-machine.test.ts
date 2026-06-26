@@ -212,6 +212,64 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects runtime snapshot accessors without invoking them", () => {
+		const definition = checkoutDefinition();
+		const stateAccessorSnapshot: Record<PropertyKey, unknown> = {};
+		const contextAccessorSnapshot: Record<PropertyKey, unknown> = {};
+		let stateAccessorInvoked = false;
+		let contextAccessorInvoked = false;
+
+		Object.defineProperty(stateAccessorSnapshot, "state", {
+			enumerable: true,
+			get: () => {
+				stateAccessorInvoked = true;
+				throw new Error("state getter must not run");
+			},
+		});
+		Object.defineProperty(stateAccessorSnapshot, "context", {
+			enumerable: true,
+			value: { orderId: "order-1", totalCents: 1000 },
+		});
+		Object.defineProperty(contextAccessorSnapshot, "state", {
+			enumerable: true,
+			value: "awaiting-payment",
+		});
+		Object.defineProperty(contextAccessorSnapshot, "context", {
+			enumerable: true,
+			get: () => {
+				contextAccessorInvoked = true;
+				throw new Error("context getter must not run");
+			},
+		});
+
+		for (const snapshot of [stateAccessorSnapshot, contextAccessorSnapshot]) {
+			expect(() =>
+				canTransitionDomainState(
+					definition,
+					snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
+					{ type: "PaymentReceived" },
+				),
+			).toThrow(InvalidDomainMachineSnapshotError);
+			expect(() =>
+				transitionDomainState(
+					definition,
+					snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
+					{ type: "PaymentReceived" },
+				),
+			).toThrow(InvalidDomainMachineSnapshotError);
+			expect(
+				() =>
+					new DomainStateMachine(
+						definition,
+						snapshot as DomainMachineSnapshot<CheckoutState, CheckoutContext>,
+					),
+			).toThrow(InvalidDomainMachineSnapshotError);
+		}
+
+		expect(stateAccessorInvoked).toBe(false);
+		expect(contextAccessorInvoked).toBe(false);
+	});
+
 	it("rejects definitions with missing initial states or unknown targets", () => {
 		expect(
 			() =>
@@ -264,25 +322,17 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(
-			canTransitionDomainState(
-				definition,
-				snapshot,
-				{
-					type: "ShippingCompleted",
-					callback: () => "not data",
-				} as unknown as CheckoutEvent,
-			),
+			canTransitionDomainState(definition, snapshot, {
+				type: "ShippingCompleted",
+				callback: () => "not data",
+			} as unknown as CheckoutEvent),
 		).toBe(false);
 		expect(
-			canTransitionDomainState(
-				definition,
-				completed,
-				{
-					type: "Cancel",
-					reason: "too-late",
-					callback: () => "not data",
-				} as unknown as CheckoutEvent,
-			),
+			canTransitionDomainState(definition, completed, {
+				type: "Cancel",
+				reason: "too-late",
+				callback: () => "not data",
+			} as unknown as CheckoutEvent),
 		).toBe(false);
 	});
 
@@ -431,25 +481,17 @@ describe("DomainStateMachine", () => {
 		};
 
 		expect(() =>
-			transitionDomainState(
-				definition,
-				snapshot,
-				{
-					type: "ShippingCompleted",
-					callback: () => "not data",
-				} as unknown as CheckoutEvent,
-			),
+			transitionDomainState(definition, snapshot, {
+				type: "ShippingCompleted",
+				callback: () => "not data",
+			} as unknown as CheckoutEvent),
 		).toThrow(InvalidDomainTransitionError);
 		expect(() =>
-			transitionDomainState(
-				definition,
-				completed,
-				{
-					type: "Cancel",
-					reason: "too-late",
-					callback: () => "not data",
-				} as unknown as CheckoutEvent,
-			),
+			transitionDomainState(definition, completed, {
+				type: "Cancel",
+				reason: "too-late",
+				callback: () => "not data",
+			} as unknown as CheckoutEvent),
 		).toThrow(InvalidDomainTransitionError);
 	});
 
@@ -700,6 +742,53 @@ describe("DomainStateMachine", () => {
 					{ type: "Close" },
 				),
 			).toThrow(InvalidDomainTransitionResultError);
+		}
+	});
+
+	it("rejects reducer result accessors without invoking them", () => {
+		for (const accessorKey of ["context", "outputs"] as const) {
+			let accessorInvoked = false;
+			const resultWithAccessor: Record<PropertyKey, unknown> = {};
+			Object.defineProperty(resultWithAccessor, accessorKey, {
+				enumerable: true,
+				get: () => {
+					accessorInvoked = true;
+					throw new Error(`${accessorKey} getter must not run`);
+				},
+			});
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				Record<string, never>,
+				{ readonly type: "Close" },
+				{ readonly type: "Closed" }
+			> = {
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: {
+						on: {
+							Close: {
+								target: "closed",
+								reduce: () =>
+									resultWithAccessor as {
+										readonly context?: Record<string, never>;
+										readonly outputs?: readonly { readonly type: "Closed" }[];
+									},
+							},
+						},
+					},
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() =>
+				transitionDomainState(
+					definition,
+					createInitialDomainMachineSnapshot(definition),
+					{ type: "Close" },
+				),
+			).toThrow(InvalidDomainTransitionResultError);
+			expect(accessorInvoked).toBe(false);
 		}
 	});
 

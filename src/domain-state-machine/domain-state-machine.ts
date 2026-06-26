@@ -169,11 +169,7 @@ export function canTransitionDomainState<
 	const stateNode = definition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(
-		definition,
-		currentSnapshot.state,
-		event,
-	);
+	const transition = getTransition(definition, currentSnapshot.state, event);
 	if (!transition) return false;
 
 	const currentEvent = copyDomainMachineEvent(event);
@@ -236,10 +232,10 @@ export function transitionDomainState<
 		event: currentEvent,
 	});
 	validateDomainTransitionResult(result);
-	const nextContext =
-		result !== undefined && hasOwn(result, "context")
-			? (result as { readonly context: TContext }).context
-			: currentSnapshot.context;
+	const contextResult = readDomainTransitionResultContext(result);
+	const nextContext = contextResult.hasContext
+		? contextResult.context
+		: currentSnapshot.context;
 	const nextSnapshot = createDomainMachineSnapshot({
 		state: transition.target,
 		context: nextContext,
@@ -249,7 +245,9 @@ export function transitionDomainState<
 		from,
 		to: transition.target,
 		snapshot: nextSnapshot,
-		outputs: copyDomainMachineOutputs(result?.outputs),
+		outputs: copyDomainMachineOutputs(
+			readDomainTransitionResultOutputs(result),
+		),
 	};
 }
 
@@ -336,8 +334,10 @@ function createDomainMachineSnapshot<TState extends string, TContext>(
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): DomainMachineSnapshot<TState, TContext> {
 	return Object.freeze({
-		state: snapshot.state,
-		context: copyDomainMachineContext(snapshot.context),
+		state: readDomainMachineSnapshotState(snapshot),
+		context: copyDomainMachineContext(
+			readDomainMachineSnapshotContext(snapshot),
+		),
 	});
 }
 
@@ -725,23 +725,47 @@ function validateDomainMachineSnapshot<
 		);
 	}
 
-	if (typeof snapshot.state !== "string") {
+	const state = readDomainMachineSnapshotState(snapshot);
+	readDomainMachineSnapshotContext(snapshot);
+
+	if (!hasOwn(definition.states, state)) {
 		throw new InvalidDomainMachineSnapshotError(
-			"Domain machine snapshot state must be a string.",
+			`Domain machine snapshot state "${state}" is not defined.`,
+		);
+	}
+}
+
+function readDomainMachineSnapshotState<TState extends string>(
+	snapshot: DomainMachineSnapshot<TState, unknown>,
+): TState {
+	const stateDescriptor = Object.getOwnPropertyDescriptor(snapshot, "state");
+	if (
+		stateDescriptor === undefined ||
+		!("value" in stateDescriptor) ||
+		typeof stateDescriptor.value !== "string"
+	) {
+		throw new InvalidDomainMachineSnapshotError(
+			"Domain machine snapshot state must be a string data property.",
 		);
 	}
 
-	if (!hasOwn(snapshot, "context")) {
+	return stateDescriptor.value as TState;
+}
+
+function readDomainMachineSnapshotContext<TContext>(
+	snapshot: DomainMachineSnapshot<string, TContext>,
+): TContext {
+	const contextDescriptor = Object.getOwnPropertyDescriptor(
+		snapshot,
+		"context",
+	);
+	if (contextDescriptor === undefined || !("value" in contextDescriptor)) {
 		throw new InvalidDomainMachineSnapshotError(
-			"Domain machine snapshot context must be present.",
+			"Domain machine snapshot context must be present as a data property.",
 		);
 	}
 
-	if (!hasOwn(definition.states, snapshot.state)) {
-		throw new InvalidDomainMachineSnapshotError(
-			`Domain machine snapshot state "${snapshot.state}" is not defined.`,
-		);
-	}
+	return contextDescriptor.value as TContext;
 }
 
 function validateDomainMachineEvent(
@@ -786,15 +810,55 @@ function validateDomainTransitionResult<TContext, TOutput>(
 		);
 	}
 
-	if (
-		hasOwn(result, "outputs") &&
-		result.outputs !== undefined &&
-		!Array.isArray(result.outputs)
-	) {
+	for (const key of Reflect.ownKeys(result)) {
+		const descriptor = Object.getOwnPropertyDescriptor(result, key);
+		if (descriptor !== undefined && !("value" in descriptor)) {
+			throw new InvalidDomainTransitionResultError(
+				"Domain transition result must contain data properties only.",
+			);
+		}
+	}
+
+	const outputs = readDomainTransitionResultOutputs(result);
+	if (outputs !== undefined && !Array.isArray(outputs)) {
 		throw new InvalidDomainTransitionResultError(
 			"Domain transition result outputs must be an array when provided.",
 		);
 	}
+}
+
+function readDomainTransitionResultContext<TContext, TOutput>(
+	result: DomainTransitionResult<TContext, TOutput> | undefined,
+):
+	| { readonly hasContext: false }
+	| { readonly hasContext: true; readonly context: TContext } {
+	if (result === undefined) return { hasContext: false };
+
+	const contextDescriptor = Object.getOwnPropertyDescriptor(result, "context");
+	if (contextDescriptor === undefined) return { hasContext: false };
+	if (!("value" in contextDescriptor)) {
+		throw new InvalidDomainTransitionResultError(
+			"Domain transition result context must be a data property when provided.",
+		);
+	}
+
+	return { hasContext: true, context: contextDescriptor.value as TContext };
+}
+
+function readDomainTransitionResultOutputs<TContext, TOutput>(
+	result: DomainTransitionResult<TContext, TOutput> | undefined,
+): readonly TOutput[] | undefined {
+	if (result === undefined) return undefined;
+
+	const outputsDescriptor = Object.getOwnPropertyDescriptor(result, "outputs");
+	if (outputsDescriptor === undefined) return undefined;
+	if (!("value" in outputsDescriptor)) {
+		throw new InvalidDomainTransitionResultError(
+			"Domain transition result outputs must be a data property when provided.",
+		);
+	}
+
+	return outputsDescriptor.value as readonly TOutput[] | undefined;
 }
 
 function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
