@@ -2,20 +2,20 @@ import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../core/errors";
 import {
-	DomainStateMachine,
-	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineContextError,
-	InvalidDomainMachineEventError,
-	InvalidDomainMachineSnapshotError,
-	InvalidDomainTransitionGuardResultError,
-	InvalidDomainTransitionResultError,
-	InvalidDomainTransitionError,
-	DomainTransitionGuardRejectedError,
 	canTransitionDomainState,
 	createInitialDomainMachineSnapshot,
-	transitionDomainState,
 	type DomainMachineDefinition,
 	type DomainMachineSnapshot,
+	DomainStateMachine,
+	DomainTransitionGuardRejectedError,
+	InvalidDomainMachineContextError,
+	InvalidDomainMachineDefinitionError,
+	InvalidDomainMachineEventError,
+	InvalidDomainMachineSnapshotError,
+	InvalidDomainTransitionError,
+	InvalidDomainTransitionGuardResultError,
+	InvalidDomainTransitionResultError,
+	transitionDomainState,
 } from "./domain-state-machine";
 
 type CheckoutState =
@@ -1271,6 +1271,33 @@ describe("DomainStateMachine", () => {
 		}).toThrow(TypeError);
 	});
 
+	it("preserves RegExp cursor state when copying machine data", () => {
+		const pattern = /payment/g;
+		pattern.lastIndex = 3;
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly pattern: RegExp },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ pattern }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+
+		const machine = new DomainStateMachine(definition);
+		const exposed = machine.context.pattern;
+
+		expect(exposed).not.toBe(pattern);
+		expect(exposed.lastIndex).toBe(3);
+		expect(Object.isFrozen(exposed)).toBe(true);
+		expect(() => {
+			exposed.lastIndex = 0;
+		}).toThrow(TypeError);
+	});
+
 	it("rejects context values that cannot be made deeply immutable", () => {
 		const invalidContexts = [
 			{ callback: () => "not data" },
@@ -1279,6 +1306,8 @@ describe("DomainStateMachine", () => {
 			{ deferred: Promise.resolve("later") },
 			{ weak: new WeakMap<object, string>() },
 			{ weak: new WeakSet<object>() },
+			{ error: new Error("not domain data") },
+			{ boxed: new Number(1) },
 		];
 
 		for (const context of invalidContexts) {
@@ -1447,6 +1476,14 @@ describe("DomainStateMachine", () => {
 		}
 		class SecretMap extends Map<string, string> {}
 		class SecretSet extends Set<string> {}
+		class SecretDate extends Date {}
+		class SecretRegExp extends RegExp {
+			constructor() {
+				super("secret");
+			}
+		}
+		const dateWithAlteredPrototype = new Date();
+		Object.setPrototypeOf(dateWithAlteredPrototype, {});
 
 		const contextDefinition: DomainMachineDefinition<
 			"open" | "closed",
@@ -1504,6 +1541,42 @@ describe("DomainStateMachine", () => {
 				closed: { terminal: true },
 			},
 		};
+		const dateDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly secret: SecretDate },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ secret: new SecretDate() }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const regexpEventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close"; readonly secret: SecretRegExp }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const alteredPrototypeDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly secret: Date },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ secret: dateWithAlteredPrototype }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
 		const setEventDefinition: DomainMachineDefinition<
 			"open" | "closed",
 			Record<string, never>,
@@ -1523,6 +1596,12 @@ describe("DomainStateMachine", () => {
 		expect(() => new DomainStateMachine(mapDefinition)).toThrow(
 			InvalidDomainMachineContextError,
 		);
+		expect(() => new DomainStateMachine(dateDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(() => new DomainStateMachine(alteredPrototypeDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
 		expect(() =>
 			transitionDomainState(
 				eventDefinition,
@@ -1539,11 +1618,118 @@ describe("DomainStateMachine", () => {
 		).toThrow(InvalidDomainMachineEventError);
 		expect(() =>
 			transitionDomainState(
+				regexpEventDefinition,
+				createInitialDomainMachineSnapshot(regexpEventDefinition),
+				{ type: "Close", secret: new SecretRegExp() },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
 				outputDefinition,
 				createInitialDomainMachineSnapshot(outputDefinition),
 				{ type: "Close" },
 			),
 		).toThrow(InvalidDomainTransitionResultError);
+	});
+
+	it("rejects custom properties on built-in data without invoking accessors", () => {
+		const dateWithProperty = new Date("2024-01-01T00:00:00.000Z");
+		Object.defineProperty(dateWithProperty, "custom", {
+			enumerable: true,
+			value: "lost metadata",
+		});
+		const setWithProperty = new Set(["value"]);
+		Object.defineProperty(setWithProperty, "custom", {
+			enumerable: true,
+			value: "lost metadata",
+		});
+		const regexpWithAccessor = /close/;
+		let regexpAccessorInvoked = false;
+		Object.defineProperty(regexpWithAccessor, "custom", {
+			enumerable: true,
+			get: () => {
+				regexpAccessorInvoked = true;
+				throw new Error("regexp accessor must not run");
+			},
+		});
+		const mapWithAccessor = new Map([["key", "value"]]);
+		let mapAccessorInvoked = false;
+		Object.defineProperty(mapWithAccessor, "custom", {
+			enumerable: true,
+			get: () => {
+				mapAccessorInvoked = true;
+				throw new Error("map accessor must not run");
+			},
+		});
+
+		for (const value of [dateWithProperty, setWithProperty]) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				{ readonly value: unknown },
+				{ readonly type: "Close" }
+			> = {
+				initial: "open",
+				initialContext: () => ({ value }),
+				states: {
+					open: { on: { Close: { target: "closed" } } },
+					closed: { terminal: true },
+				},
+			};
+
+			expect(() => new DomainStateMachine(definition)).toThrow(
+				InvalidDomainMachineContextError,
+			);
+		}
+
+		const eventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close"; readonly value: unknown }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const outputDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			unknown
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [mapWithAccessor] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				eventDefinition,
+				createInitialDomainMachineSnapshot(eventDefinition),
+				{ type: "Close", value: regexpWithAccessor },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
+				outputDefinition,
+				createInitialDomainMachineSnapshot(outputDefinition),
+				{ type: "Close" },
+			),
+		).toThrow(InvalidDomainTransitionResultError);
+		expect(regexpAccessorInvoked).toBe(false);
+		expect(mapAccessorInvoked).toBe(false);
 	});
 
 	it("rejects event values that cannot be made deeply immutable", () => {

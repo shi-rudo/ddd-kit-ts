@@ -136,6 +136,43 @@ export class InvalidDomainTransitionResultError extends BaseError<"InvalidDomain
 	}
 }
 
+type DomainMachineDataErrorFactory = (
+	message: string,
+	cause?: unknown,
+) =>
+	| InvalidDomainMachineContextError
+	| InvalidDomainMachineEventError
+	| InvalidDomainTransitionResultError;
+
+const DOMAIN_MACHINE_DATE_MUTATORS: ReadonlySet<PropertyKey> = new Set([
+	"setTime",
+	"setMilliseconds",
+	"setUTCMilliseconds",
+	"setSeconds",
+	"setUTCSeconds",
+	"setMinutes",
+	"setUTCMinutes",
+	"setHours",
+	"setUTCHours",
+	"setDate",
+	"setUTCDate",
+	"setMonth",
+	"setUTCMonth",
+	"setFullYear",
+	"setUTCFullYear",
+	"setYear",
+]);
+const DOMAIN_MACHINE_MAP_MUTATORS: ReadonlySet<PropertyKey> = new Set([
+	"set",
+	"delete",
+	"clear",
+]);
+const DOMAIN_MACHINE_SET_MUTATORS: ReadonlySet<PropertyKey> = new Set([
+	"add",
+	"delete",
+	"clear",
+]);
+
 export function createInitialDomainMachineSnapshot<
 	TState extends string,
 	TContext,
@@ -418,13 +455,7 @@ function createDomainTransitionOutputError(
 
 function cloneDomainMachineDataValue<TValue>(
 	value: TValue,
-	errorFactory: (
-		message: string,
-		cause?: unknown,
-	) =>
-		| InvalidDomainMachineContextError
-		| InvalidDomainMachineEventError
-		| InvalidDomainTransitionResultError,
+	errorFactory: DomainMachineDataErrorFactory,
 	seen = new WeakMap<object, unknown>(),
 ): TValue {
 	if (typeof value === "function") {
@@ -482,6 +513,30 @@ function cloneDomainMachineDataValue<TValue>(
 				`Domain machine data cannot contain ${tag.slice(8, -1)} values.`,
 			);
 		}
+
+		if (!isSupportedDomainMachineBuiltInTag(tag)) {
+			throw errorFactory(
+				`Domain machine data cannot contain ${tag.slice(8, -1)} object values.`,
+			);
+		}
+
+		rejectBuiltInSubclass(source, tag, errorFactory);
+		rejectBuiltInCustomProperties(source, tag, errorFactory);
+
+		if (tag === "[object Date]") {
+			const cloned = new Date((source as Date).getTime());
+			seen.set(source, cloned);
+			return cloned as TValue;
+		}
+
+		if (tag === "[object RegExp]") {
+			const regexp = source as RegExp;
+			const cloned = new RegExp(regexp.source, regexp.flags);
+			cloned.lastIndex = regexp.lastIndex;
+			seen.set(source, cloned);
+			return cloned as TValue;
+		}
+
 		if (tag !== "[object Map]" && tag !== "[object Set]") {
 			const cloned = structuredClone(value);
 			seen.set(source, cloned);
@@ -490,7 +545,6 @@ function cloneDomainMachineDataValue<TValue>(
 	}
 
 	if (isBuiltInObject(source, tag) && tag === "[object Map]") {
-		rejectBuiltInSubclass(source, tag, errorFactory);
 		const cloned = new Map<unknown, unknown>();
 		seen.set(source, cloned);
 		for (const [key, entryValue] of source as Map<unknown, unknown>) {
@@ -503,7 +557,6 @@ function cloneDomainMachineDataValue<TValue>(
 	}
 
 	if (isBuiltInObject(source, tag) && tag === "[object Set]") {
-		rejectBuiltInSubclass(source, tag, errorFactory);
 		const cloned = new Set<unknown>();
 		seen.set(source, cloned);
 		for (const entryValue of source as Set<unknown>) {
@@ -543,16 +596,19 @@ function cloneDomainMachineDataValue<TValue>(
 	return cloned as TValue;
 }
 
+function isSupportedDomainMachineBuiltInTag(tag: string): boolean {
+	return (
+		tag === "[object Date]" ||
+		tag === "[object RegExp]" ||
+		tag === "[object Map]" ||
+		tag === "[object Set]"
+	);
+}
+
 function rejectBuiltInSubclass(
 	source: object,
 	tag: string,
-	errorFactory: (
-		message: string,
-		cause?: unknown,
-	) =>
-		| InvalidDomainMachineContextError
-		| InvalidDomainMachineEventError
-		| InvalidDomainTransitionResultError,
+	errorFactory: DomainMachineDataErrorFactory,
 ): void {
 	const prototype = Object.getPrototypeOf(source);
 	if (prototype === null) return;
@@ -560,12 +616,91 @@ function rejectBuiltInSubclass(
 	const parentPrototype = Object.getPrototypeOf(prototype);
 	if (
 		parentPrototype !== null &&
-		Object.prototype.toString.call(parentPrototype) === tag
+		isBuiltInPrototypeForTag(parentPrototype, tag)
 	) {
 		throw errorFactory(
 			"Domain machine data cannot contain custom class instances.",
 		);
 	}
+}
+
+function isBuiltInPrototypeForTag(prototype: object, tag: string): boolean {
+	if (Object.prototype.toString.call(prototype) === tag) return true;
+
+	if (tag === "[object Date]") {
+		return (
+			hasOwnFunction(prototype, "getTime") &&
+			hasOwnFunction(prototype, "setTime") &&
+			hasOwnFunction(prototype, "toISOString")
+		);
+	}
+
+	if (tag === "[object RegExp]") {
+		return (
+			hasOwnFunction(prototype, "exec") &&
+			hasOwnAccessor(prototype, "source") &&
+			hasOwnAccessor(prototype, "flags")
+		);
+	}
+
+	return false;
+}
+
+function hasOwnFunction(source: object, key: string): boolean {
+	const descriptor = Object.getOwnPropertyDescriptor(source, key);
+	return (
+		descriptor !== undefined &&
+		"value" in descriptor &&
+		typeof descriptor.value === "function"
+	);
+}
+
+function hasOwnAccessor(source: object, key: string): boolean {
+	const descriptor = Object.getOwnPropertyDescriptor(source, key);
+	return descriptor !== undefined && !("value" in descriptor);
+}
+
+function rejectBuiltInCustomProperties(
+	source: object,
+	tag: string,
+	errorFactory: DomainMachineDataErrorFactory,
+): void {
+	for (const key of Reflect.ownKeys(source)) {
+		if (tag === "[object RegExp]" && key === "lastIndex") continue;
+		if (isDeepFreezeBuiltInMutationGuard(source, tag, key)) continue;
+
+		throw errorFactory(
+			"Domain machine built-in data cannot contain custom properties.",
+		);
+	}
+}
+
+function isDeepFreezeBuiltInMutationGuard(
+	source: object,
+	tag: string,
+	key: PropertyKey,
+): boolean {
+	const mutators = readDeepFreezeMutators(tag);
+	if (!mutators?.has(key)) return false;
+
+	const descriptor = Object.getOwnPropertyDescriptor(source, key);
+	return (
+		descriptor !== undefined &&
+		"value" in descriptor &&
+		typeof descriptor.value === "function" &&
+		descriptor.enumerable === false &&
+		descriptor.writable === false &&
+		descriptor.configurable === false
+	);
+}
+
+function readDeepFreezeMutators(
+	tag: string,
+): ReadonlySet<PropertyKey> | undefined {
+	if (tag === "[object Date]") return DOMAIN_MACHINE_DATE_MUTATORS;
+	if (tag === "[object Map]") return DOMAIN_MACHINE_MAP_MUTATORS;
+	if (tag === "[object Set]") return DOMAIN_MACHINE_SET_MUTATORS;
+	return undefined;
 }
 
 function copyDomainMachineDefinition<

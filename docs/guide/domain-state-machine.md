@@ -122,9 +122,11 @@ outputs returned by the API are copied and deep-frozen.
 
 Machine context, events, and outputs are data, not behavior. Use cloneable
 domain data such as primitives, arrays, plain objects, `Date`, `RegExp`, `Map`,
-and `Set`. Do not put custom class instances, accessor properties, functions,
-promises, weak collections, external resources, or binary buffers in those
-values; they cannot be made reliably immutable and are rejected.
+and `Set`. Allowed built-ins must be pure intrinsic values: do not subclass
+them or attach custom properties to them. Do not put custom class instances,
+accessor properties, functions, promises, weak collections, `Error` objects,
+boxed primitive objects, external resources, or binary buffers in those values;
+they cannot be made reliably immutable and are rejected.
 
 ## Allow and forbid transitions
 
