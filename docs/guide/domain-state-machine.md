@@ -121,10 +121,10 @@ so callers cannot mutate lifecycle data outside a transition. Snapshots and
 outputs returned by the API are copied and deep-frozen.
 
 Machine context, events, and outputs are data, not behavior. Use cloneable
-domain data such as primitives, arrays, objects, `Date`, `RegExp`, `Map`, and
-`Set`. Do not put accessor properties, functions, promises, weak collections,
-external resources, or binary buffers in those values; they cannot be made
-reliably immutable and are rejected.
+domain data such as primitives, arrays, plain objects, `Date`, `RegExp`, `Map`,
+and `Set`. Do not put custom class instances, accessor properties, functions,
+promises, weak collections, external resources, or binary buffers in those
+values; they cannot be made reliably immutable and are rejected.
 
 ## Allow and forbid transitions
 
@@ -134,7 +134,8 @@ of transitions that are meaningful from that state.
 - If a transition is never allowed from a state, do not define it there.
 - If a transition is meaningful but currently depends on state or context, use a
   `guard`.
-- If no transition should ever leave a state, mark the state as `terminal`.
+- If no transition should ever leave a state, mark the state as `terminal` and
+  do not declare an `on` block for that state.
 
 ```ts
 const orderLifecycle = {
@@ -181,6 +182,10 @@ currently available. Use `dispatch(event)` or `transitionDomainState(...)` when 
 domain method wants to enforce the rule; missing transitions throw
 `InvalidDomainTransitionError`, and rejected guards throw
 `DomainTransitionGuardRejectedError`.
+
+Guards must return a boolean. A guard that accidentally falls through and returns
+`undefined` is treated as broken machine code and throws
+`InvalidDomainTransitionGuardResultError`; it is never interpreted as allowed.
 
 ## Pure transitions
 
@@ -291,6 +296,7 @@ malformed reducer results are treated the same way:
 - `InvalidDomainMachineContextError extends BaseError`
 - `InvalidDomainMachineSnapshotError extends BaseError`
 - `InvalidDomainMachineEventError extends BaseError`
+- `InvalidDomainTransitionGuardResultError extends BaseError`
 - `InvalidDomainTransitionResultError extends BaseError`
 
 This matches the rest of the kit: domain operations throw `DomainError`, while

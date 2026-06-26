@@ -7,6 +7,7 @@ import {
 	InvalidDomainMachineContextError,
 	InvalidDomainMachineEventError,
 	InvalidDomainMachineSnapshotError,
+	InvalidDomainTransitionGuardResultError,
 	InvalidDomainTransitionResultError,
 	InvalidDomainTransitionError,
 	DomainTransitionGuardRejectedError,
@@ -391,6 +392,36 @@ describe("DomainStateMachine", () => {
 		).toThrow(DomainTransitionGuardRejectedError);
 	});
 
+	it("throws structured errors when guards do not return booleans", () => {
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							guard: (() => undefined) as unknown as () => boolean,
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+
+		expect(() =>
+			canTransitionDomainState(definition, snapshot, { type: "Close" }),
+		).toThrow(InvalidDomainTransitionGuardResultError);
+		expect(() =>
+			transitionDomainState(definition, snapshot, { type: "Close" }),
+		).toThrow(InvalidDomainTransitionGuardResultError);
+	});
+
 	it("throws invalid transition errors before validating unused event payloads", () => {
 		const definition = checkoutDefinition();
 		const snapshot = createInitialDomainMachineSnapshot(definition);
@@ -441,6 +472,33 @@ describe("DomainStateMachine", () => {
 				reason: "too-late",
 			}),
 		).toThrow(InvalidDomainTransitionError);
+	});
+
+	it("rejects terminal state definitions with outgoing transitions", () => {
+		const definition: DomainMachineDefinition<
+			"closed" | "open",
+			Record<string, never>,
+			{ readonly type: "Reopen" }
+		> = {
+			initial: "closed",
+			initialContext: () => ({}),
+			states: {
+				closed: {
+					terminal: true,
+					on: {
+						Reopen: { target: "open" },
+					},
+				},
+				open: {},
+			},
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
+		expect(() => new DomainStateMachine(definition)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
 	});
 
 	it("rejects runtime event names inherited from Object.prototype", () => {
@@ -1105,6 +1163,83 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects custom class instances because machine data must be plain data", () => {
+		class SecretValue {
+			#value: string;
+
+			constructor(value: string) {
+				this.#value = value;
+			}
+
+			get value(): string {
+				return this.#value;
+			}
+		}
+
+		const contextDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly secret: SecretValue },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ secret: new SecretValue("context") }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const eventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close"; readonly secret: SecretValue }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const outputDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			SecretValue
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [new SecretValue("output")] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(() =>
+			transitionDomainState(
+				eventDefinition,
+				createInitialDomainMachineSnapshot(eventDefinition),
+				{ type: "Close", secret: new SecretValue("event") },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
+				outputDefinition,
+				createInitialDomainMachineSnapshot(outputDefinition),
+				{ type: "Close" },
+			),
+		).toThrow(InvalidDomainTransitionResultError);
+	});
+
 	it("rejects event values that cannot be made deeply immutable", () => {
 		const invalidEvents = [
 			{ type: "Close", callback: () => "not data" },
@@ -1294,6 +1429,7 @@ describe("DomainStateMachine", () => {
 		const badContext = new InvalidDomainMachineContextError("bad");
 		const badSnapshot = new InvalidDomainMachineSnapshotError("bad");
 		const badEvent = new InvalidDomainMachineEventError("bad");
+		const badGuard = new InvalidDomainTransitionGuardResultError("bad");
 		const badResult = new InvalidDomainTransitionResultError("bad");
 
 		expect(invalid).toBeInstanceOf(DomainError);
@@ -1302,6 +1438,7 @@ describe("DomainStateMachine", () => {
 		expect(badContext).not.toBeInstanceOf(DomainError);
 		expect(badSnapshot).not.toBeInstanceOf(DomainError);
 		expect(badEvent).not.toBeInstanceOf(DomainError);
+		expect(badGuard).not.toBeInstanceOf(DomainError);
 		expect(badResult).not.toBeInstanceOf(DomainError);
 		expect(isBaseError(invalid)).toBe(true);
 		expect(isBaseError(rejected)).toBe(true);
@@ -1309,6 +1446,7 @@ describe("DomainStateMachine", () => {
 		expect(isBaseError(badContext)).toBe(true);
 		expect(isBaseError(badSnapshot)).toBe(true);
 		expect(isBaseError(badEvent)).toBe(true);
+		expect(isBaseError(badGuard)).toBe(true);
 		expect(isBaseError(badResult)).toBe(true);
 	});
 

@@ -124,6 +124,12 @@ export class InvalidDomainMachineEventError extends BaseError<"InvalidDomainMach
 	}
 }
 
+export class InvalidDomainTransitionGuardResultError extends BaseError<"InvalidDomainTransitionGuardResultError"> {
+	constructor(message: string, cause?: unknown) {
+		super(message, cause, { name: "InvalidDomainTransitionGuardResultError" });
+	}
+}
+
 export class InvalidDomainTransitionResultError extends BaseError<"InvalidDomainTransitionResultError"> {
 	constructor(message: string, cause?: unknown) {
 		super(message, cause, { name: "InvalidDomainTransitionResultError" });
@@ -171,13 +177,16 @@ export function canTransitionDomainState<
 	if (!transition) return false;
 
 	const currentEvent = copyDomainMachineEvent(event);
-	return (
-		transition.guard?.({
-			state: currentSnapshot.state,
-			context: currentSnapshot.context,
-			event: currentEvent,
-		}) ?? true
-	);
+	if (!transition.guard) return true;
+
+	const allowed = transition.guard({
+		state: currentSnapshot.state,
+		context: currentSnapshot.context,
+		event: currentEvent,
+	});
+	validateDomainTransitionGuardResult(allowed);
+
+	return allowed;
 }
 
 export function transitionDomainState<
@@ -208,11 +217,14 @@ export function transitionDomainState<
 
 	const currentEvent = copyDomainMachineEvent(event);
 	const allowed =
-		transition.guard?.({
-			state: from,
-			context: currentSnapshot.context,
-			event: currentEvent,
-		}) ?? true;
+		transition.guard === undefined
+			? true
+			: transition.guard({
+					state: from,
+					context: currentSnapshot.context,
+					event: currentEvent,
+				});
+	validateDomainTransitionGuardResult(allowed);
 
 	if (!allowed) {
 		throw new DomainTransitionGuardRejectedError(from, currentEvent.type);
@@ -484,7 +496,14 @@ function cloneDomainMachineDataValue<TValue>(
 		return cloned as TValue;
 	}
 
-	const cloned = Object.create(Object.getPrototypeOf(source));
+	const prototype = Object.getPrototypeOf(source);
+	if (prototype !== Object.prototype && prototype !== null) {
+		throw errorFactory(
+			"Domain machine data cannot contain custom class instances.",
+		);
+	}
+
+	const cloned = Object.create(prototype);
 	seen.set(source, cloned);
 
 	for (const key of Reflect.ownKeys(source)) {
@@ -644,7 +663,14 @@ function validateDomainMachineDefinition<
 			);
 		}
 
-		for (const eventType of Object.keys(transitions ?? {})) {
+		const eventTypes = Object.keys(transitions ?? {});
+		if (terminal === true && eventTypes.length > 0) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Terminal domain machine state "${state}" cannot declare transitions.`,
+			);
+		}
+
+		for (const eventType of eventTypes) {
 			const transition: unknown = (transitions as Record<PropertyKey, unknown>)[
 				eventType
 			];
@@ -737,6 +763,16 @@ function isDomainMachineEvent(event: unknown): event is DomainMachineEvent {
 		"value" in typeDescriptor &&
 		typeof typeDescriptor.value === "string"
 	);
+}
+
+function validateDomainTransitionGuardResult(
+	result: unknown,
+): asserts result is boolean {
+	if (typeof result !== "boolean") {
+		throw new InvalidDomainTransitionGuardResultError(
+			"Domain transition guard must return a boolean.",
+		);
+	}
 }
 
 function validateDomainTransitionResult<TContext, TOutput>(
