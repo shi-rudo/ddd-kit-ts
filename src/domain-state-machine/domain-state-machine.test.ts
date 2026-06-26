@@ -297,6 +297,89 @@ describe("DomainStateMachine", () => {
 		).toThrow(InvalidDomainMachineDefinitionError);
 	});
 
+	it("rejects definition accessors without invoking them", () => {
+		const definitionWithInitialAccessor = {};
+		const definitionWithStatesAccessor = {};
+		const definitionWithTransitionAccessor = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+		let initialAccessorInvoked = false;
+		let statesAccessorInvoked = false;
+		let transitionAccessorInvoked = false;
+
+		Object.defineProperty(definitionWithInitialAccessor, "initial", {
+			enumerable: true,
+			get: () => {
+				initialAccessorInvoked = true;
+				throw new Error("initial getter must not run");
+			},
+		});
+		Object.defineProperty(definitionWithInitialAccessor, "initialContext", {
+			enumerable: true,
+			value: () => ({}),
+		});
+		Object.defineProperty(definitionWithInitialAccessor, "states", {
+			enumerable: true,
+			value: { open: {} },
+		});
+		Object.defineProperty(definitionWithStatesAccessor, "initial", {
+			enumerable: true,
+			value: "open",
+		});
+		Object.defineProperty(definitionWithStatesAccessor, "initialContext", {
+			enumerable: true,
+			value: () => ({}),
+		});
+		Object.defineProperty(definitionWithStatesAccessor, "states", {
+			enumerable: true,
+			get: () => {
+				statesAccessorInvoked = true;
+				throw new Error("states getter must not run");
+			},
+		});
+		Object.defineProperty(
+			definitionWithTransitionAccessor.states.open.on.Close,
+			"target",
+			{
+				enumerable: true,
+				get: () => {
+					transitionAccessorInvoked = true;
+					throw new Error("target getter must not run");
+				},
+			},
+		);
+
+		for (const definition of [
+			definitionWithInitialAccessor,
+			definitionWithStatesAccessor,
+			definitionWithTransitionAccessor,
+		]) {
+			expect(
+				() =>
+					new DomainStateMachine(
+						definition as DomainMachineDefinition<
+							"open" | "closed",
+							Record<string, never>,
+							{ readonly type: "Close" }
+						>,
+					),
+			).toThrow(InvalidDomainMachineDefinitionError);
+		}
+
+		expect(initialAccessorInvoked).toBe(false);
+		expect(statesAccessorInvoked).toBe(false);
+		expect(transitionAccessorInvoked).toBe(false);
+	});
+
 	it("reports can=false when a transition is missing or a guard rejects it", () => {
 		const definition = checkoutDefinition();
 		const snapshot = createInitialDomainMachineSnapshot(definition);
@@ -1252,6 +1335,104 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects array accessor properties without invoking them", () => {
+		const contextArray: unknown[] = [];
+		const eventArray: unknown[] = [];
+		const outputArray: unknown[] = [];
+		let contextArrayAccessorInvoked = false;
+		let eventArrayAccessorInvoked = false;
+		let outputArrayAccessorInvoked = false;
+
+		Object.defineProperty(contextArray, "0", {
+			enumerable: true,
+			get: () => {
+				contextArrayAccessorInvoked = true;
+				throw new Error("context array getter must not run");
+			},
+		});
+		Object.defineProperty(eventArray, "0", {
+			enumerable: true,
+			get: () => {
+				eventArrayAccessorInvoked = true;
+				throw new Error("event array getter must not run");
+			},
+		});
+		Object.defineProperty(outputArray, "0", {
+			enumerable: true,
+			get: () => {
+				outputArrayAccessorInvoked = true;
+				throw new Error("output array getter must not run");
+			},
+		});
+
+		const contextDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly items: readonly unknown[] },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ items: contextArray }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const eventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close"; readonly items: readonly unknown[] }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const outputDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			unknown
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: outputArray }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(() =>
+			transitionDomainState(
+				eventDefinition,
+				createInitialDomainMachineSnapshot(eventDefinition),
+				{ type: "Close", items: eventArray },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
+				outputDefinition,
+				createInitialDomainMachineSnapshot(outputDefinition),
+				{ type: "Close" },
+			),
+		).toThrow(InvalidDomainTransitionResultError);
+
+		expect(contextArrayAccessorInvoked).toBe(false);
+		expect(eventArrayAccessorInvoked).toBe(false);
+		expect(outputArrayAccessorInvoked).toBe(false);
+	});
+
 	it("rejects custom class instances because machine data must be plain data", () => {
 		class SecretValue {
 			#value: string;
@@ -1264,6 +1445,8 @@ describe("DomainStateMachine", () => {
 				return this.#value;
 			}
 		}
+		class SecretMap extends Map<string, string> {}
+		class SecretSet extends Set<string> {}
 
 		const contextDefinition: DomainMachineDefinition<
 			"open" | "closed",
@@ -1309,8 +1492,35 @@ describe("DomainStateMachine", () => {
 				closed: { terminal: true },
 			},
 		};
+		const mapDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly secret: SecretMap },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ secret: new SecretMap() }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const setEventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close"; readonly secret: SecretSet }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
 
 		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(() => new DomainStateMachine(mapDefinition)).toThrow(
 			InvalidDomainMachineContextError,
 		);
 		expect(() =>
@@ -1318,6 +1528,13 @@ describe("DomainStateMachine", () => {
 				eventDefinition,
 				createInitialDomainMachineSnapshot(eventDefinition),
 				{ type: "Close", secret: new SecretValue("event") },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
+				setEventDefinition,
+				createInitialDomainMachineSnapshot(setEventDefinition),
+				{ type: "Close", secret: new SecretSet() },
 			),
 		).toThrow(InvalidDomainMachineEventError);
 		expect(() =>
