@@ -136,6 +136,16 @@ export class InvalidDomainTransitionResultError extends BaseError<"InvalidDomain
 	}
 }
 
+export class ReentrantDomainStateMachineEvaluationError extends BaseError<"ReentrantDomainStateMachineEvaluationError"> {
+	constructor() {
+		super(
+			"Domain state machine callbacks cannot evaluate the same machine.",
+			undefined,
+			{ name: "ReentrantDomainStateMachineEvaluationError" },
+		);
+	}
+}
+
 type DomainMachineDataErrorFactory = (
 	message: string,
 	cause?: unknown,
@@ -144,33 +154,23 @@ type DomainMachineDataErrorFactory = (
 	| InvalidDomainMachineEventError
 	| InvalidDomainTransitionResultError;
 
-const DOMAIN_MACHINE_DATE_MUTATORS: ReadonlySet<PropertyKey> = new Set([
-	"setTime",
-	"setMilliseconds",
-	"setUTCMilliseconds",
-	"setSeconds",
-	"setUTCSeconds",
-	"setMinutes",
-	"setUTCMinutes",
-	"setHours",
-	"setUTCHours",
-	"setDate",
-	"setUTCDate",
-	"setMonth",
-	"setUTCMonth",
-	"setFullYear",
-	"setUTCFullYear",
-	"setYear",
+const DOMAIN_MACHINE_DEFINITION_KEYS: ReadonlySet<PropertyKey> = new Set([
+	"initial",
+	"initialContext",
+	"states",
 ]);
-const DOMAIN_MACHINE_MAP_MUTATORS: ReadonlySet<PropertyKey> = new Set([
-	"set",
-	"delete",
-	"clear",
+const DOMAIN_MACHINE_STATE_NODE_KEYS: ReadonlySet<PropertyKey> = new Set([
+	"terminal",
+	"on",
 ]);
-const DOMAIN_MACHINE_SET_MUTATORS: ReadonlySet<PropertyKey> = new Set([
-	"add",
-	"delete",
-	"clear",
+const DOMAIN_MACHINE_TRANSITION_KEYS: ReadonlySet<PropertyKey> = new Set([
+	"target",
+	"guard",
+	"reduce",
+]);
+const DOMAIN_TRANSITION_RESULT_KEYS: ReadonlySet<PropertyKey> = new Set([
+	"context",
+	"outputs",
 ]);
 
 export function createInitialDomainMachineSnapshot<
@@ -182,9 +182,10 @@ export function createInitialDomainMachineSnapshot<
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineDefinition(definition);
+	const stableDefinition = copyDomainMachineDefinition(definition);
 	return createDomainMachineSnapshot({
-		state: definition.initial,
-		context: definition.initialContext(),
+		state: stableDefinition.initial,
+		context: stableDefinition.initialContext(),
 	});
 }
 
@@ -199,14 +200,19 @@ export function canTransitionDomainState<
 	event: TEvent,
 ): boolean {
 	validateDomainMachineDefinition(definition);
-	validateDomainMachineSnapshot(definition, snapshot);
+	const stableDefinition = copyDomainMachineDefinition(definition);
+	validateDomainMachineSnapshot(stableDefinition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
-	const stateNode = definition.states[currentSnapshot.state];
+	const stateNode = stableDefinition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(definition, currentSnapshot.state, event);
+	const transition = getTransition(
+		stableDefinition,
+		currentSnapshot.state,
+		event,
+	);
 	if (!transition) return false;
 
 	const currentEvent = copyDomainMachineEvent(event);
@@ -233,16 +239,17 @@ export function transitionDomainState<
 	event: TEvent,
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
 	validateDomainMachineDefinition(definition);
-	validateDomainMachineSnapshot(definition, snapshot);
+	const stableDefinition = copyDomainMachineDefinition(definition);
+	validateDomainMachineSnapshot(stableDefinition, snapshot);
 	validateDomainMachineEvent(event);
 
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
 	const from = currentSnapshot.state;
-	const stateNode = definition.states[from];
+	const stateNode = stableDefinition.states[from];
 	const transition =
 		stateNode.terminal === true
 			? undefined
-			: getTransition(definition, from, event);
+			: getTransition(stableDefinition, from, event);
 
 	if (!transition) {
 		throw new InvalidDomainTransitionError(from, event.type);
@@ -302,6 +309,7 @@ export class DomainStateMachine<
 	>;
 
 	#snapshot: DomainMachineSnapshot<TState, TContext>;
+	#evaluating = false;
 
 	constructor(
 		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
@@ -349,21 +357,38 @@ export class DomainStateMachine<
 	}
 
 	can(event: TEvent): boolean {
-		return canTransitionDomainState(this.definition, this.#snapshot, event);
+		return this.evaluate(() =>
+			canTransitionDomainState(this.definition, this.#snapshot, event),
+		);
 	}
 
 	dispatch(event: TEvent): DomainTransitionOutcome<TState, TContext, TOutput> {
-		const result = transitionDomainState(
-			this.definition,
-			this.#snapshot,
-			event,
-		);
-		this.#snapshot = result.snapshot;
-		return {
-			...result,
-			snapshot: createDomainMachineSnapshot(result.snapshot),
-			outputs: copyDomainMachineOutputs(result.outputs),
-		};
+		return this.evaluate(() => {
+			const result = transitionDomainState(
+				this.definition,
+				this.#snapshot,
+				event,
+			);
+			this.#snapshot = result.snapshot;
+			return {
+				...result,
+				snapshot: createDomainMachineSnapshot(result.snapshot),
+				outputs: copyDomainMachineOutputs(result.outputs),
+			};
+		});
+	}
+
+	private evaluate<TResult>(operation: () => TResult): TResult {
+		if (this.#evaluating) {
+			throw new ReentrantDomainStateMachineEvaluationError();
+		}
+
+		this.#evaluating = true;
+		try {
+			return operation();
+		} finally {
+			this.#evaluating = false;
+		}
 	}
 }
 
@@ -468,6 +493,11 @@ function cloneDomainMachineDataValue<TValue>(
 	if (existing !== undefined) return existing as TValue;
 
 	if (Array.isArray(value)) {
+		if (Object.getPrototypeOf(value) !== Array.prototype) {
+			throw errorFactory(
+				"Domain machine data cannot contain custom Array instances.",
+			);
+		}
 		const cloned: unknown[] = new Array(value.length);
 		seen.set(source, cloned);
 
@@ -494,75 +524,10 @@ function cloneDomainMachineDataValue<TValue>(
 	}
 
 	const tag = Object.prototype.toString.call(source);
-	if (isBuiltInObject(source, tag)) {
-		if (
-			tag === "[object ArrayBuffer]" ||
-			tag === "[object SharedArrayBuffer]" ||
-			ArrayBuffer.isView(source)
-		) {
-			throw errorFactory(
-				"Domain machine data cannot contain ArrayBuffer or ArrayBuffer view values.",
-			);
-		}
-		if (
-			tag === "[object Promise]" ||
-			tag === "[object WeakMap]" ||
-			tag === "[object WeakSet]"
-		) {
-			throw errorFactory(
-				`Domain machine data cannot contain ${tag.slice(8, -1)} values.`,
-			);
-		}
-
-		if (!isSupportedDomainMachineBuiltInTag(tag)) {
-			throw errorFactory(
-				`Domain machine data cannot contain ${tag.slice(8, -1)} object values.`,
-			);
-		}
-
-		rejectBuiltInSubclass(source, tag, errorFactory);
-		rejectBuiltInCustomProperties(source, tag, errorFactory);
-
-		if (tag === "[object Date]") {
-			const cloned = new Date((source as Date).getTime());
-			seen.set(source, cloned);
-			return cloned as TValue;
-		}
-
-		if (tag === "[object RegExp]") {
-			const regexp = source as RegExp;
-			const cloned = new RegExp(regexp.source, regexp.flags);
-			cloned.lastIndex = regexp.lastIndex;
-			seen.set(source, cloned);
-			return cloned as TValue;
-		}
-
-		if (tag !== "[object Map]" && tag !== "[object Set]") {
-			const cloned = structuredClone(value);
-			seen.set(source, cloned);
-			return cloned;
-		}
-	}
-
-	if (isBuiltInObject(source, tag) && tag === "[object Map]") {
-		const cloned = new Map<unknown, unknown>();
-		seen.set(source, cloned);
-		for (const [key, entryValue] of source as Map<unknown, unknown>) {
-			cloned.set(
-				cloneDomainMachineDataValue(key, errorFactory, seen),
-				cloneDomainMachineDataValue(entryValue, errorFactory, seen),
-			);
-		}
-		return cloned as TValue;
-	}
-
-	if (isBuiltInObject(source, tag) && tag === "[object Set]") {
-		const cloned = new Set<unknown>();
-		seen.set(source, cloned);
-		for (const entryValue of source as Set<unknown>) {
-			cloned.add(cloneDomainMachineDataValue(entryValue, errorFactory, seen));
-		}
-		return cloned as TValue;
+	if (isBuiltInObject(source, tag) || ArrayBuffer.isView(source)) {
+		throw errorFactory(
+			`Domain machine data cannot contain ${tag.slice(8, -1)} object values.`,
+		);
 	}
 
 	const prototype = Object.getPrototypeOf(source);
@@ -594,113 +559,6 @@ function cloneDomainMachineDataValue<TValue>(
 	}
 
 	return cloned as TValue;
-}
-
-function isSupportedDomainMachineBuiltInTag(tag: string): boolean {
-	return (
-		tag === "[object Date]" ||
-		tag === "[object RegExp]" ||
-		tag === "[object Map]" ||
-		tag === "[object Set]"
-	);
-}
-
-function rejectBuiltInSubclass(
-	source: object,
-	tag: string,
-	errorFactory: DomainMachineDataErrorFactory,
-): void {
-	const prototype = Object.getPrototypeOf(source);
-	if (prototype === null) return;
-
-	const parentPrototype = Object.getPrototypeOf(prototype);
-	if (
-		parentPrototype !== null &&
-		isBuiltInPrototypeForTag(parentPrototype, tag)
-	) {
-		throw errorFactory(
-			"Domain machine data cannot contain custom class instances.",
-		);
-	}
-}
-
-function isBuiltInPrototypeForTag(prototype: object, tag: string): boolean {
-	if (Object.prototype.toString.call(prototype) === tag) return true;
-
-	if (tag === "[object Date]") {
-		return (
-			hasOwnFunction(prototype, "getTime") &&
-			hasOwnFunction(prototype, "setTime") &&
-			hasOwnFunction(prototype, "toISOString")
-		);
-	}
-
-	if (tag === "[object RegExp]") {
-		return (
-			hasOwnFunction(prototype, "exec") &&
-			hasOwnAccessor(prototype, "source") &&
-			hasOwnAccessor(prototype, "flags")
-		);
-	}
-
-	return false;
-}
-
-function hasOwnFunction(source: object, key: string): boolean {
-	const descriptor = Object.getOwnPropertyDescriptor(source, key);
-	return (
-		descriptor !== undefined &&
-		"value" in descriptor &&
-		typeof descriptor.value === "function"
-	);
-}
-
-function hasOwnAccessor(source: object, key: string): boolean {
-	const descriptor = Object.getOwnPropertyDescriptor(source, key);
-	return descriptor !== undefined && !("value" in descriptor);
-}
-
-function rejectBuiltInCustomProperties(
-	source: object,
-	tag: string,
-	errorFactory: DomainMachineDataErrorFactory,
-): void {
-	for (const key of Reflect.ownKeys(source)) {
-		if (tag === "[object RegExp]" && key === "lastIndex") continue;
-		if (isDeepFreezeBuiltInMutationGuard(source, tag, key)) continue;
-
-		throw errorFactory(
-			"Domain machine built-in data cannot contain custom properties.",
-		);
-	}
-}
-
-function isDeepFreezeBuiltInMutationGuard(
-	source: object,
-	tag: string,
-	key: PropertyKey,
-): boolean {
-	const mutators = readDeepFreezeMutators(tag);
-	if (!mutators?.has(key)) return false;
-
-	const descriptor = Object.getOwnPropertyDescriptor(source, key);
-	return (
-		descriptor !== undefined &&
-		"value" in descriptor &&
-		typeof descriptor.value === "function" &&
-		descriptor.enumerable === false &&
-		descriptor.writable === false &&
-		descriptor.configurable === false
-	);
-}
-
-function readDeepFreezeMutators(
-	tag: string,
-): ReadonlySet<PropertyKey> | undefined {
-	if (tag === "[object Date]") return DOMAIN_MACHINE_DATE_MUTATORS;
-	if (tag === "[object Map]") return DOMAIN_MACHINE_MAP_MUTATORS;
-	if (tag === "[object Set]") return DOMAIN_MACHINE_SET_MUTATORS;
-	return undefined;
 }
 
 function copyDomainMachineDefinition<
@@ -813,12 +671,15 @@ function validateDomainMachineDefinition<
 	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
 ): void {
 	const candidate = definition as unknown;
-	if (!isRecord(candidate)) {
+	if (!isPlainRecord(candidate)) {
 		throw new InvalidDomainMachineDefinitionError(
-			"Domain machine definition must be an object.",
+			"Domain machine definition must be a plain object.",
 		);
 	}
-	assertDomainMachineDefinitionDataProperties(candidate);
+	assertDomainMachineDefinitionDataProperties(
+		candidate,
+		DOMAIN_MACHINE_DEFINITION_KEYS,
+	);
 
 	const initial = readDomainMachineDefinitionProperty(candidate, "initial");
 	if (typeof initial !== "string") {
@@ -840,13 +701,13 @@ function validateDomainMachineDefinition<
 		candidate,
 		"states",
 	);
-	if (!isRecord(statesCandidate)) {
+	if (!isPlainRecord(statesCandidate)) {
 		throw new InvalidDomainMachineDefinitionError(
-			"Domain machine states must be an object data property.",
+			"Domain machine states must be a plain object data property.",
 		);
 	}
 	const states: Record<PropertyKey, unknown> = statesCandidate;
-	assertDomainMachineDefinitionDataProperties(states);
+	assertDomainMachineDefinitionEntryMap(states, "state");
 
 	if (!hasOwn(states, initial)) {
 		throw new InvalidDomainMachineDefinitionError(
@@ -856,12 +717,15 @@ function validateDomainMachineDefinition<
 
 	for (const state of Object.keys(states)) {
 		const node: unknown = readDomainMachineDefinitionProperty(states, state);
-		if (!isRecord(node)) {
+		if (!isPlainRecord(node)) {
 			throw new InvalidDomainMachineDefinitionError(
-				`Domain machine state "${state}" must be an object data property.`,
+				`Domain machine state "${state}" must be a plain object data property.`,
 			);
 		}
-		assertDomainMachineDefinitionDataProperties(node);
+		assertDomainMachineDefinitionDataProperties(
+			node,
+			DOMAIN_MACHINE_STATE_NODE_KEYS,
+		);
 
 		const terminal: unknown = readOptionalDomainMachineDefinitionProperty(
 			node,
@@ -877,13 +741,13 @@ function validateDomainMachineDefinition<
 			node,
 			"on",
 		);
-		if (transitions !== undefined && !isRecord(transitions)) {
+		if (transitions !== undefined && !isPlainRecord(transitions)) {
 			throw new InvalidDomainMachineDefinitionError(
-				`Domain machine state "${state}" transitions must be an object.`,
+				`Domain machine state "${state}" transitions must be a plain object.`,
 			);
 		}
-		if (isRecord(transitions)) {
-			assertDomainMachineDefinitionDataProperties(transitions);
+		if (isPlainRecord(transitions)) {
+			assertDomainMachineDefinitionEntryMap(transitions, "event");
 		}
 
 		const eventTypes = Object.keys(transitions ?? {});
@@ -898,12 +762,15 @@ function validateDomainMachineDefinition<
 				transitions as object,
 				eventType,
 			);
-			if (!isRecord(transition)) {
+			if (!isPlainRecord(transition)) {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" must be an object.`,
+					`Domain transition from "${state}" on "${eventType}" must be a plain object.`,
 				);
 			}
-			assertDomainMachineDefinitionDataProperties(transition);
+			assertDomainMachineDefinitionDataProperties(
+				transition,
+				DOMAIN_MACHINE_TRANSITION_KEYS,
+			);
 
 			const target: unknown = readDomainMachineDefinitionProperty(
 				transition,
@@ -944,12 +811,36 @@ function validateDomainMachineDefinition<
 	}
 }
 
-function assertDomainMachineDefinitionDataProperties(value: object): void {
+function assertDomainMachineDefinitionDataProperties(
+	value: object,
+	allowedKeys?: ReadonlySet<PropertyKey>,
+): void {
 	for (const key of Reflect.ownKeys(value)) {
 		const descriptor = Object.getOwnPropertyDescriptor(value, key);
 		if (descriptor !== undefined && !("value" in descriptor)) {
 			throw new InvalidDomainMachineDefinitionError(
 				"Domain machine definition must contain data properties only.",
+			);
+		}
+		if (allowedKeys !== undefined && !allowedKeys.has(key)) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine definition contains unknown property "${String(key)}".`,
+			);
+		}
+	}
+}
+
+function assertDomainMachineDefinitionEntryMap(
+	value: object,
+	entryName: "state" | "event",
+): void {
+	assertDomainMachineDefinitionDataProperties(value);
+
+	for (const key of Reflect.ownKeys(value)) {
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (typeof key !== "string" || descriptor?.enumerable !== true) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine ${entryName} names must be enumerable string properties.`,
 			);
 		}
 	}
@@ -1078,13 +969,18 @@ function validateDomainTransitionResult<TContext, TOutput>(
 ): void {
 	if (result === undefined) return;
 
-	if (!isRecord(result)) {
+	if (!isPlainRecord(result)) {
 		throw new InvalidDomainTransitionResultError(
-			"Domain transition result must be an object when returned.",
+			"Domain transition result must be a plain object when returned.",
 		);
 	}
 
 	for (const key of Reflect.ownKeys(result)) {
+		if (!DOMAIN_TRANSITION_RESULT_KEYS.has(key)) {
+			throw new InvalidDomainTransitionResultError(
+				`Domain transition result contains unknown property "${String(key)}".`,
+			);
+		}
 		const descriptor = Object.getOwnPropertyDescriptor(result, key);
 		if (descriptor !== undefined && !("value" in descriptor)) {
 			throw new InvalidDomainTransitionResultError(
@@ -1137,6 +1033,13 @@ function readDomainTransitionResultOutputs<TContext, TOutput>(
 
 function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPlainRecord(value: unknown): value is Record<PropertyKey, unknown> {
+	if (!isRecord(value)) return false;
+
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): key is keyof T {

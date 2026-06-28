@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: Domain State Machine runtime hardening
+
+- Reject async reducers, unknown definition/result properties, inherited or
+  hidden definition entries, and Array subclasses instead of silently dropping
+  behavior or outputs.
+- Evaluate functional transitions against stable definition copies and reject
+  reentrant evaluation of the same stateful wrapper.
+- Restrict machine context, events, and outputs to primitives, plain arrays, and
+  plain objects. Native built-ins such as `Date`, `RegExp`, `Map`, and `Set` are
+  rejected because their internal slots cannot satisfy the machine's strict
+  deep-immutability contract.
+- Add `ReentrantDomainStateMachineEvaluationError` for structured reentrancy
+  failures.
+
 ## [2.1.0] - 2026-06-25
 
 The domain-state-machine release. This minor adds a small, framework-free

@@ -116,17 +116,29 @@ its own context reference.
 
 The stateful wrapper defensively copies its machine definition at construction
 time, so later mutation of the caller's definition object cannot change that
-machine's behavior. Machine contexts are copied into snapshots and deep-frozen
-so callers cannot mutate lifecycle data outside a transition. Snapshots and
-outputs returned by the API are copied and deep-frozen.
+machine's behavior. The functional APIs also evaluate each operation against a
+stable definition copy, so a callback cannot change the transition currently
+being evaluated. Machine contexts are copied into snapshots and deep-frozen so
+callers cannot mutate lifecycle data outside a transition. Snapshots and outputs
+returned by the API are copied and deep-frozen.
 
-Machine context, events, and outputs are data, not behavior. Use cloneable
-domain data such as primitives, arrays, plain objects, `Date`, `RegExp`, `Map`,
-and `Set`. Allowed built-ins must be pure intrinsic values: do not subclass
-them or attach custom properties to them. Do not put custom class instances,
-accessor properties, functions, promises, weak collections, `Error` objects,
-boxed primitive objects, external resources, or binary buffers in those values;
-they cannot be made reliably immutable and are rejected.
+Machine context, events, and outputs are data, not behavior. Use only primitives,
+plain arrays, and plain objects. Custom class instances, Array subclasses,
+accessor properties, functions, promises, native built-ins, external resources,
+and binary buffers are rejected. Native `Date`, `RegExp`, `Map`, and `Set`
+instances are deliberately excluded because JavaScript exposes mutable internal
+slots that `Object.freeze` cannot reliably protect. Represent dates as ISO
+strings or epoch numbers, regular expressions as pattern/flag data, maps as
+plain records or entry arrays, and sets as arrays.
+
+Runtime definition and reducer-result validation is strict. Unknown properties
+are rejected instead of ignored, so misspellings such as `gaurd` or `output`
+cannot silently remove a business rule or requested output. A reducer must
+return `undefined` or a plain object containing only `context` and `outputs`.
+Promises returned by accidentally async reducers are rejected. Definition
+objects must be plain objects, and state/event entries must be enumerable string
+properties, so inherited, symbolic, or hidden behavior cannot disappear during
+the stable copy.
 
 ## Allow and forbid transitions
 
@@ -216,6 +228,11 @@ and freeze the input snapshot and event before running guards or reducers. A
 buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
 `event`, the frozen copy fails loudly.
 
+The stateful wrapper also rejects reentrant evaluation. A guard or reducer must
+not call `can(...)` or `dispatch(...)` on the same machine instance. Such a call
+throws `ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
+unchanged, and releases the evaluation lock even when callback code throws.
+
 This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:
 
@@ -300,6 +317,7 @@ malformed reducer results are treated the same way:
 - `InvalidDomainMachineEventError extends BaseError`
 - `InvalidDomainTransitionGuardResultError extends BaseError`
 - `InvalidDomainTransitionResultError extends BaseError`
+- `ReentrantDomainStateMachineEvaluationError extends BaseError`
 
 This matches the rest of the kit: domain operations throw `DomainError`, while
 invalid wiring fails loudly as a structured `BaseError`.
