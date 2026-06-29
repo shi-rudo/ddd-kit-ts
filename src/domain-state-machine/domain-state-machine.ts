@@ -24,11 +24,13 @@ export type DomainTransition<
 	TOutput,
 > = {
 	readonly target: TState;
+	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly guard?: (input: {
 		readonly state: TState;
 		readonly context: Readonly<TContext>;
 		readonly event: TEvent;
 	}) => boolean;
+	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly reduce?: (input: {
 		readonly state: TState;
 		readonly context: Readonly<TContext>;
@@ -61,6 +63,10 @@ export type DomainMachineDefinition<
 > = {
 	readonly initial: TState;
 	readonly initialContext: () => TContext;
+	/** Must be synchronous, deterministic, and side-effect-free. */
+	readonly validateSnapshot?: (
+		snapshot: DomainMachineSnapshot<TState, Readonly<TContext>>,
+	) => boolean;
 	readonly states: {
 		readonly [TName in TState]: DomainStateNode<
 			TState,
@@ -157,6 +163,7 @@ type DomainMachineDataErrorFactory = (
 const DOMAIN_MACHINE_DEFINITION_KEYS: ReadonlySet<PropertyKey> = new Set([
 	"initial",
 	"initialContext",
+	"validateSnapshot",
 	"states",
 ]);
 const DOMAIN_MACHINE_STATE_NODE_KEYS: ReadonlySet<PropertyKey> = new Set([
@@ -183,10 +190,12 @@ export function createInitialDomainMachineSnapshot<
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	return createDomainMachineSnapshot({
+	const snapshot = createDomainMachineSnapshot({
 		state: stableDefinition.initial,
 		context: stableDefinition.initialContext(),
 	});
+	validateDomainMachineSnapshotInvariant(stableDefinition, snapshot);
+	return snapshot;
 }
 
 export function canTransitionDomainState<
@@ -205,6 +214,7 @@ export function canTransitionDomainState<
 	if (!isDomainMachineEvent(event)) return false;
 
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
+	validateDomainMachineSnapshotInvariant(stableDefinition, currentSnapshot);
 	const stateNode = stableDefinition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
@@ -244,6 +254,7 @@ export function transitionDomainState<
 	validateDomainMachineEvent(event);
 
 	const currentSnapshot = createDomainMachineSnapshot(snapshot);
+	validateDomainMachineSnapshotInvariant(stableDefinition, currentSnapshot);
 	const from = currentSnapshot.state;
 	const stateNode = stableDefinition.states[from];
 	const transition =
@@ -284,6 +295,7 @@ export function transitionDomainState<
 		state: transition.target,
 		context: nextContext,
 	});
+	validateDomainMachineSnapshotInvariant(stableDefinition, nextSnapshot);
 
 	return {
 		from,
@@ -332,10 +344,10 @@ export class DomainStateMachine<
 			>;
 			validateDomainMachineSnapshot(this.definition, suppliedSnapshot);
 			this.#snapshot = createDomainMachineSnapshot(suppliedSnapshot);
+			validateDomainMachineSnapshotInvariant(this.definition, this.#snapshot);
 		} else {
 			this.#snapshot = createInitialDomainMachineSnapshot(this.definition);
 		}
-		validateDomainMachineSnapshot(this.definition, this.#snapshot);
 	}
 
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
@@ -493,7 +505,7 @@ function cloneDomainMachineDataValue<TValue>(
 	if (existing !== undefined) return existing as TValue;
 
 	if (Array.isArray(value)) {
-		if (Object.getPrototypeOf(value) !== Array.prototype) {
+		if (!isIntrinsicArrayPrototype(Object.getPrototypeOf(value))) {
 			throw errorFactory(
 				"Domain machine data cannot contain custom Array instances.",
 			);
@@ -531,13 +543,13 @@ function cloneDomainMachineDataValue<TValue>(
 	}
 
 	const prototype = Object.getPrototypeOf(source);
-	if (prototype !== Object.prototype && prototype !== null) {
+	if (prototype !== null && !isIntrinsicObjectPrototype(prototype)) {
 		throw errorFactory(
 			"Domain machine data cannot contain custom class instances.",
 		);
 	}
 
-	const cloned = Object.create(prototype);
+	const cloned = Object.create(prototype === null ? null : Object.prototype);
 	seen.set(source, cloned);
 
 	for (const key of Reflect.ownKeys(source)) {
@@ -610,13 +622,24 @@ function copyDomainMachineDefinition<
 				  >
 				| undefined;
 			if (transition) {
+				const copiedTransition = Object.freeze({
+					target: readDomainMachineDefinitionProperty(transition, "target"),
+					guard: readOptionalDomainMachineDefinitionProperty(
+						transition,
+						"guard",
+					),
+					reduce: readOptionalDomainMachineDefinitionProperty(
+						transition,
+						"reduce",
+					),
+				}) as DomainTransition<
+					TState,
+					TContext,
+					Extract<TEvent, { readonly type: typeof eventType }>,
+					TOutput
+				>;
 				Object.defineProperty(copiedTransitions, eventType, {
-					value: Object.freeze({ ...transition }) as DomainTransition<
-						TState,
-						TContext,
-						Extract<TEvent, { readonly type: typeof eventType }>,
-						TOutput
-					>,
+					value: copiedTransition,
 					enumerable: true,
 				});
 			}
@@ -640,6 +663,14 @@ function copyDomainMachineDefinition<
 			definition,
 			"initialContext",
 		) as () => TContext,
+		validateSnapshot: readOptionalDomainMachineDefinitionProperty(
+			definition,
+			"validateSnapshot",
+		) as
+			| ((
+					snapshot: DomainMachineSnapshot<TState, Readonly<TContext>>,
+			  ) => boolean)
+			| undefined,
 		states: Object.freeze(copiedStates),
 	});
 }
@@ -694,6 +725,19 @@ function validateDomainMachineDefinition<
 	) {
 		throw new InvalidDomainMachineDefinitionError(
 			"Domain machine initialContext must be a function data property.",
+		);
+	}
+
+	const validateSnapshot = readOptionalDomainMachineDefinitionProperty(
+		candidate,
+		"validateSnapshot",
+	);
+	if (
+		validateSnapshot !== undefined &&
+		typeof validateSnapshot !== "function"
+	) {
+		throw new InvalidDomainMachineDefinitionError(
+			"Domain machine validateSnapshot must be a function data property.",
 		);
 	}
 
@@ -900,6 +944,31 @@ function validateDomainMachineSnapshot<
 	}
 }
 
+function validateDomainMachineSnapshotInvariant<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	snapshot: DomainMachineSnapshot<TState, TContext>,
+): void {
+	if (definition.validateSnapshot === undefined) return;
+
+	const valid = definition.validateSnapshot(snapshot);
+	if (typeof valid !== "boolean") {
+		throw new InvalidDomainMachineDefinitionError(
+			"Domain machine validateSnapshot must return a boolean.",
+		);
+	}
+
+	if (!valid) {
+		throw new InvalidDomainMachineSnapshotError(
+			`Domain machine snapshot violates invariants for state "${snapshot.state}".`,
+		);
+	}
+}
+
 function readDomainMachineSnapshotState<TState extends string>(
 	snapshot: DomainMachineSnapshot<TState, unknown>,
 ): TState {
@@ -1039,7 +1108,59 @@ function isPlainRecord(value: unknown): value is Record<PropertyKey, unknown> {
 	if (!isRecord(value)) return false;
 
 	const prototype = Object.getPrototypeOf(value);
-	return prototype === Object.prototype || prototype === null;
+	return prototype === null || isIntrinsicObjectPrototype(prototype);
+}
+
+function isIntrinsicArrayPrototype(prototype: object | null): boolean {
+	if (prototype === null || !Array.isArray(prototype)) return false;
+	if (!hasIntrinsicConstructorPrototype(prototype, "Array")) return false;
+
+	const parentPrototype = Object.getPrototypeOf(prototype);
+	return (
+		parentPrototype !== null && isIntrinsicObjectPrototype(parentPrototype)
+	);
+}
+
+function isIntrinsicObjectPrototype(prototype: object): boolean {
+	return (
+		Object.getPrototypeOf(prototype) === null &&
+		hasIntrinsicConstructorPrototype(prototype, "Object")
+	);
+}
+
+function hasIntrinsicConstructorPrototype(
+	prototype: object,
+	constructorName: "Array" | "Object",
+): boolean {
+	const constructorDescriptor = Object.getOwnPropertyDescriptor(
+		prototype,
+		"constructor",
+	);
+	if (
+		constructorDescriptor === undefined ||
+		!("value" in constructorDescriptor) ||
+		typeof constructorDescriptor.value !== "function"
+	) {
+		return false;
+	}
+
+	const constructorFunction = constructorDescriptor.value;
+	const nameDescriptor = Object.getOwnPropertyDescriptor(
+		constructorFunction,
+		"name",
+	);
+	const prototypeDescriptor = Object.getOwnPropertyDescriptor(
+		constructorFunction,
+		"prototype",
+	);
+	return (
+		nameDescriptor !== undefined &&
+		"value" in nameDescriptor &&
+		nameDescriptor.value === constructorName &&
+		prototypeDescriptor !== undefined &&
+		"value" in prototypeDescriptor &&
+		prototypeDescriptor.value === prototype
+	);
 }
 
 function hasOwn<T extends object>(value: T, key: PropertyKey): key is keyof T {

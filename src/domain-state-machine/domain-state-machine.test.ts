@@ -1,4 +1,6 @@
 import { isBaseError } from "@shirudo/base-error";
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../core/errors";
 import {
@@ -148,6 +150,85 @@ describe("DomainStateMachine", () => {
 		expect(a.context).not.toBe(b.context);
 	});
 
+	it("rejects initial snapshots that violate definition invariants", () => {
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly approved: boolean },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ approved: false }),
+			validateSnapshot: ({ context }) => context.approved,
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineSnapshotError,
+		);
+	});
+
+	it("rejects non-boolean snapshot validator results", () => {
+		const invalidValidators = [() => undefined, async () => true];
+
+		for (const validateSnapshot of invalidValidators) {
+			const definition = {
+				initial: "open",
+				initialContext: () => ({}),
+				validateSnapshot,
+				states: { open: {} },
+			} as unknown as DomainMachineDefinition<
+				"open",
+				Record<string, never>,
+				{ readonly type: "Stay" }
+			>;
+
+			expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+				InvalidDomainMachineDefinitionError,
+			);
+		}
+	});
+
+	it("validates each initial snapshot exactly once", () => {
+		let validations = 0;
+		const definition: DomainMachineDefinition<
+			"open",
+			Record<string, never>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			validateSnapshot: () => {
+				validations += 1;
+				return true;
+			},
+			states: { open: {} },
+		};
+
+		new DomainStateMachine(definition);
+
+		expect(validations).toBe(1);
+	});
+
+	it("passes copied and deeply frozen data to snapshot validators", () => {
+		const originalContext = { nested: { approved: true } };
+		const definition: DomainMachineDefinition<
+			"open",
+			typeof originalContext,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => originalContext,
+			validateSnapshot: (snapshot) =>
+				Object.isFrozen(snapshot) &&
+				Object.isFrozen(snapshot.context) &&
+				Object.isFrozen(snapshot.context.nested) &&
+				snapshot.context !== originalContext,
+			states: { open: {} },
+		};
+
+		expect(createInitialDomainMachineSnapshot(definition).state).toBe("open");
+	});
+
 	it("reconstitutes a machine from a valid snapshot", () => {
 		const machine = new DomainStateMachine(checkoutDefinition(), {
 			state: "awaiting-shipping",
@@ -168,6 +249,30 @@ describe("DomainStateMachine", () => {
 		});
 		expect(machine.state).toBe("awaiting-shipping");
 		expect(machine.context.paymentId).toBe("payment-1");
+	});
+
+	it("rejects reconstitution snapshots that violate definition invariants", () => {
+		const definition = {
+			...checkoutDefinition(),
+			validateSnapshot: (
+				snapshot: DomainMachineSnapshot<CheckoutState, CheckoutContext>,
+			) =>
+				snapshot.state !== "awaiting-shipping" ||
+				snapshot.context.paymentId !== undefined,
+		} as unknown as DomainMachineDefinition<
+			CheckoutState,
+			CheckoutContext,
+			CheckoutEvent,
+			CheckoutOutput
+		>;
+
+		expect(
+			() =>
+				new DomainStateMachine(definition, {
+					state: "awaiting-shipping",
+					context: { orderId: "order-1", totalCents: 1000 },
+				}),
+		).toThrow(InvalidDomainMachineSnapshotError);
 	});
 
 	it("rejects a snapshot whose state is not in the definition", () => {
@@ -212,6 +317,44 @@ describe("DomainStateMachine", () => {
 					),
 			).toThrow(InvalidDomainMachineSnapshotError);
 		}
+	});
+
+	it("validates pure API input snapshots before invoking callbacks", () => {
+		let guardCalled = false;
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly approved: boolean },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ approved: true }),
+			validateSnapshot: ({ context }) => context.approved,
+			states: {
+				open: {
+					on: {
+						Stay: {
+							target: "open",
+							guard: () => {
+								guardCalled = true;
+								return true;
+							},
+						},
+					},
+				},
+			},
+		};
+		const invalidSnapshot = {
+			state: "open" as const,
+			context: { approved: false },
+		};
+
+		expect(() =>
+			canTransitionDomainState(definition, invalidSnapshot, { type: "Stay" }),
+		).toThrow(InvalidDomainMachineSnapshotError);
+		expect(() =>
+			transitionDomainState(definition, invalidSnapshot, { type: "Stay" }),
+		).toThrow(InvalidDomainMachineSnapshotError);
+		expect(guardCalled).toBe(false);
 	});
 
 	it("rejects runtime snapshot accessors without invoking them", () => {
@@ -1076,6 +1219,38 @@ describe("DomainStateMachine", () => {
 		expect(machine.snapshot).toEqual(second.snapshot);
 	});
 
+	it("rejects invalid transition snapshots before mutating the wrapper", () => {
+		type State = "open" | "closed";
+		type Context = { readonly approved: boolean };
+		type Event = { readonly type: "Close" };
+		const definition: DomainMachineDefinition<State, Context, Event> = {
+			initial: "open",
+			initialContext: () => ({ approved: false }),
+			validateSnapshot: ({ state, context }) =>
+				state !== "closed" || context.approved,
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ context: { approved: false } }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+
+		expect(() => machine.dispatch({ type: "Close" })).toThrow(
+			InvalidDomainMachineSnapshotError,
+		);
+		expect(machine.snapshot).toEqual({
+			state: "open",
+			context: { approved: false },
+		});
+	});
+
 	it("rejects reentrant dispatch without changing the wrapper state", () => {
 		type State = "open" | "outer" | "inner";
 		type Event = { readonly type: "Outer" } | { readonly type: "Inner" };
@@ -1557,6 +1732,90 @@ describe("DomainStateMachine", () => {
 		expect(() => {
 			(exposed[symbolKey] as { code: string }).code = "mutated";
 		}).toThrow(TypeError);
+	});
+
+	it("accepts cross-realm plain data and normalizes it to local prototypes", () => {
+		type ForeignContext = {
+			readonly nested: { readonly value: string };
+			readonly items: readonly number[];
+		};
+		const foreignContext = runInNewContext(
+			`({ nested: { value: "foreign" }, items: [1, 2] })`,
+		) as ForeignContext;
+		const definition: DomainMachineDefinition<
+			"open",
+			ForeignContext,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => foreignContext,
+			states: { open: {} },
+		};
+
+		const context = new DomainStateMachine(definition).context;
+
+		expect(context).toEqual({
+			nested: { value: "foreign" },
+			items: [1, 2],
+		});
+		expect(Object.getPrototypeOf(context)).toBe(Object.prototype);
+		expect(Object.getPrototypeOf(context.nested)).toBe(Object.prototype);
+		expect(Object.getPrototypeOf(context.items)).toBe(Array.prototype);
+		expect(Object.isFrozen(context)).toBe(true);
+		expect(Object.isFrozen(context.nested)).toBe(true);
+		expect(Object.isFrozen(context.items)).toBe(true);
+	});
+
+	it("accepts cross-realm events and reducer results", () => {
+		type Event = {
+			readonly type: "Close";
+			readonly payload: { readonly value: number };
+		};
+		type Context = { readonly value: number };
+		type Output = { readonly type: "Closed" };
+		const foreignEvent = runInNewContext(
+			`({ type: "Close", payload: { value: 1 } })`,
+		) as Event;
+		const foreignResult = runInNewContext(
+			`({ context: { value: 1 }, outputs: [{ type: "Closed" }] })`,
+		) as {
+			readonly context: Context;
+			readonly outputs: readonly Output[];
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Context,
+			Event,
+			Output
+		> = {
+			initial: "open",
+			initialContext: () => ({ value: 0 }),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							guard: ({ event }) => event.payload.value === 1,
+							reduce: () => foreignResult,
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		const result = transitionDomainState(
+			definition,
+			createInitialDomainMachineSnapshot(definition),
+			foreignEvent,
+		);
+
+		expect(result.snapshot.context).toEqual({ value: 1 });
+		expect(result.outputs).toEqual([{ type: "Closed" }]);
+		expect(Object.getPrototypeOf(result.snapshot.context)).toBe(
+			Object.prototype,
+		);
+		expect(Object.getPrototypeOf(result.outputs)).toBe(Array.prototype);
 	});
 
 	it("rejects context values that cannot be made deeply immutable", () => {
@@ -2106,6 +2365,81 @@ describe("DomainStateMachine", () => {
 
 		expect(result.to).toBe("closed");
 		expect(result.snapshot.state).toBe("closed");
+	});
+
+	it("preserves non-enumerable guards in stable definition copies", () => {
+		type State = "open" | "closed";
+		type Event = { readonly type: "Close" };
+		const transition = { target: "closed" } as {
+			target: State;
+			guard?: () => boolean;
+		};
+		Object.defineProperty(transition, "guard", {
+			value: () => false,
+			enumerable: false,
+		});
+		const definition: DomainMachineDefinition<
+			State,
+			Record<string, never>,
+			Event
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: transition } },
+				closed: { terminal: true },
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+
+		expect(machine.can({ type: "Close" })).toBe(false);
+		expect(() => machine.dispatch({ type: "Close" })).toThrow(
+			DomainTransitionGuardRejectedError,
+		);
+		expect(machine.state).toBe("open");
+	});
+
+	it("preserves non-enumerable targets and reducers in stable definition copies", () => {
+		type State = "open" | "closed";
+		type Context = { readonly value: number };
+		type Event = { readonly type: "Close" };
+		type Output = { readonly type: "Closed" };
+		const transition = {} as {
+			target: State;
+			reduce: () => {
+				readonly context: Context;
+				readonly outputs: readonly Output[];
+			};
+		};
+		Object.defineProperty(transition, "target", {
+			value: "closed",
+			enumerable: false,
+		});
+		Object.defineProperty(transition, "reduce", {
+			value: () => ({
+				context: { value: 1 },
+				outputs: [{ type: "Closed" }],
+			}),
+			enumerable: false,
+		});
+		const definition: DomainMachineDefinition<State, Context, Event, Output> = {
+			initial: "open",
+			initialContext: () => ({ value: 0 }),
+			states: {
+				open: { on: { Close: transition } },
+				closed: { terminal: true },
+			},
+		};
+
+		const result = transitionDomainState(
+			definition,
+			createInitialDomainMachineSnapshot(definition),
+			{ type: "Close" },
+		);
+
+		expect(result.to).toBe("closed");
+		expect(result.snapshot.context.value).toBe(1);
+		expect(result.outputs).toEqual([{ type: "Closed" }]);
 	});
 
 	it("copies and freezes transition output arrays", () => {

@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deep-immutability contract.
 - Add `ReentrantDomainStateMachineEvaluationError` for structured reentrancy
   failures.
+- Preserve non-enumerable transition fields in stable definition copies, so a
+  validated `guard`, `reduce`, or `target` cannot disappear during evaluation.
+- Add optional `validateSnapshot` invariants across initial creation,
+  reconstitution, functional inputs, and transition results.
+- Accept cross-Realm plain objects and arrays while normalizing copied values to
+  local prototypes; custom classes and Array subclasses remain rejected.
 
 ## [2.1.0] - 2026-06-25
 

@@ -129,7 +129,9 @@ and binary buffers are rejected. Native `Date`, `RegExp`, `Map`, and `Set`
 instances are deliberately excluded because JavaScript exposes mutable internal
 slots that `Object.freeze` cannot reliably protect. Represent dates as ISO
 strings or epoch numbers, regular expressions as pattern/flag data, maps as
-plain records or entry arrays, and sets as arrays.
+plain records or entry arrays, and sets as arrays. Plain data from another
+JavaScript Realm is accepted and normalized to local `Object.prototype` and
+`Array.prototype` values while it is copied.
 
 Runtime definition and reducer-result validation is strict. Unknown properties
 are rejected instead of ignored, so misspellings such as `gaurd` or `output`
@@ -139,6 +141,26 @@ Promises returned by accidentally async reducers are rejected. Definition
 objects must be plain objects, and state/event entries must be enumerable string
 properties, so inherited, symbolic, or hidden behavior cannot disappear during
 the stable copy.
+
+Use `validateSnapshot` for invariants that relate a control state to its context.
+This closes the reconstitution path as well as the normal transition path:
+
+```ts
+const checkoutLifecycle = {
+  // ...initial, initialContext, states
+  validateSnapshot: ({ state, context }) =>
+    state !== "awaiting-shipping" || context.paymentId !== undefined,
+};
+```
+
+The predicate runs on the copied, deeply frozen snapshot during initial-state
+creation, wrapper reconstitution, functional API input validation, and before a
+transition result is committed. `false` throws `InvalidDomainMachineSnapshotError`;
+a non-boolean result is a broken definition and throws
+`InvalidDomainMachineDefinitionError`.
+Without `validateSnapshot`, snapshot validation is intentionally structural and
+data-only; the machine cannot infer state/context business invariants from erased
+TypeScript types.
 
 ## Allow and forbid transitions
 
@@ -228,9 +250,17 @@ and freeze the input snapshot and event before running guards or reducers. A
 buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
 `event`, the frozen copy fails loudly.
 
+Purity also requires callback discipline that JavaScript cannot enforce at
+runtime. Guards, reducers, and `validateSnapshot` must be synchronous,
+deterministic, and side-effect-free: do not perform I/O, read clocks or
+randomness, or mutate captured closure state. In particular, `can(...)` is a
+query and must remain side-effect-free. Return requested external work as
+`outputs`; execute it outside the machine.
+
 The stateful wrapper also rejects reentrant evaluation. A guard or reducer must
-not call `can(...)` or `dispatch(...)` on the same machine instance. Such a call
-throws `ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
+not call `can(...)` or `dispatch(...)` on the same machine instance; the same
+rule applies to `validateSnapshot`. Such a call throws
+`ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
 unchanged, and releases the evaluation lock even when callback code throws.
 
 This shape is useful inside aggregates and process managers because the domain
