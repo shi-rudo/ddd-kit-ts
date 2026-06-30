@@ -7,9 +7,33 @@ export type DomainMachineEvent = {
 	readonly type: string;
 };
 
+/** Recursively readonly view of data accepted by the domain state machine. */
+export type DomainMachineReadonly<TValue> = TValue extends
+	| bigint
+	| boolean
+	| null
+	| number
+	| string
+	| symbol
+	| undefined
+	? TValue
+	: TValue extends (...args: never[]) => unknown
+		? TValue
+		: TValue extends readonly unknown[]
+			? {
+					readonly [TKey in keyof TValue]: DomainMachineReadonly<TValue[TKey]>;
+				}
+			: TValue extends object
+				? {
+						readonly [TKey in keyof TValue]: DomainMachineReadonly<
+							TValue[TKey]
+						>;
+					}
+				: TValue;
+
 export type DomainMachineSnapshot<TState extends string, TContext> = {
 	readonly state: TState;
-	readonly context: TContext;
+	readonly context: DomainMachineReadonly<TContext>;
 };
 
 export type DomainTransitionResult<TContext, TOutput> = {
@@ -27,14 +51,14 @@ export type DomainTransition<
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly guard?: (input: {
 		readonly state: TState;
-		readonly context: Readonly<TContext>;
-		readonly event: TEvent;
+		readonly context: DomainMachineReadonly<TContext>;
+		readonly event: DomainMachineReadonly<TEvent>;
 	}) => boolean;
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly reduce?: (input: {
 		readonly state: TState;
-		readonly context: Readonly<TContext>;
-		readonly event: TEvent;
+		readonly context: DomainMachineReadonly<TContext>;
+		readonly event: DomainMachineReadonly<TEvent>;
 	}) => DomainTransitionResult<TContext, TOutput> | undefined;
 };
 
@@ -65,7 +89,7 @@ export type DomainMachineDefinition<
 	readonly initialContext: () => TContext;
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly validateSnapshot?: (
-		snapshot: DomainMachineSnapshot<TState, Readonly<TContext>>,
+		snapshot: DomainMachineSnapshot<TState, TContext>,
 	) => boolean;
 	readonly states: {
 		readonly [TName in TState]: DomainStateNode<
@@ -85,7 +109,7 @@ export type DomainTransitionOutcome<
 	readonly from: TState;
 	readonly to: TState;
 	readonly snapshot: DomainMachineSnapshot<TState, TContext>;
-	readonly outputs: readonly TOutput[];
+	readonly outputs: readonly DomainMachineReadonly<TOutput>[];
 };
 
 export class InvalidDomainTransitionError extends DomainError<"InvalidDomainTransitionError"> {
@@ -190,11 +214,22 @@ export function createInitialDomainMachineSnapshot<
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	const snapshot = createDomainMachineSnapshot({
-		state: stableDefinition.initial,
-		context: stableDefinition.initialContext(),
+	return createInitialDomainMachineSnapshotFromPrepared(stableDefinition);
+}
+
+function createInitialDomainMachineSnapshotFromPrepared<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+): DomainMachineSnapshot<TState, TContext> {
+	const snapshot = createDomainMachineSnapshot<TState, TContext>({
+		state: definition.initial,
+		context: definition.initialContext(),
 	});
-	validateDomainMachineSnapshotInvariant(stableDefinition, snapshot);
+	validateDomainMachineSnapshotInvariant(definition, snapshot);
 	return snapshot;
 }
 
@@ -210,19 +245,30 @@ export function canTransitionDomainState<
 ): boolean {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	validateDomainMachineSnapshot(stableDefinition, snapshot);
+	return canTransitionPreparedDomainState(stableDefinition, snapshot, event);
+}
+
+function canTransitionPreparedDomainState<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	snapshot: DomainMachineSnapshot<TState, TContext>,
+	event: TEvent,
+): boolean {
+	validateDomainMachineSnapshot(definition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
-	const currentSnapshot = createDomainMachineSnapshot(snapshot);
-	validateDomainMachineSnapshotInvariant(stableDefinition, currentSnapshot);
-	const stateNode = stableDefinition.states[currentSnapshot.state];
+	const currentSnapshot = createDomainMachineSnapshot<TState, TContext>(
+		snapshot,
+	);
+	validateDomainMachineSnapshotInvariant(definition, currentSnapshot);
+	const stateNode = definition.states[currentSnapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(
-		stableDefinition,
-		currentSnapshot.state,
-		event,
-	);
+	const transition = getTransition(definition, currentSnapshot.state, event);
 	if (!transition) return false;
 
 	const currentEvent = copyDomainMachineEvent(event);
@@ -250,17 +296,32 @@ export function transitionDomainState<
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	validateDomainMachineSnapshot(stableDefinition, snapshot);
+	return transitionPreparedDomainState(stableDefinition, snapshot, event);
+}
+
+function transitionPreparedDomainState<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	snapshot: DomainMachineSnapshot<TState, TContext>,
+	event: TEvent,
+): DomainTransitionOutcome<TState, TContext, TOutput> {
+	validateDomainMachineSnapshot(definition, snapshot);
 	validateDomainMachineEvent(event);
 
-	const currentSnapshot = createDomainMachineSnapshot(snapshot);
-	validateDomainMachineSnapshotInvariant(stableDefinition, currentSnapshot);
+	const currentSnapshot = createDomainMachineSnapshot<TState, TContext>(
+		snapshot,
+	);
+	validateDomainMachineSnapshotInvariant(definition, currentSnapshot);
 	const from = currentSnapshot.state;
-	const stateNode = stableDefinition.states[from];
+	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
 			? undefined
-			: getTransition(stableDefinition, from, event);
+			: getTransition(definition, from, event);
 
 	if (!transition) {
 		throw new InvalidDomainTransitionError(from, event.type);
@@ -291,11 +352,11 @@ export function transitionDomainState<
 	const nextContext = contextResult.hasContext
 		? contextResult.context
 		: currentSnapshot.context;
-	const nextSnapshot = createDomainMachineSnapshot({
+	const nextSnapshot = createDomainMachineSnapshot<TState, TContext>({
 		state: transition.target,
 		context: nextContext,
 	});
-	validateDomainMachineSnapshotInvariant(stableDefinition, nextSnapshot);
+	validateDomainMachineSnapshotInvariant(definition, nextSnapshot);
 
 	return {
 		from,
@@ -343,25 +404,27 @@ export class DomainStateMachine<
 				TContext
 			>;
 			validateDomainMachineSnapshot(this.definition, suppliedSnapshot);
-			this.#snapshot = createDomainMachineSnapshot(suppliedSnapshot);
+			this.#snapshot = createDomainMachineSnapshot<TState, TContext>(
+				suppliedSnapshot,
+			);
 			validateDomainMachineSnapshotInvariant(this.definition, this.#snapshot);
 		} else {
-			this.#snapshot = createInitialDomainMachineSnapshot(this.definition);
+			this.#snapshot = createInitialDomainMachineSnapshotFromPrepared(
+				this.definition,
+			);
 		}
 	}
 
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
-		return createDomainMachineSnapshot(this.#snapshot);
+		return createDomainMachineSnapshot<TState, TContext>(this.#snapshot);
 	}
 
 	get state(): TState {
 		return this.#snapshot.state;
 	}
 
-	get context(): Readonly<TContext> {
-		return copyDomainMachineContext(
-			this.#snapshot.context,
-		) as Readonly<TContext>;
+	get context(): DomainMachineReadonly<TContext> {
+		return this.#snapshot.context;
 	}
 
 	isTerminal(): boolean {
@@ -370,23 +433,19 @@ export class DomainStateMachine<
 
 	can(event: TEvent): boolean {
 		return this.evaluate(() =>
-			canTransitionDomainState(this.definition, this.#snapshot, event),
+			canTransitionPreparedDomainState(this.definition, this.#snapshot, event),
 		);
 	}
 
 	dispatch(event: TEvent): DomainTransitionOutcome<TState, TContext, TOutput> {
 		return this.evaluate(() => {
-			const result = transitionDomainState(
+			const result = transitionPreparedDomainState(
 				this.definition,
 				this.#snapshot,
 				event,
 			);
 			this.#snapshot = result.snapshot;
-			return {
-				...result,
-				snapshot: createDomainMachineSnapshot(result.snapshot),
-				outputs: copyDomainMachineOutputs(result.outputs),
-			};
+			return result;
 		});
 	}
 
@@ -404,26 +463,32 @@ export class DomainStateMachine<
 	}
 }
 
-function createDomainMachineSnapshot<TState extends string, TContext>(
-	snapshot: DomainMachineSnapshot<TState, TContext>,
-): DomainMachineSnapshot<TState, TContext> {
+function createDomainMachineSnapshot<
+	TState extends string,
+	TContext,
+>(snapshot: {
+	readonly state: TState;
+	readonly context: TContext | DomainMachineReadonly<TContext>;
+}): DomainMachineSnapshot<TState, TContext> {
 	return Object.freeze({
 		state: readDomainMachineSnapshotState(snapshot),
-		context: copyDomainMachineContext(
+		context: copyDomainMachineContext<TContext>(
 			readDomainMachineSnapshotContext(snapshot),
 		),
-	});
+	}) as DomainMachineSnapshot<TState, TContext>;
 }
 
 function copyDomainMachineOutputs<TOutput>(
-	outputs: readonly TOutput[] | undefined,
-): readonly TOutput[] {
+	outputs: readonly (TOutput | DomainMachineReadonly<TOutput>)[] | undefined,
+): readonly DomainMachineReadonly<TOutput>[] {
 	try {
 		const copiedOutputs = cloneDomainMachineDataValue(
 			outputs ?? [],
 			createDomainTransitionOutputError,
 		);
-		return deepFreeze(copiedOutputs) as readonly TOutput[];
+		return deepFreeze(
+			copiedOutputs,
+		) as readonly DomainMachineReadonly<TOutput>[];
 	} catch (cause) {
 		if (cause instanceof InvalidDomainTransitionResultError) {
 			throw cause;
@@ -437,11 +502,11 @@ function copyDomainMachineOutputs<TOutput>(
 
 function copyDomainMachineEvent<TEvent extends DomainMachineEvent>(
 	event: TEvent,
-): TEvent {
+): DomainMachineReadonly<TEvent> {
 	try {
 		return deepFreeze(
 			cloneDomainMachineDataValue(event, createDomainMachineEventError),
-		) as TEvent;
+		) as DomainMachineReadonly<TEvent>;
 	} catch (cause) {
 		if (cause instanceof InvalidDomainMachineEventError) {
 			throw cause;
@@ -453,11 +518,13 @@ function copyDomainMachineEvent<TEvent extends DomainMachineEvent>(
 	}
 }
 
-function copyDomainMachineContext<TContext>(context: TContext): TContext {
+function copyDomainMachineContext<TContext>(
+	context: TContext | DomainMachineReadonly<TContext>,
+): DomainMachineReadonly<TContext> {
 	try {
 		return deepFreeze(
 			cloneDomainMachineDataValue(context, createDomainMachineContextError),
-		) as TContext;
+		) as DomainMachineReadonly<TContext>;
 	} catch (cause) {
 		if (cause instanceof InvalidDomainMachineContextError) {
 			throw cause;
@@ -535,17 +602,30 @@ function cloneDomainMachineDataValue<TValue>(
 		return cloned as TValue;
 	}
 
-	const tag = Object.prototype.toString.call(source);
-	if (isBuiltInObject(source, tag) || ArrayBuffer.isView(source)) {
-		throw errorFactory(
-			`Domain machine data cannot contain ${tag.slice(8, -1)} object values.`,
-		);
-	}
-
 	const prototype = Object.getPrototypeOf(source);
 	if (prototype !== null && !isIntrinsicObjectPrototype(prototype)) {
 		throw errorFactory(
 			"Domain machine data cannot contain custom class instances.",
+		);
+	}
+
+	const toStringTagDescriptor = Object.getOwnPropertyDescriptor(
+		source,
+		Symbol.toStringTag,
+	);
+	if (
+		toStringTagDescriptor !== undefined &&
+		!("value" in toStringTagDescriptor)
+	) {
+		throw errorFactory(
+			"Domain machine data cannot contain accessor properties.",
+		);
+	}
+
+	const tag = Object.prototype.toString.call(source);
+	if (isBuiltInObject(source, tag) || ArrayBuffer.isView(source)) {
+		throw errorFactory(
+			`Domain machine data cannot contain ${tag.slice(8, -1)} object values.`,
 		);
 	}
 
@@ -667,9 +747,7 @@ function copyDomainMachineDefinition<
 			definition,
 			"validateSnapshot",
 		) as
-			| ((
-					snapshot: DomainMachineSnapshot<TState, Readonly<TContext>>,
-			  ) => boolean)
+			| ((snapshot: DomainMachineSnapshot<TState, TContext>) => boolean)
 			| undefined,
 		states: Object.freeze(copiedStates),
 	});
@@ -969,9 +1047,9 @@ function validateDomainMachineSnapshotInvariant<
 	}
 }
 
-function readDomainMachineSnapshotState<TState extends string>(
-	snapshot: DomainMachineSnapshot<TState, unknown>,
-): TState {
+function readDomainMachineSnapshotState<TState extends string>(snapshot: {
+	readonly state: TState;
+}): TState {
 	const stateDescriptor = Object.getOwnPropertyDescriptor(snapshot, "state");
 	if (
 		stateDescriptor === undefined ||
@@ -986,9 +1064,9 @@ function readDomainMachineSnapshotState<TState extends string>(
 	return stateDescriptor.value as TState;
 }
 
-function readDomainMachineSnapshotContext<TContext>(
-	snapshot: DomainMachineSnapshot<string, TContext>,
-): TContext {
+function readDomainMachineSnapshotContext<TContext>(snapshot: {
+	readonly context: TContext;
+}): TContext {
 	const contextDescriptor = Object.getOwnPropertyDescriptor(
 		snapshot,
 		"context",

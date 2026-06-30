@@ -1,6 +1,6 @@
-import { isBaseError } from "@shirudo/base-error";
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
+import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../core/errors";
 import {
@@ -1379,7 +1379,7 @@ describe("DomainStateMachine", () => {
 		expect(machine.snapshot).not.toBe(exposed);
 	});
 
-	it("does not expose its internal snapshot through dispatch results", () => {
+	it("does not let dispatch results mutate its current snapshot", () => {
 		const machine = new DomainStateMachine(checkoutDefinition());
 		const result = machine.dispatch({
 			type: "PaymentRequested",
@@ -1894,6 +1894,103 @@ describe("DomainStateMachine", () => {
 				InvalidDomainMachineContextError,
 			);
 		}
+	});
+
+	it("rejects context toStringTag accessors without invoking them", () => {
+		let accessorInvoked = false;
+		const context = {};
+		Object.defineProperty(context, Symbol.toStringTag, {
+			get: () => {
+				accessorInvoked = true;
+				return "Object";
+			},
+		});
+		const definition: DomainMachineDefinition<
+			"open",
+			typeof context,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => context,
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(accessorInvoked).toBe(false);
+	});
+
+	it("rejects event toStringTag accessors without invoking them", () => {
+		let accessorInvoked = false;
+		const event = { type: "Close" as const };
+		Object.defineProperty(event, Symbol.toStringTag, {
+			get: () => {
+				accessorInvoked = true;
+				return "Object";
+			},
+		});
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			typeof event
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				event,
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(accessorInvoked).toBe(false);
+	});
+
+	it("rejects output toStringTag accessors without invoking them", () => {
+		let accessorInvoked = false;
+		const output = { type: "Closed" as const };
+		Object.defineProperty(output, Symbol.toStringTag, {
+			get: () => {
+				accessorInvoked = true;
+				return "Object";
+			},
+		});
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			typeof output
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [output] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				{ type: "Close" },
+			),
+		).toThrow(InvalidDomainTransitionResultError);
+		expect(accessorInvoked).toBe(false);
 	});
 
 	it("rejects array accessor properties without invoking them", () => {
@@ -2655,5 +2752,67 @@ describe("DomainStateMachine", () => {
 			new DomainStateMachine(definition, undefined);
 		};
 		void assertConstructorRejectsUndefined;
+	});
+
+	it("exposes deeply immutable machine data as deeply readonly types", () => {
+		type MutableContext = { nested: { value: string } };
+		type MutableEvent = { type: "Close"; payload: { value: string } };
+		type MutableOutput = { type: "Closed"; payload: { value: string } };
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			MutableContext,
+			MutableEvent,
+			MutableOutput
+		> = {
+			initial: "open",
+			initialContext: () => ({ nested: { value: "initial" } }),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							guard: ({ context, event }) => {
+								const assertCallbackDataIsReadonly = () => {
+									// @ts-expect-error Callback context is deeply readonly.
+									context.nested.value = "mutated";
+									// @ts-expect-error Callback events are deeply readonly.
+									event.payload.value = "mutated";
+								};
+								void assertCallbackDataIsReadonly;
+								return true;
+							},
+							reduce: ({ event }) => ({
+								context: { nested: { value: event.payload.value } },
+								outputs: [
+									{ type: "Closed", payload: { value: event.payload.value } },
+								],
+							}),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+		const result = machine.dispatch({
+			type: "Close",
+			payload: { value: "closed" },
+		});
+
+		const assertReturnedDataIsReadonly = () => {
+			// @ts-expect-error Machine context is deeply readonly.
+			machine.context.nested.value = "mutated";
+			// @ts-expect-error Snapshot context is deeply readonly.
+			result.snapshot.context.nested.value = "mutated";
+			const output = result.outputs[0];
+			if (output !== undefined) {
+				// @ts-expect-error Transition outputs are deeply readonly.
+				output.payload.value = "mutated";
+			}
+		};
+		void assertReturnedDataIsReadonly;
+
+		expect(result.snapshot.context.nested.value).toBe("closed");
+		expect(result.outputs[0]?.payload.value).toBe("closed");
 	});
 });

@@ -116,11 +116,14 @@ its own context reference.
 
 The stateful wrapper defensively copies its machine definition at construction
 time, so later mutation of the caller's definition object cannot change that
-machine's behavior. The functional APIs also evaluate each operation against a
-stable definition copy, so a callback cannot change the transition currently
-being evaluated. Machine contexts are copied into snapshots and deep-frozen so
-callers cannot mutate lifecycle data outside a transition. Snapshots and outputs
-returned by the API are copied and deep-frozen.
+machine's behavior. It reuses that validated, frozen definition for subsequent
+operations. The functional APIs evaluate each operation against a fresh stable
+definition copy, so a callback cannot change the transition currently being
+evaluated. Machine contexts are copied into snapshots and deep-frozen so callers
+cannot mutate lifecycle data outside a transition. Public context, event,
+snapshot, and output types use `DomainMachineReadonly<T>` to express that deep
+immutability recursively at compile time. Snapshots and outputs returned by the
+API are deep-frozen.
 
 Machine context, events, and outputs are data, not behavior. Use only primitives,
 plain arrays, and plain objects. Custom class instances, Array subclasses,
@@ -131,7 +134,8 @@ slots that `Object.freeze` cannot reliably protect. Represent dates as ISO
 strings or epoch numbers, regular expressions as pattern/flag data, maps as
 plain records or entry arrays, and sets as arrays. Plain data from another
 JavaScript Realm is accepted and normalized to local `Object.prototype` and
-`Array.prototype` values while it is copied.
+`Array.prototype` values while it is copied. Accessor descriptors are rejected
+without invoking their getter or setter, including `Symbol.toStringTag`.
 
 Runtime definition and reducer-result validation is strict. Unknown properties
 are rejected instead of ignored, so misspellings such as `gaurd` or `output`
