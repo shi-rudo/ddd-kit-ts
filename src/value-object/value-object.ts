@@ -5,7 +5,7 @@ import {
 } from "../utils/array/deep-equal-except";
 import {
     isBuiltInObject,
-    objectTagWithoutInvokingAccessors,
+    mutableBuiltInTagWithoutInvokingAccessors,
 } from "../utils/array/is-built-in";
 import { err, ok, type Result } from "@shirudo/result";
 
@@ -130,14 +130,16 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 
     // Date/Map/Set keep internal-slot mutability under Object.freeze:
     // shadow their mutators and freeze Map/Set contents (entries are not
-    // own keys, so the key walk below would miss them). Brand-verified via
-    // isBuiltInObject: a plain object spoofing one of these tags through
-    // Symbol.toStringTag is just frozen as a plain object.
-    const tag = objectTagWithoutInvokingAccessors(obj as object);
-    if (isBuiltInObject(obj as object, tag)) {
-        if (tag === "[object Date]") {
+    // own keys, so the key walk below would miss them). Internal-slot brand
+    // probes distinguish genuine built-ins without invoking toStringTag
+    // accessors; spoofed plain objects are frozen structurally.
+    const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(
+        obj as object,
+    );
+    if (mutableBuiltInTag !== undefined) {
+        if (mutableBuiltInTag === "[object Date]") {
             shadowMutators(obj as object, "Date", DATE_MUTATORS);
-        } else if (tag === "[object Map]") {
+        } else if (mutableBuiltInTag === "[object Map]") {
             for (const [key, value] of obj as unknown as Map<
                 unknown,
                 unknown
@@ -146,7 +148,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
                 deepFreeze(value, visited);
             }
             shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
-        } else if (tag === "[object Set]") {
+        } else if (mutableBuiltInTag === "[object Set]") {
             for (const member of obj as unknown as Set<unknown>) {
                 deepFreeze(member, visited);
             }

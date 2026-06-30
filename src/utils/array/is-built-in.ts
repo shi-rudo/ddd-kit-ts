@@ -101,6 +101,34 @@ export function objectTagWithoutInvokingAccessors(value: object): string {
 		: Object.prototype.toString.call(value);
 }
 
+export type MutableBuiltInTag =
+	| "[object Date]"
+	| "[object Map]"
+	| "[object Set]";
+
+export function mutableBuiltInTagWithoutInvokingAccessors(
+	value: object,
+): MutableBuiltInTag | undefined {
+	const descriptor = findPropertyDescriptor(value, Symbol.toStringTag);
+	if (descriptor !== undefined && !("value" in descriptor)) {
+		if (hasBrand(value, "[object Date]")) return "[object Date]";
+		if (hasBrand(value, "[object Map]")) return "[object Map]";
+		if (hasBrand(value, "[object Set]")) return "[object Set]";
+		return undefined;
+	}
+
+	const tag = Object.prototype.toString.call(value);
+	if (
+		(tag === "[object Date]" ||
+			tag === "[object Map]" ||
+			tag === "[object Set]") &&
+		hasBrand(value, tag)
+	) {
+		return tag;
+	}
+	return undefined;
+}
+
 /**
  * Verifies that `obj` genuinely is the type its tag claims, via an
  * internal-slot probe. Tags without a cheap probe (Promise, Error,

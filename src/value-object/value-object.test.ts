@@ -2,6 +2,56 @@ import { describe, expect, it } from "vitest";
 import { deepFreeze, ValueObject } from "./value-object";
 
 describe("deepFreeze", () => {
+    const mutableBuiltInCases = [
+        {
+            name: "Date",
+            create: () => new Date(1_000),
+            mutate: (value: object) => (value as Date).setTime(0),
+        },
+        {
+            name: "Map",
+            create: () => new Map([["key", { value: "initial" }]]),
+            mutate: (value: object) =>
+                (value as Map<string, unknown>).set("other", true),
+        },
+        {
+            name: "Set",
+            create: () => new Set([{ value: "initial" }]),
+            mutate: (value: object) => (value as Set<unknown>).add("other"),
+        },
+    ] as const;
+
+    it.each(mutableBuiltInCases)(
+        "blocks $name mutators with an own toStringTag accessor",
+        ({ name, create, mutate }) => {
+            const value = create();
+            Object.defineProperty(value, Symbol.toStringTag, {
+                configurable: true,
+                get: () => name,
+            });
+
+            deepFreeze(value);
+
+            expect(() => mutate(value)).toThrow(TypeError);
+        },
+    );
+
+    it.each(mutableBuiltInCases)(
+        "blocks $name mutators with an inherited toStringTag accessor",
+        ({ name, create, mutate }) => {
+            const value = create();
+            const prototype = Object.create(Object.getPrototypeOf(value));
+            Object.defineProperty(prototype, Symbol.toStringTag, {
+                get: () => name,
+            });
+            Object.setPrototypeOf(value, prototype);
+
+            deepFreeze(value);
+
+            expect(() => mutate(value)).toThrow(TypeError);
+        },
+    );
+
     it("does not invoke inherited toStringTag accessors", () => {
         let accessorInvoked = false;
         const prototype = Object.create(Object.prototype);
