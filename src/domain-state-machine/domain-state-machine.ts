@@ -1,6 +1,9 @@
 import { BaseError } from "@shirudo/base-error";
 import { DomainError } from "../core/errors";
-import { isBuiltInObject } from "../utils/array/is-built-in";
+import {
+	findPropertyDescriptor,
+	isBuiltInObject,
+} from "../utils/array/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 
 export type DomainMachineEvent = {
@@ -245,7 +248,15 @@ export function canTransitionDomainState<
 ): boolean {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	return canTransitionPreparedDomainState(stableDefinition, snapshot, event);
+	const currentSnapshot = prepareDomainMachineSnapshot(
+		stableDefinition,
+		snapshot,
+	);
+	return canTransitionPreparedDomainState(
+		stableDefinition,
+		currentSnapshot,
+		event,
+	);
 }
 
 function canTransitionPreparedDomainState<
@@ -258,25 +269,20 @@ function canTransitionPreparedDomainState<
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 	event: TEvent,
 ): boolean {
-	validateDomainMachineSnapshot(definition, snapshot);
 	if (!isDomainMachineEvent(event)) return false;
 
-	const currentSnapshot = createDomainMachineSnapshot<TState, TContext>(
-		snapshot,
-	);
-	validateDomainMachineSnapshotInvariant(definition, currentSnapshot);
-	const stateNode = definition.states[currentSnapshot.state];
+	const stateNode = definition.states[snapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(definition, currentSnapshot.state, event);
+	const transition = getTransition(definition, snapshot.state, event);
 	if (!transition) return false;
 
 	const currentEvent = copyDomainMachineEvent(event);
 	if (!transition.guard) return true;
 
 	const allowed = transition.guard({
-		state: currentSnapshot.state,
-		context: currentSnapshot.context,
+		state: snapshot.state,
+		context: snapshot.context,
 		event: currentEvent,
 	});
 	validateDomainTransitionGuardResult(allowed);
@@ -296,7 +302,15 @@ export function transitionDomainState<
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
-	return transitionPreparedDomainState(stableDefinition, snapshot, event);
+	const currentSnapshot = prepareDomainMachineSnapshot(
+		stableDefinition,
+		snapshot,
+	);
+	return transitionPreparedDomainState(
+		stableDefinition,
+		currentSnapshot,
+		event,
+	);
 }
 
 function transitionPreparedDomainState<
@@ -309,14 +323,9 @@ function transitionPreparedDomainState<
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 	event: TEvent,
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
-	validateDomainMachineSnapshot(definition, snapshot);
 	validateDomainMachineEvent(event);
 
-	const currentSnapshot = createDomainMachineSnapshot<TState, TContext>(
-		snapshot,
-	);
-	validateDomainMachineSnapshotInvariant(definition, currentSnapshot);
-	const from = currentSnapshot.state;
+	const from = snapshot.state;
 	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
@@ -333,7 +342,7 @@ function transitionPreparedDomainState<
 			? true
 			: transition.guard({
 					state: from,
-					context: currentSnapshot.context,
+					context: snapshot.context,
 					event: currentEvent,
 				});
 	validateDomainTransitionGuardResult(allowed);
@@ -344,18 +353,24 @@ function transitionPreparedDomainState<
 
 	const result = transition.reduce?.({
 		state: from,
-		context: currentSnapshot.context,
+		context: snapshot.context,
 		event: currentEvent,
 	});
 	validateDomainTransitionResult(result);
 	const contextResult = readDomainTransitionResultContext(result);
 	const nextContext = contextResult.hasContext
 		? contextResult.context
-		: currentSnapshot.context;
-	const nextSnapshot = createDomainMachineSnapshot<TState, TContext>({
-		state: transition.target,
-		context: nextContext,
-	});
+		: snapshot.context;
+	const nextSnapshot =
+		nextContext === snapshot.context
+			? createDomainMachineSnapshotFromPreparedContext<TState, TContext>(
+					transition.target,
+					snapshot.context,
+				)
+			: createDomainMachineSnapshot<TState, TContext>({
+					state: transition.target,
+					context: nextContext,
+				});
 	validateDomainMachineSnapshotInvariant(definition, nextSnapshot);
 
 	return {
@@ -461,6 +476,33 @@ export class DomainStateMachine<
 			this.#evaluating = false;
 		}
 	}
+}
+
+function prepareDomainMachineSnapshot<
+	TState extends string,
+	TContext,
+	TEvent extends DomainMachineEvent,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	snapshot: DomainMachineSnapshot<TState, TContext>,
+): DomainMachineSnapshot<TState, TContext> {
+	validateDomainMachineSnapshot(definition, snapshot);
+	const preparedSnapshot = createDomainMachineSnapshot<TState, TContext>(
+		snapshot,
+	);
+	validateDomainMachineSnapshotInvariant(definition, preparedSnapshot);
+	return preparedSnapshot;
+}
+
+function createDomainMachineSnapshotFromPreparedContext<
+	TState extends string,
+	TContext,
+>(
+	state: TState,
+	context: DomainMachineReadonly<TContext>,
+): DomainMachineSnapshot<TState, TContext> {
+	return Object.freeze({ state, context });
 }
 
 function createDomainMachineSnapshot<
@@ -570,6 +612,18 @@ function cloneDomainMachineDataValue<TValue>(
 	const source = value as object;
 	const existing = seen.get(source);
 	if (existing !== undefined) return existing as TValue;
+	const toStringTagDescriptor = findPropertyDescriptor(
+		source,
+		Symbol.toStringTag,
+	);
+	if (
+		toStringTagDescriptor !== undefined &&
+		!("value" in toStringTagDescriptor)
+	) {
+		throw errorFactory(
+			"Domain machine data cannot contain accessor properties.",
+		);
+	}
 
 	if (Array.isArray(value)) {
 		if (!isIntrinsicArrayPrototype(Object.getPrototypeOf(value))) {
@@ -606,19 +660,6 @@ function cloneDomainMachineDataValue<TValue>(
 	if (prototype !== null && !isIntrinsicObjectPrototype(prototype)) {
 		throw errorFactory(
 			"Domain machine data cannot contain custom class instances.",
-		);
-	}
-
-	const toStringTagDescriptor = Object.getOwnPropertyDescriptor(
-		source,
-		Symbol.toStringTag,
-	);
-	if (
-		toStringTagDescriptor !== undefined &&
-		!("value" in toStringTagDescriptor)
-	) {
-		throw errorFactory(
-			"Domain machine data cannot contain accessor properties.",
 		);
 	}
 

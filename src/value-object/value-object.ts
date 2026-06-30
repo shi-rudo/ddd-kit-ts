@@ -3,7 +3,10 @@ import {
     deepEqualExcept,
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
-import { isBuiltInObject } from "../utils/array/is-built-in";
+import {
+    isBuiltInObject,
+    objectTagWithoutInvokingAccessors,
+} from "../utils/array/is-built-in";
 import { err, ok, type Result } from "@shirudo/result";
 
 // ============================================================================
@@ -130,7 +133,7 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
     // own keys, so the key walk below would miss them). Brand-verified via
     // isBuiltInObject: a plain object spoofing one of these tags through
     // Symbol.toStringTag is just frozen as a plain object.
-    const tag = Object.prototype.toString.call(obj);
+    const tag = objectTagWithoutInvokingAccessors(obj as object);
     if (isBuiltInObject(obj as object, tag)) {
         if (tag === "[object Date]") {
             shadowMutators(obj as object, "Date", DATE_MUTATORS);

@@ -610,6 +610,60 @@ describe("DomainStateMachine", () => {
 		]);
 	});
 
+	it("reuses the wrapper's frozen context while evaluating guards", () => {
+		type Context = { readonly nested: { readonly value: string } };
+		let guardedContext: Context | undefined;
+		const definition: DomainMachineDefinition<
+			"open",
+			Context,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ nested: { value: "initial" } }),
+			states: {
+				open: {
+					on: {
+						Stay: {
+							target: "open",
+							guard: ({ context }) => {
+								guardedContext = context;
+								return true;
+							},
+						},
+					},
+				},
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+		const contextBeforeCan = machine.context;
+
+		expect(machine.can({ type: "Stay" })).toBe(true);
+		expect(guardedContext).toBe(contextBeforeCan);
+	});
+
+	it("reuses the wrapper's frozen context when a transition does not replace it", () => {
+		type Context = { readonly nested: { readonly value: string } };
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Context,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ nested: { value: "initial" } }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+		const contextBeforeDispatch = machine.context;
+
+		const result = machine.dispatch({ type: "Close" });
+
+		expect(result.snapshot.context).toBe(contextBeforeDispatch);
+		expect(machine.context).toBe(contextBeforeDispatch);
+	});
+
 	it("preserves explicit null and undefined context updates", () => {
 		type NullableState = "filled" | "empty";
 		type NullableContext = string | null | undefined;
@@ -1764,6 +1818,64 @@ describe("DomainStateMachine", () => {
 		expect(Object.isFrozen(context)).toBe(true);
 		expect(Object.isFrozen(context.nested)).toBe(true);
 		expect(Object.isFrozen(context.items)).toBe(true);
+	});
+
+	it("rejects inherited cross-realm toStringTag accessors without invoking them", () => {
+		const tracker = { calls: 0 };
+		const foreignContext = runInNewContext(
+			`Object.defineProperty(Object.prototype, Symbol.toStringTag, {
+				configurable: true,
+				get() {
+					tracker.calls += 1;
+					return "Object";
+				},
+			});
+			({ value: "foreign" });`,
+			{ tracker },
+		) as { readonly value: string };
+		const definition: DomainMachineDefinition<
+			"open",
+			typeof foreignContext,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => foreignContext,
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(tracker.calls).toBe(0);
+	});
+
+	it("rejects inherited cross-realm array toStringTag accessors without invoking them", () => {
+		const tracker = { calls: 0 };
+		const foreignItems = runInNewContext(
+			`Object.defineProperty(Array.prototype, Symbol.toStringTag, {
+				configurable: true,
+				get() {
+					tracker.calls += 1;
+					return "Array";
+				},
+			});
+			[1, 2];`,
+			{ tracker },
+		) as readonly number[];
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly items: readonly number[] },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ items: foreignItems }),
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(tracker.calls).toBe(0);
 	});
 
 	it("accepts cross-realm events and reducer results", () => {

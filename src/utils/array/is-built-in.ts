@@ -77,6 +77,30 @@ export const REFERENCE_COMPARED_TAGS: ReadonlySet<string> = new Set([
 	"[object WeakSet]",
 ]);
 
+export function findPropertyDescriptor(
+	value: object,
+	key: PropertyKey,
+): PropertyDescriptor | undefined {
+	const visited = new WeakSet<object>();
+	let current: object | null = value;
+
+	while (current !== null && !visited.has(current)) {
+		visited.add(current);
+		const descriptor = Object.getOwnPropertyDescriptor(current, key);
+		if (descriptor !== undefined) return descriptor;
+		current = Object.getPrototypeOf(current);
+	}
+
+	return undefined;
+}
+
+export function objectTagWithoutInvokingAccessors(value: object): string {
+	const descriptor = findPropertyDescriptor(value, Symbol.toStringTag);
+	return descriptor !== undefined && !("value" in descriptor)
+		? "[object Object]"
+		: Object.prototype.toString.call(value);
+}
+
 /**
  * Verifies that `obj` genuinely is the type its tag claims, via an
  * internal-slot probe. Tags without a cheap probe (Promise, Error,

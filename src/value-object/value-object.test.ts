@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { ValueObject } from "./value-object";
+import { deepFreeze, ValueObject } from "./value-object";
+
+describe("deepFreeze", () => {
+    it("does not invoke inherited toStringTag accessors", () => {
+        let accessorInvoked = false;
+        const prototype = Object.create(Object.prototype);
+        Object.defineProperty(prototype, Symbol.toStringTag, {
+            get: () => {
+                accessorInvoked = true;
+                return "Object";
+            },
+        });
+        const value = Object.create(prototype) as { nested: { value: string } };
+        value.nested = { value: "initial" };
+
+        deepFreeze(value);
+
+        expect(accessorInvoked).toBe(false);
+        expect(Object.isFrozen(value)).toBe(true);
+        expect(Object.isFrozen(value.nested)).toBe(true);
+    });
+});
 
 describe("ValueObject Class", () => {
     interface MoneyProps {

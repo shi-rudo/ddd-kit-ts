@@ -116,14 +116,15 @@ its own context reference.
 
 The stateful wrapper defensively copies its machine definition at construction
 time, so later mutation of the caller's definition object cannot change that
-machine's behavior. It reuses that validated, frozen definition for subsequent
-operations. The functional APIs evaluate each operation against a fresh stable
-definition copy, so a callback cannot change the transition currently being
-evaluated. Machine contexts are copied into snapshots and deep-frozen so callers
-cannot mutate lifecycle data outside a transition. Public context, event,
-snapshot, and output types use `DomainMachineReadonly<T>` to express that deep
-immutability recursively at compile time. Snapshots and outputs returned by the
-API are deep-frozen.
+machine's behavior. It reuses that validated, frozen definition and its already
+validated current snapshot for subsequent operations. A transition that does not
+replace the context reuses the same deeply frozen context instead of copying it.
+The functional APIs evaluate each operation against fresh stable definition and
+snapshot copies, so a callback cannot change the transition currently being
+evaluated or mutate caller-owned data. Public context, event, snapshot, and
+output types use `DomainMachineReadonly<T>` to express deep immutability
+recursively at compile time. Snapshots and outputs returned by the API are
+deep-frozen.
 
 Machine context, events, and outputs are data, not behavior. Use only primitives,
 plain arrays, and plain objects. Custom class instances, Array subclasses,
@@ -134,8 +135,10 @@ slots that `Object.freeze` cannot reliably protect. Represent dates as ISO
 strings or epoch numbers, regular expressions as pattern/flag data, maps as
 plain records or entry arrays, and sets as arrays. Plain data from another
 JavaScript Realm is accepted and normalized to local `Object.prototype` and
-`Array.prototype` values while it is copied. Accessor descriptors are rejected
-without invoking their getter or setter, including `Symbol.toStringTag`.
+`Array.prototype` values while it is copied. Own accessor descriptors are
+rejected without invoking their getter or setter. `Symbol.toStringTag` accessors
+are also rejected when inherited from an otherwise valid object or array
+prototype.
 
 Runtime definition and reducer-result validation is strict. Unknown properties
 are rejected instead of ignored, so misspellings such as `gaurd` or `output`

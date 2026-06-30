@@ -26,12 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconstitution, functional inputs, and transition results.
 - Accept cross-Realm plain objects and arrays while normalizing copied values to
   local prototypes; custom classes and Array subclasses remain rejected.
-- Reject `Symbol.toStringTag` accessors without invoking them while validating
-  machine data.
+- Reject own and inherited `Symbol.toStringTag` accessors without invoking them
+  while validating machine data, including cross-Realm object and array
+  prototypes.
 - Expose deeply frozen context, event, snapshot, and output data through the
   recursive `DomainMachineReadonly<T>` type.
-- Reuse the stateful wrapper's prepared definition and already-frozen results to
-  avoid redundant validation and deep copies on every operation.
+- Reuse the stateful wrapper's prepared definition, validated snapshot, and
+  unchanged frozen context to avoid redundant validation and deep copies on
+  every operation.
 
 ## [2.1.0] - 2026-06-25
 
