@@ -3,6 +3,7 @@ import { DomainError } from "../core/errors";
 import {
 	findPropertyDescriptor,
 	isBuiltInObject,
+	isIntrinsicConstructorPrototype,
 } from "../utils/array/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -1232,7 +1233,7 @@ function isPlainRecord(value: unknown): value is Record<PropertyKey, unknown> {
 
 function isIntrinsicArrayPrototype(prototype: object | null): boolean {
 	if (prototype === null || !Array.isArray(prototype)) return false;
-	if (!hasIntrinsicConstructorPrototype(prototype, "Array")) return false;
+	if (!isIntrinsicConstructorPrototype(prototype, "Array")) return false;
 
 	const parentPrototype = Object.getPrototypeOf(prototype);
 	return (
@@ -1243,42 +1244,7 @@ function isIntrinsicArrayPrototype(prototype: object | null): boolean {
 function isIntrinsicObjectPrototype(prototype: object): boolean {
 	return (
 		Object.getPrototypeOf(prototype) === null &&
-		hasIntrinsicConstructorPrototype(prototype, "Object")
-	);
-}
-
-function hasIntrinsicConstructorPrototype(
-	prototype: object,
-	constructorName: "Array" | "Object",
-): boolean {
-	const constructorDescriptor = Object.getOwnPropertyDescriptor(
-		prototype,
-		"constructor",
-	);
-	if (
-		constructorDescriptor === undefined ||
-		!("value" in constructorDescriptor) ||
-		typeof constructorDescriptor.value !== "function"
-	) {
-		return false;
-	}
-
-	const constructorFunction = constructorDescriptor.value;
-	const nameDescriptor = Object.getOwnPropertyDescriptor(
-		constructorFunction,
-		"name",
-	);
-	const prototypeDescriptor = Object.getOwnPropertyDescriptor(
-		constructorFunction,
-		"prototype",
-	);
-	return (
-		nameDescriptor !== undefined &&
-		"value" in nameDescriptor &&
-		nameDescriptor.value === constructorName &&
-		prototypeDescriptor !== undefined &&
-		"value" in prototypeDescriptor &&
-		prototypeDescriptor.value === prototype
+		isIntrinsicConstructorPrototype(prototype, "Object")
 	);
 }
 

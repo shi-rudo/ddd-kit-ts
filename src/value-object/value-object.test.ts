@@ -20,7 +20,7 @@ const mutableBuiltInCases = [
         },
         {
             name: "Set",
-            create: () => new Set([{ value: "initial" }]),
+            create: () => new Set(["initial"]),
             read: (value: object) => (value as Set<unknown>).size,
             expected: 1,
             mutate: (value: object) => (value as Set<unknown>).add("other"),

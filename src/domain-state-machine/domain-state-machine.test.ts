@@ -1820,6 +1820,109 @@ describe("DomainStateMachine", () => {
 		expect(Object.isFrozen(context.items)).toBe(true);
 	});
 
+	it("rejects custom prototypes disguised as intrinsic Object prototypes", () => {
+		const createDisguisedRecord = (): Record<string, unknown> => {
+			const fakeConstructor = function FakeObject() {};
+			Object.defineProperty(fakeConstructor, "name", { value: "Object" });
+			Object.setPrototypeOf(fakeConstructor.prototype, null);
+			const value = Object.create(fakeConstructor.prototype) as Record<
+				string,
+				unknown
+			>;
+			value.value = "disguised";
+			return value;
+		};
+		const contextDefinition: DomainMachineDefinition<
+			"open",
+			Record<string, unknown>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: createDisguisedRecord,
+			states: { open: {} },
+		};
+		const eventDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+		const outputDefinition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			unknown
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [createDisguisedRecord()] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+		const event = createDisguisedRecord();
+		event.type = "Close";
+
+		expect(() => new DomainStateMachine(contextDefinition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+		expect(() =>
+			transitionDomainState(
+				eventDefinition,
+				createInitialDomainMachineSnapshot(eventDefinition),
+				event as { readonly type: "Close" },
+			),
+		).toThrow(InvalidDomainMachineEventError);
+		expect(() =>
+			transitionDomainState(
+				outputDefinition,
+				createInitialDomainMachineSnapshot(outputDefinition),
+				{ type: "Close" },
+			),
+		).toThrow(InvalidDomainTransitionResultError);
+	});
+
+	it("rejects custom array prototypes disguised as intrinsic Array prototypes", () => {
+		const fakeArrayPrototype: unknown[] = [];
+		Object.setPrototypeOf(fakeArrayPrototype, Object.prototype);
+		const fakeConstructor = function FakeArray() {};
+		Object.defineProperty(fakeConstructor, "name", { value: "Array" });
+		Object.defineProperty(fakeConstructor, "prototype", {
+			value: fakeArrayPrototype,
+		});
+		Object.defineProperty(fakeArrayPrototype, "constructor", {
+			value: fakeConstructor,
+		});
+		const disguisedArray = [1, 2];
+		Object.setPrototypeOf(disguisedArray, fakeArrayPrototype);
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly items: readonly number[] },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ items: disguisedArray }),
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			InvalidDomainMachineContextError,
+		);
+	});
+
 	it("rejects inherited cross-realm toStringTag accessors without invoking them", () => {
 		const tracker = { calls: 0 };
 		const foreignContext = runInNewContext(

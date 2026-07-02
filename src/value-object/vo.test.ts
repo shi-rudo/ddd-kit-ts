@@ -505,6 +505,36 @@ describe("VO", () => {
 			nested.lat = 0;
 			expect(v.coords.lat).toBe(52.5);
 		});
+
+		it("rejects own accessors without invoking them", () => {
+			let getterCalls = 0;
+			const input = {} as { readonly amount: number };
+			Object.defineProperty(input, "amount", {
+				enumerable: true,
+				get: () => {
+					getterCalls += 1;
+					return 5;
+				},
+			});
+
+			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(getterCalls).toBe(0);
+		});
+
+		it("rejects array index accessors without invoking them", () => {
+			let getterCalls = 0;
+			const input: number[] = [];
+			Object.defineProperty(input, 0, {
+				enumerable: true,
+				get: () => {
+					getterCalls += 1;
+					return 5;
+				},
+			});
+
+			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(getterCalls).toBe(0);
+		});
 	});
 
 	describe("symbol-keyed properties", () => {
@@ -529,6 +559,43 @@ describe("VO", () => {
 				(v.outer as unknown as Record<symbol, string>)[meta],
 			).toBe("x");
 			expect(v.outer.plain).toBe(1);
+		});
+
+		it("preserves non-enumerable symbol properties", () => {
+			const hidden = Symbol("hidden");
+			const input = {} as Record<symbol, unknown>;
+			Object.defineProperty(input, hidden, {
+				value: { amount: 5 },
+				enumerable: false,
+			});
+
+			const result = vo(input) as Record<symbol, { amount: number }>;
+
+			expect(result[hidden]).toEqual({ amount: 5 });
+			expect(Object.isFrozen(result[hidden])).toBe(true);
+		});
+
+		it("preserves array symbol properties and includes them in equality", () => {
+			const metadata = Symbol("metadata");
+			const first = [1] as number[] & Record<symbol, unknown>;
+			const second = [1] as number[] & Record<symbol, unknown>;
+			first[metadata] = { code: "first" };
+			second[metadata] = { code: "second" };
+
+			const firstVo = vo(first);
+			const secondVo = vo(second);
+
+			expect(firstVo[metadata]).toEqual({ code: "first" });
+			expect(Object.isFrozen(firstVo[metadata])).toBe(true);
+			expect(voEquals(firstVo, secondVo)).toBe(false);
+		});
+
+		it("preserves sparse array holes", () => {
+			const input = new Array<string>(1);
+
+			const result = vo(input);
+
+			expect(0 in result).toBe(false);
 		});
 
 		it("voEquals considers symbol-keyed values", () => {
@@ -630,16 +697,13 @@ describe("VO", () => {
 			expect(v.s.has(1)).toBe(true);
 		});
 
-		it("deep-freezes objects stored inside Map values and Set members", () => {
+		it("deep-freezes objects stored inside Map values", () => {
 			const v = vo({
 				m: new Map([["k", { a: 1 }]]),
-				s: new Set([{ b: 2 }]),
 			});
 
 			const inMap = v.m.get("k") as { a: number };
 			expect(Object.isFrozen(inMap)).toBe(true);
-			const [inSet] = v.s;
-			expect(Object.isFrozen(inSet)).toBe(true);
 		});
 
 		it("frozen VOs still round-trip through vo() and compare equal", () => {
@@ -671,6 +735,33 @@ describe("VO", () => {
 	});
 
 	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
+		it("does not invoke overridden Map or Set iterators", () => {
+			let iteratorCalls = 0;
+			const map = new Map([["key", "value"]]);
+			const set = new Set(["member"]);
+			const failIfInvoked = () => {
+				iteratorCalls += 1;
+				throw new Error("custom iterator must not run");
+			};
+			Object.defineProperty(map, Symbol.iterator, { value: failIfInvoked });
+			Object.defineProperty(set, Symbol.iterator, { value: failIfInvoked });
+
+			const result = vo({ map, set });
+
+			expect(result.map.get("key")).toBe("value");
+			expect(result.set.has("member")).toBe(true);
+			expect(iteratorCalls).toBe(0);
+		});
+
+		it("rejects object Map keys and Set members that cannot preserve value equality", () => {
+			expect(() => vo({ m: new Map([[{ id: 1 }, "value"]]) })).toThrow(
+				/Map keys must be primitive values/,
+			);
+			expect(() => vo({ s: new Set([{ id: 1 }]) })).toThrow(
+				/Set members must be primitive values/,
+			);
+		});
+
 		it("preserves symbol-keyed properties inside Map values", () => {
 			const s = Symbol("s");
 			const v = vo({ m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]) });

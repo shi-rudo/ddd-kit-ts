@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: Value Object cloning and equality hardening
+
+- Reject object-valued Map keys and Set members, whose identity-based lookup
+  semantics cannot survive defensive cloning while preserving value equality.
+- Clone arrays and records through data descriptors, rejecting accessors without
+  invoking them while preserving sparse holes and all symbol-keyed properties.
+- Read Map and Set contents through captured intrinsic iterators so instance-level
+  iterator overrides cannot execute behavior during Value Object construction.
+- Include array own properties in deep equality so preserved symbols and sparse
+  structure remain part of Value Object equality.
+
 ### Fixed: Domain State Machine runtime hardening
 
 - Reject async reducers, unknown definition/result properties, inherited or
@@ -26,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconstitution, functional inputs, and transition results.
 - Accept cross-Realm plain objects and arrays while normalizing copied values to
   local prototypes; custom classes and Array subclasses remain rejected.
+- Verify cross-Realm Object and Array prototypes through native intrinsic
+  constructors instead of accepting user functions with matching names.
 - Reject own and inherited `Symbol.toStringTag` accessors without invoking them
   while validating machine data, including cross-Realm object and array
   prototypes.
@@ -286,7 +299,7 @@ Four low-severity fixes from the bug audit. (1) Handlers throwing non-Error valu
 
 ### Fixed: `vo()` no longer silently drops symbol-keyed properties
 
-`vo()` cloned via `structuredClone`, which silently drops symbol-keyed properties, yet `voEquals`/`deepEqual` DO consider symbol keys, so a symbol-keyed value vanished from the VO while still being claimed by the equality contract. (The existing test passed vacuously: `Object.isFrozen(undefined) === true`.) `vo()` now walks plain objects, arrays, and **Map/Set entries** itself, preserving symbol keys, shared-reference identity, and cycles across Map/Set boundaries, with `__proto__`-as-data safety. Only atomic built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error) delegate to `structuredClone`, brand-verified against `Symbol.toStringTag` spoofing. Function values throw the documented data-not-behaviour `TypeError` everywhere (including inside Map values, previously a raw `DataCloneError`); Promise/WeakMap/WeakSet throw a descriptive `TypeError` ("Value Objects are plain data") instead of `DataCloneError`. Custom class instances and subclasses of built-ins are rejected instead of being cloned into incomplete objects that have lost private fields, non-enumerable state, or internal slots.
+`vo()` cloned via `structuredClone`, which silently drops symbol-keyed properties, yet `voEquals`/`deepEqual` DO consider symbol keys, so a symbol-keyed value vanished from the VO while still being claimed by the equality contract. (The existing test passed vacuously: `Object.isFrozen(undefined) === true`.) `vo()` now walks plain objects, arrays, and **Map values** itself, preserving symbol keys, shared-reference identity, and cycles through Map values, with `__proto__`-as-data safety. Map keys and Set members must be primitive because their identity-based lookup semantics cannot survive defensive cloning while retaining Value Object equality. Only atomic built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error) delegate to `structuredClone`, brand-verified against `Symbol.toStringTag` spoofing. Function values throw the documented data-not-behaviour `TypeError` everywhere (including inside Map values, previously a raw `DataCloneError`); Promise/WeakMap/WeakSet throw a descriptive `TypeError` ("Value Objects are plain data") instead of `DataCloneError`. Custom class instances and subclasses of built-ins are rejected instead of being cloned into incomplete objects that have lost private fields, non-enumerable state, or internal slots.
 
 ### Fixed: `deepOmit` no longer reuses path-sensitive predicate results across shared references
 

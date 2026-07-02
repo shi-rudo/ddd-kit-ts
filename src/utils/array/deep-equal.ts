@@ -142,13 +142,28 @@ function deepEqualInner(
 	// real array away from element comparison, or a plain object into it).
 	if (Array.isArray(objA) || Array.isArray(objB)) {
 		if (!Array.isArray(objA) || !Array.isArray(objB)) return false;
-		const arrA = objA as unknown[];
-		const arrB = objB as unknown[];
-		const len = arrA.length;
-		if (len !== arrB.length) return false;
+		if (objA.length !== objB.length) return false;
 
-		for (let i = 0; i < len; i++) {
-			if (!deepEqualInner(arrA[i], arrB[i], visited)) return false;
+		const keysA = Reflect.ownKeys(objA).filter((key) => key !== "length");
+		const keysB = Reflect.ownKeys(objB).filter((key) => key !== "length");
+		if (keysA.length !== keysB.length) return false;
+
+		for (const key of keysA) {
+			if (!objHasOwn.call(objB, key)) return false;
+			const descriptorA = Object.getOwnPropertyDescriptor(objA, key);
+			const descriptorB = Object.getOwnPropertyDescriptor(objB, key);
+			if (descriptorA === undefined || descriptorB === undefined) return false;
+			if (("value" in descriptorA) !== ("value" in descriptorB)) return false;
+			if ("value" in descriptorA && "value" in descriptorB) {
+				if (!deepEqualInner(descriptorA.value, descriptorB.value, visited)) {
+					return false;
+				}
+			} else if (
+				descriptorA.get !== descriptorB.get ||
+				descriptorA.set !== descriptorB.set
+			) {
+				return false;
+			}
 		}
 		return true;
 	}

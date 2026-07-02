@@ -49,6 +49,8 @@ const DATE_MUTATORS: readonly string[] = [
 // module: createDomainEvent deep-freezes a Date per event, so fresh
 // per-instance closures would be pure allocation churn on a hot path.
 const mutationThrowers = new Map<string, () => never>();
+const mapEntries = Map.prototype.entries;
+const setValues = Set.prototype.values;
 
 function mutationThrower(typeName: string, method: string): () => never {
     const key = `${typeName}.${method}`;
@@ -173,18 +175,21 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 /**
  * Deep clone used by `vo()` and the `ValueObject` constructor.
  *
- * Plain objects, arrays, and Map/Set entries are walked manually so
+ * Plain objects, arrays, and Map values are walked manually so
  * that symbol-keyed properties survive (which `structuredClone` silently
  * drops; they would otherwise be invisible to `voEquals`, whose
  * `deepEqual` DOES consider symbol keys) and shared references / cycles
- * keep their identity across Map/Set boundaries. Function values throw,
+ * keep their identity across Map boundaries. Function values throw,
  * preserving `vo()`'s documented data-not-behaviour gate; Promise /
  * WeakMap / WeakSet throw a descriptive `TypeError` (they have no
  * meaningful value semantics). Custom class instances and subclasses of
  * built-ins are rejected because cloning them without invoking their
- * constructor can silently lose private or non-enumerable state. Atomic
- * built-ins (Date, RegExp,
- * TypedArrays, ArrayBuffer, wrappers, Error) delegate to
+ * constructor can silently lose private or non-enumerable state. Map keys
+ * and Set members must be primitive because their equality is
+ * identity-based and object identity cannot survive defensive cloning.
+ * Accessor properties are rejected without invoking them. Atomic
+ * built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error)
+ * delegate to
  * `structuredClone`, brand-verified so a `Symbol.toStringTag` spoofer is
  * walked as the plain object it is. `__proto__` own keys are copied as
  * inert data properties.
@@ -209,8 +214,15 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         }
         const clone: unknown[] = new Array(obj.length);
         visited.set(obj, clone);
-        for (let i = 0; i < obj.length; i++) {
-            clone[i] = cloneForVo(obj[i], visited);
+        for (const key of Reflect.ownKeys(obj)) {
+            if (key === "length") continue;
+            const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+            if (descriptor === undefined) continue;
+            if (!("value" in descriptor)) {
+                throwUnsupportedAccessorProperty();
+            }
+            descriptor.value = cloneForVo(descriptor.value, visited);
+            Object.defineProperty(clone, key, descriptor);
         }
         return clone;
     }
@@ -223,16 +235,28 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         if (tag === "[object Map]") {
             const clone = new Map<unknown, unknown>();
             visited.set(obj, clone);
-            for (const [key, entry] of obj as Map<unknown, unknown>) {
-                clone.set(cloneForVo(key, visited), cloneForVo(entry, visited));
+            for (const [key, entry] of mapEntries.call(
+                obj as Map<unknown, unknown>,
+            )) {
+                if (!isPrimitiveValue(key)) {
+                    throw new TypeError(
+                        "vo() Map keys must be primitive values to preserve value equality",
+                    );
+                }
+                clone.set(key, cloneForVo(entry, visited));
             }
             return clone;
         }
         if (tag === "[object Set]") {
             const clone = new Set<unknown>();
             visited.set(obj, clone);
-            for (const member of obj as Set<unknown>) {
-                clone.add(cloneForVo(member, visited));
+            for (const member of setValues.call(obj as Set<unknown>)) {
+                if (!isPrimitiveValue(member)) {
+                    throw new TypeError(
+                        "vo() Set members must be primitive values to preserve value equality",
+                    );
+                }
+                clone.add(member);
             }
             return clone;
         }
@@ -266,16 +290,17 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
     visited.set(obj, clone);
     for (const key of Reflect.ownKeys(obj)) {
         const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-        if (!descriptor?.enumerable) continue;
+        if (descriptor === undefined) continue;
+        if (!("value" in descriptor)) {
+            throwUnsupportedAccessorProperty();
+        }
+        if (typeof key === "string" && !descriptor.enumerable) continue;
         // defineProperty (not assignment) so an own "__proto__" key can
         // never invoke the prototype setter.
         Object.defineProperty(clone, key, {
-            value: cloneForVo(
-                (obj as Record<PropertyKey, unknown>)[key],
-                visited,
-            ),
+            value: cloneForVo(descriptor.value, visited),
             writable: true,
-            enumerable: true,
+            enumerable: descriptor.enumerable,
             configurable: true,
         });
     }
@@ -285,6 +310,19 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
 function throwUnsupportedClassInstance(): never {
     throw new TypeError(
         "vo() cannot clone custom class instances: Value Objects are plain data",
+    );
+}
+
+function throwUnsupportedAccessorProperty(): never {
+    throw new TypeError(
+        "vo() cannot clone accessor properties: Value Objects are plain data",
+    );
+}
+
+function isPrimitiveValue(value: unknown): boolean {
+    return (
+        value === null ||
+        (typeof value !== "object" && typeof value !== "function")
     );
 }
 
