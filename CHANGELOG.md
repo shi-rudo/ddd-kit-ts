@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iterator overrides cannot execute behavior during Value Object construction.
 - Include array own properties in deep equality so preserved symbols and sparse
   structure remain part of Value Object equality.
+- Preserve sparse holes, descriptors, and custom string and symbol properties
+  while omitting array keys, keeping `deepEqualExcept` and `voEqualsExcept`
+  aligned with strict array equality.
+- Reject Proxy-wrapped user constructors that imitate intrinsic constructor
+  names by comparing their exact source with a captured intrinsic allowlist.
 
 ### Fixed: Domain State Machine runtime hardening
 
@@ -39,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local prototypes; custom classes and Array subclasses remain rejected.
 - Verify cross-Realm Object and Array prototypes through native intrinsic
   constructors instead of accepting user functions with matching names.
+- Reject Proxy-wrapped user constructors that imitate intrinsic Object or Array
+  prototypes.
 - Reject own and inherited `Symbol.toStringTag` accessors without invoking them
   while validating machine data, including cross-Realm object and array
   prototypes.

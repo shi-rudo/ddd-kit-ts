@@ -87,6 +87,27 @@ describe("deepOmit – Nested Objects and Arrays", () => {
 		expect(result.meta).not.toBe(input.meta);
 		expect(result.items).not.toBe(input.items);
 	});
+
+	it("preserves sparse holes and filters custom string and symbol properties", () => {
+		const kept = Symbol("kept");
+		const ignored = Symbol("ignored");
+		const input = new Array<{ id: number }>(2) as Array<{ id: number }> &
+			Record<PropertyKey, unknown>;
+		input[1] = { id: 1 };
+		input.label = "remove";
+		input[kept] = { nested: true };
+		input[ignored] = "remove";
+
+		const result = deepOmit(input, {
+			ignoreKeys: ["label", ignored, "id"],
+		});
+
+		expect(0 in result).toBe(false);
+		expect(result[1]).toEqual({});
+		expect(Object.hasOwn(result, "label")).toBe(false);
+		expect(result[kept]).toEqual({ nested: true });
+		expect(Object.hasOwn(result, ignored)).toBe(false);
+	});
 });
 
 describe("deepOmit – ignoreKeyPredicate with Path", () => {

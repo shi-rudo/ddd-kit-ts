@@ -67,6 +67,57 @@ const bigIntValueOf = BigInt.prototype.valueOf;
 const functionToString = Function.prototype.toString;
 const PROBE_KEY = {};
 
+const INTRINSIC_CONSTRUCTOR_NAMES = [
+	"Object",
+	"Array",
+	"Date",
+	"RegExp",
+	"Map",
+	"Set",
+	"WeakMap",
+	"WeakSet",
+	"Promise",
+	"Error",
+	"EvalError",
+	"RangeError",
+	"ReferenceError",
+	"SyntaxError",
+	"TypeError",
+	"URIError",
+	"AggregateError",
+	"Boolean",
+	"Number",
+	"String",
+	"BigInt",
+	"ArrayBuffer",
+	"SharedArrayBuffer",
+	"DataView",
+	"Int8Array",
+	"Uint8Array",
+	"Uint8ClampedArray",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"Float32Array",
+	"Float64Array",
+	"BigInt64Array",
+	"BigUint64Array",
+] as const;
+
+const intrinsicConstructorSources: ReadonlyMap<string, string> = new Map(
+	INTRINSIC_CONSTRUCTOR_NAMES.flatMap((name) => {
+		const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+		const intrinsic = descriptor?.value;
+		return typeof intrinsic === "function"
+			? [[name, functionToString.call(intrinsic)] as const]
+			: [];
+	}),
+);
+const intrinsicConstructorSourceSet: ReadonlySet<string> = new Set(
+	intrinsicConstructorSources.values(),
+);
+
 export function isIntrinsicConstructorPrototype(
 	prototype: object,
 	expectedName?: string,
@@ -76,21 +127,51 @@ export function isIntrinsicConstructorPrototype(
 		"constructor",
 	);
 	const candidateConstructor = constructorDescriptor?.value;
+	if (
+		constructorDescriptor === undefined ||
+		!("value" in constructorDescriptor) ||
+		typeof candidateConstructor !== "function"
+	) {
+		return false;
+	}
+
+	let candidateSource: string;
+	try {
+		candidateSource = functionToString.call(candidateConstructor);
+	} catch {
+		return false;
+	}
+	const expectedSource =
+		expectedName === undefined
+			? undefined
+			: intrinsicConstructorSources.get(expectedName);
+	if (
+		(expectedSource !== undefined && candidateSource !== expectedSource) ||
+		(expectedSource === undefined &&
+			!intrinsicConstructorSourceSet.has(candidateSource))
+	) {
+		return false;
+	}
+
 	const nameDescriptor =
-		typeof candidateConstructor === "function" && expectedName !== undefined
-			? Object.getOwnPropertyDescriptor(candidateConstructor, "name")
+		Object.getOwnPropertyDescriptor(candidateConstructor, "name");
+	const candidateName =
+		nameDescriptor !== undefined &&
+		"value" in nameDescriptor &&
+		typeof nameDescriptor.value === "string"
+			? nameDescriptor.value
 			: undefined;
+	const intrinsicName = expectedName ?? candidateName;
+	const intrinsicSource =
+		intrinsicName === undefined
+			? undefined
+			: intrinsicConstructorSources.get(intrinsicName);
 	return (
-		constructorDescriptor !== undefined &&
-		"value" in constructorDescriptor &&
-		typeof candidateConstructor === "function" &&
-		(expectedName === undefined ||
-			(nameDescriptor !== undefined &&
-				"value" in nameDescriptor &&
-				nameDescriptor.value === expectedName)) &&
+		candidateName === intrinsicName &&
+		intrinsicSource !== undefined &&
+		candidateSource === intrinsicSource &&
 		Object.getOwnPropertyDescriptor(candidateConstructor, "prototype")
-			?.value === prototype &&
-		functionToString.call(candidateConstructor).includes("[native code]")
+			?.value === prototype
 	);
 }
 

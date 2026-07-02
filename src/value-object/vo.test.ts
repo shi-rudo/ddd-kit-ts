@@ -897,6 +897,29 @@ describe("VO", () => {
 			expect(nameAccessorInvoked).toBe(false);
 		});
 
+		it("rejects a custom Object prototype whose constructor is hidden behind a Proxy", () => {
+			const fakeConstructor = function FakeObject() {};
+			Object.defineProperty(fakeConstructor, "name", { value: "Object" });
+			let descriptorTrapCalls = 0;
+			const disguisedConstructor = new Proxy(fakeConstructor, {
+				getOwnPropertyDescriptor: (target, key) => {
+					descriptorTrapCalls += 1;
+					return Reflect.getOwnPropertyDescriptor(target, key);
+				},
+			});
+			Object.defineProperty(fakeConstructor.prototype, "constructor", {
+				value: disguisedConstructor,
+			});
+			Object.setPrototypeOf(fakeConstructor.prototype, null);
+			const value = Object.create(fakeConstructor.prototype) as {
+				amount: number;
+			};
+			value.amount = 5;
+
+			expect(() => vo(value)).toThrow(/custom class instances/);
+			expect(descriptorTrapCalls).toBe(0);
+		});
+
 		it("continues to accept cross-realm plain objects", () => {
 			const value = runInNewContext("({ nested: { amount: 5 } })") as {
 				nested: { amount: number };

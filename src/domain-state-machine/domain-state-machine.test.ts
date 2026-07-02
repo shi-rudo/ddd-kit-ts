@@ -1923,6 +1923,50 @@ describe("DomainStateMachine", () => {
 		);
 	});
 
+	it("rejects intrinsic constructor names disguised behind Proxies", () => {
+		const fakeObjectConstructor = function FakeObject() {};
+		Object.defineProperty(fakeObjectConstructor, "name", { value: "Object" });
+		const disguisedObjectConstructor = new Proxy(fakeObjectConstructor, {});
+		Object.defineProperty(fakeObjectConstructor.prototype, "constructor", {
+			value: disguisedObjectConstructor,
+		});
+		Object.setPrototypeOf(fakeObjectConstructor.prototype, null);
+		const disguisedObject = Object.create(
+			fakeObjectConstructor.prototype,
+		) as Record<string, unknown>;
+		disguisedObject.value = "disguised";
+
+		const fakeArrayPrototype: unknown[] = [];
+		Object.setPrototypeOf(fakeArrayPrototype, Object.prototype);
+		const fakeArrayConstructor = function FakeArray() {};
+		Object.defineProperty(fakeArrayConstructor, "name", { value: "Array" });
+		const disguisedArrayConstructor = new Proxy(fakeArrayConstructor, {});
+		Object.defineProperty(fakeArrayConstructor, "prototype", {
+			value: fakeArrayPrototype,
+		});
+		Object.defineProperty(fakeArrayPrototype, "constructor", {
+			value: disguisedArrayConstructor,
+		});
+		const disguisedArray = [1, 2];
+		Object.setPrototypeOf(disguisedArray, fakeArrayPrototype);
+
+		for (const context of [disguisedObject, { items: disguisedArray }]) {
+			const definition: DomainMachineDefinition<
+				"open",
+				Record<string, unknown>,
+				{ readonly type: "Stay" }
+			> = {
+				initial: "open",
+				initialContext: () => context,
+				states: { open: {} },
+			};
+
+			expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+				InvalidDomainMachineContextError,
+			);
+		}
+	});
+
 	it("rejects inherited cross-realm toStringTag accessors without invoking them", () => {
 		const tracker = { calls: 0 };
 		const foreignContext = runInNewContext(
