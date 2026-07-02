@@ -212,8 +212,9 @@ function deepEqualInner(
 
 		case "[object Boolean]":
 		case "[object Number]":
-		case "[object String]": {
-			// Wrapper objects (new Boolean/Number/String); SameValueZero so
+		case "[object String]":
+		case "[object BigInt]": {
+			// Wrapper objects (Boolean/Number/String/BigInt); SameValueZero so
 			// two NaN Number wrappers compare equal.
 			return sameValueZero(
 				(objA as { valueOf(): unknown }).valueOf(),

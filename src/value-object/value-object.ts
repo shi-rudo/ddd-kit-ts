@@ -4,7 +4,7 @@ import {
     type DeepEqualExceptOptions,
 } from "../utils/array/deep-equal-except";
 import {
-    isBuiltInObject,
+    builtInTagWithoutInvokingAccessors,
     mutableBuiltInTagWithoutInvokingAccessors,
 } from "../utils/array/is-built-in";
 import { err, ok, type Result } from "@shirudo/result";
@@ -208,9 +208,8 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         return clone;
     }
 
-    const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(obj);
-    const tag = mutableBuiltInTag ?? Object.prototype.toString.call(obj);
-    if (mutableBuiltInTag !== undefined || isBuiltInObject(obj, tag)) {
+    const tag = builtInTagWithoutInvokingAccessors(obj);
+    if (tag !== undefined) {
         if (tag === "[object Map]") {
             const clone = new Map<unknown, unknown>();
             visited.set(obj, clone);

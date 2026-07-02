@@ -24,6 +24,7 @@ const BUILT_IN_TAGS: ReadonlySet<string> = new Set([
 	"[object Boolean]",
 	"[object Number]",
 	"[object String]",
+	"[object BigInt]",
 	"[object ArrayBuffer]",
 	"[object SharedArrayBuffer]",
 	"[object DataView]",
@@ -54,10 +55,16 @@ const arrayBufferByteLengthGet = intrinsicGetter(
 	ArrayBuffer.prototype,
 	"byteLength",
 );
+const sharedArrayBufferByteLengthGet =
+	typeof SharedArrayBuffer === "undefined"
+		? undefined
+		: intrinsicGetter(SharedArrayBuffer.prototype, "byteLength");
 const regExpSourceGet = intrinsicGetter(RegExp.prototype, "source");
 const booleanValueOf = Boolean.prototype.valueOf;
 const numberValueOf = Number.prototype.valueOf;
 const stringValueOf = String.prototype.valueOf;
+const bigIntValueOf = BigInt.prototype.valueOf;
+const functionToString = Function.prototype.toString;
 const PROBE_KEY = {};
 
 /**
@@ -106,42 +113,92 @@ export type MutableBuiltInTag =
 	| "[object Map]"
 	| "[object Set]";
 
-export function mutableBuiltInTagWithoutInvokingAccessors(
+export function builtInTagWithoutInvokingAccessors(
 	value: object,
-): MutableBuiltInTag | undefined {
+): string | undefined {
+	if (ArrayBuffer.isView(value)) {
+		return hasBrand(value, "[object DataView]")
+			? "[object DataView]"
+			: "[object TypedArray]";
+	}
+
 	const descriptor = findPropertyDescriptor(value, Symbol.toStringTag);
 	if (descriptor !== undefined && !("value" in descriptor)) {
-		return mutableBuiltInTagFromBrand(value);
+		return builtInTagFromBrand(value);
 	}
 
 	const tag = Object.prototype.toString.call(value);
-	if (
-		(tag === "[object Date]" ||
-			tag === "[object Map]" ||
-			tag === "[object Set]") &&
-		hasBrand(value, tag)
-	) {
+	if (BUILT_IN_TAGS.has(tag) && hasBrand(value, tag)) {
 		return tag;
 	}
 	return descriptor === undefined
 		? undefined
-		: mutableBuiltInTagFromBrand(value);
+		: builtInTagFromBrand(value);
 }
 
-function mutableBuiltInTagFromBrand(
+export function mutableBuiltInTagWithoutInvokingAccessors(
 	value: object,
 ): MutableBuiltInTag | undefined {
+	const tag = builtInTagWithoutInvokingAccessors(value);
+	return tag === "[object Date]" ||
+		tag === "[object Map]" ||
+		tag === "[object Set]"
+		? tag
+		: undefined;
+}
+
+function builtInTagFromBrand(value: object): string | undefined {
 	if (hasBrand(value, "[object Date]")) return "[object Date]";
+	if (hasBrand(value, "[object RegExp]")) return "[object RegExp]";
 	if (hasBrand(value, "[object Map]")) return "[object Map]";
 	if (hasBrand(value, "[object Set]")) return "[object Set]";
+	if (hasBrand(value, "[object WeakMap]")) return "[object WeakMap]";
+	if (hasBrand(value, "[object WeakSet]")) return "[object WeakSet]";
+	if (hasBrand(value, "[object DataView]")) return "[object DataView]";
+	if (hasBrand(value, "[object ArrayBuffer]")) return "[object ArrayBuffer]";
+	if (hasBrand(value, "[object SharedArrayBuffer]")) {
+		return "[object SharedArrayBuffer]";
+	}
+	if (hasBrand(value, "[object Boolean]")) return "[object Boolean]";
+	if (hasBrand(value, "[object Number]")) return "[object Number]";
+	if (hasBrand(value, "[object String]")) return "[object String]";
+	if (hasBrand(value, "[object BigInt]")) return "[object BigInt]";
+	if (hasNativePrototype(value, "Promise")) return "[object Promise]";
+	if (hasNativePrototype(value, "Error")) return "[object Error]";
 	return undefined;
+}
+
+function hasNativePrototype(value: object, expectedName: string): boolean {
+	const visited = new WeakSet<object>();
+	let prototype = Object.getPrototypeOf(value);
+
+	while (prototype !== null && !visited.has(prototype)) {
+		visited.add(prototype);
+		const constructorDescriptor = Object.getOwnPropertyDescriptor(
+			prototype,
+			"constructor",
+		);
+		const candidateConstructor = constructorDescriptor?.value;
+		if (
+			typeof candidateConstructor === "function" &&
+			candidateConstructor.name === expectedName &&
+			Object.getOwnPropertyDescriptor(candidateConstructor, "prototype")
+				?.value ===
+				prototype &&
+			functionToString.call(candidateConstructor).includes("[native code]")
+		) {
+			return true;
+		}
+		prototype = Object.getPrototypeOf(prototype);
+	}
+	return false;
 }
 
 /**
  * Verifies that `obj` genuinely is the type its tag claims, via an
- * internal-slot probe. Tags without a cheap probe (Promise, Error,
- * SharedArrayBuffer) are trusted: their downstream handling is
- * reference-based and cannot crash on a spoofed object.
+ * internal-slot probe. Promise and Error have no side-effect-free standard
+ * probe, so their visible tags remain conservative; masked instances are
+ * identified separately through their native prototype chain.
  */
 function hasBrand(obj: object, tag: string): boolean {
 	try {
@@ -170,6 +227,10 @@ function hasBrand(obj: object, tag: string): boolean {
 			case "[object ArrayBuffer]":
 				arrayBufferByteLengthGet.call(obj);
 				return true;
+			case "[object SharedArrayBuffer]":
+				if (!sharedArrayBufferByteLengthGet) return false;
+				sharedArrayBufferByteLengthGet.call(obj);
+				return true;
 			case "[object Boolean]":
 				booleanValueOf.call(obj);
 				return true;
@@ -178,6 +239,9 @@ function hasBrand(obj: object, tag: string): boolean {
 				return true;
 			case "[object String]":
 				stringValueOf.call(obj);
+				return true;
+			case "[object BigInt]":
+				bigIntValueOf.call(obj);
 				return true;
 			default:
 				return true;

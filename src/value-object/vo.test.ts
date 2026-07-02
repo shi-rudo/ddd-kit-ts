@@ -657,6 +657,17 @@ describe("VO", () => {
 		});
 	});
 
+	describe("boxed BigInt values", () => {
+		it("compares the wrapped primitive instead of the empty object shell", () => {
+			const seven = vo({ value: Object(7n) });
+			const anotherSeven = vo({ value: Object(7n) });
+			const eight = vo({ value: Object(8n) });
+
+			expect(voEquals(seven, anotherSeven)).toBe(true);
+			expect(voEquals(seven, eight)).toBe(false);
+		});
+	});
+
 	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
 		it("preserves symbol-keyed properties inside Map values", () => {
 			const s = Symbol("s");

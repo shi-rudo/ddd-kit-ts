@@ -27,6 +27,81 @@ const mutableBuiltInCases = [
         },
     ] as const;
 
+const atomicBuiltInCases = [
+    {
+        name: "RegExp",
+        create: () => /value/,
+        read: (value: object) => (value as RegExp).test("value"),
+        expected: true,
+    },
+    {
+        name: "ArrayBuffer",
+        create: () => new ArrayBuffer(8),
+        read: (value: object) => (value as ArrayBuffer).byteLength,
+        expected: 8,
+    },
+    {
+        name: "SharedArrayBuffer",
+        create: () => new SharedArrayBuffer(8),
+        read: (value: object) => (value as SharedArrayBuffer).byteLength,
+        expected: 8,
+    },
+    {
+        name: "Number",
+        create: () => new Number(7),
+        read: (value: object) =>
+            (value as { valueOf(): unknown }).valueOf(),
+        expected: 7,
+    },
+    {
+        name: "Boolean",
+        create: () => new Boolean(true),
+        read: (value: object) =>
+            (value as { valueOf(): unknown }).valueOf(),
+        expected: true,
+    },
+    {
+        name: "String",
+        create: () => new String("value"),
+        read: (value: object) =>
+            (value as { valueOf(): unknown }).valueOf(),
+        expected: "value",
+    },
+    {
+        name: "BigInt",
+        create: () => Object(7n),
+        read: (value: object) => value.valueOf(),
+        expected: 7n,
+    },
+    {
+        name: "Error",
+        create: () => new Error("value"),
+        read: (value: object) => (value as Error).message,
+        expected: "value",
+    },
+] as const;
+
+const forbiddenBuiltInCases = [
+    { name: "Promise", create: () => Promise.resolve("value") },
+    { name: "WeakMap", create: () => new WeakMap<object, unknown>() },
+    { name: "WeakSet", create: () => new WeakSet<object>() },
+] as const;
+
+function maskWithOwnDataTag<T extends object>(value: T): T {
+    Object.defineProperty(value, Symbol.toStringTag, {
+        configurable: true,
+        value: "Object",
+    });
+    return value;
+}
+
+function maskWithInheritedDataTag<T extends object>(value: T): T {
+    const prototype = Object.create(Object.getPrototypeOf(value));
+    Object.defineProperty(prototype, Symbol.toStringTag, { value: "Object" });
+    Object.setPrototypeOf(value, prototype);
+    return value;
+}
+
 describe("deepFreeze", () => {
 
     it.each(mutableBuiltInCases)(
@@ -142,6 +217,42 @@ describe("vo built-ins with data toStringTag overrides", () => {
 
             expect(read(frozen)).toEqual(expected);
             expect(() => mutate(frozen)).toThrow(TypeError);
+        },
+    );
+
+    it.each(atomicBuiltInCases)(
+        "preserves $name with an own data toStringTag",
+        ({ create, read, expected }) => {
+            const frozen = vo({ value: maskWithOwnDataTag(create()) }).value;
+
+            expect(read(frozen)).toEqual(expected);
+        },
+    );
+
+    it.each(atomicBuiltInCases)(
+        "preserves $name with an inherited data toStringTag",
+        ({ create, read, expected }) => {
+            const frozen = vo({ value: maskWithInheritedDataTag(create()) }).value;
+
+            expect(read(frozen)).toEqual(expected);
+        },
+    );
+
+    it.each(forbiddenBuiltInCases)(
+        "rejects $name with an own data toStringTag",
+        ({ create }) => {
+            expect(() => vo({ value: maskWithOwnDataTag(create()) })).toThrow(
+                /Value Objects are plain data/,
+            );
+        },
+    );
+
+    it.each(forbiddenBuiltInCases)(
+        "rejects $name with an inherited data toStringTag",
+        ({ create }) => {
+            expect(() => vo({ value: maskWithInheritedDataTag(create()) })).toThrow(
+                /Value Objects are plain data/,
+            );
         },
     );
 });
