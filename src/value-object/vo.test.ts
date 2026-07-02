@@ -1,3 +1,5 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
 	deepFreeze,
@@ -709,18 +711,140 @@ describe("VO", () => {
 			);
 		});
 
-		it("preserves class-instance prototypes instead of silently stripping them", () => {
+		it("rejects custom class instances instead of creating incomplete clones", () => {
 			class Money {
 				constructor(readonly amount: number) {}
 				double(): number {
 					return this.amount * 2;
 				}
 			}
-			const v = vo({ price: new Money(5) });
 
-			expect(v.price).toBeInstanceOf(Money);
-			expect(v.price.double()).toBe(10);
-			expect(Object.isFrozen(v.price)).toBe(true);
+			expect(() => vo({ price: new Money(5) })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("rejects classes with private or non-enumerable constructor state", () => {
+			class PrivateValue {
+				#value: number;
+				constructor(value: number) {
+					this.#value = value;
+				}
+				read(): number {
+					return this.#value;
+				}
+			}
+			class HiddenValue {
+				constructor(value: number) {
+					Object.defineProperty(this, "value", { value, enumerable: false });
+				}
+			}
+
+			for (const value of [new PrivateValue(5), new HiddenValue(5)]) {
+				expect(() => vo({ value })).toThrow(/custom class instances/);
+			}
+		});
+
+		it("rejects boxed Symbol values instead of creating slotless wrappers", () => {
+			expect(() => vo({ value: Object(Symbol("value")) })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("rejects custom subclasses of otherwise supported built-ins", () => {
+			class CustomArray extends Array<number> {}
+			class CustomDate extends Date {}
+			class CustomMap extends Map<string, number> {}
+			class CustomError extends Error {}
+			class CustomBytes extends Uint8Array {}
+
+			for (const value of [
+				new CustomArray(1, 2),
+				new CustomDate(0),
+				new CustomMap([["one", 1]]),
+				new CustomError("failure"),
+				new CustomBytes([1, 2]),
+			]) {
+				expect(() => vo({ value })).toThrow(/custom class instances/);
+			}
+		});
+
+		it("rejects a built-in subclass after its constructor marker is removed", () => {
+			class CustomMap extends Map<string, number> {
+				#secret = 1;
+				constructor() {
+					super();
+					void this.#secret;
+				}
+			}
+			Reflect.deleteProperty(CustomMap.prototype, "constructor");
+
+			expect(() => vo({ value: new CustomMap() })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("does not invoke a custom constructor name accessor while rejecting its prototype", () => {
+			let nameAccessorInvoked = false;
+			const fakeConstructor = function CustomConstructor() {};
+			Object.defineProperty(fakeConstructor, "name", {
+				get: () => {
+					nameAccessorInvoked = true;
+					return "Object";
+				},
+			});
+			const prototype = Object.create(Object.prototype) as Record<
+				PropertyKey,
+				unknown
+			>;
+			Object.defineProperty(prototype, "constructor", {
+				value: fakeConstructor,
+			});
+			const value = Object.create(prototype) as object;
+
+			expect(() => vo({ value })).toThrow(/custom class instances/);
+			expect(nameAccessorInvoked).toBe(false);
+		});
+
+		it("continues to accept cross-realm plain objects", () => {
+			const value = runInNewContext("({ nested: { amount: 5 } })") as {
+				nested: { amount: number };
+			};
+
+			const result = vo(value);
+
+			expect(result).toEqual({ nested: { amount: 5 } });
+			expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+			expect(Object.getPrototypeOf(result.nested)).toBe(Object.prototype);
+			expect(Object.isFrozen(result.nested)).toBe(true);
+		});
+
+		it("continues to accept cross-realm arrays and built-ins", () => {
+			const value = runInNewContext(
+				"({ items: [1, 2], date: new Date(0), map: new Map([['one', 1]]) })",
+			) as {
+				items: number[];
+				date: Date;
+				map: Map<string, number>;
+			};
+
+			const result = vo(value);
+
+			expect(result.items).toEqual([1, 2]);
+			expect(Object.getPrototypeOf(result.items)).toBe(Array.prototype);
+			expect(result.date.getTime()).toBe(0);
+			expect(result.map.get("one")).toBe(1);
+		});
+
+		it("preserves null-prototype records", () => {
+			const value = Object.assign(Object.create(null) as { amount: number }, {
+				amount: 5,
+			});
+
+			const result = vo(value);
+
+			expect(result.amount).toBe(5);
+			expect(Object.getPrototypeOf(result)).toBeNull();
 		});
 	});
 

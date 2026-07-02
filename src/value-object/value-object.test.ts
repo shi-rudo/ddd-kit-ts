@@ -355,6 +355,22 @@ describe("ValueObject Class", () => {
             );
         });
 
+        it("rejects custom class instances in props instead of creating incomplete clones", () => {
+            class PrivateValue {
+                #value = 5;
+                read(): number {
+                    return this.#value;
+                }
+            }
+            class PrivateValueObject extends ValueObject<{
+                value: PrivateValue;
+            }> {}
+
+            expect(
+                () => new PrivateValueObject({ value: new PrivateValue() }),
+            ).toThrow(/custom class instances/);
+        });
+
         it("does not freeze the caller's props object or nested objects", () => {
             interface TaggedProps {
                 amount: number;

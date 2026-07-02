@@ -67,6 +67,61 @@ const bigIntValueOf = BigInt.prototype.valueOf;
 const functionToString = Function.prototype.toString;
 const PROBE_KEY = {};
 
+export function isIntrinsicConstructorPrototype(
+	prototype: object,
+	expectedName?: string,
+): boolean {
+	const constructorDescriptor = Object.getOwnPropertyDescriptor(
+		prototype,
+		"constructor",
+	);
+	const candidateConstructor = constructorDescriptor?.value;
+	const nameDescriptor =
+		typeof candidateConstructor === "function" && expectedName !== undefined
+			? Object.getOwnPropertyDescriptor(candidateConstructor, "name")
+			: undefined;
+	return (
+		constructorDescriptor !== undefined &&
+		"value" in constructorDescriptor &&
+		typeof candidateConstructor === "function" &&
+		(expectedName === undefined ||
+			(nameDescriptor !== undefined &&
+				"value" in nameDescriptor &&
+				nameDescriptor.value === expectedName)) &&
+		Object.getOwnPropertyDescriptor(candidateConstructor, "prototype")
+			?.value === prototype &&
+		functionToString.call(candidateConstructor).includes("[native code]")
+	);
+}
+
+/**
+ * Accepts an intrinsic prototype, optionally behind transparent
+ * `Symbol.toStringTag` override layers. A user-defined subclass has its own
+ * non-native constructor and is therefore rejected before reaching the
+ * intrinsic prototype.
+ */
+export function hasIntrinsicPrototypeChain(
+	value: object,
+	expectedName?: string,
+): boolean {
+	const visited = new WeakSet<object>();
+	let prototype = Object.getPrototypeOf(value);
+
+	while (prototype !== null && !visited.has(prototype)) {
+		visited.add(prototype);
+		if (Object.hasOwn(prototype, "constructor")) {
+			return isIntrinsicConstructorPrototype(prototype, expectedName);
+		}
+		const ownKeys = Reflect.ownKeys(prototype);
+		if (ownKeys.length !== 1 || ownKeys[0] !== Symbol.toStringTag) {
+			return false;
+		}
+		prototype = Object.getPrototypeOf(prototype);
+	}
+
+	return false;
+}
+
 /**
  * Tags that `deepEqual` compares BY REFERENCE (its unhandled-built-in
  * fallback) and that `deepOmit` must therefore ALIAS rather than clone:
@@ -174,19 +229,7 @@ function hasNativePrototype(value: object, expectedName: string): boolean {
 
 	while (prototype !== null && !visited.has(prototype)) {
 		visited.add(prototype);
-		const constructorDescriptor = Object.getOwnPropertyDescriptor(
-			prototype,
-			"constructor",
-		);
-		const candidateConstructor = constructorDescriptor?.value;
-		if (
-			typeof candidateConstructor === "function" &&
-			candidateConstructor.name === expectedName &&
-			Object.getOwnPropertyDescriptor(candidateConstructor, "prototype")
-				?.value ===
-				prototype &&
-			functionToString.call(candidateConstructor).includes("[native code]")
-		) {
+		if (isIntrinsicConstructorPrototype(prototype, expectedName)) {
 			return true;
 		}
 		prototype = Object.getPrototypeOf(prototype);

@@ -20,7 +20,7 @@ voEquals(a, b); // true
 
 `vo()` deep-clones its input before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object. Symbol-keyed properties are preserved; they participate in `voEquals` like any other key.
 
-Function values are rejected with a `TypeError`, which catches the DDD anti-pattern of putting behaviour onto a Value Object at construction time. Value Objects are data; behaviour belongs on the surrounding aggregate or domain service.
+Function values and custom class instances (including subclasses of built-ins) are rejected with a `TypeError`. Cloning a class instance without running its constructor can silently discard private fields, non-enumerable state, and built-in internal slots. Pass plain records, arrays, or the explicitly supported built-ins instead; put Value Object behaviour on a class that extends `ValueObject<T>`, not inside its `props` graph. Plain records from another JavaScript Realm are accepted and normalized to the local `Object.prototype`.
 
 Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map/Set contents recursively, so a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. The blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated. Treat it as a guard rail, not a security boundary.
 

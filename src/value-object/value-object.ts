@@ -5,6 +5,8 @@ import {
 } from "../utils/array/deep-equal-except";
 import {
     builtInTagWithoutInvokingAccessors,
+    hasIntrinsicPrototypeChain,
+    isIntrinsicConstructorPrototype,
     mutableBuiltInTagWithoutInvokingAccessors,
 } from "../utils/array/is-built-in";
 import { err, ok, type Result } from "@shirudo/result";
@@ -171,15 +173,17 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
 /**
  * Deep clone used by `vo()` and the `ValueObject` constructor.
  *
- * Plain objects, class instances (prototype-preserving, since the constructor
- * is NOT re-invoked), arrays, and Map/Set entries are walked manually so
+ * Plain objects, arrays, and Map/Set entries are walked manually so
  * that symbol-keyed properties survive (which `structuredClone` silently
  * drops; they would otherwise be invisible to `voEquals`, whose
  * `deepEqual` DOES consider symbol keys) and shared references / cycles
  * keep their identity across Map/Set boundaries. Function values throw,
  * preserving `vo()`'s documented data-not-behaviour gate; Promise /
  * WeakMap / WeakSet throw a descriptive `TypeError` (they have no
- * meaningful value semantics). Atomic built-ins (Date, RegExp,
+ * meaningful value semantics). Custom class instances and subclasses of
+ * built-ins are rejected because cloning them without invoking their
+ * constructor can silently lose private or non-enumerable state. Atomic
+ * built-ins (Date, RegExp,
  * TypedArrays, ArrayBuffer, wrappers, Error) delegate to
  * `structuredClone`, brand-verified so a `Symbol.toStringTag` spoofer is
  * walked as the plain object it is. `__proto__` own keys are copied as
@@ -200,6 +204,9 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
     }
 
     if (Array.isArray(obj)) {
+        if (!hasIntrinsicPrototypeChain(obj, "Array")) {
+            throwUnsupportedClassInstance();
+        }
         const clone: unknown[] = new Array(obj.length);
         visited.set(obj, clone);
         for (let i = 0; i < obj.length; i++) {
@@ -210,6 +217,9 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
 
     const tag = builtInTagWithoutInvokingAccessors(obj);
     if (tag !== undefined) {
+        if (!hasIntrinsicPrototypeChain(obj)) {
+            throwUnsupportedClassInstance();
+        }
         if (tag === "[object Map]") {
             const clone = new Map<unknown, unknown>();
             visited.set(obj, clone);
@@ -242,8 +252,17 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         return builtInClone;
     }
 
-    // Plain objects AND class instances: prototype-preserving key walk.
-    const clone = Object.create(Object.getPrototypeOf(obj));
+    const prototype = Object.getPrototypeOf(obj);
+    if (
+        prototype !== null &&
+        (!isIntrinsicConstructorPrototype(prototype, "Object") ||
+            Object.getPrototypeOf(prototype) !== null)
+    ) {
+        throwUnsupportedClassInstance();
+    }
+
+    // Normalize cross-realm records to the local Object prototype.
+    const clone = Object.create(prototype === null ? null : Object.prototype);
     visited.set(obj, clone);
     for (const key of Reflect.ownKeys(obj)) {
         const descriptor = Object.getOwnPropertyDescriptor(obj, key);
@@ -263,6 +282,12 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
     return clone;
 }
 
+function throwUnsupportedClassInstance(): never {
+    throw new TypeError(
+        "vo() cannot clone custom class instances: Value Objects are plain data",
+    );
+}
+
 /**
  * Creates a deeply immutable value object from the given data.
  *
@@ -270,7 +295,8 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
  * `vo(input)` never freezes the caller's own object graph as a
  * side-effect. Mutating the input afterwards does not bleed into the VO.
  * Symbol-keyed properties are preserved (matching `voEquals`); function
- * values are rejected (Value Objects are data, not behaviour).
+ * values and custom class instances are rejected (Value Objects are plain
+ * data, not behaviour-bearing object graphs).
  *
  * @example
  * ```typescript
@@ -473,7 +499,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 
     /**
      * Creates a new ValueObject.
-     * The properties are deep-cloned (prototype-preserving) and then deeply
+     * The plain-data properties are deep-cloned and then deeply
      * frozen, so the caller's own object graph is never frozen or mutated,
      * and later mutation of the input does not bleed into the value object.
      *
@@ -493,9 +519,9 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
      */
     constructor(props: T) {
         this.validate(props);
-        // Same clone as vo(): prototype-preserving, Map/Set contents
-        // walked (so the caller's entries are never frozen or shadowed in
-        // place), function values rejected. A shallow `{ ...props }` or
+        // Same clone as vo(): Map/Set contents are walked (so the caller's
+        // entries are never frozen or shadowed in place), and functions and
+        // custom class instances are rejected. A shallow `{ ...props }` or
         // deepOmit (which aliases reference-compared built-ins by design)
         // would let deepFreeze reach caller-owned objects.
         this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
