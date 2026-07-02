@@ -111,10 +111,7 @@ export function mutableBuiltInTagWithoutInvokingAccessors(
 ): MutableBuiltInTag | undefined {
 	const descriptor = findPropertyDescriptor(value, Symbol.toStringTag);
 	if (descriptor !== undefined && !("value" in descriptor)) {
-		if (hasBrand(value, "[object Date]")) return "[object Date]";
-		if (hasBrand(value, "[object Map]")) return "[object Map]";
-		if (hasBrand(value, "[object Set]")) return "[object Set]";
-		return undefined;
+		return mutableBuiltInTagFromBrand(value);
 	}
 
 	const tag = Object.prototype.toString.call(value);
@@ -126,6 +123,17 @@ export function mutableBuiltInTagWithoutInvokingAccessors(
 	) {
 		return tag;
 	}
+	return descriptor === undefined
+		? undefined
+		: mutableBuiltInTagFromBrand(value);
+}
+
+function mutableBuiltInTagFromBrand(
+	value: object,
+): MutableBuiltInTag | undefined {
+	if (hasBrand(value, "[object Date]")) return "[object Date]";
+	if (hasBrand(value, "[object Map]")) return "[object Map]";
+	if (hasBrand(value, "[object Set]")) return "[object Set]";
 	return undefined;
 }
 

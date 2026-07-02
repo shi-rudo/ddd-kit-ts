@@ -1,25 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { deepFreeze, ValueObject } from "./value-object";
+import { deepFreeze, ValueObject, vo } from "./value-object";
 
-describe("deepFreeze", () => {
-    const mutableBuiltInCases = [
+const mutableBuiltInCases = [
         {
             name: "Date",
             create: () => new Date(1_000),
+            read: (value: object) => (value as Date).getTime(),
+            expected: 1_000,
             mutate: (value: object) => (value as Date).setTime(0),
         },
         {
             name: "Map",
             create: () => new Map([["key", { value: "initial" }]]),
+            read: (value: object) =>
+                (value as Map<string, unknown>).get("key"),
+            expected: { value: "initial" },
             mutate: (value: object) =>
                 (value as Map<string, unknown>).set("other", true),
         },
         {
             name: "Set",
             create: () => new Set([{ value: "initial" }]),
+            read: (value: object) => (value as Set<unknown>).size,
+            expected: 1,
             mutate: (value: object) => (value as Set<unknown>).add("other"),
         },
     ] as const;
+
+describe("deepFreeze", () => {
 
     it.each(mutableBuiltInCases)(
         "blocks $name mutators with an own toStringTag accessor",
@@ -52,6 +60,37 @@ describe("deepFreeze", () => {
         },
     );
 
+    it.each(mutableBuiltInCases)(
+        "blocks $name mutators with an own data toStringTag",
+        ({ create, mutate }) => {
+            const value = create();
+            Object.defineProperty(value, Symbol.toStringTag, {
+                configurable: true,
+                value: "Object",
+            });
+
+            deepFreeze(value);
+
+            expect(() => mutate(value)).toThrow(TypeError);
+        },
+    );
+
+    it.each(mutableBuiltInCases)(
+        "blocks $name mutators with an inherited data toStringTag",
+        ({ create, mutate }) => {
+            const value = create();
+            const prototype = Object.create(Object.getPrototypeOf(value));
+            Object.defineProperty(prototype, Symbol.toStringTag, {
+                value: "Object",
+            });
+            Object.setPrototypeOf(value, prototype);
+
+            deepFreeze(value);
+
+            expect(() => mutate(value)).toThrow(TypeError);
+        },
+    );
+
     it("does not invoke inherited toStringTag accessors", () => {
         let accessorInvoked = false;
         const prototype = Object.create(Object.prototype);
@@ -70,6 +109,41 @@ describe("deepFreeze", () => {
         expect(Object.isFrozen(value)).toBe(true);
         expect(Object.isFrozen(value.nested)).toBe(true);
     });
+});
+
+describe("vo built-ins with data toStringTag overrides", () => {
+    it.each(mutableBuiltInCases)(
+        "preserves $name with an own data toStringTag",
+        ({ create, read, expected, mutate }) => {
+            const value = create();
+            Object.defineProperty(value, Symbol.toStringTag, {
+                configurable: true,
+                value: "Object",
+            });
+
+            const frozen = vo({ value }).value;
+
+            expect(read(frozen)).toEqual(expected);
+            expect(() => mutate(frozen)).toThrow(TypeError);
+        },
+    );
+
+    it.each(mutableBuiltInCases)(
+        "preserves $name with an inherited data toStringTag",
+        ({ create, read, expected, mutate }) => {
+            const value = create();
+            const prototype = Object.create(Object.getPrototypeOf(value));
+            Object.defineProperty(prototype, Symbol.toStringTag, {
+                value: "Object",
+            });
+            Object.setPrototypeOf(value, prototype);
+
+            const frozen = vo({ value }).value;
+
+            expect(read(frozen)).toEqual(expected);
+            expect(() => mutate(frozen)).toThrow(TypeError);
+        },
+    );
 });
 
 describe("ValueObject Class", () => {
