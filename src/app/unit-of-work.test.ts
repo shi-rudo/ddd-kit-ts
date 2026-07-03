@@ -322,6 +322,51 @@ describe("UnitOfWork", () => {
 			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
 
+		it("forwards a post-commit persistence failure to onPersistError with the aggregate", async () => {
+			const event = testEvent("o-1");
+			let pending: TestEvent[] = [event];
+			const persistError = new Error("cache eviction failed");
+			const agg: IAggregateRoot<TestId, TestEvent> = {
+				id: "o-1" as TestId,
+				version: 1 as Version,
+				persistedVersion: undefined,
+				get pendingEvents() {
+					return pending;
+				},
+				clearPendingEvents() {
+					pending = [];
+				},
+				markPersisted() {
+					pending = [];
+					throw persistError;
+				},
+			};
+			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				bus: createMockBus(),
+				onPersistError: (error, aggregate) => {
+					reported.push({ error, aggregate });
+				},
+				repositories: {
+					orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) =>
+						new FakeOrderRepository(tx, session),
+				},
+			});
+
+			// The committed write resolves; the cleanup failure is observed.
+			await expect(
+				uow.run(async ({ repositories }) => {
+					await repositories.orders.save(agg as MockAggregate);
+					return "ok";
+				}),
+			).resolves.toBe("ok");
+			expect(reported).toHaveLength(1);
+			expect(reported[0]?.error).toBe(persistError);
+			expect(reported[0]?.aggregate).toBe(agg);
+		});
+
 		it("saving the same instance twice harvests its events once and markPersists once", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-1");

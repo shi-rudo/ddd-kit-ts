@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Unit of Work observability
+
+- Add an optional `onPersistError(error, aggregate)` observer to `withCommit`
+  and `UnitOfWork`, symmetric with `onPublishError`. Post-commit cleanup
+  failures (a throw from `markPersisted`, the user-overridable `onPersisted`
+  hook, or `clearPendingEvents`) were previously swallowed silently; they are
+  now reported per failing aggregate. The observer never rejects the committed
+  write.
+- Harden both post-commit observers (`onPersistError`, `onPublishError`)
+  against a misbehaving hook: a synchronous throw AND an `async` observer
+  whose promise rejects are both neutralised, so neither can surface as an
+  unhandled rejection after the transaction has committed. The `=> void`
+  signature admits an `async` function, so this guards a real footgun.
+
 ### Fixed: Value Object cloning and equality hardening
 
 - Enforce absolute Value Object semantics: reject `Error`, `ArrayBuffer`,
