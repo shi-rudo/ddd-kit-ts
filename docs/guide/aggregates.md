@@ -343,3 +343,7 @@ fresh.restoreFromSnapshot(snapshot);
 - Multiple state transitions belong to one logical operation and the version should bump only once
 
 In any of those cases, **mutate state first, then record events.** See [Design Decisions](./design-decisions.md#event-sourcing-structurally-enforces-record-after-mutation).
+
+::: warning Un-bumped mutations are invisible to optimistic concurrency
+A `setState` that does not bump the version writes `WHERE version = v SET version = v`. A concurrent writer that loaded the same `v` then commits its own `WHERE version = v` successfully and replaces your state, with no `ConcurrencyConflictError` on either side: a silent lost update. Skip the bump only for data whose loss under a concurrent write is acceptable, never for domain state. Note that `setState(newState)` without the per-call `bumpVersion` argument falls back to the `autoVersionBump` config, which defaults to `false`; relying on that implicit default is deprecated, and v3 makes the argument required.
+:::

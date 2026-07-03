@@ -272,6 +272,95 @@ describe("Entity", () => {
 		});
 	});
 
+	describe("opt-in deep freeze (deepFreezeState)", () => {
+		type DeepState = {
+			qty: number;
+			meta: { name: string };
+			tags: string[];
+		};
+
+		class DeepBoxEntity extends Entity<DeepState, ItemId> {
+			constructor(id: ItemId, state: DeepState) {
+				super(id, state, { deepFreezeState: true });
+			}
+
+			rename(name: string): void {
+				this.setState({
+					...this.state,
+					meta: { ...this.state.meta, name },
+				});
+			}
+		}
+
+		it("freezes nested objects and arrays so outside writes throw", () => {
+			const box = new DeepBoxEntity("item-1" as ItemId, {
+				qty: 1,
+				meta: { name: "a" },
+				tags: ["x"],
+			});
+
+			expect(Object.isFrozen(box.state)).toBe(true);
+			expect(Object.isFrozen(box.state.meta)).toBe(true);
+			expect(Object.isFrozen(box.state.tags)).toBe(true);
+			expect(() => {
+				(box.state.meta as { name: string }).name = "hacked";
+			}).toThrow();
+			expect(() => {
+				(box.state.tags as string[]).push("hacked");
+			}).toThrow();
+			expect(box.state.meta.name).toBe("a");
+			expect(box.state.tags).toEqual(["x"]);
+		});
+
+		it("applies the deep freeze to states set via setState", () => {
+			const box = new DeepBoxEntity("item-1" as ItemId, {
+				qty: 1,
+				meta: { name: "a" },
+				tags: [],
+			});
+
+			box.rename("b");
+
+			expect(box.state.meta.name).toBe("b");
+			expect(Object.isFrozen(box.state.meta)).toBe(true);
+			expect(() => {
+				(box.state.meta as { name: string }).name = "hacked";
+			}).toThrow();
+		});
+
+		it("treats nested input objects as an ownership transfer: they are frozen in place", () => {
+			// The shallow copy protects only the TOP-LEVEL input object; with
+			// deepFreezeState the nested graph becomes part of the entity's
+			// deeply frozen state and is frozen in place. Documented contract.
+			const meta = { name: "a" };
+			const box = new DeepBoxEntity("item-1" as ItemId, {
+				qty: 1,
+				meta,
+				tags: [],
+			});
+
+			expect(Object.isFrozen(meta)).toBe(true);
+			expect(box.state.meta).toBe(meta);
+		});
+
+		it("stays shallow by default (the opt-in changes nothing for other entities)", () => {
+			class ShallowBoxEntity extends Entity<
+				{ qty: number; meta: { tag: string } },
+				ItemId
+			> {
+				constructor(id: ItemId, state: { qty: number; meta: { tag: string } }) {
+					super(id, state);
+				}
+			}
+
+			const meta = { tag: "a" };
+			const box = new ShallowBoxEntity("item-1" as ItemId, { qty: 1, meta });
+
+			expect(Object.isFrozen(box.state)).toBe(true);
+			expect(Object.isFrozen(box.state.meta)).toBe(false);
+		});
+	});
+
 	describe("Helper functions compatibility", () => {
 		it("should work with class instances", () => {
 			const e1 = new OrderItemEntity("id-1" as ItemId, "prod-1", 1);

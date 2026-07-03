@@ -637,6 +637,58 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
+	describe("opt-in deep freeze (deepFreezeState via constructor config)", () => {
+		type NestedEsState = {
+			items: string[];
+			meta: { note: string };
+		};
+		type ItemAdded = DomainEvent<"ItemAdded", { item: string }>;
+
+		class DeepFrozenEsAggregate extends EventSourcedAggregate<
+			NestedEsState,
+			ItemAdded,
+			TestId
+		> {
+			protected readonly aggregateType = "DeepFrozenEsAggregate";
+
+			constructor(id: TestId, initialState: NestedEsState) {
+				super(id, initialState, { deepFreezeState: true });
+			}
+
+			addItem(item: string): void {
+				this.apply(
+					createDomainEvent("ItemAdded", { item }) as ItemAdded,
+				);
+			}
+
+			protected readonly handlers = {
+				ItemAdded: (
+					state: NestedEsState,
+					event: ItemAdded,
+				): NestedEsState => ({
+					...state,
+					items: [...state.items, event.payload.item],
+				}),
+			};
+		}
+
+		it("deep-freezes handler-produced state so nested outside writes throw", () => {
+			const aggregate = new DeepFrozenEsAggregate("test-1" as TestId, {
+				items: [],
+				meta: { note: "n" },
+			});
+
+			aggregate.addItem("a");
+
+			expect(Object.isFrozen(aggregate.state.items)).toBe(true);
+			expect(Object.isFrozen(aggregate.state.meta)).toBe(true);
+			expect(() => {
+				(aggregate.state.items as string[]).push("hacked");
+			}).toThrow();
+			expect(aggregate.state.items).toEqual(["a"]);
+		});
+	});
+
 	describe("markPersisted (post-save hook)", () => {
 		it("updates the version and clears pending events", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);

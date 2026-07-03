@@ -471,6 +471,92 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
+	describe("opt-in deep freeze (deepFreezeState config)", () => {
+		type NestedState = {
+			status: string;
+			items: Array<{ sku: string; qty: number }>;
+		};
+
+		class DeepFrozenAggregate extends AggregateRoot<NestedState, TestId> {
+			protected readonly aggregateType = "DeepFrozenAggregate";
+
+			constructor(id: TestId, initialState: NestedState) {
+				super(id, initialState, { deepFreezeState: true });
+			}
+
+			static reconstitute(
+				id: TestId,
+				state: NestedState,
+				version: Version,
+			): DeepFrozenAggregate {
+				const aggregate = new DeepFrozenAggregate(id, state);
+				aggregate.markRestored(version);
+				return aggregate;
+			}
+
+			addItem(sku: string, qty: number): void {
+				this.setState(
+					{ ...this.state, items: [...this.state.items, { sku, qty }] },
+					true,
+				);
+			}
+		}
+
+		it("freezes nested state so external nested mutation throws instead of bypassing invariants", () => {
+			const aggregate = new DeepFrozenAggregate("test-1" as TestId, {
+				status: "open",
+				items: [{ sku: "a", qty: 1 }],
+			});
+
+			// Without the opt-in this push would silently mutate aggregate
+			// internals, bypass validateState, the version bump AND the
+			// changedKeys dirty diff.
+			expect(() => {
+				(aggregate.state.items as Array<unknown>).push({
+					sku: "hacked",
+					qty: 9,
+				});
+			}).toThrow();
+			expect(aggregate.state.items).toHaveLength(1);
+
+			const first = aggregate.state.items[0];
+			expect(Object.isFrozen(first)).toBe(true);
+		});
+
+		it("keeps the deep freeze across setState mutations", () => {
+			const aggregate = new DeepFrozenAggregate("test-1" as TestId, {
+				status: "open",
+				items: [],
+			});
+
+			aggregate.addItem("a", 1);
+
+			expect(aggregate.state.items).toHaveLength(1);
+			expect(Object.isFrozen(aggregate.state.items)).toBe(true);
+			expect(Object.isFrozen(aggregate.state.items[0])).toBe(true);
+			expect(aggregate.version).toBe(1);
+		});
+
+		it("applies the deep freeze to snapshot-restored state", () => {
+			const source = new DeepFrozenAggregate("test-1" as TestId, {
+				status: "open",
+				items: [{ sku: "a", qty: 1 }],
+			});
+			source.addItem("b", 2);
+			const snapshot = source.createSnapshot();
+
+			const restored = new DeepFrozenAggregate("test-1" as TestId, {
+				status: "open",
+				items: [],
+			});
+			restored.restoreFromSnapshot(snapshot);
+
+			expect(restored.state.items).toHaveLength(2);
+			expect(Object.isFrozen(restored.state.items)).toBe(true);
+			expect(Object.isFrozen(restored.state.items[0])).toBe(true);
+		});
+	});
+
 	describe("commit(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
