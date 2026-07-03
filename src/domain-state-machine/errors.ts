@@ -49,7 +49,7 @@ export class InvalidDomainMachineInputError extends BaseError<"InvalidDomainMach
 	}
 }
 
-/** A guard returned a value other than `boolean`. */
+/** A guard returned a value other than `boolean` or `DomainError`. */
 export class InvalidDomainTransitionGuardResultError extends BaseError<"InvalidDomainTransitionGuardResultError"> {
 	constructor(message: string, cause?: unknown) {
 		super(message, cause, { name: "InvalidDomainTransitionGuardResultError" });

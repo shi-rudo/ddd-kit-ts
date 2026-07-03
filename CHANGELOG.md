@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   portable ECMAScript cannot identify transparent Proxies without invoking
   their traps.
 
-### Fixed: Domain State Machine runtime hardening
+### Changed: Domain State Machine DDD contracts and runtime hardening
 
 - Rename `DomainMachineEvent` to `DomainMachineInput`, including callback fields
   and validation errors, so machine commands, observed facts, and internal

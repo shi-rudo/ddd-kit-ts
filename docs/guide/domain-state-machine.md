@@ -24,6 +24,7 @@ import {
   DomainStateMachine,
   type DomainMachineDefinition,
   type DomainMachineSnapshot,
+  type DomainTransition,
 } from "@shirudo/ddd-kit";
 
 type CheckoutState =
@@ -529,15 +530,19 @@ type PaymentDeadlineContext = CheckoutContext & {
   paymentDueAtEpochMs: number;
 };
 
-// In the awaiting-payment state:
-PaymentDeadlineReached: {
+const paymentDeadlineTransition: DomainTransition<
+  CheckoutState,
+  PaymentDeadlineContext,
+  PaymentDeadlineInput,
+  CheckoutOutput
+> = {
   target: "cancelled",
   guard: ({ context, input }) =>
     input.observedAtEpochMs >= context.paymentDueAtEpochMs,
   reduce: ({ context }) => ({
     outputs: [{ type: "CancelOrder", orderId: context.orderId, reason: "timeout" }],
   }),
-},
+};
 ```
 
 The scheduler reads the clock and dispatches this value. Retries may deliver the
