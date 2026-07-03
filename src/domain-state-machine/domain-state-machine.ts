@@ -22,6 +22,12 @@ import {
 } from "./transition";
 
 export type {
+	DomainMachineDefinitionAnalysis,
+	DomainMachineDefinitionDiagnostic,
+	DomainMachineTransitionDescription,
+} from "./analyzer";
+export { analyzeDomainMachineDefinition } from "./analyzer";
+export type {
 	DomainMachineDefinition,
 	DomainMachineInput,
 	DomainMachineReadonly,

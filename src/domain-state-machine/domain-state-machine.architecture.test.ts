@@ -6,6 +6,7 @@ const moduleDirectory = new URL(".", import.meta.url);
 
 describe("domain state machine module architecture", () => {
 	it.each([
+		"analyzer.ts",
 		"contracts.ts",
 		"errors.ts",
 		"machine-data.ts",

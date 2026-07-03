@@ -297,6 +297,41 @@ transition is unavailable, a guard rejects, or the input has no own string
 broken guard code throw their structured errors. This keeps “not currently
 allowed” separate from malformed input and defective machine code.
 
+## Analyze a definition in tests
+
+Use `analyzeDomainMachineDefinition(...)` in architecture tests or development
+tooling to review the declared graph without creating a snapshot or executing
+domain code:
+
+```ts
+import { analyzeDomainMachineDefinition } from "@shirudo/ddd-kit";
+
+const analysis = analyzeDomainMachineDefinition(orderLifecycle);
+
+expect(analysis.diagnostics).toEqual([]);
+console.table(analysis.transitions);
+```
+
+The result contains a stable transition matrix with `state`, `inputType`,
+`target`, and `guarded`, plus these diagnostics:
+
+| Diagnostic | Statically proven meaning |
+| --- | --- |
+| `unreachable-state` | No declared path leads from the initial state to this state. |
+| `structural-dead-end` | A non-terminal state declares no outgoing transition. |
+| `no-terminal-path` | No declared path leads from this state to any terminal state. |
+
+The analyzer never calls `initialContext`, guards, reducers, `validateContext`,
+or `validateSnapshot`. Every guarded edge is treated as a possible edge. This is
+the key soundness boundary: a reported missing path is definitive, but a state
+listed in `structurallyReachableStates` may still be unreachable at runtime when
+its guards always reject. Likewise, `statesWithTerminalPath` proves only that a
+declared path exists, not that current domain data can traverse it.
+
+Analysis validates the definition's data shape first and returns deeply frozen,
+lexically ordered values. Run it in tests and CI; it is not part of transition
+execution and does not replace behavioral tests for guard conditions.
+
 ## Pure transitions
 
 The stateful wrapper is convenience. The core operation is pure:
