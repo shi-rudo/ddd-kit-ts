@@ -1,4 +1,15 @@
 import { deepFreeze } from "../value-object/value-object";
+import { assertNotThenable, now } from "./clock";
+
+// The swappable clock lives in ./clock (so BaseAggregate.createSnapshot
+// can read it without an import cycle); its public API ships from here,
+// unchanged.
+export {
+	type ClockFactory,
+	resetClockFactory,
+	setClockFactory,
+	withClockFactory,
+} from "./clock";
 
 /**
  * Factory function producing a fresh, unique event identifier for each call.
@@ -41,28 +52,6 @@ let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
  */
 export function setEventIdFactory(factory: EventIdFactory): void {
 	currentEventIdFactory = factory;
-}
-
-/**
- * Internal guard for the scoped factory helpers. Throws a clear error
- * when the user-supplied `fn` returns a thenable: the helpers are
- * synchronous-only, and a silent async-misuse would restore the factory
- * before the awaited body of `fn` runs, leaving the awaited code
- * reading the previous factory.
- */
-function assertNotThenable(result: unknown, helperName: string): void {
-	if (
-		result !== null &&
-		(typeof result === "object" || typeof result === "function") &&
-		typeof (result as { then?: unknown }).then === "function"
-	) {
-		throw new Error(
-			`${helperName}: fn returned a thenable. ` +
-				`The factory is only installed for the synchronous portion of fn; ` +
-				`awaited continuations would see the previous factory. ` +
-				`For async-scoped factories use AsyncLocalStorage.`,
-		);
-	}
 }
 
 /**
@@ -127,82 +116,6 @@ export function withEventIdFactory<T>(
  */
 export function resetEventIdFactory(): void {
 	currentEventIdFactory = defaultEventIdFactory;
-}
-
-/**
- * Clock function producing a fresh `Date` for each call. The library
- * defaults to `() => new Date()`; override globally via `setClockFactory`
- * for deterministic event-sourcing tests, time-travel debugging, or any
- * scenario where `occurredAt` must be reproducible.
- */
-export type ClockFactory = () => Date;
-
-const defaultClockFactory: ClockFactory = () => new Date();
-let currentClockFactory: ClockFactory = defaultClockFactory;
-
-/**
- * Replaces the global clock factory used by `createDomainEvent`. Call once
- * during application bootstrap (or per-test in deterministic test suites):
- *
- * ```ts
- * import { setClockFactory } from "@shirudo/ddd-kit";
- *
- * setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
- * ```
- *
- * The per-call `options.occurredAt` override always wins over this
- * factory. Symmetric to `setEventIdFactory`.
- *
- * Module-scoped: see {@link setEventIdFactory} for the global-state
- * caveats. For test isolation prefer {@link withClockFactory}; for
- * multi-tenant request isolation prefer the per-call
- * `options.occurredAt`.
- */
-export function setClockFactory(factory: ClockFactory): void {
-	currentClockFactory = factory;
-}
-
-/**
- * Scoped variant of {@link setClockFactory}: installs `factory`, runs
- * `fn`, then restores the previous factory in a `finally` block.
- * Synchronous-only, with the same constraints (and same runtime thenable
- * guard) as {@link withEventIdFactory}.
- *
- * **When to prefer the per-call `options.occurredAt` instead.** Same
- * trade-off as {@link withEventIdFactory}: passing `{ occurredAt }`
- * to `createDomainEvent` is the strongest isolation for single-event
- * cases. The scoped helper is for events constructed deep inside
- * domain methods where threading an explicit timestamp is awkward.
- *
- * @example
- * ```ts
- * it("stamps events with a fixed clock", () => {
- *   const fixed = new Date("2026-01-01T00:00:00Z");
- *   withClockFactory(() => fixed, () => {
- *     const e = createDomainEvent("X", { v: 1 });
- *     expect(e.occurredAt).toEqual(fixed);
- *   });
- * });
- * ```
- */
-export function withClockFactory<T>(factory: ClockFactory, fn: () => T): T {
-	const previous = currentClockFactory;
-	currentClockFactory = factory;
-	try {
-		const result = fn();
-		assertNotThenable(result, "withClockFactory");
-		return result;
-	} finally {
-		currentClockFactory = previous;
-	}
-}
-
-/**
- * Restores the default clock factory (`() => new Date()`).
- * Intended for use in test `afterEach` hooks.
- */
-export function resetClockFactory(): void {
-	currentClockFactory = defaultClockFactory;
 }
 
 /**
@@ -461,7 +374,7 @@ export function createDomainEvent<T extends string, P>(
 		payload: cloneOwnedEventData(payload as P, "payload"),
 		occurredAt: options?.occurredAt
 			? new Date(options.occurredAt.getTime())
-			: currentClockFactory(),
+			: now(),
 		version: options?.version ?? 1,
 		aggregateVersion: options?.aggregateVersion,
 		metadata: cloneOwnedEventData(options?.metadata, "metadata"),

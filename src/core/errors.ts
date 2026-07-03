@@ -68,6 +68,41 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 }
 
 /**
+ * Thrown by `EventSourcedAggregate.loadFromHistory` and
+ * `restoreFromSnapshotWithEvents` when the replay target is not fresh:
+ * the aggregate carries unflushed `pendingEvents`, or (for
+ * `loadFromHistory`) an in-memory version that was never persisted.
+ * Replaying onto such an instance would `markRestored` a
+ * `persistedVersion` that counts unpersisted history: repository routing
+ * flips from INSERT to UPDATE (or appends with a wrong expected version)
+ * and harvested events would claim a version baseline the stream does
+ * not carry.
+ *
+ * Deliberately **not** a `DomainError` or `InfrastructureError` (same
+ * posture as {@link MissingHandlerError}): a deterministic programming
+ * bug in how the aggregate was constructed before replay. It propagates
+ * as a throw instead of riding the replay methods' `Result` channel, so
+ * a generic corrupted-stream handler cannot absorb it. Reconstitution
+ * belongs on a bare instance: construct the aggregate without
+ * factory-recorded events or prior mutations, then replay.
+ */
+export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregateError"> {
+	constructor(
+		public readonly aggregateId: string,
+		reason: string,
+	) {
+		super(
+			`Cannot replay history onto aggregate ${aggregateId}: ${reason}. ` +
+				"Reconstitute on a fresh instance (no factory-recorded events, " +
+				"no unpersisted mutations), or markPersisted the aggregate " +
+				"before a catch-up replay.",
+			undefined,
+			{ name: "UnreplayableAggregateError" },
+		);
+	}
+}
+
+/**
  * Thrown by `withCommit` when an event harvested from an aggregate cannot
  * be safely committed: it is missing `aggregateId` / `aggregateType`
  * (downstream routing would break), or it carries a pre-set
