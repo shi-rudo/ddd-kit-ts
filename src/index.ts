@@ -22,7 +22,9 @@ export * from "./events/outbox";
 // Events
 export * from "./events/ports";
 // Repository
+export * from "./repo/event-store";
 export * from "./repo/identity-map";
+export * from "./repo/in-memory-event-store";
 export * from "./repo/repository";
 export * from "./repo/retrying-scope";
 export * from "./repo/scope";

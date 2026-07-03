@@ -72,14 +72,23 @@ If any step throws, **no state is mutated** and no event is queued. The "event f
 
 ## Persistence: pure-persistence `save()` + `withCommit` lifecycle
 
-After `apply()`, the new event lands in `pendingEvents`. The repository is responsible for **persistence only**: appending the events to the event store with optimistic-concurrency. The `withCommit` orchestrator harvests pending events into the outbox and calls `markPersisted` after the transaction commits.
+After `apply()`, the new event lands in `pendingEvents`. The repository is responsible for **persistence only**: appending the events to the event store with optimistic-concurrency through the kit's `EventStore` port. The `withCommit` orchestrator harvests pending events into the outbox and calls `markPersisted` after the transaction commits.
 
 ```ts
-class OrderRepository implements IRepository<Order, OrderId> {
+import type { EventStore } from "@shirudo/ddd-kit";
+
+class OrderRepository {
+  constructor(
+    private readonly eventStore: EventStore<OrderEvent>,
+    private readonly session: UnitOfWorkSession<OrderEvent>,
+  ) {}
+
   async save(order: Order): Promise<void> {
-    const events = order.pendingEvents;
-    const expectedVersion = order.version - events.length;
-    await this.eventStore.append(order.id, expectedVersion, events);
+    if (order.pendingEvents.length === 0) return;
+    this.session.enrollSaved(order);
+    await this.eventStore.append(order.id, order.pendingEvents, {
+      expectedVersion: order.persistedVersion ?? 0,
+    });
     // Do NOT call markPersisted here; withCommit handles it after the
     // transaction commits. Calling it inside save clears pendingEvents
     // before withCommit can harvest them, and the outbox would receive
@@ -94,6 +103,33 @@ class OrderRepository implements IRepository<Order, OrderId> {
 ::: warning Stream events and outbox events are not byte-identical
 `save()` appends the **unstamped** `pendingEvents` originals to the event store, while `withCommit` hands the outbox **stamped copies** carrying [`aggregateVersion`](./outbox.md) (the commit version; for ES, all events of one commit share it). Consequence: a projection rebuilt **from the stream** sees `aggregateVersion === undefined`, while the same projection fed live **from the outbox** sees it populated. Do not key projection logic on `aggregateVersion` if your rebuild path reads the stream. For event-sourced systems, the **store's own position / `expectedVersion` is the ordering authority**; per-event positions are the store's job, not the outbox's.
 :::
+
+## The `EventStore` port and the contract suite
+
+The kit ships a driven port for event-sourced persistence, mirroring how `IRepository` works for state-stored aggregates:
+
+```ts
+interface EventStore<Evt extends AnyDomainEvent> {
+  append(streamId, events, { expectedVersion }): Promise<void>;
+  readStream(streamId, { fromVersion }?): Promise<ReadonlyArray<Evt>>;
+}
+```
+
+One stream per aggregate (the stream id is the aggregate id), and the stream version is the event count, so it aligns with the aggregate version. `append` is atomic and guarded: when the stream does not hold exactly `expectedVersion` events, the adapter throws `ConcurrencyConflictError` with the expected and actual versions. `readStream` returns events in append order; `fromVersion` is the snapshot catch-up read. `InMemoryEventStore` ships as the reference implementation for tests and demos (like `InMemoryOutbox`, it does not participate in your `TransactionScope` rollbacks).
+
+The expectedVersion guard lives in **your** adapter, which makes stream OCC a **repository contract, not a kit guarantee**, exactly like the state-stored path. `@shirudo/ddd-kit/testing` therefore ships `createEsRepositoryContractTests`: a two-writer append conflict, replay equality (fold order), commit lifecycle and rollback purity, the duplicate-create race, and `fromVersion` slicing. For SQL-backed event stores, run it against a real database:
+
+```ts
+import { createEsRepositoryContractTests } from "@shirudo/ddd-kit/testing";
+
+describe("PgEventStoreOrderRepository: ES repository contract", () => {
+  for (const test of createEsRepositoryContractTests(harness)) {
+    (test.skipped ? it.skip : it)(test.name, test.run);
+  }
+});
+```
+
+The in-memory reference harness (repository, environment wiring, and the mutants the suite must expose) lives in the repo at `src/testing/es-repository-contract.test.ts`; copy it as the starting point for your own harness.
 
 ## Replay: `loadFromHistory`
 

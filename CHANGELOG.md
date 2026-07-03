@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unhandled rejection after the transaction has committed. The `=> void`
   signature admits an `async` function, so this guards a real footgun.
 
+### Added: `EventStore` port and event-sourced repository contract suite
+
+- New `EventStore<Evt>` driven port (`append` with an `expectedVersion`
+  guard, `readStream` with `fromVersion` for snapshot catch-up), following
+  Greg Young's stream-per-aggregate model: the stream id is the aggregate
+  id and the stream version is the event count, aligned with the aggregate
+  version. Adapters map their store's conflict signal to
+  `ConcurrencyConflictError`; rejected appends must be atomic.
+- New `InMemoryEventStore` reference implementation (tests, single-process
+  workers, demos), with the same rollback caveat as `InMemoryOutbox`.
+- New `createEsRepositoryContractTests` in `@shirudo/ddd-kit/testing`: the
+  event-sourced counterpart to the state-stored suite. Proves the
+  two-writer append conflict (expectedVersion guard + atomicity), replay
+  equality and fold order, the commit lifecycle (outbox harvest,
+  `markPersisted`, rollback purity, retried first save), the
+  duplicate-create race (capability-gated), and `fromVersion` slicing.
+  The in-repo reference adapter doubles as the example harness and pins
+  that the suite exposes blind appends and reversed reads.
+
 ### Added: opt-in deep freeze for entity and aggregate state
 
 - New `deepFreezeState` option on `EntityConfig` / `AggregateConfig`
