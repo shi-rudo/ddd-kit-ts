@@ -1,5 +1,5 @@
 import type { Id } from "../core/id";
-import { freezeShallow } from "../entity/entity";
+import type { EntityConfig } from "../entity/entity";
 import { BaseAggregate } from "./base-aggregate";
 import type { AggregateSnapshot, Version } from "./aggregate";
 import type { AnyDomainEvent } from "./domain-event";
@@ -10,18 +10,33 @@ import type { AnyDomainEvent } from "./domain-event";
 export type { IAggregateRoot } from "./aggregate";
 
 /**
- * Configuration options for AggregateRoot behavior.
+ * Configuration options for AggregateRoot behavior. Inherits
+ * `deepFreezeState` from {@link EntityConfig} (opt-in deep freeze for
+ * plain-data states).
  */
-export interface AggregateConfig {
+export interface AggregateConfig extends EntityConfig {
 	/**
 	 * Whether `setState()` should bump the version automatically when the
 	 * caller omits the per-call `bumpVersion` argument.
 	 *
 	 * Defaults to **`false`**: `setState()` already takes an explicit
 	 * `bumpVersion` argument per call, so the config is just the default
-	 * the per-call argument falls back to. Set to `true` only if you have
-	 * a subclass that never passes `bumpVersion` and you want every state
-	 * change to advance the version anyway.
+	 * the per-call argument falls back to.
+	 *
+	 * **OCC warning: an un-bumped mutation can be silently overwritten.**
+	 * A save whose version did not move writes `WHERE version = v SET
+	 * version = v`; a concurrent writer that loaded the same `v` then
+	 * commits `WHERE version = v` successfully and replaces the state
+	 * without any `ConcurrencyConflictError`. Skip the bump only for data
+	 * whose loss under a concurrent write is acceptable (cosmetic caches,
+	 * denormalized display fields), never for domain state.
+	 *
+	 * **Deprecation notice.** Relying on the implicit default (calling
+	 * `setState(newState)` without a per-call `bumpVersion` and without
+	 * setting this config) is deprecated. v3 makes the per-call argument
+	 * required, so every mutation states its OCC intent explicitly at the
+	 * call site; code that already passes `bumpVersion` or uses `commit()`
+	 * is unaffected.
 	 */
 	autoVersionBump?: boolean;
 }
@@ -103,7 +118,7 @@ export abstract class AggregateRoot<
 		initialState: TState,
 		config?: AggregateConfig,
 	) {
-		super(id, initialState);
+		super(id, initialState, config);
 		this._autoVersionBump = config?.autoVersionBump ?? false;
 	}
 
@@ -276,6 +291,14 @@ export abstract class AggregateRoot<
 	 * Sets the state and optionally bumps the version automatically.
 	 * Validates `newState` via `validateState()`.
 	 *
+	 * **State the OCC intent explicitly.** With neither the per-call
+	 * `bumpVersion` argument nor an `autoVersionBump` config, the version
+	 * does not move, and an un-bumped mutation can be silently overwritten
+	 * by a concurrent writer (see the {@link AggregateConfig.autoVersionBump}
+	 * warning for the mechanics). Prefer `commit()` for domain mutations,
+	 * or pass `bumpVersion` explicitly; relying on the implicit default is
+	 * deprecated and v3 makes the argument required.
+	 *
 	 * @param newState - The new state
 	 * @param bumpVersion - Whether to bump the version (defaults to autoVersionBump config)
 	 */
@@ -297,7 +320,7 @@ export abstract class AggregateRoot<
 	public restoreFromSnapshot(snapshot: AggregateSnapshot<TSnapshotState>): void {
 		const restored = this.fromSnapshotState(snapshot.state);
 		this.validateState(restored);
-		this._state = freezeShallow(restored);
+		this._state = this.freezeState(restored);
 		this.markRestored(snapshot.version);
 	}
 }

@@ -21,6 +21,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unhandled rejection after the transaction has committed. The `=> void`
   signature admits an `async` function, so this guards a real footgun.
 
+### Added: opt-in deep freeze for entity and aggregate state
+
+- New `deepFreezeState` option on `EntityConfig` / `AggregateConfig`
+  (`super(id, state, { deepFreezeState: true })`): the whole state graph is
+  frozen via `deepFreeze` instead of the default shallow freeze, so nested
+  outside writes (`order.state.items.push(x)`) throw instead of silently
+  bypassing `validateState`, the version bump, and the `changedKeys` dirty
+  diff. Applies to construction, `setState`, event-sourced `apply`, and both
+  snapshot-restore paths. Only for plain-data states: class-based child
+  entities inside the state would be frozen along with the graph, and nested
+  input objects are frozen in place (the ownership transfer widens to the
+  whole graph). The default stays shallow; nothing changes without the
+  opt-in.
+- Aggregate and entity subclasses that assign `this._state` directly should
+  freeze through the new protected `freezeState(value)` method instead of
+  `freezeShallow`, so the configured freeze mode is honored.
+
+### Deprecated: relying on the implicit non-bumping `setState` default
+
+- Calling `AggregateRoot.setState(newState)` without a per-call
+  `bumpVersion` argument and without an explicit `autoVersionBump` config is
+  deprecated. The implicit default (`false`) permits silent lost updates: a
+  save whose version did not move writes `WHERE version = v SET version = v`,
+  so a concurrent writer that loaded the same `v` commits over it without a
+  `ConcurrencyConflictError`. v3 will make the `bumpVersion` argument
+  required so every mutation states its OCC intent at the call site; code
+  that already passes `bumpVersion`, sets `autoVersionBump` explicitly, or
+  uses `commit()` is unaffected. The JSDoc and the aggregates guide now
+  document the lost-update mechanics.
+
 ### Fixed: architecture-audit findings (P1)
 
 - `toPublicErrorView` no longer throws a `TypeError` when the caught value is

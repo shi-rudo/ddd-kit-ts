@@ -40,7 +40,8 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
 `Entity` gives you:
 
 - A `readonly id`, with null/undefined rejected at construction
-- A `state` getter that is **shallowly frozen** (direct property writes throw)
+- A `state` getter that is **shallowly frozen** by default (direct property writes throw; nested writes bypass the freeze)
+- An opt-in **deep freeze** via `super(id, state, { deepFreezeState: true })`, so nested outside writes throw too; only for plain-data states (class-based child entities would be frozen along with the graph), and nested objects passed in become frozen in place (ownership transfer)
 - A `protected setState(newState)` that runs `validateState` then re-freezes
 - A `validateState(state)` hook for invariant checks
 

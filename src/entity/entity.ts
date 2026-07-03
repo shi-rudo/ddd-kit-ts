@@ -55,6 +55,33 @@
  * ```
  */
 import type { Id } from "../core/id";
+import { deepFreeze } from "../value-object/value-object";
+
+/**
+ * Construction options shared by `Entity` and (via `AggregateConfig`) the
+ * aggregate base classes.
+ */
+export interface EntityConfig {
+	/**
+	 * Opt-in: freeze the WHOLE state graph (via `deepFreeze`) instead of
+	 * the default shallow freeze, so nested outside writes
+	 * (`entity.state.items.push(x)`) throw instead of silently bypassing
+	 * `validateState`, the version bump, and the `changedKeys` dirty diff.
+	 *
+	 * Defaults to `false` (the documented shallow contract): deep freezing
+	 * costs a full state-graph walk on every state write, which is why it
+	 * is not the default on hot paths.
+	 *
+	 * **Only for plain-data states.** The deep freeze walks the entire
+	 * graph: a class-based child entity inside the state would be frozen
+	 * too, and its own mutation methods would start throwing. States
+	 * carrying class-based children must keep the default shallow freeze.
+	 * Note that the ownership transfer widens accordingly: nested objects
+	 * passed into the constructor or `setState` are frozen IN PLACE (the
+	 * shallow copy protects only the top-level input object).
+	 */
+	deepFreezeState?: boolean;
+}
 
 /**
  * Functional definition of an Entity via its capability: an object is
@@ -131,14 +158,16 @@ export abstract class Entity<TState, TId extends Id<string>>
 	/**
 	 * Returns the current state of the entity.
 	 *
-	 * The state object is **shallowly frozen**: direct property writes
-	 * (`entity.state.foo = …`) throw in strict mode, but writes to nested
-	 * objects (`entity.state.address.zip = …`) bypass the freeze. For deep
-	 * immutability either model nested data with `vo()` (which freezes
-	 * deeply) or reach for a structural-sharing library like Immer at the
-	 * App layer. The shallow contract is intentional: deep freezing on
-	 * every state write is too expensive for hot paths, and DDD aggregates
-	 * normally treat their own state as private (`Tell, Don't Ask`).
+	 * By default the state object is **shallowly frozen**: direct property
+	 * writes (`entity.state.foo = …`) throw in strict mode, but writes to
+	 * nested objects (`entity.state.address.zip = …`) bypass the freeze.
+	 * For deep immutability either enable the opt-in
+	 * {@link EntityConfig.deepFreezeState} (plain-data states only), model
+	 * nested data with `vo()` (which freezes deeply), or reach for a
+	 * structural-sharing library like Immer at the App layer. The shallow
+	 * default is intentional: deep freezing on every state write is too
+	 * expensive for hot paths, and DDD aggregates normally treat their own
+	 * state as private (`Tell, Don't Ask`).
 	 */
 	public get state(): TState {
 		return this._state;
@@ -146,9 +175,13 @@ export abstract class Entity<TState, TId extends Id<string>>
 
 	/**
 	 * The state is 'protected' so that only the subclass can modify it.
-	 * Subclasses can mutate this directly or use helper methods.
+	 * Subclasses can mutate this directly or use helper methods; direct
+	 * assignments should freeze through {@link freezeState} so the
+	 * configured freeze mode is honored.
 	 */
 	protected _state: TState;
+
+	private readonly _deepFreezeState: boolean;
 
 	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
@@ -156,15 +189,32 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * INSTANCE passed as state is an ownership transfer: it is frozen
 	 * in place (a copy would strip its prototype). Do not keep mutating
 	 * the instance after handing it to the entity. The same contract
-	 * applies to {@link setState}.
+	 * applies to {@link setState}. With
+	 * {@link EntityConfig.deepFreezeState} enabled, the ownership transfer
+	 * widens to the whole graph: NESTED objects are frozen in place too.
 	 */
-	protected constructor(id: TId, initialState: TState) {
+	protected constructor(id: TId, initialState: TState, config?: EntityConfig) {
 		if (id === null || id === undefined) {
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
-		this._state = freezeShallow(shallowCopyOwned(initialState));
+		this._deepFreezeState = config?.deepFreezeState ?? false;
+		this._state = this.freezeState(shallowCopyOwned(initialState));
 		this.validateState(this._state);
+	}
+
+	/**
+	 * Freezes a state value according to this entity's configured freeze
+	 * mode: the default shallow freeze, or `deepFreeze` when
+	 * {@link EntityConfig.deepFreezeState} was enabled at construction.
+	 * Subclass code that assigns `this._state` directly (bypassing
+	 * `setState`) must freeze through this method, not `freezeShallow`,
+	 * or the opt-in silently degrades to shallow for that path.
+	 */
+	protected freezeState(value: TState): TState {
+		return this._deepFreezeState
+			? (deepFreeze(value) as TState)
+			: freezeShallow(value);
 	}
 
 	/**
@@ -205,20 +255,22 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected setState(newState: TState): void {
 		this.validateState(newState);
-		this._state = freezeShallow(shallowCopyOwned(newState));
+		this._state = this.freezeState(shallowCopyOwned(newState));
 	}
 }
 
 /**
  * Shallow-freezes `value` when it's a non-null object or array, so that
  * direct property writes throw in strict mode. Returns the value as-is for
- * primitives. Used internally by `Entity` and its subclasses to prevent
- * outside mutation of state read through the `state` getter without paying
- * the cost of a deep clone on every read.
+ * primitives. Used internally by `Entity` (via `freezeState`, which picks
+ * shallow or deep per the `deepFreezeState` config) to prevent outside
+ * mutation of state read through the `state` getter without paying the
+ * cost of a deep clone on every read.
  *
- * Exported so that sibling classes (`EventSourcedAggregate`, `AggregateRoot`)
- * can apply the same freeze when they bypass `setState` and assign
- * `this._state` directly.
+ * Subclass code that assigns `this._state` directly should freeze through
+ * the protected `freezeState(value)` method rather than calling this
+ * helper, so the configured freeze mode is honored. The export remains
+ * for consumers using it as a standalone utility.
  */
 export function freezeShallow<T>(value: T): T {
 	if (value !== null && typeof value === "object") {

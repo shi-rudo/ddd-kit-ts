@@ -1,7 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
 import { DomainError, MissingHandlerError } from "../core/errors";
-import { freezeShallow } from "../entity/entity";
 import { BaseAggregate } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
@@ -136,7 +135,7 @@ export abstract class EventSourcedAggregate<
 		const nextState = handler(this._state, event);
 
 		// Atomic commit: nothing above this line mutated aggregate state.
-		this._state = freezeShallow(nextState);
+		this._state = this.freezeState(nextState);
 		if (isNew) {
 			this.addDomainEvent(event);
 			this.bumpVersion();
@@ -216,7 +215,7 @@ export abstract class EventSourcedAggregate<
 			throw e;
 		}
 
-		this._state = freezeShallow(restored);
+		this._state = this.freezeState(restored);
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {
