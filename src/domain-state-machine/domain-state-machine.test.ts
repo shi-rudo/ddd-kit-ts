@@ -72,7 +72,18 @@ type CheckoutOutput =
 			readonly type: "CancelOrder";
 			readonly orderId: string;
 			readonly reason: string;
-	  };
+		  };
+
+function nestedRecord(depth: number): Record<string, unknown> {
+	const root: Record<string, unknown> = {};
+	let current = root;
+	for (let index = 0; index < depth; index++) {
+		const next: Record<string, unknown> = {};
+		current.next = next;
+		current = next;
+	}
+	return root;
+}
 
 function checkoutDefinition(): DomainMachineDefinition<
 	CheckoutState,
@@ -2121,6 +2132,60 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects context data deeper than the traversal limit", () => {
+		const definition: DomainMachineDefinition<
+			"open",
+			Record<string, unknown>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => nestedRecord(257),
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			/maximum depth of 256/,
+		);
+	});
+
+	it("rejects context data with too many unique object nodes", () => {
+		const definition: DomainMachineDefinition<
+			"open",
+			{ readonly nodes: readonly Record<string, never>[] },
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => ({
+				nodes: Array.from({ length: 10_000 }, () => ({})),
+			}),
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			/more than 10,000 object nodes/,
+		);
+	});
+
+	it("rejects context data with too many own properties", () => {
+		const context: Record<string, number> = {};
+		for (let index = 0; index < 100_001; index++) {
+			context[`property-${index}`] = index;
+		}
+		const definition: DomainMachineDefinition<
+			"open",
+			Record<string, number>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => context,
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			/more than 100,000 own properties/,
+		);
+	});
+
 	it("rejects context accessor properties because context must be data", () => {
 		const getterContext = {};
 		Object.defineProperty(getterContext, "value", {
@@ -2677,6 +2742,33 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("rejects event data deeper than the traversal limit", () => {
+		type DeepEvent = {
+			readonly type: "Close";
+			readonly payload: Record<string, unknown>;
+		};
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			DeepEvent
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				{ type: "Close", payload: nestedRecord(256) },
+			),
+		).toThrow(/maximum depth of 256/);
+	});
+
 	it("copies the wrapper definition so later caller mutation cannot alter behavior", () => {
 		const definition = checkoutDefinition();
 		const machine = new DomainStateMachine(definition);
@@ -2930,6 +3022,37 @@ describe("DomainStateMachine", () => {
 				),
 			).toThrow(InvalidDomainTransitionResultError);
 		}
+	});
+
+	it("rejects transition output data deeper than the traversal limit", () => {
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			Record<string, never>,
+			{ readonly type: "Close" },
+			Record<string, unknown>
+		> = {
+			initial: "open",
+			initialContext: () => ({}),
+			states: {
+				open: {
+					on: {
+						Close: {
+							target: "closed",
+							reduce: () => ({ outputs: [nestedRecord(256)] }),
+						},
+					},
+				},
+				closed: { terminal: true },
+			},
+		};
+
+		expect(() =>
+			transitionDomainState(
+				definition,
+				createInitialDomainMachineSnapshot(definition),
+				{ type: "Close" },
+			),
+		).toThrow(/maximum depth of 256/);
 	});
 
 	it("uses BaseError/DomainError hierarchy consistently", () => {

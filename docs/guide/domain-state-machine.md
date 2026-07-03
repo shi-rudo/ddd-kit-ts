@@ -140,6 +140,14 @@ rejected without invoking their getter or setter. `Symbol.toStringTag` accessors
 are also rejected when inherited from an otherwise valid object or array
 prototype.
 
+The data graph is limited to 256 nested object/array levels, 10,000 unique
+object nodes, and 100,000 own properties per copy operation. Inputs must also be
+trusted and Proxy-free. ECMAScript has no portable, side-effect-free way to
+identify a transparent `Proxy`; reflective validation can execute its traps.
+The machine is therefore a domain-consistency component, not a sandbox for
+hostile in-process objects. Parse untrusted wire input into ordinary DTOs before
+constructing machine events or snapshots.
+
 Runtime definition and reducer-result validation is strict. Unknown properties
 are rejected instead of ignored, so misspellings such as `gaurd` or `output`
 cannot silently remove a business rule or requested output. A reducer must

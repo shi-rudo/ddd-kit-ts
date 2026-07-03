@@ -22,6 +22,12 @@ voEquals(a, b); // true
 
 Function values and custom class instances (including subclasses of built-ins) are rejected with a `TypeError`. Cloning a class instance without running its constructor can silently discard private fields, non-enumerable state, and built-in internal slots. Pass plain records, arrays, or the explicitly supported built-ins instead; put Value Object behaviour on a class that extends `ValueObject<T>`, not inside its `props` graph. Plain records from another JavaScript Realm are accepted and normalized to the local `Object.prototype`.
 
+Inputs to `vo()` must be trusted and Proxy-free. ECMAScript provides no
+portable, side-effect-free way to identify a transparent `Proxy`, so reflective
+cloning can execute Proxy traps. `vo()` is an immutable-value constructor, not
+a sandbox for hostile in-process objects. Parse untrusted wire data into an
+ordinary DTO before passing it to `vo()` or `voWithValidation`.
+
 Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map values recursively, so a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. Map keys and Set members must be primitive values: JavaScript defines their lookup semantics by identity, so cloning object keys or members would make separately constructed Value Objects compare unequal. Use an array when members are structured values. The mutator blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated. Treat it as a guard rail, not a security boundary.
 
 ::: info ArrayBuffer views stay mutable

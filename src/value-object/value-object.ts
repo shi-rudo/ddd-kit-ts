@@ -334,7 +334,10 @@ function isPrimitiveValue(value: unknown): boolean {
  * side-effect. Mutating the input afterwards does not bleed into the VO.
  * Symbol-keyed properties are preserved (matching `voEquals`); function
  * values and custom class instances are rejected (Value Objects are plain
- * data, not behaviour-bearing object graphs).
+ * data, not behaviour-bearing object graphs). Inputs must be trusted and
+ * Proxy-free: ECMAScript provides no portable way to identify a transparent
+ * Proxy without potentially executing its traps, so `vo()` is not a sandbox
+ * for hostile in-process objects.
  *
  * @example
  * ```typescript

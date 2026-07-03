@@ -122,6 +122,7 @@ function omitInternal(
 	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
 		const clone: unknown[] = new Array(arr.length);
+		const lengthDescriptor = Object.getOwnPropertyDescriptor(arr, "length");
 		visited.set(obj, clone);
 		for (const key of Reflect.ownKeys(arr)) {
 			if (key === "length") continue;
@@ -142,6 +143,9 @@ function omitInternal(
 			}
 			Object.defineProperty(clone, key, descriptor);
 			path.pop();
+		}
+		if (lengthDescriptor !== undefined) {
+			Object.defineProperty(clone, "length", lengthDescriptor);
 		}
 		if (budget) visited.delete(obj);
 		return clone;

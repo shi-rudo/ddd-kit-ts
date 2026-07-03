@@ -108,6 +108,17 @@ describe("deepOmit – Nested Objects and Arrays", () => {
 		expect(result[kept]).toEqual({ nested: true });
 		expect(Object.hasOwn(result, ignored)).toBe(false);
 	});
+
+	it("preserves a non-writable array length descriptor", () => {
+		const input = [1, 2];
+		Object.defineProperty(input, "length", { writable: false });
+
+		const result = deepOmit(input, { ignoreKeys: [] });
+
+		expect(Object.getOwnPropertyDescriptor(result, "length")).toEqual(
+			Object.getOwnPropertyDescriptor(input, "length"),
+		);
+	});
 });
 
 describe("deepOmit – ignoreKeyPredicate with Path", () => {

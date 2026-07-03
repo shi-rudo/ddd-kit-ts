@@ -188,6 +188,15 @@ type DomainMachineDataErrorFactory = (
 	| InvalidDomainMachineEventError
 	| InvalidDomainTransitionResultError;
 
+const DOMAIN_MACHINE_DATA_MAX_DEPTH = 256;
+const DOMAIN_MACHINE_DATA_MAX_NODES = 10_000;
+const DOMAIN_MACHINE_DATA_MAX_PROPERTIES = 100_000;
+
+type DomainMachineDataTraversal = {
+	nodes: number;
+	properties: number;
+};
+
 const DOMAIN_MACHINE_DEFINITION_KEYS: ReadonlySet<PropertyKey> = new Set([
 	"initial",
 	"initialContext",
@@ -604,6 +613,8 @@ function cloneDomainMachineDataValue<TValue>(
 	value: TValue,
 	errorFactory: DomainMachineDataErrorFactory,
 	seen = new WeakMap<object, unknown>(),
+	traversal: DomainMachineDataTraversal = { nodes: 0, properties: 0 },
+	depth = 0,
 ): TValue {
 	if (typeof value === "function") {
 		throw errorFactory("Domain machine data cannot contain function values.");
@@ -613,6 +624,17 @@ function cloneDomainMachineDataValue<TValue>(
 	const source = value as object;
 	const existing = seen.get(source);
 	if (existing !== undefined) return existing as TValue;
+	if (depth > DOMAIN_MACHINE_DATA_MAX_DEPTH) {
+		throw errorFactory(
+			`Domain machine data exceeds the maximum depth of ${DOMAIN_MACHINE_DATA_MAX_DEPTH}.`,
+		);
+	}
+	traversal.nodes += 1;
+	if (traversal.nodes > DOMAIN_MACHINE_DATA_MAX_NODES) {
+		throw errorFactory(
+			`Domain machine data contains more than ${DOMAIN_MACHINE_DATA_MAX_NODES.toLocaleString("en-US")} object nodes.`,
+		);
+	}
 	const toStringTagDescriptor = findPropertyDescriptor(
 		source,
 		Symbol.toStringTag,
@@ -635,7 +657,11 @@ function cloneDomainMachineDataValue<TValue>(
 		const cloned: unknown[] = new Array(value.length);
 		seen.set(source, cloned);
 
-		for (const key of Reflect.ownKeys(source)) {
+		for (const key of readDomainMachineDataKeys(
+			source,
+			errorFactory,
+			traversal,
+		)) {
 			const descriptor = Object.getOwnPropertyDescriptor(source, key);
 			if (!descriptor) continue;
 
@@ -651,6 +677,8 @@ function cloneDomainMachineDataValue<TValue>(
 				descriptor.value,
 				errorFactory,
 				seen,
+				traversal,
+				depth + 1,
 			);
 			Object.defineProperty(cloned, key, descriptor);
 		}
@@ -674,7 +702,11 @@ function cloneDomainMachineDataValue<TValue>(
 	const cloned = Object.create(prototype === null ? null : Object.prototype);
 	seen.set(source, cloned);
 
-	for (const key of Reflect.ownKeys(source)) {
+	for (const key of readDomainMachineDataKeys(
+		source,
+		errorFactory,
+		traversal,
+	)) {
 		const descriptor = Object.getOwnPropertyDescriptor(source, key);
 		if (!descriptor) continue;
 
@@ -688,11 +720,28 @@ function cloneDomainMachineDataValue<TValue>(
 			descriptor.value,
 			errorFactory,
 			seen,
+			traversal,
+			depth + 1,
 		);
 		Object.defineProperty(cloned, key, descriptor);
 	}
 
 	return cloned as TValue;
+}
+
+function readDomainMachineDataKeys(
+	value: object,
+	errorFactory: DomainMachineDataErrorFactory,
+	traversal: DomainMachineDataTraversal,
+): readonly PropertyKey[] {
+	const keys = Reflect.ownKeys(value);
+	traversal.properties += keys.length;
+	if (traversal.properties > DOMAIN_MACHINE_DATA_MAX_PROPERTIES) {
+		throw errorFactory(
+			`Domain machine data contains more than ${DOMAIN_MACHINE_DATA_MAX_PROPERTIES.toLocaleString("en-US")} own properties.`,
+		);
+	}
+	return keys;
 }
 
 function copyDomainMachineDefinition<

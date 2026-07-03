@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aligned with strict array equality.
 - Reject Proxy-wrapped user constructors that imitate intrinsic constructor
   names by comparing their exact source with a captured intrinsic allowlist.
+- Preserve the complete Array `length` descriptor in `deepOmit`, including a
+  non-writable length.
+- Document that Value Object inputs must be trusted and Proxy-free because
+  portable ECMAScript cannot identify transparent Proxies without invoking
+  their traps.
 
 ### Fixed: Domain State Machine runtime hardening
 
@@ -54,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reuse the stateful wrapper's prepared definition, validated snapshot, and
   unchanged frozen context to avoid redundant validation and deep copies on
   every operation.
+- Bound every context, event, and output copy to 256 levels, 10,000 unique
+  object nodes, and 100,000 own properties.
+- Document the Proxy-free input precondition and clarify that the machine is a
+  domain-consistency component rather than an in-process security sandbox.
 
 ## [2.1.0] - 2026-06-25
 
