@@ -1,6 +1,6 @@
 # Getting Started
 
-`@shirudo/ddd-kit` is a composable toolkit for tactical Domain-Driven Design in TypeScript. It models the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime. It targets modern TypeScript runtimes including Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
+`@shirudo/ddd-kit` is a composable toolkit for tactical Domain-Driven Design in TypeScript. It models the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime. It targets modern TypeScript runtimes including Node 20+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
 ## Installation
 

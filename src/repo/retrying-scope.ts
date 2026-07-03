@@ -1,5 +1,6 @@
 import { someChainRetryable } from "@shirudo/base-error";
 import { abortReason } from "../utils/abort";
+import { reportToObserver } from "../utils/observer";
 import type { TransactionScope, TransactionalOptions } from "./scope";
 
 /**
@@ -23,7 +24,12 @@ export interface RetryPolicy {
 	 * that your adapter has not mapped to a retryable kit error.
 	 */
 	isRetryable?: (error: unknown) => boolean;
-	/** Observer fired before each backoff wait (logging / metrics). */
+	/**
+	 * Observer fired before each backoff wait (logging / metrics).
+	 * Neutralised like the `withCommit` observers: a synchronous throw or
+	 * an async rejection is swallowed, so a buggy observer can neither
+	 * abort the retry loop nor mask the original retryable error.
+	 */
 	onRetry?: (info: {
 		attempt: number;
 		error: unknown;
@@ -174,7 +180,9 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 					maxDelayMs: this.maxDelayMs,
 					random: this.random,
 				});
-				this.onRetry?.({ attempt, error, delayMs });
+				// Observer only: a throwing or async-rejecting onRetry must
+				// neither abort the retry loop nor mask the original error.
+				reportToObserver(() => this.onRetry?.({ attempt, error, delayMs }));
 				// An abort during the wait rejects out of the loop with the
 				// signal reason: cancellation wins over another attempt.
 				await sleep(delayMs, signal);

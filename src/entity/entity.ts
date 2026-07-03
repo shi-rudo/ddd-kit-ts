@@ -11,32 +11,34 @@
  *
  * 2. **Child Entities**: Entities within an aggregate.
  *    - Have identity (id) and state, but no own version
- *    - Can extend `EntityBase<TState, TId>` for class-based entities
+ *    - Can extend `Entity<TState, TId>` for class-based entities
  *    - Or use functional style with `Identifiable<TId> & TProps`
  *    - Exist only within the aggregate boundary
  *    - Versioned through the Aggregate Root
  *    - Cannot be referenced directly from outside the aggregate
  *
  * This module provides:
- * - `EntityBase<TState, TId>` - Base class for entities with state
- * - `Entity<TId>` - Simple class for entities without state management
+ * - `Entity<TState, TId>` - Base class for entities with state
+ * - `EntityConfig` - Construction options (opt-in deep freeze)
  * - `Identifiable<TId>` - Minimal interface for objects with id
  * - Helper functions for working with collections of entities
  *
  * @example
  * ```typescript
  * // Class-based child entity with logic
- * class OrderItem extends EntityBase<OrderItemState, ItemId> {
+ * class OrderItem extends Entity<OrderItemState, ItemId> {
  *   constructor(id: ItemId, initialState: OrderItemState) {
  *     super(id, initialState);
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     this._state = { ...this._state, quantity };
+ *     // setState runs validateState and re-freezes; a direct
+ *     // `this._state = ...` assignment would skip both.
+ *     this.setState({ ...this.state, quantity });
  *   }
  *
  *   calculateSubtotal(): number {
- *     return this._state.price * this._state.quantity;
+ *     return this.state.price * this.state.quantity;
  *   }
  * }
  *
@@ -146,7 +148,9 @@ export interface IEntity<TId extends Id<string>, TState> extends Identifiable<TI
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     this._state = { ...this._state, quantity };
+ *     // setState runs validateState and re-freezes; a direct
+ *     // `this._state = ...` assignment would skip both.
+ *     this.setState({ ...this.state, quantity });
  *   }
  * }
  * ```

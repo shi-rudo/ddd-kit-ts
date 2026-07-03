@@ -62,6 +62,56 @@ describe("computeBackoffDelay", () => {
 });
 
 describe("RetryingTransactionScope", () => {
+	describe("onRetry observer neutralisation", () => {
+		it("a throwing onRetry neither stops retries nor fails the operation", async () => {
+			const inner = flakyScope(1, conflict);
+			const scope = new RetryingTransactionScope(inner, {
+				sleep: instantSleep,
+				onRetry: () => {
+					throw new Error("observer bug");
+				},
+			});
+
+			const result = await scope.transactional(async () => "ok");
+
+			expect(result).toBe("ok");
+			expect(inner.attempts).toBe(2);
+		});
+
+		it("a throwing onRetry does not mask the original error when retries are exhausted", async () => {
+			const inner = flakyScope(99, conflict);
+			const scope = new RetryingTransactionScope(inner, {
+				maxAttempts: 2,
+				sleep: instantSleep,
+				onRetry: () => {
+					throw new Error("observer bug");
+				},
+			});
+
+			await expect(
+				scope.transactional(async () => "ok"),
+			).rejects.toBeInstanceOf(ConcurrencyConflictError);
+			expect(inner.attempts).toBe(2);
+		});
+
+		it("an async-rejecting onRetry is swallowed and retries proceed", async () => {
+			const inner = flakyScope(1, conflict);
+			const scope = new RetryingTransactionScope(inner, {
+				sleep: instantSleep,
+				// The `=> void` signature still admits an async observer; its
+				// rejected promise must not become an unhandled rejection.
+				onRetry: async () => {
+					throw new Error("async observer bug");
+				},
+			});
+
+			await expect(scope.transactional(async () => "ok")).resolves.toBe(
+				"ok",
+			);
+			expect(inner.attempts).toBe(2);
+		});
+	});
+
 	it("returns the result without retrying when the inner scope succeeds", async () => {
 		const inner = flakyScope(0, conflict);
 		const scope = new RetryingTransactionScope(inner, { sleep: instantSleep });

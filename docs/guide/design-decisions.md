@@ -38,6 +38,10 @@ If anything in (1)–(3) throws, no state is mutated and no event is queued. Ver
 
 For `AggregateRoot` (non-event-sourced), use the `commit(newState, events)` helper to get the same guarantee. The unscoped `setState` + `addDomainEvent` pair stays available for cases that don't fit the helper (state-only mutations, audit-only events, multi-step transactions).
 
+## `commit()` keeps its transaction-flavored name
+
+An architecture review flagged `commit()` as transaction vocabulary inside the domain API (a ubiquitous-language purist would prefer `record` or `applyChange`). The name stays, deliberately: the method's whole point is its transactional SEMANTICS (state, events, and version land together or not at all), and the name says exactly that. `record` would undersell the atomicity, `applyChange` would collide with the event-sourced `apply()`, and renaming a central 2.x API would cost every consumer a mechanical migration for a vocabulary preference. Consumers who want domain verbs on the outside get them for free: `commit()` is `protected`, so the public surface of an aggregate is always the domain method (`confirm()`, `cancel()`) that calls it.
+
 ## Events are deeply frozen at construction
 
 `createDomainEvent` returns a deeply frozen object. A mutating subscriber on the `EventBus` throws instead of poisoning subsequent handlers. Events are facts of the past, immutable by definition (Vernon, IDDD §8).
