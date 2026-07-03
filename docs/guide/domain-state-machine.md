@@ -20,6 +20,7 @@ not force application code to speak in generic `dispatch(...)` calls.
 
 ```ts
 import {
+  DomainError,
   DomainStateMachine,
   type DomainMachineDefinition,
   type DomainMachineSnapshot,
@@ -241,9 +242,37 @@ domain method wants to enforce the rule; missing transitions throw
 `InvalidDomainTransitionError`, and rejected guards throw
 `DomainTransitionGuardRejectedError`.
 
-Guards must return a boolean. A guard that accidentally falls through and returns
-`undefined` is treated as broken machine code and throws
-`InvalidDomainTransitionGuardResultError`; it is never interpreted as allowed.
+Guards return `true`, `false`, or a concrete `DomainError`:
+
+- `true` allows the transition.
+- `false` makes `can(input)` return `false`; `dispatch(input)` throws the generic
+  `DomainTransitionGuardRejectedError`.
+- A `DomainError` also makes `can(input)` return `false`, but `dispatch(input)`
+  throws that exact error instance. This keeps rejected business rules in the
+  ubiquitous language.
+
+```ts
+class PaymentRequiredBeforeShippingError extends DomainError<
+  "PaymentRequiredBeforeShippingError"
+> {
+  constructor(readonly orderId: string) {
+    super(`Order ${orderId} must be paid before shipping.`);
+  }
+}
+
+// Inside the PaymentReceived transition:
+guard: ({ context }) =>
+  context.paymentId !== undefined
+    ? true
+    : new PaymentRequiredBeforeShippingError(context.orderId),
+```
+
+Return the error as a value; do not throw it inside the guard. A thrown callback
+error propagates from both `can(...)` and `dispatch(...)`, because the machine
+cannot classify arbitrary callback failures as ordinary domain rejection. A
+guard that accidentally falls through and returns `undefined`, returns a plain
+`Error`, or returns any other value is broken machine code and throws
+`InvalidDomainTransitionGuardResultError`.
 
 `can(...)` is not a general error-swallowing boundary. It returns `false` when a
 transition is unavailable, a guard rejects, or the input has no own string

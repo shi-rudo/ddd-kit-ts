@@ -24,9 +24,9 @@ import {
 	prepareDomainMachineSnapshot,
 	readDomainTransitionResultContext,
 	readDomainTransitionResultOutputs,
+	resolveDomainTransitionGuardResult,
 	validateDomainMachineInput,
 	validateDomainMachineSnapshotInvariant,
-	validateDomainTransitionGuardResult,
 	validateDomainTransitionResult,
 } from "./snapshot";
 
@@ -111,14 +111,13 @@ export function canTransitionPreparedDomainState<
 	const currentInput = copyDomainMachineInput(input);
 	if (!transition.guard) return true;
 
-	const allowed = transition.guard({
+	const guardResult = transition.guard({
 		state: snapshot.state,
 		context: snapshot.context,
 		input: currentInput,
 	});
-	validateDomainTransitionGuardResult(allowed);
 
-	return allowed;
+	return resolveDomainTransitionGuardResult(guardResult).allowed;
 }
 
 /**
@@ -126,6 +125,7 @@ export function canTransitionPreparedDomainState<
  *
  * @throws {@link InvalidDomainTransitionError} when no transition is defined.
  * @throws {@link DomainTransitionGuardRejectedError} when its guard rejects.
+ * @throws A concrete `DomainError` returned by a rejecting guard.
  */
 export function transitionDomainState<
 	TState extends string,
@@ -174,7 +174,7 @@ export function transitionPreparedDomainState<
 	}
 
 	const currentInput = copyDomainMachineInput(input);
-	const allowed =
+	const guardResult =
 		transition.guard === undefined
 			? true
 			: transition.guard({
@@ -182,9 +182,12 @@ export function transitionPreparedDomainState<
 					context: snapshot.context,
 					input: currentInput,
 				});
-	validateDomainTransitionGuardResult(allowed);
+	const guardDecision = resolveDomainTransitionGuardResult(guardResult);
 
-	if (!allowed) {
+	if (!guardDecision.allowed) {
+		if (guardDecision.rejection !== undefined) {
+			throw guardDecision.rejection;
+		}
 		throw new DomainTransitionGuardRejectedError(from, currentInput.type);
 	}
 

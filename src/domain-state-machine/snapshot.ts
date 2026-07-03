@@ -1,3 +1,4 @@
+import { DomainError } from "../core/errors";
 import type {
 	DomainMachineDefinition,
 	DomainMachineInput,
@@ -172,14 +173,19 @@ export function isDomainMachineInput(
 	);
 }
 
-export function validateDomainTransitionGuardResult(
+export function resolveDomainTransitionGuardResult(
 	result: unknown,
-): asserts result is boolean {
-	if (typeof result !== "boolean") {
-		throw new InvalidDomainTransitionGuardResultError(
-			"Domain transition guard must return a boolean.",
-		);
+):
+	| { readonly allowed: true }
+	| { readonly allowed: false; readonly rejection?: DomainError } {
+	if (typeof result === "boolean") return { allowed: result };
+	if (result instanceof DomainError) {
+		return { allowed: false, rejection: result };
 	}
+
+	throw new InvalidDomainTransitionGuardResultError(
+		"Domain transition guard must return a boolean or DomainError.",
+	);
 }
 
 export function validateDomainTransitionResult<TContext, TOutput>(

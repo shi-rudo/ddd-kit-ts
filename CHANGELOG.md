@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rename `DomainMachineEvent` to `DomainMachineInput`, including callback fields
   and validation errors, so machine commands, observed facts, and internal
   triggers cannot be confused with published Aggregate Domain Events.
+- Let guards return a concrete `DomainError`: `can()` treats it as a rejected
+  transition, while `dispatch()` throws the exact typed domain error. Boolean
+  `false` keeps the generic `DomainTransitionGuardRejectedError` behavior.
 - Reject async reducers, unknown definition/result properties, inherited or
   hidden definition entries, and Array subclasses instead of silently dropping
   behavior or outputs.
@@ -88,6 +91,7 @@ New root export:
 - `DomainMachineInput`
 - `DomainStateNode`
 - `DomainTransition`
+- `DomainTransitionGuardResult`
 - `DomainTransitionResult`
 - `DomainTransitionOutcome`
 - `createInitialDomainMachineSnapshot`

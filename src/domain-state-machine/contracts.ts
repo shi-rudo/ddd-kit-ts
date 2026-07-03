@@ -1,3 +1,5 @@
+import type { DomainError } from "../core/errors";
+
 /** Base shape for every input accepted by a domain state machine. */
 export type DomainMachineInput = {
 	readonly type: string;
@@ -39,6 +41,9 @@ export type DomainTransitionResult<TContext, TOutput> = {
 	readonly outputs?: readonly TOutput[];
 };
 
+/** A guard either allows, generically rejects, or returns a domain-specific rejection. */
+export type DomainTransitionGuardResult = boolean | DomainError;
+
 /** A guarded state change and its optional pure context reducer. */
 export type DomainTransition<
 	TState extends string,
@@ -47,12 +52,16 @@ export type DomainTransition<
 	TOutput,
 > = {
 	readonly target: TState;
-	/** Must be synchronous, deterministic, and side-effect-free. */
+	/**
+	 * Must be synchronous, deterministic, and side-effect-free. Return a
+	 * `DomainError` to provide a typed rejection that `can()` treats as false and
+	 * `dispatch()` throws unchanged.
+	 */
 	readonly guard?: (input: {
 		readonly state: TState;
 		readonly context: DomainMachineReadonly<TContext>;
 		readonly input: DomainMachineReadonly<TInput>;
-	}) => boolean;
+	}) => DomainTransitionGuardResult;
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly reduce?: (input: {
 		readonly state: TState;

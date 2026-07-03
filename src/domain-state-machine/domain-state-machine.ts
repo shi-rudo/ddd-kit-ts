@@ -28,6 +28,7 @@ export type {
 	DomainMachineSnapshot,
 	DomainStateNode,
 	DomainTransition,
+	DomainTransitionGuardResult,
 	DomainTransitionOutcome,
 	DomainTransitionResult,
 } from "./contracts";

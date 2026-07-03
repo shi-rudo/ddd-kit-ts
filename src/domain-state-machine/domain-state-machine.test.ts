@@ -75,6 +75,12 @@ type CheckoutOutput =
 			readonly reason: string;
 	  };
 
+class PaymentRequiredBeforeShippingError extends DomainError<"PaymentRequiredBeforeShippingError"> {
+	constructor() {
+		super("Payment is required before shipping.");
+	}
+}
+
 function nestedRecord(depth: number): Record<string, unknown> {
 	const root: Record<string, unknown> = {};
 	let current = root;
@@ -742,34 +748,82 @@ describe("DomainStateMachine", () => {
 		).toThrow(DomainTransitionGuardRejectedError);
 	});
 
-	it("throws structured errors when guards do not return booleans", () => {
+	it("returns false for typed domain rejections and throws them on dispatch", () => {
+		const rejection = new PaymentRequiredBeforeShippingError();
+		let reduceCalled = false;
 		const definition: DomainMachineDefinition<
-			"open" | "closed",
-			Record<string, never>,
-			{ readonly type: "Close" }
+			"awaiting-payment" | "awaiting-shipping",
+			{ readonly paid: boolean },
+			{ readonly type: "Ship" }
 		> = {
-			initial: "open",
-			initialContext: () => ({}),
+			initial: "awaiting-payment",
+			initialContext: () => ({ paid: false }),
 			states: {
-				open: {
+				"awaiting-payment": {
 					on: {
-						Close: {
-							target: "closed",
-							guard: (() => undefined) as unknown as () => boolean,
+						Ship: {
+							target: "awaiting-shipping",
+							guard: () => rejection,
+							reduce: () => {
+								reduceCalled = true;
+								return undefined;
+							},
 						},
 					},
 				},
-				closed: { terminal: true },
+				"awaiting-shipping": { terminal: true },
 			},
 		};
-		const snapshot = createInitialDomainMachineSnapshot(definition);
+		const machine = new DomainStateMachine(definition);
 
-		expect(() =>
-			canTransitionDomainState(definition, snapshot, { type: "Close" }),
-		).toThrow(InvalidDomainTransitionGuardResultError);
-		expect(() =>
-			transitionDomainState(definition, snapshot, { type: "Close" }),
-		).toThrow(InvalidDomainTransitionGuardResultError);
+		expect(machine.can({ type: "Ship" })).toBe(false);
+		let thrown: unknown;
+		try {
+			machine.dispatch({ type: "Ship" });
+		} catch (cause) {
+			thrown = cause;
+		}
+		expect(thrown).toBe(rejection);
+		expect(machine.state).toBe("awaiting-payment");
+		expect(reduceCalled).toBe(false);
+	});
+
+	it("throws structured errors for invalid guard results", () => {
+		for (const invalidResult of [
+			undefined,
+			new Error("not a domain rejection"),
+			Promise.resolve(true),
+		]) {
+			const definition: DomainMachineDefinition<
+				"open" | "closed",
+				Record<string, never>,
+				{ readonly type: "Close" }
+			> = {
+				initial: "open",
+				initialContext: () => ({}),
+				states: {
+					open: {
+						on: {
+							Close: {
+								target: "closed",
+								guard: (() => invalidResult) as unknown as () => boolean,
+							},
+						},
+					},
+					closed: { terminal: true },
+				},
+			};
+			const snapshot = createInitialDomainMachineSnapshot(definition);
+			const machine = new DomainStateMachine(definition);
+
+			expect(() =>
+				canTransitionDomainState(definition, snapshot, { type: "Close" }),
+			).toThrow(InvalidDomainTransitionGuardResultError);
+			expect(() => machine.dispatch({ type: "Close" })).toThrow(
+				InvalidDomainTransitionGuardResultError,
+			);
+			expect(machine.state).toBe("open");
+		}
 	});
 
 	it("throws invalid transition errors before validating unused input payloads", () => {
