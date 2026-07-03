@@ -297,6 +297,36 @@ describe("DomainStateMachine", () => {
 		expect(checks).toEqual({ active: 7, done: 2 });
 	});
 
+	it("treats an explicit undefined snapshot as no snapshot", () => {
+		const definition: DomainMachineDefinition<
+			"active" | "done",
+			{ readonly value: number },
+			{ readonly type: "Finish" }
+		> = {
+			initial: "active",
+			initialContext: () => ({ value: 1 }),
+			states: {
+				active: { on: { Finish: { target: "done" } } },
+				done: { terminal: true },
+			},
+		};
+
+		// A nullable `repo.loadSnapshot(id)` / `map.get(id)` passed straight
+		// through yields `undefined`, which must both typecheck against the
+		// snapshot overload and behave like the zero-arg call, constructing a
+		// fresh machine at the initial state instead of throwing.
+		const restored:
+			| DomainMachineSnapshot<"active" | "done", { readonly value: number }>
+			| undefined = undefined;
+		const machine = new DomainStateMachine(definition, restored);
+
+		expect(machine.state).toBe("active");
+		expect(machine.snapshot).toEqual({
+			state: "active",
+			context: { value: 1 },
+		});
+	});
+
 	it("rejects invalid self-transition context without advancing the wrapper", () => {
 		const definition: DomainMachineDefinition<
 			"active",
@@ -459,9 +489,11 @@ describe("DomainStateMachine", () => {
 
 	it("throws structured errors for malformed runtime snapshots", () => {
 		const definition = checkoutDefinition();
+		// `undefined` is excluded: the pure function has no "no snapshot"
+		// overload and still rejects it (asserted separately below), while the
+		// class constructor treats an explicit `undefined` as "no snapshot".
 		const malformedSnapshots = [
 			null,
-			undefined,
 			{},
 			{ state: "awaiting-payment" },
 			{ state: 123, context: { orderId: "order-1", totalCents: 1000 } },
@@ -489,6 +521,19 @@ describe("DomainStateMachine", () => {
 					),
 			).toThrow(InvalidDomainMachineSnapshotError);
 		}
+
+		// The pure transition function requires a snapshot, so `undefined` is
+		// still a malformed input for it (unlike the class constructor).
+		expect(() =>
+			transitionDomainState(
+				definition,
+				undefined as unknown as DomainMachineSnapshot<
+					CheckoutState,
+					CheckoutContext
+				>,
+				{ type: "PaymentReceived" },
+			),
+		).toThrow(InvalidDomainMachineSnapshotError);
 	});
 
 	it("validates pure API input snapshots before invoking callbacks", () => {
@@ -3429,11 +3474,13 @@ describe("DomainStateMachine", () => {
 		>;
 		void (null as unknown as InvalidDefinition);
 
-		const assertConstructorRejectsUndefined = () => {
-			// @ts-expect-error Explicit undefined is not a valid reconstitution snapshot.
+		const assertConstructorAcceptsUndefinedSnapshot = () => {
+			// An explicit undefined snapshot typechecks against the overload and
+			// falls back to the initial snapshot, so a nullable stored snapshot
+			// can be passed straight through without a narrowing branch.
 			new DomainStateMachine(definition, undefined);
 		};
-		void assertConstructorRejectsUndefined;
+		void assertConstructorAcceptsUndefinedSnapshot;
 	});
 
 	it("exposes deeply immutable machine data as deeply readonly types", () => {

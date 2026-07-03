@@ -32,6 +32,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document that Value Object inputs must be trusted and Proxy-free because
   portable ECMAScript cannot identify transparent Proxies without invoking
   their traps.
+- Reject a global or sticky `RegExp` from `vo()` and `ValueObject`: its
+  `lastIndex` is mutable scan state that deep freezing turns non-writable, so
+  every `test()`/`exec()` would throw. A plain `RegExp` never touches
+  `lastIndex` and stays an admitted immutable value.
+- Preserve non-enumerable own properties (including symbols) through
+  `ValueObject.clone()`, which previously lost them to its `{ ...props }`
+  spread and made `x.equals(x.clone())` false.
+- Stop `deepOmit` (and therefore `voEqualsExcept`/`deepEqualExcept`) from
+  applying `ignoreKeys`/`ignoreKeyPredicate` to array index keys, which
+  silently dropped elements and made structurally different arrays compare
+  equal. Key filtering still applies to custom, non-index array properties.
+- Compare accessor-defined array elements in `deepEqual` by the value they
+  yield, matching how plain-object accessor properties are compared, instead of
+  by getter/setter function identity.
+- Count non-enumerable own string properties in `deepEqual`, consistent with its
+  existing handling of symbols, so two objects that differ only by a hidden
+  string property are no longer reported equal.
+- Drop non-enumerable string properties on arrays in `vo()`/`ValueObject` just
+  like the plain-object clone path already did, so structurally parallel inputs
+  clone to the same value surface.
 
 ### Changed: Domain State Machine DDD contracts and runtime hardening
 
@@ -80,6 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reuse the stateful wrapper's prepared definition, validated snapshot, and
   unchanged frozen context to avoid redundant validation and deep copies on
   every operation.
+- Treat an explicit `undefined` snapshot argument to the `DomainStateMachine`
+  constructor as "no snapshot", falling back to the initial snapshot instead of
+  failing validation, and widen the reconstitution overload to accept
+  `undefined` so a nullable stored snapshot can be passed straight through.
 - Bound every context, input, and output copy to 256 levels, 10,000 unique
   object nodes, and 100,000 own properties.
 - Document the Proxy-free input precondition and clarify that the machine is a

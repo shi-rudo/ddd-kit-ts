@@ -82,7 +82,7 @@ export class DomainStateMachine<
 	);
 	constructor(
 		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
-		snapshot: DomainMachineSnapshot<TState, TContext>,
+		snapshot: DomainMachineSnapshot<TState, TContext> | undefined,
 	);
 	constructor(
 		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
@@ -90,12 +90,13 @@ export class DomainStateMachine<
 	) {
 		validateDomainMachineDefinition(definition);
 		this.definition = copyDomainMachineDefinition(definition);
-		if (snapshotInput.length === 1) {
-			const [snapshot] = snapshotInput;
-			const suppliedSnapshot = snapshot as DomainMachineSnapshot<
-				TState,
-				TContext
-			>;
+		// Resolve the overload by the argument value, not the rest-parameter
+		// arity: an explicit `undefined` snapshot (a natural result of a
+		// nullable `repo.loadSnapshot(id)` or `map.get(id)` passed straight
+		// through) means "no snapshot", so it must fall back to the initial
+		// snapshot instead of failing validation.
+		const [suppliedSnapshot] = snapshotInput;
+		if (suppliedSnapshot !== undefined) {
 			validateDomainMachineSnapshot(this.definition, suppliedSnapshot);
 			this.#snapshot = createDomainMachineSnapshot<TState, TContext>(
 				suppliedSnapshot,

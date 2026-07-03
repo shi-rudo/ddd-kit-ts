@@ -157,6 +157,37 @@ describe("deepOmit – ignoreKeyPredicate with Path", () => {
 			data: { updatedAt: "X" },
 		});
 	});
+
+	it("never drops array elements even when a predicate matches their index", () => {
+		// Key filtering is for object properties, not array elements. A
+		// predicate written to strip a config key named "2" must not silently
+		// delete array index 2 and leave a hole.
+		const result = deepOmit(["a", "b", "c"], {
+			ignoreKeyPredicate: (key) => key === "2",
+		});
+
+		expect(result).toEqual(["a", "b", "c"]);
+		expect(result).toHaveLength(3);
+		expect("2" in result).toBe(true);
+	});
+
+	it("never drops array elements matched by ignoreKeys index strings", () => {
+		const result = deepOmit(["a", "b", "c"], { ignoreKeys: ["1"] });
+
+		expect(result).toEqual(["a", "b", "c"]);
+	});
+
+	it("still filters custom (non-index) own properties on an array", () => {
+		const input: string[] & { meta?: string } = ["a", "b"];
+		input.meta = "secret";
+
+		const result = deepOmit(input, { ignoreKeys: ["meta"] }) as string[] & {
+			meta?: string;
+		};
+
+		expect([...result]).toEqual(["a", "b"]);
+		expect("meta" in result).toBe(false);
+	});
 });
 
 describe("deepOmit – Object.create(null) and Symbols", () => {

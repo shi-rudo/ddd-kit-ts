@@ -469,6 +469,27 @@ describe("ValueObject Class", () => {
             expect(cloned.props.currency).toBe("USD");
             expect(cloned.equals(money)).toBe(false);
         });
+
+        it("stays equal to its clone when props carry a non-enumerable symbol", () => {
+            // cloneForVo preserves non-enumerable symbol properties, but a
+            // `{ ...props }` spread would drop them, so clone() must re-attach
+            // them; otherwise equals(clone) fails, since deepEqual counts all
+            // own symbols regardless of enumerability.
+            const hidden = Symbol("hidden");
+            const props: MoneyProps = { amount: 100, currency: "USD" };
+            Object.defineProperty(props, hidden, {
+                value: 42,
+                enumerable: false,
+            });
+
+            const money = new Money(props);
+            const cloned = money.clone();
+
+            expect(Object.getOwnPropertySymbols(money.props)).toHaveLength(1);
+            expect(Object.getOwnPropertySymbols(cloned.props)).toHaveLength(1);
+            expect((cloned.props as Record<symbol, unknown>)[hidden]).toBe(42);
+            expect(money.equals(cloned)).toBe(true);
+        });
     });
 
     describe("toJSON", () => {

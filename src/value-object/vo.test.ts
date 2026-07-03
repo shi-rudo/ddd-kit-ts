@@ -252,7 +252,7 @@ describe("VO", () => {
 		it("compares every admitted built-in category by value", () => {
 			const first = vo({
 				date: new Date(1_000),
-				regexp: /value/gi,
+				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
 				set: new Set(["a", "b"]),
 				number: new Number(7),
@@ -262,7 +262,7 @@ describe("VO", () => {
 			});
 			const second = vo({
 				date: new Date(1_000),
-				regexp: /value/gi,
+				regexp: /value/i,
 				map: new Map([["key", { nested: 1 }]]),
 				set: new Set(["a", "b"]),
 				number: new Number(7),
@@ -621,6 +621,22 @@ describe("VO", () => {
 			const result = vo(input);
 
 			expect(0 in result).toBe(false);
+		});
+
+		it("drops non-enumerable string properties on arrays like it does on objects", () => {
+			// The array and plain-object clone paths must treat a non-enumerable
+			// string property the same way, so structurally parallel inputs do
+			// not yield value objects that voEquals treats differently.
+			const arr = [1, 2] as number[] & Record<string, unknown>;
+			Object.defineProperty(arr, "meta", {
+				value: "hidden",
+				enumerable: false,
+			});
+
+			const result = vo(arr);
+
+			expect(Object.getOwnPropertyNames(result)).not.toContain("meta");
+			expect([...result]).toEqual([1, 2]);
 		});
 
 		it("voEquals considers symbol-keyed values", () => {
@@ -1136,5 +1152,27 @@ describe("deepFreeze – mutator shadows are shared module-level functions", () 
 		// are pure allocation churn on that hot path.
 		expect(typeof setTimeA).toBe("function");
 		expect(setTimeA).toBe(setTimeB);
+	});
+});
+
+describe("vo() – RegExp value semantics", () => {
+	it("admits a plain RegExp and keeps it usable after freezing", () => {
+		const value = vo({ pattern: /ab+c/i });
+
+		// A non-global, non-sticky RegExp never touches lastIndex, so it stays
+		// a genuine immutable value that still matches once frozen.
+		expect(value.pattern.test("ABBBC")).toBe(true);
+		expect(value.pattern.source).toBe("ab+c");
+	});
+
+	it("rejects a global RegExp whose lastIndex is mutable scan state", () => {
+		// A global RegExp advances lastIndex on every test()/exec(); deep
+		// freezing it would make matching throw, so it is not a value.
+		expect(() => vo({ pattern: /ab+c/g })).toThrow(TypeError);
+		expect(() => vo({ pattern: /ab+c/g })).toThrow(/global or sticky RegExp/);
+	});
+
+	it("rejects a sticky RegExp for the same reason", () => {
+		expect(() => vo({ pattern: /ab+c/y })).toThrow(/global or sticky RegExp/);
 	});
 });

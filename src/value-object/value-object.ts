@@ -226,6 +226,11 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
             if (!("value" in descriptor)) {
                 throwUnsupportedAccessorProperty();
             }
+            // Drop non-enumerable string keys just like the plain-object branch
+            // below, so an array and an object carrying the same hidden property
+            // clone to the same value surface. Array indices are enumerable and
+            // therefore preserved.
+            if (typeof key === "string" && !descriptor.enumerable) continue;
             descriptor.value = cloneForVo(descriptor.value, visited);
             Object.defineProperty(clone, key, descriptor);
         }
@@ -280,6 +285,20 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
             tag === "[object SharedArrayBuffer]"
         ) {
             throwUnsupportedValueSemantics(tag);
+        }
+        if (tag === "[object RegExp]") {
+            // A global or sticky RegExp carries observable mutable scan state:
+            // every test()/exec() writes lastIndex, so it is a stateful object,
+            // not a value. Deep-freezing it makes lastIndex non-writable and
+            // crashes matching, so reject it instead of admitting a half-frozen
+            // value. A plain (non-global, non-sticky) RegExp never touches
+            // lastIndex and stays a genuine immutable value.
+            const regExp = obj as RegExp;
+            if (regExp.global || regExp.sticky) {
+                throw new TypeError(
+                    "vo() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
+                );
+            }
         }
         // Atomic built-ins admitted by the VO contract: Date, RegExp and
         // primitive wrappers all have stable value semantics in deepEqual.
@@ -625,7 +644,26 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
      */
     public clone(props?: Partial<T>): this {
         const Constructor = this.constructor as new (props: T) => this;
-        return new Constructor({ ...this.props, ...(props || {}) });
+        const merged = { ...this.props, ...(props || {}) } as T;
+        // A `{ ...spread }` copies only enumerable own keys, so any
+        // non-enumerable own property that cloneForVo preserved on this.props
+        // (e.g. a non-enumerable symbol) would be dropped, making
+        // `x.equals(x.clone())` false because deepEqual counts all own symbols.
+        // Re-attach every non-enumerable own key the caller did not override.
+        for (const key of Reflect.ownKeys(this.props)) {
+            const descriptor = Object.getOwnPropertyDescriptor(this.props, key);
+            if (descriptor === undefined || descriptor.enumerable) continue;
+            if (props && Object.hasOwn(props, key)) continue;
+            Object.defineProperty(merged, key, {
+                value: (this.props as Record<PropertyKey, unknown>)[
+                    key as PropertyKey
+                ],
+                writable: true,
+                enumerable: false,
+                configurable: true,
+            });
+        }
+        return new Constructor(merged);
     }
 
     /**

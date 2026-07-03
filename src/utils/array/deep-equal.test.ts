@@ -74,6 +74,24 @@ describe("deepEqual – Plain Objects", () => {
 		b.x = 1;
 		expect(deepEqual(a, b)).toBe(true);
 	});
+
+	it("detects a differing non-enumerable string property", () => {
+		// Symbols are compared regardless of enumerability, so non-enumerable
+		// string properties must be too; otherwise an object carrying extra
+		// hidden data would compare equal to one without it.
+		const a = { x: 1 };
+		const b = Object.defineProperty({ x: 1 }, "secret", {
+			value: 2,
+			enumerable: false,
+		});
+		expect(deepEqual(a, b)).toBe(false);
+
+		const c = Object.defineProperty({ x: 1 }, "secret", {
+			value: 2,
+			enumerable: false,
+		});
+		expect(deepEqual(b, c)).toBe(true);
+	});
 });
 
 describe("deepEqual – Arrays", () => {
@@ -99,6 +117,33 @@ describe("deepEqual – Arrays", () => {
 
 		const c = [{ x: 1 }, { y: [2, 4] }];
 		expect(deepEqual(a, c)).toBe(false);
+	});
+
+	it("compares accessor-defined array elements by their yielded value", () => {
+		// An array index defined as a getter must be compared by the value it
+		// yields, matching how plain-object accessor properties are compared,
+		// rather than by getter-function identity.
+		const withGetter = (value: number): unknown[] => {
+			const arr: unknown[] = [];
+			Object.defineProperty(arr, 0, {
+				get: () => value,
+				enumerable: true,
+				configurable: true,
+			});
+			return arr;
+		};
+
+		expect(deepEqual(withGetter(42), withGetter(42))).toBe(true);
+		expect(deepEqual(withGetter(42), withGetter(99))).toBe(false);
+		expect(deepEqual(withGetter(7), [7])).toBe(true);
+	});
+
+	it("distinguishes a sparse hole from an explicit undefined", () => {
+		// deepEqual([, 1], [undefined, 1]) must stay false: reading elements by
+		// access must not erase the hole-vs-undefined distinction that the
+		// own-key comparison provides.
+		// biome-ignore lint/suspicious/noSparseArray: the hole is the assertion.
+		expect(deepEqual([, 1], [undefined, 1])).toBe(false);
 	});
 });
 

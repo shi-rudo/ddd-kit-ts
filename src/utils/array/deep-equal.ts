@@ -148,20 +148,18 @@ function deepEqualInner(
 		const keysB = Reflect.ownKeys(objB).filter((key) => key !== "length");
 		if (keysA.length !== keysB.length) return false;
 
+		const arrA = objA as unknown as Record<PropertyKey, unknown>;
+		const arrB = objB as unknown as Record<PropertyKey, unknown>;
 		for (const key of keysA) {
 			if (!objHasOwn.call(objB, key)) return false;
-			const descriptorA = Object.getOwnPropertyDescriptor(objA, key);
-			const descriptorB = Object.getOwnPropertyDescriptor(objB, key);
-			if (descriptorA === undefined || descriptorB === undefined) return false;
-			if (("value" in descriptorA) !== ("value" in descriptorB)) return false;
-			if ("value" in descriptorA && "value" in descriptorB) {
-				if (!deepEqualInner(descriptorA.value, descriptorB.value, visited)) {
-					return false;
-				}
-			} else if (
-				descriptorA.get !== descriptorB.get ||
-				descriptorA.set !== descriptorB.set
-			) {
+			// Read the element by access (invoking any getter) rather than
+			// comparing accessor descriptors by function identity, so an array
+			// index defined as a getter is compared by the value it yields,
+			// matching how comparePlainObjects treats accessor properties.
+			// Sparse holes stay observable through the key-set comparison above:
+			// a hole leaves no own key, so two arrays that differ by a hole vs
+			// an explicit undefined have different key sets.
+			if (!deepEqualInner(arrA[key], arrB[key], visited)) {
 				return false;
 			}
 		}
@@ -262,8 +260,12 @@ function comparePlainObjects(
 	const recA = objA as Record<string | symbol, unknown>;
 	const recB = objB as Record<string | symbol, unknown>;
 
-	const stringKeysA = Object.keys(objA);
-	const stringKeysB = Object.keys(objB);
+	// Own string keys including non-enumerable ones: symbols are already
+	// counted through Object.getOwnPropertySymbols (which ignores
+	// enumerability), so using Object.keys here would let two objects that
+	// differ only by a non-enumerable string property compare equal.
+	const stringKeysA = Object.getOwnPropertyNames(objA);
+	const stringKeysB = Object.getOwnPropertyNames(objB);
 	if (stringKeysA.length !== stringKeysB.length) return false;
 
 	const symbolKeysA = Object.getOwnPropertySymbols(objA);

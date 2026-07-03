@@ -126,11 +126,21 @@ function omitInternal(
 		visited.set(obj, clone);
 		for (const key of Reflect.ownKeys(arr)) {
 			if (key === "length") continue;
-			if (shouldIgnoreKey(key, path, ignoreKeys, options)) continue;
+			const segment = arrayPathSegment(key);
+			// Key filtering never applies to array elements (numeric indices):
+			// dropping an element would leave a hole and make structurally
+			// different arrays compare equal through deepEqualExcept. It still
+			// applies to custom (non-index) own properties on the array.
+			if (
+				typeof segment !== "number" &&
+				shouldIgnoreKey(key, path, ignoreKeys, options)
+			) {
+				continue;
+			}
 			const descriptor = Object.getOwnPropertyDescriptor(arr, key);
 			if (descriptor === undefined) continue;
 
-			path.push(arrayPathSegment(key));
+			path.push(segment);
 			if ("value" in descriptor) {
 				descriptor.value = omitInternal(
 					descriptor.value,
