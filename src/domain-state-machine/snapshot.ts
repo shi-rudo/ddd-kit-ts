@@ -101,6 +101,24 @@ export function validateDomainMachineSnapshotInvariant<
 	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): void {
+	const stateNode = definition.states[snapshot.state];
+	if (stateNode.validateContext !== undefined) {
+		const validContext = stateNode.validateContext({
+			state: snapshot.state,
+			context: snapshot.context,
+		});
+		if (typeof validContext !== "boolean") {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine state "${snapshot.state}" validateContext must return a boolean.`,
+			);
+		}
+		if (!validContext) {
+			throw new InvalidDomainMachineSnapshotError(
+				`Domain machine snapshot violates the context invariant for state "${snapshot.state}".`,
+			);
+		}
+	}
+
 	if (definition.validateSnapshot === undefined) return;
 
 	const valid = definition.validateSnapshot(snapshot);

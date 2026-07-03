@@ -165,23 +165,40 @@ objects must be plain objects, and state/input entries must be enumerable string
 properties, so inherited, symbolic, or hidden behavior cannot disappear during
 the stable copy.
 
-Use `validateSnapshot` for invariants that relate a control state to its context.
-This closes the reconstitution path as well as the normal transition path:
+Use a state's `validateContext` for an invariant owned by that state. The callback
+is typed with the concrete state name, so the rule stays next to the state it
+protects:
 
 ```ts
-const checkoutLifecycle = {
-  // ...initial, initialContext, states
-  validateSnapshot: ({ state, context }) =>
-    state !== "awaiting-shipping" || context.paymentId !== undefined,
-};
+"awaiting-shipping": {
+  validateContext: ({ state, context }) => {
+    // state is typed as "awaiting-shipping"
+    return context.paymentId !== undefined;
+  },
+  on: {
+    // ...shipping transitions
+  },
+},
 ```
 
-The predicate runs on the copied, deeply frozen snapshot during initial-state
-creation, wrapper reconstitution, functional API input validation, and before a
-transition result is committed. `false` throws `InvalidDomainMachineSnapshotError`;
-a non-boolean result is a broken definition and throws
+Keep machine-level `validateSnapshot` for a rule that genuinely spans several
+states or must compare the state discriminator itself:
+
+```ts
+validateSnapshot: ({ state, context }) =>
+  !state.startsWith("cancelled-") || context.cancellationReason !== undefined,
+```
+
+The active state's `validateContext` runs first, followed by `validateSnapshot`.
+Each predicate runs exactly once on the copied, deeply frozen snapshot during
+initial-state creation, wrapper reconstitution, functional API input validation,
+and before a transition result is committed. The stateful wrapper reuses its
+already validated current snapshot, so `can(...)` does not repeatedly validate
+unchanged context. `false` throws `InvalidDomainMachineSnapshotError`; a
+non-boolean result is a broken definition and throws
 `InvalidDomainMachineDefinitionError`.
-Without `validateSnapshot`, snapshot validation is intentionally structural and
+
+Without either validator, snapshot validation is intentionally structural and
 data-only; the machine cannot infer state/context business invariants from erased
 TypeScript types.
 
@@ -314,7 +331,7 @@ buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
 `input`, the frozen copy fails loudly.
 
 Purity also requires callback discipline that JavaScript cannot enforce at
-runtime. Guards, reducers, and `validateSnapshot` must be synchronous,
+runtime. Guards, reducers, `validateContext`, and `validateSnapshot` must be synchronous,
 deterministic, and side-effect-free: do not perform I/O, read clocks or
 randomness, or mutate captured closure state. In particular, `can(...)` is a
 query and must remain side-effect-free. Return requested external work as
@@ -322,7 +339,7 @@ query and must remain side-effect-free. Return requested external work as
 
 The stateful wrapper also rejects reentrant evaluation. A guard or reducer must
 not call `can(...)` or `dispatch(...)` on the same machine instance; the same
-rule applies to `validateSnapshot`. Such a call throws
+rule applies to `validateContext` and `validateSnapshot`. Such a call throws
 `ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
 unchanged, and releases the evaluation lock even when callback code throws.
 
@@ -353,7 +370,8 @@ await checkoutRepository.save({
 ```
 
 The constructor validates the restored state name, copies and freezes its
-context, and runs `validateSnapshot` before exposing the machine. Invalid or
+context, and runs the active state's `validateContext` followed by
+`validateSnapshot` before exposing the machine. Invalid or
 outdated persisted data therefore fails during reconstitution instead of during
 a later business operation. Add an explicit persistence migration when a new
 deployment removes states or changes context invariants.

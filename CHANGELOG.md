@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Let guards return a concrete `DomainError`: `can()` treats it as a rejected
   transition, while `dispatch()` throws the exact typed domain error. Boolean
   `false` keeps the generic `DomainTransitionGuardRejectedError` behavior.
+- Add state-local `validateContext` invariants, typed to each concrete state and
+  evaluated across creation, reconstitution, functional inputs, and transition
+  results; retain `validateSnapshot` for cross-state rules.
 - Reject async reducers, unknown definition/result properties, inherited or
   hidden definition entries, and Array subclasses instead of silently dropping
   behavior or outputs.

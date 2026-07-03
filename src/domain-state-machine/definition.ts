@@ -16,6 +16,7 @@ const DOMAIN_MACHINE_DEFINITION_KEYS: ReadonlySet<PropertyKey> = new Set([
 ]);
 const DOMAIN_MACHINE_STATE_NODE_KEYS: ReadonlySet<PropertyKey> = new Set([
 	"terminal",
+	"validateContext",
 	"on",
 ]);
 const DOMAIN_MACHINE_TRANSITION_KEYS: ReadonlySet<PropertyKey> = new Set([
@@ -99,6 +100,10 @@ export function copyDomainMachineDefinition<
 		Object.defineProperty(copiedStates, state, {
 			value: Object.freeze({
 				terminal: readOptionalDomainMachineDefinitionProperty(node, "terminal"),
+				validateContext: readOptionalDomainMachineDefinitionProperty(
+					node,
+					"validateContext",
+				),
 				on: Object.freeze(copiedTransitions),
 			}),
 			enumerable: true,
@@ -227,6 +232,17 @@ export function validateDomainMachineDefinition<
 		if (terminal !== undefined && typeof terminal !== "boolean") {
 			throw new InvalidDomainMachineDefinitionError(
 				`Domain machine state "${state}" terminal flag must be a boolean.`,
+			);
+		}
+
+		const validateContext: unknown =
+			readOptionalDomainMachineDefinitionProperty(node, "validateContext");
+		if (
+			validateContext !== undefined &&
+			typeof validateContext !== "function"
+		) {
+			throw new InvalidDomainMachineDefinitionError(
+				`Domain machine state "${state}" validateContext must be a function.`,
 			);
 		}
 

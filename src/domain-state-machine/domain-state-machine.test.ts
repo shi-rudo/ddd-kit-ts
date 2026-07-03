@@ -212,6 +212,154 @@ describe("DomainStateMachine", () => {
 		}
 	});
 
+	it("enforces context invariants declared by the active state", () => {
+		const definition: DomainMachineDefinition<
+			"open" | "closed",
+			{ readonly approved: boolean },
+			{ readonly type: "Close" }
+		> = {
+			initial: "open",
+			initialContext: () => ({ approved: false }),
+			states: {
+				open: { on: { Close: { target: "closed" } } },
+				closed: {
+					terminal: true,
+					validateContext: ({ state, context }) => {
+						const closedState: "closed" = state;
+						return closedState === "closed" && context.approved;
+					},
+				},
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+
+		expect(() => machine.dispatch({ type: "Close" })).toThrow(
+			InvalidDomainMachineSnapshotError,
+		);
+		expect(machine.state).toBe("open");
+	});
+
+	it("evaluates each state-local invariant once per snapshot boundary", () => {
+		const checks = { active: 0, done: 0 };
+		const definition: DomainMachineDefinition<
+			"active" | "done",
+			{ readonly valid: boolean },
+			{ readonly type: "Stay" } | { readonly type: "Finish" }
+		> = {
+			initial: "active",
+			initialContext: () => ({ valid: true }),
+			states: {
+				active: {
+					validateContext: ({ context }) => {
+						checks.active += 1;
+						return context.valid;
+					},
+					on: {
+						Stay: { target: "active" },
+						Finish: { target: "done" },
+					},
+				},
+				done: {
+					terminal: true,
+					validateContext: ({ context }) => {
+						checks.done += 1;
+						return context.valid;
+					},
+				},
+			},
+		};
+
+		const initial = createInitialDomainMachineSnapshot(definition);
+		expect(checks).toEqual({ active: 1, done: 0 });
+
+		const machine = new DomainStateMachine(definition, initial);
+		expect(checks).toEqual({ active: 2, done: 0 });
+		expect(machine.can({ type: "Stay" })).toBe(true);
+		expect(checks).toEqual({ active: 2, done: 0 });
+
+		machine.dispatch({ type: "Stay" });
+		expect(checks).toEqual({ active: 3, done: 0 });
+
+		expect(
+			canTransitionDomainState(definition, initial, { type: "Stay" }),
+		).toBe(true);
+		expect(checks).toEqual({ active: 4, done: 0 });
+
+		transitionDomainState(definition, initial, { type: "Stay" });
+		expect(checks).toEqual({ active: 6, done: 0 });
+
+		const finished = transitionDomainState(definition, initial, {
+			type: "Finish",
+		});
+		expect(checks).toEqual({ active: 7, done: 1 });
+
+		new DomainStateMachine(definition, finished.snapshot);
+		expect(checks).toEqual({ active: 7, done: 2 });
+	});
+
+	it("rejects invalid self-transition context without advancing the wrapper", () => {
+		const definition: DomainMachineDefinition<
+			"active",
+			{ readonly valid: boolean },
+			{ readonly type: "Invalidate" }
+		> = {
+			initial: "active",
+			initialContext: () => ({ valid: true }),
+			states: {
+				active: {
+					validateContext: ({ context }) => context.valid,
+					on: {
+						Invalidate: {
+							target: "active",
+							reduce: () => ({ context: { valid: false } }),
+						},
+					},
+				},
+			},
+		};
+		const machine = new DomainStateMachine(definition);
+
+		expect(() => machine.dispatch({ type: "Invalidate" })).toThrow(
+			InvalidDomainMachineSnapshotError,
+		);
+		expect(machine.snapshot).toEqual({
+			state: "active",
+			context: { valid: true },
+		});
+	});
+
+	it("rejects malformed state-local invariant definitions and results", () => {
+		const malformedDefinition = {
+			initial: "active",
+			initialContext: () => ({}),
+			states: { active: { validateContext: true } },
+		} as unknown as DomainMachineDefinition<
+			"active",
+			Record<string, never>,
+			{ readonly type: "Stay" }
+		>;
+		expect(() => new DomainStateMachine(malformedDefinition)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
+
+		const invalidResult: DomainMachineDefinition<
+			"active",
+			Record<string, never>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "active",
+			initialContext: () => ({}),
+			states: {
+				active: {
+					validateContext: (() => undefined) as unknown as () => boolean,
+				},
+			},
+		};
+		expect(() => createInitialDomainMachineSnapshot(invalidResult)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
+	});
+
 	it("validates each initial snapshot exactly once", () => {
 		let validations = 0;
 		const definition: DomainMachineDefinition<

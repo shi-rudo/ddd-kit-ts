@@ -76,8 +76,14 @@ export type DomainStateNode<
 	TContext,
 	TInput extends DomainMachineInput,
 	TOutput,
+	TName extends TState = TState,
 > = {
 	readonly terminal?: boolean;
+	/** State-specific context invariant. Must be synchronous, deterministic, and side-effect-free. */
+	readonly validateContext?: (input: {
+		readonly state: TName;
+		readonly context: DomainMachineReadonly<TContext>;
+	}) => boolean;
 	readonly on?: {
 		readonly [TType in TInput["type"]]?: DomainTransition<
 			TState,
@@ -106,7 +112,8 @@ export type DomainMachineDefinition<
 			TState,
 			TContext,
 			TInput,
-			TOutput
+			TOutput,
+			TName
 		>;
 	};
 };
