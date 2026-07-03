@@ -432,3 +432,22 @@ mathematical FSM, but the public API keeps the DDD-facing name:
 
 Use it when lifecycle transitions are a real domain concept. For a simple
 two-state aggregate method, a direct `if` guard is usually clearer.
+
+## DomainStateMachine vs XState
+
+Use this `DomainStateMachine` when the lifecycle is part of the domain model and
+fits flat, named states with synchronous pure guards and reducers. It is designed
+for aggregate invariants and process-manager decisions that should produce plain
+snapshots and explicit value outputs without introducing an interpreter, actor
+runtime, timers, or framework integration.
+
+Use [XState](https://stately.ai/docs/xstate) when the required semantics are
+statecharts or actor orchestration: nested or parallel states, invoked or spawned
+actors, delayed transitions, asynchronous service lifecycles, UI-framework
+integration, visual modeling, or deep actor persistence. XState can also model
+domain lifecycles, but its larger runtime is justified when those capabilities
+are actually part of the problem.
+
+Choose by required semantics, not by the number of states. Keep this machine for
+a synchronous domain decision table; choose XState when the machine itself must
+coordinate concurrent or asynchronous runtime behavior.
