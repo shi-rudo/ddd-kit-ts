@@ -98,6 +98,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `occurredAt`. The clock implementation moved to an internal module; the
   public API (`ClockFactory`, `setClockFactory`, `withClockFactory`,
   `resetClockFactory`) is unchanged.
+- `RetryingTransactionScope` now neutralises its `onRetry` observer the
+  same way `withCommit` neutralises `onPublishError` / `onPersistError`: a
+  synchronous throw or an async rejection from the observer is swallowed,
+  so a buggy logging/metrics hook can no longer abort the retry loop and
+  mask the original retryable error (typically a
+  `ConcurrencyConflictError`) with its own.
+
+### Documentation: audit follow-up corrections
+
+- Align the supported-Node claim with the package's `engines` field:
+  README, getting-started, LLM.md, and the edge-runtimes guide now say
+  Node 20+ (the previous "Node 18+" contradicted `engines: >=20`).
+- Fix the stale `EntityBase` references in the `entity.ts` module header
+  (the exported class is `Entity`) and rewrite both JSDoc examples to
+  mutate through `setState` instead of assigning `this._state` directly,
+  which skipped `validateState` and the freeze the getter contract
+  documents.
+- Record the decision to keep `commit()`'s transaction-flavored name in
+  the design-decisions guide (the atomic semantics are the point; the
+  method is `protected`, so aggregates expose domain verbs publicly).
 
 ### Fixed: Value Object cloning and equality hardening
 

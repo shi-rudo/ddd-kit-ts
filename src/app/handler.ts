@@ -5,6 +5,7 @@ import type { Id } from "../core/id";
 import type { EventBus, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
+import { reportToObserver } from "../utils/observer";
 
 /**
  * Helper for executing a write Use Case inside a transaction scope.
@@ -307,32 +308,4 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	}
 
 	return result;
-}
-
-/**
- * Invokes a fire-and-forget post-commit observer (`onPersistError`,
- * `onPublishError`) and neutralises BOTH failure shapes it can produce. The
- * observers are typed `(...) => void`, but a `void` return type still admits
- * an `async` function, so an observer can fail in two ways: a synchronous
- * throw, or a rejected promise. Either would surface AFTER the transaction
- * already committed - the synchronous throw breaks the loop, and the async
- * rejection becomes an `unhandledRejection` that can crash the process under
- * Node's default policy. Both would violate the post-commit invariant, so
- * both are swallowed here: observers report, they never fail a committed
- * write.
- */
-function reportToObserver(invoke: () => void): void {
-	let result: unknown;
-	try {
-		result = invoke() as unknown;
-	} catch {
-		return;
-	}
-	if (
-		result !== null &&
-		typeof result === "object" &&
-		typeof (result as { then?: unknown }).then === "function"
-	) {
-		(result as Promise<unknown>).then(undefined, () => {});
-	}
 }

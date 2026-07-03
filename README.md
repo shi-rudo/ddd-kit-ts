@@ -1,6 +1,6 @@
 # @shirudo/ddd-kit
 
-Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
+Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 20+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
 > **Stable: 2.1**
 >
