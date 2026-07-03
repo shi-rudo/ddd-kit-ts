@@ -26,7 +26,9 @@ import { abortReason } from "../utils/abort";
  *     events were recorded. Each harvested event is stamped with
  *     `aggregateVersion` = the aggregate's commit version (onto a frozen
  *     copy; a pre-set value wins) - consumers get the OCC version the
- *     row was written with, for ordering and idempotency watermarks.
+ *     row was written with, for cross-commit ordering and debugging.
+ *     All events of one commit share the stamp, so per-event dedup
+ *     belongs on `eventId`, not on this value (see the outbox guide).
  *
  *     **Harvest order.** Events are concatenated in the order
  *     aggregates appear in the returned `aggregates` array, then in

@@ -320,11 +320,16 @@ export interface DomainEvent<T extends string, P = void> {
 	 * `CreateDomainEventOptions.aggregateVersion`; a pre-set value is
 	 * never overwritten.
 	 *
-	 * Consumers use it for ordering ("apply projections up to aggregate
-	 * version N"), idempotency watermarks, debugging, and integration
-	 * logs. Optional at the type level: events created outside an
-	 * aggregate (system/integration events) and events from older kit
-	 * versions don't carry it.
+	 * Consumers use it for cross-commit ordering and debugging. It is NOT
+	 * a per-event idempotency key: all events of one commit share the
+	 * stamp, so a position cursor keyed on it alone would silently skip
+	 * every event after the first within a commit (e.g. after a crash
+	 * between two same-version events). Dedup keys belong on `eventId`;
+	 * as a watermark this value is per-commit only (advance it after
+	 * processing ALL events of that version; see the outbox guide).
+	 * Optional at the type level: events created outside an aggregate
+	 * (system/integration events) and events from older kit versions
+	 * don't carry it.
 	 */
 	aggregateVersion?: number;
 
@@ -393,6 +398,14 @@ export interface CreateDomainEventOptions {
  * Creates a domain event with default values.
  * Sets occurredAt to current date and version to 1 if not provided.
  *
+ * **Input ownership.** The event is deeply frozen, and `payload` and
+ * `metadata` are deep-cloned first, so the caller's own objects are never
+ * frozen in place and later mutation of them does not bleed into the
+ * event (same contract as `vo()`). The clone follows the plain-data event
+ * contract via `structuredClone`: functions, Promise, and WeakMap/WeakSet
+ * values throw a `TypeError`; symbol-keyed properties are not carried
+ * over.
+ *
  * **For aggregate-internal events, prefer `this.recordEvent(...)` on
  * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
@@ -439,20 +452,56 @@ export function createDomainEvent<T extends string, P>(
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
-		payload: payload as P,
-		// Defensive copy: the event must not share the caller's live Date
-		// instance, or a later mutation of it would bleed into the event.
+		// Defensive copies throughout: the deep-freeze below must never
+		// reach the caller's own object graph. Without the clone, passing
+		// (parts of) live aggregate state as payload, or reusing a metadata
+		// object across events, would freeze the caller's objects in place;
+		// the next mutation then throws far away from the cause. Same
+		// ownership contract as `vo()` and the occurredAt copy.
+		payload: cloneOwnedEventData(payload as P, "payload"),
 		occurredAt: options?.occurredAt
 			? new Date(options.occurredAt.getTime())
 			: currentClockFactory(),
 		version: options?.version ?? 1,
 		aggregateVersion: options?.aggregateVersion,
-		metadata: options?.metadata,
+		metadata: cloneOwnedEventData(options?.metadata, "metadata"),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
 	return deepFreeze(event) as DomainEvent<T, P>;
+}
+
+/**
+ * Deep-clones caller-supplied event data (payload, metadata) before the
+ * event is frozen, so `createDomainEvent` never freezes or aliases the
+ * caller's own object graph. Primitives pass through unchanged.
+ *
+ * Uses `structuredClone`, which matches the documented plain-data event
+ * contract: functions, Promise, and WeakMap/WeakSet values throw a
+ * descriptive `TypeError` (they are not data); symbol-keyed properties
+ * are not carried over; a class instance would silently lose its
+ * prototype, which the plain-data contract already rules out.
+ */
+function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
+	if (typeof value === "function") {
+		throw new TypeError(
+			`createDomainEvent: ${field} must not be a function: domain events are plain data`,
+		);
+	}
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	try {
+		return structuredClone(value);
+	} catch (cause) {
+		throw new TypeError(
+			`createDomainEvent: ${field} must be plain, structured-cloneable data ` +
+				`(no functions, Promises, or WeakMap/WeakSet values): domain events ` +
+				`are plain data`,
+			{ cause },
+		);
+	}
 }
 
 /**

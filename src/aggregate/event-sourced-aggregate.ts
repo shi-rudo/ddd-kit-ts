@@ -203,7 +203,20 @@ export abstract class EventSourcedAggregate<
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		this._state = freezeShallow(this.fromSnapshotState(snapshot.state));
+		// Same guard AggregateRoot.restoreFromSnapshot applies: a corrupt
+		// snapshot store must not reconstitute an invalid aggregate. Runs
+		// BEFORE anything is assigned, so there is nothing to roll back;
+		// a DomainError maps to Err (infrastructure boundary, same contract
+		// as the replay loop below), everything else propagates.
+		const restored = this.fromSnapshotState(snapshot.state);
+		try {
+			this.validateState(restored);
+		} catch (e) {
+			if (e instanceof DomainError) return err(e);
+			throw e;
+		}
+
+		this._state = freezeShallow(restored);
 		this.setVersion(snapshot.version);
 
 		for (const event of eventsAfterSnapshot) {
