@@ -22,6 +22,13 @@ voEquals(a, b); // true
 
 Function values and custom class instances (including subclasses of built-ins) are rejected with a `TypeError`. Cloning a class instance without running its constructor can silently discard private fields, non-enumerable state, and built-in internal slots. Pass plain records, arrays, or the explicitly supported built-ins instead; put Value Object behaviour on a class that extends `ValueObject<T>`, not inside its `props` graph. Plain records from another JavaScript Realm are accepted and normalized to the local `Object.prototype`.
 
+Every accepted VO value must be both immutable and compared by value. `Error`,
+`ArrayBuffer`, `SharedArrayBuffer`, TypedArrays, and `DataView` are therefore
+rejected instead of introducing reference equality or mutable bytes. `Promise`,
+`WeakMap`, and `WeakSet` remain rejected as non-value data. Convert binary data
+to an immutable representation such as a plain number array or encoded string
+before constructing a VO.
+
 Inputs to `vo()` must be trusted and Proxy-free. ECMAScript provides no
 portable, side-effect-free way to identify a transparent `Proxy`, so reflective
 cloning can execute Proxy traps. `vo()` is an immutable-value constructor, not
@@ -30,9 +37,9 @@ ordinary DTO before passing it to `vo()` or `voWithValidation`.
 
 Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map values recursively, so a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. Map keys and Set members must be primitive values: JavaScript defines their lookup semantics by identity, so cloning object keys or members would make separately constructed Value Objects compare unequal. Use an array when members are structured values. The mutator blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated. Treat it as a guard rail, not a security boundary.
 
-::: info ArrayBuffer views stay mutable
-The spec forbids `Object.freeze` on a TypedArray with elements, and freezing could not protect the underlying buffer anyway, so `deepFreeze` passes ArrayBuffer views (TypedArrays, `DataView`) through unfrozen. The surrounding object graph is still deeply frozen; treat the bytes themselves as mutable.
-:::
+The standalone `deepFreeze` utility still documents its JavaScript-level
+limitations, but `vo()` and `ValueObject` do not inherit a weaker contract from
+it: unsupported mutable values are rejected before freezing.
 
 ### Validation at the App boundary
 
@@ -131,7 +138,11 @@ voEqualsExcept(a, b, {
 });
 ```
 
-`voEqualsExcept` compares deep-omitted copies of both sides. Built-ins that `deepEqual` compares **by value** (Date, RegExp, Map, Set, TypedArrays, DataView) are cloned into those copies; built-ins it compares **by reference** (Error, ArrayBuffer, Promise, WeakMap, WeakSet) are passed through by reference instead, since cloning them would make even `voEqualsExcept(x, x, …)` false. Reflexivity always holds.
+`voEqualsExcept` compares deep-omitted copies of both sides. Every value admitted
+by the VO constructors has value semantics, so equality never falls back to
+identity for valid VOs. The lower-level `deepEqualExcept` utility can still
+receive arbitrary JavaScript objects and documents its broader behavior
+separately.
 
 ## When to reach for `vo()` vs `ValueObject<T>`
 

@@ -35,18 +35,6 @@ const atomicBuiltInCases = [
         expected: true,
     },
     {
-        name: "ArrayBuffer",
-        create: () => new ArrayBuffer(8),
-        read: (value: object) => (value as ArrayBuffer).byteLength,
-        expected: 8,
-    },
-    {
-        name: "SharedArrayBuffer",
-        create: () => new SharedArrayBuffer(8),
-        read: (value: object) => (value as SharedArrayBuffer).byteLength,
-        expected: 8,
-    },
-    {
         name: "Number",
         create: () => new Number(7),
         read: (value: object) =>
@@ -73,18 +61,17 @@ const atomicBuiltInCases = [
         read: (value: object) => value.valueOf(),
         expected: 7n,
     },
-    {
-        name: "Error",
-        create: () => new Error("value"),
-        read: (value: object) => (value as Error).message,
-        expected: "value",
-    },
 ] as const;
 
 const forbiddenBuiltInCases = [
     { name: "Promise", create: () => Promise.resolve("value") },
     { name: "WeakMap", create: () => new WeakMap<object, unknown>() },
     { name: "WeakSet", create: () => new WeakSet<object>() },
+    { name: "Error", create: () => new Error("value") },
+    { name: "ArrayBuffer", create: () => new ArrayBuffer(8) },
+    { name: "SharedArrayBuffer", create: () => new SharedArrayBuffer(8) },
+    { name: "Uint8Array", create: () => new Uint8Array([1]) },
+    { name: "DataView", create: () => new DataView(new ArrayBuffer(1)) },
 ] as const;
 
 function maskWithOwnDataTag<T extends object>(value: T): T {
@@ -242,7 +229,7 @@ describe("vo built-ins with data toStringTag overrides", () => {
         "rejects $name with an own data toStringTag",
         ({ create }) => {
             expect(() => vo({ value: maskWithOwnDataTag(create()) })).toThrow(
-                /Value Objects are plain data/,
+                /(Value Objects are plain data|immutable value semantics)/,
             );
         },
     );
@@ -251,7 +238,7 @@ describe("vo built-ins with data toStringTag overrides", () => {
         "rejects $name with an inherited data toStringTag",
         ({ create }) => {
             expect(() => vo({ value: maskWithInheritedDataTag(create()) })).toThrow(
-                /Value Objects are plain data/,
+                /(Value Objects are plain data|immutable value semantics)/,
             );
         },
     );
@@ -304,9 +291,9 @@ describe("ValueObject Class", () => {
             }).toThrow();
         });
 
-        it("should accept props containing a non-empty TypedArray", () => {
+        it("rejects mutable or reference-compared built-ins in class-based Value Objects", () => {
             interface BlobProps {
-                data: Uint8Array;
+                data: object;
             }
 
             class Blob extends ValueObject<BlobProps> {
@@ -315,31 +302,34 @@ describe("ValueObject Class", () => {
                 }
             }
 
-            const blob = new Blob({ data: new Uint8Array([1, 2, 3]) });
-            expect(Array.from(blob.props.data)).toEqual([1, 2, 3]);
-            expect(Object.isFrozen(blob.props)).toBe(true);
+            for (const data of [
+                new Uint8Array([1, 2, 3]),
+                new DataView(new ArrayBuffer(4)),
+                new ArrayBuffer(4),
+                new SharedArrayBuffer(4),
+                new Error("failure"),
+            ]) {
+                expect(() => new Blob({ data })).toThrow(
+                    /immutable value semantics/,
+                );
+            }
         });
 
         it("does not freeze (or shadow) caller-owned objects inside Map/Set props", () => {
             interface BagProps {
                 m: Map<string, Date>;
-                e: Error;
             }
 
             class Bag extends ValueObject<BagProps> {}
 
             const d = new Date(1000);
-            const e = new Error("mine");
-            const bag = new Bag({ m: new Map([["k", d]]), e });
+            const bag = new Bag({ m: new Map([["k", d]]) });
 
             // The caller's Date must stay fully usable: no in-place freeze,
             // no permanently installed throwing setTime shadow.
             expect(Object.isFrozen(d)).toBe(false);
             d.setTime(5);
             expect(d.getTime()).toBe(5);
-            // The caller's Error must not be frozen or aliased into props.
-            expect(Object.isFrozen(e)).toBe(false);
-            expect(bag.props.e).not.toBe(e);
             // The VO's own copy is still immutable.
             expect(() => bag.props.m.get("k")?.setTime(99)).toThrow(TypeError);
         });

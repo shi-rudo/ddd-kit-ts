@@ -50,6 +50,7 @@ export type DomainTransition<
 	TContext,
 	TInput extends DomainMachineInput,
 	TOutput,
+	TSource extends TState = TState,
 > = {
 	readonly target: TState;
 	/**
@@ -58,13 +59,13 @@ export type DomainTransition<
 	 * `dispatch()` throws unchanged.
 	 */
 	readonly guard?: (input: {
-		readonly state: TState;
+		readonly state: TSource;
 		readonly context: DomainMachineReadonly<TContext>;
 		readonly input: DomainMachineReadonly<TInput>;
 	}) => DomainTransitionGuardResult;
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly reduce?: (input: {
-		readonly state: TState;
+		readonly state: TSource;
 		readonly context: DomainMachineReadonly<TContext>;
 		readonly input: DomainMachineReadonly<TInput>;
 	}) => DomainTransitionResult<TContext, TOutput> | undefined;
@@ -89,7 +90,8 @@ export type DomainStateNode<
 			TState,
 			TContext,
 			Extract<TInput, { readonly type: TType }>,
-			TOutput
+			TOutput,
+			TName
 		>;
 	};
 };

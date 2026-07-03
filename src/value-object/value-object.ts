@@ -180,16 +180,15 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
  * drops; they would otherwise be invisible to `voEquals`, whose
  * `deepEqual` DOES consider symbol keys) and shared references / cycles
  * keep their identity across Map boundaries. Function values throw,
- * preserving `vo()`'s documented data-not-behaviour gate; Promise /
- * WeakMap / WeakSet throw a descriptive `TypeError` (they have no
- * meaningful value semantics). Custom class instances and subclasses of
- * built-ins are rejected because cloning them without invoking their
+ * preserving `vo()`'s documented data-not-behaviour gate. Built-ins without
+ * immutable value semantics throw a descriptive `TypeError`. Custom class
+ * instances and subclasses of built-ins are rejected because cloning them
+ * without invoking their
  * constructor can silently lose private or non-enumerable state. Map keys
  * and Set members must be primitive because their equality is
  * identity-based and object identity cannot survive defensive cloning.
- * Accessor properties are rejected without invoking them. Atomic
- * built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error)
- * delegate to
+ * Accessor properties are rejected without invoking them. Admitted atomic
+ * built-ins (Date, RegExp and primitive wrappers) delegate to
  * `structuredClone`, brand-verified so a `Symbol.toStringTag` spoofer is
  * walked as the plain object it is. `__proto__` own keys are copied as
  * inert data properties.
@@ -204,6 +203,12 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
         return value;
     }
     const obj = value as object;
+    if (ArrayBuffer.isView(obj)) {
+        throwUnsupportedValueSemantics(
+            builtInTagWithoutInvokingAccessors(obj) ??
+                "[object ArrayBuffer view]",
+        );
+    }
     if (visited.has(obj)) {
         return visited.get(obj);
     }
@@ -269,8 +274,15 @@ function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown 
                 `vo() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
             );
         }
-        // Atomic built-ins: Date, RegExp, TypedArrays, ArrayBuffer,
-        // wrappers, Error.
+        if (
+            tag === "[object Error]" ||
+            tag === "[object ArrayBuffer]" ||
+            tag === "[object SharedArrayBuffer]"
+        ) {
+            throwUnsupportedValueSemantics(tag);
+        }
+        // Atomic built-ins admitted by the VO contract: Date, RegExp and
+        // primitive wrappers all have stable value semantics in deepEqual.
         const builtInClone = structuredClone(obj);
         visited.set(obj, builtInClone);
         return builtInClone;
@@ -319,6 +331,13 @@ function throwUnsupportedAccessorProperty(): never {
     );
 }
 
+function throwUnsupportedValueSemantics(tag: string): never {
+    const name = tag.startsWith("[object ") ? tag.slice(8, -1) : tag;
+    throw new TypeError(
+        `vo() cannot accept ${name} values: Value Objects require immutable value semantics`,
+    );
+}
+
 function isPrimitiveValue(value: unknown): boolean {
     return (
         value === null ||
@@ -337,7 +356,8 @@ function isPrimitiveValue(value: unknown): boolean {
  * data, not behaviour-bearing object graphs). Inputs must be trusted and
  * Proxy-free: ECMAScript provides no portable way to identify a transparent
  * Proxy without potentially executing its traps, so `vo()` is not a sandbox
- * for hostile in-process objects.
+ * for hostile in-process objects. Built-ins that cannot provide immutable,
+ * value-based semantics are rejected instead of weakening the VO contract.
  *
  * @example
  * ```typescript
@@ -357,7 +377,6 @@ export function vo<T>(t: T): VO<T> {
  * - Nested objects and arrays
  * - Primitives (including NaN)
  * - Dates, Maps, Sets, RegExp
- * - TypedArrays and DataView
  * - Symbol keys
  * - Circular references
  *
@@ -435,8 +454,8 @@ export function voEqualsExcept<T>(
  * Creates a value object with optional validation.
  * Returns a Result type instead of throwing an error.
  *
- * Note: the Result covers VALIDATION failures only. Non-data values in
- * the input (functions, Promise/WeakMap/WeakSet) still throw a
+ * Note: the Result covers VALIDATION failures only. Non-data values and
+ * built-ins without immutable value semantics still throw a
  * `TypeError` from `vo()`; they cannot occur in parsed JSON and signal
  * a programming error, not a validation failure.
  *

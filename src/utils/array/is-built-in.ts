@@ -117,6 +117,16 @@ const intrinsicConstructorSources: ReadonlyMap<string, string> = new Map(
 const intrinsicConstructorSourceSet: ReadonlySet<string> = new Set(
 	intrinsicConstructorSources.values(),
 );
+const ERROR_INTRINSIC_NAMES = [
+	"Error",
+	"EvalError",
+	"RangeError",
+	"ReferenceError",
+	"SyntaxError",
+	"TypeError",
+	"URIError",
+	"AggregateError",
+] as const;
 
 export function isIntrinsicConstructorPrototype(
 	prototype: object,
@@ -153,8 +163,10 @@ export function isIntrinsicConstructorPrototype(
 		return false;
 	}
 
-	const nameDescriptor =
-		Object.getOwnPropertyDescriptor(candidateConstructor, "name");
+	const nameDescriptor = Object.getOwnPropertyDescriptor(
+		candidateConstructor,
+		"name",
+	);
 	const candidateName =
 		nameDescriptor !== undefined &&
 		"value" in nameDescriptor &&
@@ -267,9 +279,7 @@ export function builtInTagWithoutInvokingAccessors(
 	if (BUILT_IN_TAGS.has(tag) && hasBrand(value, tag)) {
 		return tag;
 	}
-	return descriptor === undefined
-		? undefined
-		: builtInTagFromBrand(value);
+	return descriptor === undefined ? undefined : builtInTagFromBrand(value);
 }
 
 export function mutableBuiltInTagWithoutInvokingAccessors(
@@ -367,8 +377,14 @@ function hasBrand(obj: object, tag: string): boolean {
 			case "[object BigInt]":
 				bigIntValueOf.call(obj);
 				return true;
+			case "[object Promise]":
+				return hasNativePrototype(obj, "Promise");
+			case "[object Error]":
+				return ERROR_INTRINSIC_NAMES.some((name) =>
+					hasNativePrototype(obj, name),
+				);
 			default:
-				return true;
+				return false;
 		}
 	} catch {
 		return false;

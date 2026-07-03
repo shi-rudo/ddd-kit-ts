@@ -3396,13 +3396,21 @@ describe("DomainStateMachine", () => {
 					on: {
 						Named: {
 							target: "closed",
-							reduce: ({ context, input }) => ({
-								context: { seen: [...context.seen, input.name] },
-							}),
+							reduce: ({ state, context, input }) => {
+								const sourceState: "open" = state;
+								return {
+									context: {
+										seen: [...context.seen, `${sourceState}:${input.name}`],
+									},
+								};
+							},
 						},
 						Numbered: {
 							target: "closed",
-							guard: ({ input }) => input.value > 0,
+							guard: ({ state, input }) => {
+								const sourceState: "open" = state;
+								return sourceState === "open" && input.value > 0;
+							},
 						},
 					},
 				},

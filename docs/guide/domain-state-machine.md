@@ -166,6 +166,11 @@ objects must be plain objects, and state/input entries must be enumerable string
 properties, so inherited, symbolic, or hidden behavior cannot disappear during
 the stable copy.
 
+Transition guards and reducers are typed with both the input selected by the
+`on` key and the concrete source-state key. A callback declared under
+`states.draft.on.Submit`, for example, receives `state` as `"draft"`, not as the
+entire state union.
+
 Use a state's `validateContext` for an invariant owned by that state. The callback
 is typed with the concrete state name, so the rule stays next to the state it
 protects:

@@ -427,6 +427,20 @@ describe("deepOmit – Symbol.toStringTag spoofing", () => {
 		expect(result.m.x).toBe(1);
 	});
 
+	it.each(["Promise", "Error"])(
+		"walks a spoofed %s as plain data and applies omissions",
+		(tag) => {
+			const value = { [Symbol.toStringTag]: tag, secret: 1, keep: 2 };
+			const result = deepOmit(value, { ignoreKeys: ["secret"] }) as {
+				keep: number;
+			};
+
+			expect(result).not.toBe(value);
+			expect(result.keep).toBe(2);
+			expect("secret" in result).toBe(false);
+		},
+	);
+
 	it("still clones real built-ins by type (regression guard)", () => {
 		const input = { d: new Date(5), m: new Map([["k", 1]]) };
 		const result = deepOmit(input, {}) as { d: Date; m: Map<string, number> };
@@ -489,8 +503,8 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 			node = { a: node, b: node };
 		}
 
-		expect(() =>
-			deepOmit(node, { ignoreKeyPredicate: () => false }),
-		).toThrow(/shared references/);
+		expect(() => deepOmit(node, { ignoreKeyPredicate: () => false })).toThrow(
+			/shared references/,
+		);
 	});
 });

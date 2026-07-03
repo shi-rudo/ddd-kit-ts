@@ -377,8 +377,18 @@ describe("deepEqual – Symbol.toStringTag spoofing", () => {
 		expect(deepEqual(a, b)).toBe(false);
 	});
 
-	it("does not crash on spoofed Map/Set/DataView/Number tags", () => {
-		for (const tagName of ["Map", "Set", "DataView", "Number", "Boolean", "String", "RegExp"]) {
+	it("does not crash on spoofed built-in tags", () => {
+		for (const tagName of [
+			"Map",
+			"Set",
+			"DataView",
+			"Number",
+			"Boolean",
+			"String",
+			"RegExp",
+			"Promise",
+			"Error",
+		]) {
 			const a = { [Symbol.toStringTag]: tagName, v: 1 };
 			const b = { [Symbol.toStringTag]: tagName, v: 1 };
 			expect(deepEqual(a, b)).toBe(true);
@@ -427,9 +437,9 @@ describe("deepEqual – NaN consistency across containers", () => {
 		expect(
 			deepEqual(new Float64Array([1, NaN]), new Float64Array([1, NaN])),
 		).toBe(true);
-		expect(
-			deepEqual(new Float64Array([NaN]), new Float64Array([1])),
-		).toBe(false);
+		expect(deepEqual(new Float64Array([NaN]), new Float64Array([1]))).toBe(
+			false,
+		);
 	});
 
 	it("treats two invalid Dates as equal", () => {

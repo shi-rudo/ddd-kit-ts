@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed: Value Object cloning and equality hardening
 
+- Enforce absolute Value Object semantics: reject `Error`, `ArrayBuffer`,
+  `SharedArrayBuffer`, TypedArrays, and `DataView` from `vo()` and `ValueObject`
+  because they cannot be both deeply immutable and reliably value-compared.
+- Require intrinsic prototype evidence for unprobeable `Promise` and `Error`
+  tags, so plain records spoofing those names remain ordinary structural data.
 - Reject object-valued Map keys and Set members, whose identity-based lookup
   semantics cannot survive defensive cloning while preserving value equality.
 - Clone arrays and records through data descriptors, rejecting accessors without
@@ -39,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add state-local `validateContext` invariants, typed to each concrete state and
   evaluated across creation, reconstitution, functional inputs, and transition
   results; retain `validateSnapshot` for cross-state rules.
+- Narrow transition guard and reducer `state` values to their concrete source
+  state instead of the full machine state union.
 - Add `analyzeDomainMachineDefinition` for deterministic transition matrices and
   sound diagnostics for unreachable states, structural dead ends, and missing
   terminal paths without executing definition callbacks.

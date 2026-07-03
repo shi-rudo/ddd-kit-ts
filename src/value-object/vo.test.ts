@@ -248,6 +248,31 @@ describe("VO", () => {
 			expect(money1 === money2).toBe(true); // Reference equality
 			expect(voEquals(money1, money2)).toBe(true); // Value equality
 		});
+
+		it("compares every admitted built-in category by value", () => {
+			const first = vo({
+				date: new Date(1_000),
+				regexp: /value/gi,
+				map: new Map([["key", { nested: 1 }]]),
+				set: new Set(["a", "b"]),
+				number: new Number(7),
+				boolean: new Boolean(true),
+				string: new String("value"),
+				bigint: Object(7n),
+			});
+			const second = vo({
+				date: new Date(1_000),
+				regexp: /value/gi,
+				map: new Map([["key", { nested: 1 }]]),
+				set: new Set(["a", "b"]),
+				number: new Number(7),
+				boolean: new Boolean(true),
+				string: new String("value"),
+				bigint: Object(7n),
+			});
+
+			expect(voEquals(first, second)).toBe(true);
+		});
 	});
 
 	describe("voEqualsExcept()", () => {
@@ -621,48 +646,41 @@ describe("VO", () => {
 		});
 	});
 
-	describe("TypedArray and DataView handling", () => {
-		it("creates a VO containing a non-empty TypedArray without throwing", () => {
-			// Object.freeze on an ArrayBuffer view with elements throws per
-			// spec; deepFreeze must skip views instead of crashing.
-			const v = vo({ data: new Uint8Array([1, 2, 3]) });
-
-			expect(Array.from(v.data)).toEqual([1, 2, 3]);
+	describe("mutable and reference-compared built-ins", () => {
+		it.each([
+			["Uint8Array", () => new Uint8Array([1, 2, 3])],
+			["empty Uint8Array", () => new Uint8Array(0)],
+			["DataView", () => new DataView(new ArrayBuffer(4))],
+			["ArrayBuffer", () => new ArrayBuffer(4)],
+			["SharedArrayBuffer", () => new SharedArrayBuffer(4)],
+			["Error", () => new Error("failure")],
+		] as const)("rejects %s because every admitted VO value must be immutable and value-based", (_name, create) => {
+			expect(() => vo({ value: create() })).toThrow(
+				/immutable value semantics/,
+			);
 		});
 
-		it("still freezes the surrounding object graph when a TypedArray is present", () => {
-			const v = vo({ data: new Float64Array([1.5]), label: "raw" });
-
-			expect(Object.isFrozen(v)).toBe(true);
-			expect(() => {
-				(v as any).label = "changed";
-			}).toThrow();
+		it("rejects unsupported values before validation can produce a mutable VO", () => {
+			expect(() =>
+				voWithValidation(
+					{ data: new Uint8Array([9]) },
+					(value) => value.data.length > 0,
+				),
+			).toThrow(/immutable value semantics/);
 		});
 
-		it("handles TypedArrays nested below the top level", () => {
-			const v = vo({ chunk: { bytes: new Int32Array([7, 8]) } });
-
-			expect(Object.isFrozen(v.chunk)).toBe(true);
-			expect(Array.from(v.chunk.bytes)).toEqual([7, 8]);
-		});
-
-		it("handles empty TypedArrays and DataView", () => {
-			const v = vo({
-				empty: new Uint8Array(0),
-				view: new DataView(new ArrayBuffer(4)),
+		it("rejects an ArrayBuffer view without invoking its toStringTag accessor", () => {
+			const value = new Uint8Array([1]);
+			let accessorInvoked = false;
+			Object.defineProperty(value, Symbol.toStringTag, {
+				get: () => {
+					accessorInvoked = true;
+					throw new Error("toStringTag getter must not run");
+				},
 			});
 
-			expect(v.empty.length).toBe(0);
-			expect(v.view.byteLength).toBe(4);
-		});
-
-		it("voWithValidation succeeds for valid input containing a TypedArray", () => {
-			const result = voWithValidation(
-				{ data: new Uint8Array([9]) },
-				(t) => t.data.length > 0,
-			);
-
-			expect(result.isOk()).toBe(true);
+			expect(() => vo({ value })).toThrow(/immutable value semantics/);
+			expect(accessorInvoked).toBe(false);
 		});
 	});
 
@@ -802,6 +820,21 @@ describe("VO", () => {
 			);
 		});
 
+		it("treats Promise and Error toStringTag spoofers as ordinary value data", () => {
+			for (const tag of ["Promise", "Error"] as const) {
+				const marker = Symbol("marker");
+				const first = vo({
+					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
+				});
+				const second = vo({
+					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
+				});
+
+				expect(first.value[marker]).toBe("kept");
+				expect(voEquals(first, second)).toBe(true);
+			}
+		});
+
 		it("rejects custom class instances instead of creating incomplete clones", () => {
 			class Money {
 				constructor(readonly amount: number) {}
@@ -847,14 +880,12 @@ describe("VO", () => {
 			class CustomDate extends Date {}
 			class CustomMap extends Map<string, number> {}
 			class CustomError extends Error {}
-			class CustomBytes extends Uint8Array {}
 
 			for (const value of [
 				new CustomArray(1, 2),
 				new CustomDate(0),
 				new CustomMap([["one", 1]]),
 				new CustomError("failure"),
-				new CustomBytes([1, 2]),
 			]) {
 				expect(() => vo({ value })).toThrow(/custom class instances/);
 			}
