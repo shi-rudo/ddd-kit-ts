@@ -1,3 +1,5 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
 	deepFreeze,
@@ -245,6 +247,31 @@ describe("VO", () => {
 
 			expect(money1 === money2).toBe(true); // Reference equality
 			expect(voEquals(money1, money2)).toBe(true); // Value equality
+		});
+
+		it("compares every admitted built-in category by value", () => {
+			const first = vo({
+				date: new Date(1_000),
+				regexp: /value/i,
+				map: new Map([["key", { nested: 1 }]]),
+				set: new Set(["a", "b"]),
+				number: new Number(7),
+				boolean: new Boolean(true),
+				string: new String("value"),
+				bigint: Object(7n),
+			});
+			const second = vo({
+				date: new Date(1_000),
+				regexp: /value/i,
+				map: new Map([["key", { nested: 1 }]]),
+				set: new Set(["a", "b"]),
+				number: new Number(7),
+				boolean: new Boolean(true),
+				string: new String("value"),
+				bigint: Object(7n),
+			});
+
+			expect(voEquals(first, second)).toBe(true);
 		});
 	});
 
@@ -503,6 +530,36 @@ describe("VO", () => {
 			nested.lat = 0;
 			expect(v.coords.lat).toBe(52.5);
 		});
+
+		it("rejects own accessors without invoking them", () => {
+			let getterCalls = 0;
+			const input = {} as { readonly amount: number };
+			Object.defineProperty(input, "amount", {
+				enumerable: true,
+				get: () => {
+					getterCalls += 1;
+					return 5;
+				},
+			});
+
+			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(getterCalls).toBe(0);
+		});
+
+		it("rejects array index accessors without invoking them", () => {
+			let getterCalls = 0;
+			const input: number[] = [];
+			Object.defineProperty(input, 0, {
+				enumerable: true,
+				get: () => {
+					getterCalls += 1;
+					return 5;
+				},
+			});
+
+			expect(() => vo(input)).toThrow(/accessor properties/);
+			expect(getterCalls).toBe(0);
+		});
 	});
 
 	describe("symbol-keyed properties", () => {
@@ -529,6 +586,59 @@ describe("VO", () => {
 			expect(v.outer.plain).toBe(1);
 		});
 
+		it("preserves non-enumerable symbol properties", () => {
+			const hidden = Symbol("hidden");
+			const input = {} as Record<symbol, unknown>;
+			Object.defineProperty(input, hidden, {
+				value: { amount: 5 },
+				enumerable: false,
+			});
+
+			const result = vo(input) as Record<symbol, { amount: number }>;
+
+			expect(result[hidden]).toEqual({ amount: 5 });
+			expect(Object.isFrozen(result[hidden])).toBe(true);
+		});
+
+		it("preserves array symbol properties and includes them in equality", () => {
+			const metadata = Symbol("metadata");
+			const first = [1] as number[] & Record<symbol, unknown>;
+			const second = [1] as number[] & Record<symbol, unknown>;
+			first[metadata] = { code: "first" };
+			second[metadata] = { code: "second" };
+
+			const firstVo = vo(first);
+			const secondVo = vo(second);
+
+			expect(firstVo[metadata]).toEqual({ code: "first" });
+			expect(Object.isFrozen(firstVo[metadata])).toBe(true);
+			expect(voEquals(firstVo, secondVo)).toBe(false);
+		});
+
+		it("preserves sparse array holes", () => {
+			const input = new Array<string>(1);
+
+			const result = vo(input);
+
+			expect(0 in result).toBe(false);
+		});
+
+		it("drops non-enumerable string properties on arrays like it does on objects", () => {
+			// The array and plain-object clone paths must treat a non-enumerable
+			// string property the same way, so structurally parallel inputs do
+			// not yield value objects that voEquals treats differently.
+			const arr = [1, 2] as number[] & Record<string, unknown>;
+			Object.defineProperty(arr, "meta", {
+				value: "hidden",
+				enumerable: false,
+			});
+
+			const result = vo(arr);
+
+			expect(Object.getOwnPropertyNames(result)).not.toContain("meta");
+			expect([...result]).toEqual([1, 2]);
+		});
+
 		it("voEquals considers symbol-keyed values", () => {
 			const k = Symbol("k");
 			const a = vo({ [k]: 1 } as Record<symbol, unknown>);
@@ -552,48 +662,41 @@ describe("VO", () => {
 		});
 	});
 
-	describe("TypedArray and DataView handling", () => {
-		it("creates a VO containing a non-empty TypedArray without throwing", () => {
-			// Object.freeze on an ArrayBuffer view with elements throws per
-			// spec; deepFreeze must skip views instead of crashing.
-			const v = vo({ data: new Uint8Array([1, 2, 3]) });
-
-			expect(Array.from(v.data)).toEqual([1, 2, 3]);
+	describe("mutable and reference-compared built-ins", () => {
+		it.each([
+			["Uint8Array", () => new Uint8Array([1, 2, 3])],
+			["empty Uint8Array", () => new Uint8Array(0)],
+			["DataView", () => new DataView(new ArrayBuffer(4))],
+			["ArrayBuffer", () => new ArrayBuffer(4)],
+			["SharedArrayBuffer", () => new SharedArrayBuffer(4)],
+			["Error", () => new Error("failure")],
+		] as const)("rejects %s because every admitted VO value must be immutable and value-based", (_name, create) => {
+			expect(() => vo({ value: create() })).toThrow(
+				/immutable value semantics/,
+			);
 		});
 
-		it("still freezes the surrounding object graph when a TypedArray is present", () => {
-			const v = vo({ data: new Float64Array([1.5]), label: "raw" });
-
-			expect(Object.isFrozen(v)).toBe(true);
-			expect(() => {
-				(v as any).label = "changed";
-			}).toThrow();
+		it("rejects unsupported values before validation can produce a mutable VO", () => {
+			expect(() =>
+				voWithValidation(
+					{ data: new Uint8Array([9]) },
+					(value) => value.data.length > 0,
+				),
+			).toThrow(/immutable value semantics/);
 		});
 
-		it("handles TypedArrays nested below the top level", () => {
-			const v = vo({ chunk: { bytes: new Int32Array([7, 8]) } });
-
-			expect(Object.isFrozen(v.chunk)).toBe(true);
-			expect(Array.from(v.chunk.bytes)).toEqual([7, 8]);
-		});
-
-		it("handles empty TypedArrays and DataView", () => {
-			const v = vo({
-				empty: new Uint8Array(0),
-				view: new DataView(new ArrayBuffer(4)),
+		it("rejects an ArrayBuffer view without invoking its toStringTag accessor", () => {
+			const value = new Uint8Array([1]);
+			let accessorInvoked = false;
+			Object.defineProperty(value, Symbol.toStringTag, {
+				get: () => {
+					accessorInvoked = true;
+					throw new Error("toStringTag getter must not run");
+				},
 			});
 
-			expect(v.empty.length).toBe(0);
-			expect(v.view.byteLength).toBe(4);
-		});
-
-		it("voWithValidation succeeds for valid input containing a TypedArray", () => {
-			const result = voWithValidation(
-				{ data: new Uint8Array([9]) },
-				(t) => t.data.length > 0,
-			);
-
-			expect(result.isOk()).toBe(true);
+			expect(() => vo({ value })).toThrow(/immutable value semantics/);
+			expect(accessorInvoked).toBe(false);
 		});
 	});
 
@@ -628,16 +731,13 @@ describe("VO", () => {
 			expect(v.s.has(1)).toBe(true);
 		});
 
-		it("deep-freezes objects stored inside Map values and Set members", () => {
+		it("deep-freezes objects stored inside Map values", () => {
 			const v = vo({
 				m: new Map([["k", { a: 1 }]]),
-				s: new Set([{ b: 2 }]),
 			});
 
 			const inMap = v.m.get("k") as { a: number };
 			expect(Object.isFrozen(inMap)).toBe(true);
-			const [inSet] = v.s;
-			expect(Object.isFrozen(inSet)).toBe(true);
 		});
 
 		it("frozen VOs still round-trip through vo() and compare equal", () => {
@@ -657,7 +757,45 @@ describe("VO", () => {
 		});
 	});
 
+	describe("boxed BigInt values", () => {
+		it("compares the wrapped primitive instead of the empty object shell", () => {
+			const seven = vo({ value: Object(7n) });
+			const anotherSeven = vo({ value: Object(7n) });
+			const eight = vo({ value: Object(8n) });
+
+			expect(voEquals(seven, anotherSeven)).toBe(true);
+			expect(voEquals(seven, eight)).toBe(false);
+		});
+	});
+
 	describe("built-in boundary: Map/Set contents go through the vo clone", () => {
+		it("does not invoke overridden Map or Set iterators", () => {
+			let iteratorCalls = 0;
+			const map = new Map([["key", "value"]]);
+			const set = new Set(["member"]);
+			const failIfInvoked = () => {
+				iteratorCalls += 1;
+				throw new Error("custom iterator must not run");
+			};
+			Object.defineProperty(map, Symbol.iterator, { value: failIfInvoked });
+			Object.defineProperty(set, Symbol.iterator, { value: failIfInvoked });
+
+			const result = vo({ map, set });
+
+			expect(result.map.get("key")).toBe("value");
+			expect(result.set.has("member")).toBe(true);
+			expect(iteratorCalls).toBe(0);
+		});
+
+		it("rejects object Map keys and Set members that cannot preserve value equality", () => {
+			expect(() => vo({ m: new Map([[{ id: 1 }, "value"]]) })).toThrow(
+				/Map keys must be primitive values/,
+			);
+			expect(() => vo({ s: new Set([{ id: 1 }]) })).toThrow(
+				/Set members must be primitive values/,
+			);
+		});
+
 		it("preserves symbol-keyed properties inside Map values", () => {
 			const s = Symbol("s");
 			const v = vo({ m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]) });
@@ -698,18 +836,176 @@ describe("VO", () => {
 			);
 		});
 
-		it("preserves class-instance prototypes instead of silently stripping them", () => {
+		it("treats Promise and Error toStringTag spoofers as ordinary value data", () => {
+			for (const tag of ["Promise", "Error"] as const) {
+				const marker = Symbol("marker");
+				const first = vo({
+					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
+				});
+				const second = vo({
+					value: { [Symbol.toStringTag]: tag, [marker]: "kept", count: 1 },
+				});
+
+				expect(first.value[marker]).toBe("kept");
+				expect(voEquals(first, second)).toBe(true);
+			}
+		});
+
+		it("rejects custom class instances instead of creating incomplete clones", () => {
 			class Money {
 				constructor(readonly amount: number) {}
 				double(): number {
 					return this.amount * 2;
 				}
 			}
-			const v = vo({ price: new Money(5) });
 
-			expect(v.price).toBeInstanceOf(Money);
-			expect(v.price.double()).toBe(10);
-			expect(Object.isFrozen(v.price)).toBe(true);
+			expect(() => vo({ price: new Money(5) })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("rejects classes with private or non-enumerable constructor state", () => {
+			class PrivateValue {
+				#value: number;
+				constructor(value: number) {
+					this.#value = value;
+				}
+				read(): number {
+					return this.#value;
+				}
+			}
+			class HiddenValue {
+				constructor(value: number) {
+					Object.defineProperty(this, "value", { value, enumerable: false });
+				}
+			}
+
+			for (const value of [new PrivateValue(5), new HiddenValue(5)]) {
+				expect(() => vo({ value })).toThrow(/custom class instances/);
+			}
+		});
+
+		it("rejects boxed Symbol values instead of creating slotless wrappers", () => {
+			expect(() => vo({ value: Object(Symbol("value")) })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("rejects custom subclasses of otherwise supported built-ins", () => {
+			class CustomArray extends Array<number> {}
+			class CustomDate extends Date {}
+			class CustomMap extends Map<string, number> {}
+			class CustomError extends Error {}
+
+			for (const value of [
+				new CustomArray(1, 2),
+				new CustomDate(0),
+				new CustomMap([["one", 1]]),
+				new CustomError("failure"),
+			]) {
+				expect(() => vo({ value })).toThrow(/custom class instances/);
+			}
+		});
+
+		it("rejects a built-in subclass after its constructor marker is removed", () => {
+			class CustomMap extends Map<string, number> {
+				#secret = 1;
+				constructor() {
+					super();
+					void this.#secret;
+				}
+			}
+			Reflect.deleteProperty(CustomMap.prototype, "constructor");
+
+			expect(() => vo({ value: new CustomMap() })).toThrow(
+				/custom class instances/,
+			);
+		});
+
+		it("does not invoke a custom constructor name accessor while rejecting its prototype", () => {
+			let nameAccessorInvoked = false;
+			const fakeConstructor = function CustomConstructor() {};
+			Object.defineProperty(fakeConstructor, "name", {
+				get: () => {
+					nameAccessorInvoked = true;
+					return "Object";
+				},
+			});
+			const prototype = Object.create(Object.prototype) as Record<
+				PropertyKey,
+				unknown
+			>;
+			Object.defineProperty(prototype, "constructor", {
+				value: fakeConstructor,
+			});
+			const value = Object.create(prototype) as object;
+
+			expect(() => vo({ value })).toThrow(/custom class instances/);
+			expect(nameAccessorInvoked).toBe(false);
+		});
+
+		it("rejects a custom Object prototype whose constructor is hidden behind a Proxy", () => {
+			const fakeConstructor = function FakeObject() {};
+			Object.defineProperty(fakeConstructor, "name", { value: "Object" });
+			let descriptorTrapCalls = 0;
+			const disguisedConstructor = new Proxy(fakeConstructor, {
+				getOwnPropertyDescriptor: (target, key) => {
+					descriptorTrapCalls += 1;
+					return Reflect.getOwnPropertyDescriptor(target, key);
+				},
+			});
+			Object.defineProperty(fakeConstructor.prototype, "constructor", {
+				value: disguisedConstructor,
+			});
+			Object.setPrototypeOf(fakeConstructor.prototype, null);
+			const value = Object.create(fakeConstructor.prototype) as {
+				amount: number;
+			};
+			value.amount = 5;
+
+			expect(() => vo(value)).toThrow(/custom class instances/);
+			expect(descriptorTrapCalls).toBe(0);
+		});
+
+		it("continues to accept cross-realm plain objects", () => {
+			const value = runInNewContext("({ nested: { amount: 5 } })") as {
+				nested: { amount: number };
+			};
+
+			const result = vo(value);
+
+			expect(result).toEqual({ nested: { amount: 5 } });
+			expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+			expect(Object.getPrototypeOf(result.nested)).toBe(Object.prototype);
+			expect(Object.isFrozen(result.nested)).toBe(true);
+		});
+
+		it("continues to accept cross-realm arrays and built-ins", () => {
+			const value = runInNewContext(
+				"({ items: [1, 2], date: new Date(0), map: new Map([['one', 1]]) })",
+			) as {
+				items: number[];
+				date: Date;
+				map: Map<string, number>;
+			};
+
+			const result = vo(value);
+
+			expect(result.items).toEqual([1, 2]);
+			expect(Object.getPrototypeOf(result.items)).toBe(Array.prototype);
+			expect(result.date.getTime()).toBe(0);
+			expect(result.map.get("one")).toBe(1);
+		});
+
+		it("preserves null-prototype records", () => {
+			const value = Object.assign(Object.create(null) as { amount: number }, {
+				amount: 5,
+			});
+
+			const result = vo(value);
+
+			expect(result.amount).toBe(5);
+			expect(Object.getPrototypeOf(result)).toBeNull();
 		});
 	});
 
@@ -856,5 +1152,27 @@ describe("deepFreeze – mutator shadows are shared module-level functions", () 
 		// are pure allocation churn on that hot path.
 		expect(typeof setTimeA).toBe("function");
 		expect(setTimeA).toBe(setTimeB);
+	});
+});
+
+describe("vo() – RegExp value semantics", () => {
+	it("admits a plain RegExp and keeps it usable after freezing", () => {
+		const value = vo({ pattern: /ab+c/i });
+
+		// A non-global, non-sticky RegExp never touches lastIndex, so it stays
+		// a genuine immutable value that still matches once frozen.
+		expect(value.pattern.test("ABBBC")).toBe(true);
+		expect(value.pattern.source).toBe("ab+c");
+	});
+
+	it("rejects a global RegExp whose lastIndex is mutable scan state", () => {
+		// A global RegExp advances lastIndex on every test()/exec(); deep
+		// freezing it would make matching throw, so it is not a value.
+		expect(() => vo({ pattern: /ab+c/g })).toThrow(TypeError);
+		expect(() => vo({ pattern: /ab+c/g })).toThrow(/global or sticky RegExp/);
+	});
+
+	it("rejects a sticky RegExp for the same reason", () => {
+		expect(() => vo({ pattern: /ab+c/y })).toThrow(/global or sticky RegExp/);
 	});
 });

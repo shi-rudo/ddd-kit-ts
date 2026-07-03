@@ -31,7 +31,8 @@ export interface DeepOmitOptions {
  * apply. Types that `deepEqual` compares by reference (Error, ArrayBuffer,
  * SharedArrayBuffer, Promise, WeakMap, WeakSet) are passed through by
  * reference, so `deepEqualExcept(x, x)` stays reflexive. Cycles are
- * preserved: a cycle `a → a` clones to `a' → a'`.
+ * preserved: a cycle `a → a` clones to `a' → a'`. Arrays retain sparse
+ * holes and all non-ignored own properties, including symbol keys.
  *
  * **Shared references.** Without `ignoreKeyPredicate`, an object reached
  * via several paths dedupes to a single clone. With a predicate, each
@@ -115,23 +116,46 @@ function omitInternal(
 		);
 	}
 
-	// Arrays: recursively process elements. `Array.isArray` is brand-based,
-	// immune to `Symbol.toStringTag` spoofing, unlike the tag check below.
+	// Arrays: recursively process every own property so sparse holes, custom
+	// properties, symbols, and descriptors remain observable to deepEqual.
+	// `Array.isArray` is brand-based and immune to `Symbol.toStringTag` spoofing.
 	if (Array.isArray(obj)) {
 		const arr = obj as unknown[];
 		const clone: unknown[] = new Array(arr.length);
+		const lengthDescriptor = Object.getOwnPropertyDescriptor(arr, "length");
 		visited.set(obj, clone);
-		for (let i = 0; i < arr.length; i++) {
-			path.push(i);
-			clone[i] = omitInternal(
-				arr[i],
-				options,
-				ignoreKeys,
-				path,
-				visited,
-				budget,
-			);
+		for (const key of Reflect.ownKeys(arr)) {
+			if (key === "length") continue;
+			const segment = arrayPathSegment(key);
+			// Key filtering never applies to array elements (numeric indices):
+			// dropping an element would leave a hole and make structurally
+			// different arrays compare equal through deepEqualExcept. It still
+			// applies to custom (non-index) own properties on the array.
+			if (
+				typeof segment !== "number" &&
+				shouldIgnoreKey(key, path, ignoreKeys, options)
+			) {
+				continue;
+			}
+			const descriptor = Object.getOwnPropertyDescriptor(arr, key);
+			if (descriptor === undefined) continue;
+
+			path.push(segment);
+			if ("value" in descriptor) {
+				descriptor.value = omitInternal(
+					descriptor.value,
+					options,
+					ignoreKeys,
+					path,
+					visited,
+					budget,
+				);
+			}
+			Object.defineProperty(clone, key, descriptor);
 			path.pop();
+		}
+		if (lengthDescriptor !== undefined) {
+			Object.defineProperty(clone, "length", lengthDescriptor);
 		}
 		if (budget) visited.delete(obj);
 		return clone;
@@ -192,6 +216,17 @@ function omitInternal(
 
 	if (budget) visited.delete(obj);
 	return clone;
+}
+
+function arrayPathSegment(key: string | symbol): PathSegment {
+	if (typeof key === "symbol") return key;
+	const index = Number(key);
+	return Number.isInteger(index) &&
+		index >= 0 &&
+		index < 4_294_967_295 &&
+		String(index) === key
+		? index
+		: key;
 }
 
 /**

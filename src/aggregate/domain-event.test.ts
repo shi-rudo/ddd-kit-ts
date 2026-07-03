@@ -392,6 +392,7 @@ describe("DomainEvent", () => {
 		});
 
 		it("guards also catch raw thenables (object with a then method), not just real Promises", () => {
+			// biome-ignore lint/suspicious/noThenProperty: this test intentionally builds a raw thenable.
 			const fakeThenable = { then: () => {} };
 			expect(() =>
 				withEventIdFactory(

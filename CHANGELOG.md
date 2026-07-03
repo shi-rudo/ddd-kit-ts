@@ -7,6 +7,175 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed: Value Object cloning and equality hardening
+
+- Enforce absolute Value Object semantics: reject `Error`, `ArrayBuffer`,
+  `SharedArrayBuffer`, TypedArrays, and `DataView` from `vo()` and `ValueObject`
+  because they cannot be both deeply immutable and reliably value-compared.
+- Require intrinsic prototype evidence for unprobeable `Promise` and `Error`
+  tags, so plain records spoofing those names remain ordinary structural data.
+- Reject object-valued Map keys and Set members, whose identity-based lookup
+  semantics cannot survive defensive cloning while preserving value equality.
+- Clone arrays and records through data descriptors, rejecting accessors without
+  invoking them while preserving sparse holes and all symbol-keyed properties.
+- Read Map and Set contents through captured intrinsic iterators so instance-level
+  iterator overrides cannot execute behavior during Value Object construction.
+- Include array own properties in deep equality so preserved symbols and sparse
+  structure remain part of Value Object equality.
+- Preserve sparse holes, descriptors, and custom string and symbol properties
+  while omitting array keys, keeping `deepEqualExcept` and `voEqualsExcept`
+  aligned with strict array equality.
+- Reject Proxy-wrapped user constructors that imitate intrinsic constructor
+  names by comparing their exact source with a captured intrinsic allowlist.
+- Preserve the complete Array `length` descriptor in `deepOmit`, including a
+  non-writable length.
+- Document that Value Object inputs must be trusted and Proxy-free because
+  portable ECMAScript cannot identify transparent Proxies without invoking
+  their traps.
+- Reject a global or sticky `RegExp` from `vo()` and `ValueObject`: its
+  `lastIndex` is mutable scan state that deep freezing turns non-writable, so
+  every `test()`/`exec()` would throw. A plain `RegExp` never touches
+  `lastIndex` and stays an admitted immutable value.
+- Preserve non-enumerable own properties (including symbols) through
+  `ValueObject.clone()`, which previously lost them to its `{ ...props }`
+  spread and made `x.equals(x.clone())` false.
+- Stop `deepOmit` (and therefore `voEqualsExcept`/`deepEqualExcept`) from
+  applying `ignoreKeys`/`ignoreKeyPredicate` to array index keys, which
+  silently dropped elements and made structurally different arrays compare
+  equal. Key filtering still applies to custom, non-index array properties.
+- Compare accessor-defined array elements in `deepEqual` by the value they
+  yield, matching how plain-object accessor properties are compared, instead of
+  by getter/setter function identity.
+- Count non-enumerable own string properties in `deepEqual`, consistent with its
+  existing handling of symbols, so two objects that differ only by a hidden
+  string property are no longer reported equal.
+- Drop non-enumerable string properties on arrays in `vo()`/`ValueObject` just
+  like the plain-object clone path already did, so structurally parallel inputs
+  clone to the same value surface.
+
+### Changed: Domain State Machine DDD contracts and runtime hardening
+
+- Rename `DomainMachineEvent` to `DomainMachineInput`, including callback fields
+  and validation errors, so machine commands, observed facts, and internal
+  triggers cannot be confused with published Aggregate Domain Events.
+- Let guards return a concrete `DomainError`: `can()` treats it as a rejected
+  transition, while `dispatch()` throws the exact typed domain error. Boolean
+  `false` keeps the generic `DomainTransitionGuardRejectedError` behavior.
+- Add state-local `validateContext` invariants, typed to each concrete state and
+  evaluated across creation, reconstitution, functional inputs, and transition
+  results; retain `validateSnapshot` for cross-state rules.
+- Narrow transition guard and reducer `state` values to their concrete source
+  state instead of the full machine state union.
+- Add `analyzeDomainMachineDefinition` for deterministic transition matrices and
+  sound diagnostics for unreachable states, structural dead ends, and missing
+  terminal paths without executing definition callbacks.
+- Document versioned snapshot migrations, transactional inbox/outbox
+  deduplication, and deadlines supplied as explicit machine input data.
+- Reject async reducers, unknown definition/result properties, inherited or
+  hidden definition entries, and Array subclasses instead of silently dropping
+  behavior or outputs.
+- Evaluate functional transitions against stable definition copies and reject
+  reentrant evaluation of the same stateful wrapper.
+- Restrict machine context, inputs, and outputs to primitives, plain arrays, and
+  plain objects. Native built-ins such as `Date`, `RegExp`, `Map`, and `Set` are
+  rejected because their internal slots cannot satisfy the machine's strict
+  deep-immutability contract.
+- Add `ReentrantDomainStateMachineEvaluationError` for structured reentrancy
+  failures.
+- Preserve non-enumerable transition fields in stable definition copies, so a
+  validated `guard`, `reduce`, or `target` cannot disappear during evaluation.
+- Add optional `validateSnapshot` invariants across initial creation,
+  reconstitution, functional inputs, and transition results.
+- Accept cross-Realm plain objects and arrays while normalizing copied values to
+  local prototypes; custom classes and Array subclasses remain rejected.
+- Verify cross-Realm Object and Array prototypes through native intrinsic
+  constructors instead of accepting user functions with matching names.
+- Reject Proxy-wrapped user constructors that imitate intrinsic Object or Array
+  prototypes.
+- Reject own and inherited `Symbol.toStringTag` accessors without invoking them
+  while validating machine data, including cross-Realm object and array
+  prototypes.
+- Expose deeply frozen context, input, snapshot, and output data through the
+  recursive `DomainMachineReadonly<T>` type.
+- Reuse the stateful wrapper's prepared definition, validated snapshot, and
+  unchanged frozen context to avoid redundant validation and deep copies on
+  every operation.
+- Treat an explicit `undefined` snapshot argument to the `DomainStateMachine`
+  constructor as "no snapshot", falling back to the initial snapshot instead of
+  failing validation, and widen the reconstitution overload to accept
+  `undefined` so a nullable stored snapshot can be passed straight through.
+- Bound every context, input, and output copy to 256 levels, 10,000 unique
+  object nodes, and 100,000 own properties.
+- Document the Proxy-free input precondition and clarify that the machine is a
+  domain-consistency component rather than an in-process security sandbox.
+- Document snapshot persistence, reconstitution, JSON encoding boundaries, and
+  atomic output handoff; update the executable saga example to use the actual
+  domain state machine API.
+
+## [2.1.0] - 2026-06-25
+
+The domain-state-machine release. This minor adds a small, framework-free
+`DomainStateMachine` building block for finite, named domain states with typed
+context. It is meant for aggregate lifecycles, process managers, and
+long-running business workflows where the allowed transitions should be explicit
+without turning the kit into a workflow engine.
+
+### Added: `DomainStateMachine`
+
+New root export:
+
+- `DomainStateMachine`
+- `DomainMachineDefinition`
+- `DomainMachineSnapshot`
+- `DomainMachineInput`
+- `DomainStateNode`
+- `DomainTransition`
+- `DomainTransitionGuardResult`
+- `DomainTransitionResult`
+- `DomainTransitionOutcome`
+- `createInitialDomainMachineSnapshot`
+- `canTransitionDomainState`
+- `transitionDomainState`
+
+The machine supports synchronous guards, synchronous reducers, terminal states,
+typed transition outputs, validated reconstitution snapshots, and a pure
+transition function for aggregate methods that want to decide first and commit
+afterward. Transition callbacks are typed by the specific input selected by the
+`on` key, so `PaymentReceived` guards/reducers see the `PaymentReceived` input
+shape rather than the full input union.
+
+The stateful wrapper defensively copies its definition at construction time, so
+mutating the caller's definition object later cannot alter machine behavior.
+Snapshots and output arrays returned by the API are shallow-frozen copies, and
+constructor snapshots are copied before being stored. Definition copies preserve
+own special-property keys such as `__proto__`, and malformed runtime definitions
+fail as structured definition errors rather than leaking raw `TypeError`s.
+Explicit `null` or `undefined` context updates are preserved when the `context`
+property is present in a reducer result. The context object remains
+application-owned by design: model it immutably, use value objects where deep
+immutability matters, and keep aggregate methods as the public domain language
+instead of exposing generic `dispatch(...)` calls to application code.
+
+Domain-rule failures throw `DomainError` subclasses:
+
+- `InvalidDomainTransitionError`
+- `DomainTransitionGuardRejectedError`
+
+Definition and reconstitution failures throw structured `BaseError` subclasses:
+
+- `InvalidDomainMachineDefinitionError`
+- `InvalidDomainMachineSnapshotError`
+
+### Documentation and release hygiene
+
+- Added the Domain State Machine guide and sidebar entry.
+- Enabled Biome's VCS ignore-file integration so generated `dist` and
+  VitePress output stay out of `pnpm run lint`.
+- Quoted YAML frontmatter strings in the docs home page that contained `:`
+  characters, so the docs build parses consistently.
+- Ignored known TypeDoc-generated guide-relative dead links in VitePress' API
+  media output; the canonical guide links remain intact.
+
 ## [2.0.0] - 2026-06-23
 
 The error-stack release. The `@shirudo/base-error` peer dependency moves from `^5.0.0` to `^7.1.1`, which crossed two of its major versions: v6 made base-error's core purely technical (it removed the localization layer and every in-core serializer) and v7 reorganized public output into opt-in subpaths. This release migrates the kit onto v7 and adopts the same posture: technical errors in the core, client-safe and localized output projected at the boundary. The major also irons out two long-standing footguns while the door is open: the swap-prone positional error constructors move to options objects, and the redundant `createDomainEventWithMetadata` is removed. Two additive features round it out: a generic `Result<T, E>` error channel for the buses (default `string`), and a transport-neutral `@shirudo/ddd-kit/presentation` entry. The retry, validation, and class-discrimination surfaces are unchanged. base-error v7 requires Node.js `>=20`.
@@ -195,7 +364,7 @@ Four low-severity fixes from the bug audit. (1) Handlers throwing non-Error valu
 
 ### Fixed: `vo()` no longer silently drops symbol-keyed properties
 
-`vo()` cloned via `structuredClone`, which silently drops symbol-keyed properties, yet `voEquals`/`deepEqual` DO consider symbol keys, so a symbol-keyed value vanished from the VO while still being claimed by the equality contract. (The existing test passed vacuously: `Object.isFrozen(undefined) === true`.) `vo()` now walks plain objects, arrays, class instances (prototype-preserving, so methods survive and the constructor is not re-invoked) and **Map/Set entries** itself, preserving symbol keys, shared-reference identity, and cycles across Map/Set boundaries, with `__proto__`-as-data safety. Only atomic built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error) delegate to `structuredClone`, brand-verified against `Symbol.toStringTag` spoofing. Function values throw the documented data-not-behaviour `TypeError` everywhere (including inside Map values, previously a raw `DataCloneError`); Promise/WeakMap/WeakSet throw a descriptive `TypeError` ("Value Objects are plain data") instead of `DataCloneError`.
+`vo()` cloned via `structuredClone`, which silently drops symbol-keyed properties, yet `voEquals`/`deepEqual` DO consider symbol keys, so a symbol-keyed value vanished from the VO while still being claimed by the equality contract. (The existing test passed vacuously: `Object.isFrozen(undefined) === true`.) `vo()` now walks plain objects, arrays, and **Map values** itself, preserving symbol keys, shared-reference identity, and cycles through Map values, with `__proto__`-as-data safety. Map keys and Set members must be primitive because their identity-based lookup semantics cannot survive defensive cloning while retaining Value Object equality. Only atomic built-ins (Date, RegExp, TypedArrays, ArrayBuffer, wrappers, Error) delegate to `structuredClone`, brand-verified against `Symbol.toStringTag` spoofing. Function values throw the documented data-not-behaviour `TypeError` everywhere (including inside Map values, previously a raw `DataCloneError`); Promise/WeakMap/WeakSet throw a descriptive `TypeError` ("Value Objects are plain data") instead of `DataCloneError`. Custom class instances and subclasses of built-ins are rejected instead of being cloned into incomplete objects that have lost private fields, non-enumerable state, or internal slots.
 
 ### Fixed: `deepOmit` no longer reuses path-sensitive predicate results across shared references
 
@@ -221,7 +390,7 @@ The `handlers` map is an object literal, so `this.handlers[event.type]` resolved
 
 ### Fixed: `ValueObject` and `Entity` no longer freeze caller-owned objects in place
 
-The class-based `ValueObject` constructor ran `deepFreeze({ ...props })`: the spread only copies the top level, so every nested object of the caller's input was frozen **by reference**: the caller's own graph silently became immutable (later writes throw in strict mode). The constructor now deep-clones `props` with the same clone as `vo()` (prototype-preserving for class instances, with Map/Set entries walked, so caller-owned objects inside collections are never frozen or mutator-shadowed in place, verified down to a Date inside a Map), then freezes the clone; later mutation of the input no longer bleeds into the VO. Aligned with `vo()`, the constructor now also rejects function-valued props with a descriptive `TypeError` (previously they were silently aliased). Similarly, `Entity`'s constructor and `setState` froze the very state object the caller passed; they now take a shallow copy first for plain objects and arrays (class instances and primitives pass through unchanged, since spreading would strip an instance's prototype). The shallow-freeze design is unchanged: nested state objects stay shared, there is still no deep clone on reads.
+The class-based `ValueObject` constructor ran `deepFreeze({ ...props })`: the spread only copies the top level, so every nested object of the caller's input was frozen **by reference**: the caller's own graph silently became immutable (later writes throw in strict mode). The constructor now deep-clones `props` with the same clone as `vo()` (with Map/Set entries walked, so caller-owned objects inside collections are never frozen or mutator-shadowed in place, verified down to a Date inside a Map), then freezes the clone; later mutation of the input no longer bleeds into the VO. Aligned with `vo()`, the constructor now also rejects function-valued props and custom class instances with a descriptive `TypeError`. Similarly, `Entity`'s constructor and `setState` froze the very state object the caller passed; they now take a shallow copy first for plain objects and arrays (class instances and primitives pass through unchanged, since spreading would strip an instance's prototype). The shallow-freeze design is unchanged: nested state objects stay shared, there is still no deep clone on reads.
 
 ### Fixed: `deepFreeze` now actually delivers deep immutability for Date, Map and Set
 

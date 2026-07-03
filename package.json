@@ -1,6 +1,6 @@
 {
 	"name": "@shirudo/ddd-kit",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {
@@ -47,8 +47,8 @@
 		"typecheck": "tsc --noEmit",
 		"prepublishOnly": "npm run clean && vitest run && npm run build",
 		"docs:api": "typedoc",
-		"docs:dev": "pnpm run docs:api && vitepress dev docs",
-		"docs:build": "pnpm run docs:api && vitepress build docs",
+		"docs:dev": "typedoc && vitepress dev docs",
+		"docs:build": "typedoc && vitepress build docs",
 		"docs:preview": "vitepress preview docs"
 	},
 	"keywords": [

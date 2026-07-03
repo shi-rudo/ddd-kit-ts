@@ -35,7 +35,7 @@ PlaceOrder ──▶ Order.place ──▶ OrderPlaced ─┐
 ## Files
 
 - **`order.ts`**, **`payment.ts`**, **`shipping.ts`**: three small state-stored aggregates (`AggregateRoot`). Each has a `static create` / `static request` factory that records its first event, plus domain methods (`confirm`, `cancel`, `receive`, `fail`, `complete`) that mutate state and record events.
-- **`checkout-saga.ts`**: the Process Manager. It is itself an `AggregateRoot` with a state machine (`awaiting-payment` → `awaiting-shipping` → `completed` / `cancelled-*`). Its `TEvent` generic stays at `never`: the saga does not publish events of its own; its outputs are commands dispatched to other aggregates.
+- **`checkout-saga.ts`**: the Process Manager. It is an `AggregateRoot` whose lifecycle is implemented with `DomainMachineDefinition`, `createInitialDomainMachineSnapshot`, and `transitionDomainState` (`awaiting-payment` → `awaiting-shipping` → `completed` / `cancelled-*`). Its aggregate `TEvent` generic stays at `never`: the saga does not publish events of its own; application subscribers dispatch commands after its transition methods succeed.
 - **`saga.spec.ts`**: wiring + tests. Three scenarios:
   1. Happy path: order → payment received → shipping completed → order confirmed
   2. Payment-failure compensation: payment fails → saga cancels → order cancelled, no shipment created
@@ -47,11 +47,29 @@ PlaceOrder ──▶ Order.place ──▶ OrderPlaced ─┐
 
 Per Vernon §12, a Process Manager has identity, state, and a lifecycle: exactly an aggregate. `CheckoutSaga` extends `AggregateRoot<CheckoutSagaState, OrderId>` and is persisted through `IRepository` just like `Order` / `Payment` / `Shipment`. Saga id = `OrderId` (one saga per order).
 
-### The saga's outputs are commands (this example: only commands)
+Its public methods stay in the ubiquitous language (`advanceToShipping()`,
+`cancelOnPaymentFailure()`), while an internal `DomainMachineDefinition` is the
+single table of allowed transitions, guards, terminal states, and snapshot
+invariants. Each method calls the pure `transitionDomainState(...)` function and
+commits the returned snapshot data back into the aggregate state. The executable
+test also verifies that an invalid lifecycle step produces the machine's
+structured `InvalidDomainTransitionError`.
 
-A Process Manager's job is to turn events into commands: it consumes events from other aggregates and dispatches the next command in the workflow. This example takes the strict form: `TEvent = never` on the saga, so it has no domain events of its own; its outputs are exclusively the commands it dispatches.
+### The saga's outgoing work is commands
 
-That's a design choice, **not** the only valid shape. Vernon's IDDD §12 examples often have the Process Manager publish progress events (`CheckoutStarted`, `AwaitingPayment`, `ProcessCompleted`) so monitoring / observability / downstream-saga subscribers can react. If you need that, give the saga a `TEvent` union and record events via `commit(state, event)` in the transition methods; the infrastructure supports it identically.
+A Process Manager's job is to turn events into commands: it consumes events from
+other aggregates and requests the next step in the workflow. This example keeps
+that application orchestration explicit in the EventBus subscribers: the saga's
+machine transitions update state and return no machine `outputs`; after the saga
+is saved, the subscriber dispatches the corresponding command.
+
+An alternative is to return command-shaped machine `outputs` from reducers and
+let the application layer dispatch them after persistence. Those values are not
+domain events and are not published automatically. This example also keeps the
+aggregate's `TEvent = never`, so it records no progress events. If monitoring or
+downstream processes need `CheckoutStarted`, `AwaitingPayment`, or
+`ProcessCompleted`, declare an aggregate event union and record those events via
+`recordEvent`/`commit`; do not reinterpret machine outputs as domain events.
 
 Either way the core principle holds: Process Managers turn events into commands. Whether they *also* turn events into events is a per-app call.
 

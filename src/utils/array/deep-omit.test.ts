@@ -87,6 +87,38 @@ describe("deepOmit – Nested Objects and Arrays", () => {
 		expect(result.meta).not.toBe(input.meta);
 		expect(result.items).not.toBe(input.items);
 	});
+
+	it("preserves sparse holes and filters custom string and symbol properties", () => {
+		const kept = Symbol("kept");
+		const ignored = Symbol("ignored");
+		const input = new Array<{ id: number }>(2) as Array<{ id: number }> &
+			Record<PropertyKey, unknown>;
+		input[1] = { id: 1 };
+		input.label = "remove";
+		input[kept] = { nested: true };
+		input[ignored] = "remove";
+
+		const result = deepOmit(input, {
+			ignoreKeys: ["label", ignored, "id"],
+		});
+
+		expect(0 in result).toBe(false);
+		expect(result[1]).toEqual({});
+		expect(Object.hasOwn(result, "label")).toBe(false);
+		expect(result[kept]).toEqual({ nested: true });
+		expect(Object.hasOwn(result, ignored)).toBe(false);
+	});
+
+	it("preserves a non-writable array length descriptor", () => {
+		const input = [1, 2];
+		Object.defineProperty(input, "length", { writable: false });
+
+		const result = deepOmit(input, { ignoreKeys: [] });
+
+		expect(Object.getOwnPropertyDescriptor(result, "length")).toEqual(
+			Object.getOwnPropertyDescriptor(input, "length"),
+		);
+	});
 });
 
 describe("deepOmit – ignoreKeyPredicate with Path", () => {
@@ -124,6 +156,37 @@ describe("deepOmit – ignoreKeyPredicate with Path", () => {
 			meta: { version: 1 },
 			data: { updatedAt: "X" },
 		});
+	});
+
+	it("never drops array elements even when a predicate matches their index", () => {
+		// Key filtering is for object properties, not array elements. A
+		// predicate written to strip a config key named "2" must not silently
+		// delete array index 2 and leave a hole.
+		const result = deepOmit(["a", "b", "c"], {
+			ignoreKeyPredicate: (key) => key === "2",
+		});
+
+		expect(result).toEqual(["a", "b", "c"]);
+		expect(result).toHaveLength(3);
+		expect("2" in result).toBe(true);
+	});
+
+	it("never drops array elements matched by ignoreKeys index strings", () => {
+		const result = deepOmit(["a", "b", "c"], { ignoreKeys: ["1"] });
+
+		expect(result).toEqual(["a", "b", "c"]);
+	});
+
+	it("still filters custom (non-index) own properties on an array", () => {
+		const input: string[] & { meta?: string } = ["a", "b"];
+		input.meta = "secret";
+
+		const result = deepOmit(input, { ignoreKeys: ["meta"] }) as string[] & {
+			meta?: string;
+		};
+
+		expect([...result]).toEqual(["a", "b"]);
+		expect("meta" in result).toBe(false);
 	});
 });
 
@@ -395,6 +458,20 @@ describe("deepOmit – Symbol.toStringTag spoofing", () => {
 		expect(result.m.x).toBe(1);
 	});
 
+	it.each(["Promise", "Error"])(
+		"walks a spoofed %s as plain data and applies omissions",
+		(tag) => {
+			const value = { [Symbol.toStringTag]: tag, secret: 1, keep: 2 };
+			const result = deepOmit(value, { ignoreKeys: ["secret"] }) as {
+				keep: number;
+			};
+
+			expect(result).not.toBe(value);
+			expect(result.keep).toBe(2);
+			expect("secret" in result).toBe(false);
+		},
+	);
+
 	it("still clones real built-ins by type (regression guard)", () => {
 		const input = { d: new Date(5), m: new Map([["k", 1]]) };
 		const result = deepOmit(input, {}) as { d: Date; m: Map<string, number> };
@@ -457,8 +534,8 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 			node = { a: node, b: node };
 		}
 
-		expect(() =>
-			deepOmit(node, { ignoreKeyPredicate: () => false }),
-		).toThrow(/shared references/);
+		expect(() => deepOmit(node, { ignoreKeyPredicate: () => false })).toThrow(
+			/shared references/,
+		);
 	});
 });

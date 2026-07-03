@@ -89,6 +89,25 @@ describe("deepEqualExcept – ignoreKeys", () => {
 			}),
 		).toBe(true);
 	});
+
+	it("preserves array symbol and custom-property differences unless ignored", () => {
+		const metadata = Symbol("metadata");
+		const a = Object.assign([1], { label: "a", [metadata]: "a" });
+		const b = Object.assign([1], { label: "b", [metadata]: "b" });
+
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["unrelated"] })).toBe(false);
+		expect(deepEqualExcept(a, b, { ignoreKeys: ["label", metadata] })).toBe(
+			true,
+		);
+	});
+
+	it("preserves the difference between sparse holes and explicit undefined", () => {
+		expect(
+			deepEqualExcept(new Array(1), [undefined], {
+				ignoreKeys: ["unrelated"],
+			}),
+		).toBe(false);
+	});
 });
 
 describe("deepEqualExcept – ignoreKeyPredicate", () => {

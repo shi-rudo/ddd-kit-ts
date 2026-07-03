@@ -2,7 +2,7 @@
 
 Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 18+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
-> **Stable: 1.0**
+> **Stable: 2.1**
 >
 > The public API is stable and follows [Semantic Versioning](https://semver.org/). Breaking changes bump the major and ship with a migration path in the [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md).
 
@@ -15,6 +15,7 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 - **Entities:** identity + lifecycle, with collection helpers branded by `Id<Tag>`.
 - **Aggregate Roots:** state-stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`), with optimistic-concurrency versioning.
 - **Domain Events:** typed, deeply frozen, carry metadata for traceability and schema evolution.
+- **Domain State Machine:** finite, named domain states with typed context, guards, reducers, terminal states, and value outputs for aggregate lifecycles and process managers.
 - **Repositories:** technology-agnostic persistence ports with an Identity-Map contract and OCC.
 - **CQRS:** zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
 - **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes. Honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
@@ -58,6 +59,7 @@ Each building block has a dedicated guide. Start with [Design Decisions](https:/
 | Aggregate Roots, factories, reconstitution | [Aggregate Roots](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/aggregates.md) |
 | Event sourcing (`apply`, replay, snapshots) | [Event Sourcing](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-sourcing.md) |
 | Domain Events (`createDomainEvent`, metadata) | [Domain Events](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-events.md) |
+| Domain State Machine (`DomainStateMachine`, `transitionDomainState`) | [Domain State Machine](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-state-machine.md) |
 | Errors: throw vs Result, `ValidationError`, RFC 9457 | [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md) |
 | Commands, queries, buses | [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md) |
 | Repositories, Identity Map, OCC | [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md) |

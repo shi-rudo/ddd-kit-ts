@@ -25,6 +25,7 @@ export default defineConfig({
 
 	cleanUrls: true,
 	lastUpdated: true,
+	ignoreDeadLinks: [/^\.\/(aggregates|unit-of-work|outbox|concurrency)$/],
 
 	// Emit llms.txt (sitemap index) and llms-full.txt (full docs concat)
 	// at the docs site root for LLM coding tools. The hand-curated LLM
@@ -50,7 +51,7 @@ export default defineConfig({
 			{ text: "Guide", link: "/guide/getting-started" },
 			{ text: "API", link: "/api/" },
 			{
-				text: "1.0.0",
+				text: "2.1.0",
 				items: [
 					{
 						text: "Changelog",
@@ -81,6 +82,10 @@ export default defineConfig({
 						{ text: "Aggregate Roots", link: "/guide/aggregates" },
 						{ text: "Event Sourcing", link: "/guide/event-sourcing" },
 						{ text: "Domain Events", link: "/guide/domain-events" },
+						{
+							text: "Domain State Machine",
+							link: "/guide/domain-state-machine",
+						},
 					],
 				},
 				{

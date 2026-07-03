@@ -142,13 +142,26 @@ function deepEqualInner(
 	// real array away from element comparison, or a plain object into it).
 	if (Array.isArray(objA) || Array.isArray(objB)) {
 		if (!Array.isArray(objA) || !Array.isArray(objB)) return false;
-		const arrA = objA as unknown[];
-		const arrB = objB as unknown[];
-		const len = arrA.length;
-		if (len !== arrB.length) return false;
+		if (objA.length !== objB.length) return false;
 
-		for (let i = 0; i < len; i++) {
-			if (!deepEqualInner(arrA[i], arrB[i], visited)) return false;
+		const keysA = Reflect.ownKeys(objA).filter((key) => key !== "length");
+		const keysB = Reflect.ownKeys(objB).filter((key) => key !== "length");
+		if (keysA.length !== keysB.length) return false;
+
+		const arrA = objA as unknown as Record<PropertyKey, unknown>;
+		const arrB = objB as unknown as Record<PropertyKey, unknown>;
+		for (const key of keysA) {
+			if (!objHasOwn.call(objB, key)) return false;
+			// Read the element by access (invoking any getter) rather than
+			// comparing accessor descriptors by function identity, so an array
+			// index defined as a getter is compared by the value it yields,
+			// matching how comparePlainObjects treats accessor properties.
+			// Sparse holes stay observable through the key-set comparison above:
+			// a hole leaves no own key, so two arrays that differ by a hole vs
+			// an explicit undefined have different key sets.
+			if (!deepEqualInner(arrA[key], arrB[key], visited)) {
+				return false;
+			}
 		}
 		return true;
 	}
@@ -212,8 +225,9 @@ function deepEqualInner(
 
 		case "[object Boolean]":
 		case "[object Number]":
-		case "[object String]": {
-			// Wrapper objects (new Boolean/Number/String); SameValueZero so
+		case "[object String]":
+		case "[object BigInt]": {
+			// Wrapper objects (Boolean/Number/String/BigInt); SameValueZero so
 			// two NaN Number wrappers compare equal.
 			return sameValueZero(
 				(objA as { valueOf(): unknown }).valueOf(),
@@ -246,8 +260,12 @@ function comparePlainObjects(
 	const recA = objA as Record<string | symbol, unknown>;
 	const recB = objB as Record<string | symbol, unknown>;
 
-	const stringKeysA = Object.keys(objA);
-	const stringKeysB = Object.keys(objB);
+	// Own string keys including non-enumerable ones: symbols are already
+	// counted through Object.getOwnPropertySymbols (which ignores
+	// enumerability), so using Object.keys here would let two objects that
+	// differ only by a non-enumerable string property compare equal.
+	const stringKeysA = Object.getOwnPropertyNames(objA);
+	const stringKeysB = Object.getOwnPropertyNames(objB);
 	if (stringKeysA.length !== stringKeysB.length) return false;
 
 	const symbolKeysA = Object.getOwnPropertySymbols(objA);
