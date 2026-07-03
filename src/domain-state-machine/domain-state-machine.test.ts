@@ -2148,6 +2148,22 @@ describe("DomainStateMachine", () => {
 		);
 	});
 
+	it("accepts context data at exactly the maximum traversal depth", () => {
+		const definition: DomainMachineDefinition<
+			"open",
+			Record<string, unknown>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => nestedRecord(256),
+			states: { open: {} },
+		};
+
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+
+		expect(Object.isFrozen(snapshot.context)).toBe(true);
+	});
+
 	it("enforces the depth limit before resolving shared references", () => {
 		const shared = { value: "shared" };
 		const chain: Record<string, unknown> = {};
@@ -2192,6 +2208,24 @@ describe("DomainStateMachine", () => {
 		);
 	});
 
+	it("accepts context data with exactly the maximum unique object nodes", () => {
+		const context = Array.from({ length: 9_999 }, () => ({}));
+		const definition: DomainMachineDefinition<
+			"open",
+			typeof context,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => context,
+			states: { open: {} },
+		};
+
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+
+		expect(snapshot.context).toHaveLength(9_999);
+		expect(Object.isFrozen(snapshot.context)).toBe(true);
+	});
+
 	it("rejects context data with too many own properties", () => {
 		const context: Record<string, number> = {};
 		for (let index = 0; index < 100_001; index++) {
@@ -2210,6 +2244,27 @@ describe("DomainStateMachine", () => {
 		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
 			/more than 100,000 own properties/,
 		);
+	});
+
+	it("accepts context data with exactly the maximum own properties", () => {
+		const context: Record<string, number> = {};
+		for (let index = 0; index < 100_000; index++) {
+			context[`property-${index}`] = index;
+		}
+		const definition: DomainMachineDefinition<
+			"open",
+			Record<string, number>,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => context,
+			states: { open: {} },
+		};
+
+		const snapshot = createInitialDomainMachineSnapshot(definition);
+
+		expect(snapshot.context["property-99999"]).toBe(99_999);
+		expect(Object.isFrozen(snapshot.context)).toBe(true);
 	});
 
 	it("rejects context accessor properties because context must be data", () => {
