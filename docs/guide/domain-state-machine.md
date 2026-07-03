@@ -366,11 +366,11 @@ buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
 `input`, the frozen copy fails loudly.
 
 Purity also requires callback discipline that JavaScript cannot enforce at
-runtime. Guards, reducers, `validateContext`, and `validateSnapshot` must be synchronous,
-deterministic, and side-effect-free: do not perform I/O, read clocks or
-randomness, or mutate captured closure state. In particular, `can(...)` is a
-query and must remain side-effect-free. Return requested external work as
-`outputs`; execute it outside the machine.
+runtime. Guards, reducers, `validateContext`, and `validateSnapshot` must be
+synchronous, deterministic, and side-effect-free: do not perform I/O, read
+clocks or randomness, or mutate captured closure state. In particular,
+`can(...)` is a query and must remain side-effect-free. Return requested external
+work as `outputs`; execute it outside the machine.
 
 The stateful wrapper also rejects reentrant evaluation. A guard or reducer must
 not call `can(...)` or `dispatch(...)` on the same machine instance; the same
@@ -421,6 +421,129 @@ Persistence, optimistic concurrency, and output delivery remain outside the
 machine. In production, save the new snapshot and enqueue its requested outputs
 atomically, usually through an outbox. Do not execute an external output first
 and persist the corresponding snapshot afterward.
+
+### Version persisted snapshots
+
+Version the persistence envelope independently from the machine definition. A
+deployment can rename a state, add required context, or tighten an invariant;
+the old snapshot must be migrated before it reaches the constructor:
+
+```ts
+type PersistedCheckoutLifecycle = {
+  schemaVersion: 2;
+  snapshot: DomainMachineSnapshot<CheckoutState, CheckoutContext>;
+};
+
+type CheckoutStateV1 =
+  | "pending-payment"
+  | "awaiting-shipping"
+  | "completed"
+  | "cancelled";
+
+type PersistedCheckoutLifecycleV1 = {
+  schemaVersion: 1;
+  snapshot: DomainMachineSnapshot<CheckoutStateV1, CheckoutContext>;
+};
+
+function migrateCheckoutLifecycleV1(
+  snapshot: PersistedCheckoutLifecycleV1["snapshot"],
+): DomainMachineSnapshot<CheckoutState, CheckoutContext> {
+  return {
+    state:
+      snapshot.state === "pending-payment"
+        ? "awaiting-payment"
+        : snapshot.state,
+    context: snapshot.context,
+  };
+}
+
+function loadCheckoutLifecycle(
+  stored: PersistedCheckoutLifecycleV1 | PersistedCheckoutLifecycle,
+): DomainMachineSnapshot<CheckoutState, CheckoutContext> {
+  switch (stored.schemaVersion) {
+    case 1:
+      return migrateCheckoutLifecycleV1(stored.snapshot);
+    case 2:
+      return stored.snapshot;
+  }
+}
+
+const snapshot = loadCheckoutLifecycle(row.lifecycle);
+const machine = new DomainStateMachine(checkoutLifecycle, snapshot);
+```
+
+Parse the stored envelope as untrusted data at the repository boundary. Keep
+each migration deterministic and test it against real old fixtures. Persist the
+new schema version in the same transaction as the migrated snapshot. Do not put
+migration branches into guards or reducers: the current machine definition
+should only operate on the current context schema.
+
+### Deduplicate delivered inputs
+
+Process managers commonly receive the same message more than once. Deduplicate
+by message ID in an application-layer inbox before applying the machine input,
+and commit the inbox marker, new snapshot, and requested outputs atomically:
+
+```ts
+await transaction.run(async (tx) => {
+  if (await inbox.contains(tx, message.id)) return;
+
+  const saga = await checkoutSagaRepository.getById(tx, message.checkoutId);
+  const result = transitionDomainState(checkoutLifecycle, saga.lifecycle, {
+    type: "PaymentReceived",
+  });
+
+  await checkoutSagaRepository.save(
+    tx,
+    { ...saga, lifecycle: result.snapshot },
+    { expectedVersion: saga.version },
+  );
+  await outbox.enqueueAll(tx, result.outputs);
+  await inbox.record(tx, message.id);
+});
+```
+
+Use optimistic concurrency as well, because two different messages can race for
+the same process manager. If repetition is meaningful in the domain rather than
+delivery duplication, model an explicit idempotent self-transition in the
+relevant state. Do not globally swallow `InvalidDomainTransitionError`; that
+would hide genuinely forbidden transitions.
+
+The outbox values above are requested application work. They are not Domain
+Events. An Aggregate still records a Domain Event explicitly through
+`recordEvent(...)` and commits it through the Aggregate path.
+
+### Pass deadlines as input data
+
+The machine does not own a clock or scheduler. Store a deadline as plain context
+data, let infrastructure decide when to wake up, and include the observed time
+in the input:
+
+```ts
+type PaymentDeadlineInput = {
+  type: "PaymentDeadlineReached";
+  observedAtEpochMs: number;
+};
+
+type PaymentDeadlineContext = CheckoutContext & {
+  paymentDueAtEpochMs: number;
+};
+
+// In the awaiting-payment state:
+PaymentDeadlineReached: {
+  target: "cancelled",
+  guard: ({ context, input }) =>
+    input.observedAtEpochMs >= context.paymentDueAtEpochMs,
+  reduce: ({ context }) => ({
+    outputs: [{ type: "CancelOrder", orderId: context.orderId, reason: "timeout" }],
+  }),
+},
+```
+
+The scheduler reads the clock and dispatches this value. Retries may deliver the
+same deadline input again, so combine this pattern with inbox deduplication or a
+deliberate idempotent transition. Tests can pass exact timestamps without fake
+timers, and replaying the same snapshot plus input remains deterministic.
 
 This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:

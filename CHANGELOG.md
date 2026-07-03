@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `analyzeDomainMachineDefinition` for deterministic transition matrices and
   sound diagnostics for unreachable states, structural dead ends, and missing
   terminal paths without executing definition callbacks.
+- Document versioned snapshot migrations, transactional inbox/outbox
+  deduplication, and deadlines supplied as explicit machine input data.
 - Reject async reducers, unknown definition/result properties, inherited or
   hidden definition entries, and Array subclasses instead of silently dropping
   behavior or outputs.
