@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import { isBaseError } from "@shirudo/base-error";
-import { DomainError, MissingHandlerError } from "../core/errors";
+import {
+	DomainError,
+	MissingHandlerError,
+	UnreplayableAggregateError,
+} from "../core/errors";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
 import {
 	type AggregateSnapshot,
@@ -170,6 +174,9 @@ describe("EventSourcedAggregate", () => {
 
 		it("should advance version by history.length on top of the existing version (not stomp it)", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			// Catch-up replay requires a persisted baseline; a fresh
+			// factory-created target throws UnreplayableAggregateError.
+			aggregate.markPersisted(aggregate.version);
 			const initialVersion = aggregate.version; // 1 after creation
 
 			const history: TestEvent[] = [
@@ -551,9 +558,48 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.state.status).toBe("active");
 		});
 
-		it("should advance version additively when called on a non-zero aggregate", () => {
+		it("throws UnreplayableAggregateError when the aggregate carries pending events", () => {
+			// A factory-created aggregate holds an unpersisted creation event.
+			// Replaying history onto it would markRestored a persistedVersion
+			// that counts the pending event, flipping repository routing to
+			// UPDATE against a row/stream that does not contain it.
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			expect(aggregate.pendingEvents).toHaveLength(1);
+
+			const history: TestEvent[] = [
+				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
+			];
+
+			expect(() => aggregate.loadFromHistory(history)).toThrow(
+				UnreplayableAggregateError,
+			);
+			// Crash-loud programming bug, never a Result Err, and nothing moved.
+			expect(aggregate.version).toBe(1);
+			expect(aggregate.persistedVersion).toBeUndefined();
+			expect(aggregate.state.value).toBe(10);
+		});
+
+		it("throws UnreplayableAggregateError for in-memory versions that were never persisted", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			aggregate.clearPendingEvents();
+			expect(aggregate.version).toBe(1);
+			expect(aggregate.persistedVersion).toBeUndefined();
+
+			expect(() =>
+				aggregate.loadFromHistory([
+					createDomainEvent("TestEventUpdated", {
+						newValue: 20,
+					}) as TestEventUpdated,
+				]),
+			).toThrow(UnreplayableAggregateError);
+		});
+
+		it("should advance version additively on a persisted aggregate (catch-up replay)", () => {
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			expect(aggregate.version).toBe(1); // created event
+			// Simulate the post-save lifecycle: the creation event is now
+			// part of the persisted stream, so catching up is legitimate.
+			aggregate.markPersisted(aggregate.version);
 
 			const history: TestEvent[] = [
 				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
@@ -564,6 +610,7 @@ describe("EventSourcedAggregate", () => {
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(3); // 1 + 2, not 2 (the bug stomped it)
+			expect(aggregate.persistedVersion).toBe(3);
 		});
 
 		it("should handle empty history", () => {
@@ -592,9 +639,21 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.persistedVersion).toBeUndefined();
 		});
 
-		it("should leave the aggregate's pre-existing version untouched on empty history", () => {
+		it("runs the freshness guard before the empty-history fast path", () => {
+			// A dirty replay target is the same misuse whether the stream
+			// happens to be empty or not; a data-dependent guard would make
+			// the bug intermittent (fine in dev, throwing in prod).
 			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			expect(aggregate.version).toBe(1);
+
+			expect(() => aggregate.loadFromHistory([])).toThrow(
+				UnreplayableAggregateError,
+			);
+		});
+
+		it("allows empty history for a persisted aggregate (no-op catch-up)", () => {
+			const aggregate = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			aggregate.markPersisted(aggregate.version);
 
 			const result = aggregate.loadFromHistory([]);
 
@@ -860,6 +919,22 @@ describe("EventSourcedAggregate", () => {
 
 			expect(aggregate.state.value).toBe(42);
 			expect(aggregate.state.status).toBe("active");
+		});
+
+		it("throws UnreplayableAggregateError when restoring onto an aggregate with pending events", () => {
+			// Pending events recorded before the restore are unrelated to the
+			// restored stream; harvesting them after markRestored would emit
+			// them with a version baseline they were never part of.
+			const source = TestEventSourcedAggregate.create("test-1" as TestId, 10);
+			source.markPersisted(source.version);
+			const snapshot = source.createSnapshot();
+
+			const dirty = TestEventSourcedAggregate.create("test-1" as TestId, 0);
+			expect(dirty.pendingEvents).toHaveLength(1);
+
+			expect(() =>
+				dirty.restoreFromSnapshotWithEvents(snapshot, []),
+			).toThrow(UnreplayableAggregateError);
 		});
 
 		it("returns Err and leaves the aggregate untouched when the snapshot state violates validateState", () => {

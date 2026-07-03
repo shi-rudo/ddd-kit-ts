@@ -111,7 +111,9 @@ if (result.isErr()) {
 
 `loadFromHistory` returns `Result<void, DomainError>` because event-stream corruption is an *expected recoverable failure* at the infrastructure boundary. Unexpected throws (programmer errors, e.g. `TypeError`) still propagate.
 
-The version is advanced **additively**: `startVersion + history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3; an aggregate already at v=1 loading 2 events ends at v=3, not v=2.
+The version is advanced **additively**: `startVersion + history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3; a **persisted** aggregate at v=P (`persistedVersion === P`) catching up on M newer events ends at v=P+M.
+
+The replay target must be **fresh or persisted**. An aggregate that carries unflushed `pendingEvents`, or whose in-memory version was never persisted (a factory-created instance holding its creation event), throws `UnreplayableAggregateError` before anything moves: replaying onto it would set a `persistedVersion` that counts unpersisted history, flipping repository routing from INSERT to UPDATE (or appending with a wrong expected version). This is a crash-loud programming bug, deliberately a throw and never a `Result` `Err`. `restoreFromSnapshotWithEvents` applies the same pending-events guard (a never-persisted in-memory version is fine there, because the snapshot overwrites state and version wholesale).
 
 ## Snapshots: `restoreFromSnapshotWithEvents`
 

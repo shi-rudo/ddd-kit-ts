@@ -4,7 +4,11 @@ import {
 	AggregateRoot,
 	type AggregateConfig,
 } from "./aggregate-root";
-import type { AggregateSnapshot, Version } from "./aggregate";
+import {
+	type AggregateSnapshot,
+	type Version,
+	withClockFactory,
+} from "./aggregate";
 import type { DomainEvent } from "./domain-event";
 
 type TestId = Id<"TestId">;
@@ -166,6 +170,20 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(snapshot.state.status).toBe("active");
 			expect(snapshot.version).toBe(2);
 			expect(snapshot.snapshotAt).toBeInstanceOf(Date);
+		});
+
+		it("stamps snapshotAt via the installed clock factory", () => {
+			// Deterministic tests pin occurredAt through withClockFactory;
+			// snapshotAt must honor the same clock instead of a hard new Date().
+			const fixed = new Date("2026-01-01T00:00:00Z");
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+			const snapshot = withClockFactory(
+				() => new Date(fixed.getTime()),
+				() => aggregate.createSnapshot(),
+			);
+
+			expect(snapshot.snapshotAt.getTime()).toBe(fixed.getTime());
 		});
 
 		it("should restore from snapshot", () => {

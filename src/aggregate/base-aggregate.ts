@@ -2,6 +2,7 @@ import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
 import { isBuiltInObject } from "../utils/array/is-built-in";
 import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
+import { now } from "./clock";
 import {
 	type AnyDomainEvent,
 	type CreateDomainEventOptions,
@@ -242,12 +243,17 @@ export abstract class BaseAggregate<
 	 *
 	 * The state is converted via {@link toSnapshotState}; the default
 	 * requires plain, serialisable data and fails fast otherwise.
+	 *
+	 * `snapshotAt` is read from the kit's swappable clock, the same one
+	 * `createDomainEvent` stamps `occurredAt` from, so
+	 * `setClockFactory` / `withClockFactory` pin snapshot timestamps in
+	 * deterministic tests too.
 	 */
 	public createSnapshot(): AggregateSnapshot<TSnapshotState> {
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
-			snapshotAt: new Date(),
+			snapshotAt: now(),
 		};
 	}
 

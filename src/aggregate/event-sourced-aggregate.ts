@@ -1,6 +1,10 @@
 import { err, ok, type Result } from "@shirudo/result";
 import type { Id } from "../core/id";
-import { DomainError, MissingHandlerError } from "../core/errors";
+import {
+	DomainError,
+	MissingHandlerError,
+	UnreplayableAggregateError,
+} from "../core/errors";
 import { BaseAggregate } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
@@ -155,13 +159,26 @@ export abstract class EventSourcedAggregate<
 	 * which never bumps it; only the final `markRestored` advances it.)
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
-	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
-	 * an aggregate already at v=1 (e.g. after a creation event) loading
-	 * 2 events ends at v=3, not v=2.
+	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at
+	 * v=3; a PERSISTED aggregate at v=P (`persistedVersion === P`) catching
+	 * up on M newer events ends at v=P+M.
+	 *
+	 * **The replay target must be fresh or persisted.** An aggregate with
+	 * unflushed `pendingEvents`, or with an in-memory version that was
+	 * never persisted (a factory-created instance), throws
+	 * {@link UnreplayableAggregateError} BEFORE anything moves: replaying
+	 * onto it would `markRestored` a `persistedVersion` that counts
+	 * unpersisted history, flipping repository routing from INSERT to
+	 * UPDATE (or appending with a wrong expected version). The throw is
+	 * deliberate (crash-loud programming bug), never a `Result` `Err`, and
+	 * runs before the empty-history fast path so the misuse is caught
+	 * deterministically rather than only when the stream happens to be
+	 * non-empty.
 	 */
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
+		this.assertReplayTargetFresh(true);
 		// Empty stream: nothing was loaded, so leave the lifecycle markers
 		// alone. markRestored(version) here would replace the
 		// never-persisted sentinel (persistedVersion === undefined) on a
@@ -193,11 +210,21 @@ export abstract class EventSourcedAggregate<
 	 * All-or-nothing: if any event mid-stream throws a `DomainError`, the
 	 * aggregate is rolled back to its pre-call state + version. Partial
 	 * restoration is never observable to the caller.
+	 *
+	 * **The restore target must not carry pending events.** Events recorded
+	 * before the restore are unrelated to the restored stream; harvesting
+	 * them after `markRestored` would emit them with a version baseline
+	 * they were never part of. Such a target throws
+	 * {@link UnreplayableAggregateError} before anything moves (crash-loud
+	 * programming bug, never a `Result` `Err`). Unlike `loadFromHistory`,
+	 * a never-persisted in-memory version is fine here: the snapshot
+	 * overwrites state and version entirely instead of adding to them.
 	 */
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
+		this.assertReplayTargetFresh(false);
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
@@ -233,6 +260,37 @@ export abstract class EventSourcedAggregate<
 			(snapshot.version + eventsAfterSnapshot.length) as Version,
 		);
 		return ok();
+	}
+
+	/**
+	 * Replay-target freshness guard shared by `loadFromHistory` and
+	 * `restoreFromSnapshotWithEvents`. See {@link UnreplayableAggregateError}
+	 * for the desync both conditions prevent. `checkUnpersistedVersion` is
+	 * `true` for the additive `loadFromHistory` path only: the snapshot
+	 * restore overwrites version wholesale, so a never-persisted in-memory
+	 * version is harmless there.
+	 */
+	private assertReplayTargetFresh(checkUnpersistedVersion: boolean): void {
+		const pending = this.pendingEvents.length;
+		if (pending > 0) {
+			throw new UnreplayableAggregateError(
+				String(this.id),
+				`it carries ${pending} unflushed pending event(s) that are not ` +
+					"part of the persisted stream",
+			);
+		}
+		if (
+			checkUnpersistedVersion &&
+			this.version > 0 &&
+			this.persistedVersion === undefined
+		) {
+			throw new UnreplayableAggregateError(
+				String(this.id),
+				`its in-memory version (${this.version}) was never persisted ` +
+					"(persistedVersion is undefined), so additive replay would " +
+					"mark unpersisted history as persisted",
+			);
+		}
 	}
 
 	/**

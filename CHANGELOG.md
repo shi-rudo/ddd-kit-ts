@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses `commit()` is unaffected. The JSDoc and the aggregates guide now
   document the lost-update mechanics.
 
-### Fixed: architecture-audit findings (P1)
+### Fixed: architecture-audit findings
 
 - `toPublicErrorView` no longer throws a `TypeError` when the caught value is
   `null` or `undefined` (`throw null` and `reject(undefined)` happen in real
@@ -78,6 +78,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a per-event idempotency key; dedup belongs on `eventId`, and a watermark
   keyed on `aggregateVersion` is per-commit only. The outbox guide already
   said this; the JSDoc now matches it.
+- `EventSourcedAggregate.loadFromHistory` and
+  `restoreFromSnapshotWithEvents` now guard their replay target: an
+  aggregate carrying unflushed `pendingEvents`, or (for `loadFromHistory`)
+  an in-memory version that was never persisted, throws the new
+  `UnreplayableAggregateError` before anything moves. Previously the JSDoc
+  even blessed replaying onto a factory-created instance holding its
+  creation event; doing so set a `persistedVersion` counting unpersisted
+  history, which flipped repository routing from INSERT to UPDATE (a false
+  `ConcurrencyConflictError` against a missing row) and let harvested
+  events claim a version baseline the stream does not carry. Fresh
+  reconstitution and catch-up replay on a persisted aggregate
+  (`persistedVersion` set) behave as before. The error extends `BaseError`
+  directly (crash-loud posture, like `MissingHandlerError`) and is thrown,
+  never returned as `Err`.
+- `createSnapshot` now stamps `snapshotAt` from the kit's swappable clock
+  instead of a hard `new Date()`, so `setClockFactory` / `withClockFactory`
+  pin snapshot timestamps in deterministic tests exactly like event
+  `occurredAt`. The clock implementation moved to an internal module; the
+  public API (`ClockFactory`, `setClockFactory`, `withClockFactory`,
+  `resetClockFactory`) is unchanged.
 
 ### Fixed: Value Object cloning and equality hardening
 
