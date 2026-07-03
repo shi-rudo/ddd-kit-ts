@@ -435,6 +435,18 @@ two-state aggregate method, a direct `if` guard is usually clearer.
 
 ## DomainStateMachine vs XState
 
+[XState](https://stately.ai/docs/xstate) can model every lifecycle shown in this
+guide. The reason to choose `DomainStateMachine` is not a missing XState
+capability; it is the narrower, opinionated DDD contract enforced wherever the
+runtime permits. Callbacks must be synchronous and pure (invalid return values
+and async reducers are rejected, while side-effect freedom remains a coding
+discipline); context/events/outputs cross a strict plain-data copy-and-freeze
+boundary; restored snapshots must satisfy domain invariants; transition failures
+use structured domain errors; and outputs remain requested-work values rather
+than published domain events. XState is the more capable general-purpose
+statechart and actor runtime, but those DDD policies remain application
+responsibilities when using it.
+
 | Requirement | `DomainStateMachine` | [XState](https://stately.ai/docs/xstate) |
 | --- | --- | --- |
 | Flat, named lifecycle states | Best fit | Supported |
