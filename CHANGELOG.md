@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object nodes, and 100,000 own properties.
 - Document the Proxy-free input precondition and clarify that the machine is a
   domain-consistency component rather than an in-process security sandbox.
+- Document snapshot persistence, reconstitution, JSON encoding boundaries, and
+  atomic output handoff; update the executable saga example to use the actual
+  domain state machine API.
 
 ## [2.1.0] - 2026-06-25
 

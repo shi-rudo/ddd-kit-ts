@@ -1,135 +1,167 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import { DomainError } from "../../src/core/errors";
+import {
+	createInitialDomainMachineSnapshot,
+	type DomainMachineDefinition,
+	type DomainMachineSnapshot,
+	transitionDomainState,
+} from "../../src/domain-state-machine/domain-state-machine";
 import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";
 import type { ShipmentId } from "./shipping";
 
 /**
- * Process Manager (Vernon IDDD §12) that orchestrates the checkout
- * flow: order placed → payment requested → payment received →
- * shipping requested → shipping completed → order confirmed.
- *
- * Failure paths trigger compensating actions:
- *  - Payment fails  → order cancelled
- *  - Shipping fails → payment refunded + order cancelled
- *
- * The Process Manager is itself an aggregate: it has identity (the
- * saga id, here aligned with the orderId), state (its position in
- * the workflow), and a lifecycle.
- *
- * **This example publishes no Process-Manager events** (`TEvent`
- * defaults to `never`), so its outputs are exclusively the commands
- * it dispatches to other aggregates. This is a design choice, not a
- * canonical rule: Vernon's IDDD §12 examples often publish
- * progress events (`CheckoutStarted`, `AwaitingPayment`,
- * `ProcessCompleted`) so monitoring/observability subscribers can
- * react. If you need that, give `CheckoutSaga` a `TEvent` union and
- * record events via `commit(state, event)` in the transition
- * methods; the surrounding infrastructure already supports it.
+ * Process Manager (Vernon IDDD §12) that orchestrates checkout while keeping
+ * its public API in domain language. The table-driven state machine remains an
+ * internal implementation detail of methods such as `advanceToShipping()`.
  */
+
+export type CheckoutSagaStep =
+	| "awaiting-payment"
+	| "awaiting-shipping"
+	| "completed"
+	| "cancelled-payment-failed"
+	| "cancelled-shipping-failed";
 
 export type CheckoutSagaState = {
 	orderId: OrderId;
 	totalCents: number;
-	step:
-		| "awaiting-payment"
-		| "awaiting-shipping"
-		| "completed"
-		| "cancelled-payment-failed"
-		| "cancelled-shipping-failed";
+	step: CheckoutSagaStep;
 	paymentId?: PaymentId;
 	shipmentId?: ShipmentId;
 };
 
-export class SagaInWrongStateError extends DomainError<"SagaInWrongStateError"> {
-	constructor(orderId: OrderId, current: string, attempted: string) {
-		super(`Checkout saga for ${orderId} is in ${current}; cannot ${attempted}`);
-	}
+type CheckoutSagaContext = Omit<CheckoutSagaState, "step">;
+
+type CheckoutSagaTransition =
+	| { readonly type: "PaymentRequested"; readonly paymentId: PaymentId }
+	| { readonly type: "PaymentReceived" }
+	| { readonly type: "ShippingRequested"; readonly shipmentId: ShipmentId }
+	| { readonly type: "ShippingCompleted" }
+	| { readonly type: "PaymentFailed" }
+	| { readonly type: "ShippingFailed" };
+
+function checkoutLifecycle(
+	initialContext: CheckoutSagaContext,
+): DomainMachineDefinition<
+	CheckoutSagaStep,
+	CheckoutSagaContext,
+	CheckoutSagaTransition
+> {
+	return {
+		initial: "awaiting-payment",
+		initialContext: () => initialContext,
+		validateSnapshot: ({ state, context }) => {
+			if (state === "awaiting-payment") return true;
+			if (context.paymentId === undefined) return false;
+			if (state === "completed" || state === "cancelled-shipping-failed") {
+				return context.shipmentId !== undefined;
+			}
+			return true;
+		},
+		states: {
+			"awaiting-payment": {
+				on: {
+					PaymentRequested: {
+						target: "awaiting-payment",
+						reduce: ({ context, event }) => ({
+							context: { ...context, paymentId: event.paymentId },
+						}),
+					},
+					PaymentReceived: {
+						target: "awaiting-shipping",
+						guard: ({ context }) => context.paymentId !== undefined,
+					},
+					PaymentFailed: {
+						target: "cancelled-payment-failed",
+						guard: ({ context }) => context.paymentId !== undefined,
+					},
+				},
+			},
+			"awaiting-shipping": {
+				on: {
+					ShippingRequested: {
+						target: "awaiting-shipping",
+						reduce: ({ context, event }) => ({
+							context: { ...context, shipmentId: event.shipmentId },
+						}),
+					},
+					ShippingCompleted: {
+						target: "completed",
+						guard: ({ context }) => context.shipmentId !== undefined,
+					},
+					ShippingFailed: {
+						target: "cancelled-shipping-failed",
+						guard: ({ context }) => context.shipmentId !== undefined,
+					},
+				},
+			},
+			completed: { terminal: true },
+			"cancelled-payment-failed": { terminal: true },
+			"cancelled-shipping-failed": { terminal: true },
+		},
+	};
 }
 
-// TEvent stays at the default `never`: the saga has no domain events
-// of its own. Its state changes are private bookkeeping; downstream
-// effects flow through dispatched commands, not published events.
-export class CheckoutSaga extends AggregateRoot<
-	CheckoutSagaState,
-	OrderId
-> {
+function toMachineSnapshot(
+	state: CheckoutSagaState,
+): DomainMachineSnapshot<CheckoutSagaStep, CheckoutSagaContext> {
+	const { step, ...context } = state;
+	return { state: step, context };
+}
+
+function toSagaState(
+	snapshot: DomainMachineSnapshot<CheckoutSagaStep, CheckoutSagaContext>,
+): CheckoutSagaState {
+	return { ...snapshot.context, step: snapshot.state };
+}
+
+// TEvent stays at the default `never`: machine transitions are internal state
+// decisions, while aggregate domain events still go through recordEvent/commit.
+export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 	protected readonly aggregateType = "CheckoutSaga";
 
 	static start(orderId: OrderId, totalCents: number): CheckoutSaga {
-		const saga = new CheckoutSaga(orderId, {
-			orderId,
-			totalCents,
-			step: "awaiting-payment",
-		});
-		// commit() with no events: bumps version, records no domain events.
-		saga.commit({ orderId, totalCents, step: "awaiting-payment" });
+		const initialContext = { orderId, totalCents };
+		const snapshot = createInitialDomainMachineSnapshot(
+			checkoutLifecycle(initialContext),
+		);
+		const state = toSagaState(snapshot);
+		const saga = new CheckoutSaga(orderId, state);
+		saga.commit(state);
 		return saga;
 	}
 
 	recordPaymentRequested(paymentId: PaymentId): void {
-		if (this.state.step !== "awaiting-payment") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"recordPaymentRequested",
-			);
-		}
-		this.commit({ ...this.state, paymentId });
+		this.transition({ type: "PaymentRequested", paymentId });
 	}
 
 	advanceToShipping(): void {
-		if (this.state.step !== "awaiting-payment") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"advanceToShipping",
-			);
-		}
-		this.commit({ ...this.state, step: "awaiting-shipping" });
+		this.transition({ type: "PaymentReceived" });
 	}
 
 	recordShippingRequested(shipmentId: ShipmentId): void {
-		if (this.state.step !== "awaiting-shipping") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"recordShippingRequested",
-			);
-		}
-		this.commit({ ...this.state, shipmentId });
+		this.transition({ type: "ShippingRequested", shipmentId });
 	}
 
 	complete(): void {
-		if (this.state.step !== "awaiting-shipping") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"complete",
-			);
-		}
-		this.commit({ ...this.state, step: "completed" });
+		this.transition({ type: "ShippingCompleted" });
 	}
 
 	cancelOnPaymentFailure(): void {
-		if (this.state.step !== "awaiting-payment") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"cancelOnPaymentFailure",
-			);
-		}
-		this.commit({ ...this.state, step: "cancelled-payment-failed" });
+		this.transition({ type: "PaymentFailed" });
 	}
 
 	cancelOnShippingFailure(): void {
-		if (this.state.step !== "awaiting-shipping") {
-			throw new SagaInWrongStateError(
-				this.state.orderId,
-				this.state.step,
-				"cancelOnShippingFailure",
-			);
-		}
-		this.commit({ ...this.state, step: "cancelled-shipping-failed" });
+		this.transition({ type: "ShippingFailed" });
+	}
+
+	private transition(event: CheckoutSagaTransition): void {
+		const snapshot = toMachineSnapshot(this.state);
+		const result = transitionDomainState(
+			checkoutLifecycle(snapshot.context),
+			snapshot,
+			event,
+		);
+		this.commit(toSagaState(result.snapshot));
 	}
 }

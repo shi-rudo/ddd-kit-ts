@@ -48,6 +48,12 @@ export {
 	transitionDomainState,
 } from "./transition";
 
+/**
+ * Stateful convenience wrapper around the pure domain transition functions.
+ *
+ * Persist {@link snapshot}, not the machine instance. Pass a restored snapshot
+ * to the second constructor overload to validate and reconstitute a machine.
+ */
 export class DomainStateMachine<
 	TState extends string,
 	TContext,
@@ -95,28 +101,34 @@ export class DomainStateMachine<
 		}
 	}
 
+	/** Returns a defensive, deeply frozen copy of the current snapshot. */
 	get snapshot(): DomainMachineSnapshot<TState, TContext> {
 		return createDomainMachineSnapshot<TState, TContext>(this.#snapshot);
 	}
 
+	/** Current named control state. */
 	get state(): TState {
 		return this.#snapshot.state;
 	}
 
+	/** Current deeply readonly context. */
 	get context(): DomainMachineReadonly<TContext> {
 		return this.#snapshot.context;
 	}
 
+	/** Whether the current state permanently forbids outgoing transitions. */
 	isTerminal(): boolean {
 		return this.definition.states[this.state].terminal === true;
 	}
 
+	/** Checks a transition without changing the current snapshot. */
 	can(event: TEvent): boolean {
 		return this.evaluate(() =>
 			canTransitionPreparedDomainState(this.definition, this.#snapshot, event),
 		);
 	}
 
+	/** Applies an event and advances the current snapshot on success. */
 	dispatch(event: TEvent): DomainTransitionOutcome<TState, TContext, TOutput> {
 		return this.evaluate(() => {
 			const result = transitionPreparedDomainState(

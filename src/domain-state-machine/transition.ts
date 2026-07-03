@@ -30,6 +30,7 @@ import {
 	validateDomainTransitionResult,
 } from "./snapshot";
 
+/** Creates and validates a fresh initial snapshot from a machine definition. */
 export function createInitialDomainMachineSnapshot<
 	TState extends string,
 	TContext,
@@ -59,6 +60,13 @@ export function createInitialDomainMachineSnapshotFromPrepared<
 	return snapshot;
 }
 
+/**
+ * Checks whether an event currently has an allowed transition.
+ *
+ * Returns `false` for missing transitions, terminal states, rejected guards,
+ * and events without an own string `type` property. Invalid payload data for a
+ * matching transition and broken guard code still throw structured errors.
+ */
 export function canTransitionDomainState<
 	TState extends string,
 	TContext,
@@ -113,6 +121,12 @@ export function canTransitionPreparedDomainState<
 	return allowed;
 }
 
+/**
+ * Applies one event without mutating the input definition or snapshot.
+ *
+ * @throws {@link InvalidDomainTransitionError} when no transition is defined.
+ * @throws {@link DomainTransitionGuardRejectedError} when its guard rejects.
+ */
 export function transitionDomainState<
 	TState extends string,
 	TContext,

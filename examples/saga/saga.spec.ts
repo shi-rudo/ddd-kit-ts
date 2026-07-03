@@ -1,29 +1,22 @@
+import { ok } from "@shirudo/result";
 import { describe, expect, it } from "vitest";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
-import { CommandBus } from "../../src/app/command-bus";
 import type { Command, CommandHandler } from "../../src/app/command";
+import { CommandBus } from "../../src/app/command-bus";
 import { withCommit } from "../../src/app/handler";
 import { AggregateNotFoundError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
+import { InvalidDomainTransitionError } from "../../src/domain-state-machine/domain-state-machine";
 import { EventBusImpl } from "../../src/events/event-bus";
 import { InMemoryOutbox } from "../../src/events/outbox";
 import type { EventBus, Outbox } from "../../src/events/ports";
 import type { IRepository } from "../../src/repo/repository";
 import type { TransactionScope } from "../../src/repo/scope";
-import { err, ok, type Result } from "@shirudo/result";
 
-import { Order, type OrderEvent, type OrderId } from "./order";
-import {
-	Payment,
-	type PaymentEvent,
-	type PaymentId,
-} from "./payment";
-import {
-	Shipment,
-	type ShipmentId,
-	type ShippingEvent,
-} from "./shipping";
 import { CheckoutSaga } from "./checkout-saga";
+import { Order, type OrderEvent, type OrderId } from "./order";
+import { Payment, type PaymentEvent, type PaymentId } from "./payment";
+import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 
 // ----------------------------------------------------------------------------
 // Tiny test helpers
@@ -343,6 +336,12 @@ function bootstrap() {
 // ----------------------------------------------------------------------------
 
 describe("Checkout saga (Process Manager)", () => {
+	it("enforces its lifecycle through the domain state machine", () => {
+		const saga = CheckoutSaga.start("ord-invalid" as OrderId, 1000);
+
+		expect(() => saga.complete()).toThrow(InvalidDomainTransitionError);
+	});
+
 	it("happy path: order → payment → shipping → confirmed", async () => {
 		const { deps } = bootstrap();
 		const orderId = "ord-1" as OrderId;

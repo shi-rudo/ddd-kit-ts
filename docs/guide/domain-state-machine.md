@@ -22,6 +22,7 @@ not force application code to speak in generic `dispatch(...)` calls.
 import {
   DomainStateMachine,
   type DomainMachineDefinition,
+  type DomainMachineSnapshot,
 } from "@shirudo/ddd-kit";
 
 type CheckoutState =
@@ -238,17 +239,29 @@ Guards must return a boolean. A guard that accidentally falls through and return
 `undefined` is treated as broken machine code and throws
 `InvalidDomainTransitionGuardResultError`; it is never interpreted as allowed.
 
+`can(...)` is not a general error-swallowing boundary. It returns `false` when a
+transition is unavailable, a guard rejects, or the event has no own string
+`type`. Once an event type matches a transition, invalid event payload data and
+broken guard code throw their structured errors. This keeps “not currently
+allowed” separate from malformed input and defective machine code.
+
 ## Pure transitions
 
 The stateful wrapper is convenience. The core operation is pure:
 
 ```ts
 import {
+  canTransitionDomainState,
   createInitialDomainMachineSnapshot,
   transitionDomainState,
 } from "@shirudo/ddd-kit";
 
 const snapshot = createInitialDomainMachineSnapshot(checkoutLifecycle);
+
+canTransitionDomainState(checkoutLifecycle, snapshot, {
+  type: "Cancel",
+  reason: "payment-failed",
+}); // true
 
 const transitioned = transitionDomainState(checkoutLifecycle, snapshot, {
   type: "Cancel",
@@ -277,6 +290,49 @@ not call `can(...)` or `dispatch(...)` on the same machine instance; the same
 rule applies to `validateSnapshot`. Such a call throws
 `ReentrantDomainStateMachineEvaluationError`, leaves the current snapshot
 unchanged, and releases the evaluation lock even when callback code throws.
+
+## Persist and reconstitute snapshots
+
+Persist the snapshot value, not the `DomainStateMachine` instance or its
+definition. Definitions are executable domain code and must be supplied by the
+current application version when a snapshot is loaded:
+
+```ts
+type CheckoutRow = {
+  id: string;
+  lifecycle: DomainMachineSnapshot<CheckoutState, CheckoutContext>;
+};
+
+const row = await checkoutRepository.getByIdOrFail("checkout-1");
+const machine = new DomainStateMachine(checkoutLifecycle, row.lifecycle);
+
+const result = machine.dispatch({
+  type: "Cancel",
+  reason: "payment-timeout",
+});
+
+await checkoutRepository.save({
+  ...row,
+  lifecycle: result.snapshot,
+});
+```
+
+The constructor validates the restored state name, copies and freezes its
+context, and runs `validateSnapshot` before exposing the machine. Invalid or
+outdated persisted data therefore fails during reconstitution instead of during
+a later business operation. Add an explicit persistence migration when a new
+deployment removes states or changes context invariants.
+
+Snapshots contain plain data and can be serialized as JSON when the context uses
+JSON-compatible primitives. The machine also accepts `bigint`, `symbol`,
+`undefined`, and non-finite numbers as in-memory data, but JSON does not preserve
+those values faithfully; encode them explicitly or exclude them from persisted
+contexts.
+
+Persistence, optimistic concurrency, and output delivery remain outside the
+machine. In production, save the new snapshot and enqueue its requested outputs
+atomically, usually through an outbox. Do not execute an external output first
+and persist the corresponding snapshot afterward.
 
 This shape is useful inside aggregates and process managers because the domain
 method can decide with values first, then commit the new aggregate state:

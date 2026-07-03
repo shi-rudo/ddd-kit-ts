@@ -1,3 +1,4 @@
+/** Base shape for every event accepted by a domain state machine. */
 export type DomainMachineEvent = {
 	readonly type: string;
 };
@@ -26,16 +27,19 @@ export type DomainMachineReadonly<TValue> = TValue extends
 					}
 				: TValue;
 
+/** Immutable state and context value suitable for persistence. */
 export type DomainMachineSnapshot<TState extends string, TContext> = {
 	readonly state: TState;
 	readonly context: DomainMachineReadonly<TContext>;
 };
 
+/** Optional context replacement and requested external work from a reducer. */
 export type DomainTransitionResult<TContext, TOutput> = {
 	readonly context?: TContext;
 	readonly outputs?: readonly TOutput[];
 };
 
+/** A guarded state change and its optional pure context reducer. */
 export type DomainTransition<
 	TState extends string,
 	TContext,
@@ -57,6 +61,7 @@ export type DomainTransition<
 	}) => DomainTransitionResult<TContext, TOutput> | undefined;
 };
 
+/** Configuration for one named control state. */
 export type DomainStateNode<
 	TState extends string,
 	TContext,
@@ -74,6 +79,7 @@ export type DomainStateNode<
 	};
 };
 
+/** Complete, finite domain lifecycle definition. */
 export type DomainMachineDefinition<
 	TState extends string,
 	TContext,
@@ -96,6 +102,7 @@ export type DomainMachineDefinition<
 	};
 };
 
+/** Result of a successful transition. */
 export type DomainTransitionOutcome<
 	TState extends string,
 	TContext,
