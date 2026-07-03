@@ -1,5 +1,5 @@
-/** Base shape for every event accepted by a domain state machine. */
-export type DomainMachineEvent = {
+/** Base shape for every input accepted by a domain state machine. */
+export type DomainMachineInput = {
 	readonly type: string;
 };
 
@@ -43,7 +43,7 @@ export type DomainTransitionResult<TContext, TOutput> = {
 export type DomainTransition<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 > = {
 	readonly target: TState;
@@ -51,13 +51,13 @@ export type DomainTransition<
 	readonly guard?: (input: {
 		readonly state: TState;
 		readonly context: DomainMachineReadonly<TContext>;
-		readonly event: DomainMachineReadonly<TEvent>;
+		readonly input: DomainMachineReadonly<TInput>;
 	}) => boolean;
 	/** Must be synchronous, deterministic, and side-effect-free. */
 	readonly reduce?: (input: {
 		readonly state: TState;
 		readonly context: DomainMachineReadonly<TContext>;
-		readonly event: DomainMachineReadonly<TEvent>;
+		readonly input: DomainMachineReadonly<TInput>;
 	}) => DomainTransitionResult<TContext, TOutput> | undefined;
 };
 
@@ -65,15 +65,15 @@ export type DomainTransition<
 export type DomainStateNode<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 > = {
 	readonly terminal?: boolean;
 	readonly on?: {
-		readonly [TType in TEvent["type"]]?: DomainTransition<
+		readonly [TType in TInput["type"]]?: DomainTransition<
 			TState,
 			TContext,
-			Extract<TEvent, { readonly type: TType }>,
+			Extract<TInput, { readonly type: TType }>,
 			TOutput
 		>;
 	};
@@ -83,7 +83,7 @@ export type DomainStateNode<
 export type DomainMachineDefinition<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput = never,
 > = {
 	readonly initial: TState;
@@ -96,7 +96,7 @@ export type DomainMachineDefinition<
 		readonly [TName in TState]: DomainStateNode<
 			TState,
 			TContext,
-			TEvent,
+			TInput,
 			TOutput
 		>;
 	};

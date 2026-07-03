@@ -1,13 +1,13 @@
 import type {
 	DomainMachineDefinition,
-	DomainMachineEvent,
+	DomainMachineInput,
 	DomainMachineReadonly,
 	DomainMachineSnapshot,
 	DomainTransitionResult,
 } from "./contracts";
 import {
 	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineEventError,
+	InvalidDomainMachineInputError,
 	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionGuardResultError,
 	InvalidDomainTransitionResultError,
@@ -27,10 +27,10 @@ const DOMAIN_TRANSITION_RESULT_KEYS: ReadonlySet<PropertyKey> = new Set([
 export function prepareDomainMachineSnapshot<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineSnapshot(definition, snapshot);
@@ -69,10 +69,10 @@ export function createDomainMachineSnapshot<
 export function validateDomainMachineSnapshot<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): void {
 	if (!isRecord(snapshot)) {
@@ -94,10 +94,10 @@ export function validateDomainMachineSnapshot<
 export function validateDomainMachineSnapshotInvariant<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 ): void {
 	if (definition.validateSnapshot === undefined) return;
@@ -149,22 +149,22 @@ function readDomainMachineSnapshotContext<TContext>(snapshot: {
 	return contextDescriptor.value as TContext;
 }
 
-export function validateDomainMachineEvent(
-	event: unknown,
-): asserts event is DomainMachineEvent {
-	if (!isDomainMachineEvent(event)) {
-		throw new InvalidDomainMachineEventError(
-			"Domain machine event must be an object with a string type.",
+export function validateDomainMachineInput(
+	input: unknown,
+): asserts input is DomainMachineInput {
+	if (!isDomainMachineInput(input)) {
+		throw new InvalidDomainMachineInputError(
+			"Domain machine input must be an object with a string type.",
 		);
 	}
 }
 
-export function isDomainMachineEvent(
-	event: unknown,
-): event is DomainMachineEvent {
-	if (!isRecord(event)) return false;
+export function isDomainMachineInput(
+	input: unknown,
+): input is DomainMachineInput {
+	if (!isRecord(input)) return false;
 
-	const typeDescriptor = Object.getOwnPropertyDescriptor(event, "type");
+	const typeDescriptor = Object.getOwnPropertyDescriptor(input, "type");
 	return (
 		typeDescriptor !== undefined &&
 		"value" in typeDescriptor &&

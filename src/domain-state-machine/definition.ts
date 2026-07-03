@@ -1,6 +1,6 @@
 import type {
 	DomainMachineDefinition,
-	DomainMachineEvent,
+	DomainMachineInput,
 	DomainMachineSnapshot,
 	DomainStateNode,
 	DomainTransition,
@@ -27,48 +27,48 @@ const DOMAIN_MACHINE_TRANSITION_KEYS: ReadonlySet<PropertyKey> = new Set([
 export function copyDomainMachineDefinition<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
-): DomainMachineDefinition<TState, TContext, TEvent, TOutput> {
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
+): DomainMachineDefinition<TState, TContext, TInput, TOutput> {
 	const states = readDomainMachineDefinitionProperty(
 		definition,
 		"states",
-	) as DomainMachineDefinition<TState, TContext, TEvent, TOutput>["states"];
+	) as DomainMachineDefinition<TState, TContext, TInput, TOutput>["states"];
 	const copiedStates = Object.create(null) as {
-		[TName in TState]: DomainStateNode<TState, TContext, TEvent, TOutput>;
+		[TName in TState]: DomainStateNode<TState, TContext, TInput, TOutput>;
 	};
 
 	for (const state of Object.keys(states) as TState[]) {
 		const node = readDomainMachineDefinitionProperty(
 			states,
 			state,
-		) as DomainStateNode<TState, TContext, TEvent, TOutput>;
+		) as DomainStateNode<TState, TContext, TInput, TOutput>;
 		const transitions = readOptionalDomainMachineDefinitionProperty(
 			node,
 			"on",
-		) as DomainStateNode<TState, TContext, TEvent, TOutput>["on"] | undefined;
+		) as DomainStateNode<TState, TContext, TInput, TOutput>["on"] | undefined;
 		const copiedTransitions = Object.create(null) as {
-			[TType in TEvent["type"]]?: DomainTransition<
+			[TType in TInput["type"]]?: DomainTransition<
 				TState,
 				TContext,
-				Extract<TEvent, { readonly type: TType }>,
+				Extract<TInput, { readonly type: TType }>,
 				TOutput
 			>;
 		};
 
-		for (const eventType of Object.keys(
+		for (const inputType of Object.keys(
 			transitions ?? {},
-		) as TEvent["type"][]) {
+		) as TInput["type"][]) {
 			const transition = readDomainMachineDefinitionProperty(
 				transitions as object,
-				eventType,
+				inputType,
 			) as
 				| DomainTransition<
 						TState,
 						TContext,
-						Extract<TEvent, { readonly type: typeof eventType }>,
+						Extract<TInput, { readonly type: typeof inputType }>,
 						TOutput
 				  >
 				| undefined;
@@ -86,10 +86,10 @@ export function copyDomainMachineDefinition<
 				}) as DomainTransition<
 					TState,
 					TContext,
-					Extract<TEvent, { readonly type: typeof eventType }>,
+					Extract<TInput, { readonly type: typeof inputType }>,
 					TOutput
 				>;
-				Object.defineProperty(copiedTransitions, eventType, {
+				Object.defineProperty(copiedTransitions, inputType, {
 					value: copiedTransition,
 					enumerable: true,
 				});
@@ -127,28 +127,28 @@ export function copyDomainMachineDefinition<
 export function getTransition<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	state: TState,
-	event: TEvent,
-): DomainTransition<TState, TContext, TEvent, TOutput> | undefined {
+	input: TInput,
+): DomainTransition<TState, TContext, TInput, TOutput> | undefined {
 	const transitions = definition.states[state].on;
-	if (!transitions || !hasOwn(transitions, event.type)) return undefined;
+	if (!transitions || !hasOwn(transitions, input.type)) return undefined;
 
-	return transitions[event.type as TEvent["type"]] as
-		| DomainTransition<TState, TContext, TEvent, TOutput>
+	return transitions[input.type as TInput["type"]] as
+		| DomainTransition<TState, TContext, TInput, TOutput>
 		| undefined;
 }
 
 export function validateDomainMachineDefinition<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 ): void {
 	const candidate = definition as unknown;
 	if (!isPlainRecord(candidate)) {
@@ -240,24 +240,24 @@ export function validateDomainMachineDefinition<
 			);
 		}
 		if (isPlainRecord(transitions)) {
-			assertDomainMachineDefinitionEntryMap(transitions, "event");
+			assertDomainMachineDefinitionEntryMap(transitions, "input");
 		}
 
-		const eventTypes = Object.keys(transitions ?? {});
-		if (terminal === true && eventTypes.length > 0) {
+		const inputTypes = Object.keys(transitions ?? {});
+		if (terminal === true && inputTypes.length > 0) {
 			throw new InvalidDomainMachineDefinitionError(
 				`Terminal domain machine state "${state}" cannot declare transitions.`,
 			);
 		}
 
-		for (const eventType of eventTypes) {
+		for (const inputType of inputTypes) {
 			const transition: unknown = readDomainMachineDefinitionProperty(
 				transitions as object,
-				eventType,
+				inputType,
 			);
 			if (!isPlainRecord(transition)) {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" must be a plain object.`,
+					`Domain transition from "${state}" on "${inputType}" must be a plain object.`,
 				);
 			}
 			assertDomainMachineDefinitionDataProperties(
@@ -271,13 +271,13 @@ export function validateDomainMachineDefinition<
 			);
 			if (typeof target !== "string") {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" must target a string state.`,
+					`Domain transition from "${state}" on "${inputType}" must target a string state.`,
 				);
 			}
 
 			if (!hasOwn(states, target)) {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" targets unknown state "${target}".`,
+					`Domain transition from "${state}" on "${inputType}" targets unknown state "${target}".`,
 				);
 			}
 
@@ -287,7 +287,7 @@ export function validateDomainMachineDefinition<
 			);
 			if (guard !== undefined && typeof guard !== "function") {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" guard must be a function.`,
+					`Domain transition from "${state}" on "${inputType}" guard must be a function.`,
 				);
 			}
 
@@ -297,7 +297,7 @@ export function validateDomainMachineDefinition<
 			);
 			if (reduce !== undefined && typeof reduce !== "function") {
 				throw new InvalidDomainMachineDefinitionError(
-					`Domain transition from "${state}" on "${eventType}" reduce must be a function.`,
+					`Domain transition from "${state}" on "${inputType}" reduce must be a function.`,
 				);
 			}
 		}
@@ -325,7 +325,7 @@ function assertDomainMachineDefinitionDataProperties(
 
 function assertDomainMachineDefinitionEntryMap(
 	value: object,
-	entryName: "state" | "event",
+	entryName: "state" | "input",
 ): void {
 	assertDomainMachineDefinitionDataProperties(value);
 

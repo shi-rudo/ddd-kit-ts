@@ -1,6 +1,6 @@
 import type {
 	DomainMachineDefinition,
-	DomainMachineEvent,
+	DomainMachineInput,
 	DomainMachineReadonly,
 	DomainMachineSnapshot,
 	DomainTransitionOutcome,
@@ -23,7 +23,7 @@ import {
 
 export type {
 	DomainMachineDefinition,
-	DomainMachineEvent,
+	DomainMachineInput,
 	DomainMachineReadonly,
 	DomainMachineSnapshot,
 	DomainStateNode,
@@ -35,7 +35,7 @@ export {
 	DomainTransitionGuardRejectedError,
 	InvalidDomainMachineContextError,
 	InvalidDomainMachineDefinitionError,
-	InvalidDomainMachineEventError,
+	InvalidDomainMachineInputError,
 	InvalidDomainMachineSnapshotError,
 	InvalidDomainTransitionError,
 	InvalidDomainTransitionGuardResultError,
@@ -57,13 +57,13 @@ export {
 export class DomainStateMachine<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput = never,
 > {
 	private readonly definition: DomainMachineDefinition<
 		TState,
 		TContext,
-		TEvent,
+		TInput,
 		TOutput
 	>;
 
@@ -71,14 +71,14 @@ export class DomainStateMachine<
 	#evaluating = false;
 
 	constructor(
-		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	);
 	constructor(
-		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 		snapshot: DomainMachineSnapshot<TState, TContext>,
 	);
 	constructor(
-		definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 		...snapshotInput: [] | [DomainMachineSnapshot<TState, TContext> | undefined]
 	) {
 		validateDomainMachineDefinition(definition);
@@ -122,19 +122,19 @@ export class DomainStateMachine<
 	}
 
 	/** Checks a transition without changing the current snapshot. */
-	can(event: TEvent): boolean {
+	can(input: TInput): boolean {
 		return this.evaluate(() =>
-			canTransitionPreparedDomainState(this.definition, this.#snapshot, event),
+			canTransitionPreparedDomainState(this.definition, this.#snapshot, input),
 		);
 	}
 
-	/** Applies an event and advances the current snapshot on success. */
-	dispatch(event: TEvent): DomainTransitionOutcome<TState, TContext, TOutput> {
+	/** Applies an input and advances the current snapshot on success. */
+	dispatch(input: TInput): DomainTransitionOutcome<TState, TContext, TOutput> {
 		return this.evaluate(() => {
 			const result = transitionPreparedDomainState(
 				this.definition,
 				this.#snapshot,
-				event,
+				input,
 			);
 			this.#snapshot = result.snapshot;
 			return result;

@@ -30,12 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed: Domain State Machine runtime hardening
 
+- Rename `DomainMachineEvent` to `DomainMachineInput`, including callback fields
+  and validation errors, so machine commands, observed facts, and internal
+  triggers cannot be confused with published Aggregate Domain Events.
 - Reject async reducers, unknown definition/result properties, inherited or
   hidden definition entries, and Array subclasses instead of silently dropping
   behavior or outputs.
 - Evaluate functional transitions against stable definition copies and reject
   reentrant evaluation of the same stateful wrapper.
-- Restrict machine context, events, and outputs to primitives, plain arrays, and
+- Restrict machine context, inputs, and outputs to primitives, plain arrays, and
   plain objects. Native built-ins such as `Date`, `RegExp`, `Map`, and `Set` are
   rejected because their internal slots cannot satisfy the machine's strict
   deep-immutability contract.
@@ -54,12 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject own and inherited `Symbol.toStringTag` accessors without invoking them
   while validating machine data, including cross-Realm object and array
   prototypes.
-- Expose deeply frozen context, event, snapshot, and output data through the
+- Expose deeply frozen context, input, snapshot, and output data through the
   recursive `DomainMachineReadonly<T>` type.
 - Reuse the stateful wrapper's prepared definition, validated snapshot, and
   unchanged frozen context to avoid redundant validation and deep copies on
   every operation.
-- Bound every context, event, and output copy to 256 levels, 10,000 unique
+- Bound every context, input, and output copy to 256 levels, 10,000 unique
   object nodes, and 100,000 own properties.
 - Document the Proxy-free input precondition and clarify that the machine is a
   domain-consistency component rather than an in-process security sandbox.
@@ -82,7 +85,7 @@ New root export:
 - `DomainStateMachine`
 - `DomainMachineDefinition`
 - `DomainMachineSnapshot`
-- `DomainMachineEvent`
+- `DomainMachineInput`
 - `DomainStateNode`
 - `DomainTransition`
 - `DomainTransitionResult`
@@ -94,9 +97,9 @@ New root export:
 The machine supports synchronous guards, synchronous reducers, terminal states,
 typed transition outputs, validated reconstitution snapshots, and a pure
 transition function for aggregate methods that want to decide first and commit
-afterward. Transition callbacks are typed by the specific event selected by the
-`on` key, so `PaymentReceived` guards/reducers see the `PaymentReceived` event
-shape rather than the full event union.
+afterward. Transition callbacks are typed by the specific input selected by the
+`on` key, so `PaymentReceived` guards/reducers see the `PaymentReceived` input
+shape rather than the full input union.
 
 The stateful wrapper defensively copies its definition at construction time, so
 mutating the caller's definition object later cannot alter machine behavior.

@@ -1,6 +1,6 @@
 import type {
 	DomainMachineDefinition,
-	DomainMachineEvent,
+	DomainMachineInput,
 	DomainMachineSnapshot,
 	DomainTransitionOutcome,
 } from "./contracts";
@@ -14,17 +14,17 @@ import {
 	InvalidDomainTransitionError,
 } from "./errors";
 import {
-	copyDomainMachineEvent,
+	copyDomainMachineInput,
 	copyDomainMachineOutputs,
 } from "./machine-data";
 import {
 	createDomainMachineSnapshot,
 	createDomainMachineSnapshotFromPreparedContext,
-	isDomainMachineEvent,
+	isDomainMachineInput,
 	prepareDomainMachineSnapshot,
 	readDomainTransitionResultContext,
 	readDomainTransitionResultOutputs,
-	validateDomainMachineEvent,
+	validateDomainMachineInput,
 	validateDomainMachineSnapshotInvariant,
 	validateDomainTransitionGuardResult,
 	validateDomainTransitionResult,
@@ -34,10 +34,10 @@ import {
 export function createInitialDomainMachineSnapshot<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 ): DomainMachineSnapshot<TState, TContext> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
@@ -47,10 +47,10 @@ export function createInitialDomainMachineSnapshot<
 export function createInitialDomainMachineSnapshotFromPrepared<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 ): DomainMachineSnapshot<TState, TContext> {
 	const snapshot = createDomainMachineSnapshot<TState, TContext>({
 		state: definition.initial,
@@ -61,21 +61,21 @@ export function createInitialDomainMachineSnapshotFromPrepared<
 }
 
 /**
- * Checks whether an event currently has an allowed transition.
+ * Checks whether an input currently has an allowed transition.
  *
  * Returns `false` for missing transitions, terminal states, rejected guards,
- * and events without an own string `type` property. Invalid payload data for a
+ * and inputs without an own string `type` property. Invalid payload data for a
  * matching transition and broken guard code still throw structured errors.
  */
 export function canTransitionDomainState<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
-	event: TEvent,
+	input: TInput,
 ): boolean {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
@@ -86,35 +86,35 @@ export function canTransitionDomainState<
 	return canTransitionPreparedDomainState(
 		stableDefinition,
 		currentSnapshot,
-		event,
+		input,
 	);
 }
 
 export function canTransitionPreparedDomainState<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
-	event: TEvent,
+	input: TInput,
 ): boolean {
-	if (!isDomainMachineEvent(event)) return false;
+	if (!isDomainMachineInput(input)) return false;
 
 	const stateNode = definition.states[snapshot.state];
 	if (stateNode.terminal === true) return false;
 
-	const transition = getTransition(definition, snapshot.state, event);
+	const transition = getTransition(definition, snapshot.state, input);
 	if (!transition) return false;
 
-	const currentEvent = copyDomainMachineEvent(event);
+	const currentInput = copyDomainMachineInput(input);
 	if (!transition.guard) return true;
 
 	const allowed = transition.guard({
 		state: snapshot.state,
 		context: snapshot.context,
-		event: currentEvent,
+		input: currentInput,
 	});
 	validateDomainTransitionGuardResult(allowed);
 
@@ -122,7 +122,7 @@ export function canTransitionPreparedDomainState<
 }
 
 /**
- * Applies one event without mutating the input definition or snapshot.
+ * Applies one input without mutating the input definition or snapshot.
  *
  * @throws {@link InvalidDomainTransitionError} when no transition is defined.
  * @throws {@link DomainTransitionGuardRejectedError} when its guard rejects.
@@ -130,12 +130,12 @@ export function canTransitionPreparedDomainState<
 export function transitionDomainState<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
-	event: TEvent,
+	input: TInput,
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
 	validateDomainMachineDefinition(definition);
 	const stableDefinition = copyDomainMachineDefinition(definition);
@@ -146,52 +146,52 @@ export function transitionDomainState<
 	return transitionPreparedDomainState(
 		stableDefinition,
 		currentSnapshot,
-		event,
+		input,
 	);
 }
 
 export function transitionPreparedDomainState<
 	TState extends string,
 	TContext,
-	TEvent extends DomainMachineEvent,
+	TInput extends DomainMachineInput,
 	TOutput,
 >(
-	definition: DomainMachineDefinition<TState, TContext, TEvent, TOutput>,
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 	snapshot: DomainMachineSnapshot<TState, TContext>,
-	event: TEvent,
+	input: TInput,
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
-	validateDomainMachineEvent(event);
+	validateDomainMachineInput(input);
 
 	const from = snapshot.state;
 	const stateNode = definition.states[from];
 	const transition =
 		stateNode.terminal === true
 			? undefined
-			: getTransition(definition, from, event);
+			: getTransition(definition, from, input);
 
 	if (!transition) {
-		throw new InvalidDomainTransitionError(from, event.type);
+		throw new InvalidDomainTransitionError(from, input.type);
 	}
 
-	const currentEvent = copyDomainMachineEvent(event);
+	const currentInput = copyDomainMachineInput(input);
 	const allowed =
 		transition.guard === undefined
 			? true
 			: transition.guard({
 					state: from,
 					context: snapshot.context,
-					event: currentEvent,
+					input: currentInput,
 				});
 	validateDomainTransitionGuardResult(allowed);
 
 	if (!allowed) {
-		throw new DomainTransitionGuardRejectedError(from, currentEvent.type);
+		throw new DomainTransitionGuardRejectedError(from, currentInput.type);
 	}
 
 	const result = transition.reduce?.({
 		state: from,
 		context: snapshot.context,
-		event: currentEvent,
+		input: currentInput,
 	});
 	validateDomainTransitionResult(result);
 	const contextResult = readDomainTransitionResultContext(result);

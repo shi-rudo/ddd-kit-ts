@@ -4,10 +4,10 @@ import {
 	isIntrinsicConstructorPrototype,
 } from "../utils/array/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
-import type { DomainMachineEvent, DomainMachineReadonly } from "./contracts";
+import type { DomainMachineInput, DomainMachineReadonly } from "./contracts";
 import {
 	InvalidDomainMachineContextError,
-	InvalidDomainMachineEventError,
+	InvalidDomainMachineInputError,
 	InvalidDomainTransitionResultError,
 } from "./errors";
 
@@ -16,7 +16,7 @@ type DomainMachineDataErrorFactory = (
 	cause?: unknown,
 ) =>
 	| InvalidDomainMachineContextError
-	| InvalidDomainMachineEventError
+	| InvalidDomainMachineInputError
 	| InvalidDomainTransitionResultError;
 
 const DOMAIN_MACHINE_DATA_MAX_DEPTH = 256;
@@ -50,19 +50,19 @@ export function copyDomainMachineOutputs<TOutput>(
 	}
 }
 
-export function copyDomainMachineEvent<TEvent extends DomainMachineEvent>(
-	event: TEvent,
-): DomainMachineReadonly<TEvent> {
+export function copyDomainMachineInput<TInput extends DomainMachineInput>(
+	input: TInput,
+): DomainMachineReadonly<TInput> {
 	try {
 		return deepFreeze(
-			cloneDomainMachineDataValue(event, createDomainMachineEventError),
-		) as DomainMachineReadonly<TEvent>;
+			cloneDomainMachineDataValue(input, createDomainMachineInputError),
+		) as DomainMachineReadonly<TInput>;
 	} catch (cause) {
-		if (cause instanceof InvalidDomainMachineEventError) {
+		if (cause instanceof InvalidDomainMachineInputError) {
 			throw cause;
 		}
-		throw new InvalidDomainMachineEventError(
-			"Domain machine event must contain cloneable, deeply immutable data.",
+		throw new InvalidDomainMachineInputError(
+			"Domain machine input must contain cloneable, deeply immutable data.",
 			cause,
 		);
 	}
@@ -93,11 +93,11 @@ function createDomainMachineContextError(
 	return new InvalidDomainMachineContextError(message, cause);
 }
 
-function createDomainMachineEventError(
+function createDomainMachineInputError(
 	message: string,
 	cause?: unknown,
-): InvalidDomainMachineEventError {
-	return new InvalidDomainMachineEventError(message, cause);
+): InvalidDomainMachineInputError {
+	return new InvalidDomainMachineInputError(message, cause);
 }
 
 function createDomainTransitionOutputError(

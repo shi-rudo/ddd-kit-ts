@@ -32,7 +32,7 @@ export type CheckoutSagaState = {
 
 type CheckoutSagaContext = Omit<CheckoutSagaState, "step">;
 
-type CheckoutSagaTransition =
+type CheckoutSagaInput =
 	| { readonly type: "PaymentRequested"; readonly paymentId: PaymentId }
 	| { readonly type: "PaymentReceived" }
 	| { readonly type: "ShippingRequested"; readonly shipmentId: ShipmentId }
@@ -45,7 +45,7 @@ function checkoutLifecycle(
 ): DomainMachineDefinition<
 	CheckoutSagaStep,
 	CheckoutSagaContext,
-	CheckoutSagaTransition
+	CheckoutSagaInput
 > {
 	return {
 		initial: "awaiting-payment",
@@ -63,8 +63,8 @@ function checkoutLifecycle(
 				on: {
 					PaymentRequested: {
 						target: "awaiting-payment",
-						reduce: ({ context, event }) => ({
-							context: { ...context, paymentId: event.paymentId },
+						reduce: ({ context, input }) => ({
+							context: { ...context, paymentId: input.paymentId },
 						}),
 					},
 					PaymentReceived: {
@@ -81,8 +81,8 @@ function checkoutLifecycle(
 				on: {
 					ShippingRequested: {
 						target: "awaiting-shipping",
-						reduce: ({ context, event }) => ({
-							context: { ...context, shipmentId: event.shipmentId },
+						reduce: ({ context, input }) => ({
+							context: { ...context, shipmentId: input.shipmentId },
 						}),
 					},
 					ShippingCompleted: {
@@ -155,12 +155,12 @@ export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 		this.transition({ type: "ShippingFailed" });
 	}
 
-	private transition(event: CheckoutSagaTransition): void {
+	private transition(input: CheckoutSagaInput): void {
 		const snapshot = toMachineSnapshot(this.state);
 		const result = transitionDomainState(
 			checkoutLifecycle(snapshot.context),
 			snapshot,
-			event,
+			input,
 		);
 		this.commit(toSagaState(result.snapshot));
 	}

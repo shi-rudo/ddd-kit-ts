@@ -37,7 +37,7 @@ type CheckoutContext = {
   shipmentId?: string;
 };
 
-type CheckoutEvent =
+type CheckoutInput =
   | { type: "PaymentRequested"; paymentId: string }
   | { type: "PaymentReceived" }
   | { type: "ShippingCompleted" }
@@ -51,7 +51,7 @@ type CheckoutOutput =
 const checkoutLifecycle: DomainMachineDefinition<
   CheckoutState,
   CheckoutContext,
-  CheckoutEvent,
+  CheckoutInput,
   CheckoutOutput
 > = {
   initial: "awaiting-payment",
@@ -61,8 +61,8 @@ const checkoutLifecycle: DomainMachineDefinition<
       on: {
         PaymentRequested: {
           target: "awaiting-payment",
-          reduce: ({ context, event }) => ({
-            context: { ...context, paymentId: event.paymentId },
+          reduce: ({ context, input }) => ({
+            context: { ...context, paymentId: input.paymentId },
           }),
         },
         PaymentReceived: {
@@ -74,12 +74,12 @@ const checkoutLifecycle: DomainMachineDefinition<
         },
         Cancel: {
           target: "cancelled",
-          reduce: ({ context, event }) => ({
+          reduce: ({ context, input }) => ({
             outputs: [
               {
                 type: "CancelOrder",
                 orderId: context.orderId,
-                reason: event.reason,
+                reason: input.reason,
               },
             ],
           }),
@@ -115,6 +115,12 @@ result.snapshot.context.paymentId; // "payment-1"
 `initialContext` is a factory, not a shared object. Each fresh machine gets
 its own context reference.
 
+The machine's base type is called `DomainMachineInput` deliberately. A concrete
+union such as `CheckoutInput` may contain a command (`Cancel`), an observed fact
+(`PaymentReceived`), or an internal trigger. It is not automatically a published
+Domain Event. Domain Events remain immutable facts recorded by Aggregates
+through `recordEvent`/`commit` and delivered through the outbox/EventBus path.
+
 The stateful wrapper defensively copies its machine definition at construction
 time, so later mutation of the caller's definition object cannot change that
 machine's behavior. It reuses that validated, frozen definition and its already
@@ -122,12 +128,12 @@ validated current snapshot for subsequent operations. A transition that does not
 replace the context reuses the same deeply frozen context instead of copying it.
 The functional APIs evaluate each operation against fresh stable definition and
 snapshot copies, so a callback cannot change the transition currently being
-evaluated or mutate caller-owned data. Public context, event, snapshot, and
+evaluated or mutate caller-owned data. Public context, input, snapshot, and
 output types use `DomainMachineReadonly<T>` to express deep immutability
 recursively at compile time. Snapshots and outputs returned by the API are
 deep-frozen.
 
-Machine context, events, and outputs are data, not behavior. Use only primitives,
+Machine context, inputs, and outputs are data, not behavior. Use only primitives,
 plain arrays, and plain objects. Custom class instances, Array subclasses,
 accessor properties, functions, promises, native built-ins, external resources,
 and binary buffers are rejected. Native `Date`, `RegExp`, `Map`, and `Set`
@@ -147,14 +153,14 @@ trusted and Proxy-free. ECMAScript has no portable, side-effect-free way to
 identify a transparent `Proxy`; reflective validation can execute its traps.
 The machine is therefore a domain-consistency component, not a sandbox for
 hostile in-process objects. Parse untrusted wire input into ordinary DTOs before
-constructing machine events or snapshots.
+constructing machine inputs or snapshots.
 
 Runtime definition and reducer-result validation is strict. Unknown properties
 are rejected instead of ignored, so misspellings such as `gaurd` or `output`
 cannot silently remove a business rule or requested output. A reducer must
 return `undefined` or a plain object containing only `context` and `outputs`.
 Promises returned by accidentally async reducers are rejected. Definition
-objects must be plain objects, and state/event entries must be enumerable string
+objects must be plain objects, and state/input entries must be enumerable string
 properties, so inherited, symbolic, or hidden behavior cannot disappear during
 the stable copy.
 
@@ -226,11 +232,11 @@ const orderLifecycle = {
 
 In this example, `Ship` is not defined from `draft`, so that transition is not a
 valid part of the lifecycle. `Submit` is defined from `draft`, but its guard can
-reject empty orders. `shipped` and `cancelled` are terminal states, so no event
+reject empty orders. `shipped` and `cancelled` are terminal states, so no input
 can transition out of them.
 
-Use `can(event)` when the application needs to ask whether a transition is
-currently available. Use `dispatch(event)` or `transitionDomainState(...)` when a
+Use `can(input)` when the application needs to ask whether a transition is
+currently available. Use `dispatch(input)` or `transitionDomainState(...)` when a
 domain method wants to enforce the rule; missing transitions throw
 `InvalidDomainTransitionError`, and rejected guards throw
 `DomainTransitionGuardRejectedError`.
@@ -240,8 +246,8 @@ Guards must return a boolean. A guard that accidentally falls through and return
 `InvalidDomainTransitionGuardResultError`; it is never interpreted as allowed.
 
 `can(...)` is not a general error-swallowing boundary. It returns `false` when a
-transition is unavailable, a guard rejects, or the event has no own string
-`type`. Once an event type matches a transition, invalid event payload data and
+transition is unavailable, a guard rejects, or the input has no own string
+`type`. Once an input type matches a transition, invalid input payload data and
 broken guard code throw their structured errors. This keeps “not currently
 allowed” separate from malformed input and defective machine code.
 
@@ -274,9 +280,9 @@ transitioned.outputs; // [{ type: "CancelOrder", ... }]
 ```
 
 `transitionDomainState(...)` and `canTransitionDomainState(...)` defensively copy
-and freeze the input snapshot and event before running guards or reducers. A
+and freeze the snapshot and machine input before running guards or reducers. A
 buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
-`event`, the frozen copy fails loudly.
+`input`, the frozen copy fails loudly.
 
 Purity also requires callback discipline that JavaScript cannot enforce at
 runtime. Guards, reducers, and `validateSnapshot` must be synchronous,
@@ -409,13 +415,13 @@ Missing transitions and rejected guards are domain-rule violations:
 - `DomainTransitionGuardRejectedError extends DomainError`
 
 Broken machine definitions and invalid snapshots are programmer or
-reconstitution failures. Invalid context values, malformed runtime events, and
+reconstitution failures. Invalid context values, malformed runtime inputs, and
 malformed reducer results are treated the same way:
 
 - `InvalidDomainMachineDefinitionError extends BaseError`
 - `InvalidDomainMachineContextError extends BaseError`
 - `InvalidDomainMachineSnapshotError extends BaseError`
-- `InvalidDomainMachineEventError extends BaseError`
+- `InvalidDomainMachineInputError extends BaseError`
 - `InvalidDomainTransitionGuardResultError extends BaseError`
 - `InvalidDomainTransitionResultError extends BaseError`
 - `ReentrantDomainStateMachineEvaluationError extends BaseError`
@@ -440,7 +446,7 @@ guide. The reason to choose `DomainStateMachine` is not a missing XState
 capability; it is the narrower, opinionated DDD contract enforced wherever the
 runtime permits. Callbacks must be synchronous and pure (invalid return values
 and async reducers are rejected, while side-effect freedom remains a coding
-discipline); context/events/outputs cross a strict plain-data copy-and-freeze
+discipline); context/inputs/outputs cross a strict plain-data copy-and-freeze
 boundary; restored snapshots must satisfy domain invariants; transition failures
 use structured domain errors; and outputs remain requested-work values rather
 than published domain events. XState is the more capable general-purpose

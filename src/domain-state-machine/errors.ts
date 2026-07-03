@@ -1,13 +1,13 @@
 import { BaseError } from "@shirudo/base-error";
 import { DomainError } from "../core/errors";
 
-/** No transition is defined for the event in the current state. */
+/** No transition is defined for the input in the current state. */
 export class InvalidDomainTransitionError extends DomainError<"InvalidDomainTransitionError"> {
 	constructor(
 		public readonly state: string,
-		public readonly eventType: string,
+		public readonly inputType: string,
 	) {
-		super(`No domain transition from "${state}" on "${eventType}".`);
+		super(`No domain transition from "${state}" on "${inputType}".`);
 	}
 }
 
@@ -15,9 +15,9 @@ export class InvalidDomainTransitionError extends DomainError<"InvalidDomainTran
 export class DomainTransitionGuardRejectedError extends DomainError<"DomainTransitionGuardRejectedError"> {
 	constructor(
 		public readonly state: string,
-		public readonly eventType: string,
+		public readonly inputType: string,
 	) {
-		super(`Domain transition guard rejected "${eventType}" from "${state}".`);
+		super(`Domain transition guard rejected "${inputType}" from "${state}".`);
 	}
 }
 
@@ -42,10 +42,10 @@ export class InvalidDomainMachineSnapshotError extends BaseError<"InvalidDomainM
 	}
 }
 
-/** An event is malformed or contains unsupported runtime data. */
-export class InvalidDomainMachineEventError extends BaseError<"InvalidDomainMachineEventError"> {
+/** An input is malformed or contains unsupported runtime data. */
+export class InvalidDomainMachineInputError extends BaseError<"InvalidDomainMachineInputError"> {
 	constructor(message: string, cause?: unknown) {
-		super(message, cause, { name: "InvalidDomainMachineEventError" });
+		super(message, cause, { name: "InvalidDomainMachineInputError" });
 	}
 }
 
