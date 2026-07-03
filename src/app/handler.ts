@@ -132,6 +132,21 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			events: ReadonlyArray<Evt>,
 		) => void;
 		/**
+		 * Observer for post-commit persistence-cleanup failures: a throw from
+		 * `markPersisted`, the user-overridable `onPersisted` hook, or
+		 * `clearPendingEvents`. Called once per failing aggregate with the
+		 * error and that aggregate. Symmetric with {@link onPublishError}: the
+		 * transaction has already committed, so the failure must NOT reject the
+		 * write; without this observer it would otherwise vanish silently. The
+		 * hook is an observer only: if it throws, its error is swallowed so the
+		 * post-commit invariant holds, and the loop continues marking the
+		 * remaining aggregates.
+		 */
+		onPersistError?: (
+			error: unknown,
+			aggregate: IAggregateRoot<Id<string>, Evt>,
+		) => void;
+		/**
 		 * Cooperative-cancellation signal. If already aborted, `withCommit`
 		 * rejects with the signal's `reason` BEFORE opening the transaction.
 		 * Otherwise the signal is forwarded to `scope.transactional`, where a
@@ -261,13 +276,18 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			} else {
 				agg.markPersisted(agg.version);
 			}
-		} catch {
+		} catch (error) {
 			// Only the user-overridable onPersisted hook can throw here, and
 			// it runs AFTER the framework cleanup (events already flushed for
 			// THIS aggregate). Aborting the loop would leave the remaining
 			// aggregates un-marked (double-emitting their events on the next
 			// commit) and reject a committed write. Hook failures are
-			// observer failures: the post-commit invariant wins.
+			// observer failures: the post-commit invariant wins. Report the
+			// failure to onPersistError instead of dropping it silently
+			// (symmetric with the onPublishError path below); a throwing OR
+			// async-rejecting observer is neutralised so it cannot break the
+			// invariant either.
+			reportToObserver(() => deps.onPersistError?.(error, agg));
 		}
 	}
 
@@ -278,15 +298,39 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// The tx has committed and the outbox holds the events; an
 			// outbox dispatcher will deliver them. Rejecting here would turn
 			// a committed write into an apparent use-case failure (callers
-			// would retry and double-execute).
-			try {
-				deps.onPublishError?.(error, events);
-			} catch {
-				// Observer-only hook: its own failure must not break the
-				// post-commit invariant either.
-			}
+			// would retry and double-execute). A throwing OR async-rejecting
+			// observer is neutralised so it cannot break the invariant either.
+			reportToObserver(() => deps.onPublishError?.(error, events));
 		}
 	}
 
 	return result;
+}
+
+/**
+ * Invokes a fire-and-forget post-commit observer (`onPersistError`,
+ * `onPublishError`) and neutralises BOTH failure shapes it can produce. The
+ * observers are typed `(...) => void`, but a `void` return type still admits
+ * an `async` function, so an observer can fail in two ways: a synchronous
+ * throw, or a rejected promise. Either would surface AFTER the transaction
+ * already committed - the synchronous throw breaks the loop, and the async
+ * rejection becomes an `unhandledRejection` that can crash the process under
+ * Node's default policy. Both would violate the post-commit invariant, so
+ * both are swallowed here: observers report, they never fail a committed
+ * write.
+ */
+function reportToObserver(invoke: () => void): void {
+	let result: unknown;
+	try {
+		result = invoke() as unknown;
+	} catch {
+		return;
+	}
+	if (
+		result !== null &&
+		typeof result === "object" &&
+		typeof (result as { then?: unknown }).then === "function"
+	) {
+		(result as Promise<unknown>).then(undefined, () => {});
+	}
 }

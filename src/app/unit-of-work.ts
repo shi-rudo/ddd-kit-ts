@@ -276,6 +276,16 @@ export interface UnitOfWorkDeps<
 	bus?: EventBus<Evt>;
 	/** See `withCommit`: observer for post-commit `bus.publish` failures. */
 	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
+	/**
+	 * See `withCommit`: observer for post-commit persistence-cleanup failures
+	 * (a throw from `markPersisted`, the `onPersisted` hook, or
+	 * `clearPendingEvents`). Called once per failing aggregate; observer only,
+	 * never rejects the committed write.
+	 */
+	onPersistError?: (
+		error: unknown,
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	) => void;
 	repositories: RepositoryFactories<TCtx, TRepos, Evt>;
 }
 
@@ -390,6 +400,7 @@ export class UnitOfWork<
 					bus: this.deps.bus,
 					scope: this.deps.scope,
 					onPublishError: this.deps.onPublishError,
+					onPersistError: this.deps.onPersistError,
 					signal: options?.signal,
 				},
 				async (tx) => {
@@ -433,41 +444,11 @@ export class UnitOfWork<
 				},
 			);
 		} catch (error) {
-			if (workThrew) {
-				// The scope normally rethrows the callback's error unchanged
-				// (rolled back, pass through - ConcurrencyConflictError & co.
-				// stay catchable as-is). A scope that WRAPS the original is
-				// detected via the cause chain and also passed through. Only
-				// a rejection that neither IS nor wraps the callback's error
-				// indicates the rollback itself failed.
-				if (error === workError || causeChainContains(error, workError)) {
-					throw error;
-				}
-				throw new RollbackError(workError, error);
-			}
-			if (workCompleted) {
-				// A harvest-guard violation (an event missing aggregateId /
-				// aggregateType, or an aggregateVersion ahead of the commit
-				// version) is a deterministic programming bug, not a transient
-				// commit failure. Surface the EventHarvestError itself: it does
-				// not extend InfrastructureError, so a retry-on-Infrastructure
-				// handler skips it instead of looping forever. The guard throws
-				// inside scope.transactional(), so a wrapping scope can nest it
-				// in its cause chain; walk the chain (same treatment the
-				// RollbackError path uses) rather than a bare instanceof, and
-				// re-throw the harvest error so the non-retryable type is never
-				// masked by the wrapper. Only genuinely post-completion failures
-				// the caller could not foresee (outbox write, the commit itself)
-				// become CommitError.
-				const harvestError = findHarvestErrorInChain(error);
-				if (harvestError) {
-					throw harvestError;
-				}
-				throw new CommitError(error);
-			}
-			// Neither flag set: withCommit rejected before the callback ran
-			// (e.g. the scope failed to even open a transaction).
-			throw error;
+			throw classifyRunError(error, {
+				workThrew,
+				workCompleted,
+				workError,
+			});
 		} finally {
 			session?.close();
 			this._active = false;
@@ -616,6 +597,58 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
 		// assertOpen, so polling `aborted` after close stays harmless.
 		signal,
 	};
+}
+
+/**
+ * Classifies a `withCommit` rejection into the error `run()` should throw,
+ * using the flags captured inside the work wrapper. Pure and total: it
+ * returns the error to throw rather than throwing itself, so `run()` reads
+ * as orchestration and this decision is unit-testable in isolation.
+ *
+ * - `workThrew`: the work callback (or `assertAllChangesEnrolled`) threw.
+ *   The scope normally rethrows that error unchanged (rolled back, pass
+ *   through so a `ConcurrencyConflictError` & co. stay catchable as-is); a
+ *   scope that WRAPS the original is detected via the cause chain and also
+ *   passed through. Only a rejection that neither IS nor wraps the
+ *   callback's error indicates the rollback itself failed, which becomes a
+ *   {@link RollbackError}.
+ * - `workCompleted`: the callback finished; the failure is post-completion.
+ *   A harvest-guard violation (an event missing aggregateId / aggregateType,
+ *   or an aggregateVersion ahead of the commit version) is a deterministic
+ *   programming bug, surfaced as its {@link EventHarvestError} (which does
+ *   NOT extend `InfrastructureError`, so a retry-on-Infrastructure handler
+ *   skips it). It is thrown inside `scope.transactional()`, so a wrapping
+ *   scope can nest it: walk the chain rather than a bare `instanceof`. Only
+ *   genuinely unforeseeable post-completion failures (outbox write, the
+ *   commit itself) become {@link CommitError}.
+ * - Neither flag set: `withCommit` rejected before the callback ran (the
+ *   scope failed to even open a transaction); pass the error through.
+ */
+function classifyRunError(
+	error: unknown,
+	state: {
+		readonly workThrew: boolean;
+		readonly workCompleted: boolean;
+		readonly workError: unknown;
+	},
+): unknown {
+	if (state.workThrew) {
+		if (
+			error === state.workError ||
+			causeChainContains(error, state.workError)
+		) {
+			return error;
+		}
+		return new RollbackError(state.workError, error);
+	}
+	if (state.workCompleted) {
+		const harvestError = findHarvestErrorInChain(error);
+		if (harvestError) {
+			return harvestError;
+		}
+		return new CommitError(error);
+	}
+	return error;
 }
 
 /**

@@ -657,6 +657,174 @@ describe("withCommit", () => {
 			expect(aggB.pendingEvents).toHaveLength(0);
 			expect(bus.published).toHaveLength(1);
 		});
+
+		it("reports a post-commit persistence failure via onPersistError with the failing aggregate", async () => {
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const base = createMockAggregate([event]);
+			const persistError = new Error("cache eviction failed");
+			const throwing: MockAggregate = {
+				...base,
+				get pendingEvents() {
+					return base.pendingEvents;
+				},
+				get markPersistedCalls() {
+					return base.markPersistedCalls;
+				},
+				markPersisted(v) {
+					base.markPersisted(v);
+					throw persistError;
+				},
+			};
+			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createMockBus(),
+					scope: createMockScope(),
+					onPersistError: (error, aggregate) => {
+						reported.push({ error, aggregate });
+					},
+				},
+				async () => ({ result: "ok", aggregates: [throwing] }),
+			);
+
+			// The write committed; the persistence-cleanup failure is reported,
+			// not thrown.
+			expect(result).toBe("ok");
+			expect(reported).toHaveLength(1);
+			expect(reported[0]?.error).toBe(persistError);
+			expect(reported[0]?.aggregate).toBe(throwing);
+		});
+
+		it("swallows a throwing onPersistError observer so the post-commit invariant holds", async () => {
+			const eventA = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const eventB = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "b" },
+				{ aggregateId: "b", aggregateType: "MockOrder" },
+			);
+			const aggA = createMockAggregate([eventA]);
+			const throwingA: MockAggregate = {
+				...aggA,
+				get pendingEvents() {
+					return aggA.pendingEvents;
+				},
+				get markPersistedCalls() {
+					return aggA.markPersistedCalls;
+				},
+				markPersisted(v) {
+					aggA.markPersisted(v);
+					throw new Error("cache eviction failed");
+				},
+			};
+			const aggB = createMockAggregate([eventB]);
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createMockBus(),
+					scope: createMockScope(),
+					onPersistError: () => {
+						// A misbehaving observer must not break the invariant.
+						throw new Error("observer blew up");
+					},
+				},
+				async () => ({ result: "ok", aggregates: [throwingA, aggB] }),
+			);
+
+			// Peer B is still marked; the committed write still resolves.
+			expect(result).toBe("ok");
+			expect(aggB.markPersistedCalls).toBe(1);
+			expect(aggB.pendingEvents).toHaveLength(0);
+		});
+
+		it("does not invoke onPersistError when persistence cleanup succeeds", async () => {
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const agg = createMockAggregate([event]);
+			let reported = 0;
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus: createMockBus(),
+					scope: createMockScope(),
+					onPersistError: () => {
+						reported += 1;
+					},
+				},
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(result).toBe("ok");
+			expect(reported).toBe(0);
+			expect(agg.markPersistedCalls).toBe(1);
+		});
+
+		it("neutralises an async (rejecting) onPersistError instead of leaking an unhandled rejection", async () => {
+			// The observer is typed `=> void`, but a `void` return still admits
+			// an async function: a rejecting one must not become an
+			// unhandledRejection after a committed write.
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const base = createMockAggregate([event]);
+			const throwing: MockAggregate = {
+				...base,
+				get pendingEvents() {
+					return base.pendingEvents;
+				},
+				get markPersistedCalls() {
+					return base.markPersistedCalls;
+				},
+				markPersisted(v) {
+					base.markPersisted(v);
+					throw new Error("cleanup failed");
+				},
+			};
+
+			const unhandled: unknown[] = [];
+			const onUnhandled = (reason: unknown): void => {
+				unhandled.push(reason);
+			};
+			// @ts-expect-error Node's process exists in the test runtime; the package stays Node-type-free.
+			process.on("unhandledRejection", onUnhandled);
+			try {
+				const result = await withCommit(
+					{
+						outbox: createMockOutbox(),
+						bus: createMockBus(),
+						scope: createMockScope(),
+						onPersistError: async () => {
+							throw new Error("async sink down");
+						},
+					},
+					async () => ({ result: "ok", aggregates: [throwing] }),
+				);
+
+				expect(result).toBe("ok");
+				// A macrotask tick lets any un-swallowed rejection surface.
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				expect(unhandled).toEqual([]);
+			} finally {
+				// @ts-expect-error Node's process exists in the test runtime; the package stays Node-type-free.
+				process.off("unhandledRejection", onUnhandled);
+			}
+		});
 	});
 
 	describe("post-commit bus.publish failure", () => {
