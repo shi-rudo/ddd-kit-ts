@@ -435,19 +435,19 @@ two-state aggregate method, a direct `if` guard is usually clearer.
 
 ## DomainStateMachine vs XState
 
-Use this `DomainStateMachine` when the lifecycle is part of the domain model and
-fits flat, named states with synchronous pure guards and reducers. It is designed
-for aggregate invariants and process-manager decisions that should produce plain
-snapshots and explicit value outputs without introducing an interpreter, actor
-runtime, timers, or framework integration.
+| Requirement | `DomainStateMachine` | [XState](https://stately.ai/docs/xstate) |
+| --- | --- | --- |
+| Flat, named lifecycle states | Best fit | Supported |
+| Synchronous pure guards and reducers | Best fit | Supported |
+| Aggregate invariants and structured domain errors | Built-in contract | Possible with application mapping |
+| Plain, defensively copied snapshots and value outputs | Built-in contract | Different actor/action model |
+| No interpreter or actor-runtime dependency | Yes | No |
+| Nested or parallel states | Not provided | Built in |
+| Delayed transitions and timers | Not provided | Built in |
+| Invoked or spawned asynchronous actors | Not provided | Built in |
+| UI-framework integration and visual modeling | Not provided | Ecosystem support |
+| Deep actor-tree persistence | Not provided | Built in |
 
-Use [XState](https://stately.ai/docs/xstate) when the required semantics are
-statecharts or actor orchestration: nested or parallel states, invoked or spawned
-actors, delayed transitions, asynchronous service lifecycles, UI-framework
-integration, visual modeling, or deep actor persistence. XState can also model
-domain lifecycles, but its larger runtime is justified when those capabilities
-are actually part of the problem.
-
-Choose by required semantics, not by the number of states. Keep this machine for
-a synchronous domain decision table; choose XState when the machine itself must
-coordinate concurrent or asynchronous runtime behavior.
+> Choose by required semantics, not by the number of states. Use
+> `DomainStateMachine` for a synchronous domain decision table; use XState when
+> the machine itself must coordinate concurrent or asynchronous runtime behavior.
