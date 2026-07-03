@@ -42,6 +42,12 @@ class AlreadyActiveError extends DomainError {
 	}
 }
 
+class NegativeValueError extends DomainError {
+	constructor() {
+		super("value must not be negative");
+	}
+}
+
 class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
 	TestEvent,
@@ -802,6 +808,85 @@ describe("EventSourcedAggregate", () => {
 
 			expect(aggregate.state.value).toBe(42);
 			expect(aggregate.state.status).toBe("active");
+		});
+
+		it("returns Err and leaves the aggregate untouched when the snapshot state violates validateState", () => {
+			// A corrupt snapshot store must not reconstitute an invalid
+			// aggregate: restoreFromSnapshotWithEvents has to run the same
+			// validateState guard AggregateRoot.restoreFromSnapshot runs.
+			// With zero events after the snapshot no validateEvent runs
+			// either, so this is the path where corruption slips through.
+			class StateValidatingAggregate extends EventSourcedAggregate<
+				TestState,
+				TestEvent,
+				TestId
+			> {
+				protected readonly aggregateType = "StateValidatingAggregate";
+
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+
+				protected validateState(state: TestState): void {
+					if (state.value < 0) {
+						throw new NegativeValueError();
+					}
+				}
+
+				protected readonly handlers = {
+					TestEventCreated: (
+						state: TestState,
+						event: TestEventCreated,
+					): TestState => ({ ...state, value: event.payload.value }),
+					TestEventUpdated: (
+						state: TestState,
+						event: TestEventUpdated,
+					): TestState => ({ ...state, value: event.payload.newValue }),
+					TestEventActivated: (state: TestState): TestState => ({
+						...state,
+						status: "active",
+					}),
+					TestEventDeactivated: (state: TestState): TestState => ({
+						...state,
+						status: "inactive",
+					}),
+					TestEventInvalid: (state: TestState): TestState => state,
+				};
+			}
+
+			const originalState: TestState = { value: 5, status: "inactive" };
+			const aggregate = new StateValidatingAggregate(
+				"test-1" as TestId,
+				originalState,
+			);
+			const originalVersion = aggregate.version;
+
+			const corrupt: AggregateSnapshot<TestState> = {
+				state: { value: -1, status: "active" },
+				version: 7 as Version,
+				snapshotAt: new Date(),
+			};
+
+			// Zero events after the snapshot: without the guard, NO
+			// validation at all would run on this path.
+			const bare = aggregate.restoreFromSnapshotWithEvents(corrupt, []);
+			expect(bare.isErr()).toBe(true);
+			if (bare.isErr()) {
+				expect(bare.error).toBeInstanceOf(NegativeValueError);
+			}
+			expect(aggregate.state).toEqual(originalState);
+			expect(aggregate.version).toBe(originalVersion);
+			expect(aggregate.persistedVersion).toBeUndefined();
+
+			// Same guard when valid events follow the corrupt snapshot.
+			const withEvents = aggregate.restoreFromSnapshotWithEvents(corrupt, [
+				createDomainEvent("TestEventUpdated", {
+					newValue: 30,
+				}) as TestEventUpdated,
+			]);
+			expect(withEvents.isErr()).toBe(true);
+			expect(aggregate.state).toEqual(originalState);
+			expect(aggregate.version).toBe(originalVersion);
 		});
 
 		it("should roll back state + version when an event mid-stream fails validation", () => {

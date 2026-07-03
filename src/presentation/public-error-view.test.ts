@@ -50,6 +50,22 @@ describe("toPublicErrorView()", () => {
 		expect(fromPrimitive.details).toBeUndefined();
 	});
 
+	it("is total over thrown null and undefined: degrades instead of throwing", () => {
+		// `throw null` and `reject(undefined)` occur in real systems; the
+		// presenter crashing in the 500 path would turn a handled failure
+		// into an unhandled one.
+		const fromNull = toPublicErrorView(null);
+		expect(fromNull.code).toBe("INTERNAL_ERROR");
+		expect(fromNull.message).toBe("An unexpected error occurred.");
+		expect(fromNull.details).toBeUndefined();
+
+		const fromUndefined = toPublicErrorView(undefined);
+		expect(fromUndefined.code).toBe("INTERNAL_ERROR");
+		expect(fromUndefined.details).toBeUndefined();
+
+		expect(toPublicErrorView(42).code).toBe("INTERNAL_ERROR");
+	});
+
 	it("stamps an explicit locale when provided", () => {
 		const view = toPublicErrorView(new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }), {
 			locale: "de-DE",

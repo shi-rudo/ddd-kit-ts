@@ -110,11 +110,17 @@ function errorName(error: unknown): string | undefined {
 	return typeof name === "string" ? name : undefined;
 }
 
-/** Duck-types base-error's `ValidationError.publicIssues()` accessor. */
+/**
+ * Duck-types base-error's `ValidationError.publicIssues()` accessor. The
+ * null/object guard keeps `toPublicErrorView` total: a thrown `null` or
+ * `undefined` must degrade to the fallback view, not crash the presenter.
+ */
 function hasPublicIssues(
 	error: unknown,
 ): error is { publicIssues(): PublicIssue[] } {
 	return (
+		typeof error === "object" &&
+		error !== null &&
 		typeof (error as { publicIssues?: unknown }).publicIssues === "function"
 	);
 }

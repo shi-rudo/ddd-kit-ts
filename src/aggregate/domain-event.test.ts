@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type DomainEvent,
+	type EventMetadata,
 	copyMetadata,
 	createDomainEvent,
 	mergeMetadata,
@@ -96,10 +97,53 @@ describe("DomainEvent", () => {
 			expect(event.payload).toBeUndefined();
 		});
 
-		it("preserves the payload as given", () => {
+		it("preserves the payload by value while isolating it from the caller", () => {
 			const payload = { orderId: "o-1", items: 3 };
 			const event = createDomainEvent("OrderCreated", payload);
-			expect(event.payload).toBe(payload);
+			// Value equality, NOT identity: like occurredAt, the payload is
+			// defensively cloned so the event never aliases (or freezes) the
+			// caller's own object.
+			expect(event.payload).toEqual(payload);
+			expect(event.payload).not.toBe(payload);
+		});
+	});
+
+	describe("input ownership: caller objects are never frozen in place", () => {
+		it("leaves the caller's payload object graph mutable after event creation", () => {
+			const item = { sku: "a", qty: 1 };
+			const payload = { items: [item] };
+			const event = createDomainEvent("Demo", payload);
+
+			expect(Object.isFrozen(payload)).toBe(false);
+			expect(Object.isFrozen(item)).toBe(false);
+			item.qty = 2; // must not throw
+			expect(item.qty).toBe(2);
+
+			// The event stays deeply frozen and isolated from the mutation.
+			expect(Object.isFrozen(event.payload)).toBe(true);
+			expect(Object.isFrozen(event.payload.items[0])).toBe(true);
+			expect(event.payload.items[0]?.qty).toBe(1);
+		});
+
+		it("leaves a metadata object reusable across events", () => {
+			const metadata: EventMetadata = { correlationId: "corr-1" };
+			const first = createDomainEvent("Demo", { x: 1 }, { metadata });
+
+			expect(Object.isFrozen(metadata)).toBe(false);
+			metadata.causationId = first.eventId; // must not throw
+			const second = createDomainEvent("Demo", { x: 2 }, { metadata });
+
+			expect(first.metadata?.causationId).toBeUndefined();
+			expect(second.metadata?.causationId).toBe(first.eventId);
+		});
+
+		it("rejects payloads that are not plain structured-cloneable data", () => {
+			expect(() =>
+				createDomainEvent("Demo", { callback: () => "not data" }),
+			).toThrow(TypeError);
+			expect(() => createDomainEvent("Demo", () => "not data")).toThrow(
+				TypeError,
+			);
 		});
 	});
 

@@ -21,6 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unhandled rejection after the transaction has committed. The `=> void`
   signature admits an `async` function, so this guards a real footgun.
 
+### Fixed: architecture-audit findings (P1)
+
+- `toPublicErrorView` no longer throws a `TypeError` when the caught value is
+  `null` or `undefined` (`throw null` and `reject(undefined)` happen in real
+  systems). It now degrades to the generic `INTERNAL_ERROR` view, as its
+  "total over `unknown`" contract always promised.
+- `createDomainEvent` now deep-clones `payload` and `metadata` before the
+  deep-freeze, so the caller's own object graph is never frozen in place
+  (same ownership contract as `vo()` and the existing `occurredAt` copy).
+  Previously, passing parts of live aggregate state as a payload, or reusing
+  a metadata object across events, froze the caller's objects; the next
+  mutation then threw far away from the cause. Behavioral notes: the event's
+  `payload` is no longer reference-identical to the input; function-bearing
+  payloads and metadata now throw a descriptive `TypeError` (domain events
+  are plain data by contract); symbol-keyed properties are not carried over
+  (`structuredClone` semantics).
+- `EventSourcedAggregate.restoreFromSnapshotWithEvents` now runs the
+  `validateState` hook on the restored snapshot state before applying it,
+  matching `AggregateRoot.restoreFromSnapshot`. Previously a corrupt snapshot
+  store could reconstitute an invalid aggregate; with zero events after the
+  snapshot, no validation ran at all. A rejecting `validateState` surfaces as
+  `Err` (infrastructure boundary), and the aggregate is left untouched.
+- Correct the `aggregateVersion` guidance in the `DomainEvent` and
+  `withCommit` JSDoc: all events of one commit share the stamp, so it is not
+  a per-event idempotency key; dedup belongs on `eventId`, and a watermark
+  keyed on `aggregateVersion` is per-commit only. The outbox guide already
+  said this; the JSDoc now matches it.
+
 ### Fixed: Value Object cloning and equality hardening
 
 - Enforce absolute Value Object semantics: reject `Error`, `ArrayBuffer`,
