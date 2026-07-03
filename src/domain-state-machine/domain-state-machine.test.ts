@@ -2148,6 +2148,32 @@ describe("DomainStateMachine", () => {
 		);
 	});
 
+	it("enforces the depth limit before resolving shared references", () => {
+		const shared = { value: "shared" };
+		const chain: Record<string, unknown> = {};
+		let current = chain;
+		for (let depth = 1; depth < 256; depth++) {
+			const next: Record<string, unknown> = {};
+			current.next = next;
+			current = next;
+		}
+		current.next = shared;
+		const context = { shared, chain };
+		const definition: DomainMachineDefinition<
+			"open",
+			typeof context,
+			{ readonly type: "Stay" }
+		> = {
+			initial: "open",
+			initialContext: () => context,
+			states: { open: {} },
+		};
+
+		expect(() => createInitialDomainMachineSnapshot(definition)).toThrow(
+			/maximum depth of 256/,
+		);
+	});
+
 	it("rejects context data with too many unique object nodes", () => {
 		const definition: DomainMachineDefinition<
 			"open",

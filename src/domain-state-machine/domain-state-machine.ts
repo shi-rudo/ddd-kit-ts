@@ -622,13 +622,13 @@ function cloneDomainMachineDataValue<TValue>(
 	if (value === null || typeof value !== "object") return value;
 
 	const source = value as object;
-	const existing = seen.get(source);
-	if (existing !== undefined) return existing as TValue;
 	if (depth > DOMAIN_MACHINE_DATA_MAX_DEPTH) {
 		throw errorFactory(
 			`Domain machine data exceeds the maximum depth of ${DOMAIN_MACHINE_DATA_MAX_DEPTH}.`,
 		);
 	}
+	const existing = seen.get(source);
+	if (existing !== undefined) return existing as TValue;
 	traversal.nodes += 1;
 	if (traversal.nodes > DOMAIN_MACHINE_DATA_MAX_NODES) {
 		throw errorFactory(
