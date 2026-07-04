@@ -41,8 +41,9 @@ type QueryTypeMap = Record<string, unknown>;
  */
 export interface QueryBusOptions<E = string> {
 	/**
-	 * Maps a thrown value (a handler that throws, or dispatch to an
-	 * unregistered query type) into the bus's error channel `E`. Defaults to
+	 * Maps a value thrown by a registered handler into the bus's error
+	 * channel `E`. Dispatching an unregistered query type is NOT mapped:
+	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
 	 * {@link describeThrown}, which renders any thrown value as a `string`.
 	 * base-error's `toStructuredError` fits this slot directly when `E` is a
 	 * `StructuredError`.
@@ -92,7 +93,9 @@ export interface IQueryBus<
 	 * When a type map is provided, the return type is inferred from the query type.
 	 *
 	 * @param query - The query to execute
-	 * @returns Result containing the query result if successful, or an error message
+	 * @returns Result containing the query result if successful, or an error of type `E`
+	 * @throws UnregisteredHandlerError when no handler is registered for
+	 *   `query.type` (a wiring bug; never delivered through the channel)
 	 */
 	execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
@@ -199,25 +202,32 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	): Promise<Result<TMap[Q["type"]], E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
-		const handler = this.handlers.get(query.type);
-		if (!handler) {
-			// Same posture as CommandBus: a named wiring-bug error through
-			// the channel (2.x compatibility; the wire message is unchanged).
-			return err(
-				this.errorMapper(
-					new UnregisteredHandlerError({
-						busKind: "query",
-						messageType: query.type,
-					}),
-				),
-			);
-		}
+		const handler = this.handlerOrThrow(query.type);
 		try {
 			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
+			// A NESTED dispatch's wiring bug must stay a throw; see
+			// CommandBus.execute for the rationale.
+			if (error instanceof UnregisteredHandlerError) throw error;
 			return err(this.errorMapper(error));
 		}
+	}
+
+	/**
+	 * Shared no-handler gate for `execute` and `executeUnsafe`: a wiring
+	 * bug throws (same posture as CommandBus), it never rides the error
+	 * channel. One implementation so the two paths cannot drift.
+	 */
+	private handlerOrThrow(type: string): StoredQueryHandler {
+		const handler = this.handlers.get(type);
+		if (!handler) {
+			throw new UnregisteredHandlerError({
+				busKind: "query",
+				messageType: type,
+			});
+		}
+		return handler;
 	}
 
 	async executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
@@ -225,13 +235,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	): Promise<TMap[Q["type"]]>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
-		const handler = this.handlers.get(query.type);
-		if (!handler) {
-			throw new UnregisteredHandlerError({
-				busKind: "query",
-				messageType: query.type,
-			});
-		}
+		const handler = this.handlerOrThrow(query.type);
 		return (await handler(query)) as R;
 	}
 }

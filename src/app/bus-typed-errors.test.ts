@@ -44,13 +44,12 @@ describe("CommandBus typed error channel", () => {
 		if (result.isErr()) expect(result.error.code).toBe("boom");
 	});
 
-	it("maps the no-handler dispatch through errorMapper too", async () => {
+	it("the no-handler dispatch throws past the errorMapper (wiring bug, not a channel value)", async () => {
 		const bus = new CommandBus<Commands, AppError>({ errorMapper: toAppError });
 
-		const result = await bus.execute({ type: "Create", id: "x" });
-
-		expect(result.isErr()).toBe(true);
-		if (result.isErr()) expect(result.error.code).toContain("No handler");
+		await expect(bus.execute({ type: "Create", id: "x" })).rejects.toThrow(
+			"No handler registered for command type: Create",
+		);
 	});
 
 	it("defaults to a string channel with no options (backward compatible)", async () => {

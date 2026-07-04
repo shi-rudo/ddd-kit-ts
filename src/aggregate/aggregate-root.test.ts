@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Id } from "../core/id";
 import { SnapshotSchemaMismatchError } from "../core/errors";
-import {
-	AggregateRoot,
-	type AggregateConfig,
-} from "./aggregate-root";
+import type { Id } from "../core/id";
 import {
 	type AggregateSnapshot,
 	type Version,
 	withClockFactory,
 } from "./aggregate";
+import { type AggregateConfig, AggregateRoot } from "./aggregate-root";
 import type { DomainEvent } from "./domain-event";
 
 type TestId = Id<"TestId">;
@@ -21,11 +18,7 @@ type TestState = {
 
 class TestAggregate extends AggregateRoot<TestState, TestId> {
 	protected readonly aggregateType = "TestAggregate";
-	constructor(
-		id: TestId,
-		initialState: TestState,
-		config?: AggregateConfig,
-	) {
+	constructor(id: TestId, initialState: TestState, config?: AggregateConfig) {
 		super(id, initialState, config);
 	}
 
@@ -113,30 +106,70 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.version).toBe(2);
 		});
 
-		it("should support automatic version bumping with config", () => {
-			class AutoVersionAggregate extends AggregateRoot<TestState, TestId> {
-				protected readonly aggregateType = "AutoVersionAggregate";
+		it("requires the OCC intent per call: setState without bumpVersion is a compile error", () => {
+			class ExplicitAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "ExplicitAggregate";
 				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState, { autoVersionBump: true });
+					super(id, initialState);
+				}
+
+				public brokenUpdate(newValue: number): void {
+					// @ts-expect-error bumpVersion is required in v3: every mutation states its OCC intent at the call site
+					this.setState({ ...this.state, value: newValue });
 				}
 
 				public updateValue(newValue: number): void {
-					this.setState({ ...this.state, value: newValue });
+					this.setState({ ...this.state, value: newValue }, true);
+				}
+
+				public updateCosmetic(newValue: number): void {
+					// Explicit opt-OUT: acceptable only for data whose loss under
+					// a concurrent write is acceptable.
+					this.setState({ ...this.state, value: newValue }, false);
 				}
 			}
 
-			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new AutoVersionAggregate("test-1" as TestId, initialState);
+			const aggregate = new ExplicitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
 
 			aggregate.updateValue(20);
-			expect(aggregate.version).toBe(1); // Auto-bumped via setState
+			expect(aggregate.version).toBe(1);
+
+			aggregate.updateCosmetic(30);
+			expect(aggregate.version).toBe(1); // explicit no-bump, no silent default
+			expect(aggregate.state.value).toBe(30);
 		});
 
-		it("should not auto-bump when disabled", () => {
+		it("the autoVersionBump config is gone (the per-call argument replaced it)", () => {
+			// @ts-expect-error autoVersionBump was removed in v3; pass bumpVersion per setState call
+			const config: AggregateConfig = { autoVersionBump: true };
+			expect(config).toBeDefined();
+		});
+
+		it("fails loud at runtime when bumpVersion is bypassed (polymorphic or untyped caller)", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+			// A call through an Entity-typed reference (or plain JavaScript)
+			// reaches the implementation without the required argument; the
+			// guard fires BEFORE any mutation.
+			expect(() =>
+				(
+					aggregate as unknown as {
+						setState(newState: TestState): void;
+					}
+				).setState({ value: 99, status: "active" }),
+			).toThrow(TypeError);
+			expect(aggregate.state.value).toBe(10);
+			expect(aggregate.version).toBe(0);
+		});
+
+		it("manual bumpVersion stays available for subclass orchestration", () => {
 			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
 				protected readonly aggregateType = "ManualVersionAggregate";
 				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState, { autoVersionBump: false });
+					super(id, initialState);
 				}
 
 				public testBumpVersion(): void {
@@ -149,10 +182,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			const initialState: TestState = { value: 10, status: "inactive" };
-			const aggregate = new ManualVersionAggregate("test-1" as TestId, initialState);
+			const aggregate = new ManualVersionAggregate(
+				"test-1" as TestId,
+				initialState,
+			);
 
 			aggregate.updateValue(20);
-			expect(aggregate.version).toBe(0); // No auto-bump
+			expect(aggregate.version).toBe(0); // explicit no-bump
 
 			aggregate.testBumpVersion();
 			expect(aggregate.version).toBe(1); // Manual bump
@@ -321,11 +357,17 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					super(id, state);
 				}
 				addItem(item: { id: string; qty: number }) {
-					this.setState({ ...this.state, items: [...this._state.items, item] });
+					this.setState(
+						{ ...this.state, items: [...this._state.items, item] },
+						true,
+					);
 				}
 			}
 
-			const agg = new AggWithChildren("a-1" as TestId, { items: [{ id: "i1", qty: 2 }], status: "open" });
+			const agg = new AggWithChildren("a-1" as TestId, {
+				items: [{ id: "i1", qty: 2 }],
+				status: "open",
+			});
 			const snapshot = agg.createSnapshot();
 
 			// Mutate aggregate after snapshot
@@ -355,7 +397,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				snapshotAt: new Date(),
 			};
 
-			const agg = new AggWithChildren("a-1" as TestId, { items: [], status: "open" });
+			const agg = new AggWithChildren("a-1" as TestId, {
+				items: [],
+				status: "open",
+			});
 			agg.restoreFromSnapshot(snapshot);
 
 			// Mutate the original snapshot AFTER restore. The aggregate must be isolated.
@@ -397,7 +442,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 		}
 
-		class Cart extends AggregateRoot<CartState, TestId, never, CartSnapshotState> {
+		class Cart extends AggregateRoot<
+			CartState,
+			TestId,
+			never,
+			CartSnapshotState
+		> {
 			protected readonly aggregateType = "Cart";
 			constructor(id: TestId, state: CartState) {
 				super(id, state);
@@ -421,7 +471,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			// Without the guard, structuredClone silently strips the prototype
 			// and the snapshot breaks on first method call after restore.
-			expect(() => cart.createSnapshot()).toThrow(/class instance \(LineItem\)/);
+			expect(() => cart.createSnapshot()).toThrow(
+				/class instance \(LineItem\)/,
+			);
 			expect(() => cart.createSnapshot()).toThrow(/toSnapshotState/);
 			expect(() => cart.createSnapshot()).toThrow(/items\[0\]/);
 		});
@@ -761,20 +813,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
-		it("always bumps the version, regardless of the autoVersionBump config", () => {
-			// commit() is the opt-in path that explicitly couples state +
-			// event recording. Recording an event implies 'this is a
-			// version-worthy change'. The aggregate's autoVersionBump config
-			// governs the un-coupled setState path, not this one.
-			class NoAutoBumpAgg extends CommitAggregate {
-				constructor(id: TestId, state: TestState) {
-					// autoVersionBump = false (the default), the trap that
-					// silently broke OCC for callers using commit().
-					super(id, state);
-				}
-			}
-
-			const agg = new NoAutoBumpAgg("test-1" as TestId, {
+		it("always bumps the version (commit is never a no-bump mutation)", () => {
+			// commit() couples state + event recording; recording an event
+			// implies "this is a version-worthy change", so the bump is
+			// unconditional by design.
+			const agg = new CommitAggregate("test-1" as TestId, {
 				value: 10,
 				status: "inactive",
 			});
@@ -803,7 +846,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	describe("recordEvent helper", () => {
 		type Recorded = DomainEvent<"Recorded", { v: number }>;
 
-		class RecordingAggregate extends AggregateRoot<TestState, TestId, Recorded> {
+		class RecordingAggregate extends AggregateRoot<
+			TestState,
+			TestId,
+			Recorded
+		> {
 			protected readonly aggregateType = "RecordingAggregate";
 
 			constructor(id: TestId, initialState: TestState) {
@@ -1016,9 +1063,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should throw if ID is null or undefined", () => {
 			const state = { value: 10, status: "inactive" as const };
 			// @ts-expect-error - testing invalid input
-			expect(() => new TestAggregate(null, state)).toThrow("ID cannot be null or undefined");
+			expect(() => new TestAggregate(null, state)).toThrow(
+				"ID cannot be null or undefined",
+			);
 			// @ts-expect-error - testing invalid input
-			expect(() => new TestAggregate(undefined, state)).toThrow("ID cannot be null or undefined");
+			expect(() => new TestAggregate(undefined, state)).toThrow(
+				"ID cannot be null or undefined",
+			);
 		});
 
 		it("should validate state changes", () => {
@@ -1033,11 +1084,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					}
 				}
 				public update(value: number) {
-					this.setState({ ...this.state, value });
+					this.setState({ ...this.state, value }, true);
 				}
 			}
 
-			const agg = new ValidatedAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+			const agg = new ValidatedAggregate("id-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
 
 			expect(() => agg.update(-5)).toThrow("Value cannot be negative");
 		});
@@ -1054,7 +1108,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 			}
 
-			const agg = new EventAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+			const agg = new EventAggregate("id-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
 
 			expect(agg.pendingEvents).toHaveLength(0);
 			agg.doSomething();
@@ -1070,7 +1127,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				| DomainEvent<"ValueUpdated", { newValue: number }>
 				| DomainEvent<"Activated", void>;
 
-			class TypedEventAggregate extends AggregateRoot<TestState, TestId, TestEvent> {
+			class TypedEventAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				TestEvent
+			> {
 				protected readonly aggregateType = "TypedEventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -1085,14 +1146,20 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 			}
 
-			const agg = new TypedEventAggregate("id-1" as TestId, { value: 10, status: "inactive" });
+			const agg = new TypedEventAggregate("id-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
 
 			agg.updateValue(42);
 			agg.activate();
 
 			expect(agg.pendingEvents).toHaveLength(2);
 			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
-			expect((agg.pendingEvents[0] as Extract<TestEvent, { type: "ValueUpdated" }>).payload).toEqual({ newValue: 42 });
+			expect(
+				(agg.pendingEvents[0] as Extract<TestEvent, { type: "ValueUpdated" }>)
+					.payload,
+			).toEqual({ newValue: 42 });
 			expect(agg.pendingEvents[1]?.type).toBe("Activated");
 
 			// pendingEvents is typed: access event-specific fields without cast
@@ -1103,7 +1170,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should reject wrong event types at compile time with TEvent", () => {
 			type StrictEvent = DomainEvent<"OnlyThis", { data: string }>;
 
-			class StrictAggregate extends AggregateRoot<TestState, TestId, StrictEvent> {
+			class StrictAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				StrictEvent
+			> {
 				protected readonly aggregateType = "StrictAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -1117,7 +1188,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 			}
 
-			const agg = new StrictAggregate("id-1" as TestId, { value: 1, status: "inactive" });
+			const agg = new StrictAggregate("id-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
 			agg.doCorrect();
 			expect(agg.pendingEvents).toHaveLength(1);
 			expect(agg.pendingEvents[0]?.type).toBe("OnlyThis");
@@ -1615,11 +1689,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			it("an event recorded without a state change makes hasChanges true (pending-events clause)", () => {
 				type Deleted = DomainEvent<"Deleted", { reason: string }>;
-				class DeletingDirty extends AggregateRoot<
-					DirtyState,
-					TestId,
-					Deleted
-				> {
+				class DeletingDirty extends AggregateRoot<DirtyState, TestId, Deleted> {
 					protected readonly aggregateType = "DeletingDirty";
 					constructor(id: TestId, state: DirtyState) {
 						super(id, state);
@@ -1830,5 +1900,4 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 		});
 	});
-
 });

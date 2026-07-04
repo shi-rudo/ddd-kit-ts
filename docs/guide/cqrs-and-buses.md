@@ -78,15 +78,16 @@ Without a `TMap` the registration is loose (any key, any return type); the no-co
 
 ### Unregistered handlers are wiring bugs
 
-Dispatching a type no handler was registered under produces a named
+Dispatching a type no handler was registered under THROWS a named
 `UnregisteredHandlerError` (`busKind`, `messageType`): a wiring bug (typo in
 the type string, missing `register` call at bootstrap), deliberately in the
 same crash-loud `BaseError` family as `MissingHandlerError`, never a
-`DomainError`. For 2.x compatibility, `execute` still delivers it through the
-error CHANNEL via the `errorMapper` (the default string channel keeps its
-exact message), so route it explicitly in typed channels instead of treating
-it like an expected domain failure; `QueryBus.executeUnsafe` throws it
-directly. v3 makes `execute` throw it too.
+`DomainError` and never a value on the error channel. The `errorMapper` only
+sees failures a registered handler produced, so a generic err-branch cannot
+absorb a mis-wired bus; let the throw reach the boundary that turns bugs
+into 500s. Before v3 this surfaced through the error channel; migrate by
+removing any err-branch that matched the "No handler registered" message
+and, if you need to handle it at a specific seam, catching the named type.
 
 ## Queries
 

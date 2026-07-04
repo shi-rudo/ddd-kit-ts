@@ -1,7 +1,7 @@
 import type { Id } from "../core/id";
 import type { EntityConfig } from "../entity/entity";
-import { BaseAggregate } from "./base-aggregate";
 import type { AggregateSnapshot, Version } from "./aggregate";
+import { BaseAggregate } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 
 // Re-export for backwards compatibility: `IAggregateRoot` lives in
@@ -10,36 +10,13 @@ import type { AnyDomainEvent } from "./domain-event";
 export type { IAggregateRoot } from "./aggregate";
 
 /**
- * Configuration options for AggregateRoot behavior. Inherits
- * `deepFreezeState` from {@link EntityConfig} (opt-in deep freeze for
- * plain-data states).
+ * Configuration options for AggregateRoot behavior: currently exactly
+ * {@link EntityConfig} (the opt-in `deepFreezeState`). The former
+ * `autoVersionBump` option was removed in v3: `setState` takes a
+ * REQUIRED per-call `bumpVersion` argument instead, so every mutation
+ * states its OCC intent explicitly at the call site.
  */
-export interface AggregateConfig extends EntityConfig {
-	/**
-	 * Whether `setState()` should bump the version automatically when the
-	 * caller omits the per-call `bumpVersion` argument.
-	 *
-	 * Defaults to **`false`**: `setState()` already takes an explicit
-	 * `bumpVersion` argument per call, so the config is just the default
-	 * the per-call argument falls back to.
-	 *
-	 * **OCC warning: an un-bumped mutation can be silently overwritten.**
-	 * A save whose version did not move writes `WHERE version = v SET
-	 * version = v`; a concurrent writer that loaded the same `v` then
-	 * commits `WHERE version = v` successfully and replaces the state
-	 * without any `ConcurrencyConflictError`. Skip the bump only for data
-	 * whose loss under a concurrent write is acceptable (cosmetic caches,
-	 * denormalized display fields), never for domain state.
-	 *
-	 * **Deprecation notice.** Relying on the implicit default (calling
-	 * `setState(newState)` without a per-call `bumpVersion` and without
-	 * setting this config) is deprecated. v3 makes the per-call argument
-	 * required, so every mutation states its OCC intent explicitly at the
-	 * call site; code that already passes `bumpVersion` or uses `commit()`
-	 * is unaffected.
-	 */
-	autoVersionBump?: boolean;
-}
+export type AggregateConfig = EntityConfig;
 
 /**
  * Base class for Aggregate Roots without Event Sourcing.
@@ -53,7 +30,7 @@ export interface AggregateConfig extends EntityConfig {
  * Provides:
  * - Identity (id) and state management (via `Entity`)
  * - Version + persistedVersion + pending-event tracking (via `BaseAggregate`)
- * - `setState`-based mutation with optional version bumping
+ * - `setState`-based mutation with an explicit per-call version bump
  * - `commit()` record-after-mutation helper
  * - Snapshot support for performance optimization
  *
@@ -91,8 +68,6 @@ export abstract class AggregateRoot<
 	TEvent extends AnyDomainEvent = never,
 	TSnapshotState = TState,
 > extends BaseAggregate<TState, TId, TEvent, TSnapshotState> {
-	private readonly _autoVersionBump: boolean;
-
 	/**
 	 * The state reference as of the last {@link markRestored} /
 	 * `markPersisted` (the persistence-lifecycle markers). Only
@@ -119,7 +94,6 @@ export abstract class AggregateRoot<
 		config?: AggregateConfig,
 	) {
 		super(id, initialState, config);
-		this._autoVersionBump = config?.autoVersionBump ?? false;
 	}
 
 	/**
@@ -242,13 +216,11 @@ export abstract class AggregateRoot<
 	 *     and no version is bumped**.
 	 *  2. Each event in `events` is appended via `addDomainEvent`.
 	 *
-	 * `commit()` **always bumps the version**, regardless of the aggregate's
-	 * `autoVersionBump` config. Recording a domain event implies "something
-	 * happened that the outside world cares about", and optimistic-
-	 * concurrency callers must see a fresh version every time. The config
-	 * still governs the un-coupled `setState` path. If you need to mutate
-	 * state without bumping (e.g. cosmetic caches), call `setState(newState,
-	 * false)` and skip `commit` entirely.
+	 * `commit()` **always bumps the version**. Recording a domain event
+	 * implies "something happened that the outside world cares about", and
+	 * optimistic-concurrency callers must see a fresh version every time.
+	 * If you need to mutate state without bumping (e.g. cosmetic caches),
+	 * call `setState(newState, false)` and skip `commit` entirely.
 	 *
 	 * `events` accepts a single event or an array. Omit it (or pass `[]`)
 	 * for state-only mutations.
@@ -288,24 +260,50 @@ export abstract class AggregateRoot<
 	}
 
 	/**
-	 * Sets the state and optionally bumps the version automatically.
-	 * Validates `newState` via `validateState()`.
+	 * Sets the state and, when `bumpVersion` is `true`, advances the
+	 * version. Validates `newState` via `validateState()`.
 	 *
-	 * **State the OCC intent explicitly.** With neither the per-call
-	 * `bumpVersion` argument nor an `autoVersionBump` config, the version
-	 * does not move, and an un-bumped mutation can be silently overwritten
-	 * by a concurrent writer (see the {@link AggregateConfig.autoVersionBump}
-	 * warning for the mechanics). Prefer `commit()` for domain mutations,
-	 * or pass `bumpVersion` explicitly; relying on the implicit default is
-	 * deprecated and v3 makes the argument required.
+	 * **`bumpVersion` is required: every mutation states its OCC intent
+	 * at the call site.** An un-bumped mutation can be silently
+	 * overwritten by a concurrent writer: a save whose version did not
+	 * move writes `WHERE version = v SET version = v`, so a concurrent
+	 * writer that loaded the same `v` commits over it without any
+	 * `ConcurrencyConflictError`. Pass `false` only for data whose loss
+	 * under a concurrent write is acceptable (cosmetic caches,
+	 * denormalized display fields), never for domain state. Prefer
+	 * `commit()` for domain mutations; it always bumps.
+	 *
+	 * **Overrides must keep the two-argument signature and delegate to
+	 * `super.setState(newState, bumpVersion)`.** TypeScript's method
+	 * bivariance also accepts a narrower single-argument override, which
+	 * would silently disable BOTH guards (the compile-time block and the
+	 * runtime `TypeError`) for every call inside that subclass,
+	 * reintroducing the exact lost-update trap this signature closes.
 	 *
 	 * @param newState - The new state
-	 * @param bumpVersion - Whether to bump the version (defaults to autoVersionBump config)
+	 * @param bumpVersion - Whether this mutation advances the OCC version
 	 */
+	protected setState(newState: TState, bumpVersion: boolean): void;
+	/**
+	 * Base-signature overload, deliberately BLOCKED (`never` parameter):
+	 * calling `setState` on an `AggregateRoot` without `bumpVersion` is a
+	 * compile error. The overload exists only so the required-argument
+	 * signature stays structurally compatible with `Entity.setState`.
+	 */
+	protected setState(newState: never): void;
 	protected setState(newState: TState, bumpVersion?: boolean): void {
+		if (typeof bumpVersion !== "boolean") {
+			// Reachable despite the compile-time block: a polymorphic call
+			// through an Entity-typed reference, or plain JavaScript. Fail
+			// loud BEFORE mutating; a silent no-bump default is exactly the
+			// lost-update trap the required argument exists to close.
+			throw new TypeError(
+				"AggregateRoot.setState requires the bumpVersion argument: " +
+					"every mutation states its OCC intent at the call site",
+			);
+		}
 		super.setState(newState);
-		const shouldBump = bumpVersion ?? this._autoVersionBump;
-		if (shouldBump) {
+		if (bumpVersion) {
 			this.bumpVersion();
 		}
 	}
@@ -317,8 +315,12 @@ export abstract class AggregateRoot<
 	 *
 	 * @param snapshot - The snapshot to restore from
 	 */
-	public restoreFromSnapshot(snapshot: AggregateSnapshot<TSnapshotState>): void {
-		const restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
+	public restoreFromSnapshot(
+		snapshot: AggregateSnapshot<TSnapshotState>,
+	): void {
+		const restored = this.fromSnapshotState(
+			this.resolveSnapshotState(snapshot),
+		);
 		this.validateState(restored);
 		this._state = this.freezeState(restored);
 		this.markRestored(snapshot.version);

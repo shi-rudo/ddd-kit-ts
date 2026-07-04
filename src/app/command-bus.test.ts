@@ -78,44 +78,62 @@ describe("CommandBus", () => {
 			}
 		});
 
-		it("should return error if no handler is registered", async () => {
+		it("throws UnregisteredHandlerError if no handler is registered (wiring bug, not an err)", async () => {
 			const bus = new CommandBus();
 
-			type UnknownCommand = Command & {
-				type: "UnknownCommand";
-			};
-
-			const result = await bus.execute({
-				type: "UnknownCommand",
-			});
-
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toContain("No handler registered");
-			}
+			await expect(
+				bus.execute({ type: "UnknownCommand" }),
+			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+			await expect(bus.execute({ type: "UnknownCommand" })).rejects.toThrow(
+				"No handler registered for command type: UnknownCommand",
+			);
 		});
 
-		it("surfaces an unregistered command type as a named UnregisteredHandlerError through the errorMapper", async () => {
-			// The kit's posture treats mis-wiring as a bug that must not be
-			// absorbed by generic domain-error handling; the NAMED type lets
-			// a typed error channel route it explicitly (and pins the wire
-			// message the default string channel has always produced).
+		it("rethrows a nested dispatch's wiring bug instead of absorbing it into the channel", async () => {
+			// A handler that awaits a nested execute with a typoed type: the
+			// nested UnregisteredHandlerError lands in the outer catch, which
+			// must rethrow it, not map it into an err the caller treats as an
+			// expected failure.
+			let mapperCalls = 0;
 			const bus = new CommandBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => thrown,
+				errorMapper: (thrown) => {
+					mapperCalls += 1;
+					return thrown;
+				},
+			});
+			bus.register("Outer", async () => {
+				await bus.execute({ type: "TypoedNested" });
+				return ok("unreachable");
 			});
 
-			const result = await bus.execute({ type: "UnknownCommand" });
+			await expect(bus.execute({ type: "Outer" })).rejects.toBeInstanceOf(
+				UnregisteredHandlerError,
+			);
+			expect(mapperCalls).toBe(0);
+		});
 
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toBeInstanceOf(UnregisteredHandlerError);
-				const error = result.error as UnregisteredHandlerError;
-				expect(error.busKind).toBe("command");
-				expect(error.messageType).toBe("UnknownCommand");
-				expect(error.message).toBe(
-					"No handler registered for command type: UnknownCommand",
-				);
-			}
+		it("bypasses the errorMapper for unregistered types: the wiring bug throws instead of riding the channel", async () => {
+			// The error CHANNEL is for expected failures a handler produced;
+			// a mis-wired bus is a bug that must crash loud, not something a
+			// generic err-branch can absorb.
+			let mapperCalls = 0;
+			const bus = new CommandBus<Record<string, unknown>, unknown>({
+				errorMapper: (thrown) => {
+					mapperCalls += 1;
+					return thrown;
+				},
+			});
+
+			const rejection = await bus.execute({ type: "UnknownCommand" }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+
+			expect(rejection).toBeInstanceOf(UnregisteredHandlerError);
+			const error = rejection as UnregisteredHandlerError;
+			expect(error.busKind).toBe("command");
+			expect(error.messageType).toBe("UnknownCommand");
+			expect(mapperCalls).toBe(0);
 		});
 
 		it("should handle errors from command handlers", async () => {

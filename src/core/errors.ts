@@ -145,14 +145,11 @@ export interface UnregisteredHandlerErrorOptions {
  * a domain or infrastructure failure.
  *
  * Extends `BaseError` directly (same crash-loud family as
- * {@link MissingHandlerError}): a generic `catch (e instanceof
- * DomainError)` handler must not absorb it. For 2.x compatibility the
- * buses still deliver it through their error CHANNEL (`err(...)` via the
- * `errorMapper`, so the default string channel keeps its exact message)
- * rather than throwing; the named type exists so a typed error channel
- * can route it explicitly instead of pattern-matching message strings.
- * `QueryBus.executeUnsafe` throws it directly. v3 makes `execute` throw
- * it too.
+ * {@link MissingHandlerError}), and since v3 it is THROWN by `execute`
+ * and `executeUnsafe` alike, never delivered through the error channel:
+ * the channel carries expected failures a registered handler produced,
+ * and a generic err-branch must not absorb a mis-wired bus. Catch it
+ * only at a boundary that turns bugs into 500s.
  */
 export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerError"> {
 	readonly busKind: "command" | "query";
