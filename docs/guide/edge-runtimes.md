@@ -102,6 +102,6 @@ Same shape as Workers. Vercel's `runtime: "edge"` exposes Web Crypto and `Promis
 
 The kit is ESM-only and uses no Node-specific APIs, so Deno and Bun work without any compatibility shims. Bun's faster `crypto.randomUUID()` is automatically picked up.
 
-## Node 20+
+## Node 22+
 
-Works as expected with `"type": "module"` in `package.json`. The package's `engines` field requires Node 20 or newer; `crypto.randomUUID()` is available on the global `crypto` there without flags or imports.
+Works as expected with `"type": "module"` in `package.json`. The package's `engines` field requires Node 22 or newer (Node 20 reached end-of-life in April 2026); `crypto.randomUUID()` is available on the global `crypto` there without flags or imports.
