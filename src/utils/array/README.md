@@ -69,8 +69,8 @@ This function recursively traverses the object tree and removes keys that match 
 
 - `value`: The value to create a deep copy from
 - `options`: Options specifying which keys to ignore
-  - `ignoreKeys?: readonly Key[]` - Keys to ignore everywhere in the object tree
-  - `ignoreKeyPredicate?: (key: Key, path: PathSegment[]) => boolean` - Fine-grained control based on key and path
+  - `ignoreKeys?: readonly DeepOmitKey[]` - Keys to ignore everywhere in the object tree
+  - `ignoreKeyPredicate?: (key: DeepOmitKey, path: DeepOmitPathSegment[]) => boolean` - Fine-grained control based on key and path
 
 #### Example
 
@@ -501,24 +501,24 @@ describe("ActiveOrdersSpecification", () => {
 
 ## Type Definitions
 
-### `Key`
+### `DeepOmitKey`
 
 ```ts
-type Key = string | symbol;
+type DeepOmitKey = string | symbol;
 ```
 
-### `PathSegment`
+### `DeepOmitPathSegment`
 
 ```ts
-type PathSegment = string | number | symbol;
+type DeepOmitPathSegment = string | number | symbol;
 ```
 
 ### `DeepOmitOptions`
 
 ```ts
 interface DeepOmitOptions {
-  readonly ignoreKeys?: readonly Key[];
-  readonly ignoreKeyPredicate?: (key: Key, path: readonly PathSegment[]) => boolean;
+  readonly ignoreKeys?: readonly DeepOmitKey[];
+  readonly ignoreKeyPredicate?: (key: DeepOmitKey, path: readonly DeepOmitPathSegment[]) => boolean;
 }
 ```
 
