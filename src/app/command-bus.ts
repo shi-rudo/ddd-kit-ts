@@ -1,4 +1,5 @@
 import { err, type Result } from "@shirudo/result";
+import { UnregisteredHandlerError } from "../core/errors";
 import type { Command, CommandHandler } from "./command";
 import { describeThrown } from "./describe-thrown";
 
@@ -13,9 +14,7 @@ import { describeThrown } from "./describe-thrown";
  * the key it was registered under). Result is widened to `unknown` here
  * and narrowed back via the public overloads on `execute`.
  */
-type StoredCommandHandler<E> = (
-	cmd: Command,
-) => Promise<Result<unknown, E>>;
+type StoredCommandHandler<E> = (cmd: Command) => Promise<Result<unknown, E>>;
 
 /**
  * Type map for command types to their return types.
@@ -116,10 +115,7 @@ export interface ICommandBus<
 	register<
 		K extends keyof TMap & string,
 		C extends Command & { type: K } = Command & { type: K },
-	>(
-		commandType: K,
-		handler: CommandHandler<C, TMap[K], E>,
-	): void;
+	>(commandType: K, handler: CommandHandler<C, TMap[K], E>): void;
 }
 
 /**
@@ -158,8 +154,10 @@ export interface ICommandBus<
  * const result = await bus.execute({ type: "CreateOrder", ... });
  * ```
  */
-export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap, E = string>
-	implements ICommandBus<TMap, E>
+export class CommandBus<
+	TMap extends CommandTypeMap = CommandTypeMap,
+	E = string,
+> implements ICommandBus<TMap, E>
 {
 	private readonly handlers = new Map<string, StoredCommandHandler<E>>();
 	private readonly errorMapper: (thrown: unknown) => E;
@@ -175,10 +173,7 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap, E = string
 	register<
 		K extends keyof TMap & string,
 		C extends Command & { type: K } = Command & { type: K },
-	>(
-		commandType: K,
-		handler: CommandHandler<C, TMap[K], E>,
-	): void {
+	>(commandType: K, handler: CommandHandler<C, TMap[K], E>): void {
 		// Silent replacement would turn the first handler into dead code
 		// with no signal; wiring bugs must surface at registration time.
 		if (this.handlers.has(commandType)) {
@@ -196,9 +191,16 @@ export class CommandBus<TMap extends CommandTypeMap = CommandTypeMap, E = string
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
 		const handler = this.handlers.get(command.type);
 		if (!handler) {
+			// A wiring bug, not a domain failure: the NAMED error type lets a
+			// typed error channel route it explicitly. Delivered through the
+			// channel (not thrown) for 2.x compatibility; the message is
+			// byte-identical to what the default string channel always carried.
 			return err(
 				this.errorMapper(
-					new Error(`No handler registered for command type: ${command.type}`),
+					new UnregisteredHandlerError({
+						busKind: "command",
+						messageType: command.type,
+					}),
 				),
 			);
 		}

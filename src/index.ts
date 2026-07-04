@@ -1,39 +1,198 @@
-// Core utilities
+// Main entry point (`@shirudo/ddd-kit`). Every export is named
+// deliberately: the SemVer surface is exactly this list, internals never
+// leak by accident, and `src/api-surface.test.ts` pins the runtime part.
+// Result types come from the peer dependency `@shirudo/result`;
+// `ValidationError` comes from `@shirudo/base-error`; RFC 9457 Problem
+// Details presenters live in the opt-in `@shirudo/ddd-kit/http` entry;
+// the repository contract suites live in `@shirudo/ddd-kit/testing`.
 
-// Aggregates
-export * from "./aggregate/aggregate";
-export * from "./aggregate/aggregate-root";
-export * from "./aggregate/event-sourced-aggregate";
-// CQRS - Commands and Queries
-export * from "./app/command";
-export * from "./app/command-bus";
-// App handlers
-export * from "./app/handler";
-export * from "./app/query";
-export * from "./app/unit-of-work";
-export * from "./app/query-bus";
-export * from "./core/errors";
-export * from "./core/id";
-export * from "./domain-state-machine/domain-state-machine";
+// Aggregates: type hub + domain events
+export {
+	type AggregateSnapshot,
+	type IAggregateRoot,
+	type IEventSourcedAggregate,
+	sameVersion,
+	type Version,
+} from "./aggregate/aggregate";
+export {
+	type AggregateConfig,
+	AggregateRoot,
+} from "./aggregate/aggregate-root";
+export {
+	type AnyDomainEvent,
+	type ClockFactory,
+	type CreateDomainEventOptions,
+	copyMetadata,
+	createDomainEvent,
+	type DomainEvent,
+	type EventIdFactory,
+	type EventMetadata,
+	mergeMetadata,
+	resetClockFactory,
+	resetEventIdFactory,
+	setClockFactory,
+	setEventIdFactory,
+	withClockFactory,
+	withEventIdFactory,
+} from "./aggregate/domain-event";
+export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
+
+// CQRS: commands, queries, buses
+export type { Command, CommandHandler } from "./app/command";
+export {
+	CommandBus,
+	type CommandBusOptions,
+	type ICommandBus,
+} from "./app/command-bus";
+// App orchestration: withCommit + Unit of Work
+export { withCommit } from "./app/handler";
+export type { Query, QueryHandler } from "./app/query";
+export {
+	type IQueryBus,
+	QueryBus,
+	type QueryBusOptions,
+} from "./app/query-bus";
+export {
+	CommitError,
+	NestedUnitOfWorkError,
+	type RepositoryFactories,
+	RollbackError,
+	type RunOptions,
+	TransactionClosedError,
+	UnitOfWork,
+	type UnitOfWorkContext,
+	type UnitOfWorkDeps,
+	type UnitOfWorkSession,
+} from "./app/unit-of-work";
+
+// Core: errors + branded ids
+export {
+	AggregateDeletedError,
+	AggregateNotFoundError,
+	type AggregateNotFoundErrorOptions,
+	ConcurrencyConflictError,
+	type ConcurrencyConflictErrorOptions,
+	DomainError,
+	DuplicateAggregateError,
+	type DuplicateAggregateErrorOptions,
+	EventHarvestError,
+	InfrastructureError,
+	MissingHandlerError,
+	SnapshotSchemaMismatchError,
+	type SnapshotSchemaMismatchErrorOptions,
+	UnenrolledChangesError,
+	UnregisteredHandlerError,
+	type UnregisteredHandlerErrorOptions,
+	UnreplayableAggregateError,
+} from "./core/errors";
+export type { Id, IdGenerator } from "./core/id";
+
+// Domain State Machine
+export {
+	analyzeDomainMachineDefinition,
+	canTransitionDomainState,
+	createInitialDomainMachineSnapshot,
+	type DomainMachineDefinition,
+	type DomainMachineDefinitionAnalysis,
+	type DomainMachineDefinitionDiagnostic,
+	type DomainMachineInput,
+	type DomainMachineReadonly,
+	type DomainMachineSnapshot,
+	type DomainMachineTransitionDescription,
+	DomainStateMachine,
+	type DomainStateNode,
+	type DomainTransition,
+	DomainTransitionGuardRejectedError,
+	type DomainTransitionGuardResult,
+	type DomainTransitionOutcome,
+	type DomainTransitionResult,
+	InvalidDomainMachineContextError,
+	InvalidDomainMachineDefinitionError,
+	InvalidDomainMachineInputError,
+	InvalidDomainMachineSnapshotError,
+	InvalidDomainTransitionError,
+	InvalidDomainTransitionGuardResultError,
+	InvalidDomainTransitionResultError,
+	type PreparedDomainMachineDefinition,
+	prepareDomainMachineDefinition,
+	ReentrantDomainStateMachineEvaluationError,
+	transitionDomainState,
+} from "./domain-state-machine/domain-state-machine";
+
 // Entities
-export * from "./entity/entity";
-export * from "./events/event-bus";
-export * from "./events/outbox";
-// Events
-export * from "./events/ports";
-// Repository
-export * from "./repo/event-store";
-export * from "./repo/identity-map";
-export * from "./repo/in-memory-event-store";
-export * from "./repo/repository";
-export * from "./repo/retrying-scope";
-export * from "./repo/scope";
-// Utils
-export * from "./utils";
-// Result types come from the peer dependency `@shirudo/result`; import directly from there.
-// `ValidationError` comes from the peer dependency `@shirudo/base-error`; import directly from there.
-// RFC 9457 Problem Details presenters live in the opt-in `@shirudo/ddd-kit/http` entry point.
+export {
+	Entity,
+	type EntityConfig,
+	entityIds,
+	findEntityById,
+	freezeShallow,
+	hasEntityId,
+	type Identifiable,
+	type IEntity,
+	removeEntityById,
+	replaceEntityById,
+	sameEntity,
+	updateEntityById,
+} from "./entity/entity";
+
+// Events: bus, outbox, ports
+export { EventBusImpl } from "./events/event-bus";
+export { InMemoryOutbox, type InMemoryOutboxOptions } from "./events/outbox";
+export type {
+	DeadLetterRecord,
+	DispatchTrackingOutbox,
+	EventBus,
+	EventHandler,
+	OnceOptions,
+	Outbox,
+	OutboxRecord,
+} from "./events/ports";
+
+// Repository: ports, identity map, event store, scopes
+export type {
+	EventStore,
+	EventStoreAppendOptions,
+	ReadStreamOptions,
+} from "./repo/event-store";
+export { type AggregateClass, IdentityMap } from "./repo/identity-map";
+export { InMemoryEventStore } from "./repo/in-memory-event-store";
+export type {
+	IQueryableRepository,
+	IRepository,
+	IUnitOfWorkRepository,
+} from "./repo/repository";
+export {
+	computeBackoffDelay,
+	RetryingTransactionScope,
+	type RetryPolicy,
+} from "./repo/retrying-scope";
+export type {
+	TransactionalOptions,
+	TransactionScope,
+} from "./repo/scope";
+
+// Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
+export {
+	type DeepEqualExceptOptions,
+	type DeepOmitOptions,
+	deepEqual,
+	deepEqualExcept,
+	deepOmit,
+	type Key,
+	type PathSegment,
+} from "./utils";
+
 // Validation
-export * from "./validation";
+export { voValidated } from "./validation";
+
 // Value Objects
-export * from "./value-object/value-object";
+export {
+	deepFreeze,
+	type IValueObject,
+	ValueObject,
+	type VO,
+	vo,
+	voEquals,
+	voEqualsExcept,
+	voWithValidation,
+} from "./value-object/value-object";

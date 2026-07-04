@@ -371,6 +371,26 @@ and freeze the snapshot and machine input before running guards or reducers. A
 buggy callback cannot mutate caller-owned inputs; if it writes to `context` or
 `input`, the frozen copy fails loudly.
 
+They also validate and defensively copy the **definition** on every call: safe
+for one-off use, avoidable O(definition) work on a hot dispatch path. Amortize
+it with `prepareDomainMachineDefinition`, which validates and stabilizes the
+definition once (the same thing the `DomainStateMachine` constructor does
+internally); the pure functions recognize the prepared handle and skip their
+per-call validate-and-copy:
+
+```ts
+import { prepareDomainMachineDefinition } from "@shirudo/ddd-kit";
+
+const prepared = prepareDomainMachineDefinition(checkoutLifecycle);
+
+// per dispatch: no re-validation, no definition copy
+const outcome = transitionDomainState(prepared, snapshot, input);
+```
+
+The prepared handle is a deeply frozen copy, isolated from later mutation of
+the input object. Snapshots and inputs are still validated and copied per call;
+they come from storage and callers, so their defensive treatment is the point.
+
 Purity also requires callback discipline that JavaScript cannot enforce at
 runtime. Guards, reducers, `validateContext`, and `validateSnapshot` must be
 synchronous, deterministic, and side-effect-free: do not perform I/O, read

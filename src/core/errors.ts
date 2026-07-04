@@ -130,6 +130,45 @@ export class EventHarvestError extends BaseError<"EventHarvestError"> {
 	}
 }
 
+/** Constructor options for {@link UnregisteredHandlerError}. */
+export interface UnregisteredHandlerErrorOptions {
+	/** Which bus rejected the dispatch. */
+	readonly busKind: "command" | "query";
+	/** The message type no handler was registered for. */
+	readonly messageType: string;
+}
+
+/**
+ * Produced by the in-memory `CommandBus` / `QueryBus` when a message is
+ * dispatched for a type no handler was registered under: a wiring bug
+ * (typo in the type string, missing `register` call at bootstrap), not
+ * a domain or infrastructure failure.
+ *
+ * Extends `BaseError` directly (same crash-loud family as
+ * {@link MissingHandlerError}): a generic `catch (e instanceof
+ * DomainError)` handler must not absorb it. For 2.x compatibility the
+ * buses still deliver it through their error CHANNEL (`err(...)` via the
+ * `errorMapper`, so the default string channel keeps its exact message)
+ * rather than throwing; the named type exists so a typed error channel
+ * can route it explicitly instead of pattern-matching message strings.
+ * `QueryBus.executeUnsafe` throws it directly. v3 makes `execute` throw
+ * it too.
+ */
+export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerError"> {
+	readonly busKind: "command" | "query";
+	readonly messageType: string;
+
+	constructor(options: UnregisteredHandlerErrorOptions) {
+		super(
+			`No handler registered for ${options.busKind} type: ${options.messageType}`,
+			undefined,
+			{ name: "UnregisteredHandlerError" },
+		);
+		this.busKind = options.busKind;
+		this.messageType = options.messageType;
+	}
+}
+
 /**
  * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
  * loaded into the identity map during the operation carries unflushed

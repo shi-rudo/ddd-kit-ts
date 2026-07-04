@@ -21,6 +21,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unhandled rejection after the transaction has committed. The `=> void`
   signature admits an `async` function, so this guards a real footgun.
 
+### Added: named wiring-bug error for the buses, prepared state machines, curated exports
+
+- New `UnregisteredHandlerError` (`busKind`, `messageType`): dispatching a
+  command or query type no handler was registered under is a wiring bug,
+  in the same crash-loud `BaseError` family as `MissingHandlerError`. For
+  2.x compatibility `execute` still delivers it through the error channel
+  via the `errorMapper` (the default string channel keeps its exact
+  message, so nothing observable changes there), but typed error channels
+  can now route it explicitly instead of pattern-matching message
+  strings; `QueryBus.executeUnsafe` throws it directly. v3 makes
+  `execute` throw it too. Note for CUSTOM `errorMapper`s: the value they
+  receive for this path changes from a plain `Error` to this structured
+  `BaseError` subclass (own `name`, `toJSON`, `busKind`, `messageType`),
+  the same shape kit errors thrown by handlers have always arrived in;
+  a mapper that serializes or branches on the thrown value will see the
+  richer structure.
+- New `prepareDomainMachineDefinition` (+ `PreparedDomainMachineDefinition`
+  type): validates and stabilizes a machine definition ONCE for the pure
+  API. `transitionDomainState`, `canTransitionDomainState`,
+  `createInitialDomainMachineSnapshot`, and the `DomainStateMachine`
+  constructor recognize the prepared handle and skip their per-call
+  validate-and-copy of the definition; raw definitions keep the
+  documented per-call safety. Snapshots and inputs are still validated
+  and copied per call.
+- All package entry points now use curated named exports instead of
+  `export *`, and a new API-surface test pins the runtime export list of
+  every entry, so internals can no longer leak into the public SemVer
+  surface by accident. The exported surface is byte-for-byte unchanged
+  (verified against the previous build); already-shipped internals
+  (`computeBackoffDelay`, `freezeShallow`) stay exported until v3.
+
 ### Added: `EventStore` port and event-sourced repository contract suite
 
 - New `EventStore<Evt>` driven port (`append` with an `expectedVersion`

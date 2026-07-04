@@ -5,10 +5,7 @@ import type {
 	DomainMachineSnapshot,
 	DomainTransitionOutcome,
 } from "./contracts";
-import {
-	copyDomainMachineDefinition,
-	validateDomainMachineDefinition,
-} from "./definition";
+import { ensureStableDomainMachineDefinition } from "./definition";
 import { ReentrantDomainStateMachineEvaluationError } from "./errors";
 import {
 	createDomainMachineSnapshot,
@@ -38,6 +35,10 @@ export type {
 	DomainTransitionOutcome,
 	DomainTransitionResult,
 } from "./contracts";
+export {
+	type PreparedDomainMachineDefinition,
+	prepareDomainMachineDefinition,
+} from "./definition";
 export {
 	DomainTransitionGuardRejectedError,
 	InvalidDomainMachineContextError,
@@ -88,8 +89,9 @@ export class DomainStateMachine<
 		definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 		...snapshotInput: [] | [DomainMachineSnapshot<TState, TContext> | undefined]
 	) {
-		validateDomainMachineDefinition(definition);
-		this.definition = copyDomainMachineDefinition(definition);
+		// A prepared definition (prepareDomainMachineDefinition) passes
+		// through; a raw one pays the one-time validate-and-copy here.
+		this.definition = ensureStableDomainMachineDefinition(definition);
 		// Resolve the overload by the argument value, not the rest-parameter
 		// arity: an explicit `undefined` snapshot (a natural result of a
 		// nullable `repo.loadSnapshot(id)` or `map.get(id)` passed straight

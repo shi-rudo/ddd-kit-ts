@@ -19,6 +19,8 @@ import {
 	InvalidDomainTransitionError,
 	InvalidDomainTransitionGuardResultError,
 	InvalidDomainTransitionResultError,
+	type PreparedDomainMachineDefinition,
+	prepareDomainMachineDefinition,
 	ReentrantDomainStateMachineEvaluationError,
 	transitionDomainState,
 } from "./domain-state-machine";
@@ -153,6 +155,86 @@ function checkoutDefinition(): DomainMachineDefinition<
 		},
 	};
 }
+
+describe("prepareDomainMachineDefinition (pure-API fast path)", () => {
+	const requestPayment: PaymentRequested = {
+		type: "PaymentRequested",
+		paymentId: "p-1",
+	};
+
+	it("validates at prepare time", () => {
+		const invalid = {
+			...checkoutDefinition(),
+			initial: "no-such-state" as CheckoutState,
+		};
+		expect(() => prepareDomainMachineDefinition(invalid)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
+	});
+
+	it("a prepared definition drives the pure functions and the class", () => {
+		const prepared = prepareDomainMachineDefinition(checkoutDefinition());
+
+		const snapshot = createInitialDomainMachineSnapshot(prepared);
+		expect(snapshot.state).toBe("awaiting-payment");
+		expect(canTransitionDomainState(prepared, snapshot, requestPayment)).toBe(
+			true,
+		);
+		const outcome = transitionDomainState(prepared, snapshot, requestPayment);
+		expect(outcome.to).toBe("awaiting-payment");
+		expect(outcome.snapshot.context.paymentId).toBe("p-1");
+
+		const machine = new DomainStateMachine(prepared);
+		expect(machine.state).toBe("awaiting-payment");
+		expect(machine.can(requestPayment)).toBe(true);
+	});
+
+	it("a prepared definition is a stable copy, isolated from later raw-definition sabotage", () => {
+		const raw = checkoutDefinition();
+		const prepared = prepareDomainMachineDefinition(raw);
+		const snapshot = createInitialDomainMachineSnapshot(prepared);
+
+		// Sabotage the RAW definition after preparing: the prepared handle
+		// keeps working (it is the validated stable copy, not re-derived
+		// from the raw object per call)...
+		(raw as { states: unknown }).states = {};
+		const outcome = transitionDomainState(prepared, snapshot, requestPayment);
+		expect(outcome.snapshot.context.paymentId).toBe("p-1");
+
+		// ...while the raw object keeps the documented per-call validation
+		// of the unprepared path and now fails it.
+		expect(() => transitionDomainState(raw, snapshot, requestPayment)).toThrow(
+			InvalidDomainMachineDefinitionError,
+		);
+	});
+
+	it("preparing an already-prepared definition returns it as-is", () => {
+		const prepared = prepareDomainMachineDefinition(checkoutDefinition());
+		expect(prepareDomainMachineDefinition(prepared)).toBe(prepared);
+	});
+
+	it("type-level: the brand is required, so a raw definition is not assignable to PreparedDomainMachineDefinition", () => {
+		const raw = checkoutDefinition();
+
+		// @ts-expect-error only prepareDomainMachineDefinition produces the brand
+		const bad: PreparedDomainMachineDefinition<
+			CheckoutState,
+			CheckoutContext,
+			CheckoutInput,
+			CheckoutOutput
+		> = raw;
+		expect(bad).toBe(raw); // smoke usage; the check above is the assertion
+
+		// The reverse assignment stays free: prepared IS a definition.
+		const asPlain: DomainMachineDefinition<
+			CheckoutState,
+			CheckoutContext,
+			CheckoutInput,
+			CheckoutOutput
+		> = prepareDomainMachineDefinition(checkoutDefinition());
+		expect(asPlain.initial).toBe("awaiting-payment");
+	});
+});
 
 describe("DomainStateMachine", () => {
 	it("exposes transition triggers as machine inputs", () => {

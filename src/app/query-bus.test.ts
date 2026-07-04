@@ -1,5 +1,6 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
 import type { Result } from "@shirudo/result";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { UnregisteredHandlerError } from "../core/errors";
 import type { Query } from "./query";
 import { QueryBus } from "./query-bus";
 
@@ -201,6 +202,30 @@ describe("QueryBus", () => {
 					type: "UnknownQuery",
 				}),
 			).rejects.toThrow("No handler registered");
+		});
+
+		it("executeUnsafe throws the named UnregisteredHandlerError", async () => {
+			const bus = new QueryBus();
+
+			await expect(
+				bus.executeUnsafe({ type: "UnknownQuery" }),
+			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+		});
+
+		it("surfaces an unregistered query type as a named UnregisteredHandlerError through the errorMapper", async () => {
+			const bus = new QueryBus<Record<string, unknown>, unknown>({
+				errorMapper: (thrown) => thrown,
+			});
+
+			const result = await bus.execute({ type: "UnknownQuery" });
+
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
+				expect(result.error).toBeInstanceOf(UnregisteredHandlerError);
+				const error = result.error as UnregisteredHandlerError;
+				expect(error.busKind).toBe("query");
+				expect(error.messageType).toBe("UnknownQuery");
+			}
 		});
 
 		it("should handle null results from query handlers", async () => {

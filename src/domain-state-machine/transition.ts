@@ -5,9 +5,8 @@ import type {
 	DomainTransitionOutcome,
 } from "./contracts";
 import {
-	copyDomainMachineDefinition,
+	ensureStableDomainMachineDefinition,
 	getTransition,
-	validateDomainMachineDefinition,
 } from "./definition";
 import {
 	DomainTransitionGuardRejectedError,
@@ -39,8 +38,7 @@ export function createInitialDomainMachineSnapshot<
 >(
 	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 ): DomainMachineSnapshot<TState, TContext> {
-	validateDomainMachineDefinition(definition);
-	const stableDefinition = copyDomainMachineDefinition(definition);
+	const stableDefinition = ensureStableDomainMachineDefinition(definition);
 	return createInitialDomainMachineSnapshotFromPrepared(stableDefinition);
 }
 
@@ -77,8 +75,7 @@ export function canTransitionDomainState<
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 	input: TInput,
 ): boolean {
-	validateDomainMachineDefinition(definition);
-	const stableDefinition = copyDomainMachineDefinition(definition);
+	const stableDefinition = ensureStableDomainMachineDefinition(definition);
 	const currentSnapshot = prepareDomainMachineSnapshot(
 		stableDefinition,
 		snapshot,
@@ -137,8 +134,7 @@ export function transitionDomainState<
 	snapshot: DomainMachineSnapshot<TState, TContext>,
 	input: TInput,
 ): DomainTransitionOutcome<TState, TContext, TOutput> {
-	validateDomainMachineDefinition(definition);
-	const stableDefinition = copyDomainMachineDefinition(definition);
+	const stableDefinition = ensureStableDomainMachineDefinition(definition);
 	const currentSnapshot = prepareDomainMachineSnapshot(
 		stableDefinition,
 		snapshot,
