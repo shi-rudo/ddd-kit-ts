@@ -1,3 +1,4 @@
+import { SnapshotSchemaMismatchError } from "../core/errors";
 import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
 import { isBuiltInObject } from "../utils/array/is-built-in";
@@ -247,14 +248,69 @@ export abstract class BaseAggregate<
 	 * `snapshotAt` is read from the kit's swappable clock, the same one
 	 * `createDomainEvent` stamps `occurredAt` from, so
 	 * `setClockFactory` / `withClockFactory` pin snapshot timestamps in
-	 * deterministic tests too.
+	 * deterministic tests too. `schemaVersion` is stamped from
+	 * {@link snapshotSchemaVersion} so a later restore can detect
+	 * snapshots written against an older `TSnapshotState` shape.
 	 */
 	public createSnapshot(): AggregateSnapshot<TSnapshotState> {
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
 			snapshotAt: now(),
+			schemaVersion: this.snapshotSchemaVersion,
 		};
+	}
+
+	/**
+	 * Schema version of the shape {@link toSnapshotState} produces.
+	 * Defaults to `1`. Bump it whenever `TSnapshotState` changes
+	 * incompatibly (renamed or removed fields, changed representations):
+	 * `createSnapshot` stamps it onto every snapshot, and the restore
+	 * paths compare it, so an outdated stored snapshot surfaces as a
+	 * `SnapshotSchemaMismatchError` at restore time (or is upgraded via
+	 * {@link migrateSnapshotState}) instead of crashing on the first
+	 * method call much later.
+	 */
+	protected readonly snapshotSchemaVersion: number = 1;
+
+	/**
+	 * Resolves a stored snapshot's state against the aggregate's current
+	 * snapshot schema: pass-through when the versions match (a missing
+	 * `schemaVersion` counts as `1`, the pre-versioning era), otherwise
+	 * routed through {@link migrateSnapshotState}. Called by both restore
+	 * paths BEFORE anything is assigned, so a rejected snapshot leaves
+	 * the aggregate untouched.
+	 */
+	protected resolveSnapshotState(
+		snapshot: AggregateSnapshot<TSnapshotState>,
+	): TSnapshotState {
+		const storedSchemaVersion = snapshot.schemaVersion ?? 1;
+		if (storedSchemaVersion === this.snapshotSchemaVersion) {
+			return snapshot.state;
+		}
+		return this.migrateSnapshotState(snapshot.state, storedSchemaVersion);
+	}
+
+	/**
+	 * Upgrade hook for snapshots written against an older
+	 * `TSnapshotState` shape. Receives the stored state as `unknown`
+	 * (its shape is, by definition, not the current `TSnapshotState`)
+	 * plus the schema version it was written with, and returns the
+	 * current shape. The default rejects with
+	 * `SnapshotSchemaMismatchError`: discard-and-refold from the full
+	 * event stream is the safe default strategy; override this only when
+	 * upgrading in place is cheaper than refolding.
+	 */
+	protected migrateSnapshotState(
+		_stored: unknown,
+		storedSchemaVersion: number,
+	): TSnapshotState {
+		throw new SnapshotSchemaMismatchError({
+			aggregateType: this.aggregateType,
+			aggregateId: String(this.id),
+			expectedSchemaVersion: this.snapshotSchemaVersion,
+			actualSchemaVersion: storedSchemaVersion,
+		});
 	}
 
 	/**

@@ -5,8 +5,12 @@ import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
 	assertEqual,
+	captureRejection,
 	chainContainsErrorNamed,
 	describeError,
+	loadAggregateOrFail,
+	runInContractEnvironment,
+	skippedContractTest,
 } from "./contract-assertions";
 
 /**
@@ -280,46 +284,20 @@ export function createRepositoryContractTests<
 >(harness: RepositoryContractHarness<TAgg, Evt>): RepositoryContractTest[] {
 	type Env = RepositoryContractEnvironment<TAgg, Evt>;
 
-	async function withEnvironment(
-		body: (env: Env) => Promise<void>,
-	): Promise<void> {
-		const env = await harness.createEnvironment();
-		let bodyFailed = false;
-		let bodyError: unknown;
-		try {
-			await body(env);
-		} catch (error) {
-			bodyFailed = true;
-			bodyError = error;
-		}
-		try {
-			await env.teardown?.();
-		} catch (teardownError) {
-			// A teardown failure (dropping a schema on an aborted pool)
-			// must never REPLACE the contract-violation diagnostic that is
-			// the suite's entire value. Only surface it when the body
-			// itself succeeded.
-			if (!bodyFailed) {
-				throw teardownError;
-			}
-		}
-		if (bodyFailed) {
-			throw bodyError;
-		}
-	}
+	// Runner plumbing shared with the event-sourced suite; see
+	// ./contract-assertions for the teardown-never-masks rule.
+	const withEnvironment = (body: (env: Env) => Promise<void>): Promise<void> =>
+		runInContractEnvironment(() => harness.createEnvironment(), body);
 
-	/** Load with a contract diagnostic instead of a bare TypeError downstream. */
-	async function loadOrFail(
+	const loadOrFail = (
 		repository: ContractRepository<TAgg>,
 		id: TAgg["id"],
-	): Promise<TAgg> {
-		const loaded = await repository.getById(id);
-		assert(
-			loaded !== null,
-			`getById(${String(id)}) returned null for an aggregate that must exist - broken hydration or a write that did not commit`,
+	): Promise<TAgg> =>
+		loadAggregateOrFail(
+			repository,
+			id,
+			"broken hydration or a write that did not commit",
 		);
-		return loaded;
-	}
 
 	/** Seed one aggregate with a single committed mutation; returns it persisted. */
 	async function seed(env: Env): Promise<TAgg> {
@@ -333,13 +311,6 @@ export function createRepositoryContractTests<
 
 	async function reload(env: Env, id: TAgg["id"]): Promise<TAgg> {
 		return env.run(({ repository }) => loadOrFail(repository, id));
-	}
-
-	function captureRejection(promise: Promise<unknown>): Promise<unknown> {
-		return promise.then(
-			() => undefined,
-			(error: unknown) => error,
-		);
 	}
 
 	// Sorted: eventIds are unique, so this is a multiset comparison. The
@@ -360,19 +331,10 @@ export function createRepositoryContractTests<
 	const insertsAreDuplicateChecked =
 		harness.insertsAreDuplicateChecked !== false;
 
-	function skippedTest(name: string, capability: string): RepositoryContractTest {
-		return {
-			name,
-			skipped: { capability },
-			run: async () => {
-				throw new Error(
-					`Repository contract test skipped: harness capability '${capability}' is not provided. ` +
-						`Bind skipped tests with it.skip ((test.skipped ? it.skip : it)(test.name, test.run)) ` +
-						`or provide the capability - each one closes a real OCC hole.`,
-				);
-			},
-		};
-	}
+	const skippedTest = (
+		name: string,
+		capability: string,
+	): RepositoryContractTest => skippedContractTest(name, capability);
 
 	const tests: RepositoryContractTest[] = [
 		{

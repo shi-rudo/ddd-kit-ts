@@ -232,7 +232,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
 
-	it("marks the duplicate-create test as skipped without createAggregateWithId - and a naive run() fails loud", async () => {
+	it("marks the duplicate-create test as skipped without createAggregateWithId; a naive run() fails loud", async () => {
 		const minimal = createInMemoryEsHarness();
 		minimal.createAggregateWithId = undefined;
 

@@ -21,17 +21,28 @@ export interface AggregateSnapshot<TState> {
 	/**
 	 * The state of the aggregate at the time of the snapshot.
 	 */
-	state: TState;
+	readonly state: TState;
 
 	/**
 	 * The version of the aggregate when the snapshot was taken.
 	 */
-	version: Version;
+	readonly version: Version;
 
 	/**
 	 * Timestamp when the snapshot was created.
 	 */
-	snapshotAt: Date;
+	readonly snapshotAt: Date;
+
+	/**
+	 * Schema version of the SHAPE of `state` (the aggregate's declared
+	 * `snapshotSchemaVersion`), stamped by `createSnapshot`. Distinct from
+	 * {@link version}, which counts mutations: this field says "which
+	 * shape does the stored state have", so a restore can detect a
+	 * snapshot written against an older `TSnapshotState` and migrate or
+	 * discard it instead of crashing later. Optional: absent on snapshots
+	 * written by older kit versions, which restore treats as schema `1`.
+	 */
+	readonly schemaVersion?: number;
 }
 
 /**

@@ -132,6 +132,23 @@ export interface OnceOptions {
 export interface OutboxRecord<Evt extends AnyDomainEvent> {
 	dispatchId: string;
 	event: Evt;
+
+	/**
+	 * Failed delivery attempts so far. Populated by implementations that
+	 * track dispatch failures (see {@link DispatchTrackingOutbox});
+	 * plain `Outbox` implementations may omit it.
+	 */
+	attempts?: number;
+}
+
+/** A record that exhausted its delivery attempts; see {@link DispatchTrackingOutbox.deadLetters}. */
+export interface DeadLetterRecord<Evt extends AnyDomainEvent> {
+	dispatchId: string;
+	event: Evt;
+	/** Failed delivery attempts when the record was dead-lettered. */
+	attempts: number;
+	/** Human-readable rendering of the last delivery error, if recorded. */
+	lastError?: string;
 }
 
 /**
@@ -166,8 +183,15 @@ export interface Outbox<Evt extends AnyDomainEvent> {
 
 	/**
 	 * Returns up to `limit` outbox records that have not yet been
-	 * dispatched. The dispatcher polls this on a schedule. When `limit`
-	 * is omitted, the implementation decides on a default page size.
+	 * dispatched, **in the order `add()` persisted them** (commit order).
+	 * The ordering is part of the port contract: `withCommit` promises
+	 * subscribers per-aggregate causal order, and a sequential dispatcher
+	 * can only honor that promise when this read is ordered. SQL-backed
+	 * implementations need a monotonic position column (an auto-increment
+	 * primary key works) and an `ORDER BY` on it; a bare `SELECT` returns
+	 * rows in storage order, not insertion order. The dispatcher polls
+	 * this on a schedule. When `limit` is omitted, the implementation
+	 * decides on a default page size.
 	 */
 	getPending: (limit?: number) => Promise<ReadonlyArray<OutboxRecord<Evt>>>;
 
@@ -177,4 +201,40 @@ export interface Outbox<Evt extends AnyDomainEvent> {
 	 * already-marked ids.
 	 */
 	markDispatched: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
+}
+
+/**
+ * Optional extension of {@link Outbox} for dispatchers that track
+ * delivery failures. Without failure tracking, a poison message (an
+ * event whose delivery always throws) is redelivered forever: it comes
+ * back from every `getPending` poll, blocks per-aggregate ordering
+ * behind it, and burns the dispatcher's cycles. This extension gives
+ * the dispatcher a bounded-retry story: report each failed delivery via
+ * {@link markFailed}; the implementation moves records past its
+ * attempt ceiling to a dead-letter set that `getPending` no longer
+ * returns, and {@link deadLetters} exposes them for alerting, manual
+ * inspection, and redelivery (deliver by hand, then ack via
+ * `markDispatched`, which also clears dead-lettered records).
+ *
+ * See the outbox guide's dispatcher recipe for the retry-then-dead-letter
+ * loop this port shape supports.
+ */
+export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
+	extends Outbox<Evt> {
+	/**
+	 * Records one failed delivery attempt for the given record:
+	 * increments its attempt count (surfaced as
+	 * {@link OutboxRecord.attempts}) and, once the implementation's
+	 * ceiling is reached, moves the record to the dead-letter set.
+	 * A no-op for unknown or already-dispatched ids (a late failure
+	 * report after a successful retry must not resurrect the record).
+	 */
+	markFailed: (dispatchId: string, error?: unknown) => Promise<void>;
+
+	/**
+	 * Records that exhausted their delivery attempts. They no longer
+	 * come back from `getPending`; wire this to alerting so poison
+	 * messages surface instead of rotting silently.
+	 */
+	deadLetters: () => Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
 }
