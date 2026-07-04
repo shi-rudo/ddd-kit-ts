@@ -5,9 +5,13 @@ import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
 	assertEqual,
+	captureRejection,
 	chainContainsErrorNamed,
 	chainContainsErrorNamedAnyOf,
 	describeError,
+	loadAggregateOrFail,
+	runInContractEnvironment,
+	skippedContractTest,
 } from "./contract-assertions";
 
 /**
@@ -158,41 +162,20 @@ export function createEsRepositoryContractTests<
 ): EsRepositoryContractTest[] {
 	type Env = EsRepositoryContractEnvironment<TAgg, Evt>;
 
-	async function withEnvironment(
-		body: (env: Env) => Promise<void>,
-	): Promise<void> {
-		const env = await harness.createEnvironment();
-		let bodyFailed = false;
-		let bodyError: unknown;
-		try {
-			await body(env);
-		} catch (error) {
-			bodyFailed = true;
-			bodyError = error;
-		}
-		try {
-			await env.teardown?.();
-		} catch (teardownError) {
-			if (!bodyFailed) {
-				throw teardownError;
-			}
-		}
-		if (bodyFailed) {
-			throw bodyError;
-		}
-	}
+	// Runner plumbing shared with the state-stored suite; see
+	// ./contract-assertions for the teardown-never-masks rule.
+	const withEnvironment = (body: (env: Env) => Promise<void>): Promise<void> =>
+		runInContractEnvironment(() => harness.createEnvironment(), body);
 
-	async function loadOrFail(
+	const loadOrFail = (
 		repository: EsContractRepository<TAgg>,
 		id: TAgg["id"],
-	): Promise<TAgg> {
-		const loaded = await repository.getById(id);
-		assert(
-			loaded !== null,
-			`getById(${String(id)}) returned null for an aggregate whose stream must exist - broken replay read or a write that did not commit`,
+	): Promise<TAgg> =>
+		loadAggregateOrFail(
+			repository,
+			id,
+			"broken replay read or a write that did not commit",
 		);
-		return loaded;
-	}
 
 	/** Seed one aggregate (creation event only, committed). */
 	async function seed(env: Env): Promise<TAgg> {
@@ -207,13 +190,6 @@ export function createEsRepositoryContractTests<
 		return env.run(({ repository }) => loadOrFail(repository, id));
 	}
 
-	function captureRejection(promise: Promise<unknown>): Promise<unknown> {
-		return promise.then(
-			() => undefined,
-			(error: unknown) => error,
-		);
-	}
-
 	// Ordered ids: streams are ordered, so stream assertions compare the
 	// exact sequence (unlike the outbox, whose read-back order is not
 	// part of the environment contract).
@@ -226,22 +202,10 @@ export function createEsRepositoryContractTests<
 	const snapshotState = harness.snapshotState;
 	const createAggregateWithId = harness.createAggregateWithId;
 
-	function skippedTest(
+	const skippedTest = (
 		name: string,
 		capability: string,
-	): EsRepositoryContractTest {
-		return {
-			name,
-			skipped: { capability },
-			run: async () => {
-				throw new Error(
-					`Repository contract test skipped: harness capability '${capability}' is not provided. ` +
-						`Bind skipped tests with it.skip ((test.skipped ? it.skip : it)(test.name, test.run)) ` +
-						`or provide the capability.`,
-				);
-			},
-		};
-	}
+	): EsRepositoryContractTest => skippedContractTest(name, capability);
 
 	const tests: EsRepositoryContractTest[] = [
 		{
@@ -272,7 +236,11 @@ export function createEsRepositoryContractTests<
 						"writer A's event must reach the stream on commit",
 					);
 
-					// Writer B appends from its stale baseline.
+					// Writer B appends a TWO-event batch from its stale baseline:
+					// the exact-ids assertion below then also proves the rejected
+					// append was atomic (no prefix of the batch landed), port
+					// contract point 2.
+					harness.mutate(staleB);
 					harness.mutate(staleB);
 					const rejection = await captureRejection(
 						env.run(async ({ repository }) => {
@@ -281,7 +249,7 @@ export function createEsRepositoryContractTests<
 					);
 					assert(
 						rejection !== undefined,
-						"the second writer's commit must reject - it appended on a stale expectedVersion instead (append guard missing?)",
+						"the second writer's commit must reject; it appended on a stale expectedVersion instead (append guard missing?)",
 					);
 					assert(
 						chainContainsErrorNamed(rejection, "ConcurrencyConflictError"),
@@ -293,7 +261,7 @@ export function createEsRepositoryContractTests<
 					const finalStream = await env.committedStreamEvents(seeded.id);
 					assert(
 						deepEqual(orderedIds(finalStream), orderedIds(streamAfterA)),
-						"the stream must contain exactly the winning writer's events in order - a rejected append must leave the stream untouched",
+						"the stream must contain exactly the winning writer's events in order: a rejected append must leave the stream untouched",
 					);
 
 					// The reloaded fold equals writer A's aggregate.
@@ -314,11 +282,11 @@ export function createEsRepositoryContractTests<
 					}
 
 					// The outbox carries the same committed events (as stamped
-					// copies with identical eventIds) - nothing from B.
+					// copies with identical eventIds); nothing from B.
 					const outbox = await env.committedOutboxEvents();
 					assert(
 						deepEqual(sortedIds(outbox), sortedIds(streamAfterA)),
-						"the outbox must contain exactly the committed events (compared by eventId) - nothing from the stale writer",
+						"the outbox must contain exactly the committed events (compared by eventId); nothing from the stale writer",
 					);
 				}),
 		},
@@ -344,7 +312,7 @@ export function createEsRepositoryContractTests<
 					const stream = await env.committedStreamEvents(aggregate.id);
 					assert(
 						deepEqual(orderedIds(stream), emittedIds),
-						"the committed stream must contain exactly the emitted events in emission order - reordering breaks every consumer's fold",
+						"the committed stream must contain exactly the emitted events in emission order; reordering breaks every consumer's fold",
 					);
 
 					// Post-commit lifecycle on the saved instance.
@@ -412,7 +380,7 @@ export function createEsRepositoryContractTests<
 						const second = await repository.getById(seeded.id);
 						assert(
 							first !== null && first === second,
-							"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
+							"repeated loads within one unit of work must return the SAME instance (identity map); distinct instances double-harvest events",
 						);
 					});
 				}),
@@ -486,7 +454,7 @@ export function createEsRepositoryContractTests<
 					const afterOne = await env.committedStreamEvents(aggregate.id, 1);
 					assert(
 						deepEqual(orderedIds(afterOne), orderedIds(full.slice(1))),
-						"fromVersion=1 must return exactly the events after stream position 1, in order - restoreFromSnapshotWithEvents replays exactly this window",
+						"fromVersion=1 must return exactly the events after stream position 1, in order; restoreFromSnapshotWithEvents replays exactly this window",
 					);
 
 					const afterAll = await env.committedStreamEvents(
@@ -505,7 +473,7 @@ export function createEsRepositoryContractTests<
 	tests.push(
 		createAggregateWithId
 			? {
-					name: "duplicate create: two creators racing on one stream - the second append conflicts and the stream is untouched",
+					name: "duplicate create: two creators racing on one stream; the second append conflicts and the stream is untouched",
 					run: () =>
 						withEnvironment(async (env) => {
 							const seeded = await seed(env);
@@ -536,7 +504,7 @@ export function createEsRepositoryContractTests<
 						}),
 				}
 			: skippedTest(
-					"duplicate create: two creators racing on one stream - the second append conflicts and the stream is untouched",
+					"duplicate create: two creators racing on one stream; the second append conflicts and the stream is untouched",
 					"createAggregateWithId",
 				),
 	);

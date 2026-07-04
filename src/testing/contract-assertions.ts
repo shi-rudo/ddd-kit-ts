@@ -1,8 +1,94 @@
 /**
- * Assertion and error-matching helpers shared by the repository contract
- * suites (state-stored and event-sourced). Internal to the testing entry:
- * not re-exported from `@shirudo/ddd-kit/testing`.
+ * Assertion, error-matching, and suite-runner helpers shared by the
+ * repository contract suites (state-stored and event-sourced). Internal
+ * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
+
+/**
+ * Runs one contract-test body against a fresh environment and tears it
+ * down in a finally-like discipline with one subtle, load-bearing rule:
+ * a teardown failure (dropping a schema on an aborted pool) must never
+ * REPLACE the contract-violation diagnostic that is the suite's entire
+ * value. It only surfaces when the body itself succeeded.
+ */
+export async function runInContractEnvironment<
+	Env extends { teardown?(): Promise<void> },
+>(
+	createEnvironment: () => Promise<Env>,
+	body: (env: Env) => Promise<void>,
+): Promise<void> {
+	const env = await createEnvironment();
+	let bodyFailed = false;
+	let bodyError: unknown;
+	try {
+		await body(env);
+	} catch (error) {
+		bodyFailed = true;
+		bodyError = error;
+	}
+	try {
+		await env.teardown?.();
+	} catch (teardownError) {
+		if (!bodyFailed) {
+			throw teardownError;
+		}
+	}
+	if (bodyFailed) {
+		throw bodyError;
+	}
+}
+
+/** Resolves to the rejection reason, or `undefined` when the promise resolved. */
+export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+	return promise.then(
+		() => undefined,
+		(error: unknown) => error,
+	);
+}
+
+/**
+ * Load with a contract diagnostic instead of a bare TypeError downstream.
+ * `suspectHint` names the suite-specific likely cause (broken hydration
+ * vs broken replay read).
+ */
+export async function loadAggregateOrFail<TAgg, TId>(
+	repository: { getById(id: TId): Promise<TAgg | null> },
+	id: TId,
+	suspectHint: string,
+): Promise<TAgg> {
+	const loaded = await repository.getById(id);
+	assert(
+		loaded !== null,
+		`getById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
+	);
+	return loaded;
+}
+
+/**
+ * A capability-gated test entry whose `run()` rejects loudly, so a naive
+ * binding that ignores `skipped` fails instead of green-no-op'ing.
+ * Structurally assignable to both suites' test-entry types.
+ */
+export function skippedContractTest(
+	name: string,
+	capability: string,
+): {
+	name: string;
+	run: () => Promise<void>;
+	skipped: { capability: string };
+} {
+	return {
+		name,
+		skipped: { capability },
+		run: async () => {
+			throw new Error(
+				`Repository contract test skipped: harness capability '${capability}' is not provided. ` +
+					`Bind skipped tests with it.skip ((test.skipped ? it.skip : it)(test.name, test.run)) ` +
+					`or provide the capability; each one closes a real OCC hole.`,
+			);
+		},
+	};
+}
 
 export function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {

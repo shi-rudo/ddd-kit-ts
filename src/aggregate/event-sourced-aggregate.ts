@@ -234,8 +234,15 @@ export abstract class EventSourcedAggregate<
 		// BEFORE anything is assigned, so there is nothing to roll back;
 		// a DomainError maps to Err (infrastructure boundary, same contract
 		// as the replay loop below), everything else propagates.
-		const restored = this.fromSnapshotState(snapshot.state);
+		// Resolve, convert, and validate BEFORE anything is assigned, all
+		// under the method's documented Result contract: a DomainError from
+		// a migrateSnapshotState override, fromSnapshotState, or
+		// validateState maps to Err (the repository's discard-and-refold
+		// branch must see it), while SnapshotSchemaMismatchError (an
+		// InfrastructureError) and other non-domain throws propagate.
+		let restored: TState;
 		try {
+			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
 			this.validateState(restored);
 		} catch (e) {
 			if (e instanceof DomainError) return err(e);

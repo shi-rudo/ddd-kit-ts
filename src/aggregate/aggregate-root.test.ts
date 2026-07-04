@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
+import { SnapshotSchemaMismatchError } from "../core/errors";
 import {
 	AggregateRoot,
 	type AggregateConfig,
@@ -170,6 +171,101 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(snapshot.state.status).toBe("active");
 			expect(snapshot.version).toBe(2);
 			expect(snapshot.snapshotAt).toBeInstanceOf(Date);
+		});
+
+		it("stamps schemaVersion 1 on snapshots by default", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			expect(aggregate.createSnapshot().schemaVersion).toBe(1);
+		});
+
+		it("stamps an overridden snapshotSchemaVersion", () => {
+			class VersionedAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "VersionedAggregate";
+				protected override readonly snapshotSchemaVersion = 3;
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+			}
+
+			const aggregate = new VersionedAggregate("test-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+			expect(aggregate.createSnapshot().schemaVersion).toBe(3);
+		});
+
+		it("rejects a snapshot with a mismatched schemaVersion by default (SnapshotSchemaMismatchError)", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			const stale: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+				schemaVersion: 99,
+			};
+
+			expect(() => aggregate.restoreFromSnapshot(stale)).toThrow(
+				SnapshotSchemaMismatchError,
+			);
+			// Nothing moved: the mismatch is detected before any assignment.
+			expect(aggregate.state.value).toBe(10);
+			expect(aggregate.persistedVersion).toBeUndefined();
+		});
+
+		it("treats a legacy snapshot without schemaVersion as schema 1", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			const legacy: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+				// no schemaVersion: written by an older kit version
+			};
+
+			aggregate.restoreFromSnapshot(legacy);
+
+			expect(aggregate.state.value).toBe(42);
+			expect(aggregate.version).toBe(5);
+		});
+
+		it("routes a mismatched snapshot through an overridden migrateSnapshotState", () => {
+			class MigratingAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "MigratingAggregate";
+				protected override readonly snapshotSchemaVersion = 2;
+
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState);
+				}
+
+				protected override migrateSnapshotState(
+					stored: unknown,
+					storedSchemaVersion: number,
+				): TestState {
+					// v1 snapshots carried only { value }; status arrived in v2.
+					if (storedSchemaVersion === 1) {
+						const v1 = stored as { value: number };
+						return { value: v1.value, status: "inactive" };
+					}
+					throw new Error(
+						`no migration from snapshot schema ${storedSchemaVersion}`,
+					);
+				}
+			}
+
+			const aggregate = new MigratingAggregate("test-1" as TestId, {
+				value: 0,
+				status: "active",
+			});
+			const v1Snapshot = {
+				state: { value: 42 } as unknown as TestState,
+				version: 5 as Version,
+				snapshotAt: new Date(),
+				schemaVersion: 1,
+			};
+
+			aggregate.restoreFromSnapshot(v1Snapshot);
+
+			expect(aggregate.state).toEqual({ value: 42, status: "inactive" });
+			expect(aggregate.version).toBe(5);
+			expect(aggregate.persistedVersion).toBe(5);
 		});
 
 		it("stamps snapshotAt via the installed clock factory", () => {

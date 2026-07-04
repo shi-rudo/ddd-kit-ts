@@ -4,6 +4,7 @@ import { isBaseError } from "@shirudo/base-error";
 import {
 	DomainError,
 	MissingHandlerError,
+	SnapshotSchemaMismatchError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
@@ -919,6 +920,68 @@ describe("EventSourcedAggregate", () => {
 
 			expect(aggregate.state.value).toBe(42);
 			expect(aggregate.state.status).toBe("active");
+		});
+
+		it("maps a DomainError from a migrateSnapshotState override to Err (the documented Result contract)", () => {
+			class UnmigratableSnapshotError extends DomainError {
+				constructor() {
+					super("this v1 snapshot cannot be upgraded");
+				}
+			}
+
+			class MigratingEsAggregate extends TestEventSourcedAggregate {
+				protected override readonly snapshotSchemaVersion = 2;
+
+				protected override migrateSnapshotState(): TestState {
+					throw new UnmigratableSnapshotError();
+				}
+			}
+
+			const originalState: TestState = { value: 5, status: "inactive" };
+			const aggregate = new MigratingEsAggregate(
+				"test-1" as TestId,
+				originalState,
+			);
+			const v1Snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 7 as Version,
+				snapshotAt: new Date(),
+				schemaVersion: 1,
+			};
+
+			// Repository code written to the documented contract ("catches
+			// DomainError and returns it as an Err") must see the Err and
+			// fall back to a full refold, not an uncaught throw.
+			const result = aggregate.restoreFromSnapshotWithEvents(v1Snapshot, []);
+
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
+				expect(result.error).toBeInstanceOf(UnmigratableSnapshotError);
+			}
+			expect(aggregate.state).toEqual(originalState);
+			expect(aggregate.version).toBe(0);
+			expect(aggregate.persistedVersion).toBeUndefined();
+		});
+
+		it("throws SnapshotSchemaMismatchError for a mismatched snapshot schema (not an Err) and leaves the aggregate untouched", () => {
+			const originalState: TestState = { value: 5, status: "inactive" };
+			const aggregate = new TestEventSourcedAggregate(
+				"test-1" as TestId,
+				originalState,
+			);
+			const stale: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 7 as Version,
+				snapshotAt: new Date(),
+				schemaVersion: 99,
+			};
+
+			expect(() =>
+				aggregate.restoreFromSnapshotWithEvents(stale, []),
+			).toThrow(SnapshotSchemaMismatchError);
+			expect(aggregate.state).toEqual(originalState);
+			expect(aggregate.version).toBe(0);
+			expect(aggregate.persistedVersion).toBeUndefined();
 		});
 
 		it("throws UnreplayableAggregateError when restoring onto an aggregate with pending events", () => {

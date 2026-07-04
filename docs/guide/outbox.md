@@ -99,9 +99,42 @@ Lifecycle:
 2. A separate **outbox dispatcher** polls `getPending` and forwards the events to subscribers / external brokers.
 3. After successful dispatch, the dispatcher calls `markDispatched(dispatchIds)` so they don't come back next poll.
 
+### Ordering is part of the port contract
+
+`getPending` must return records **in the order `add()` persisted them** (commit order). `withCommit` promises subscribers per-aggregate causal order, and a sequential dispatcher can only honor that promise when this read is ordered. SQL-backed implementations need a monotonic position column (an auto-increment primary key works) plus an `ORDER BY` on it: a bare `SELECT` returns rows in storage order, not insertion order, and silently violates the causal-order promise under load.
+
 ### Idempotency
 
 Both `add` and `markDispatched` should be idempotent; the dispatcher may retry on partial failure. A unique constraint on `(eventId)` for the outbox row is the standard pattern; the implementation can reuse the event's own `eventId` as the `dispatchId` (the common, clean choice).
+
+### Failure tracking and dead letters (`DispatchTrackingOutbox`)
+
+Without failure tracking, a poison message (an event whose delivery always throws) is redelivered forever: it comes back from every poll, blocks per-aggregate ordering behind it, and burns dispatcher cycles. The optional `DispatchTrackingOutbox` extension adds the bounded-retry story:
+
+```ts
+interface DispatchTrackingOutbox<Evt> extends Outbox<Evt> {
+  markFailed(dispatchId: string, error?: unknown): Promise<void>;
+  deadLetters():                                   Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
+}
+```
+
+The dispatcher loop becomes: deliver, `markDispatched` on success, `markFailed` on failure, **and stop the batch on the first failure**. Continuing past a failed record would deliver later events of the same aggregate before the failed earlier one, breaking exactly the per-aggregate causal order the `getPending` contract exists to preserve; the next poll retries from the failed record (the implementation counts attempts, surfaced as `OutboxRecord.attempts`, so the dispatcher can add backoff per record):
+
+```ts
+for (const record of await outbox.getPending(batchSize)) {
+  try {
+    await broker.publish(record.event);
+    await outbox.markDispatched([record.dispatchId]);
+  } catch (error) {
+    await outbox.markFailed(record.dispatchId, error);
+    break; // later records must not overtake a failed predecessor
+  }
+}
+```
+
+A dispatcher that partitions by aggregate (`record.event.aggregateId`) can scope the stop to the failing aggregate's lane instead of the whole batch; the invariant is per-aggregate order, not global order.
+
+Wire `deadLetters()` to alerting: a growing dead-letter set is an incident signal, not a log line. **Dead-lettering deliberately forfeits ordering for that aggregate's successors**: once the poison record leaves the pending set, later events of the same aggregate flow without their predecessor; that trade-off (bounded retries over strict order) is the point of the ceiling, and the alert is what makes it safe. Recovery paths: fix the cause and re-`add` the event (requeues it with a fresh attempts budget), or deliver by hand and ack via `markDispatched` (which clears dead-lettered records too). `InMemoryOutbox` implements the extension with a configurable `maxDeliveryAttempts` (default 5).
 
 ### Reference implementation
 

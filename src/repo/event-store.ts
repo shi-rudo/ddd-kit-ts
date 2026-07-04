@@ -65,6 +65,15 @@ export interface ReadStreamOptions {
  * separately hands the outbox stamped copies. The store's own position
  * is the ordering authority for replay (see the event-sourcing guide's
  * note on `aggregateVersion`).
+ *
+ * **One save per aggregate per unit of work, after all mutations.**
+ * `pendingEvents` are cleared and `persistedVersion` advances only AFTER
+ * the commit (`markPersisted`), so a second `save` of the same instance
+ * inside one unit of work would re-append the already-appended events
+ * with a stale `expectedVersion` and deterministically conflict, with no
+ * concurrent writer in sight. This is the same rule the state-stored
+ * path documents as "mutate first, save last" on `withCommit`; it is
+ * not specific to event sourcing.
  */
 export interface EventStore<Evt extends AnyDomainEvent> {
 	/**
@@ -79,7 +88,15 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     the stream), throw `ConcurrencyConflictError` from
 	 *     `@shirudo/ddd-kit` carrying the expected and actual stream
 	 *     versions; map your store's native conflict signal to it instead
-	 *     of letting a raw driver error escape.
+	 *     of letting a raw driver error escape. One sanctioned exception:
+	 *     an adapter that can DISTINGUISH the duplicate-create race
+	 *     (`expectedVersion: 0` against a stream that already exists,
+	 *     typically a unique violation on the first position) may throw
+	 *     `DuplicateAggregateError` for that case instead, matching the
+	 *     state-stored insert path. It is deliberately NOT retryable:
+	 *     replaying the same append cannot succeed; the use case resolves
+	 *     the create race (load the existing aggregate, or surface HTTP
+	 *     409). The contract suite accepts both errors for this race.
 	 *  2. **Atomicity:** all events land or none do; a rejected append
 	 *     leaves the stream untouched.
 	 *  3. **Order:** events are stored in the given array order, appended

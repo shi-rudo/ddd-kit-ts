@@ -28,7 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Greg Young's stream-per-aggregate model: the stream id is the aggregate
   id and the stream version is the event count, aligned with the aggregate
   version. Adapters map their store's conflict signal to
-  `ConcurrencyConflictError`; rejected appends must be atomic.
+  `ConcurrencyConflictError` (for the duplicate-create race specifically,
+  an adapter that can distinguish it may throw the non-retryable
+  `DuplicateAggregateError` instead, matching the state-stored insert
+  path); rejected appends must be atomic, which the contract suite's
+  mandatory test now exercises with a two-event stale batch. The port
+  documents the one-save-per-aggregate-per-unit-of-work rule (the ES
+  spelling of the existing "mutate first, save last" contract).
 - New `InMemoryEventStore` reference implementation (tests, single-process
   workers, demos), with the same rollback caveat as `InMemoryOutbox`.
 - New `createEsRepositoryContractTests` in `@shirudo/ddd-kit/testing`: the
@@ -39,6 +45,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate-create race (capability-gated), and `fromVersion` slicing.
   The in-repo reference adapter doubles as the example harness and pins
   that the suite exposes blind appends and reversed reads.
+
+### Added: snapshot schema versioning
+
+- `AggregateSnapshot` carries an optional `schemaVersion`, stamped by
+  `createSnapshot` from the new overridable `snapshotSchemaVersion` on the
+  aggregate (default `1`). Both restore paths (`restoreFromSnapshot`,
+  `restoreFromSnapshotWithEvents`) compare it before anything is assigned:
+  a mismatched stored snapshot throws the new `SnapshotSchemaMismatchError`
+  (an `InfrastructureError`; catch it in the repository, discard the
+  snapshot, and refold from the stream), or is upgraded through the new
+  overridable `migrateSnapshotState(stored, storedSchemaVersion)` hook.
+  A `DomainError` thrown by a `migrateSnapshotState` override (an
+  unupgradable snapshot) rides `restoreFromSnapshotWithEvents`'
+  documented `Err` channel like every other domain rejection, so the
+  repository's discard-and-refold branch sees it.
+  Previously a snapshot written against an older `TSnapshotState` shape
+  surfaced as an undefined-field crash on the first method call after a
+  much later restore. Snapshots from older kit versions (no
+  `schemaVersion`) are treated as schema `1`.
+
+### Changed: `AggregateSnapshot` fields are `readonly` at the type level
+
+- `state`, `version`, and `snapshotAt` are now declared `readonly`,
+  matching what snapshots are (point-in-time values) and what the kit's
+  restore paths already assumed. **Compile impact:** code that assigned to
+  these fields after construction (`snapshot.version = ...`) will no
+  longer typecheck. That pattern was never supported (a mutated snapshot
+  desyncs state from version); construct a new snapshot object instead.
+  Object-literal construction is unaffected. Runtime behavior is
+  unchanged.
+
+### Added: outbox ordering contract and dead-letter affordances
+
+- `Outbox.getPending` now documents ordering as part of the port
+  contract: records come back in the order `add()` persisted them (commit
+  order). `withCommit` has always promised subscribers per-aggregate
+  causal order; a dispatcher can only honor it when this read is ordered,
+  so SQL-backed implementations need a monotonic position column plus an
+  `ORDER BY`. This is a contract clarification, not a behavior change in
+  the kit; `InMemoryOutbox` already preserved insertion order and now
+  pins it with a test.
+- New optional `DispatchTrackingOutbox` extension port: `markFailed`
+  records a failed delivery attempt (surfaced as the new optional
+  `OutboxRecord.attempts`), and records past the implementation's attempt
+  ceiling move to a dead-letter set exposed by `deadLetters()` (new
+  `DeadLetterRecord` type), so a poison message stops blocking the
+  dispatcher instead of being redelivered forever. `InMemoryOutbox`
+  implements the extension with a configurable `maxDeliveryAttempts`
+  (default `5`). Re-`add` semantics are part of the contract: re-adding a
+  pending eventId refreshes the stored copy (a retried commit re-stamps
+  `aggregateVersion`) while the delivery attempt count survives, and
+  re-adding a dead-lettered event requeues it with a fresh attempts
+  budget instead of silently succeeding while the event stays dead. The
+  outbox guide documents the retry-then-dead-letter dispatcher loop,
+  including stopping the batch on the first failure so later events
+  cannot overtake a failed predecessor of the same aggregate.
 
 ### Added: opt-in deep freeze for entity and aggregate state
 

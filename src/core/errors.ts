@@ -270,6 +270,53 @@ export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggre
 }
 
 /**
+ * Thrown on snapshot restore (`restoreFromSnapshot`,
+ * `restoreFromSnapshotWithEvents`) when the stored snapshot carries a
+ * different schema version than the aggregate's declared
+ * `snapshotSchemaVersion` and no `migrateSnapshotState` override handles
+ * the upgrade. Without the check, a snapshot written against an older
+ * `TSnapshotState` shape would surface as an undefined-field crash on
+ * the first method call after a much later restore.
+ *
+ * `InfrastructureError` because the storage boundary served outdated
+ * data; the schema evolving past stored snapshots is an expected
+ * lifecycle event, not a programming bug. NOT retryable: the recovery
+ * is a code path, not a repeat. Either override `migrateSnapshotState`
+ * on the aggregate (upgrade old shapes in place), or catch this error
+ * in the repository, discard the snapshot, and refold from the full
+ * event stream / reload from the source of truth.
+ */
+export interface SnapshotSchemaMismatchErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly expectedSchemaVersion: number;
+	readonly actualSchemaVersion: number;
+}
+
+export class SnapshotSchemaMismatchError extends InfrastructureError<"SnapshotSchemaMismatchError"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly expectedSchemaVersion: number;
+	readonly actualSchemaVersion: number;
+
+	constructor(options: SnapshotSchemaMismatchErrorOptions) {
+		super(
+			`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
+				`the aggregate expects snapshot schema ${options.expectedSchemaVersion}, ` +
+				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
+				`migrateSnapshotState to upgrade old snapshots, or discard the snapshot ` +
+				`and refold from the full event stream.`,
+			undefined,
+			{ name: "SnapshotSchemaMismatchError" },
+		);
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.expectedSchemaVersion = options.expectedSchemaVersion;
+		this.actualSchemaVersion = options.actualSchemaVersion;
+	}
+}
+
+/**
  * Thrown by `IRepository.save()` when the aggregate's expected version
  * does not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-

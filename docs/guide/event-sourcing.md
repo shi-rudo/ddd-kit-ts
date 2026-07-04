@@ -98,6 +98,8 @@ class OrderRepository {
 }
 ```
 
+**Save once per aggregate per unit of work, after all mutations.** `pendingEvents` are cleared and `persistedVersion` advances only after the commit, so a second `save` of the same instance inside one unit of work re-appends the already-appended events with a stale `expectedVersion` and deterministically conflicts. This is the same "mutate first, save last" rule the [outbox guide](./outbox.md) documents for the state-stored path.
+
 `markPersisted` is library-internal under the canonical `withCommit` path. It stays on `IAggregateRoot` for consumers running their own orchestration (call it manually **after** harvesting `pendingEvents`; stamp `aggregateVersion = aggregate.version` onto the harvested events if your consumers rely on it; `withCommit` does this automatically). See [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ::: warning Stream events and outbox events are not byte-identical

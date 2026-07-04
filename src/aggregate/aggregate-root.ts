@@ -318,7 +318,7 @@ export abstract class AggregateRoot<
 	 * @param snapshot - The snapshot to restore from
 	 */
 	public restoreFromSnapshot(snapshot: AggregateSnapshot<TSnapshotState>): void {
-		const restored = this.fromSnapshotState(snapshot.state);
+		const restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
 		this.validateState(restored);
 		this._state = this.freezeState(restored);
 		this.markRestored(snapshot.version);
