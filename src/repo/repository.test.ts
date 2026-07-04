@@ -1,15 +1,15 @@
-import { describe, expect, it } from "vitest";
-import type { Id } from "../core/id";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
-import type { Version } from "../aggregate/aggregate";
-import type { IQueryableRepository, IRepository } from "./repository";
 import { isBaseError } from "@shirudo/base-error";
+import { describe, expect, it } from "vitest";
+import type { Version } from "../aggregate/aggregate";
+import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
 	InfrastructureError,
 } from "../core/errors";
+import type { Id } from "../core/id";
+import type { IQueryableRepository, IRepository } from "./repository";
 
 type OrderId = Id<"OrderId">;
 type Order = IAggregateRoot<OrderId> & {
@@ -36,7 +36,10 @@ describe("IAggregateRoot interface contract", () => {
 		const stub: IAggregateRoot<OrderId> = {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
-			markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
+			markPersisted: () => {},
+			pendingEvents: [],
+			clearPendingEvents: () => {},
+			persistedVersion: undefined,
 		};
 		postSave(stub, 1 as Version);
 		expect(typeof stub.markPersisted).toBe("function");
@@ -69,8 +72,8 @@ describe("Repository contract", () => {
 					this.byId.set(aggregate.id, aggregate);
 				}
 
-				async delete(id: OrderId): Promise<void> {
-					this.byId.delete(id);
+				async delete(aggregate: Order): Promise<void> {
+					this.byId.delete(aggregate.id);
 				}
 			}
 
@@ -80,7 +83,10 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
+				markPersisted: () => {},
+				pendingEvents: [],
+				clearPendingEvents: () => {},
+				persistedVersion: undefined,
 			};
 
 			expect(await repo.exists("o-1" as OrderId)).toBe(false);
@@ -97,10 +103,38 @@ describe("Repository contract", () => {
 		});
 	});
 
+	describe("delete contract (v3: one shape across both repository interfaces)", () => {
+		it("type-level: an id-only delete implementation no longer conforms", () => {
+			// v3 unified delete on the aggregate-taking shape: deletion-event
+			// harvest, the identity-map tombstone, and an OCC predicate all
+			// need the instance, which a bare id cannot provide.
+			class V2ShapedRepo implements IRepository<Order, OrderId> {
+				async getById(): Promise<Order | null> {
+					return null;
+				}
+				async getByIdOrFail(id: OrderId): Promise<Order> {
+					throw new AggregateNotFoundError({ aggregateType: "Order", id });
+				}
+				async exists(): Promise<boolean> {
+					return false;
+				}
+				async save(): Promise<void> {}
+				// @ts-expect-error v3 contract: delete takes the aggregate, not the bare id
+				async delete(id: OrderId): Promise<void> {
+					void id;
+				}
+			}
+			expect(new V2ShapedRepo()).toBeDefined();
+		});
+	});
+
 	describe("@shirudo/base-error integration", () => {
 		it("library errors carry timestamp + name from BaseError", () => {
 			const before = Date.now();
-			const e = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" });
+			const e = new AggregateNotFoundError({
+				aggregateType: "Order",
+				id: "o-1",
+			});
 			const after = Date.now();
 
 			expect(e.name).toBe("AggregateNotFoundError");
@@ -110,14 +144,22 @@ describe("Repository contract", () => {
 		});
 
 		it("AggregateNotFoundError carries the aggregate type and id in its technical message", () => {
-			const e = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" });
+			const e = new AggregateNotFoundError({
+				aggregateType: "Order",
+				id: "o-1",
+			});
 
 			expect(e.message).toContain("Order(o-1)"); // technical
 		});
 
 		it("ConcurrencyConflictError marks itself retryable via @shirudo/base-error isRetryable", async () => {
 			const { isRetryable } = await import("@shirudo/base-error");
-			const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+			const e = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 5,
+			});
 
 			expect(e.retryable).toBe(true);
 			expect(isRetryable(e)).toBe(true);
@@ -125,13 +167,21 @@ describe("Repository contract", () => {
 
 		it("AggregateNotFoundError is NOT retryable (the row isn't there; retry won't help)", async () => {
 			const { isRetryable } = await import("@shirudo/base-error");
-			const e = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" });
+			const e = new AggregateNotFoundError({
+				aggregateType: "Order",
+				id: "o-1",
+			});
 
 			expect(isRetryable(e)).toBe(false);
 		});
 
 		it("library errors serialise to JSON for structured logging", () => {
-			const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+			const e = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 5,
+			});
 			const json = e.toJSON();
 
 			expect(json.name).toBe("ConcurrencyConflictError");
@@ -150,7 +200,12 @@ describe("Repository contract", () => {
 				}
 			}
 
-			const root = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+			const root = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 5,
+			});
 			const wrapped = new FailedToProcessOrderError(root);
 
 			expect(getRootCause(wrapped)).toBe(root);
@@ -165,14 +220,22 @@ describe("Repository contract", () => {
 
 	describe("Error hierarchy: InfrastructureError vs DomainError", () => {
 		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
-			const error = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" });
+			const error = new AggregateNotFoundError({
+				aggregateType: "Order",
+				id: "o-1",
+			});
 			expect(error).toBeInstanceOf(InfrastructureError);
 			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
 		it("ConcurrencyConflictError is an InfrastructureError, not a DomainError", () => {
-			const error = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+			const error = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 5,
+			});
 			expect(error).toBeInstanceOf(InfrastructureError);
 			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
@@ -193,7 +256,12 @@ describe("Repository contract", () => {
 
 	describe("ConcurrencyConflictError contract", () => {
 		it("carries aggregate type, id, expected and actual versions", () => {
-			const error = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+			const error = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 5,
+			});
 			expect(error).toBeInstanceOf(InfrastructureError);
 			expect(error.aggregateType).toBe("Order");
 			expect(error.aggregateId).toBe("o-1");
@@ -234,7 +302,10 @@ describe("Repository contract", () => {
 					version: 3 as never,
 					customerId: "c-1",
 					total: 100,
-					markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
+					markPersisted: () => {},
+					pendingEvents: [],
+					clearPendingEvents: () => {},
+					persistedVersion: undefined,
 				}),
 			).rejects.toBeInstanceOf(ConcurrencyConflictError);
 		});
@@ -254,7 +325,8 @@ describe("Repository contract", () => {
 				}
 				async getByIdOrFail(id: OrderId): Promise<Order> {
 					const existing = this.byId.get(id);
-					if (!existing) throw new AggregateNotFoundError({ aggregateType: "Order", id });
+					if (!existing)
+						throw new AggregateNotFoundError({ aggregateType: "Order", id });
 					return existing;
 				}
 				async exists(id: OrderId): Promise<boolean> {
@@ -263,8 +335,8 @@ describe("Repository contract", () => {
 				async save(aggregate: Order): Promise<void> {
 					this.byId.set(aggregate.id, aggregate);
 				}
-				async delete(id: OrderId): Promise<void> {
-					this.byId.delete(id);
+				async delete(aggregate: Order): Promise<void> {
+					this.byId.delete(aggregate.id);
 				}
 				async findOne(filter: Predicate<Order>): Promise<Order | null> {
 					for (const o of this.byId.values()) if (filter(o)) return o;
@@ -281,14 +353,20 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
+				markPersisted: () => {},
+				pendingEvents: [],
+				clearPendingEvents: () => {},
+				persistedVersion: undefined,
 			});
 			await repo.save({
 				id: "o-2" as OrderId,
 				version: 1 as never,
 				customerId: "c-2",
 				total: 250,
-				markPersisted: () => {}, pendingEvents: [], clearPendingEvents: () => {}, persistedVersion: undefined,
+				markPersisted: () => {},
+				pendingEvents: [],
+				clearPendingEvents: () => {},
+				persistedVersion: undefined,
 			});
 
 			const found = await repo.find((o) => o.total > 200);

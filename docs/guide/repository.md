@@ -1,6 +1,6 @@
 # Repository
 
-In DDD, a Repository is a collection illusion for aggregates: load by id, save the whole aggregate, delete by id. The kit splits the contract in two:
+In DDD, a Repository is a collection illusion for aggregates: load by id, save the whole aggregate, delete the whole aggregate. The kit splits the contract in two:
 
 - **`IRepository<TAgg, TId>`**: id-canonical CRUD. Every aggregate has one.
 - **`IQueryableRepository<TAgg, TId, TFilter>`**: adds filter-based querying. Opt-in, parameterised over the persistence layer's native filter shape.
@@ -13,7 +13,7 @@ interface IRepository<TAgg extends IAggregateRoot<TId>, TId extends Id<string>> 
   getByIdOrFail(id: TId):      Promise<TAgg>;       // throws AggregateNotFoundError
   exists(id: TId):             Promise<boolean>;
   save(aggregate: TAgg):       Promise<void>;
-  delete(id: TId):             Promise<void>;
+  delete(aggregate: TAgg):     Promise<void>;
 }
 ```
 
@@ -256,7 +256,7 @@ Dirty tracking is exactly as sound as the kit's existing immutability convention
 
 ### Deletion and Domain Events
 
-`delete(id)` is **pure persistence**: it removes the row by id and nothing else. The contract takes only the id, so there's no aggregate to harvest pending events from.
+`delete(aggregate)` is **pure persistence**: it removes the aggregate's row and nothing else. Since v3 the contract takes the AGGREGATE (one shape across `IRepository` and `IUnitOfWorkRepository`): deletion-event harvest, the identity-map tombstone, and an OCC predicate all need the instance, which a bare id cannot provide. Event harvest stays the orchestrator's job.
 
 ::: tip OCC applies to deletes too
 When a delete races with concurrent updates in a way your domain cares about (cancel-vs-modify races), guard the delete with the same version predicate as updates: `DELETE FROM orders WHERE id = $id AND version = $persistedVersion`, throwing `ConcurrencyConflictError` on zero affected rows. An unguarded delete is last-write-wins by construction: acceptable for GC-style cleanup (Pattern 3), rarely acceptable for user-initiated deletion of contended aggregates.
@@ -264,7 +264,7 @@ When a delete races with concurrent updates in a way your domain cares about (ca
 
 Before reaching for it, ask whether *"delete"* is the right domain verb at all. Most user-facing "deletes" are something else in the domain language: *cancel*, *archive*, *close*, *deactivate*, *terminate*, *withdraw*, *expire*. Those are **state transitions**, not row removals; they have proper names in the ubiquitous language and they record events. If your use case has a proper name, use it.
 
-`delete(id)` belongs in the toolkit for the genuinely different cases: regulated data must physically vanish, an aggregate has no domain meaning anymore, or you're cleaning up infrastructure rows that were never real domain objects in the first place.
+`delete(aggregate)` belongs in the toolkit for the genuinely different cases: regulated data must physically vanish, an aggregate has no domain meaning anymore, or you're cleaning up infrastructure rows that were never real domain objects in the first place. **Id-only bulk cleanup deliberately has no port method:** loading aggregates one by one just to purge them at scale is waste; declare a repository-specific method (e.g. `purgeExpired(before: Date)`) on your concrete class instead.
 
 ::: info Event-Sourcing note
 In pure event-sourced systems `IRepository.delete` is rarely meaningful: the aggregate's end-of-lifecycle lives in the stream as an event (`Closed`, `Terminated`), and the identity persists in the event log forever. `delete` applies primarily to state-stored aggregates and to snapshot / projection tables.
@@ -274,7 +274,7 @@ Three canonical patterns, applied per use case:
 
 #### 1. State transition that records an event (the most common case)
 
-When the user says "delete the order" but the domain actually means *cancel*, *archive*, or *close*, model it as a state transition with a domain method that records the corresponding event. The row stays in the table; a status column marks the transition. `delete(id)` is never called.
+When the user says "delete the order" but the domain actually means *cancel*, *archive*, or *close*, model it as a state transition with a domain method that records the corresponding event. The row stays in the table; a status column marks the transition. `delete` is never called.
 
 ```ts
 // Domain method on the aggregate
@@ -306,7 +306,7 @@ The audit trail is preserved (the event documents *who* archived *what* and *whe
 
 #### 2. Hard-delete with event harvest
 
-When the row genuinely must disappear from the primary store (privacy/regulatory deletion such as GDPR right-to-be-forgotten, data-retention purge after a contractual window, true subscription-termination) but the disappearance itself is a domain fact subscribers care about, record the deletion event on the aggregate first, then call `delete(id)` inside the same transactional callback. Return the aggregate in `withCommit`'s `aggregates` array so its pending events flow through the outbox before the row is gone:
+When the row genuinely must disappear from the primary store (privacy/regulatory deletion such as GDPR right-to-be-forgotten, data-retention purge after a contractual window, true subscription-termination) but the disappearance itself is a domain fact subscribers care about, record the deletion event on the aggregate first, then call `delete(aggregate)` inside the same transactional callback. Return the aggregate in `withCommit`'s `aggregates` array so its pending events flow through the outbox before the row is gone, and mark it in `deleted` so the post-save `onPersisted` hook does not fire for a row that no longer exists:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -325,30 +325,38 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
   const orderRepository = makeOrderRepository(tx);
   const order = await orderRepository.getByIdOrFail(orderId);
   order.recordDeletion(reason);              // records the event
-  await orderRepository.delete(orderId);     // removes the row in the same tx
-  return { result: undefined, aggregates: [order] };
+  await orderRepository.delete(order);       // removes the row in the same tx
+  return { result: undefined, aggregates: [order], deleted: [order] };
 });
 ```
 
 Order of operations inside the transaction:
 
 1. `recordDeletion` puts `OrderDeleted` into `order.pendingEvents`
-2. `delete(orderId)` removes the row
+2. `delete(order)` removes the row
 3. `withCommit` harvests `order.pendingEvents` and writes them to the outbox, *still inside the transaction*, so the event and the row removal commit atomically
 4. After the transaction commits, downstream subscribers see `OrderDeleted` and react (clear caches, expire projections, etc.)
 
-The in-memory `order` object still has its version and (now-empty) state after `withCommit` calls `markPersisted`, but the caller typically discards the reference immediately, since the aggregate is gone.
+Because the aggregate is marked in `deleted`, `withCommit` clears its pending events directly instead of calling `markPersisted`; the caller typically discards the reference immediately, since the aggregate is gone.
 
 #### 3. Hard-delete without event
 
-When the aggregate has no domain meaning anymore and no subscriber needs to know (abandoned-cart cleanup, internal garbage collection, expired session rows), call `delete(id)` directly. No event, no `withCommit` ceremony:
+When the aggregate has no domain meaning anymore and no subscriber needs to know (a single abandoned cart, an expired session row), load it and call `delete(aggregate)` directly. No event, no `withCommit` ceremony:
 
 ```ts
 await scope.transactional(async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  await orderRepository.delete(orderId);
+  // getById, not getByIdOrFail: cleanup stays idempotent. A retried job
+  // (or a concurrent cleaner) finding the row already gone is a no-op,
+  // not an AggregateNotFoundError crash.
+  const order = await orderRepository.getById(orderId);
+  if (order) {
+    await orderRepository.delete(order);
+  }
 });
 ```
+
+For deletion **at scale** (nightly GC over thousands of expired rows), skip the port entirely: a repository-specific bulk method (`purgeExpired(before)`) issues one predicated statement instead of a load-then-delete per row.
 
 Skip this path if anything else in the system might care about the disappearance. The cost of recording a deletion event is small; the cost of subscribers silently going stale is much higher.
 

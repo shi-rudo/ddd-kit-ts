@@ -56,7 +56,6 @@ const INDEX_SURFACE = [
 	"ValueObject",
 	"analyzeDomainMachineDefinition",
 	"canTransitionDomainState",
-	"computeBackoffDelay",
 	"copyMetadata",
 	"createDomainEvent",
 	"createInitialDomainMachineSnapshot",

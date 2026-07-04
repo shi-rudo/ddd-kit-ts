@@ -1,22 +1,22 @@
 import { isBuiltInObject, REFERENCE_COMPARED_TAGS } from "./is-built-in";
 
-export type Key = string | symbol;
-export type PathSegment = string | number | symbol;
+export type DeepOmitKey = string | symbol;
+export type DeepOmitPathSegment = string | number | symbol;
 
 export interface DeepOmitOptions {
 	/**
 	 * Keys to ignore everywhere in the object tree.
 	 * Only applies to object properties, not Map/Set/TypedArray contents.
 	 */
-	readonly ignoreKeys?: readonly Key[];
+	readonly ignoreKeys?: readonly DeepOmitKey[];
 
 	/**
-	 * Fine-grained control: Key + path (without current key).
+	 * Fine-grained control: key + path (without current key).
 	 * Example path: ["user", "meta", 0, "data"]
 	 */
 	readonly ignoreKeyPredicate?: (
-		key: Key,
-		path: readonly PathSegment[],
+		key: DeepOmitKey,
+		path: readonly DeepOmitPathSegment[],
 	) => boolean;
 }
 
@@ -63,7 +63,7 @@ export function deepOmit<T>(value: T, options: DeepOmitOptions): T {
 	const visited = new WeakMap<object, unknown>();
 	// Materialise ignoreKeys as a Set once so the inner loop probes O(1).
 	const ignoreKeys = options.ignoreKeys
-		? new Set<Key>(options.ignoreKeys)
+		? new Set<DeepOmitKey>(options.ignoreKeys)
 		: undefined;
 	// With a path-sensitive predicate, a clone computed under one path must
 	// NOT be reused for the same object reached via another path (the
@@ -87,8 +87,8 @@ const PATH_SENSITIVE_VISIT_BUDGET = 1_000_000;
 function omitInternal(
 	value: unknown,
 	options: DeepOmitOptions,
-	ignoreKeys: ReadonlySet<Key> | undefined,
-	path: PathSegment[],
+	ignoreKeys: ReadonlySet<DeepOmitKey> | undefined,
+	path: DeepOmitPathSegment[],
 	visited: WeakMap<object, unknown>,
 	budget: { visits: number } | undefined,
 ): unknown {
@@ -218,7 +218,7 @@ function omitInternal(
 	return clone;
 }
 
-function arrayPathSegment(key: string | symbol): PathSegment {
+function arrayPathSegment(key: string | symbol): DeepOmitPathSegment {
 	if (typeof key === "symbol") return key;
 	const index = Number(key);
 	return Number.isInteger(index) &&
@@ -279,9 +279,9 @@ function cloneBuiltIn(obj: object, tag: string): unknown {
 }
 
 function shouldIgnoreKey(
-	key: Key,
-	path: readonly PathSegment[],
-	ignoreKeys: ReadonlySet<Key> | undefined,
+	key: DeepOmitKey,
+	path: readonly DeepOmitPathSegment[],
+	ignoreKeys: ReadonlySet<DeepOmitKey> | undefined,
 	options: DeepOmitOptions,
 ): boolean {
 	if (ignoreKeys?.has(key)) return true;

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking): one repository delete contract, on the aggregate
+
+- `IRepository.delete` now takes the AGGREGATE instead of the bare id,
+  unifying the delete shape with `IUnitOfWorkRepository` (which is now
+  simply the minimal subset of `IRepository`): deletion-event harvest,
+  the identity-map tombstone, and an OCC predicate on `persistedVersion`
+  all need the instance, which an id cannot provide. The contract-test
+  suites already used the aggregate-taking shape and are unchanged.
+- Id-only BULK cleanup deliberately has no port method: declare a
+  repository-specific method (e.g. `purgeExpired(before)`) instead of
+  loading aggregates one by one to purge them.
+- Migration: change `delete(id)` implementations and call sites to
+  `delete(aggregate)`; where only the id is at hand, load first
+  (`getByIdOrFail`), which the richer deletion flows require anyway.
+
+### Removed (breaking): internal exports and generic type names
+
+- `computeBackoffDelay` is no longer exported from the main entry. It has
+  been marked `@internal` since 2.x (exported only for its unit tests,
+  which already import the source module directly); the retry behavior it
+  implements is unchanged.
+- The `deepOmit` helper types `Key` and `PathSegment` are renamed to
+  `DeepOmitKey` and `DeepOmitPathSegment`: the old names polluted the
+  root namespace with generic identifiers. Hard rename, no aliases;
+  migration is a find-and-replace on the two type names (the shapes are
+  identical).
+
 ### Changed (breaking): `AggregateRoot.setState` requires the `bumpVersion` argument
 
 - `setState(newState, bumpVersion)` takes a REQUIRED boolean: every mutation

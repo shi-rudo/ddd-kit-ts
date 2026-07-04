@@ -7,8 +7,8 @@ export {
 	deepEqualExcept,
 } from "./utils/array/deep-equal-except";
 export {
+	type DeepOmitKey,
 	type DeepOmitOptions,
+	type DeepOmitPathSegment,
 	deepOmit,
-	type Key,
-	type PathSegment,
 } from "./utils/array/deep-omit";

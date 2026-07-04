@@ -1,14 +1,15 @@
-import type { Id } from "../core/id";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { Id } from "../core/id";
 
 /**
- * The canonical shape of a unit-of-work-facing repository. Unlike
- * `IRepository` below (id-canonical CRUD for `withCommit`-style
- * setups), `delete` takes the AGGREGATE: the unit of work needs the
- * instance for deletion-event harvest, the identity-map tombstone, and
- * the deleted-cannot-be-resaved gate. Ids stay branded (`TId extends
- * Id<string>`) end-to-end.
+ * The canonical shape of a unit-of-work-facing repository: the minimal
+ * subset of `IRepository` below (which adds `exists`). Since v3 both
+ * interfaces share ONE delete contract: `delete` takes the AGGREGATE,
+ * because deletion-event harvest, the identity-map tombstone, the
+ * deleted-cannot-be-resaved gate, and an OCC predicate all need the
+ * instance, which a bare id cannot provide. Ids stay branded
+ * (`TId extends Id<string>`) end-to-end.
  *
  * Implementing this interface is optional (the `UnitOfWork` registry
  * is structurally typed), but it is the single source of truth the
@@ -31,7 +32,8 @@ export interface IUnitOfWorkRepository<
  * Core repository contract for Aggregate Roots.
  *
  * In DDD a Repository is a "collection illusion" for aggregates: load by
- * identity, save the whole aggregate, delete by identity. Querying by
+ * identity, save the whole aggregate, delete the whole aggregate.
+ * Querying by
  * arbitrary criteria is a separate concern (CQRS read-side, ad-hoc bulk
  * operations) and lives on the `IQueryableRepository` extension below, so
  * write-side repositories don't have to implement query plumbing they
@@ -112,9 +114,18 @@ export interface IRepository<
 	save(aggregate: TAgg): Promise<void>;
 
 	/**
-	 * Removes the aggregate's row by id. Pure persistence: does NOT
-	 * harvest pending events from the aggregate (the contract takes
-	 * only the id, so there is no aggregate to harvest from).
+	 * Removes the aggregate's row. Since v3 the delete contract is
+	 * unified with `IUnitOfWorkRepository`: the parameter is the
+	 * AGGREGATE, because deletion-event harvest, the identity-map
+	 * tombstone, and an OCC predicate on `persistedVersion` all need the
+	 * instance, which a bare id cannot provide.
+	 *
+	 * Pure persistence: remove the row (predicated on
+	 * `aggregate.persistedVersion` when the domain cares about
+	 * delete-vs-update races); in unit-of-work repositories also call
+	 * `session.enrollDeleted(aggregate)`. Event harvest stays the
+	 * orchestrator's job: with plain `withCommit`, return the aggregate
+	 * in the `aggregates` array AND mark it in `deleted`.
 	 *
 	 * Before reaching for `delete`, ask whether the user-facing "delete"
 	 * is the right domain verb. Most are actually state transitions
@@ -122,29 +133,33 @@ export interface IRepository<
 	 * proper domain names that should be modelled as state changes plus
 	 * a recorded event, not as row removal.
 	 *
-	 * `delete(id)` belongs in the toolkit for three distinct cases, in
-	 * decreasing order of common occurrence (see
+	 * `delete(aggregate)` belongs in the toolkit for three distinct
+	 * cases, in decreasing order of common occurrence (see
 	 * `docs/guide/repository.md` → "Deletion and Domain Events" for
 	 * worked examples):
 	 *
 	 * 1. **State transition that records an event.** The user-facing
 	 *    "delete" maps to a real domain operation (e.g. `order.cancel()`,
 	 *    `order.archive()`). Call `save(aggregate)`; the row stays with
-	 *    a status column. `delete(id)` is never called by the use case.
+	 *    a status column. `delete` is never called by the use case.
 	 *
 	 * 2. **Hard-delete with event harvest.** The row genuinely must
 	 *    vanish (regulatory purge, retention-window expiry, true
 	 *    termination) *and* the disappearance is a domain fact
-	 *    subscribers care about. Inside `withCommit`'s transactional
-	 *    callback, record the deletion event on the aggregate, then
-	 *    call `delete(id)`. Return the aggregate in the `aggregates`
-	 *    array so `withCommit` harvests its pending events into the
-	 *    outbox before the row is gone.
+	 *    subscribers care about. Record the deletion event on the
+	 *    aggregate, then call `delete(aggregate)` inside the same
+	 *    transactional callback.
 	 *
 	 * 3. **Hard-delete without event.** Deletion is invisible to the
-	 *    domain (abandoned-cart cleanup, expired session rows). No
+	 *    domain (a single abandoned cart, an expired session row). No
 	 *    subscriber cares. If the entity has identity in the ubiquitous
 	 *    language, you probably want path 1 or 2 instead.
+	 *
+	 * **Id-only BULK cleanup deliberately has no port method:** loading
+	 * aggregates one by one just to delete them at scale is waste.
+	 * Declare a repository-specific method on your concrete class
+	 * instead (e.g. `purgeExpired(before: Date)`); the port stays an
+	 * aggregate-lifecycle contract.
 	 *
 	 * In pure event-sourced systems `delete` is rarely meaningful:
 	 * end-of-lifecycle there is a `Closed` / `Terminated` event in the
@@ -152,7 +167,7 @@ export interface IRepository<
 	 * primarily to state-stored aggregates and snapshot / projection
 	 * tables.
 	 */
-	delete(id: TId): Promise<void>;
+	delete(aggregate: TAgg): Promise<void>;
 }
 
 /**

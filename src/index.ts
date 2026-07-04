@@ -161,8 +161,9 @@ export type {
 	IRepository,
 	IUnitOfWorkRepository,
 } from "./repo/repository";
+// computeBackoffDelay is deliberately NOT exported: internal since 2.x
+// (unit-tested via direct source import), removed from the surface in v3.
 export {
-	computeBackoffDelay,
 	RetryingTransactionScope,
 	type RetryPolicy,
 } from "./repo/retrying-scope";
@@ -174,12 +175,12 @@ export type {
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,
+	type DeepOmitKey,
 	type DeepOmitOptions,
+	type DeepOmitPathSegment,
 	deepEqual,
 	deepEqualExcept,
 	deepOmit,
-	type Key,
-	type PathSegment,
 } from "./utils";
 
 // Validation
