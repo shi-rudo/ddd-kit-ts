@@ -41,8 +41,9 @@ type CommandTypeMap = Record<string, unknown>;
  */
 export interface CommandBusOptions<E = string> {
 	/**
-	 * Maps a thrown value (a handler that throws, or dispatch to an
-	 * unregistered command type) into the bus's error channel `E`. Defaults to
+	 * Maps a value thrown by a registered handler into the bus's error
+	 * channel `E`. Dispatching an unregistered command type is NOT mapped:
+	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
 	 * {@link describeThrown}, which renders any thrown value as a `string`.
 	 * base-error's `toStructuredError` fits this slot directly when `E` is a
 	 * `StructuredError`.
@@ -94,6 +95,8 @@ export interface ICommandBus<
 	 *
 	 * @param command - The command to execute
 	 * @returns Result containing the success value or an error of type `E`
+	 * @throws UnregisteredHandlerError when no handler is registered for
+	 *   `command.type` (a wiring bug; never delivered through the channel)
 	 */
 	execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
@@ -191,22 +194,23 @@ export class CommandBus<
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
 		const handler = this.handlers.get(command.type);
 		if (!handler) {
-			// A wiring bug, not a domain failure: the NAMED error type lets a
-			// typed error channel route it explicitly. Delivered through the
-			// channel (not thrown) for 2.x compatibility; the message is
-			// byte-identical to what the default string channel always carried.
-			return err(
-				this.errorMapper(
-					new UnregisteredHandlerError({
-						busKind: "command",
-						messageType: command.type,
-					}),
-				),
-			);
+			// A wiring bug, not a domain failure: thrown, never delivered
+			// through the error channel, so a generic err-branch cannot
+			// absorb a mis-wired bus (same crash-loud posture as
+			// MissingHandlerError). The errorMapper only sees failures a
+			// registered handler produced.
+			throw new UnregisteredHandlerError({
+				busKind: "command",
+				messageType: command.type,
+			});
 		}
 		try {
 			return (await handler(command)) as Result<R, E>;
 		} catch (error) {
+			// A NESTED dispatch's wiring bug (a handler awaiting execute for
+			// a typoed type) must stay a throw: the channel carries expected
+			// failures a registered handler produced, never a mis-wired bus.
+			if (error instanceof UnregisteredHandlerError) throw error;
 			return err(this.errorMapper(error));
 		}
 	}

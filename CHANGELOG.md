@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking): `AggregateRoot.setState` requires the `bumpVersion` argument
+
+- `setState(newState, bumpVersion)` takes a REQUIRED boolean: every mutation
+  states its optimistic-concurrency intent at the call site. The implicit
+  no-bump default permitted silent lost updates (a save whose version did
+  not move writes `WHERE version = v SET version = v`, so a concurrent
+  writer that loaded the same `v` commits over it without a
+  `ConcurrencyConflictError`); deprecated since 2.2.0, removed now.
+- The `autoVersionBump` option is removed; `AggregateConfig` is now an
+  alias of `EntityConfig` (the per-call argument replaced the config
+  fallback entirely).
+- Calls that bypass the compiler (an `Entity`-typed reference, plain
+  JavaScript) fail loud with a `TypeError` before anything mutates.
+- Migration: add the second argument to every `setState` call site
+  (`this.setState(next)` becomes `this.setState(next, true)`; pass
+  `false` only for data whose loss under a concurrent write is
+  acceptable). Aggregates configured with `autoVersionBump: true` pass
+  `true` per call; `commit()` users are unaffected. If you OVERRIDE
+  `setState`, keep the two-argument signature and delegate to `super`:
+  method bivariance also accepts a narrower single-argument override,
+  which would silently disable both guards for that subclass.
+
+### Changed (breaking): buses throw `UnregisteredHandlerError` for unregistered types
+
+- `CommandBus.execute` and `QueryBus.execute` THROW the
+  `UnregisteredHandlerError` introduced in 2.2.0 instead of returning it
+  through the error channel, completing the crash-loud wiring-bug posture
+  (`MissingHandlerError` precedent): a mis-wired bus fails the request
+  loudly instead of surfacing as an expected failure a generic err-branch
+  can absorb. The `errorMapper` now only ever sees failures a REGISTERED
+  handler produced. `executeUnsafe` already threw.
+- Migration: remove err-branches that matched the
+  "No handler registered" message (default string channel) or the
+  `UnregisteredHandlerError` type (typed channels); where the case must
+  be handled at a specific seam, catch the named type around `execute`.
+
 ## [2.2.0] - 2026-07-04
 
 ### Added: Unit of Work observability

@@ -66,21 +66,31 @@ describe("QueryBus", () => {
 			}
 		});
 
-		it("should return error result if no handler is registered", async () => {
+		it("throws UnregisteredHandlerError if no handler is registered (wiring bug, not an err)", async () => {
 			const bus = new QueryBus();
 
-			type UnknownQuery = Query & {
-				type: "UnknownQuery";
-			};
+			await expect(
+				bus.execute({ type: "UnknownQuery" }),
+			).rejects.toBeInstanceOf(UnregisteredHandlerError);
+		});
 
-			const result = await bus.execute({
-				type: "UnknownQuery",
+		it("rethrows a nested dispatch's wiring bug instead of absorbing it into the channel", async () => {
+			let mapperCalls = 0;
+			const bus = new QueryBus<Record<string, unknown>, unknown>({
+				errorMapper: (thrown) => {
+					mapperCalls += 1;
+					return thrown;
+				},
+			});
+			bus.register("Outer", async () => {
+				await bus.execute({ type: "TypoedNested" });
+				return null;
 			});
 
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toContain("No handler registered");
-			}
+			await expect(bus.execute({ type: "Outer" })).rejects.toBeInstanceOf(
+				UnregisteredHandlerError,
+			);
+			expect(mapperCalls).toBe(0);
 		});
 
 		it("should handle null results from query handlers", async () => {
@@ -212,20 +222,25 @@ describe("QueryBus", () => {
 			).rejects.toBeInstanceOf(UnregisteredHandlerError);
 		});
 
-		it("surfaces an unregistered query type as a named UnregisteredHandlerError through the errorMapper", async () => {
+		it("bypasses the errorMapper for unregistered types: the wiring bug throws instead of riding the channel", async () => {
+			let mapperCalls = 0;
 			const bus = new QueryBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => thrown,
+				errorMapper: (thrown) => {
+					mapperCalls += 1;
+					return thrown;
+				},
 			});
 
-			const result = await bus.execute({ type: "UnknownQuery" });
+			const rejection = await bus.execute({ type: "UnknownQuery" }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
 
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toBeInstanceOf(UnregisteredHandlerError);
-				const error = result.error as UnregisteredHandlerError;
-				expect(error.busKind).toBe("query");
-				expect(error.messageType).toBe("UnknownQuery");
-			}
+			expect(rejection).toBeInstanceOf(UnregisteredHandlerError);
+			const error = rejection as UnregisteredHandlerError;
+			expect(error.busKind).toBe("query");
+			expect(error.messageType).toBe("UnknownQuery");
+			expect(mapperCalls).toBe(0);
 		});
 
 		it("should handle null results from query handlers", async () => {
