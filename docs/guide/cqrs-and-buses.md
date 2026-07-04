@@ -76,6 +76,18 @@ bus.register("CreateOrder", async () => ok(42));
 
 Without a `TMap` the registration is loose (any key, any return type); the no-config path keeps working for tests and prototypes.
 
+### Unregistered handlers are wiring bugs
+
+Dispatching a type no handler was registered under produces a named
+`UnregisteredHandlerError` (`busKind`, `messageType`): a wiring bug (typo in
+the type string, missing `register` call at bootstrap), deliberately in the
+same crash-loud `BaseError` family as `MissingHandlerError`, never a
+`DomainError`. For 2.x compatibility, `execute` still delivers it through the
+error CHANNEL via the `errorMapper` (the default string channel keeps its
+exact message), so route it explicitly in typed channels instead of treating
+it like an expected domain failure; `QueryBus.executeUnsafe` throws it
+directly. v3 makes `execute` throw it too.
+
 ## Queries
 
 ```ts

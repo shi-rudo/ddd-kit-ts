@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@shirudo/result";
+import { UnregisteredHandlerError } from "../core/errors";
 import { describeThrown } from "./describe-thrown";
 import type { Query, QueryHandler } from "./query";
 
@@ -126,10 +127,7 @@ export interface IQueryBus<
 	register<
 		K extends keyof TMap & string,
 		Q extends Query & { type: K } = Query & { type: K },
-	>(
-		queryType: K,
-		handler: QueryHandler<Q, TMap[K]>,
-	): void;
+	>(queryType: K, handler: QueryHandler<Q, TMap[K]>): void;
 }
 
 /**
@@ -185,10 +183,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	register<
 		K extends keyof TMap & string,
 		Q extends Query & { type: K } = Query & { type: K },
-	>(
-		queryType: K,
-		handler: QueryHandler<Q, TMap[K]>,
-	): void {
+	>(queryType: K, handler: QueryHandler<Q, TMap[K]>): void {
 		// Silent replacement would turn the first handler into dead code
 		// with no signal; wiring bugs must surface at registration time.
 		if (this.handlers.has(queryType)) {
@@ -206,9 +201,14 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
 		const handler = this.handlers.get(query.type);
 		if (!handler) {
+			// Same posture as CommandBus: a named wiring-bug error through
+			// the channel (2.x compatibility; the wire message is unchanged).
 			return err(
 				this.errorMapper(
-					new Error(`No handler registered for query type: ${query.type}`),
+					new UnregisteredHandlerError({
+						busKind: "query",
+						messageType: query.type,
+					}),
 				),
 			);
 		}
@@ -227,7 +227,10 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
 		const handler = this.handlers.get(query.type);
 		if (!handler) {
-			throw new Error(`No handler registered for query type: ${query.type}`);
+			throw new UnregisteredHandlerError({
+				busKind: "query",
+				messageType: query.type,
+			});
 		}
 		return (await handler(query)) as R;
 	}

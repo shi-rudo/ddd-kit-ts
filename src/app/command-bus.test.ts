@@ -1,5 +1,6 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
 import { err, ok, type Result } from "@shirudo/result";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { UnregisteredHandlerError } from "../core/errors";
 import type { Command } from "./command";
 import { CommandBus } from "./command-bus";
 
@@ -46,9 +47,9 @@ describe("CommandBus", () => {
 
 			// Silent overwrite turns the first handler into dead code with
 			// no signal; wiring bugs must surface at startup.
-			expect(() =>
-				bus.register("CreateOrder", async () => ok("b")),
-			).toThrow(/already registered/);
+			expect(() => bus.register("CreateOrder", async () => ok("b"))).toThrow(
+				/already registered/,
+			);
 		});
 	});
 
@@ -91,6 +92,29 @@ describe("CommandBus", () => {
 			expect(result.isErr()).toBe(true);
 			if (result.isErr()) {
 				expect(result.error).toContain("No handler registered");
+			}
+		});
+
+		it("surfaces an unregistered command type as a named UnregisteredHandlerError through the errorMapper", async () => {
+			// The kit's posture treats mis-wiring as a bug that must not be
+			// absorbed by generic domain-error handling; the NAMED type lets
+			// a typed error channel route it explicitly (and pins the wire
+			// message the default string channel has always produced).
+			const bus = new CommandBus<Record<string, unknown>, unknown>({
+				errorMapper: (thrown) => thrown,
+			});
+
+			const result = await bus.execute({ type: "UnknownCommand" });
+
+			expect(result.isErr()).toBe(true);
+			if (result.isErr()) {
+				expect(result.error).toBeInstanceOf(UnregisteredHandlerError);
+				const error = result.error as UnregisteredHandlerError;
+				expect(error.busKind).toBe("command");
+				expect(error.messageType).toBe("UnknownCommand");
+				expect(error.message).toBe(
+					"No handler registered for command type: UnknownCommand",
+				);
 			}
 		});
 
@@ -231,7 +255,6 @@ describe("CommandBus", () => {
 		});
 	});
 });
-
 
 describe("CommandBus – non-Error throws keep their diagnostics", () => {
 	it("serialises a structured thrown object into the error string", async () => {

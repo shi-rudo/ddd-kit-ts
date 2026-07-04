@@ -129,6 +129,95 @@ export function copyDomainMachineDefinition<
 	});
 }
 
+/**
+ * Registry of definitions produced by `prepareDomainMachineDefinition`:
+ * validated, defensively copied, deeply frozen. The runtime membership
+ * proof lives in this module-private WeakSet (the stable copies are
+ * frozen and must stay pure data, so no runtime brand property); the
+ * compile-time proof is the required type brand on
+ * {@link PreparedDomainMachineDefinition}. Only
+ * `prepareDomainMachineDefinition` below adds to the set, so membership
+ * always implies validated + copied + frozen.
+ */
+const preparedDefinitions = new WeakSet<object>();
+
+declare const preparedDefinitionBrand: unique symbol;
+
+/**
+ * A machine definition that `prepareDomainMachineDefinition` has
+ * validated, defensively copied, and deeply frozen. Assignable wherever
+ * a plain `DomainMachineDefinition` is accepted; the reverse does NOT
+ * hold (the brand is required), so an API that demands a prepared
+ * definition rejects raw ones at compile time. The pure functions and
+ * the `DomainStateMachine` constructor recognize prepared definitions
+ * at runtime and skip their per-call validate-and-copy.
+ */
+export type PreparedDomainMachineDefinition<
+	TState extends string,
+	TContext,
+	TInput extends DomainMachineInput,
+	TOutput = never,
+> = DomainMachineDefinition<TState, TContext, TInput, TOutput> & {
+	readonly [preparedDefinitionBrand]: true;
+};
+
+/**
+ * The entry-point normalization every pure function and the
+ * `DomainStateMachine` constructor share: a prepared definition passes
+ * through untouched (already validated, copied, frozen); anything else
+ * pays the documented per-call validate-and-copy.
+ */
+export function ensureStableDomainMachineDefinition<
+	TState extends string,
+	TContext,
+	TInput extends DomainMachineInput,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
+): DomainMachineDefinition<TState, TContext, TInput, TOutput> {
+	if (preparedDefinitions.has(definition)) return definition;
+	validateDomainMachineDefinition(definition);
+	return copyDomainMachineDefinition(definition);
+}
+
+/**
+ * Validates and stabilizes a machine definition ONCE, for repeated use
+ * with the pure functions. Without it, `transitionDomainState` and
+ * `canTransitionDomainState` re-validate and defensively re-copy the
+ * WHOLE definition on every call (the documented safety of the raw
+ * path); on a hot dispatch path that is avoidable O(definition) work.
+ * The `DomainStateMachine` class does the equivalent once in its
+ * constructor; this export brings the same amortization to pure-API
+ * users:
+ *
+ * ```ts
+ * const prepared = prepareDomainMachineDefinition(orderLifecycle);
+ * // per dispatch: no re-validation, no definition copy
+ * const outcome = transitionDomainState(prepared, snapshot, input);
+ * ```
+ *
+ * The returned definition is a deeply frozen copy, isolated from later
+ * mutation of the input object. Preparing an already-prepared
+ * definition returns it unchanged.
+ */
+export function prepareDomainMachineDefinition<
+	TState extends string,
+	TContext,
+	TInput extends DomainMachineInput,
+	TOutput,
+>(
+	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
+): PreparedDomainMachineDefinition<TState, TContext, TInput, TOutput> {
+	const stable = ensureStableDomainMachineDefinition(definition);
+	preparedDefinitions.add(stable);
+	return stable as PreparedDomainMachineDefinition<
+		TState,
+		TContext,
+		TInput,
+		TOutput
+	>;
+}
+
 export function getTransition<
 	TState extends string,
 	TContext,
