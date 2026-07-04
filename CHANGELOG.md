@@ -5,7 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-07-05
+
+v3 is a deliberately small "tightening" major: every breaking change
+fails at COMPILE time instead of changing runtime semantics silently.
+Upgrade checklist (details and rationale in the sections below):
+
+1. Add the second argument to every `AggregateRoot.setState` call:
+   `this.setState(next)` becomes `this.setState(next, true)` (pass
+   `false` only for data whose loss under a concurrent write is
+   acceptable). Remove `autoVersionBump` from configs; overrides keep
+   the two-argument signature and delegate to `super`.
+2. Remove err-branches that matched the "No handler registered" message
+   or the `UnregisteredHandlerError` type on the bus error channel:
+   `execute` now throws it. Catch the named type where the case must be
+   handled at a specific seam.
+3. Change `repository.delete(id)` implementations and call sites to
+   `delete(aggregate)`; load first where only the id is at hand. Bulk
+   purges move to repository-specific methods off the port.
+4. Find-and-replace the `deepOmit` type names `Key` and `PathSegment`
+   with `DeepOmitKey` and `DeepOmitPathSegment`; stop importing
+   `computeBackoffDelay` (internal).
+5. Runtime and peers: Node 22+ and `@shirudo/base-error` ^8.
+
+### Changed (breaking): Node 22+ and `@shirudo/base-error` ^8
+
+- `engines.node` moves to `>=22`: Node 20 reached end-of-life on
+  2026-04-30, and a major is the right window to drop it. Cloudflare
+  Workers, Vercel Edge, Deno, and Bun remain supported unchanged.
+- The `@shirudo/base-error` peer dependency moves from `^7.1.1` to
+  `^8.0.0`. The kit compiles and its full test suite passes against 8.x
+  without source changes; consumers that use base-error's API directly
+  follow its own migration notes.
 
 ### Changed (breaking): one repository delete contract, on the aggregate
 
