@@ -19,31 +19,34 @@ import {
 
 describe("DomainError", () => {
 	it("is abstract; only consumer subclasses are constructible", () => {
-		class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {
+		class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
 			constructor(orderId: string) {
-				super(`Order ${orderId} is already shipped`);
+				super({
+					code: "ORDER_ALREADY_SHIPPED",
+					message: `Order ${orderId} is already shipped`,
+				});
 			}
 		}
 
 		const e = new OrderAlreadyShippedError("o-1");
 		expect(e).toBeInstanceOf(DomainError);
-		expect(e.name).toBe("OrderAlreadyShippedError");
+		expect(e.name).toBe("ORDER_ALREADY_SHIPPED");
 		expect(e.message).toBe("Order o-1 is already shipped");
 	});
 
 	it("is not an InfrastructureError, so App-layer catches stay separable", () => {
-		class OrderError extends DomainError {
+		class OrderError extends DomainError<"ORDER_ERROR"> {
 			constructor() {
-				super("nope");
+				super({ code: "ORDER_ERROR", message: "nope" });
 			}
 		}
 		expect(new OrderError()).not.toBeInstanceOf(InfrastructureError);
 	});
 
 	it("inherits BaseError surface: timestamp, isBaseError detection", () => {
-		class OrderError extends DomainError {
+		class OrderError extends DomainError<"ORDER_ERROR"> {
 			constructor() {
-				super("nope");
+				super({ code: "ORDER_ERROR", message: "nope" });
 			}
 		}
 		const before = Date.now();
@@ -57,9 +60,9 @@ describe("DomainError", () => {
 	});
 
 	it("propagates cause through the BaseError chain", () => {
-		class OrderError extends DomainError {
+		class OrderError extends DomainError<"ORDER_ERROR"> {
 			constructor(cause: unknown) {
-				super("wrapped", cause);
+				super({ code: "ORDER_ERROR", message: "wrapped", cause });
 			}
 		}
 		const root = new Error("driver-level failure");
@@ -72,9 +75,9 @@ describe("DomainError", () => {
 
 describe("InfrastructureError", () => {
 	it("is not a DomainError: distinct hierarchy from business-rule violations", () => {
-		class DriverTimeout extends InfrastructureError<"DriverTimeout"> {
+		class DriverTimeout extends InfrastructureError<"DRIVER_TIMEOUT"> {
 			constructor() {
-				super("timeout");
+				super({ code: "DRIVER_TIMEOUT", message: "timeout" });
 			}
 		}
 		const e = new DriverTimeout();
@@ -93,7 +96,7 @@ describe("MissingHandlerError", () => {
 		expect(e).not.toBeInstanceOf(DomainError);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
 		expect(isBaseError(e)).toBe(true);
-		expect(e.name).toBe("MissingHandlerError");
+		expect(e.name).toBe("MISSING_HANDLER");
 		expect(e.eventType).toBe("OrderShipped");
 		expect(e.message).toContain("OrderShipped");
 	});
@@ -150,7 +153,7 @@ describe("DuplicateAggregateError", () => {
 		const e = new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1" });
 		expect(e.aggregateType).toBe("Order");
 		expect(e.aggregateId).toBe("o-1");
-		expect(e.name).toBe("DuplicateAggregateError");
+		expect(e.name).toBe("DUPLICATE_AGGREGATE");
 		expect(e.message).toContain("Order(o-1)"); // technical
 	});
 
@@ -187,9 +190,9 @@ describe("ConcurrencyConflictError", () => {
 	});
 
 	it("retryable hint survives wrapping in a use-case-level DomainError", () => {
-		class FailedToConfirmOrderError extends DomainError {
+		class FailedToConfirmOrderError extends DomainError<"FAILED_TO_CONFIRM_ORDER"> {
 			constructor(cause: unknown) {
-				super("Failed to confirm order", cause);
+				super({ code: "FAILED_TO_CONFIRM_ORDER", message: "Failed to confirm order", cause });
 			}
 		}
 		const root = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
@@ -204,7 +207,7 @@ describe("ConcurrencyConflictError", () => {
 	it("serialises to JSON with name, message, and timestamp for structured logging", () => {
 		const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
 		const json = e.toJSON();
-		expect(json.name).toBe("ConcurrencyConflictError");
+		expect(json.name).toBe("CONCURRENCY_CONFLICT");
 		expect(json.message).toContain("Order(o-1)");
 		expect(json.timestamp).toBeDefined();
 	});
@@ -215,7 +218,7 @@ describe("EventHarvestError", () => {
 		const e = new EventHarvestError("bad event");
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
-		expect(e.name).toBe("EventHarvestError");
+		expect(e.name).toBe("EVENT_HARVEST_FAILED");
 	});
 });
 
@@ -224,7 +227,7 @@ describe("UnenrolledChangesError", () => {
 		const e = new UnenrolledChangesError("order-1");
 		expect(isBaseError(e)).toBe(true);
 		expect(e).not.toBeInstanceOf(InfrastructureError);
-		expect(e.name).toBe("UnenrolledChangesError");
+		expect(e.name).toBe("UNENROLLED_CHANGES");
 		expect(e.aggregateId).toBe("order-1");
 	});
 });

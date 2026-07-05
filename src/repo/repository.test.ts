@@ -137,7 +137,7 @@ describe("Repository contract", () => {
 			});
 			const after = Date.now();
 
-			expect(e.name).toBe("AggregateNotFoundError");
+			expect(e.name).toBe("AGGREGATE_NOT_FOUND");
 			expect(e.timestamp).toBeGreaterThanOrEqual(before);
 			expect(e.timestamp).toBeLessThanOrEqual(after);
 			expect(typeof e.timestampIso).toBe("string");
@@ -184,7 +184,7 @@ describe("Repository contract", () => {
 			});
 			const json = e.toJSON();
 
-			expect(json.name).toBe("ConcurrencyConflictError");
+			expect(json.name).toBe("CONCURRENCY_CONFLICT");
 			expect(json.message).toContain("Order(o-1)");
 			expect(json.timestamp).toBeDefined();
 		});
@@ -194,9 +194,13 @@ describe("Repository contract", () => {
 				"@shirudo/base-error"
 			);
 
-			class FailedToProcessOrderError extends DomainError<"FailedToProcessOrderError"> {
+			class FailedToProcessOrderError extends DomainError<"FAILED_TO_PROCESS_ORDER"> {
 				constructor(cause: unknown) {
-					super("Failed to process order", cause);
+					super({
+						code: "FAILED_TO_PROCESS_ORDER",
+						message: "Failed to process order",
+						cause,
+					});
 				}
 			}
 
@@ -242,9 +246,12 @@ describe("Repository contract", () => {
 		});
 
 		it("a consumer-derived DomainError is NOT an InfrastructureError", () => {
-			class OrderAlreadyConfirmedError extends DomainError {
+			class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
 				constructor() {
-					super("Order already confirmed");
+					super({
+						code: "ORDER_ALREADY_CONFIRMED",
+						message: "Order already confirmed",
+					});
 				}
 			}
 			const e = new OrderAlreadyConfirmedError();

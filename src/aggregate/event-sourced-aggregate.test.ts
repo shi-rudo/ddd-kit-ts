@@ -35,21 +35,24 @@ type TestEvent =
 	| TestEventDeactivated
 	| TestEventInvalid;
 
-class InvalidTestEventError extends DomainError {
+class InvalidTestEventError extends DomainError<"INVALID_TEST_EVENT"> {
 	constructor(reason: string) {
-		super(`Invalid test event: ${reason}`);
+		super({
+			code: "INVALID_TEST_EVENT",
+			message: `Invalid test event: ${reason}`,
+		});
 	}
 }
 
-class AlreadyActiveError extends DomainError {
+class AlreadyActiveError extends DomainError<"ALREADY_ACTIVE"> {
 	constructor() {
-		super("Already active");
+		super({ code: "ALREADY_ACTIVE", message: "Already active" });
 	}
 }
 
-class NegativeValueError extends DomainError {
+class NegativeValueError extends DomainError<"NEGATIVE_VALUE"> {
 	constructor() {
-		super("value must not be negative");
+		super({ code: "NEGATIVE_VALUE", message: "value must not be negative" });
 	}
 }
 
@@ -949,9 +952,12 @@ describe("EventSourcedAggregate", () => {
 		});
 
 		it("maps a DomainError from a migrateSnapshotState override to Err (the documented Result contract)", () => {
-			class UnmigratableSnapshotError extends DomainError {
+			class UnmigratableSnapshotError extends DomainError<"UNMIGRATABLE_SNAPSHOT"> {
 				constructor() {
-					super("this v1 snapshot cannot be upgraded");
+					super({
+						code: "UNMIGRATABLE_SNAPSHOT",
+						message: "this v1 snapshot cannot be upgraded",
+					});
 				}
 			}
 

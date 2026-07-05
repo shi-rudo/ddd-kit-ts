@@ -87,11 +87,9 @@ See [Domain Events → Factory bootstrap](./domain-events.md).
 
 Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.getById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
 
-### Calling `isChainRetryable(err)` on a wrapped ddd-kit error
+### Assuming the strict base-error helpers cannot see ddd-kit errors
 
-`@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`). ddd-kit's errors (`DomainError`, `InfrastructureError`, `ConcurrencyConflictError`, `AggregateNotFoundError`) extend `BaseError` directly without `code` / `category` (they discriminate by class, not RFC 9457 fields), so `isChainRetryable` returns `false` silently and OCC retry middleware skips the conflict.
-
-Use `someChainRetryable(err)` for whole-chain checks or `isRetryable(err)` for single-level. Same trap for `getRootCauseRetryable` and `getFirstRetryableCause`. See [Result vs Throw](./result-vs-throw.md).
+Outdated pre-v3 advice, inverted since the StructuredError migration: every kit error now carries `code` + `category` + `retryable`, so `isChainRetryable`, `isStructuredError`, `getRootCauseRetryable`, and `getFirstRetryableCause` all work on kit errors (a wrapped `ConcurrencyConflictError` IS found by `isChainRetryable`). `someChainRetryable(err)` remains the tolerant default (it also matches bare `retryable === true` markers from other libraries) and is what `RetryingTransactionScope` uses. See [Result vs Throw](./result-vs-throw.md).
 
 ## Architectural / testing mistakes
 

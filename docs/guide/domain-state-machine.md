@@ -276,10 +276,13 @@ Guards return `true`, `false`, or a concrete `DomainError`:
 
 ```ts
 class PaymentRequiredBeforeShippingError extends DomainError<
-  "PaymentRequiredBeforeShippingError"
+  "PAYMENT_REQUIRED_BEFORE_SHIPPING"
 > {
   constructor(readonly orderId: string) {
-    super(`Order ${orderId} must be paid before shipping.`);
+    super({
+      code: "PAYMENT_REQUIRED_BEFORE_SHIPPING",
+      message: `Order ${orderId} must be paid before shipping.`,
+    });
   }
 }
 

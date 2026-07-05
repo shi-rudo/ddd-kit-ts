@@ -48,8 +48,10 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  *
  * @example
  * ```typescript
- * class OrderAlreadyConfirmedError extends DomainError {
- *   constructor(id: OrderId) { super(`Order ${id} is already confirmed`); }
+ * class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
+ *   constructor(id: OrderId) {
+ *     super({ code: "ORDER_ALREADY_CONFIRMED", message: `Order ${id} is already confirmed` });
+ *   }
  * }
  *
  * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {

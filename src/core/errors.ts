@@ -1,26 +1,96 @@
-import { BaseError } from "@shirudo/base-error";
+import { StructuredError } from "@shirudo/base-error";
+
+/**
+ * **The kit's error identity model (since v3).** Every kit error is a
+ * structured error carrying exactly ONE identifier: `code`, a stable
+ * SCREAMING_SNAKE string, and `error.name === error.code` by design, so
+ * there is no name/code drift and nothing to keep in sync. `category`
+ * follows the class hierarchy mechanically (`"DOMAIN"`,
+ * `"INFRASTRUCTURE"`, or `"WIRING"` for the crash-loud family) and
+ * `retryable` is a plain boolean field.
+ *
+ * **No base-error adoption required.** Consumers branch with a plain
+ * `switch (error.code)`, catch via `instanceof DomainError` /
+ * `instanceof InfrastructureError` (exported from this kit), and read
+ * `retryable` / `cause` as ordinary properties. base-error's toolbox
+ * (`matchError` exhaustive dispatch, `isStructuredError`, the
+ * public-error catalog and `toProblem`) works on every kit error as an
+ * OPT-IN benefit on top, never as a prerequisite.
+ */
+
+/**
+ * Options for consumer subclasses of {@link DomainError} and
+ * {@link InfrastructureError}: the `code` (which also becomes
+ * `error.name`) and the technical `message` are the only obligations;
+ * `retryable` defaults to `false` and the category is fixed by the base.
+ */
+export interface KitErrorOptions<TCode extends string> {
+	/** Stable SCREAMING_SNAKE identifier; also becomes `error.name`. */
+	code: TCode;
+	/** Technical message for logs and debugging, never for clients. */
+	message: string;
+	/** Optional underlying error preserved in the cause chain. */
+	cause?: unknown;
+	/** Whether retrying the failed operation can succeed. Default `false`. */
+	retryable?: boolean;
+}
 
 /**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
  * violated. Consumers derive their own concrete errors (e.g.
- * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}`)
+ * `class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED">`)
  * for `instanceof`-style catching at the App-Service boundary, where
  * they typically map to HTTP 400 / business-rule responses.
  *
- * The library itself does **not** ship any concrete `DomainError`
- * subclass: the kit can't know your invariants.
+ * The library itself ships no business-rule `DomainError` subclass: the
+ * kit can't know your invariants. (The domain-state-machine module's
+ * transition errors are the structural exception.)
  *
- * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
- * surface (timestamps, cause chains, `toJSON()`, `isRetryable`, …). For
- * client-safe / localized messages, project errors through the opt-in
- * `@shirudo/base-error/public-error` subpath at the boundary; the technical
- * core deliberately carries no user-facing message.
+ * The `category` is fixed to `"DOMAIN"` and `retryable` defaults to
+ * `false`, so a subclass supplies only its `code` and `message`:
+ *
+ * ```ts
+ * class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
+ *   constructor(orderId: string) {
+ *     super({
+ *       code: "ORDER_ALREADY_SHIPPED",
+ *       message: `Order ${orderId} has already been shipped`,
+ *     });
+ *   }
+ * }
+ * ```
  */
 export abstract class DomainError<
-	Name extends string = string,
-> extends BaseError<Name> {}
+	TCode extends string = string,
+> extends StructuredError<TCode, "DOMAIN"> {
+	protected constructor(options: KitErrorOptions<TCode>) {
+		super({
+			code: options.code,
+			category: "DOMAIN",
+			retryable: options.retryable ?? false,
+			message: options.message,
+			cause: options.cause,
+		});
+	}
+}
+
+/**
+ * Internal base for the kit's crash-loud **WIRING** family: deterministic
+ * programming/configuration bugs that must fail the operation loudly and
+ * never be absorbed by generic domain or infrastructure handlers. One
+ * implementation of the `{ category: "WIRING", retryable: false }` shape
+ * so the family cannot drift. Exported for the kit's own modules only;
+ * not part of the package entries.
+ */
+export abstract class KitWiringError<
+	TCode extends string,
+> extends StructuredError<TCode, "WIRING"> {
+	protected constructor(code: TCode, message: string, cause?: unknown) {
+		super({ code, category: "WIRING", retryable: false, message, cause });
+	}
+}
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
@@ -30,14 +100,27 @@ export abstract class DomainError<
  * broken); they describe race conditions and missing rows at the
  * storage boundary.
  *
+ * The `category` is fixed to `"INFRASTRUCTURE"`; `retryable` defaults
+ * to `false` (opt in per subclass, see {@link ConcurrencyConflictError}).
+ *
  * Library-internal concrete subclasses: {@link AggregateNotFoundError},
  * {@link ConcurrencyConflictError}, {@link DuplicateAggregateError},
  * plus the unit-of-work lifecycle wrappers `CommitError` and
  * `RollbackError` (in `src/app/unit-of-work.ts`).
  */
 export abstract class InfrastructureError<
-	Name extends string = string,
-> extends BaseError<Name> {}
+	TCode extends string = string,
+> extends StructuredError<TCode, "INFRASTRUCTURE"> {
+	protected constructor(options: KitErrorOptions<TCode>) {
+		super({
+			code: options.code,
+			category: "INFRASTRUCTURE",
+			retryable: options.retryable ?? false,
+			message: options.message,
+			cause: options.cause,
+		});
+	}
+}
 
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
@@ -56,14 +139,16 @@ export abstract class InfrastructureError<
  * "any structured error from the kit or any other BaseError-using
  * library" at the App boundary.
  */
-export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
+export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 	constructor(
 		public readonly eventType: string,
 		cause?: unknown,
 	) {
-		super(`Missing handler for event type: ${eventType}`, cause, {
-			name: "MissingHandlerError",
-		});
+		super(
+			"MISSING_HANDLER",
+			`Missing handler for event type: ${eventType}`,
+			cause,
+		);
 	}
 }
 
@@ -84,14 +169,13 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
  * input at the application edge; model genuinely arbitrary keys with a
  * `Map`, not a plain object.
  */
-export class HostileStateKeyError extends BaseError<"HostileStateKeyError"> {
+export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 	constructor(public readonly key: string) {
 		super(
+			"HOSTILE_STATE_KEY",
 			`Entity state carries a hostile own "${key}" key, which can never ` +
 				"be legitimate domain state. Validate and strip untrusted input " +
 				"at the boundary, or model arbitrary keys with a Map.",
-			undefined,
-			{ name: "HostileStateKeyError" },
 		);
 	}
 }
@@ -121,17 +205,16 @@ export class HostileStateKeyError extends BaseError<"HostileStateKeyError"> {
  * only for a catch-up replay after the state was actually saved. The
  * class message itself stays remediation-neutral.
  */
-export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregateError"> {
+export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
 	constructor(
 		public readonly aggregateId: string,
 		reason: string,
 	) {
 		super(
+			"UNREPLAYABLE_AGGREGATE",
 			`Cannot restore or replay onto aggregate ${aggregateId}: ${reason}. ` +
 				"Reconstitute on a fresh instance (no factory-recorded events, " +
 				"no unpersisted mutations).",
-			undefined,
-			{ name: "UnreplayableAggregateError" },
 		);
 	}
 }
@@ -154,13 +237,13 @@ export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregate
  * why `withCommit` throws it directly and `UnitOfWork.run` passes it
  * through unchanged instead of wrapping it in `CommitError`.
  */
-export class EventHarvestError extends BaseError<"EventHarvestError"> {
+export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 	constructor(
 		message: string,
 		/** The `type` of the offending event, for programmatic routing. */
 		public readonly eventType?: string,
 	) {
-		super(message, undefined, { name: "EventHarvestError" });
+		super("EVENT_HARVEST_FAILED", message);
 	}
 }
 
@@ -178,22 +261,21 @@ export interface UnregisteredHandlerErrorOptions {
  * (typo in the type string, missing `register` call at bootstrap), not
  * a domain or infrastructure failure.
  *
- * Extends `BaseError` directly (same crash-loud family as
+ * Carries the `WIRING` category (same crash-loud family as
  * {@link MissingHandlerError}), and since v3 it is THROWN by `execute`
  * and `executeUnsafe` alike, never delivered through the error channel:
  * the channel carries expected failures a registered handler produced,
  * and a generic err-branch must not absorb a mis-wired bus. Catch it
  * only at a boundary that turns bugs into 500s.
  */
-export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerError"> {
+export class UnregisteredHandlerError extends KitWiringError<"UNREGISTERED_HANDLER"> {
 	readonly busKind: "command" | "query";
 	readonly messageType: string;
 
 	constructor(options: UnregisteredHandlerErrorOptions) {
 		super(
+			"UNREGISTERED_HANDLER",
 			`No handler registered for ${options.busKind} type: ${options.messageType}`,
-			undefined,
-			{ name: "UnregisteredHandlerError" },
 		);
 		this.busKind = options.busKind;
 		this.messageType = options.messageType;
@@ -222,22 +304,22 @@ export interface ErrorMapperFailedErrorOptions {
  * walks, retryability checks, and error-type mapping keep working) and
  * the mapper's own failure rides along as {@link mapperCause}.
  *
- * Extends `BaseError` directly (same crash-loud family as
+ * Carries the `WIRING` category (same crash-loud family as
  * {@link MissingHandlerError} and {@link UnregisteredHandlerError}): it is
  * thrown, never delivered through the error channel.
  */
-export class ErrorMapperFailedError extends BaseError<"ErrorMapperFailedError"> {
+export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"> {
 	readonly busKind: "command" | "query";
 	/** The value the errorMapper itself threw. */
 	readonly mapperCause: unknown;
 
 	constructor(options: ErrorMapperFailedErrorOptions) {
 		super(
+			"ERROR_MAPPER_FAILED",
 			`The ${options.busKind} bus errorMapper threw while mapping a ` +
 				"handler failure. The original handler error is preserved as " +
 				"cause; the mapper's own failure as mapperCause.",
 			options.handlerError,
-			{ name: "ErrorMapperFailedError" },
 		);
 		this.busKind = options.busKind;
 		this.mapperCause = options.mapperError;
@@ -269,15 +351,14 @@ export class ErrorMapperFailedError extends BaseError<"ErrorMapperFailedError"> 
  * invisible to the kit. The repository contract test suite remains the
  * full mitigation. See the Unit of Work guide.
  */
-export class UnenrolledChangesError extends BaseError<"UnenrolledChangesError"> {
+export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
 	constructor(public readonly aggregateId: string) {
 		super(
+			"UNENROLLED_CHANGES",
 			`Aggregate ${aggregateId} was loaded in this unit of work and has ` +
 				"pending events, but was never enrolled (no save), so its events " +
 				"would be silently dropped. Call repository.save(aggregate), and " +
 				"ensure save() calls session.enrollSaved before the row write.",
-			undefined,
-			{ name: "UnenrolledChangesError" },
 		);
 	}
 }
@@ -291,18 +372,17 @@ export class UnenrolledChangesError extends BaseError<"UnenrolledChangesError"> 
  * a row the delete just removed (or resurrect it), which is always a
  * use-case bug.
  *
- * Extends `BaseError` directly (same reasoning as
+ * Carries the `WIRING` category (same reasoning as
  * {@link MissingHandlerError}): a programming bug that should crash
  * loud, not be absorbed by a generic infrastructure-error handler.
  */
-export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
+export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 	constructor(public readonly aggregateId: string) {
 		super(
+			"AGGREGATE_DELETED",
 			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
 				"cannot be saved or registered again. Deletion is final within an " +
 				"operation; if the aggregate must live, do not delete it.",
-			undefined,
-			{ name: "AggregateDeletedError" },
 		);
 	}
 }
@@ -327,16 +407,16 @@ export interface AggregateNotFoundErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
+export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_FOUND"> {
 	readonly aggregateType: string;
 	readonly id: string;
 
 	constructor(options: AggregateNotFoundErrorOptions) {
-		super(
-			`Aggregate not found: ${options.aggregateType}(${options.id})`,
-			options.cause,
-			{ name: "AggregateNotFoundError" },
-		);
+		super({
+			code: "AGGREGATE_NOT_FOUND",
+			message: `Aggregate not found: ${options.aggregateType}(${options.id})`,
+			cause: options.cause,
+		});
 		this.aggregateType = options.aggregateType;
 		this.id = options.id;
 	}
@@ -368,16 +448,16 @@ export interface DuplicateAggregateErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggregateError"> {
+export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGREGATE"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 
 	constructor(options: DuplicateAggregateErrorOptions) {
-		super(
-			`Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
-			options.cause,
-			{ name: "DuplicateAggregateError" },
-		);
+		super({
+			code: "DUPLICATE_AGGREGATE",
+			message: `Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
+			cause: options.cause,
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 	}
@@ -407,22 +487,22 @@ export interface SnapshotSchemaMismatchErrorOptions {
 	readonly actualSchemaVersion: number;
 }
 
-export class SnapshotSchemaMismatchError extends InfrastructureError<"SnapshotSchemaMismatchError"> {
+export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_SCHEMA_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 
 	constructor(options: SnapshotSchemaMismatchErrorOptions) {
-		super(
-			`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
+		super({
+			code: "SNAPSHOT_SCHEMA_MISMATCH",
+			message:
+				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
 				`the aggregate expects snapshot schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
 				`migrateSnapshotState to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
-			undefined,
-			{ name: "SnapshotSchemaMismatchError" },
-		);
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
@@ -457,28 +537,59 @@ export interface ConcurrencyConflictErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyConflictError"> {
-	/**
-	 * Marks this error as retryable so `isRetryable(err)` returns
-	 * true. The canonical OCC pattern is to reload the aggregate, re-apply
-	 * the use case, and retry on this exception.
-	 */
-	readonly retryable = true as const;
-
+export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedVersion: number;
 	readonly actualVersion: number;
 
 	constructor(options: ConcurrencyConflictErrorOptions) {
-		super(
-			`Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
-			options.cause,
-			{ name: "ConcurrencyConflictError" },
-		);
+		super({
+			code: "CONCURRENCY_CONFLICT",
+			message: `Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
+			cause: options.cause,
+			// The canonical OCC pattern: reload the aggregate, re-apply the
+			// use case, retry in a FRESH unit of work. The structured field
+			// is what the retry classifier (someChainRetryable) reads.
+			retryable: true,
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion;
 	}
 }
+
+/**
+ * The closed union of every error code the kit itself can produce
+ * (consumer subclasses of {@link DomainError} / {@link InfrastructureError}
+ * add their own on top). Useful for building `switch` tables or
+ * base-error `matchError` cases that cover kit and consumer codes
+ * together, without importing anything from base-error.
+ */
+export type KitErrorCode =
+	| "AGGREGATE_DELETED"
+	| "AGGREGATE_NOT_FOUND"
+	| "COMMIT_FAILED"
+	| "CONCURRENCY_CONFLICT"
+	| "DOMAIN_TRANSITION_GUARD_REJECTED"
+	| "DUPLICATE_AGGREGATE"
+	| "ERROR_MAPPER_FAILED"
+	| "EVENT_HARVEST_FAILED"
+	| "HOSTILE_STATE_KEY"
+	| "INVALID_DOMAIN_MACHINE_CONTEXT"
+	| "INVALID_DOMAIN_MACHINE_DEFINITION"
+	| "INVALID_DOMAIN_MACHINE_INPUT"
+	| "INVALID_DOMAIN_MACHINE_SNAPSHOT"
+	| "INVALID_DOMAIN_TRANSITION"
+	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
+	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "MISSING_HANDLER"
+	| "NESTED_UNIT_OF_WORK"
+	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
+	| "ROLLBACK_FAILED"
+	| "SNAPSHOT_SCHEMA_MISMATCH"
+	| "TRANSACTION_CLOSED"
+	| "UNENROLLED_CHANGES"
+	| "UNREGISTERED_HANDLER"
+	| "UNREPLAYABLE_AGGREGATE";

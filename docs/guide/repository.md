@@ -463,7 +463,7 @@ try {
 ```
 
 ::: tip Why `someChainRetryable`, not `isChainRetryable` or `isRetryable`
-`isChainRetryable` from `@shirudo/base-error` filters on the strict `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for `ConcurrencyConflictError`. `isRetryable(err)` only inspects the top-level error: if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` walks the whole chain with the loose predicate.
+Since v3 `ConcurrencyConflictError` is a full `StructuredError`, so the strict `isChainRetryable` works on it too; `someChainRetryable` stays the default because it also accepts bare `retryable === true` markers from other libraries. `isRetryable(err)` only inspects the top-level error: if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` walks the whole chain with the loose predicate.
 :::
 
 Catch them at the App-Service layer to map to HTTP 404 / HTTP 409 as appropriate (`ConcurrencyConflictError` and `DuplicateAggregateError` are both 409-shaped, with different retry semantics: the former retries in a fresh unit of work, the latter never).

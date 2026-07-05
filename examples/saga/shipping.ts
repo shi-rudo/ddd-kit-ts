@@ -32,9 +32,12 @@ export type ShippingEvent =
 	| ShippingCompleted
 	| ShippingFailed;
 
-export class ShipmentInWrongStateError extends DomainError<"ShipmentInWrongStateError"> {
+export class ShipmentInWrongStateError extends DomainError<"SHIPMENT_IN_WRONG_STATE"> {
 	constructor(shipmentId: ShipmentId, current: string, attempted: string) {
-		super(`Shipment ${shipmentId} is ${current}; cannot ${attempted}`);
+		super({
+			code: "SHIPMENT_IN_WRONG_STATE",
+			message: `Shipment ${shipmentId} is ${current}; cannot ${attempted}`,
+		});
 	}
 }
 

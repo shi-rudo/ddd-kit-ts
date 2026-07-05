@@ -80,6 +80,8 @@ export {
 	EventHarvestError,
 	HostileStateKeyError,
 	InfrastructureError,
+	type KitErrorCode,
+	type KitErrorOptions,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

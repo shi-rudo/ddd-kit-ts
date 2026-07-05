@@ -11,6 +11,13 @@ v3 is a deliberately small "tightening" major: every breaking change
 fails at COMPILE time instead of changing runtime semantics silently.
 Upgrade checklist (details and rationale in the sections below):
 
+0. Kit errors are structured now: every error carries a stable
+   SCREAMING_SNAKE `code`, and `error.name === error.code` (the old
+   PascalCase class names are gone from `error.name`). Re-key
+   `error.name` matching to the codes (e.g. "ConcurrencyConflictError"
+   becomes "CONCURRENCY_CONFLICT"); consumer subclasses of
+   `DomainError` / `InfrastructureError` switch to the options-object
+   super call with an explicit `code`.
 1. `AggregateRoot.setState(next)` now ALWAYS bumps the OCC version.
    Call sites that relied on the implicit non-bumping default and
    genuinely tolerate loss under a concurrent write switch to the new
@@ -28,6 +35,34 @@ Upgrade checklist (details and rationale in the sections below):
    with `DeepOmitKey` and `DeepOmitPathSegment`; stop importing
    `computeBackoffDelay` (internal).
 5. Runtime and peers: Node 22+ and `@shirudo/base-error` ^8.
+
+### Changed (breaking): kit errors are StructuredErrors with one identifier
+
+- Every kit error is now a base-error `StructuredError` carrying a
+  stable SCREAMING_SNAKE `code`, a `category` derived mechanically from
+  the hierarchy (`DOMAIN` / `INFRASTRUCTURE` / `WIRING` for the
+  crash-loud family), and a plain `retryable` boolean
+  (`ConcurrencyConflictError`'s hand-rolled marker became the
+  structured field). By base-error's design `error.name === error.code`,
+  so there is exactly ONE identifier and no name/code drift: the old
+  PascalCase names ("ConcurrencyConflictError") are gone from
+  `error.name`; the contract-test suites and `toPublicErrorView` match
+  on the codes now.
+- **No base-error adoption required.** Consumers branch with a plain
+  `switch (error.code)`, catch via the kit-exported `instanceof
+  DomainError` / `instanceof InfrastructureError`, and read
+  `retryable` / `cause` as ordinary properties. base-error's toolbox
+  (exhaustive `matchError` on the codes, `isStructuredError`, the
+  public-error pipeline) works on every kit error as an opt-in benefit
+  on top, never as a prerequisite.
+- Consumer subclasses of `DomainError` / `InfrastructureError` supply
+  their `code` and `message` via an options object; `category` is fixed
+  by the base and `retryable` defaults to `false`:
+  `class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
+  constructor(id: string) { super({ code: "ORDER_ALREADY_SHIPPED",
+  message: ... }); } }`.
+- Added: the `KitErrorCode` union (every code the kit itself produces)
+  and the `KitErrorOptions` type are exported from the main entry.
 
 ### Changed (breaking): Node 22+ and `@shirudo/base-error` ^8
 

@@ -28,9 +28,12 @@ type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: OrderId }>;
 type OrderShipped   = DomainEvent<"OrderShipped",   { orderId: OrderId; tracking: string }>;
 type OrderEvent = OrderConfirmed | OrderShipped;
 
-class OrderAlreadyConfirmedError extends DomainError {
+class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
   constructor(public readonly id: OrderId) {
-    super(`Order ${id} is already confirmed`);
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${id} is already confirmed`,
+    });
   }
 }
 

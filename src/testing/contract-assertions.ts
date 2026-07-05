@@ -115,13 +115,14 @@ export function assertEqual(
  * bundle entry, and the adapter's errors come from the main entry's
  * copy of the kit (or even a second installed kit version) -
  * cross-copy `instanceof` is always false, name identity is the stable
- * contract. The kit's error classes pin their runtime `name` via
- * BaseError's `options.name`, so the match survives consumer-side
- * minification AND subclassing (a `PgConflictError extends
- * ConcurrencyConflictError` inherits the pinned name). For errors from
- * OLDER kit versions (no pinned name), the prototype chain's
- * constructor names are checked as a fallback, so subclasses still
- * match.
+ * contract. Since v3 the kit's errors are StructuredErrors whose
+ * runtime `name` IS their SCREAMING_SNAKE code, minification-stable by
+ * construction and inherited by subclasses (a `PgConflictError extends
+ * ConcurrencyConflictError` keeps the code as its name). The suites
+ * additionally pass the pre-v3 PascalCase names as aliases (via
+ * {@link chainContainsErrorNamedAnyOf}), and the prototype chain's
+ * constructor names are checked as a fallback, so errors from OLDER
+ * kit copies in the same process still match.
  */
 export function chainContainsErrorNamed(error: unknown, name: string): boolean {
 	const seen = new Set<unknown>();

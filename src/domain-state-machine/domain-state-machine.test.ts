@@ -77,9 +77,12 @@ type CheckoutOutput =
 			readonly reason: string;
 	  };
 
-class PaymentRequiredBeforeShippingError extends DomainError<"PaymentRequiredBeforeShippingError"> {
+class PaymentRequiredBeforeShippingError extends DomainError<"PAYMENT_REQUIRED_BEFORE_SHIPPING"> {
 	constructor() {
-		super("Payment is required before shipping.");
+		super({
+			code: "PAYMENT_REQUIRED_BEFORE_SHIPPING",
+			message: "Payment is required before shipping.",
+		});
 	}
 }
 
@@ -1689,7 +1692,7 @@ describe("DomainStateMachine", () => {
 		}
 
 		expect(thrown).toMatchObject({
-			name: "ReentrantDomainStateMachineEvaluationError",
+			name: "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
 		});
 		expect(machine.state).toBe("open");
 	});
@@ -1725,7 +1728,7 @@ describe("DomainStateMachine", () => {
 
 		expect(() => machine.can({ type: "Check" })).toThrowError(
 			expect.objectContaining({
-				name: "ReentrantDomainStateMachineEvaluationError",
+				name: "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
 			}),
 		);
 		expect(machine.state).toBe("open");
