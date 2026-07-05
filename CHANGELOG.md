@@ -47,7 +47,10 @@ Upgrade checklist (details and rationale in the sections below):
   so there is exactly ONE identifier and no name/code drift: the old
   PascalCase names ("ConcurrencyConflictError") are gone from
   `error.name`; the contract-test suites and `toPublicErrorView` match
-  on the codes now.
+  on the codes now (and ONLY the codes). Troubleshooting note: if a
+  contract-suite failure's cause chain shows a PascalCase kit error
+  name, the adapter under test resolves a pre-v3 `@shirudo/ddd-kit`
+  copy; align the versions in your dependency graph.
 - **No base-error adoption required.** Consumers branch with a plain
   `switch (error.code)`, catch via the kit-exported `instanceof
   DomainError` / `instanceof InfrastructureError`, and read

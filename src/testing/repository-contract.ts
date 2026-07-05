@@ -6,7 +6,7 @@ import {
 	assert,
 	assertEqual,
 	captureRejection,
-	chainContainsErrorNamedAnyOf,
+	assertChainContainsKitError,
 	describeError,
 	loadAggregateOrFail,
 	runInContractEnvironment,
@@ -251,7 +251,7 @@ export interface RepositoryContractTest {
  * `instanceof`.** The suite ships in its own bundle entry; comparing
  * class identity would spuriously fail whenever the adapter's errors
  * come from a different copy of the kit (the main entry's bundle, or a
- * second installed version). `error.name === "CONCURRENCY_CONFLICT"` (with the pre-v3 name "ConcurrencyConflictError" accepted as a legacy alias)
+ * second installed version). `error.name === "CONCURRENCY_CONFLICT"`
  * anywhere in the chain is the contract.
  *
  * **What each test proves.** The OCC, routing, rollback, and outbox
@@ -390,8 +390,9 @@ export function createRepositoryContractTests<
 						rejection !== undefined,
 						"the second writer's commit must reject - it committed on a stale version instead (OCC predicate missing?)",
 					);
-					assert(
-						chainContainsErrorNamedAnyOf(rejection, ["CONCURRENCY_CONFLICT", "ConcurrencyConflictError"]),
+					assertChainContainsKitError(
+						rejection,
+						["CONCURRENCY_CONFLICT"],
 						`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
 					);
 
@@ -567,8 +568,9 @@ export function createRepositoryContractTests<
 							await repository.save(loaded);
 						}),
 					);
-					assert(
-						chainContainsErrorNamedAnyOf(rejection, ["AGGREGATE_DELETED", "AggregateDeletedError"]),
+					assertChainContainsKitError(
+						rejection,
+						["AGGREGATE_DELETED"],
 						`save-after-delete must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}. ` +
 							`If you see ConcurrencyConflictError here instead, your save() probably enrolls AFTER the row write - enroll first.`,
 					);
@@ -723,8 +725,9 @@ export function createRepositoryContractTests<
 									await repository.save(resurrected);
 								}),
 							);
-							assert(
-								chainContainsErrorNamedAnyOf(rejection, ["AGGREGATE_DELETED", "AggregateDeletedError"]),
+							assertChainContainsKitError(
+								rejection,
+								["AGGREGATE_DELETED"],
 								`saving a re-created instance of a deleted aggregate must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}`,
 							);
 						}),
@@ -761,8 +764,9 @@ export function createRepositoryContractTests<
 									await repository.save(duplicate);
 								}),
 							);
-							assert(
-								chainContainsErrorNamedAnyOf(rejection, ["DUPLICATE_AGGREGATE", "DuplicateAggregateError"]),
+							assertChainContainsKitError(
+								rejection,
+								["DUPLICATE_AGGREGATE"],
 								`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
 									`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
 									`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
@@ -823,8 +827,9 @@ export function createRepositoryContractTests<
 									await repository.delete(staleB);
 								}),
 							);
-							assert(
-								chainContainsErrorNamedAnyOf(rejection, ["CONCURRENCY_CONFLICT", "ConcurrencyConflictError"]),
+							assertChainContainsKitError(
+								rejection,
+								["CONCURRENCY_CONFLICT"],
 								`a stale delete must reject with (or wrap) ConcurrencyConflictError; got: ${describeError(rejection)} - an unpredicated DELETE silently destroys the concurrent writer's update`,
 							);
 

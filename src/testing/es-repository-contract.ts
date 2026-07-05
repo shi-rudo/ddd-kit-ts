@@ -6,7 +6,7 @@ import {
 	assert,
 	assertEqual,
 	captureRejection,
-	chainContainsErrorNamedAnyOf,
+	assertChainContainsKitError,
 	describeError,
 	loadAggregateOrFail,
 	runInContractEnvironment,
@@ -250,8 +250,9 @@ export function createEsRepositoryContractTests<
 						rejection !== undefined,
 						"the second writer's commit must reject; it appended on a stale expectedVersion instead (append guard missing?)",
 					);
-					assert(
-						chainContainsErrorNamedAnyOf(rejection, ["CONCURRENCY_CONFLICT", "ConcurrencyConflictError"]),
+					assertChainContainsKitError(
+						rejection,
+						["CONCURRENCY_CONFLICT"],
 						`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
 					);
 
@@ -487,13 +488,9 @@ export function createEsRepositoryContractTests<
 									await repository.save(duplicate);
 								}),
 							);
-							assert(
-								chainContainsErrorNamedAnyOf(rejection, [
-									"CONCURRENCY_CONFLICT",
-									"ConcurrencyConflictError",
-									"DUPLICATE_AGGREGATE",
-									"DuplicateAggregateError",
-								]),
+							assertChainContainsKitError(
+								rejection,
+								["CONCURRENCY_CONFLICT", "DUPLICATE_AGGREGATE"],
 								`the duplicate creator's append (expectedVersion 0 on an existing stream) must reject with (or wrap) ConcurrencyConflictError or DuplicateAggregateError; got: ${describeError(rejection)}`,
 							);
 
