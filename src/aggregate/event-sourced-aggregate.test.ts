@@ -576,9 +576,19 @@ describe("EventSourcedAggregate", () => {
 				createDomainEvent("TestEventUpdated", { newValue: 20 }) as TestEventUpdated,
 			];
 
-			expect(() => aggregate.loadFromHistory(history)).toThrow(
-				UnreplayableAggregateError,
-			);
+			const thrown = ((): unknown => {
+				try {
+					aggregate.loadFromHistory(history);
+					return undefined;
+				} catch (e) {
+					return e;
+				}
+			})();
+			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
+			// The pending-events guard names its own remedy; the
+			// unpersisted-version remedy (markPersisted) would be harmful here.
+			expect((thrown as Error).message).toContain("clearPendingEvents");
+			expect((thrown as Error).message).not.toContain("markPersisted");
 			// Crash-loud programming bug, never a Result Err, and nothing moved.
 			expect(aggregate.version).toBe(1);
 			expect(aggregate.persistedVersion).toBeUndefined();
@@ -591,13 +601,24 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(1);
 			expect(aggregate.persistedVersion).toBeUndefined();
 
-			expect(() =>
-				aggregate.loadFromHistory([
-					createDomainEvent("TestEventUpdated", {
-						newValue: 20,
-					}) as TestEventUpdated,
-				]),
-			).toThrow(UnreplayableAggregateError);
+			const thrown = ((): unknown => {
+				try {
+					aggregate.loadFromHistory([
+						createDomainEvent("TestEventUpdated", {
+							newValue: 20,
+						}) as TestEventUpdated,
+					]);
+					return undefined;
+				} catch (e) {
+					return e;
+				}
+			})();
+			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
+			// This guard's remedy is markPersisted AFTER an actual save;
+			// clearPendingEvents does nothing here (events are already empty)
+			// and must not be recommended.
+			expect((thrown as Error).message).toContain("markPersisted");
+			expect((thrown as Error).message).not.toContain("clearPendingEvents");
 		});
 
 		it("should advance version additively on a persisted aggregate (catch-up replay)", () => {

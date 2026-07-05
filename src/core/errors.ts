@@ -97,23 +97,29 @@ export class HostileStateKeyError extends BaseError<"HostileStateKeyError"> {
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory` and
- * `restoreFromSnapshotWithEvents` when the replay target is not fresh:
- * the aggregate carries unflushed `pendingEvents`, or (for
- * `loadFromHistory`) an in-memory version that was never persisted.
- * Replaying onto such an instance would `markRestored` a
- * `persistedVersion` that counts unpersisted history: repository routing
- * flips from INSERT to UPDATE (or appends with a wrong expected version)
- * and harvested events would claim a version baseline the stream does
- * not carry.
+ * Thrown by `EventSourcedAggregate.loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`, and `AggregateRoot.restoreFromSnapshot`
+ * when the restore/replay target is not fresh: the aggregate carries
+ * unflushed `pendingEvents`, or (for `loadFromHistory`) an in-memory
+ * version that was never persisted. Restoring onto such an instance
+ * would `markRestored` a version baseline the unflushed events were
+ * never part of: repository routing flips from INSERT to UPDATE (or
+ * appends with a wrong expected version) and harvested events would
+ * claim history the stream does not carry.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): a deterministic programming
- * bug in how the aggregate was constructed before replay. It propagates
- * as a throw instead of riding the replay methods' `Result` channel, so
- * a generic corrupted-stream handler cannot absorb it. Reconstitution
- * belongs on a bare instance: construct the aggregate without
- * factory-recorded events or prior mutations, then replay.
+ * bug in how the aggregate was constructed before the restore. It
+ * propagates as a throw instead of riding the replay methods' `Result`
+ * channel, so a generic corrupted-stream handler cannot absorb it.
+ * Reconstitution belongs on a bare instance: construct the aggregate
+ * without factory-recorded events or prior mutations, then restore.
+ *
+ * The safe remedy differs per guard, so each throw site carries its own
+ * in the `reason` it passes: `clearPendingEvents()` when deliberately
+ * discarding unflushed events (an in-memory undo), `markPersisted()`
+ * only for a catch-up replay after the state was actually saved. The
+ * class message itself stays remediation-neutral.
  */
 export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregateError"> {
 	constructor(
@@ -121,10 +127,9 @@ export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregate
 		reason: string,
 	) {
 		super(
-			`Cannot replay history onto aggregate ${aggregateId}: ${reason}. ` +
+			`Cannot restore or replay onto aggregate ${aggregateId}: ${reason}. ` +
 				"Reconstitute on a fresh instance (no factory-recorded events, " +
-				"no unpersisted mutations), or markPersisted the aggregate " +
-				"before a catch-up replay.",
+				"no unpersisted mutations).",
 			undefined,
 			{ name: "UnreplayableAggregateError" },
 		);

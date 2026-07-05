@@ -5,7 +5,10 @@ import {
 	MissingHandlerError,
 	UnreplayableAggregateError,
 } from "../core/errors";
-import { BaseAggregate } from "./base-aggregate";
+import {
+	assertRestoreTargetHasNoPendingEvents,
+	BaseAggregate,
+} from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
 
@@ -183,7 +186,7 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		this.assertReplayTargetHasNoPendingEvents();
+		assertRestoreTargetHasNoPendingEvents(this);
 		this.assertReplayTargetHasNoUnpersistedVersion();
 		// Empty stream: nothing was loaded, so leave the lifecycle markers
 		// alone. markRestored(version) here would replace the
@@ -217,20 +220,19 @@ export abstract class EventSourcedAggregate<
 	 * aggregate is rolled back to its pre-call state + version. Partial
 	 * restoration is never observable to the caller.
 	 *
-	 * **The restore target must not carry pending events.** Events recorded
-	 * before the restore are unrelated to the restored stream; harvesting
-	 * them after `markRestored` would emit them with a version baseline
-	 * they were never part of. Such a target throws
-	 * {@link UnreplayableAggregateError} before anything moves (crash-loud
-	 * programming bug, never a `Result` `Err`). Unlike `loadFromHistory`,
-	 * a never-persisted in-memory version is fine here: the snapshot
-	 * overwrites state and version entirely instead of adding to them.
+	 * **The restore target must not carry pending events**: such a target
+	 * throws {@link UnreplayableAggregateError} before anything moves
+	 * (crash-loud programming bug, never a `Result` `Err`; see that
+	 * error's docs for the rationale and remedies). Unlike
+	 * `loadFromHistory`, a never-persisted in-memory version is fine
+	 * here: the snapshot overwrites state and version entirely instead
+	 * of adding to them.
 	 */
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		this.assertReplayTargetHasNoPendingEvents();
+		assertRestoreTargetHasNoPendingEvents(this);
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
@@ -276,22 +278,6 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Replay-target freshness guard shared by `loadFromHistory` and
-	 * `restoreFromSnapshotWithEvents`. See {@link UnreplayableAggregateError}
-	 * for the desync this prevents.
-	 */
-	private assertReplayTargetHasNoPendingEvents(): void {
-		const pending = this.pendingEvents.length;
-		if (pending > 0) {
-			throw new UnreplayableAggregateError(
-				String(this.id),
-				`it carries ${pending} unflushed pending event(s) that are not ` +
-					"part of the persisted stream",
-			);
-		}
-	}
-
-	/**
 	 * Additive-replay guard for `loadFromHistory` only: the snapshot
 	 * restore overwrites version wholesale, so a never-persisted in-memory
 	 * version is harmless there and `restoreFromSnapshotWithEvents`
@@ -303,7 +289,9 @@ export abstract class EventSourcedAggregate<
 				String(this.id),
 				`its in-memory version (${this.version}) was never persisted ` +
 					"(persistedVersion is undefined), so additive replay would " +
-					"mark unpersisted history as persisted",
+					"mark unpersisted history as persisted; call " +
+					"markPersisted(version) only after that state was actually " +
+					"saved, then catch-up replay",
 			);
 		}
 	}

@@ -118,6 +118,31 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: `restoreFromSnapshot` rejects targets carrying pending events
+
+- `AggregateRoot.restoreFromSnapshot` silently kept pre-restore
+  `pendingEvents` while re-baselining the version via `markRestored`,
+  so events recorded before the restore would later be harvested with
+  a version baseline from a state lineage the snapshot had discarded.
+  The event-sourced replay methods already guarded against exactly
+  this; the guard is now one shared, non-overridable module-internal
+  function checking the public `pendingEvents` surface, and both
+  restore paths throw `UnreplayableAggregateError` before anything
+  moves.
+- Migration for the in-memory undo pattern (snapshot before a risky
+  operation, restore on failure): take the undo snapshot while the
+  aggregate is CLEAN (no `pendingEvents`, e.g. right after load or
+  save), since `createSnapshot` bakes pending events' version bumps
+  into `snapshot.version`; on failure call `clearPendingEvents()`
+  BEFORE `restoreFromSnapshot` to discard the events recorded since
+  that clean point. Restoring first and clearing afterwards now
+  throws.
+- The `UnreplayableAggregateError` message no longer recommends a bare
+  `markPersisted` (harmful on the snapshot-restore path: it flips
+  repository routing to UPDATE and silently drops the unflushed
+  events); it names `clearPendingEvents()` as the deliberate-discard
+  remedy instead.
+
 ### Fixed: a throwing retry classifier no longer masks the transaction error
 
 - `RetryingTransactionScope` invoked the `isRetryable` classifier

@@ -334,6 +334,12 @@ fresh.restoreFromSnapshot(snapshot);
 
 `createSnapshot` uses `structuredClone` so the snapshot is fully isolated from later mutations. `restoreFromSnapshot` runs `validateState` on the restored state before assigning it.
 
+::: warning The restore target must not carry pending events
+`restoreFromSnapshot` throws `UnreplayableAggregateError` when the aggregate has unflushed `pendingEvents` (same guard as the event-sourced replay methods): the restore re-baselines the version via `markRestored`, so events recorded against the old baseline would later be harvested claiming a version they were never part of.
+
+For a deliberate in-memory undo, BOTH ends must be clean. Take the undo snapshot while the aggregate has no `pendingEvents` (right after load or save): `createSnapshot` bakes any pending events' version bumps into `snapshot.version`, so restoring a dirty-taken snapshot after clearing would desync `persistedVersion` from the store and lose those events. On failure, call `clearPendingEvents()` to discard the events recorded since that clean point, then `restoreFromSnapshot`.
+:::
+
 ## When to skip `commit()`
 
 `commit()` is the safe default. Reach for `setState` + `addDomainEvent` separately when:

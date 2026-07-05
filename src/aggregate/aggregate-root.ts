@@ -1,7 +1,10 @@
 import type { Id } from "../core/id";
 import type { EntityConfig } from "../entity/entity";
 import type { AggregateSnapshot, Version } from "./aggregate";
-import { BaseAggregate } from "./base-aggregate";
+import {
+	assertRestoreTargetHasNoPendingEvents,
+	BaseAggregate,
+} from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 
 // Re-export for backwards compatibility: `IAggregateRoot` lives in
@@ -308,11 +311,19 @@ export abstract class AggregateRoot<
 	 * `version` + `persistedVersion` to the snapshot version. Validates
 	 * the restored state.
 	 *
+	 * **The restore target must not carry pending events**: such a target
+	 * throws `UnreplayableAggregateError` before anything moves (the
+	 * restore re-baselines the version, so unflushed events would later be
+	 * harvested claiming a version they were never part of; see that
+	 * error's docs). `clearPendingEvents()` is the deliberate-discard
+	 * escape hatch for the in-memory undo pattern.
+	 *
 	 * @param snapshot - The snapshot to restore from
 	 */
 	public restoreFromSnapshot(
 		snapshot: AggregateSnapshot<TSnapshotState>,
 	): void {
+		assertRestoreTargetHasNoPendingEvents(this);
 		const restored = this.fromSnapshotState(
 			this.resolveSnapshotState(snapshot),
 		);

@@ -14,6 +14,7 @@ import {
 	InfrastructureError,
 	MissingHandlerError,
 	UnenrolledChangesError,
+	UnreplayableAggregateError,
 } from "./errors";
 
 describe("DomainError", () => {
@@ -101,6 +102,27 @@ describe("MissingHandlerError", () => {
 		const root = new Error("registry lookup failed");
 		const e = new MissingHandlerError("OrderShipped", root);
 		expect(getRootCause(e)).toBe(root);
+	});
+});
+
+describe("UnreplayableAggregateError", () => {
+	it("keeps the class message remediation-neutral; remedies are thrower-specific", () => {
+		// The error is thrown by loadFromHistory (two distinct guards),
+		// restoreFromSnapshotWithEvents, and AggregateRoot.restoreFromSnapshot,
+		// and the safe remedy differs per guard: clearPendingEvents() for a
+		// deliberate discard of unflushed events, markPersisted() only for a
+		// catch-up replay after the state was actually saved. A remedy baked
+		// into the class message is wrong for at least one thrower (token-level
+		// assertions, so a rephrased harmful remedy still fails), so each
+		// throw site carries its own remedy in the reason.
+		const error = new UnreplayableAggregateError(
+			"agg-1",
+			"it carries 2 unflushed pending event(s)",
+		);
+
+		expect(error.message).not.toContain("markPersisted");
+		expect(error.message).not.toContain("clearPendingEvents");
+		expect(error.message).toContain("Reconstitute on a fresh instance");
 	});
 });
 

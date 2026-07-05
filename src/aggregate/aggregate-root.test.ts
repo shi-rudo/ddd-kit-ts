@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { SnapshotSchemaMismatchError } from "../core/errors";
+import {
+	SnapshotSchemaMismatchError,
+	UnreplayableAggregateError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import {
 	type AggregateSnapshot,
@@ -293,6 +296,44 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 			expect(aggregate.createSnapshot().schemaVersion).toBe(3);
+		});
+
+		it("rejects a restore target carrying pending events (UnreplayableAggregateError), same guard as the event-sourced path", () => {
+			// Rationale lives on assertRestoreTargetHasNoPendingEvents in
+			// base-aggregate.ts; clearPendingEvents() first is the
+			// deliberate-discard escape hatch.
+			type Ev = DomainEvent<"Updated", { value: number }>;
+			class EventfulAggregate extends AggregateRoot<TestState, TestId, Ev> {
+				protected readonly aggregateType = "EventfulAggregate";
+				constructor(id: TestId, state: TestState) {
+					super(id, state);
+				}
+				update(value: number): void {
+					this.commit(
+						{ ...this.state, value },
+						this.recordEvent("Updated", { value }),
+					);
+				}
+			}
+
+			const aggregate = new EventfulAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.update(20);
+			const snapshot: AggregateSnapshot<TestState> = {
+				state: { value: 42, status: "active" },
+				version: 5 as Version,
+				snapshotAt: new Date(),
+			};
+
+			expect(() => aggregate.restoreFromSnapshot(snapshot)).toThrow(
+				UnreplayableAggregateError,
+			);
+			// Nothing moved: the guard fires before any assignment.
+			expect(aggregate.state.value).toBe(20);
+			expect(aggregate.version).toBe(1);
+			expect(aggregate.pendingEvents).toHaveLength(1);
 		});
 
 		it("rejects a snapshot with a mismatched schemaVersion by default (SnapshotSchemaMismatchError)", () => {
