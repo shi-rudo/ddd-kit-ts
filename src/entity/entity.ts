@@ -56,6 +56,7 @@
  * }
  * ```
  */
+import { HostileStateKeyError } from "../core/errors";
 import type { Id } from "../core/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -196,6 +197,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * applies to {@link setState}. With
 	 * {@link EntityConfig.deepFreezeState} enabled, the ownership transfer
 	 * widens to the whole graph: NESTED objects are frozen in place too.
+	 *
+	 * @throws HostileStateKeyError when a plain-object, null-prototype,
+	 * or array state carries an own `"__proto__"` data key; validate and
+	 * strip untrusted input at the boundary.
 	 */
 	protected constructor(id: TId, initialState: TState, config?: EntityConfig) {
 		if (id === null || id === undefined) {
@@ -256,6 +261,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * ownership transfer and is frozen in place; see the constructor.
 	 *
 	 * @param newState - The new state
+	 * @throws HostileStateKeyError when the state carries an own
+	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
 		this.validateState(newState);
@@ -293,10 +300,35 @@ export function freezeShallow<T>(value: T): T {
  */
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
-	if (Array.isArray(value)) return [...value] as T;
+	if (Array.isArray(value)) {
+		assertNoHostileKey(value);
+		return [...value] as T;
+	}
 	const proto = Object.getPrototypeOf(value);
 	if (proto !== Object.prototype && proto !== null) return value;
-	return Object.assign(Object.create(proto), value) as T;
+	assertNoHostileKey(value);
+	// Copy as data properties, never through [[Set]]: object spread uses
+	// CreateDataProperty, so even without the guard above no key could
+	// reach the `__proto__` setter the way Object.assign onto an
+	// Object.prototype-based target would. On a null-prototype target no
+	// setter exists in the chain, so Object.assign is safe there.
+	return (proto === null
+		? Object.assign(Object.create(null), value)
+		: { ...value }) as T;
+}
+
+/**
+ * Rejects state carrying an own `"__proto__"` data key (the shape
+ * `JSON.parse` produces for hostile rows or request bodies handed to
+ * reconstitute factories). Copying the key onward would re-arm prototype
+ * pollution in any downstream `[[Set]]`-based consumer of `state`, and
+ * dropping it would be silent data mutation, so the only safe contract
+ * is to fail loudly at the domain boundary.
+ */
+function assertNoHostileKey(value: object): void {
+	if (Object.hasOwn(value, "__proto__")) {
+		throw new HostileStateKeyError("__proto__");
+	}
 }
 
 

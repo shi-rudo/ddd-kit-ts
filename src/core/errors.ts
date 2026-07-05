@@ -68,6 +68,35 @@ export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
 }
 
 /**
+ * Thrown by `Entity` (constructor and `setState`) when a plain-object,
+ * null-prototype, or array state carries an own `"__proto__"` data key:
+ * the shape `JSON.parse` produces for hostile DB rows or request bodies
+ * handed to reconstitute factories. Such a key can never be legitimate
+ * domain state; accepting it would hand a prototype-pollution payload to
+ * every downstream consumer that copies the state through `[[Set]]`
+ * (`Object.assign`, for-in assignment loops), and dropping it would be
+ * silent data mutation.
+ *
+ * Deliberately **not** a `DomainError` or `InfrastructureError` (same
+ * posture as {@link MissingHandlerError}): untrusted input reaching the
+ * domain layer unvalidated is a boundary bug, and a generic
+ * business-rule handler must not absorb it. Validate and strip untrusted
+ * input at the application edge; model genuinely arbitrary keys with a
+ * `Map`, not a plain object.
+ */
+export class HostileStateKeyError extends BaseError<"HostileStateKeyError"> {
+	constructor(public readonly key: string) {
+		super(
+			`Entity state carries a hostile own "${key}" key, which can never ` +
+				"be legitimate domain state. Validate and strip untrusted input " +
+				"at the boundary, or model arbitrary keys with a Map.",
+			undefined,
+			{ name: "HostileStateKeyError" },
+		);
+	}
+}
+
+/**
  * Thrown by `EventSourcedAggregate.loadFromHistory` and
  * `restoreFromSnapshotWithEvents` when the replay target is not fresh:
  * the aggregate carries unflushed `pendingEvents`, or (for

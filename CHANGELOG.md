@@ -101,6 +101,23 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: entity state rejects `__proto__` prototype pollution loudly
+
+- An own `__proto__` data key on a plain-object state (the shape
+  `JSON.parse` produces for DB rows or request bodies handed to
+  reconstitute factories) was applied through the `Object.prototype`
+  setter by `Object.assign` during `Entity`'s internal shallow copy:
+  the copy's prototype was replaced with the injected object and the
+  key was dropped. The constructor and `setState` now throw the new
+  `HostileStateKeyError` when a plain-object, null-prototype, or array
+  state carries such a key: it can never be legitimate domain state,
+  carrying it onward would re-arm pollution in downstream
+  `Object.assign`-style consumers of `state`, and dropping it would be
+  silent data mutation. On `setState` the previous state is kept. The
+  internal copy also switched from `Object.assign` to object spread
+  (data properties, never `[[Set]]`) as defense in depth.
+- Added: `HostileStateKeyError` is exported from the main entry.
+
 ## [2.2.0] - 2026-07-04
 
 ### Added: Unit of Work observability

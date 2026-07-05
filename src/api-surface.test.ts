@@ -30,6 +30,7 @@ const INDEX_SURFACE = [
 	"EventBusImpl",
 	"EventHarvestError",
 	"EventSourcedAggregate",
+	"HostileStateKeyError",
 	"IdentityMap",
 	"InMemoryEventStore",
 	"InMemoryOutbox",

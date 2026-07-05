@@ -76,6 +76,7 @@ export {
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
 	EventHarvestError,
+	HostileStateKeyError,
 	InfrastructureError,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,

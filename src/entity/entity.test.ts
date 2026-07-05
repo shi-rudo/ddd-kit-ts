@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HostileStateKeyError } from "../core/errors";
 import type { Id } from "../core/id";
 import {
 	Entity,
@@ -269,6 +270,89 @@ describe("Entity", () => {
 
 			expect(Object.isFrozen(meta)).toBe(false);
 			expect(box.state.meta).toBe(meta);
+		});
+	});
+
+	describe("hostile state keys (own __proto__ data key)", () => {
+		type RawState = Record<string, unknown>;
+
+		class RawStateEntity extends Entity<RawState, ItemId> {
+			constructor(id: ItemId, state: RawState) {
+				super(id, state);
+			}
+
+			replace(state: RawState): void {
+				this.setState(state);
+			}
+		}
+
+		// JSON.parse creates an own "__proto__" DATA key (it never invokes
+		// the Object.prototype.__proto__ setter): the shape of any DB row or
+		// request body handed to a reconstitute factory. Such a key can never
+		// be legitimate domain state; carrying it onward would re-arm
+		// prototype pollution in downstream [[Set]]-based consumers.
+		const hostileState = (): RawState =>
+			JSON.parse('{"qty":1,"__proto__":{"isAdmin":true}}') as RawState;
+
+		it("rejects a JSON-parsed own __proto__ key at construction", () => {
+			expect(
+				() => new RawStateEntity("item-1" as ItemId, hostileState()),
+			).toThrow(HostileStateKeyError);
+		});
+
+		it("rejects the key on the setState path and keeps the previous state", () => {
+			const entity = new RawStateEntity("item-1" as ItemId, { qty: 0 });
+
+			expect(() => entity.replace(hostileState())).toThrow(
+				HostileStateKeyError,
+			);
+
+			expect(entity.state.qty).toBe(0);
+			expect(Object.hasOwn(entity.state, "__proto__")).toBe(false);
+		});
+
+		it("rejects an own __proto__ data key on a null-prototype state", () => {
+			const state: RawState = Object.create(null);
+			state.qty = 1;
+			Object.defineProperty(state, "__proto__", {
+				value: { isAdmin: true },
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+
+			expect(() => new RawStateEntity("item-1" as ItemId, state)).toThrow(
+				HostileStateKeyError,
+			);
+		});
+
+		it("rejects an own __proto__ data key attached to an array state", () => {
+			class ListEntity extends Entity<number[], ItemId> {
+				constructor(id: ItemId, state: number[]) {
+					super(id, state);
+				}
+			}
+			const state = [1, 2];
+			Object.defineProperty(state, "__proto__", {
+				value: { isAdmin: true },
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+
+			expect(() => new ListEntity("item-1" as ItemId, state)).toThrow(
+				HostileStateKeyError,
+			);
+		});
+
+		it("keeps benign null-prototype states intact", () => {
+			const state: RawState = Object.create(null);
+			state.qty = 1;
+
+			const entity = new RawStateEntity("item-1" as ItemId, state);
+
+			expect(Object.getPrototypeOf(entity.state)).toBe(null);
+			expect(entity.state.qty).toBe(1);
 		});
 	});
 
