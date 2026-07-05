@@ -101,6 +101,36 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: bus error channels are honest for literal unions and broken mappers
+
+- A string-literal-union error channel (e.g.
+  `E = "DB_CONN" | "TIMEOUT"`) slipped through the `errorMapper`
+  requirement: every subtype of `string` passed the
+  `[E] extends [string]` gate, so the built-in `describeThrown`
+  fallback could deliver arbitrary strings outside the declared union,
+  falling through exhaustive switches. The gate now tests both
+  directions, so options are optional only when `E` IS `string` (and
+  the unavoidable `any`); literal unions, object types, and `unknown`
+  all require an explicit `errorMapper` at compile time, for both
+  buses.
+- A THROWING `errorMapper` no longer replaces the handler's original
+  failure: `execute` now throws the new `ErrorMapperFailedError`
+  (crash-loud, same family as `UnregisteredHandlerError`) carrying the
+  handler's error as `cause` and the mapper's own failure as
+  `mapperCause`. Like a nested `UnregisteredHandlerError`, a nested
+  dispatch's `ErrorMapperFailedError` stays a throw and is never
+  mapped into the outer bus's channel. The default mapper
+  `describeThrown` is also total now: it no longer throws for a cyclic
+  null-prototype thrown value, a revoked Proxy, or an Error subclass
+  with a hostile `message` getter.
+- Internal: the buses' shared wiring semantics (constructor-args
+  conditional, mapper resolution, register-once guard, no-handler
+  gate, handler-failure mapping) moved into one internal module, so a
+  fix to one bus can no longer silently miss the other; `CommandBus`
+  adopted the factored no-handler gate `QueryBus` already had.
+- Added: `ErrorMapperFailedError` (and its options type) is exported
+  from the main entry.
+
 ### Fixed: `toPublicErrorView` is total and no longer trusts duck-typed `publicIssues()`
 
 - A throwing `publicIssues()` implementation (or a throwing `name` /

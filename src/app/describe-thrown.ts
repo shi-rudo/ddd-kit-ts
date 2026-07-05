@@ -6,7 +6,13 @@
  * `String(error)` would collapse it to `"[object Object]"`.
  */
 export function describeThrown(error: unknown): string {
-	if (error instanceof Error) return error.message;
+	try {
+		if (error instanceof Error) return error.message;
+	} catch {
+		// A revoked Proxy makes `instanceof` itself throw, and a hostile
+		// `message` getter can throw on an Error subclass: fall through to
+		// the serialisation attempts below.
+	}
 	try {
 		const json = JSON.stringify(error);
 		// JSON.stringify yields undefined for undefined/functions/symbols.
@@ -14,5 +20,12 @@ export function describeThrown(error: unknown): string {
 	} catch {
 		// Cyclic or BigInt-bearing values cannot be JSON-serialised.
 	}
-	return String(error);
+	try {
+		return String(error);
+	} catch {
+		// String() itself throws for a null-prototype object (no toString)
+		// whose Symbol.toPrimitive chain is absent; the default bus mapper
+		// must stay total.
+		return "[unrepresentable thrown value]";
+	}
 }

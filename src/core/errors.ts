@@ -195,6 +195,50 @@ export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerErro
 	}
 }
 
+/** Constructor options for {@link ErrorMapperFailedError}. */
+export interface ErrorMapperFailedErrorOptions {
+	/** Which bus was mapping the failure. */
+	readonly busKind: "command" | "query";
+	/** The registered handler's ORIGINAL failure (also set as `cause`). */
+	readonly handlerError: unknown;
+	/** The value the errorMapper itself threw. */
+	readonly mapperError: unknown;
+}
+
+/**
+ * Produced by the in-memory `CommandBus` / `QueryBus` when the configured
+ * `errorMapper` THROWS while mapping a registered handler's failure. A
+ * broken mapper is a wiring bug: letting its throw propagate bare would
+ * replace the handler's original failure entirely, and the rest of the
+ * kit is fastidious about never letting a secondary failure mask the
+ * primary one (`RollbackError.rollbackCause`, the neutralized observers).
+ *
+ * The handler's original failure is preserved as `cause` (so cause-chain
+ * walks, retryability checks, and error-type mapping keep working) and
+ * the mapper's own failure rides along as {@link mapperCause}.
+ *
+ * Extends `BaseError` directly (same crash-loud family as
+ * {@link MissingHandlerError} and {@link UnregisteredHandlerError}): it is
+ * thrown, never delivered through the error channel.
+ */
+export class ErrorMapperFailedError extends BaseError<"ErrorMapperFailedError"> {
+	readonly busKind: "command" | "query";
+	/** The value the errorMapper itself threw. */
+	readonly mapperCause: unknown;
+
+	constructor(options: ErrorMapperFailedErrorOptions) {
+		super(
+			`The ${options.busKind} bus errorMapper threw while mapping a ` +
+				"handler failure. The original handler error is preserved as " +
+				"cause; the mapper's own failure as mapperCause.",
+			options.handlerError,
+			{ name: "ErrorMapperFailedError" },
+		);
+		this.busKind = options.busKind;
+		this.mapperCause = options.mapperError;
+	}
+}
+
 /**
  * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
  * loaded into the identity map during the operation carries unflushed

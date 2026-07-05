@@ -1,7 +1,12 @@
-import { err, type Result } from "@shirudo/result";
-import { UnregisteredHandlerError } from "../core/errors";
+import type { Result } from "@shirudo/result";
+import {
+	type BusArgs,
+	handlerOrThrow,
+	mapHandlerFailure,
+	registerOnce,
+	resolveErrorMapper,
+} from "./bus-internals";
 import type { Command, CommandHandler } from "./command";
-import { describeThrown } from "./describe-thrown";
 
 /**
  * Internal adapter shape for handlers stored in the map.
@@ -44,7 +49,7 @@ export interface CommandBusOptions<E = string> {
 	 * Maps a value thrown by a registered handler into the bus's error
 	 * channel `E`. Dispatching an unregistered command type is NOT mapped:
 	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
-	 * {@link describeThrown}, which renders any thrown value as a `string`.
+	 * `describeThrown`, which renders any thrown value as a `string`.
 	 * base-error's `toStructuredError` fits this slot directly when `E` is a
 	 * `StructuredError`.
 	 */
@@ -53,13 +58,12 @@ export interface CommandBusOptions<E = string> {
 
 /**
  * Constructor arguments for {@link CommandBus}. When `E` is the default
- * `string`, options are optional (the built-in {@link describeThrown} mapper
+ * `string`, options are optional (the built-in `describeThrown` mapper
  * applies). When `E` is widened, an `errorMapper` is required, so a typed
- * channel can never silently fall back to string values.
+ * channel can never silently fall back to string values. The conditional
+ * lives in the shared {@link BusArgs} so the two buses cannot drift.
  */
-type CommandBusArgs<E> = [E] extends [string]
-	? [options?: CommandBusOptions<E>]
-	: [options: CommandBusOptions<E> & { errorMapper: (thrown: unknown) => E }];
+type CommandBusArgs<E> = BusArgs<E, CommandBusOptions<E>>;
 
 /**
  * Command Bus interface for dispatching commands to their handlers.
@@ -166,25 +170,16 @@ export class CommandBus<
 	private readonly errorMapper: (thrown: unknown) => E;
 
 	constructor(...args: CommandBusArgs<E>) {
-		// describeThrown produces a string; that is the correct mapper only for
-		// the default E = string. CommandBusArgs makes errorMapper mandatory once
-		// E is widened, so this fallback is never reached with a non-string E.
-		this.errorMapper =
-			args[0]?.errorMapper ?? (describeThrown as (thrown: unknown) => E);
+		this.errorMapper = resolveErrorMapper(args[0]);
 	}
 
 	register<
 		K extends keyof TMap & string,
 		C extends Command & { type: K } = Command & { type: K },
 	>(commandType: K, handler: CommandHandler<C, TMap[K], E>): void {
-		// Silent replacement would turn the first handler into dead code
-		// with no signal; wiring bugs must surface at registration time.
-		if (this.handlers.has(commandType)) {
-			throw new Error(
-				`CommandBus: a handler for command type "${commandType}" is already registered`,
-			);
-		}
-		this.handlers.set(commandType, (cmd) => handler(cmd as C));
+		registerOnce(this.handlers, "command", commandType, (cmd: Command) =>
+			handler(cmd as C),
+		);
 	}
 
 	async execute<C extends Command & { type: keyof TMap & string }>(
@@ -192,26 +187,13 @@ export class CommandBus<
 	): Promise<Result<TMap[C["type"]], E>>;
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>>;
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
-		const handler = this.handlers.get(command.type);
-		if (!handler) {
-			// A wiring bug, not a domain failure: thrown, never delivered
-			// through the error channel, so a generic err-branch cannot
-			// absorb a mis-wired bus (same crash-loud posture as
-			// MissingHandlerError). The errorMapper only sees failures a
-			// registered handler produced.
-			throw new UnregisteredHandlerError({
-				busKind: "command",
-				messageType: command.type,
-			});
-		}
+		// No-handler dispatch is a wiring bug, not a domain failure: thrown,
+		// never delivered through the error channel (see handlerOrThrow).
+		const handler = handlerOrThrow(this.handlers, "command", command.type);
 		try {
 			return (await handler(command)) as Result<R, E>;
 		} catch (error) {
-			// A NESTED dispatch's wiring bug (a handler awaiting execute for
-			// a typoed type) must stay a throw: the channel carries expected
-			// failures a registered handler produced, never a mis-wired bus.
-			if (error instanceof UnregisteredHandlerError) throw error;
-			return err(this.errorMapper(error));
+			return mapHandlerFailure(error, this.errorMapper, "command");
 		}
 	}
 }
