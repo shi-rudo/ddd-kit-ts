@@ -118,6 +118,17 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: the analyzer honors the prepared-definition fast path
+
+- `analyzeDomainMachineDefinition` hand-rolled validate-and-copy
+  instead of going through the shared entry-point normalization, so a
+  definition prepared with `prepareDomainMachineDefinition` paid the
+  full O(definition) re-validation and deep re-copy on every analysis
+  call, contradicting the documented prepared-definition contract. It
+  now uses the same fast path as the other pure functions and the
+  `DomainStateMachine` constructor: prepared definitions pass through
+  untouched, raw definitions keep the per-call validate-and-copy.
+
 ### Fixed: `deepOmit` preserves non-enumerable own string properties
 
 - `deepOmit` cloned plain objects from `Object.keys` only, silently
