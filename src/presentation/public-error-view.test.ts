@@ -72,4 +72,102 @@ describe("toPublicErrorView()", () => {
 		});
 		expect(view.locale).toBe("de-DE");
 	});
+
+	describe("hardening against hostile or accidental publicIssues()", () => {
+		it("degrades to the fallback view when publicIssues() throws, instead of crashing the 500 path", () => {
+			const hostile = {
+				name: "VALIDATION_FAILED",
+				publicIssues() {
+					throw new Error("secret pool state: 10.0.0.5:5432");
+				},
+			};
+
+			const view = toPublicErrorView(hostile, { locale: "de-DE" });
+
+			expect(view.code).toBe("INTERNAL_ERROR");
+			expect(view.message).toBe("An unexpected error occurred.");
+			expect(view.locale).toBe("de-DE");
+			expect(view.details).toBeUndefined();
+		});
+
+		it("does not leak a class-style name as code nor issues from an accidental publicIssues() method", () => {
+			// A non-kit infrastructure error that happens to expose a
+			// publicIssues() method must not have its raw name emitted as the
+			// client-facing code, nor its return value shipped to the client.
+			const accidental = {
+				name: "PgPoolExhaustedError",
+				publicIssues: () => [{ message: "conn 10.0.0.5:5432 refused" }],
+			};
+
+			const view = toPublicErrorView(accidental);
+
+			expect(view.code).toBe("INTERNAL_ERROR");
+			expect(view.message).toBe("An unexpected error occurred.");
+			expect(view.details).toBeUndefined();
+			expect(JSON.stringify(view)).not.toContain("10.0.0.5");
+		});
+
+		it("ignores a publicIssues() that does not return an array", () => {
+			const broken = {
+				name: "VALIDATION_FAILED",
+				publicIssues: () => ({ message: "not an array" }),
+			};
+
+			const view = toPublicErrorView(broken);
+
+			expect(view.code).toBe("INTERNAL_ERROR");
+			expect(view.details).toBeUndefined();
+		});
+
+		it("whitelists issue fields and drops non-conforming entries", () => {
+			const oversharing = {
+				name: "VALIDATION_FAILED",
+				publicIssues: () => [
+					{
+						message: "must be a valid email",
+						path: ["email"],
+						code: "EMAIL",
+						pointer: "email",
+						stack: "at connectPg (10.0.0.5:5432)",
+						driver: { host: "10.0.0.5" },
+					},
+					"raw string",
+					null,
+					{ message: 42 },
+				],
+			};
+
+			const view = toPublicErrorView(oversharing);
+
+			expect(view.code).toBe("VALIDATION_FAILED");
+			expect(view.details?.issues).toEqual([
+				{
+					message: "must be a valid email",
+					path: ["email"],
+					code: "EMAIL",
+					pointer: "email",
+				},
+			]);
+			expect(JSON.stringify(view)).not.toContain("10.0.0.5");
+		});
+
+		it("stays total when name or publicIssues are throwing accessors", () => {
+			const throwingName = {
+				get name(): string {
+					throw new Error("gotcha");
+				},
+			};
+			const throwingCapability = {
+				name: "VALIDATION_FAILED",
+				get publicIssues(): () => unknown[] {
+					throw new Error("gotcha");
+				},
+			};
+
+			expect(toPublicErrorView(throwingName).code).toBe("INTERNAL_ERROR");
+			expect(toPublicErrorView(throwingCapability).code).toBe(
+				"INTERNAL_ERROR",
+			);
+		});
+	});
 });

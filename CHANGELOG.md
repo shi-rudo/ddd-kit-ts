@@ -101,6 +101,23 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: `toPublicErrorView` is total and no longer trusts duck-typed `publicIssues()`
+
+- A throwing `publicIssues()` implementation (or a throwing `name` /
+  `publicIssues` accessor) crashed the presenter inside the 500 path,
+  contradicting the documented totality over `unknown`; any non-kit
+  object that happened to expose a `publicIssues()` method also had
+  its raw `name` emitted as the client-facing `code` and its arbitrary
+  return value shipped to the client in `details.issues`. The mapper
+  now degrades to the `INTERNAL_ERROR` fallback view on any throw, and
+  the validation branch requires a SCREAMING_SNAKE `name` (the shape
+  base-error gives a `ValidationError`, which is named after its code)
+  in addition to the capability, so class-named infrastructure errors
+  can no longer masquerade as validation errors. Issues are re-emitted
+  through the `PublicIssue` whitelist (`message`, `path`, `code`,
+  `pointer`): unknown fields, non-conforming entries, and non-array
+  `publicIssues()` results are dropped.
+
 ### Fixed: entity state rejects `__proto__` prototype pollution loudly
 
 - An own `__proto__` data key on a plain-object state (the shape
