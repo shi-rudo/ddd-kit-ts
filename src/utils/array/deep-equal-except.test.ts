@@ -337,3 +337,30 @@ describe("deepEqualExcept – Circular References", () => {
 		).toBe(false);
 	});
 });
+
+describe("deepEqualExcept – non-enumerable own string properties", () => {
+	const withHidden = (hidden: number) => {
+		const obj: Record<string, unknown> = { visible: 1 };
+		Object.defineProperty(obj, "hidden", {
+			value: hidden,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
+		return obj;
+	};
+
+	it("stays equivalent to deepEqual for objects differing only in a non-enumerable property", () => {
+		const a = withHidden(1);
+		const b = withHidden(2);
+
+		expect(deepEqual(a, b)).toBe(false);
+		expect(deepEqualExcept(a, b, {})).toBe(false);
+	});
+
+	it("the omit of nothing round-trips through deepEqual", () => {
+		const a = withHidden(1);
+
+		expect(deepEqualExcept(a, withHidden(1), {})).toBe(true);
+	});
+});

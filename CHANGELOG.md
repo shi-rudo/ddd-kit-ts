@@ -118,6 +118,18 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: `deepOmit` preserves non-enumerable own string properties
+
+- `deepOmit` cloned plain objects from `Object.keys` only, silently
+  dropping non-enumerable own string properties, while `deepEqual`
+  deliberately compares via `Object.getOwnPropertyNames`: two objects
+  differing only in such a property gave `deepEqual` `false` but
+  `deepEqualExcept` `true`, and `deepEqual(deepOmit(x, {}), x)` was
+  `false`. The clone now walks `Object.getOwnPropertyNames` (matching
+  `deepEqual`, and matching the symbol and array-property handling that
+  already survived) and preserves each property's enumerability, so
+  the omit of nothing is an exact key-set image of the input.
+
 ### Fixed: `restoreFromSnapshot` rejects targets carrying pending events
 
 - `AggregateRoot.restoreFromSnapshot` silently kept pre-restore
