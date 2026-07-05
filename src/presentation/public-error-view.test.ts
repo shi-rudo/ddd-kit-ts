@@ -66,11 +66,15 @@ describe("toPublicErrorView()", () => {
 		expect(toPublicErrorView(42).code).toBe("INTERNAL_ERROR");
 	});
 
-	it("stamps an explicit locale when provided", () => {
+	it("the locale option is a PREFERENCE; the view carries the locale that resolved", () => {
+		// The built-in messages are English only, so a de-DE preference
+		// resolves to the base locale instead of claiming a locale the
+		// message is not actually in.
 		const view = toPublicErrorView(new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }), {
 			locale: "de-DE",
 		});
-		expect(view.locale).toBe("de-DE");
+		expect(view.locale).toBe("en");
+		expect(view.message).toBe("The requested resource could not be found.");
 	});
 
 	describe("hardening against hostile or accidental publicIssues()", () => {
@@ -87,7 +91,7 @@ describe("toPublicErrorView()", () => {
 
 			expect(view.code).toBe("INTERNAL_ERROR");
 			expect(view.message).toBe("An unexpected error occurred.");
-			expect(view.locale).toBe("de-DE");
+			expect(view.locale).toBe("en");
 			expect(view.details).toBeUndefined();
 		});
 

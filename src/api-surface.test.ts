@@ -100,7 +100,10 @@ const TESTING_SURFACE = [
 
 const HTTP_SURFACE = ["toProblemDetails"] as const;
 
-const PRESENTATION_SURFACE = ["toPublicErrorView"] as const;
+const PRESENTATION_SURFACE = [
+	"createKitPublicErrors",
+	"toPublicErrorView",
+] as const;
 
 describe("public API surface (runtime exports)", () => {
 	it("the main entry exports exactly the pinned names", () => {

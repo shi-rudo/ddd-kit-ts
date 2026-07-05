@@ -165,6 +165,29 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Added: `createKitPublicErrors`, and `toPublicErrorView` rides the pipeline
+
+- New `createKitPublicErrors()` (presentation entry) builds base-error's
+  `PublicErrorCatalog` with one descriptor per public code the kit can
+  emit (`AGGREGATE_NOT_FOUND` 404, `CONCURRENCY_CONFLICT` 409 retryable,
+  `DUPLICATE_AGGREGATE` 409, the validation family 422 with sanitized
+  issues under `details.issues`, `INTERNAL_ERROR` 500 fallback).
+  Deliberately a FACTORY: base-error's `registerByCode` / `register`
+  widen the type but register into the same instance, so a shared
+  export would leak one consumer's extensions into every other. Build
+  your catalog at the composition root and extend it there:
+  `createKitPublicErrors().registerByCode("ORDER_ALREADY_SHIPPED", ...)`.
+- `toPublicErrorView` now delegates to that pipeline (`project` +
+  `localize` over a private default catalog) and accepts a `catalog`
+  option, so consumer codes and locales resolve through the same
+  machinery. Totality and the validation hardening are unchanged and
+  stay test-pinned.
+- Breaking within the unreleased 3.0.0: the `locale` option is now a
+  PREFERENCE (RFC 4647 lookup); the view carries the locale that
+  actually RESOLVED instead of stamping the requested one onto an
+  English message (`locale: "de-DE"` with the built-in messages now
+  yields `locale: "en"`).
+
 ### Changed (breaking): `toProblemDetails` delegates to base-error's `toProblem`
 
 - `toProblemDetails` now runs base-error's transport stage instead of
