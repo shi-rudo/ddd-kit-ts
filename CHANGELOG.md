@@ -165,6 +165,27 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Changed (breaking): `toProblemDetails` delegates to base-error's `toProblem`
+
+- `toProblemDetails` now runs base-error's transport stage instead of
+  hand-building the body: one pipeline, one wire profile, one hardening
+  implementation. It returns `toProblem`'s `ProblemDetailsResult`
+  (`{ status, headers, body, outcome }`), so boundaries stop restating
+  the status and content-type; the whitelisted issues ride under
+  `details.issues` (the same shape `toPublicErrorView` uses) and the
+  body carries the error's public `code`.
+- Wire changes: the `member` option (`errors` / `invalid-params`, both
+  non-standard conventions) is gone; the `ValidationProblemMember` type
+  was removed and `ValidationProblemDetails` added. The body inherits
+  `toProblem`'s guarantees: deeply frozen, null prototype, JSON-safe (a
+  non-serializable value drops that member into `outcome.omitted`
+  instead of corrupting the wire), and an extensions set colliding with
+  reserved members is dropped and recorded rather than merged.
+- Migration: `Response.json(toProblemDetails(e), { status: 422 })`
+  becomes `const p = toProblemDetails(e); Response.json(p.body,
+  { status: p.status, headers: p.headers })`; clients read the issues
+  from `details.issues` instead of the `errors` member.
+
 ### Fixed: the analyzer honors the prepared-definition fast path
 
 - `analyzeDomainMachineDefinition` hand-rolled validate-and-copy

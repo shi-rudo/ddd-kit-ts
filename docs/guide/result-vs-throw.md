@@ -224,10 +224,15 @@ This is where the kit's error model has **two deliberate styles**, and the rule 
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
 
 if (result.isErr()) {
-  return Response.json(toProblemDetails(result.error), { status: 422 });
+  const problem = toProblemDetails(result.error);
+  return Response.json(problem.body, {
+    status: problem.status,
+    headers: problem.headers,
+  });
 }
-// → { type: "about:blank", title: "Validation Failed", status: 422,
-//     errors: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] }
+// body → { type: "about:blank", title: "Validation Failed", status: 422,
+//          code: "VALIDATION_FAILED",
+//          details: { issues: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] } }
 ```
 
 For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a projected `PublicError`), reach for base-error's `toProblem` directly; `toProblemDetails` is the narrow validation shortcut.
