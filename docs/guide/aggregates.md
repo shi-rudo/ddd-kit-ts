@@ -184,7 +184,7 @@ The kit's two reconstitution paths enforce this structurally: `markRestored` wri
 
 The canonical record-after-mutation helper:
 
-1. Calls `setState(newState, /* bumpVersion */ true)`, which runs `validateState` and throws on rejection
+1. Calls `setState(newState)`, which runs `validateState` and throws on rejection
 2. Only if state mutated successfully, appends the event(s) via `addDomainEvent`
 3. Always bumps the version
 
@@ -198,7 +198,7 @@ this.commit(newState, [eventA, eventB]); // two events in one transition
 ```
 
 ::: info `commit()` always bumps the version
-The `bumpVersion` parameter was deliberately removed. Recording a domain event implies "something version-worthy happened". If you need to mutate state without bumping (cosmetic caches, internal state), call `setState(newState, false)` directly.
+Recording a domain event implies "something version-worthy happened". If you need to mutate state without bumping (cosmetic caches, internal state), call `setStateWithoutVersionBump(newState)` directly and skip `commit` entirely.
 :::
 
 ## Where invariants live
@@ -345,5 +345,5 @@ fresh.restoreFromSnapshot(snapshot);
 In any of those cases, **mutate state first, then record events.** See [Design Decisions](./design-decisions.md#event-sourcing-structurally-enforces-record-after-mutation).
 
 ::: warning Un-bumped mutations are invisible to optimistic concurrency
-A `setState` that does not bump the version writes `WHERE version = v SET version = v`. A concurrent writer that loaded the same `v` then commits its own `WHERE version = v` successfully and replaces your state, with no `ConcurrencyConflictError` on either side: a silent lost update. Skip the bump only for data whose loss under a concurrent write is acceptable, never for domain state. Since v3 the `bumpVersion` argument is required (the `autoVersionBump` config is gone), so every mutation states its OCC intent at the call site; a call that bypasses the compiler (an `Entity`-typed reference, plain JavaScript) fails loud with a `TypeError` before anything mutates. If you override `setState`, keep the two-argument signature and delegate to `super.setState(newState, bumpVersion)`: TypeScript's method bivariance also accepts a narrower single-argument override, which would silently disable both guards for that subclass.
+A mutation that does not bump the version writes `WHERE version = v SET version = v`. A concurrent writer that loaded the same `v` then commits its own `WHERE version = v` successfully and replaces your state, with no `ConcurrencyConflictError` on either side: a silent lost update. That is why the no-bump path has its own, deliberately loud method name: `setStateWithoutVersionBump`. Since v3 the OCC decision lives in the method name (the `autoVersionBump` config and the interim boolean argument are gone): `setState(newState)` always bumps, and the rare loss-tolerant mutation (cosmetic caches, denormalized display fields) spells out what it gives up. A call through an `Entity`-typed reference or plain JavaScript hits the same safe bumping default, so no runtime guard is needed.
 :::

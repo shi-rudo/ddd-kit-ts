@@ -76,7 +76,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 	/** Version-only change: deep-equal state, bumped version, no event. */
 	touch(): void {
-		this.setState({ ...this.state }, true);
+		this.setState({ ...this.state });
 	}
 }
 

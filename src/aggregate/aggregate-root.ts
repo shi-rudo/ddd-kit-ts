@@ -12,9 +12,10 @@ export type { IAggregateRoot } from "./aggregate";
 /**
  * Configuration options for AggregateRoot behavior: currently exactly
  * {@link EntityConfig} (the opt-in `deepFreezeState`). The former
- * `autoVersionBump` option was removed in v3: `setState` takes a
- * REQUIRED per-call `bumpVersion` argument instead, so every mutation
- * states its OCC intent explicitly at the call site.
+ * `autoVersionBump` option was removed in v3: the OCC decision lives in
+ * the method NAME instead. `setState` always bumps the version; the rare
+ * non-bumping mutation is the deliberately loud
+ * `setStateWithoutVersionBump`.
  */
 export type AggregateConfig = EntityConfig;
 
@@ -30,7 +31,8 @@ export type AggregateConfig = EntityConfig;
  * Provides:
  * - Identity (id) and state management (via `Entity`)
  * - Version + persistedVersion + pending-event tracking (via `BaseAggregate`)
- * - `setState`-based mutation with an explicit per-call version bump
+ * - `setState`-based mutation that always bumps the OCC version
+ *   (`setStateWithoutVersionBump` for the rare, loss-tolerant exception)
  * - `commit()` record-after-mutation helper
  * - Snapshot support for performance optimization
  *
@@ -175,7 +177,7 @@ export abstract class AggregateRoot<
 	 * zero-own-key objects like a bare `Date`), the state reference
 	 * changed since the baseline.
 	 *
-	 * The version clause is deliberate: `setState({...state}, true)` with
+	 * The version clause is deliberate: `setState({...state})` with
 	 * identical per-key values yields empty {@link changedKeys} but a
 	 * bumped version. If a repository skipped `save()` on a state-only
 	 * check, `withCommit` would still call `markPersisted(version)` after
@@ -211,7 +213,7 @@ export abstract class AggregateRoot<
 	 * "event for a fact that never happened" footgun.
 	 *
 	 * Order of operations:
-	 *  1. `setState(newState, true)`: runs `validateState` first.
+	 *  1. `setState(newState)`: runs `validateState` first.
 	 *     If it throws, the method propagates and **no event is recorded
 	 *     and no version is bumped**.
 	 *  2. Each event in `events` is appended via `addDomainEvent`.
@@ -220,7 +222,8 @@ export abstract class AggregateRoot<
 	 * implies "something happened that the outside world cares about", and
 	 * optimistic-concurrency callers must see a fresh version every time.
 	 * If you need to mutate state without bumping (e.g. cosmetic caches),
-	 * call `setState(newState, false)` and skip `commit` entirely.
+	 * call `setStateWithoutVersionBump(newState)` and skip `commit`
+	 * entirely.
 	 *
 	 * `events` accepts a single event or an array. Omit it (or pass `[]`)
 	 * for state-only mutations.
@@ -250,7 +253,7 @@ export abstract class AggregateRoot<
 		newState: TState,
 		events: TEvent | readonly TEvent[] = [],
 	): void {
-		this.setState(newState, true);
+		this.setState(newState);
 		const list: readonly TEvent[] = Array.isArray(events)
 			? events
 			: [events as TEvent];
@@ -260,52 +263,44 @@ export abstract class AggregateRoot<
 	}
 
 	/**
-	 * Sets the state and, when `bumpVersion` is `true`, advances the
-	 * version. Validates `newState` via `validateState()`.
+	 * Sets the state AND advances the OCC version. Validates `newState`
+	 * via `validateState()`. This is the safe default for every domain
+	 * mutation: a version that moves makes the save's optimistic
+	 * predicate (`WHERE version = v`) catch concurrent writers. Prefer
+	 * `commit()` when the mutation also records events; it delegates
+	 * here.
 	 *
-	 * **`bumpVersion` is required: every mutation states its OCC intent
-	 * at the call site.** An un-bumped mutation can be silently
-	 * overwritten by a concurrent writer: a save whose version did not
-	 * move writes `WHERE version = v SET version = v`, so a concurrent
-	 * writer that loaded the same `v` commits over it without any
-	 * `ConcurrencyConflictError`. Pass `false` only for data whose loss
-	 * under a concurrent write is acceptable (cosmetic caches,
-	 * denormalized display fields), never for domain state. Prefer
-	 * `commit()` for domain mutations; it always bumps.
-	 *
-	 * **Overrides must keep the two-argument signature and delegate to
-	 * `super.setState(newState, bumpVersion)`.** TypeScript's method
-	 * bivariance also accepts a narrower single-argument override, which
-	 * would silently disable BOTH guards (the compile-time block and the
-	 * runtime `TypeError`) for every call inside that subclass,
-	 * reintroducing the exact lost-update trap this signature closes.
+	 * The rare non-bumping mutation has its own, deliberately loud name:
+	 * {@link setStateWithoutVersionBump}. No boolean flag: the OCC
+	 * decision is a word at the call site, not a `true`/`false` a reader
+	 * has to look up, and a polymorphic call through an `Entity`-typed
+	 * reference gets this safe bumping behavior instead of a runtime
+	 * guard.
 	 *
 	 * @param newState - The new state
-	 * @param bumpVersion - Whether this mutation advances the OCC version
 	 */
-	protected setState(newState: TState, bumpVersion: boolean): void;
-	/**
-	 * Base-signature overload, deliberately BLOCKED (`never` parameter):
-	 * calling `setState` on an `AggregateRoot` without `bumpVersion` is a
-	 * compile error. The overload exists only so the required-argument
-	 * signature stays structurally compatible with `Entity.setState`.
-	 */
-	protected setState(newState: never): void;
-	protected setState(newState: TState, bumpVersion?: boolean): void {
-		if (typeof bumpVersion !== "boolean") {
-			// Reachable despite the compile-time block: a polymorphic call
-			// through an Entity-typed reference, or plain JavaScript. Fail
-			// loud BEFORE mutating; a silent no-bump default is exactly the
-			// lost-update trap the required argument exists to close.
-			throw new TypeError(
-				"AggregateRoot.setState requires the bumpVersion argument: " +
-					"every mutation states its OCC intent at the call site",
-			);
-		}
+	protected override setState(newState: TState): void {
 		super.setState(newState);
-		if (bumpVersion) {
-			this.bumpVersion();
-		}
+		this.bumpVersion();
+	}
+
+	/**
+	 * Sets the state WITHOUT advancing the OCC version. Validates
+	 * `newState` via `validateState()` and marks keys dirty like
+	 * {@link setState}.
+	 *
+	 * **The name is long on purpose.** An un-bumped mutation can be
+	 * silently overwritten by a concurrent writer: a save whose version
+	 * did not move writes `WHERE version = v SET version = v`, so a
+	 * concurrent writer that loaded the same `v` commits over it without
+	 * any `ConcurrencyConflictError`. Use this only for data whose loss
+	 * under a concurrent write is acceptable (cosmetic caches,
+	 * denormalized display fields), never for domain state.
+	 *
+	 * @param newState - The new state
+	 */
+	protected setStateWithoutVersionBump(newState: TState): void {
+		super.setState(newState);
 	}
 
 	/**

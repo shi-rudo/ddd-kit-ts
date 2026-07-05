@@ -116,7 +116,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState(_, true)` / `commit()` paths and by the
+	 * aggregates' `setState()` / `commit()` paths and by the
 	 * event-sourced replay path after each applied event.
 	 */
 	protected bumpVersion(): void {

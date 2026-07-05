@@ -94,6 +94,11 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		);
 	}
 
+	replayLikeLegacy(event: TestEventUpdated): void {
+		// @ts-expect-error the isNew flag argument is gone: apply() always records; replay goes through loadFromHistory / restoreFromSnapshotWithEvents
+		this.apply(event, false);
+	}
+
 	protected readonly handlers = {
 		TestEventCreated: (state: TestState, event: TestEventCreated): TestState => ({
 			...state,

@@ -102,24 +102,33 @@ export abstract class EventSourcedAggregate<
 	 * dispatched handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`,
 	 * with no `as` cast required at the call site.
 	 *
+	 * `apply()` is exclusively for NEW facts: it always records the event
+	 * and bumps the version (the former `isNew` flag argument is gone).
+	 * Replaying history is a different operation with its own entry
+	 * points, `loadFromHistory` and `restoreFromSnapshotWithEvents`.
+	 *
 	 * @param event - The domain event to apply
-	 * @param isNew - Whether the event is new (needs persisting) or replayed from history
 	 */
 	protected apply<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
-		isNew = true,
 	): void {
-		this.dispatchAndCommit(event, isNew);
+		this.dispatch(event);
+		this.addDomainEvent(event);
+		this.bumpVersion();
 	}
 
 	/**
-	 * Internal dispatch path used by `apply()` and the replay methods
-	 * (`loadFromHistory`, `restoreFromSnapshotWithEvents`). The replay loop
-	 * iterates over `TEvent[]` and therefore cannot supply a narrowed `K`
-	 * generic, so this helper accepts `TEvent` and the discriminator is
-	 * resolved via the (statically-sound) `handlers` map.
+	 * Internal state-transition path shared by `apply()` and the replay
+	 * methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`):
+	 * validate, locate the handler, commit the next state. It deliberately
+	 * does NOT record the event or bump the version; `apply()` layers that
+	 * on for new facts, while replay must not (the history is already
+	 * persisted). The replay loop iterates over `TEvent[]` and therefore
+	 * cannot supply a narrowed `K` generic, so this helper accepts `TEvent`
+	 * and the discriminator is resolved via the (statically-sound)
+	 * `handlers` map.
 	 */
-	private dispatchAndCommit(event: TEvent, isNew: boolean): void {
+	private dispatch(event: TEvent): void {
 		this.validateEvent(event);
 
 		// Own-key guard: the handlers map is an object literal, so a plain
@@ -140,10 +149,6 @@ export abstract class EventSourcedAggregate<
 
 		// Atomic commit: nothing above this line mutated aggregate state.
 		this._state = this.freezeState(nextState);
-		if (isNew) {
-			this.addDomainEvent(event);
-			this.bumpVersion();
-		}
 	}
 
 	/**
@@ -155,8 +160,8 @@ export abstract class EventSourcedAggregate<
 	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
 	 * is rolled back to its pre-call value, the same contract as
 	 * `restoreFromSnapshotWithEvents`. Partial replay is never observable.
-	 * (Version needs no rollback: replay dispatches with `isNew = false`,
-	 * which never bumps it; only the final `markRestored` advances it.)
+	 * (Version needs no rollback: replay goes through `dispatch`, which
+	 * never bumps it; only the final `markRestored` advances it.)
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at
@@ -178,7 +183,8 @@ export abstract class EventSourcedAggregate<
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		this.assertReplayTargetFresh(true);
+		this.assertReplayTargetHasNoPendingEvents();
+		this.assertReplayTargetHasNoUnpersistedVersion();
 		// Empty stream: nothing was loaded, so leave the lifecycle markers
 		// alone. markRestored(version) here would replace the
 		// never-persisted sentinel (persistedVersion === undefined) on a
@@ -190,7 +196,7 @@ export abstract class EventSourcedAggregate<
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
-				this.dispatchAndCommit(event, false);
+				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
 				if (e instanceof DomainError) return err(e);
@@ -224,7 +230,7 @@ export abstract class EventSourcedAggregate<
 		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		this.assertReplayTargetFresh(false);
+		this.assertReplayTargetHasNoPendingEvents();
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
@@ -254,7 +260,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			try {
-				this.dispatchAndCommit(event, false);
+				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
 				this.setVersion(previousVersion);
@@ -272,12 +278,9 @@ export abstract class EventSourcedAggregate<
 	/**
 	 * Replay-target freshness guard shared by `loadFromHistory` and
 	 * `restoreFromSnapshotWithEvents`. See {@link UnreplayableAggregateError}
-	 * for the desync both conditions prevent. `checkUnpersistedVersion` is
-	 * `true` for the additive `loadFromHistory` path only: the snapshot
-	 * restore overwrites version wholesale, so a never-persisted in-memory
-	 * version is harmless there.
+	 * for the desync this prevents.
 	 */
-	private assertReplayTargetFresh(checkUnpersistedVersion: boolean): void {
+	private assertReplayTargetHasNoPendingEvents(): void {
 		const pending = this.pendingEvents.length;
 		if (pending > 0) {
 			throw new UnreplayableAggregateError(
@@ -286,11 +289,16 @@ export abstract class EventSourcedAggregate<
 					"part of the persisted stream",
 			);
 		}
-		if (
-			checkUnpersistedVersion &&
-			this.version > 0 &&
-			this.persistedVersion === undefined
-		) {
+	}
+
+	/**
+	 * Additive-replay guard for `loadFromHistory` only: the snapshot
+	 * restore overwrites version wholesale, so a never-persisted in-memory
+	 * version is harmless there and `restoreFromSnapshotWithEvents`
+	 * deliberately does not call this.
+	 */
+	private assertReplayTargetHasNoUnpersistedVersion(): void {
+		if (this.version > 0 && this.persistedVersion === undefined) {
 			throw new UnreplayableAggregateError(
 				String(this.id),
 				`its in-memory version (${this.version}) was never persisted ` +

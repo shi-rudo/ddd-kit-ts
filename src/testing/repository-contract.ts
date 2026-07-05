@@ -101,7 +101,7 @@ export interface RepositoryContractHarness<
 
 	/**
 	 * Optional: a version-bumping mutation whose state is deep-equal to
-	 * the previous state (`setState({...state}, true)`). Enables the
+	 * the previous state (`setState({...state})`). Enables the
 	 * version-only-change-still-persists test: the skip-save/OCC-desync
 	 * trap.
 	 */

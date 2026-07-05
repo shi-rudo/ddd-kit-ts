@@ -84,7 +84,7 @@ export interface IRepository<
 	 * exposes two version fields with distinct roles:
 	 *
 	 *  - `aggregate.version`: in-memory post-mutation value, bumped by
-	 *    `setState(_, true)` / `commit()` / `apply()`. NOT the right
+	 *    `setState()` / `commit()` / `apply()`. NOT the right
 	 *    routing key, because mutations can advance it past zero while
 	 *    the DB row still does not exist.
 	 *  - `aggregate.persistedVersion`: what the persistence layer holds.

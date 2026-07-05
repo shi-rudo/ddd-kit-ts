@@ -11,11 +11,12 @@ v3 is a deliberately small "tightening" major: every breaking change
 fails at COMPILE time instead of changing runtime semantics silently.
 Upgrade checklist (details and rationale in the sections below):
 
-1. Add the second argument to every `AggregateRoot.setState` call:
-   `this.setState(next)` becomes `this.setState(next, true)` (pass
-   `false` only for data whose loss under a concurrent write is
-   acceptable). Remove `autoVersionBump` from configs; overrides keep
-   the two-argument signature and delegate to `super`.
+1. `AggregateRoot.setState(next)` now ALWAYS bumps the OCC version.
+   Call sites that relied on the implicit non-bumping default and
+   genuinely tolerate loss under a concurrent write switch to the new
+   `setStateWithoutVersionBump(next)`; everything else keeps its
+   one-argument call and gains the safe behavior. Remove
+   `autoVersionBump` from configs.
 2. Remove err-branches that matched the "No handler registered" message
    or the `UnregisteredHandlerError` type on the bus error channel:
    `execute` now throws it. Catch the named type where the case must be
@@ -65,27 +66,43 @@ Upgrade checklist (details and rationale in the sections below):
   migration is a find-and-replace on the two type names (the shapes are
   identical).
 
-### Changed (breaking): `AggregateRoot.setState` requires the `bumpVersion` argument
+### Changed (breaking): `AggregateRoot.setState` always bumps; the no-bump path is a named method
 
-- `setState(newState, bumpVersion)` takes a REQUIRED boolean: every mutation
-  states its optimistic-concurrency intent at the call site. The implicit
-  no-bump default permitted silent lost updates (a save whose version did
-  not move writes `WHERE version = v SET version = v`, so a concurrent
-  writer that loaded the same `v` commits over it without a
+- `setState(newState)` now ALWAYS advances the OCC version, and the
+  rare non-bumping mutation moved to the deliberately loud
+  `setStateWithoutVersionBump(newState)`. The optimistic-concurrency
+  decision is a WORD at the call site, not a boolean flag a reader has
+  to look up. The previously implicit no-bump default permitted silent
+  lost updates (a save whose version did not move writes
+  `WHERE version = v SET version = v`, so a concurrent writer that
+  loaded the same `v` commits over it without a
   `ConcurrencyConflictError`); deprecated since 2.2.0, removed now.
 - The `autoVersionBump` option is removed; `AggregateConfig` is now an
-  alias of `EntityConfig` (the per-call argument replaced the config
+  alias of `EntityConfig` (the named methods replaced the config
   fallback entirely).
 - Calls that bypass the compiler (an `Entity`-typed reference, plain
-  JavaScript) fail loud with a `TypeError` before anything mutates.
-- Migration: add the second argument to every `setState` call site
-  (`this.setState(next)` becomes `this.setState(next, true)`; pass
-  `false` only for data whose loss under a concurrent write is
-  acceptable). Aggregates configured with `autoVersionBump: true` pass
-  `true` per call; `commit()` users are unaffected. If you OVERRIDE
-  `setState`, keep the two-argument signature and delegate to `super`:
-  method bivariance also accepts a narrower single-argument override,
-  which would silently disable both guards for that subclass.
+  JavaScript) hit the same safe bumping default: `setState` keeps the
+  identical one-argument signature as `Entity.setState`, so the
+  bivariant-override footgun and the runtime `TypeError` guard of the
+  interim two-argument design are gone.
+- Migration from 2.x: audit every `setState` call site. Domain
+  mutations keep their one-argument call and gain the version bump;
+  only mutations that genuinely tolerate loss under a concurrent write
+  (cosmetic caches, denormalized display fields) switch to
+  `setStateWithoutVersionBump(next)`. Aggregates configured with
+  `autoVersionBump: true` drop the config and change nothing else;
+  `commit()` users are unaffected.
+
+### Changed (breaking): `apply()` is only for new facts; the `isNew` flag is gone
+
+- `EventSourcedAggregate.apply(event)` drops its optional `isNew`
+  boolean (the same flag-argument cleanup as `setState`): `apply()`
+  always records the event and bumps the version. Replaying history is
+  a different operation with its own entry points, `loadFromHistory`
+  and `restoreFromSnapshotWithEvents`; internally both share the
+  record-free `dispatch` transition path. No known consumer passed
+  `isNew` explicitly; call sites using `this.apply(event)` are
+  unaffected.
 
 ### Changed (breaking): buses throw `UnregisteredHandlerError` for unregistered types
 
