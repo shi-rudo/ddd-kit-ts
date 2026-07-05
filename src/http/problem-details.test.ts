@@ -14,6 +14,10 @@ describe("toProblemDetails()", () => {
 
 		expect(problem.status).toBe(422);
 		expect(problem.title).toBe("Validation Failed");
+		// base-error 8's ProblemDetails carries the machine-readable public
+		// code as a documented member; the ValidationError's own code rides
+		// along so clients can branch without parsing the title.
+		expect(problem.code).toBe("VALIDATION_FAILED");
 		const errors = problem.errors as Array<Record<string, unknown>>;
 		expect(errors).toHaveLength(2);
 		expect(errors[0]?.message).toBe("must be a valid email");
@@ -31,9 +35,12 @@ describe("toProblemDetails()", () => {
 	});
 
 	it("merges extra extension members alongside the issues", () => {
-		const problem = toProblemDetails(invalidRegistration(), {
-			extensions: { traceId: "abc-123" },
-		});
+		const problem = toProblemDetails<Record<string, unknown>>(
+			invalidRegistration(),
+			{
+				extensions: { traceId: "abc-123" },
+			},
+		);
 
 		expect(problem.traceId).toBe("abc-123");
 		expect(problem.errors).toHaveLength(2);

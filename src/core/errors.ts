@@ -15,7 +15,7 @@ import { BaseError } from "@shirudo/base-error";
  * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
  * surface (timestamps, cause chains, `toJSON()`, `isRetryable`, …). For
  * client-safe / localized messages, project errors through the opt-in
- * `@shirudo/base-error/presentation` subpath at the boundary; the technical
+ * `@shirudo/base-error/public-error` subpath at the boundary; the technical
  * core deliberately carries no user-facing message.
  */
 export abstract class DomainError<

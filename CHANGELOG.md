@@ -35,9 +35,18 @@ Upgrade checklist (details and rationale in the sections below):
   2026-04-30, and a major is the right window to drop it. Cloudflare
   Workers, Vercel Edge, Deno, and Bun remain supported unchanged.
 - The `@shirudo/base-error` peer dependency moves from `^7.1.1` to
-  `^8.0.0`. The kit compiles and its full test suite passes against 8.x
-  without source changes; consumers that use base-error's API directly
-  follow its own migration notes.
+  `^8.0.0`, and the kit follows 8.x's public-error consolidation: the
+  `/presentation` and `/problem-details` subpaths merged into
+  `/public-error`, so `toPublicErrorView` now returns base-error's
+  `LocalizedPublicError` (structurally the same `code` / `message` /
+  `locale` / `details` view the 7.x `PublicErrorView` carried) and
+  `toProblemDetails` returns the 8.x `ProblemDetails`, whose contract
+  includes the machine-readable public `code` member; the body now
+  carries the `ValidationError`'s own code (`"VALIDATION_FAILED"` by
+  default). For catalog-driven mapping use 8.x's `toProblem` /
+  `definePublicErrors` (the 7.x `defineProblemDetailsAdapter` /
+  `PublicErrorPresenter` are gone); consumers that use base-error's
+  API directly follow its own migration notes.
 
 ### Changed (breaking): one repository delete contract, on the aggregate
 

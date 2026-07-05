@@ -1,5 +1,5 @@
 import type { PublicIssue } from "@shirudo/base-error";
-import type { PublicErrorView } from "@shirudo/base-error/presentation";
+import type { LocalizedPublicError } from "@shirudo/base-error/public-error";
 
 /**
  * Safe, client-facing English messages for the kit's known errors. They carry
@@ -44,11 +44,11 @@ export interface PublicErrorViewOptions {
 
 /**
  * Maps a kit error (or any caught value) to a base-error
- * {@link PublicErrorView}: a **transport-neutral**, client-safe representation
- * (`code`, `message`, `locale`, optional `details`). It is deliberately *not* a
- * transport adapter: it carries no HTTP status, header, or exit code, because
- * those are the consumer's concern. Feed the view into base-error's
- * `defineProblemDetailsAdapter` (HTTP / RFC 9457), a gRPC status mapper, or a
+ * {@link LocalizedPublicError}: a **transport-neutral**, client-safe
+ * representation (`code`, `message`, `locale`, optional `details`). It is
+ * deliberately *not* a transport adapter: it carries no HTTP status, header,
+ * or exit code, because those are the consumer's concern. Feed the view into
+ * base-error's `toProblem` (HTTP / RFC 9457), a gRPC status mapper, or a
  * CLI exit-code table, whichever boundary you are at.
  *
  * Total over `unknown`: an unmapped or non-kit value degrades to a generic
@@ -65,28 +65,27 @@ export interface PublicErrorViewOptions {
  * (`message`, `path`, `code`, `pointer`); unknown fields and non-conforming
  * entries are dropped.
  *
- * For richer, multi-locale messages, register the kit's errors in a base-error
- * `PublicErrorRegistry` and use `PublicErrorPresenter` instead; this helper is
- * the lean, single-locale default.
+ * For richer, multi-locale messages, describe the kit's errors in a
+ * base-error catalog (`definePublicErrors`) and use its `project` /
+ * `localize` pipeline instead; this helper is the lean, single-locale
+ * default.
  *
  * @example
  * ```ts
  * import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
- * import { defineProblemDetailsAdapter } from "@shirudo/base-error/problem-details";
+ * import { toProblem } from "@shirudo/base-error/public-error";
  *
- * const adapter = defineProblemDetailsAdapter({
- *   definitions: { AggregateNotFoundError: { type: "about:blank", status: 404 } },
- *   fallback: { type: "about:blank", status: 500 },
- * });
- *
- * const { body, status } = adapter.map(toPublicErrorView(error));
+ * const { body, status } = toProblem(
+ *   { status: 500 }, // or a PublicErrorCatalog with per-code type/status
+ *   toPublicErrorView(error),
+ * );
  * return Response.json(body, { status });
  * ```
  */
 export function toPublicErrorView(
 	error: unknown,
 	options: PublicErrorViewOptions = {},
-): PublicErrorView<PublicErrorViewDetails> {
+): LocalizedPublicError<PublicErrorViewDetails> {
 	const locale = options.locale ?? DEFAULT_LOCALE;
 	// The catch is the totality guarantee itself: a hostile or broken input
 	// (throwing `name`/`publicIssues` accessors, a throwing `publicIssues()`
@@ -100,14 +99,14 @@ export function toPublicErrorView(
 
 function fallbackView(
 	locale: string,
-): PublicErrorView<PublicErrorViewDetails> {
+): LocalizedPublicError<PublicErrorViewDetails> {
 	return { code: FALLBACK_CODE, message: FALLBACK_MESSAGE, locale };
 }
 
 function mapToView(
 	error: unknown,
 	locale: string,
-): PublicErrorView<PublicErrorViewDetails> {
+): LocalizedPublicError<PublicErrorViewDetails> {
 	const name = errorName(error);
 
 	// ValidationError (and subclasses) are detected by capability, not by a

@@ -54,7 +54,7 @@ A handler may also return `err(typedError)` directly; that value passes through 
 
 ## Error hierarchy
 
-The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, retryable hints, and `toJSON()` for structured logging out of the box. Client-safe, localized messages are a separate boundary concern: project errors through the opt-in `@shirudo/base-error/presentation` subpath.
+The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, retryable hints, and `toJSON()` for structured logging out of the box. Client-safe, localized messages are a separate boundary concern: project errors through the opt-in `@shirudo/base-error/public-error` subpath.
 
 ```ts
 import { BaseError } from "@shirudo/base-error";
@@ -140,7 +140,7 @@ try {
 
 Because every library error extends `BaseError<Name>`:
 
-- **`error.toJSON()` / `error.toLogObject()`**: structured **log** entry with name, message, timestamp, stack, cause chain. Log-only: never return it to a client. For client-safe, localized output, project the error through the opt-in `@shirudo/base-error/presentation` subpath (`PublicErrorPresenter`) at the boundary; the technical core carries no user-facing message.
+- **`error.toJSON()` / `error.toLogObject()`**: structured **log** entry with name, message, timestamp, stack, cause chain. Log-only: never return it to a client. For client-safe, localized output, project the error through the opt-in `@shirudo/base-error/public-error` subpath (`the public-error projection pipeline`) at the boundary; the technical core carries no user-facing message.
 - **`error.timestamp` / `error.timestampIso`**: epoch + ISO, useful for sorting / correlating log entries across distributed systems.
 - **`error.name`**: typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
 - **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`): for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
@@ -219,7 +219,7 @@ This is where the kit's error model has **two deliberate styles**, and the rule 
 
 ### Rendering RFC 9457 at the boundary
 
-`@shirudo/base-error` is **safe by default**: a `ValidationError` does not expose its issues on its own; they only cross to a client through the `publicIssues()` whitelist. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free. It returns base-error's own `ProblemDetails` type (from `@shirudo/base-error/problem-details`), so the RFC 9457 shape stays a single source of truth:
+`@shirudo/base-error` is **safe by default**: a `ValidationError` does not expose its issues on its own; they only cross to a client through the `publicIssues()` whitelist. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free. It returns base-error's own `ProblemDetails` type (from `@shirudo/base-error/public-error`), so the RFC 9457 shape stays a single source of truth:
 
 ```ts
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
@@ -231,4 +231,4 @@ if (result.isErr()) {
 //     errors: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] }
 ```
 
-For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a `PublicErrorView`), reach for base-error's `defineProblemDetailsAdapter` directly; `toProblemDetails` is the narrow validation shortcut.
+For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a projected `PublicError`), reach for base-error's `toProblem` directly; `toProblemDetails` is the narrow validation shortcut.
