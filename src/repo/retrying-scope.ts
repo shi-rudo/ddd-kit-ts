@@ -22,6 +22,10 @@ export interface RetryPolicy {
 	 * even when an adapter wraps it). Override to add driver-specific
 	 * serialization codes (Postgres 40001, MySQL 1213, SQLite SQLITE_BUSY)
 	 * that your adapter has not mapped to a retryable kit error.
+	 *
+	 * Guarded like `onRetry`: a THROWING classifier counts as "not
+	 * retryable" and the transaction's ORIGINAL error surfaces, never the
+	 * classifier's own failure.
 	 */
 	isRetryable?: (error: unknown) => boolean;
 	/**
@@ -162,6 +166,13 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 	): Promise<T> {
 		const { maxAttempts, isRetryable, sleep } = this;
 		const signal = options?.signal;
+		const isRetryableSafe = (error: unknown): boolean => {
+			try {
+				return isRetryable(error);
+			} catch {
+				return false;
+			}
+		};
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			if (signal?.aborted) {
@@ -172,7 +183,12 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 			} catch (error) {
 				// Exhausted, or a failure retrying cannot fix: surface it
 				// unchanged so the caller keeps the original error type.
-				if (attempt === maxAttempts || !isRetryable(error)) {
+				// The classifier itself is guarded like the onRetry observer
+				// below: a throwing classifier (a custom predicate bug, or
+				// the default someChainRetryable on a circular cause chain)
+				// must not replace the transaction's failure, so its throw
+				// counts as "not retryable" and the ORIGINAL error surfaces.
+				if (attempt === maxAttempts || !isRetryableSafe(error)) {
 					throw error;
 				}
 				const delayMs = computeBackoffDelay(attempt, {

@@ -101,6 +101,18 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: a throwing retry classifier no longer masks the transaction error
+
+- `RetryingTransactionScope` invoked the `isRetryable` classifier
+  unguarded inside its catch block, so a throwing classifier replaced
+  the original transaction failure with its own error (losing the
+  error type upstream mapping relies on, e.g.
+  `ConcurrencyConflictError` to HTTP 409). Reachable with the DEFAULT
+  policy: base-error's `someChainRetryable` throws on a circular cause
+  chain. The classifier is now guarded like the `onRetry` observer: a
+  classifier throw counts as "not retryable" and the ORIGINAL error
+  surfaces unchanged.
+
 ### Fixed: bus error channels are honest for literal unions and broken mappers
 
 - A string-literal-union error channel (e.g.
