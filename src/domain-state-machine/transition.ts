@@ -209,12 +209,15 @@ export function transitionPreparedDomainState<
 				});
 	validateDomainMachineSnapshotInvariant(definition, nextSnapshot);
 
-	return {
+	// Frozen like every sibling return value (snapshots, outputs, the
+	// analyzer result): the contract types the fields readonly, and the
+	// runtime must not allow a cast to rewrite from/to.
+	return Object.freeze({
 		from,
 		to: transition.target,
 		snapshot: nextSnapshot,
 		outputs: copyDomainMachineOutputs(
 			readDomainTransitionResultOutputs(result),
 		),
-	};
+	});
 }

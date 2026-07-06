@@ -193,6 +193,10 @@ Upgrade checklist (details and rationale in the sections below):
   instead of as empty plain objects that all equaled each other;
   `deepOmit` passes them through by reference so `deepEqualExcept`
   stays consistent.
+- `transitionDomainState` outcomes are `Object.freeze`d like every
+  sibling return value (snapshots, outputs, the analyzer result), so a
+  cast can no longer rewrite `from`/`to` at runtime despite the
+  readonly typing.
 - `deepOmit`'s `ignoreKeyPredicate` receives a stable path snapshot;
   captured paths no longer read as empty after the walk.
 - `mergeMetadata` and `copyMetadata` reject an own `__proto__` data key

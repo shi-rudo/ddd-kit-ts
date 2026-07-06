@@ -3715,3 +3715,31 @@ describe("validate-then-copy is not Proxy-defeatable (single-read contract)", ()
 	});
 });
 
+describe("transition outcomes are frozen like every sibling return value", () => {
+	it("transitionDomainState returns a frozen outcome object", () => {
+		const outcome = transitionDomainState(
+			{
+				initial: "draft",
+				initialContext: () => ({}),
+				states: {
+					draft: { on: { Finish: { target: "done" } } },
+					done: { terminal: true },
+				},
+			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>,
+			createInitialDomainMachineSnapshot({
+				initial: "draft",
+				initialContext: () => ({}),
+				states: {
+					draft: { on: { Finish: { target: "done" } } },
+					done: { terminal: true },
+				},
+			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>),
+			{ type: "Finish" },
+		);
+
+		expect(Object.isFrozen(outcome)).toBe(true);
+		expect(() => {
+			(outcome as { to: string }).to = "draft";
+		}).toThrow();
+	});
+});
