@@ -5,7 +5,7 @@ A collection of utility functions for deep comparison and manipulation of arrays
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqual, deepOmit, deepEqualExcept } from '@shirudo/ddd-kit/utils';
 ```
 
 ## Functions
@@ -27,7 +27,7 @@ Performs a deep equality check between two values. This function compares values
 #### Example
 
 ```ts
-import { deepEqual } from '@shirudo/ddd-kit/utils/array';
+import { deepEqual } from '@shirudo/ddd-kit/utils';
 
 deepEqual([1, 2, 3], [1, 2, 3]); // true
 deepEqual({ a: 1, b: [2, 3] }, { a: 1, b: [2, 3] }); // true
@@ -75,7 +75,7 @@ This function recursively traverses the object tree and removes keys that match 
 #### Example
 
 ```ts
-import { deepOmit } from '@shirudo/ddd-kit/utils/array';
+import { deepOmit } from '@shirudo/ddd-kit/utils';
 
 const obj = {
   id: 1,
@@ -119,7 +119,7 @@ This function first removes the specified keys from both values using `deepOmit`
 #### Example
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 const obj1 = {
   id: 1,
@@ -155,35 +155,6 @@ deepEqualExcept(obj1, obj2, {
 
 ---
 
-### `isBuiltInObject(obj, tag)`
-
-Checks if an object is a built-in JavaScript type that should be treated atomically.
-
-This function uses a multi-layered detection strategy:
-
-1. TypedArrays: Checks if tag ends with "Array]"
-2. ArrayBuffer views: Uses `ArrayBuffer.isView()` (covers DataView and all TypedArrays)
-3. Built-in constructors: Checks if constructor exists in global scope
-4. Tag-based: Fallback to tag matching for known built-ins
-
-#### Example
-
-```ts
-import { isBuiltInObject } from '@shirudo/ddd-kit/utils/array';
-
-isBuiltInObject(new Date(), "[object Date]"); // true
-isBuiltInObject(new Map(), "[object Map]"); // true
-isBuiltInObject(new Uint8Array(), "[object Uint8Array]"); // true
-isBuiltInObject({}, "[object Object]"); // false
-```
-
-#### Notes
-
-- Useful for determining if an object should be treated atomically
-- Exported for advanced use cases
-
----
-
 ## DDD Use Cases
 
 These utilities are particularly useful in Domain-Driven Design contexts for comparing domain objects while ignoring infrastructure concerns.
@@ -193,7 +164,7 @@ These utilities are particularly useful in Domain-Driven Design contexts for com
 Value Objects should be compared by their attributes, not identity:
 
 ```ts
-import { deepEqual } from '@shirudo/ddd-kit/utils/array';
+import { deepEqual } from '@shirudo/ddd-kit/utils';
 import { vo, type VO } from '@shirudo/ddd-kit';
 
 type Money = VO<{
@@ -234,7 +205,7 @@ deepEqual(address1, address2); // true
 When comparing entities or aggregates, you often want to ignore infrastructure fields like IDs, versions, timestamps, and metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 // Compare entities ignoring ID and version
 const entity1 = {
@@ -270,7 +241,7 @@ deepEqualExcept(entity1, entity2, {
 Aggregates contain entities and value objects. Compare them while ignoring infrastructure concerns:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 type OrderState = {
   id: OrderId;
@@ -324,7 +295,7 @@ deepEqualExcept(order1, order2, {
 When testing domain logic, compare expected vs actual results while ignoring non-deterministic fields:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 import { describe, it, expect } from 'vitest';
 
 describe("Order aggregate", () => {
@@ -358,7 +329,7 @@ describe("Order aggregate", () => {
 Domain events often have metadata that should be ignored when comparing:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 type OrderCreatedEvent = {
   type: "OrderCreated";
@@ -411,7 +382,7 @@ deepEqualExcept(event1, event2, {
 When testing repositories, compare aggregates while ignoring persistence metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 describe("OrderRepository", () => {
   it("should save and load aggregate correctly", async () => {
@@ -436,7 +407,7 @@ describe("OrderRepository", () => {
 When comparing aggregate snapshots, ignore snapshot-specific metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 type AggregateSnapshot = {
   aggregateId: string;
@@ -473,7 +444,7 @@ deepEqualExcept(snapshot1, snapshot2, {
 When testing specifications, compare query results while ignoring order or metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils/array';
+import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
 describe("ActiveOrdersSpecification", () => {
   it("should return only active orders", async () => {
