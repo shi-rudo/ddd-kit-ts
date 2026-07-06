@@ -1,4 +1,8 @@
-import { isBuiltInObject, REFERENCE_COMPARED_TAGS } from "./is-built-in";
+import {
+	isBuiltInObject,
+	isOpaqueExoticTag,
+	REFERENCE_COMPARED_TAGS,
+} from "./is-built-in";
 
 export type DeepOmitKey = string | symbol;
 export type DeepOmitPathSegment = string | number | symbol;
@@ -172,6 +176,15 @@ function omitInternal(
 		return builtInClone;
 	}
 
+	// Opaque intrinsics (boxed Symbol, generator, WeakRef, ...): pass
+	// through by reference, mirroring deepEqual's identity comparison; a
+	// plain "clone" would carry none of their internal state and could
+	// never compare equal to anything, including itself.
+	if (isOpaqueExoticTag(tag)) {
+		visited.set(obj, obj);
+		return obj;
+	}
+
 	// Plain / Custom Objects: filter keys, recursively process values.
 	const clone = Object.create(Object.getPrototypeOf(obj));
 	visited.set(obj, clone);
@@ -282,6 +295,9 @@ function shouldIgnoreKey(
 	options: DeepOmitOptions,
 ): boolean {
 	if (ignoreKeys?.has(key)) return true;
-	if (options.ignoreKeyPredicate?.(key, path)) return true;
+	// The walk reuses ONE path array via push/pop; hand the predicate a
+	// snapshot so paths it captures stay valid after the walk. Paid only
+	// on the (already path-sensitive, budget-guarded) predicate mode.
+	if (options.ignoreKeyPredicate?.(key, path.slice())) return true;
 	return false;
 }

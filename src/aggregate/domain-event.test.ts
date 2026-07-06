@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { HostileStateKeyError } from "../core/errors";
 import {
-	type DomainEvent,
-	type EventMetadata,
 	copyMetadata,
 	createDomainEvent,
+	type DomainEvent,
+	type EventMetadata,
 	mergeMetadata,
 	resetClockFactory,
 	resetEventIdFactory,
@@ -28,9 +29,13 @@ describe("DomainEvent", () => {
 		});
 
 		it("uses an explicit eventId when provided via options", () => {
-			const event = createDomainEvent("Demo", { x: 1 }, {
-				eventId: "evt-explicit-123",
-			});
+			const event = createDomainEvent(
+				"Demo",
+				{ x: 1 },
+				{
+					eventId: "evt-explicit-123",
+				},
+			);
 			expect(event.eventId).toBe("evt-explicit-123");
 		});
 
@@ -52,10 +57,14 @@ describe("DomainEvent", () => {
 
 	describe("aggregateId / aggregateType", () => {
 		it("captures aggregateId and aggregateType when provided", () => {
-			const event = createDomainEvent("OrderCreated", { customerId: "c-1" }, {
-				aggregateId: "order-42",
-				aggregateType: "Order",
-			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ customerId: "c-1" },
+				{
+					aggregateId: "order-42",
+					aggregateType: "Order",
+				},
+			);
 			expect(event.aggregateId).toBe("order-42");
 			expect(event.aggregateType).toBe("Order");
 		});
@@ -163,10 +172,14 @@ describe("DomainEvent", () => {
 
 		it("honors explicit occurredAt / version overrides", () => {
 			const when = new Date("2026-01-01T00:00:00Z");
-			const event = createDomainEvent("Demo", { x: 1 }, {
-				occurredAt: when,
-				version: 7,
-			});
+			const event = createDomainEvent(
+				"Demo",
+				{ x: 1 },
+				{
+					occurredAt: when,
+					version: 7,
+				},
+			);
 			// Value equality, NOT identity: the event defensively copies the
 			// caller's Date so later mutation of `when` cannot bleed in.
 			expect(event.occurredAt.getTime()).toBe(when.getTime());
@@ -193,9 +206,13 @@ describe("DomainEvent", () => {
 		it("per-call eventId override takes precedence over the global factory", () => {
 			setEventIdFactory(() => "factory-id");
 
-			const event = createDomainEvent("Demo", { x: 1 }, {
-				eventId: "explicit-id",
-			});
+			const event = createDomainEvent(
+				"Demo",
+				{ x: 1 },
+				{
+					eventId: "explicit-id",
+				},
+			);
 			expect(event.eventId).toBe("explicit-id");
 		});
 
@@ -245,9 +262,13 @@ describe("DomainEvent", () => {
 			setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
 
 			const explicit = new Date("2030-12-31T00:00:00Z");
-			const event = createDomainEvent("Demo", { x: 1 }, {
-				occurredAt: explicit,
-			});
+			const event = createDomainEvent(
+				"Demo",
+				{ x: 1 },
+				{
+					occurredAt: explicit,
+				},
+			);
 
 			expect(event.occurredAt.getTime()).toBe(explicit.getTime());
 		});
@@ -411,10 +432,8 @@ describe("DomainEvent", () => {
 			// see the restored (previous) factory in its awaited body:
 			// silent corruption. The guard catches this at write time.
 			expect(() =>
-				withEventIdFactory(
-					() => "scoped",
-					(async () => createDomainEvent("X", {})) as unknown as () => void,
-				),
+				withEventIdFactory(() => "scoped", (async () =>
+					createDomainEvent("X", {})) as unknown as () => void),
 			).toThrow(/withEventIdFactory.*thenable/);
 
 			// And the factory was restored despite the throw.
@@ -425,10 +444,8 @@ describe("DomainEvent", () => {
 		it("withClockFactory throws if fn returns a thenable (async-misuse guard)", () => {
 			const fixed = new Date("1999-12-31T23:59:59Z");
 			expect(() =>
-				withClockFactory(
-					() => fixed,
-					(async () => createDomainEvent("X", {})) as unknown as () => void,
-				),
+				withClockFactory(() => fixed, (async () =>
+					createDomainEvent("X", {})) as unknown as () => void),
 			).toThrow(/withClockFactory.*thenable/);
 
 			const after = createDomainEvent("Demo", { x: 1 }).occurredAt;
@@ -515,23 +532,20 @@ describe("DomainEvent", () => {
 	});
 
 	describe("mergeMetadata prototype-pollution safety", () => {
-		it("treats a parsed __proto__ key as inert data, not a prototype write", () => {
-			const hostile = JSON.parse(
-				'{"__proto__": {"isAdmin": true}}',
-			) as Record<string, unknown>;
+		it("rejects a parsed __proto__ key loudly (same contract as entity state)", () => {
+			const hostile = JSON.parse('{"__proto__": {"isAdmin": true}}') as Record<
+				string,
+				unknown
+			>;
 
-			const merged = mergeMetadata(
-				{ correlationId: "corr-1" },
-				hostile,
-			) as Record<string, unknown>;
-
-			// The merge must not install a prototype: reading a key that only
-			// exists on the injected proto must yield undefined…
-			expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
-			expect(merged.isAdmin).toBeUndefined();
-			// …and the global prototype must stay clean.
+			// Preserving the key as data would re-arm pollution in every
+			// downstream [[Set]]-based consumer of the metadata; dropping it
+			// would be silent mutation. Loud rejection is the one safe
+			// contract, and the global prototype stays clean.
+			expect(() => mergeMetadata({ correlationId: "corr-1" }, hostile)).toThrow(
+				HostileStateKeyError,
+			);
 			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
-			expect(merged.correlationId).toBe("corr-1");
 		});
 	});
 
@@ -551,5 +565,64 @@ describe("DomainEvent", () => {
 			expect((copied as Record<string, unknown>).aggregateId).toBeUndefined();
 			expect(copied.correlationId).toBe("corr-1");
 		});
+	});
+});
+
+describe("clock ownership: a shared Date from the factory is never frozen or aliased", () => {
+	it("createDomainEvent copies the now() result before the deep freeze", () => {
+		const fixed = new Date("2026-01-01T00:00:00Z");
+		withClockFactory(
+			() => fixed,
+			() => {
+				const event = createDomainEvent("Ticked", {});
+				expect(event.occurredAt.getTime()).toBe(fixed.getTime());
+				expect(event.occurredAt).not.toBe(fixed);
+				expect(Object.isFrozen(fixed)).toBe(false);
+				// The caller's later mutation must neither throw nor bleed
+				// into the already-created event.
+				fixed.setFullYear(2030);
+				expect(event.occurredAt.getFullYear()).toBe(2026);
+			},
+		);
+	});
+});
+
+describe("createDomainEvent metadata is guarded at the source", () => {
+	it("rejects options.metadata carrying an own __proto__ key", () => {
+		const hostile = JSON.parse(
+			'{"correlationId":"c-1","__proto__":{"isAdmin":true}}',
+		) as Record<string, unknown>;
+
+		expect(() =>
+			createDomainEvent("Ticked", {}, { metadata: hostile }),
+		).toThrow(HostileStateKeyError);
+	});
+
+	it("copyMetadata rejects hostile ADDITIONAL metadata", () => {
+		const event = createDomainEvent("Ticked", {});
+		const hostile = JSON.parse(
+			'{"correlationId":"c-1","__proto__":{"isAdmin":true}}',
+		) as Record<string, unknown>;
+
+		expect(() => copyMetadata(event, hostile)).toThrow(HostileStateKeyError);
+	});
+
+	it("copyMetadata also rejects a hostile SOURCE event (hand-built, not via createDomainEvent)", () => {
+		const handBuilt = {
+			eventId: "e1",
+			type: "T",
+			aggregateType: "A",
+			occurredAt: new Date(),
+			version: 1,
+			payload: {},
+			metadata: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
+				string,
+				unknown
+			>,
+		};
+
+		expect(() => copyMetadata(handBuilt as never)).toThrow(
+			HostileStateKeyError,
+		);
 	});
 });

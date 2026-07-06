@@ -364,3 +364,12 @@ describe("deepEqualExcept – non-enumerable own string properties", () => {
 		expect(deepEqualExcept(a, withHidden(1), {})).toBe(true);
 	});
 });
+
+describe("deepEqualExcept – opaque exotics stay consistent with deepEqual", () => {
+	it("boxed symbols compare by identity through the omit clone", () => {
+		const a = Object(Symbol("a"));
+
+		expect(deepEqualExcept(a, Object(Symbol("b")), {})).toBe(false);
+		expect(deepEqualExcept(a, a, {})).toBe(true);
+	});
+});

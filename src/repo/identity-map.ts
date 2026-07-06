@@ -72,7 +72,7 @@ export class IdentityMap {
 	// pendingEvents length captured when an instance was first registered
 	// (load time), so the unit of work can tell events RECORDED AFTER load
 	// apart from a "dirty" reconstitution that already carried events.
-	private readonly _pendingAtRegistration = new WeakMap<object, number>();
+	private _pendingAtRegistration = new WeakMap<object, number>();
 
 	/** The cached instance for type+id, or `undefined` (also after {@link delete}). */
 	public get<TAgg>(
@@ -200,6 +200,11 @@ export class IdentityMap {
 	public clear(): void {
 		this._stores.clear();
 		this._deleted.clear();
+		// A WeakMap cannot be emptied in place; replace it so a reused map
+		// captures FRESH pending-event baselines. A stale (higher) baseline
+		// would make instancesWithNewPendingEvents under-report and defeat
+		// the UnenrolledChangesError safety net.
+		this._pendingAtRegistration = new WeakMap<object, number>();
 	}
 }
 

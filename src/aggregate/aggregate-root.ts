@@ -197,7 +197,7 @@ export abstract class AggregateRoot<
 	public get hasChanges(): boolean {
 		if (!this._hasBaseline) return true;
 		if (this.version !== this.persistedVersion) return true;
-		if (this.pendingEvents.length > 0) return true;
+		if (this.pendingEventCount > 0) return true;
 		if (this.changedKeys.size > 0) return true;
 		// Keyless states are invisible to the per-key diff; fall back to
 		// the state reference itself; setState always replaces it.

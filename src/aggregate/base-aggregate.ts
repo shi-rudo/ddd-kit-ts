@@ -105,6 +105,15 @@ export abstract class BaseAggregate<
 	}
 
 	/**
+	 * Count-only accessor for internal hot paths (`hasChanges` runs per
+	 * save): the public {@link pendingEvents} getter allocates and freezes
+	 * a defensive copy per read, which a length check does not need.
+	 */
+	protected get pendingEventCount(): number {
+		return this._pendingEvents.length;
+	}
+
+	/**
 	 * Clears the pending-event list. Called by `markPersisted` after a
 	 * successful write: the events have been handed off to the outbox
 	 * / event store and are no longer the aggregate's responsibility.
@@ -269,6 +278,7 @@ export abstract class BaseAggregate<
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
+			// now() returns a defensive copy at the source (see clock.ts).
 			snapshotAt: now(),
 			schemaVersion: this.snapshotSchemaVersion,
 		};
@@ -404,7 +414,6 @@ export abstract class BaseAggregate<
 	}
 }
 
-/**
 /**
  * Walks a state graph and throws a descriptive error (with the offending
  * path) when it contains anything `structuredClone` would either reject

@@ -36,7 +36,10 @@ describe("isBuiltInObject", () => {
 	describe("rejects user-defined classes (does NOT misclassify as built-in)", () => {
 		it("plain user class with constructor is NOT a built-in", () => {
 			class Money {
-				constructor(public amount: number, public currency: string) {}
+				constructor(
+					public amount: number,
+					public currency: string,
+				) {}
 			}
 			const m = new Money(100, "EUR");
 			expect(isBuiltInObject(m, tag(m))).toBe(false);

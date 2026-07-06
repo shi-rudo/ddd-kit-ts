@@ -36,18 +36,30 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		options: EventStoreAppendOptions,
 	): Promise<void> {
 		if (events.length === 0) return;
-		const stream = this.streams.get(streamId) ?? [];
-		if (stream.length !== options.expectedVersion) {
+		const existing = this.streams.get(streamId);
+		if ((existing?.length ?? 0) !== options.expectedVersion) {
 			throw new ConcurrencyConflictError({
 				aggregateType: events[0]?.aggregateType ?? "stream",
 				aggregateId: streamId,
 				expectedVersion: options.expectedVersion,
-				actualVersion: stream.length,
+				actualVersion: existing?.length ?? 0,
 			});
 		}
 		// Atomic by construction: the conflict check above throws before
-		// anything is written, and the batch lands in one push.
-		this.streams.set(streamId, [...stream, ...events]);
+		// anything is written (including the get-or-create, so a rejected
+		// append on a nonexistent stream leaves no empty entry behind).
+		// Pushing in place keeps append O(batch) instead of O(stream) per
+		// call; no caller ever holds the internal array (readStream
+		// slices). Element-wise, not push(...events): a spread into
+		// arguments overflows the engine's argument limit on huge batches.
+		let stream = existing;
+		if (stream === undefined) {
+			stream = [];
+			this.streams.set(streamId, stream);
+		}
+		for (const event of events) {
+			stream.push(event);
+		}
 	}
 
 	async readStream(

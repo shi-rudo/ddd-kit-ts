@@ -56,7 +56,7 @@
  * }
  * ```
  */
-import { HostileStateKeyError } from "../core/errors";
+import { assertNoHostileOwnProtoKey } from "../core/errors";
 import type { Id } from "../core/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -112,7 +112,8 @@ export type Identifiable<TId extends Id<string>> = {
  * @template TId - The type of the entity identifier
  * @template TState - The type of the entity state
  */
-export interface IEntity<TId extends Id<string>, TState> extends Identifiable<TId> {
+export interface IEntity<TId extends Id<string>, TState>
+	extends Identifiable<TId> {
 	/**
 	 * Unique identifier of the entity.
 	 */
@@ -157,7 +158,8 @@ export interface IEntity<TId extends Id<string>, TState> extends Identifiable<TI
  * ```
  */
 export abstract class Entity<TState, TId extends Id<string>>
-	implements IEntity<TId, TState> {
+	implements IEntity<TId, TState>
+{
 	public readonly id: TId;
 
 	/**
@@ -208,6 +210,13 @@ export abstract class Entity<TState, TId extends Id<string>>
 		}
 		this.id = id;
 		this._deepFreezeState = config?.deepFreezeState ?? false;
+		// Both mutation paths validate the exact frozen object that is
+		// stored, so a normalizing or input-reading override cannot behave
+		// differently between construction and setState. The constructor
+		// assigns BEFORE validating: `this.state` stays readable inside a
+		// validateState override during construction (a validation throw
+		// discards the instance anyway), while setState validates before
+		// assigning so a throw leaves the previous state in place.
 		this._state = this.freezeState(shallowCopyOwned(initialState));
 		this.validateState(this._state);
 	}
@@ -265,8 +274,12 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
-		this.validateState(newState);
-		this._state = this.freezeState(shallowCopyOwned(newState));
+		// Same copy-freeze-validate-assign order as the constructor: the
+		// object validated IS the object stored, and a validation throw
+		// leaves the previous state untouched.
+		const next = this.freezeState(shallowCopyOwned(newState));
+		this.validateState(next);
+		this._state = next;
 	}
 }
 
@@ -301,36 +314,37 @@ export function freezeShallow<T>(value: T): T {
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
 	if (Array.isArray(value)) {
-		assertNoHostileKey(value);
-		return [...value] as T;
+		assertNoHostileOwnProtoKey(value, "Entity state");
+		// Spread copies only iterated index elements; transfer own
+		// enumerable NON-INDEX keys (items.total = 5 style annotations) as
+		// data properties too, mirroring the plain-object branch, so the
+		// copy never silently loses caller state.
+		const copy = [...value];
+		for (const key of Reflect.ownKeys(value)) {
+			if (key === "length" || Object.hasOwn(copy, key)) continue;
+			const descriptor = Object.getOwnPropertyDescriptor(value, key);
+			if (!descriptor?.enumerable) continue;
+			Object.defineProperty(copy, key, {
+				value: (value as Record<PropertyKey, unknown>)[key],
+				writable: true,
+				enumerable: true,
+				configurable: true,
+			});
+		}
+		return copy as T;
 	}
 	const proto = Object.getPrototypeOf(value);
 	if (proto !== Object.prototype && proto !== null) return value;
-	assertNoHostileKey(value);
+	assertNoHostileOwnProtoKey(value, "Entity state");
 	// Copy as data properties, never through [[Set]]: object spread uses
 	// CreateDataProperty, so even without the guard above no key could
 	// reach the `__proto__` setter the way Object.assign onto an
 	// Object.prototype-based target would. On a null-prototype target no
 	// setter exists in the chain, so Object.assign is safe there.
-	return (proto === null
-		? Object.assign(Object.create(null), value)
-		: { ...value }) as T;
+	return (
+		proto === null ? Object.assign(Object.create(null), value) : { ...value }
+	) as T;
 }
-
-/**
- * Rejects state carrying an own `"__proto__"` data key (the shape
- * `JSON.parse` produces for hostile rows or request bodies handed to
- * reconstitute factories). Copying the key onward would re-arm prototype
- * pollution in any downstream `[[Set]]`-based consumer of `state`, and
- * dropping it would be silent data mutation, so the only safe contract
- * is to fail loudly at the domain boundary.
- */
-function assertNoHostileKey(value: object): void {
-	if (Object.hasOwn(value, "__proto__")) {
-		throw new HostileStateKeyError("__proto__");
-	}
-}
-
 
 /**
  * Checks if two entities have the same ID.
@@ -349,7 +363,10 @@ function assertNoHostileKey(value: object): void {
  * sameEntity(item1, item1); // true
  * ```
  */
-export function sameEntity<TId extends Id<string>>(a: Identifiable<TId>, b: Identifiable<TId>): boolean {
+export function sameEntity<TId extends Id<string>>(
+	a: Identifiable<TId>,
+	b: Identifiable<TId>,
+): boolean {
 	return a.id === b.id;
 }
 
@@ -372,10 +389,10 @@ export function sameEntity<TId extends Id<string>>(a: Identifiable<TId>, b: Iden
  * // item is { id: itemId1, productId: "prod-1", quantity: 2 }
  * ```
  */
-export function findEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: ReadonlyArray<T>,
-	id: TId,
-): T | undefined {
+export function findEntityById<
+	TId extends Id<string>,
+	T extends Identifiable<TId>,
+>(entities: ReadonlyArray<T>, id: TId): T | undefined {
 	return entities.find((entity) => entity.id === id);
 }
 
@@ -396,16 +413,18 @@ export function findEntityById<TId extends Id<string>, T extends Identifiable<TI
  * hasEntityId(items, itemId2); // false
  * ```
  */
-export function hasEntityId<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: ReadonlyArray<T>,
-	id: TId,
-): boolean {
+export function hasEntityId<
+	TId extends Id<string>,
+	T extends Identifiable<TId>,
+>(entities: ReadonlyArray<T>, id: TId): boolean {
 	return entities.some((entity) => entity.id === id);
 }
 
 /**
- * Removes an entity with the given ID from the collection.
- * Returns a new array without the entity.
+ * Removes an entity with the given ID from the collection. Returns the
+ * ORIGINAL array when the id is absent (structural sharing for the
+ * reference-based dirty tracking; see `updateEntityById`), otherwise a
+ * new array without the entity.
  *
  * @param entities - Array of entities
  * @param id - The ID of the entity to remove
@@ -422,17 +441,24 @@ export function hasEntityId<TId extends Id<string>, T extends Identifiable<TId>>
  * // updated is [{ id: itemId2, productId: "prod-2", quantity: 1 }]
  * ```
  */
-export function removeEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: ReadonlyArray<T>,
-	id: TId,
-): T[] {
-	return entities.filter((entity) => entity.id !== id);
+export function removeEntityById<
+	TId extends Id<string>,
+	T extends Identifiable<TId>,
+>(entities: ReadonlyArray<T>, id: TId): ReadonlyArray<T> {
+	const filtered = entities.filter((entity) => entity.id !== id);
+	return filtered.length === entities.length ? entities : filtered;
 }
 
 /**
  * Updates an entity with the given ID in the collection.
  * Returns a new array with the updated entity.
- * If the entity is not found, returns the original array unchanged.
+ * Structural sharing for the kit's reference-based dirty tracking: returns
+ * the ORIGINAL array when nothing changed (no match, or the element kept
+ * its reference), so `changedKeys` stays clean and partial-write
+ * repositories skip the untouched collection; a new array only when an
+ * element reference actually changed. The result is `ReadonlyArray<T>`:
+ * it may BE the (possibly frozen) input; spread it if you need a mutable
+ * copy.
  *
  * @param entities - Array of entities
  * @param id - The ID of the entity to update
@@ -452,18 +478,34 @@ export function removeEntityById<TId extends Id<string>, T extends Identifiable<
  * // updated is [{ id: itemId1, productId: "prod-1", quantity: 3 }]
  * ```
  */
-export function updateEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
+export function updateEntityById<
+	TId extends Id<string>,
+	T extends Identifiable<TId>,
+>(
 	entities: ReadonlyArray<T>,
 	id: TId,
 	updater: (entity: T) => T,
-): T[] {
-	return entities.map((entity) => (entity.id === id ? updater(entity) : entity));
+): ReadonlyArray<T> {
+	let changed = false;
+	const mapped = entities.map((entity) => {
+		if (entity.id !== id) return entity;
+		const next = updater(entity);
+		if (next !== entity) changed = true;
+		return next;
+	});
+	return changed ? mapped : entities;
 }
 
 /**
  * Replaces an entity with the given ID in the collection.
  * Returns a new array with the replaced entity.
- * If the entity is not found, returns the original array unchanged.
+ * Structural sharing for the kit's reference-based dirty tracking: returns
+ * the ORIGINAL array when nothing changed (no match, or the element kept
+ * its reference), so `changedKeys` stays clean and partial-write
+ * repositories skip the untouched collection; a new array only when an
+ * element reference actually changed. The result is `ReadonlyArray<T>`:
+ * it may BE the (possibly frozen) input; spread it if you need a mutable
+ * copy.
  *
  * @param entities - Array of entities
  * @param id - The ID of the entity to replace
@@ -483,12 +525,17 @@ export function updateEntityById<TId extends Id<string>, T extends Identifiable<
  * });
  * ```
  */
-export function replaceEntityById<TId extends Id<string>, T extends Identifiable<TId>>(
-	entities: ReadonlyArray<T>,
-	id: TId,
-	replacement: T,
-): T[] {
-	return entities.map((entity) => (entity.id === id ? replacement : entity));
+export function replaceEntityById<
+	TId extends Id<string>,
+	T extends Identifiable<TId>,
+>(entities: ReadonlyArray<T>, id: TId, replacement: T): ReadonlyArray<T> {
+	let changed = false;
+	const mapped = entities.map((entity) => {
+		if (entity.id !== id) return entity;
+		if (replacement !== entity) changed = true;
+		return replacement;
+	});
+	return changed ? mapped : entities;
 }
 
 /**
@@ -508,7 +555,8 @@ export function replaceEntityById<TId extends Id<string>, T extends Identifiable
  * // ids is [itemId1, itemId2]
  * ```
  */
-export function entityIds<TId extends Id<string>, T extends Identifiable<TId>>(entities: ReadonlyArray<T>): TId[] {
+export function entityIds<TId extends Id<string>, T extends Identifiable<TId>>(
+	entities: ReadonlyArray<T>,
+): TId[] {
 	return entities.map((entity) => entity.id);
 }
-

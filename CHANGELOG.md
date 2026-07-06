@@ -165,6 +165,59 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Fixed: audit follow-ups across entity, aggregate, state machine, and utils
+
+- A clock factory returning a SHARED `Date` (the documented
+  `withClockFactory(() => fixed, ...)` pattern) is no longer frozen in
+  place by `createDomainEvent` nor aliased into `createSnapshot`'s
+  `snapshotAt`; both copy the reading.
+- `Entity` construction and `setState` share one order (copy, freeze,
+  validate, assign): `validateState` always sees the exact frozen
+  object that will be stored, so a normalizing or input-reading
+  override cannot behave differently between the two paths.
+- `Entity` state copies preserve own enumerable NON-INDEX keys on array
+  states (`items.total = 5` style annotations), mirroring the
+  plain-object branch instead of silently dropping them.
+- `IdentityMap.clear()` resets the pending-event baselines; a reused
+  map no longer under-reports new events to the
+  `UnenrolledChangesError` safety net.
+- The domain state machine re-validates the defensive COPY of raw
+  definitions and snapshots, closing the Proxy TOCTOU where a lying
+  `getOwnPropertyDescriptor` could smuggle values validation never
+  saw (exhaustively pinned over every read position); the
+  `DomainStateMachine` constructor now shares
+  `prepareDomainMachineSnapshot` with the pure path instead of
+  hand-rolling it.
+- `deepEqual` compares opaque exotics (boxed Symbols, generator
+  objects, WeakRefs; tags outside every curated set) by identity
+  instead of as empty plain objects that all equaled each other;
+  `deepOmit` passes them through by reference so `deepEqualExcept`
+  stays consistent.
+- `deepOmit`'s `ignoreKeyPredicate` receives a stable path snapshot;
+  captured paths no longer read as empty after the walk.
+- `mergeMetadata` and `copyMetadata` reject an own `__proto__` data key
+  with `HostileStateKeyError` (same contract as entity state) instead
+  of carrying the pollution payload into event metadata.
+- Added: `DuplicateHandlerRegistrationError` (code
+  `DUPLICATE_HANDLER_REGISTRATION`, WIRING): duplicate bus handler
+  registration now throws a named, routable error instead of an
+  anonymous `Error`; the message still contains "already registered"
+  for existing matchers.
+- Performance: `InMemoryEventStore.append` pushes in place (O(batch)
+  instead of O(stream) per append), `InMemoryOutbox.getPending(limit)`
+  stops at the limit instead of materializing the whole backlog, and
+  `hasChanges` reads an internal pending-event count instead of
+  allocating the frozen `pendingEvents` copy per save.
+- `updateEntityById` / `replaceEntityById` / `removeEntityById` use
+  structural sharing: they return the ORIGINAL array when nothing
+  changed (no match, same-reference result) so the reference-based
+  `changedKeys` diff stays clean and partial-write repositories skip
+  untouched collections; a new array only when an element reference
+  actually changed. Their return type is now `ReadonlyArray<T>` (the
+  result may BE the frozen input); spread it for a mutable copy.
+- Docs: the transaction-scope module doc now attaches to
+  `TransactionScope`; the remaining German test names were translated.
+
 ### Added: `createKitPublicErrors`, and `toPublicErrorView` rides the pipeline
 
 - New `createKitPublicErrors()` (presentation entry) builds base-error's

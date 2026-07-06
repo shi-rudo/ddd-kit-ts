@@ -177,7 +177,14 @@ export function ensureStableDomainMachineDefinition<
 ): DomainMachineDefinition<TState, TContext, TInput, TOutput> {
 	if (preparedDefinitions.has(definition)) return definition;
 	validateDomainMachineDefinition(definition);
-	return copyDomainMachineDefinition(definition);
+	const stable = copyDomainMachineDefinition(definition);
+	// Re-validate the COPY: a Proxy can legally answer the copy's reads
+	// differently from validation's (TOCTOU), so the object that will
+	// actually be dispatched against must itself pass validation. Costs a
+	// second pass on the raw path only; prepared definitions skip all of
+	// this.
+	validateDomainMachineDefinition(stable);
+	return stable;
 }
 
 /**

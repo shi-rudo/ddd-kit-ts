@@ -38,6 +38,9 @@ export function prepareDomainMachineSnapshot<
 	const preparedSnapshot = createDomainMachineSnapshot<TState, TContext>(
 		snapshot,
 	);
+	// Re-validate the COPY: a Proxy can answer the copy's reads differently
+	// from validation's (TOCTOU), and the copy is what the machine runs on.
+	validateDomainMachineSnapshot(definition, preparedSnapshot);
 	validateDomainMachineSnapshotInvariant(definition, preparedSnapshot);
 	return preparedSnapshot;
 }

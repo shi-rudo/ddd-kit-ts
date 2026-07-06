@@ -26,6 +26,7 @@ const INDEX_SURFACE = [
 	"DomainStateMachine",
 	"DomainTransitionGuardRejectedError",
 	"DuplicateAggregateError",
+	"DuplicateHandlerRegistrationError",
 	"Entity",
 	"ErrorMapperFailedError",
 	"EventBusImpl",

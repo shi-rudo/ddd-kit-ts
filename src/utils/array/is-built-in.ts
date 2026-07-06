@@ -232,6 +232,31 @@ export const REFERENCE_COMPARED_TAGS: ReadonlySet<string> = new Set([
 	"[object WeakSet]",
 ]);
 
+/**
+ * Intrinsic tags of OPAQUE exotics: objects whose internal state no
+ * structural walk can observe (boxed Symbols, generator objects,
+ * WeakRefs, FinalizationRegistry handles). `deepEqual` compares them by
+ * identity and `deepOmit` passes them through by reference; treating
+ * them as (empty) plain objects would make ALL such exotics equal to
+ * each other. Deliberately a curated INTRINSIC list, not "every unknown
+ * tag": a user class exposing its own `Symbol.toStringTag` (e.g.
+ * "Money") keeps structural comparison, and a plain object spoofing one
+ * of these intrinsic tags gets the identity semantics of the thing it
+ * claims to be.
+ */
+const OPAQUE_EXOTIC_TAGS: ReadonlySet<string> = new Set([
+	"[object Symbol]",
+	"[object Generator]",
+	"[object AsyncGenerator]",
+	"[object WeakRef]",
+	"[object FinalizationRegistry]",
+]);
+
+/** True when `tag` names an opaque intrinsic; see {@link OPAQUE_EXOTIC_TAGS}. */
+export function isOpaqueExoticTag(tag: string): boolean {
+	return OPAQUE_EXOTIC_TAGS.has(tag);
+}
+
 export function findPropertyDescriptor(
 	value: object,
 	key: PropertyKey,

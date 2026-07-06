@@ -1,4 +1,4 @@
-import { isBuiltInObject } from "./is-built-in";
+import { isBuiltInObject, isOpaqueExoticTag } from "./is-built-in";
 
 const objProto = Object.prototype;
 const objToString = objProto.toString;
@@ -10,9 +10,7 @@ const objHasOwn = objProto.hasOwnProperty;
  * applied consistently inside TypedArrays, Dates and Number wrappers.
  */
 function sameValueZero(a: unknown, b: unknown): boolean {
-	return (
-		a === b || (Number.isNaN(a as number) && Number.isNaN(b as number))
-	);
+	return a === b || (Number.isNaN(a as number) && Number.isNaN(b as number));
 }
 
 /**
@@ -125,8 +123,12 @@ function deepEqualInner(
 
 		// Typed Arrays: element by element (length + numeric index access are
 		// part of the TypedArray contract; the indexed read is sound).
-		const arrA = objA as unknown as Record<number, unknown> & { length: number };
-		const arrB = objB as unknown as Record<number, unknown> & { length: number };
+		const arrA = objA as unknown as Record<number, unknown> & {
+			length: number;
+		};
+		const arrB = objB as unknown as Record<number, unknown> & {
+			length: number;
+		};
 
 		const len = arrA.length;
 		if (len !== arrB.length) return false;
@@ -179,6 +181,10 @@ function deepEqualInner(
 	if (builtInA !== builtInB) return false;
 
 	if (!builtInA) {
+		// Opaque intrinsics (boxed Symbol, generator, WeakRef, ...):
+		// identity is the only honest comparison; symmetric because
+		// tagA === tagB was already enforced above.
+		if (isOpaqueExoticTag(tagA)) return objA === objB;
 		return comparePlainObjects(objA, objB, visited);
 	}
 

@@ -153,8 +153,10 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
- * Thrown by `Entity` (constructor and `setState`) when a plain-object,
- * null-prototype, or array state carries an own `"__proto__"` data key:
+ * Thrown by `Entity` (constructor and `setState`) and by the event
+ * metadata helpers (`createDomainEvent`'s `options.metadata`,
+ * `mergeMetadata`, `copyMetadata`) when the value carries an own
+ * `"__proto__"` data key:
  * the shape `JSON.parse` produces for hostile DB rows or request bodies
  * handed to reconstitute factories. Such a key can never be legitimate
  * domain state; accepting it would hand a prototype-pollution payload to
@@ -170,11 +172,14 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
  * `Map`, not a plain object.
  */
 export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
-	constructor(public readonly key: string) {
+	constructor(
+		public readonly key: string,
+		subject: string = "Entity state",
+	) {
 		super(
 			"HOSTILE_STATE_KEY",
-			`Entity state carries a hostile own "${key}" key, which can never ` +
-				"be legitimate domain state. Validate and strip untrusted input " +
+			`${subject} carries a hostile own "${key}" key, which can never ` +
+				"be legitimate domain data. Validate and strip untrusted input " +
 				"at the boundary, or model arbitrary keys with a Map.",
 		);
 	}
@@ -247,6 +252,22 @@ export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 	}
 }
 
+/**
+ * Shared guard for the loud-rejection contract on own `__proto__` data
+ * keys (the shape `JSON.parse` produces for hostile rows, bodies, or
+ * envelopes): used by `Entity` state copies and the event metadata
+ * helpers. One implementation so the contract cannot drift.
+ * Module-internal export; not part of the package entries.
+ */
+export function assertNoHostileOwnProtoKey(
+	value: object,
+	subject: string,
+): void {
+	if (Object.hasOwn(value, "__proto__")) {
+		throw new HostileStateKeyError("__proto__", subject);
+	}
+}
+
 /** Constructor options for {@link UnregisteredHandlerError}. */
 export interface UnregisteredHandlerErrorOptions {
 	/** Which bus rejected the dispatch. */
@@ -276,6 +297,38 @@ export class UnregisteredHandlerError extends KitWiringError<"UNREGISTERED_HANDL
 		super(
 			"UNREGISTERED_HANDLER",
 			`No handler registered for ${options.busKind} type: ${options.messageType}`,
+		);
+		this.busKind = options.busKind;
+		this.messageType = options.messageType;
+	}
+}
+
+/** Constructor options for {@link DuplicateHandlerRegistrationError}. */
+export interface DuplicateHandlerRegistrationErrorOptions {
+	/** Which bus rejected the registration. */
+	readonly busKind: "command" | "query";
+	/** The message type a handler was already registered for. */
+	readonly messageType: string;
+}
+
+/**
+ * Produced by `CommandBus.register` / `QueryBus.register` when a handler
+ * is registered for a type that already has one: silent replacement would
+ * turn the first handler into dead code with no signal, so the wiring bug
+ * surfaces at registration time. Same crash-loud family as
+ * {@link UnregisteredHandlerError}; catch it only at a boundary that
+ * turns bugs into 500s.
+ */
+export class DuplicateHandlerRegistrationError extends KitWiringError<"DUPLICATE_HANDLER_REGISTRATION"> {
+	readonly busKind: "command" | "query";
+	readonly messageType: string;
+
+	constructor(options: DuplicateHandlerRegistrationErrorOptions) {
+		super(
+			"DUPLICATE_HANDLER_REGISTRATION",
+			`A handler for ${options.busKind} type "${options.messageType}" is ` +
+				"already registered; the duplicate would silently shadow the " +
+				"first. Register each type exactly once at bootstrap.",
 		);
 		this.busKind = options.busKind;
 		this.messageType = options.messageType;
@@ -574,6 +627,7 @@ export type KitErrorCode =
 	| "CONCURRENCY_CONFLICT"
 	| "DOMAIN_TRANSITION_GUARD_REJECTED"
 	| "DUPLICATE_AGGREGATE"
+	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_HARVEST_FAILED"
 	| "HOSTILE_STATE_KEY"

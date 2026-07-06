@@ -493,3 +493,130 @@ describe("Entity", () => {
 		});
 	});
 });
+
+describe("validation sees the stored copy on both paths", () => {
+	type ProbeState = { q: number };
+
+	class ProbeEntity extends Entity<ProbeState, ItemId> {
+		readonly seen: ProbeState[] = [];
+		constructor(initial: ProbeState) {
+			super("item-1" as ItemId, initial);
+		}
+		protected override validateState(state: ProbeState): void {
+			// The constructor runs before field initializers; guard the push.
+			this.seen?.push(state);
+			if (state.q < 0) throw new Error("q must not be negative");
+		}
+		set(next: ProbeState): void {
+			this.setState(next);
+		}
+	}
+
+	it("setState validates the frozen copy that will be stored, never the caller's object", () => {
+		const entity = new ProbeEntity({ q: 1 });
+		const raw = { q: 2 };
+
+		entity.set(raw);
+
+		const validated = entity.seen.at(-1);
+		expect(validated).not.toBe(raw);
+		expect(Object.isFrozen(validated)).toBe(true);
+		expect(entity.state).toBe(validated);
+	});
+
+	it("a throwing validateState in setState leaves the previous state in place", () => {
+		const entity = new ProbeEntity({ q: 1 });
+
+		expect(() => entity.set({ q: -5 })).toThrow("must not be negative");
+		expect(entity.state.q).toBe(1);
+	});
+});
+
+describe("array states keep own non-index keys", () => {
+	type Items = number[] & { total?: number };
+
+	class ListEntity extends Entity<Items, ItemId> {
+		constructor(state: Items) {
+			super("item-1" as ItemId, state);
+		}
+		replace(next: Items): void {
+			this.setState(next);
+		}
+	}
+
+	const withTotal = (): Items => {
+		const items = [1, 2] as Items;
+		items.total = 3;
+		return items;
+	};
+
+	it("preserves an own enumerable non-index key through the constructor copy", () => {
+		const entity = new ListEntity(withTotal());
+
+		expect([...entity.state]).toEqual([1, 2]);
+		expect(entity.state.total).toBe(3);
+	});
+
+	it("preserves the key on the setState path too", () => {
+		const entity = new ListEntity([0] as Items);
+
+		entity.replace(withTotal());
+
+		expect(entity.state.total).toBe(3);
+	});
+});
+
+describe("collection helpers preserve reference identity when nothing changed", () => {
+	// changedKeys is a reference diff: a helper returning a NEW array for
+	// a no-op would mark the state key dirty and trigger a pointless
+	// partial write. New array if and only if an element reference changed.
+	type Item = Identifiable<ItemId> & { qty: number };
+	const items = (): Item[] => [
+		{ id: "i-1" as ItemId, qty: 1 },
+		{ id: "i-2" as ItemId, qty: 2 },
+	];
+
+	it("updateEntityById returns the original array when no id matched", () => {
+		const source = items();
+		expect(updateEntityById(source, "i-9" as ItemId, (e) => ({ ...e }))).toBe(
+			source,
+		);
+	});
+
+	it("updateEntityById returns the original array when the updater is a no-op", () => {
+		const source = items();
+		expect(updateEntityById(source, "i-1" as ItemId, (e) => e)).toBe(source);
+	});
+
+	it("updateEntityById returns a fresh array on a real change, keeping sibling identity", () => {
+		const source = items();
+		const updated = updateEntityById(source, "i-1" as ItemId, (e) => ({
+			...e,
+			qty: 9,
+		}));
+
+		expect(updated).not.toBe(source);
+		expect(updated[0]?.qty).toBe(9);
+		expect(updated[1]).toBe(source[1]);
+		expect(source[0]?.qty).toBe(1);
+	});
+
+	it("replaceEntityById returns the original array for a same-reference replacement or a miss", () => {
+		const source = items();
+		const first = source[0] as Item;
+
+		expect(replaceEntityById(source, "i-1" as ItemId, first)).toBe(source);
+		expect(
+			replaceEntityById(source, "i-9" as ItemId, {
+				id: "i-9" as ItemId,
+				qty: 0,
+			}),
+		).toBe(source);
+	});
+
+	it("removeEntityById returns the original array when the id is absent", () => {
+		const source = items();
+		expect(removeEntityById(source, "i-9" as ItemId)).toBe(source);
+		expect(removeEntityById(source, "i-1" as ItemId)).toHaveLength(1);
+	});
+});

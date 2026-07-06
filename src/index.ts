@@ -75,6 +75,8 @@ export {
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
+	DuplicateHandlerRegistrationError,
+	type DuplicateHandlerRegistrationErrorOptions,
 	ErrorMapperFailedError,
 	type ErrorMapperFailedErrorOptions,
 	EventHarvestError,

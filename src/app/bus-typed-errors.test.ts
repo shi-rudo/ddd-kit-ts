@@ -1,6 +1,9 @@
 import { err, type Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { ErrorMapperFailedError } from "../core/errors";
+import {
+	DuplicateHandlerRegistrationError,
+	ErrorMapperFailedError,
+} from "../core/errors";
 import { CommandBus } from "./command-bus";
 import { QueryBus } from "./query-bus";
 
@@ -206,6 +209,49 @@ describe("QueryBus typed error channel", () => {
 
 		await expect(bus.executeUnsafe({ type: "GetName" })).rejects.toThrow(
 			"db down",
+		);
+	});
+});
+
+describe("duplicate handler registration is a named wiring error", () => {
+	it("CommandBus.register throws DuplicateHandlerRegistrationError with busKind and messageType", () => {
+		const bus = new CommandBus<Commands>();
+		bus.register("Create", async () => err("first"));
+
+		const thrown = ((): unknown => {
+			try {
+				bus.register("Create", async () => err("second"));
+				return undefined;
+			} catch (e) {
+				return e;
+			}
+		})();
+
+		expect(thrown).toBeInstanceOf(DuplicateHandlerRegistrationError);
+		const error = thrown as DuplicateHandlerRegistrationError;
+		expect(error.code).toBe("DUPLICATE_HANDLER_REGISTRATION");
+		expect(error.busKind).toBe("command");
+		expect(error.messageType).toBe("Create");
+		// Boundaries matching the historical message keep working.
+		expect(error.message).toContain("already registered");
+	});
+
+	it("QueryBus.register throws the same named error with busKind query", () => {
+		const bus = new QueryBus<Queries>();
+		bus.register("GetName", async () => "a");
+
+		const thrown = ((): unknown => {
+			try {
+				bus.register("GetName", async () => "b");
+				return undefined;
+			} catch (e) {
+				return e;
+			}
+		})();
+
+		expect(thrown).toBeInstanceOf(DuplicateHandlerRegistrationError);
+		expect((thrown as DuplicateHandlerRegistrationError).busKind).toBe(
+			"query",
 		);
 	});
 });

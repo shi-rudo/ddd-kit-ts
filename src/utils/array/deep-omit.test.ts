@@ -573,3 +573,22 @@ describe("deepOmit – non-enumerable own string properties", () => {
 		expect(Object.hasOwn(clone, "hidden")).toBe(false);
 	});
 });
+
+describe("deepOmit – predicate receives a stable path snapshot", () => {
+	it("paths captured by the predicate stay valid after the walk", () => {
+		const captured: ReadonlyArray<readonly unknown[]> = [];
+		const input = { a: { b: 1 }, c: 2 };
+
+		deepOmit(input, {
+			ignoreKeyPredicate: (_key, path) => {
+				(captured as Array<readonly unknown[]>).push(path);
+				return false;
+			},
+		});
+
+		// The walk reuses one internal array via push/pop; the predicate
+		// must receive a snapshot, not the live reference that ends up
+		// empty after the walk.
+		expect(captured.some((path) => path.length > 0)).toBe(true);
+	});
+});

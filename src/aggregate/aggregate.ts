@@ -1,6 +1,6 @@
 import type { Result } from "@shirudo/result";
-import type { Id } from "../core/id";
 import type { DomainError } from "../core/errors";
+import type { Id } from "../core/id";
 import type { AnyDomainEvent } from "./domain-event";
 
 // Re-export domain event types for convenience

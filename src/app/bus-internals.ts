@@ -1,5 +1,6 @@
 import { err, type Result } from "@shirudo/result";
 import {
+	DuplicateHandlerRegistrationError,
 	ErrorMapperFailedError,
 	UnregisteredHandlerError,
 } from "../core/errors";
@@ -48,11 +49,6 @@ export function resolveErrorMapper<E>(
 	return options?.errorMapper ?? (describeThrown as (thrown: unknown) => E);
 }
 
-/** Display label for wiring-bug messages, per bus kind. */
-function busLabel(busKind: "command" | "query"): string {
-	return busKind === "command" ? "CommandBus" : "QueryBus";
-}
-
 /**
  * Registers a handler exactly once. Silent replacement would turn the first
  * handler into dead code with no signal; wiring bugs must surface at
@@ -65,9 +61,10 @@ export function registerOnce<THandler>(
 	handler: THandler,
 ): void {
 	if (handlers.has(type)) {
-		throw new Error(
-			`${busLabel(busKind)}: a handler for ${busKind} type "${type}" is already registered`,
-		);
+		throw new DuplicateHandlerRegistrationError({
+			busKind,
+			messageType: type,
+		});
 	}
 	handlers.set(type, handler);
 }

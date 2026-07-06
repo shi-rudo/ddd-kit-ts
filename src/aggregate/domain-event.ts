@@ -1,3 +1,4 @@
+import { assertNoHostileOwnProtoKey } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
 import { assertNotThenable, now } from "./clock";
 
@@ -95,10 +96,7 @@ export function setEventIdFactory(factory: EventIdFactory): void {
  * });
  * ```
  */
-export function withEventIdFactory<T>(
-	factory: EventIdFactory,
-	fn: () => T,
-): T {
+export function withEventIdFactory<T>(factory: EventIdFactory, fn: () => T): T {
 	const previous = currentEventIdFactory;
 	currentEventIdFactory = factory;
 	try {
@@ -372,12 +370,14 @@ export function createDomainEvent<T extends string, P>(
 		// the next mutation then throws far away from the cause. Same
 		// ownership contract as `vo()` and the occurredAt copy.
 		payload: cloneOwnedEventData(payload as P, "payload"),
+		// A caller-supplied occurredAt is copied here; the now() reading is
+		// already a defensive copy at the source (see clock.ts).
 		occurredAt: options?.occurredAt
 			? new Date(options.occurredAt.getTime())
 			: now(),
 		version: options?.version ?? 1,
 		aggregateVersion: options?.aggregateVersion,
-		metadata: cloneOwnedEventData(options?.metadata, "metadata"),
+		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -434,6 +434,16 @@ export function copyMetadata(
 	sourceEvent: AnyDomainEvent,
 	additionalMetadata?: Partial<EventMetadata>,
 ): EventMetadata {
+	// Guard BOTH inputs: additional metadata from the caller AND the
+	// source event's metadata, because events can be hand-built without
+	// createDomainEvent. Spread itself is safe (CreateDataProperty, never
+	// the __proto__ setter); the guard is about not CARRYING the payload.
+	if (sourceEvent.metadata !== undefined) {
+		assertNoHostileOwnProtoKey(sourceEvent.metadata, "Event metadata");
+	}
+	if (additionalMetadata !== undefined) {
+		assertNoHostileOwnProtoKey(additionalMetadata, "Event metadata");
+	}
 	return {
 		...(sourceEvent.metadata ?? {}),
 		...(additionalMetadata ?? {}),
@@ -463,6 +473,7 @@ export function mergeMetadata(
 	const merged: Record<PropertyKey, unknown> = {};
 	for (const metadata of metadataObjects) {
 		if (!metadata) continue;
+		assertNoHostileOwnProtoKey(metadata, "Event metadata");
 		for (const key of Reflect.ownKeys(metadata)) {
 			const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
 			if (!descriptor?.enumerable) continue;
@@ -475,4 +486,19 @@ export function mergeMetadata(
 		}
 	}
 	return merged as EventMetadata;
+}
+
+/**
+ * Clones event metadata with the loud `__proto__` rejection applied at
+ * the SOURCE: structuredClone preserves an own `__proto__` data key, so
+ * without this guard a hostile envelope would ride into the frozen
+ * event and re-arm downstream.
+ */
+function guardedMetadataClone(
+	metadata: EventMetadata | undefined,
+): EventMetadata | undefined {
+	if (metadata !== undefined) {
+		assertNoHostileOwnProtoKey(metadata, "Event metadata");
+	}
+	return cloneOwnedEventData(metadata, "metadata") as EventMetadata | undefined;
 }

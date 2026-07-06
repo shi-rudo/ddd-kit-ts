@@ -1,16 +1,20 @@
 import { err, ok, type Result } from "@shirudo/result";
-import type { Id } from "../core/id";
 import {
 	DomainError,
 	MissingHandlerError,
 	UnreplayableAggregateError,
 } from "../core/errors";
+import type { Id } from "../core/id";
+import type {
+	AggregateSnapshot,
+	IEventSourcedAggregate,
+	Version,
+} from "./aggregate";
 import {
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
-import type { AggregateSnapshot, IEventSourcedAggregate, Version } from "./aggregate";
 
 // Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).

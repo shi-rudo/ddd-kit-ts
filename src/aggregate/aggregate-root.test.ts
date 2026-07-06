@@ -264,6 +264,21 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("Snapshots", () => {
+		it("does not alias a shared clock Date into snapshotAt", () => {
+			const fixed = new Date("2026-01-01T00:00:00Z");
+			const snapshot = withClockFactory(
+				() => fixed,
+				() => TestAggregate.create("test-1" as TestId, 10).createSnapshot(),
+			);
+
+			expect(snapshot.snapshotAt.getTime()).toBe(
+				new Date("2026-01-01T00:00:00Z").getTime(),
+			);
+			expect(snapshot.snapshotAt).not.toBe(fixed);
+			fixed.setFullYear(2030);
+			expect(snapshot.snapshotAt.getFullYear()).toBe(2026);
+		});
+
 		it("should create snapshot with current state and version", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 			aggregate.updateValue(20);
@@ -764,7 +779,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			addItem(sku: string, qty: number): void {
-				this.setState({ ...this.state, items: [...this.state.items, { sku, qty }] });
+				this.setState({
+					...this.state,
+					items: [...this.state.items, { sku, qty }],
+				});
 			}
 		}
 

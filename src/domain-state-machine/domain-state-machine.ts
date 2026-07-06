@@ -9,8 +9,7 @@ import { ensureStableDomainMachineDefinition } from "./definition";
 import { ReentrantDomainStateMachineEvaluationError } from "./errors";
 import {
 	createDomainMachineSnapshot,
-	validateDomainMachineSnapshot,
-	validateDomainMachineSnapshotInvariant,
+	prepareDomainMachineSnapshot,
 } from "./snapshot";
 import {
 	canTransitionPreparedDomainState,
@@ -99,11 +98,13 @@ export class DomainStateMachine<
 		// snapshot instead of failing validation.
 		const [suppliedSnapshot] = snapshotInput;
 		if (suppliedSnapshot !== undefined) {
-			validateDomainMachineSnapshot(this.definition, suppliedSnapshot);
-			this.#snapshot = createDomainMachineSnapshot<TState, TContext>(
+			// One shared implementation with the pure path (transition.ts);
+			// hand-rolling the validate-copy-validate trio here would let
+			// the class and pure snapshot preparation drift.
+			this.#snapshot = prepareDomainMachineSnapshot(
+				this.definition,
 				suppliedSnapshot,
 			);
-			validateDomainMachineSnapshotInvariant(this.definition, this.#snapshot);
 		} else {
 			this.#snapshot = createInitialDomainMachineSnapshotFromPrepared(
 				this.definition,

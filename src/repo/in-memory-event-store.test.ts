@@ -131,3 +131,32 @@ describe("InMemoryEventStore", () => {
 		expect(await store.readStream(streamA)).toHaveLength(1);
 	});
 });
+
+describe("store hygiene", () => {
+	it("readStream is side-effect free: an unknown id does not grow the store", async () => {
+		const store = new InMemoryEventStore();
+
+		await store.readStream("ghost-1" as never);
+		await store.readStream("ghost-2" as never);
+
+		expect(
+			(store as unknown as { streams: Map<string, unknown> }).streams.size,
+		).toBe(0);
+	});
+
+	it("a rejected append on a nonexistent stream leaves no empty entry behind", async () => {
+		const store = new InMemoryEventStore();
+
+		await expect(
+			store.append(
+				"ghost" as never,
+				[{ eventId: "e1", type: "T", aggregateType: "A" } as never],
+				{ expectedVersion: 5 },
+			),
+		).rejects.toThrow();
+
+		expect(
+			(store as unknown as { streams: Map<string, unknown> }).streams.size,
+		).toBe(0);
+	});
+});
