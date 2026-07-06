@@ -165,6 +165,20 @@ Upgrade checklist (details and rationale in the sections below):
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
+### Added: `commitSequence` on harvested events
+
+- `withCommit` stamps every harvested event with `commitSequence`, the
+  zero-based index of the event within its aggregate's harvest batch,
+  next to `aggregateVersion` (same pre-set-wins rule). All events of
+  one commit share the version, so the pair
+  `(aggregateVersion, commitSequence)` is a total order per aggregate
+  and a compact idempotency watermark: consumers sort and advance by
+  the tuple instead of keeping an `eventId` set (which remains the
+  general fallback for events stamped outside `withCommit`). Additive
+  and optional at the type level; `createDomainEvent` accepts a
+  pre-set value; the repository contract suite enforces a gapless
+  sequence on committed outbox events.
+
 ### Fixed: audit follow-ups across entity, aggregate, state machine, and utils
 
 - A clock factory returning a SHARED `Date` (the documented

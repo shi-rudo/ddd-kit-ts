@@ -129,8 +129,12 @@ function createUow(overrides?: {
 }
 
 /** Harvested events are stamped with the aggregate's commit version. */
-function stamped(event: TestEvent, aggregateVersion = 1): TestEvent {
-	return { ...event, aggregateVersion };
+function stamped(
+	event: TestEvent,
+	aggregateVersion = 1,
+	commitSequence = 0,
+): TestEvent {
+	return { ...event, aggregateVersion, commitSequence };
 }
 
 describe("UnitOfWork", () => {

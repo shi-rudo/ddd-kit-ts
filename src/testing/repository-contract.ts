@@ -378,6 +378,18 @@ export function createRepositoryContractTests<
 							`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
 							`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
 					);
+					// ...and a gapless zero-based commitSequence: the pair
+					// (aggregateVersion, commitSequence) is the consumer's
+					// total order and compact idempotency watermark.
+					const sequences = newSinceSeed
+						.map((event) => event.commitSequence)
+						.sort((a, b) => (a ?? -1) - (b ?? -1));
+					assert(
+						sequences.every((sequence, index) => sequence === index),
+						`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
+							`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
+							`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
+					);
 
 					// Writer B mutates its stale instance and tries to commit.
 					harness.mutate(staleB);

@@ -222,19 +222,17 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// (the createDomainEvent / recordEvent contract); class-based
 			// event objects with prototype members are unsupported.
 			const harvested = uniqueAggregates.flatMap((agg) =>
-				agg.pendingEvents.map((event) => {
-					if (event.aggregateVersion === undefined) {
-						return Object.freeze({
-							...event,
-							aggregateVersion: agg.version as number,
-						}) as Evt;
-					}
+				agg.pendingEvents.map((event, index) => {
 					// Pre-set values win (replay fixtures, backfills) - but a
-					// pre-set AHEAD of the commit version is always a leaked
-					// fixture or copied options object, and consumers key
-					// idempotency watermarks on this number: fail fast, same
-					// posture as the aggregateId/aggregateType guard below.
-					if (event.aggregateVersion > (agg.version as number)) {
+					// pre-set aggregateVersion AHEAD of the commit version is
+					// always a leaked fixture or copied options object, and
+					// consumers key idempotency watermarks on this number:
+					// fail fast, same posture as the aggregateId/aggregateType
+					// guard below.
+					if (
+						event.aggregateVersion !== undefined &&
+						event.aggregateVersion > (agg.version as number)
+					) {
 						throw new EventHarvestError(
 							`withCommit: event "${event.type}" carries a pre-set ` +
 								`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
@@ -242,10 +240,23 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 								`copied pre-set would advance consumer idempotency ` +
 								`watermarks past real history; remove the manual ` +
 								`aggregateVersion or correct it.`,
-								event.type,
+							event.type,
 						);
 					}
-					return event;
+					// Stamp the commit version AND the zero-based harvest
+					// index: the pair (aggregateVersion, commitSequence) is a
+					// total order per aggregate and a compact consumer
+					// watermark (all events of one commit share the version).
+					const needsVersion = event.aggregateVersion === undefined;
+					const needsSequence = event.commitSequence === undefined;
+					if (!needsVersion && !needsSequence) return event;
+					return Object.freeze({
+						...event,
+						aggregateVersion: needsVersion
+							? (agg.version as number)
+							: event.aggregateVersion,
+						commitSequence: needsSequence ? index : event.commitSequence,
+					}) as Evt;
 				}),
 			);
 			// Guard: every event harvested from an aggregate MUST carry

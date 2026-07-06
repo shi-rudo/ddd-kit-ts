@@ -232,17 +232,28 @@ export interface DomainEvent<T extends string, P = void> {
 	 * never overwritten.
 	 *
 	 * Consumers use it for cross-commit ordering and debugging. It is NOT
-	 * a per-event idempotency key: all events of one commit share the
-	 * stamp, so a position cursor keyed on it alone would silently skip
-	 * every event after the first within a commit (e.g. after a crash
-	 * between two same-version events). Dedup keys belong on `eventId`;
-	 * as a watermark this value is per-commit only (advance it after
-	 * processing ALL events of that version; see the outbox guide).
+	 * a per-event idempotency key on its own: all events of one commit
+	 * share the stamp. Pair it with {@link commitSequence} for a total
+	 * order per aggregate and a compact per-event watermark; `eventId`
+	 * dedup remains the fully general fallback (see the outbox guide).
 	 * Optional at the type level: events created outside an aggregate
 	 * (system/integration events) and events from older kit versions
 	 * don't carry it.
 	 */
 	aggregateVersion?: number;
+
+	/**
+	 * Zero-based index of the event within its aggregate's harvest batch,
+	 * stamped by `withCommit` next to {@link aggregateVersion} (a pre-set
+	 * value is never overwritten). All events of one commit share the
+	 * `aggregateVersion`, so the PAIR `(aggregateVersion, commitSequence)`
+	 * is a total order per aggregate and a compact idempotency watermark:
+	 * consumers sort and advance by the tuple instead of keeping an
+	 * `eventId` set. Optional at the type level for the same reasons as
+	 * `aggregateVersion` (system events, older kit versions, hand-rolled
+	 * orchestrations).
+	 */
+	commitSequence?: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -298,6 +309,14 @@ export interface CreateDomainEventOptions {
 	 * aggregate. A pre-set value is never overwritten by the harvest.
 	 */
 	aggregateVersion?: number;
+
+	/**
+	 * Pre-set the event's position within its commit batch (see
+	 * `DomainEvent.commitSequence`). Normally left unset (`withCommit`
+	 * stamps the zero-based harvest index); a pre-set value is never
+	 * overwritten by the harvest.
+	 */
+	commitSequence?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -377,6 +396,7 @@ export function createDomainEvent<T extends string, P>(
 			: now(),
 		version: options?.version ?? 1,
 		aggregateVersion: options?.aggregateVersion,
+		commitSequence: options?.commitSequence,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent

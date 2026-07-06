@@ -626,3 +626,14 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		);
 	});
 });
+
+describe("commitSequence option", () => {
+	it("passes a pre-set commitSequence through to the event", () => {
+		const event = createDomainEvent("Ticked", {}, { commitSequence: 3 });
+		expect(event.commitSequence).toBe(3);
+	});
+
+	it("leaves commitSequence undefined by default (stamped at harvest)", () => {
+		expect(createDomainEvent("Ticked", {}).commitSequence).toBeUndefined();
+	});
+});
