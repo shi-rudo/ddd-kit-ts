@@ -949,3 +949,33 @@ describe("withCommit", () => {
 		});
 	});
 });
+
+describe("deleted must be a subset of aggregates", () => {
+	it("throws EventHarvestError inside the transaction when a deleted aggregate is not listed in aggregates", async () => {
+		const outbox = createMockOutbox();
+		const deletionEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "inv-1" },
+			{ aggregateId: "inv-1", aggregateType: "MockOrder" },
+		);
+		const listed = createMockAggregate([]);
+		const forgotten = createMockAggregate([deletionEvent]);
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({
+					result: "r",
+					aggregates: [listed],
+					deleted: [forgotten],
+				}),
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
+
+		// The guard fires inside the transaction: nothing reached the outbox
+		// and the forgotten aggregate keeps its pending events (no silent
+		// loss, no stale double-emit source).
+		expect(outbox.added).toHaveLength(0);
+		expect(forgotten.pendingEvents).toHaveLength(1);
+	});
+});

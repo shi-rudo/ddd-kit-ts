@@ -193,6 +193,12 @@ Upgrade checklist (details and rationale in the sections below):
   instead of as empty plain objects that all equaled each other;
   `deepOmit` passes them through by reference so `deepEqualExcept`
   stays consistent.
+- `withCommit` enforces the documented subset contract inside the
+  transaction: an aggregate listed in `deleted` but missing from
+  `aggregates` throws `EventHarvestError` instead of silently losing
+  its deletion events (never harvested into the outbox) and
+  double-emitting them on a later commit. The `UnitOfWork` facade was
+  always immune; only direct `withCommit` callers could trip this.
 - `transitionDomainState` outcomes are `Object.freeze`d like every
   sibling return value (snapshots, outputs, the analyzer result), so a
   cast can no longer rewrite `from`/`to` at runtime despite the

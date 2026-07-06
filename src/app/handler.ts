@@ -164,7 +164,10 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
 		/**
 		 * Optional marker: which of `aggregates` were DELETED in this unit
-		 * of work. Their pending events are harvested like any other
+		 * of work. Must be a SUBSET of `aggregates` (enforced inside the
+		 * transaction with `EventHarvestError`: a deleted aggregate missing
+		 * from `aggregates` would lose its deletion events silently).
+		 * Their pending events are harvested like any other
 		 * (deletion events must reach the outbox), but the post-commit
 		 * lifecycle differs: `markPersisted` is NOT called on them. It
 		 * would fire the user-overridable `onPersisted` hook, whose
@@ -192,6 +195,23 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// markPersisted twice. Distinct instances with the same logical
 			// id are NOT detected here; that's a different misuse class.
 			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
+			// Subset guard: `deleted` is a MARKER over `aggregates`, not a
+			// second harvest source. A deleted aggregate missing from
+			// `aggregates` would have its deletion events silently lost
+			// (never harvested into the outbox) and double-emitted by a
+			// later commit; fail inside the transaction like the other
+			// harvest guards so nothing commits.
+			const aggregateSet = new Set(uniqueAggregates);
+			for (const deletedAggregate of fnResult.deleted ?? []) {
+				if (!aggregateSet.has(deletedAggregate)) {
+					throw new EventHarvestError(
+						"withCommit: an aggregate in `deleted` is not listed in " +
+							"`aggregates`. The harvest only reads `aggregates`, so " +
+							"its deletion events would be silently dropped. List " +
+							"every deleted aggregate in BOTH arrays.",
+					);
+				}
+			}
 			// Stamp each harvested event with its aggregate's COMMIT version
 			// (the value the OCC row write carries for saved aggregates).
 			// Events are deeply frozen at creation, so the stamp goes onto a
