@@ -78,6 +78,7 @@ export default defineConfig({
 					text: "Building Blocks",
 					items: [
 						{ text: "Value Objects", link: "/guide/value-objects" },
+						{ text: "Money", link: "/guide/money" },
 						{ text: "Entities", link: "/guide/entities" },
 						{ text: "Aggregate Roots", link: "/guide/aggregates" },
 						{ text: "Event Sourcing", link: "/guide/event-sourcing" },

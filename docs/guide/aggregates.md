@@ -16,11 +16,15 @@ import {
   type Id,
   type DomainEvent,
 } from "@shirudo/ddd-kit";
+import type { Money } from "@shirudo/ddd-kit/money";
 
 type OrderId = Id<"OrderId">;
 type OrderState = {
   customerId: string;
-  items: { id: string; qty: number; priceCents: number }[];
+  // Money carries a bigint amount: clone- and snapshot-safe, but a
+  // JSON-serializing store adapter must map it through MoneyDto (see
+  // the Money guide's wire-format section).
+  items: { id: string; qty: number; price: Money }[];
   status: "draft" | "confirmed" | "shipped";
 };
 

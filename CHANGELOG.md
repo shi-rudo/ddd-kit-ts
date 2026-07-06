@@ -179,6 +179,71 @@ Upgrade checklist (details and rationale in the sections below):
   pre-set value; the repository contract suite enforces a gapless
   sequence on committed outbox events.
 
+### Added: `@shirudo/ddd-kit/money`, the money contract and its boundaries
+
+- New opt-in entry point shipping the canonical money shape so
+  consumers stop re-implementing (and mis-implementing) it. `Money` is
+  `{ amountMinor: bigint, currency, scale }`: exact, frozen plain data
+  that is safe inside aggregate state, event payloads, and snapshots
+  (survives `structuredClone`, deep-freeze, and dirty diffing), with
+  `MoneyDto` carrying `amountMinor` as an integer string for JSON
+  safety. Exact operations only: `addMoney` / `subtractMoney` (exact on
+  aligned minor units with same-currency and same-scale guards raising
+  `MONEY_CURRENCY_MISMATCH` / `MONEY_SCALE_MISMATCH`), `negateMoney`,
+  and lossless `rescaleMoney` (upscaling and exact downscaling; inexact
+  conversions throw `MONEY_PRECISION_LOSS`), so domain code needs no
+  third-party import and the kit never rounds outside parsing.
+  Deliberately NOT shipped: everything carrying a rounding or
+  distribution policy (multiplication, ratios, fees, division, lossy
+  rescaling, allocation, FX); those are domain policy executed by a
+  calculation library at the use-case boundary, and `moneyFromSnapshot`
+  / `moneyToSnapshot` bridge its structural `{ amount, currency, scale }`
+  snapshot shape without depending on any of them (non-base-10
+  currencies and unsafe number amounts are rejected loudly at the
+  boundary).
+- `parseMoneyInput` parses decimal strings into exact minor units (the
+  safe replacement for `Number(input) * 100`) and is EXACT OR
+  REJECTED: over-precise input throws `MONEY_PRECISION_LOSS`, and the
+  kit ships NO rounding at all (no modes, no rounding engine). Whether
+  `10.999 EUR` is rejected or becomes `11.00 EUR` is a business
+  decision; the guide shows how to put it in a domain-named policy
+  function that rounds via the calculation library.
+  `moneyToDecimalString` is the exact inverse; `formatMoney` /
+  `createMoneyFormatter` feed `Intl.NumberFormat` the exact decimal
+  string, precision-safe past 2^53.
+- The kit ships no currency table: `createMoneyFactory({ scaleFor })`
+  binds a consumer-provided `CurrencyScaleResolver` once
+  (`currencyScaleFromRecord`, `currencyScaleFromIntl`, or a one-liner
+  over a calculation library's currency package); unresolved
+  currencies throw `UNKNOWN_CURRENCY`.
+- New codes in the `KitErrorCode` union: `INVALID_MONEY`,
+  `MONEY_CURRENCY_MISMATCH`, `MONEY_SCALE_MISMATCH`,
+  `MONEY_PRECISION_LOSS`, `UNKNOWN_CURRENCY` (DomainErrors, registered
+  in `createKitPublicErrors()` at status 422 with client-safe
+  messages).
+- `Money` is branded with a NON-EXPORTED unique symbol: structural
+  literals do not type-check as `Money`, not even ones spelling out a
+  `__brand` property; only the module's constructors mint it.
+  `moneyFromUnknown` re-hydrates foreign plain shapes by validating,
+  copying, and freezing (later mutation of the input cannot reach
+  domain state); `isMoney` is a check, not a door. The trust-boundary
+  parsers (`moneyFromDto`, `parseMoneyInput`, `moneyFromSnapshot`,
+  `factory.parse`) take `unknown`, so raw request or storage values go straight in
+  without casts or lossy `String(...)` coercion. The Intl-backed resolver
+  accepts only canonical uppercase ISO codes ("eur" resolves to
+  `undefined` instead of silently aliasing "EUR") and is documented as
+  a convenience, not an enterprise source of truth (production paths
+  pin a closed, versioned currency map).
+- Hard bounds by construction, sized for hostile input on the parse and
+  DTO boundaries: amounts up to 96 digits (uint256 fits with headroom),
+  scale up to 64, currency up to 32 characters, parse input up to 256
+  characters. Oversized input is rejected in O(1) before any bigint
+  conversion, diagnostic messages truncate what they echo, the
+  Intl-backed resolver and formatter caches are size-capped, and every
+  emitting boundary (`moneyToDto`, `moneyToSnapshot`,
+  `moneyToDecimalString`, the formatters) rejects non-Money input
+  loudly.
+
 ### Fixed: audit follow-ups across entity, aggregate, state machine, and utils
 
 - A clock factory returning a SHARED `Date` (the documented

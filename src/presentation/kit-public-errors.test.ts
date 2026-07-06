@@ -1,14 +1,12 @@
 import { ValidationError } from "@shirudo/base-error";
-import {
-	LocalizedMessageSet,
-	project,
-} from "@shirudo/base-error/public-error";
+import { LocalizedMessageSet, project } from "@shirudo/base-error/public-error";
 import { describe, expect, it } from "vitest";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
 } from "../core/errors";
+import { moneyFromDto } from "../money/money";
 import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 
@@ -34,11 +32,39 @@ describe("createKitPublicErrors catalog", () => {
 		expect(kitPublicErrors.transportFor("DUPLICATE_AGGREGATE")?.status).toBe(
 			409,
 		);
-		expect(kitPublicErrors.transportFor("VALIDATION_FAILED")?.status).toBe(
-			422,
-		);
+		expect(kitPublicErrors.transportFor("VALIDATION_FAILED")?.status).toBe(422);
 		expect(kitPublicErrors.fallback.publicCode).toBe("INTERNAL_ERROR");
 		expect(kitPublicErrors.fallback.status).toBe(500);
+	});
+
+	it("carries transport metadata for the money boundary codes", () => {
+		expect(kitPublicErrors.transportFor("INVALID_MONEY")?.status).toBe(422);
+		expect(kitPublicErrors.transportFor("MONEY_PRECISION_LOSS")?.status).toBe(
+			422,
+		);
+		expect(kitPublicErrors.transportFor("UNKNOWN_CURRENCY")?.status).toBe(422);
+		expect(
+			kitPublicErrors.transportFor("MONEY_CURRENCY_MISMATCH")?.status,
+		).toBe(422);
+		expect(kitPublicErrors.transportFor("MONEY_SCALE_MISMATCH")?.status).toBe(
+			422,
+		);
+	});
+
+	it("projects money errors by their code with client-safe messages", () => {
+		let thrown: unknown;
+		try {
+			moneyFromDto({ amountMinor: "10.99", currency: "EUR", scale: 2 });
+		} catch (error) {
+			thrown = error;
+		}
+		const view = toPublicErrorView(thrown);
+		expect(view.code).toBe("INVALID_MONEY");
+		// the client-safe message never echoes the technical input details
+		expect(view.message).not.toContain("10.99");
+		expect(view.message).toBe(
+			"The submitted amount is not a valid monetary value.",
+		);
 	});
 
 	it("projects kit errors by their code, carrying the retryable hint", () => {
@@ -77,20 +103,21 @@ describe("createKitPublicErrors catalog", () => {
 	});
 
 	it("consumers extend their own factory instance; other instances stay untouched", () => {
-		const extended = createKitPublicErrors().registerByCode("ORDER_ALREADY_SHIPPED", {
-			publicCode: "ORDER_ALREADY_SHIPPED",
-			status: 409,
-			userMessages: new LocalizedMessageSet({
-				baseLocale: "en",
-				messages: { en: "This order has already been shipped." },
-			}),
-		});
+		const extended = createKitPublicErrors().registerByCode(
+			"ORDER_ALREADY_SHIPPED",
+			{
+				publicCode: "ORDER_ALREADY_SHIPPED",
+				status: 409,
+				userMessages: new LocalizedMessageSet({
+					baseLocale: "en",
+					messages: { en: "This order has already been shipped." },
+				}),
+			},
+		);
 
 		const consumerError = new OrderAlreadyShippedError("o-1");
 
-		expect(project(extended, consumerError).code).toBe(
-			"ORDER_ALREADY_SHIPPED",
-		);
+		expect(project(extended, consumerError).code).toBe("ORDER_ALREADY_SHIPPED");
 		// A fresh kit catalog is untouched: the same error falls back there.
 		expect(project(createKitPublicErrors(), consumerError).code).toBe(
 			"INTERNAL_ERROR",
@@ -98,17 +125,20 @@ describe("createKitPublicErrors catalog", () => {
 	});
 
 	it("toPublicErrorView accepts an extended catalog", () => {
-		const extended = createKitPublicErrors().registerByCode("ORDER_ALREADY_SHIPPED", {
-			publicCode: "ORDER_ALREADY_SHIPPED",
-			status: 409,
-			userMessages: new LocalizedMessageSet({
-				baseLocale: "en",
-				messages: {
-					en: "This order has already been shipped.",
-					de: "Diese Bestellung wurde bereits versandt.",
-				},
-			}),
-		});
+		const extended = createKitPublicErrors().registerByCode(
+			"ORDER_ALREADY_SHIPPED",
+			{
+				publicCode: "ORDER_ALREADY_SHIPPED",
+				status: 409,
+				userMessages: new LocalizedMessageSet({
+					baseLocale: "en",
+					messages: {
+						en: "This order has already been shipped.",
+						de: "Diese Bestellung wurde bereits versandt.",
+					},
+				}),
+			},
+		);
 
 		const view = toPublicErrorView(new OrderAlreadyShippedError("o-1"), {
 			locale: "de-DE",

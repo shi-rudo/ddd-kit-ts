@@ -22,6 +22,10 @@
 			"types": "./dist/http.d.ts",
 			"import": "./dist/http.js"
 		},
+		"./money": {
+			"types": "./dist/money.d.ts",
+			"import": "./dist/money.js"
+		},
 		"./presentation": {
 			"types": "./dist/presentation.d.ts",
 			"import": "./dist/presentation.js"

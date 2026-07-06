@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as http from "./http";
 import * as index from "./index";
+import * as money from "./money";
 import * as presentation from "./presentation";
 import * as testing from "./testing";
 import * as utils from "./utils";
@@ -106,6 +107,36 @@ const PRESENTATION_SURFACE = [
 	"toPublicErrorView",
 ] as const;
 
+const MONEY_SURFACE = [
+	"InvalidMoneyError",
+	"MoneyCurrencyMismatchError",
+	"MoneyPrecisionLossError",
+	"MoneyScaleMismatchError",
+	"UnknownCurrencyError",
+	"addMoney",
+	"createMoneyFactory",
+	"createMoneyFormatter",
+	"currencyScaleFromIntl",
+	"currencyScaleFromRecord",
+	"formatMoney",
+	"isMoney",
+	"isNegativeMoney",
+	"isPositiveMoney",
+	"isZeroMoney",
+	"moneyEquals",
+	"moneyFromDto",
+	"moneyFromSnapshot",
+	"moneyFromUnknown",
+	"moneyOfMinor",
+	"moneyToDecimalString",
+	"moneyToDto",
+	"moneyToSnapshot",
+	"negateMoney",
+	"parseMoneyInput",
+	"rescaleMoney",
+	"subtractMoney",
+] as const;
+
 describe("public API surface (runtime exports)", () => {
 	it("the main entry exports exactly the pinned names", () => {
 		expect(Object.keys(index).sort()).toEqual([...INDEX_SURFACE]);
@@ -125,5 +156,9 @@ describe("public API surface (runtime exports)", () => {
 
 	it("the presentation entry exports exactly the pinned names", () => {
 		expect(Object.keys(presentation).sort()).toEqual([...PRESENTATION_SURFACE]);
+	});
+
+	it("the money entry exports exactly the pinned names", () => {
+		expect(Object.keys(money).sort()).toEqual([...MONEY_SURFACE]);
 	});
 });

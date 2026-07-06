@@ -160,6 +160,37 @@ export function createKitPublicErrors() {
 			status: 409,
 			userMessages: english("The resource already exists."),
 		})
+		.registerByCode("INVALID_MONEY", {
+			publicCode: "INVALID_MONEY",
+			status: 422,
+			userMessages: english(
+				"The submitted amount is not a valid monetary value.",
+			),
+		})
+		.registerByCode("MONEY_CURRENCY_MISMATCH", {
+			publicCode: "MONEY_CURRENCY_MISMATCH",
+			status: 422,
+			userMessages: english("The amounts involved use different currencies."),
+		})
+		.registerByCode("MONEY_SCALE_MISMATCH", {
+			publicCode: "MONEY_SCALE_MISMATCH",
+			status: 422,
+			userMessages: english(
+				"The amounts involved use different decimal precisions.",
+			),
+		})
+		.registerByCode("MONEY_PRECISION_LOSS", {
+			publicCode: "MONEY_PRECISION_LOSS",
+			status: 422,
+			userMessages: english(
+				"The submitted amount has more decimal places than the currency allows.",
+			),
+		})
+		.registerByCode("UNKNOWN_CURRENCY", {
+			publicCode: "UNKNOWN_CURRENCY",
+			status: 422,
+			userMessages: english("The currency is not supported."),
+		})
 		.register({
 			match: isValidationErrorLike,
 			descriptor: {
