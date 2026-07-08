@@ -82,6 +82,17 @@ only when its value warrants.
   dilute it.
 - Explicitness is cheap before it is structural. A written statement and a
   marked model come before code is moved.
+- An opinionated platform-wide business policy, a product behavior every
+  tenant gets identically (fair allocation of scarce capacity, anti-resale
+  rules, uniform refund handling), can be the differentiation precisely
+  because it is not per-tenant configurable: the promise to users holds only
+  while it holds everywhere, so a per-tenant opt-out does not weaken the
+  policy, it dissolves it. Domain behavior only; technical policy such as
+  coding standards or security baselines is not governed here.
+- Record such a policy in the distillation document with an explicit guard:
+  one sentence naming the policy, stating that its uniformity is the
+  differentiation, and that making it configurable is a strategy change to be
+  decided by the strategy's owners, not a feature request to be scheduled.
 
 ### Distillation Is an Escalation
 
@@ -294,6 +305,8 @@ Distillation table:
 - A vision statement lists common traits instead of what differentiates.
 - Refactoring effort is spread evenly instead of following the core.
 - "Generic" is treated as "reusable" and built as a shared library prematurely.
+- A core-defining platform business policy is made per-tenant configurable,
+  dissolving the differentiation it carried.
 
 ## Expected Output
 

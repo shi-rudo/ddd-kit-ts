@@ -31,6 +31,9 @@ design uses that path; skip them otherwise.
   generic or legacy models?
 - Is ownership of each context clear, one team per context?
 - Are context relationships explicit (`context-mapping.md`)?
+- Is concept ownership derived from expert language and validated recorded
+  decisions, rather than from authoring workflow, persistence shape, or
+  consumers?
 
 ## Language
 

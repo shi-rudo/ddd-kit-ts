@@ -114,6 +114,23 @@ by technology, table, or convenience, and it should align with a single team.
   and the domain term differ, one of them is wrong.
 - Capturing and maintaining the language itself, terms, definitions, and their
   evolution, is the subject of `ubiquitous-language.md`.
+- Structure is not language. Who authors a concept, in which workflow it is
+  created, where it is persisted, and what it appears next to in a user
+  interface are workflow and persistence facts; they do not decide ownership.
+  The language domain experts actually speak decides.
+- A recorded boundary decision (ADR) is a testable hypothesis with its
+  rationale attached, not evidence about the domain. Gather it as input,
+  extract its premises, and test them against the living expert language and
+  the discriminators here, the same way every other claim is tested. A
+  confirmed ADR saves the walk; a refuted one is a finding that recommends
+  revising the ADR, which is what ADRs are made for (superseding). Never let
+  an ADR settle a question these procedures would answer differently, and
+  never override one silently: a deliberate decision is challenged
+  explicitly, with the evidence that broke its premises.
+- Consumption is not ownership. Display, filtering, and search are read-side
+  demand, served through contracts and read models from whichever context
+  owns the concept (`read-model-design.md`); a concept does not belong to a
+  context because that context shows it.
 
 ### The Context Owns Its Data
 
@@ -162,7 +179,10 @@ Goal: find where a bounded-context boundary belongs.
    part of the domain differentiates the organization; where do experts
    disagree about terms or rules; which rules change together and which
    independently; which decisions must stay locally consistent; who owns the
-   language and lifecycle of each concept.
+   language and lifecycle of each concept; and which boundary decisions are
+   already recorded (ADRs, decision logs). Recorded decisions are gathered as
+   input and audited with the same discriminators as everything else, never
+   inherited untested.
 2. Look for linguistic seams: the same term used with two meanings, or two terms
    for one concept. Each ambiguity is a candidate boundary.
 3. Group by business capability: the distinct jobs the business does.
@@ -244,6 +264,17 @@ Discriminator: how do the model boundary and the problem-space subdomain line up
    only when one language, one model, and one owning team remain genuinely
    cohesive, or as an explicit legacy/migration state with a recorded extraction
    path.
+4. **A concept needed today whose recorded future owner is a planned, not yet
+   built context** -> an existing context may host it as declared custodian:
+   record the owner and the extraction path, and name the concept in the
+   owner's language. Custody adds no machinery: the model is shaped no further
+   than the tactical rules already demand today (value objects for constrained
+   values, enforced invariants); published schemas, version negotiation, or
+   adapters for the future owner are speculation and wait until that owner
+   exists. Done this way, extraction stays a data migration, not a remodel.
+   Custody is not ownership; the host gains no authority over the concept's
+   rules. A concept nothing needs today is not hosted anywhere; it is not
+   built.
 
 Hard limit: a context spanning subdomains is not a goal by itself. Name the
 reason, the owner, and the cost of keeping it.
