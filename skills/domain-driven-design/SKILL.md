@@ -1,6 +1,6 @@
 ---
 name: domain-driven-design
-version: 1.0.0
+version: 1.1.0
 description: Apply Domain-Driven Design to understand and model a business domain. Use when discovering subdomains, designing bounded contexts, distilling the core domain, selecting business-logic implementation patterns, deciding whether a domain model is warranted, defining ubiquitous language, identifying aggregates and invariants, designing use cases and application services, designing domain services, designing repositories, unit of work, transaction managers, designing read models and CQRS read sides, designing error contracts and error management, designing domain events, choosing tactical DDD patterns, mapping context relationships, choosing cross-context coordination patterns, designing sagas or process managers, or reviewing whether a model expresses the domain clearly.
 ---
 
@@ -61,7 +61,11 @@ when the user wants TypeScript code with `@shirudo/ddd-kit`.
 ## Workflow
 
 1. Clarify the domain goal, actors, business process, and success/failure cases.
-2. Identify subdomains: core, supporting, and generic.
+2. Identify subdomains: core, supporting, and generic. If more than one
+   subdomain claims core, or core status is argued from criticality rather
+   than differentiation, run the distillation gate
+   (`references/core-domain-distillation.md`, *Qualification*) and elicit the
+   differentiation evidence from domain experts with its question set.
 3. Propose bounded contexts and name the language used inside each one.
 4. Select the business-logic implementation pattern before detailed tactical
    modeling. An audit or history requirement alone never selects event

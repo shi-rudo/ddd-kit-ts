@@ -158,6 +158,11 @@ Goal: find where a bounded-context boundary belongs.
 
 1. Gather the domain language from the people who speak it: EventStorming,
    Domain Storytelling, or interviews. Record the terms and the pivotal events.
+   Useful opening questions: what business capability is being improved; which
+   part of the domain differentiates the organization; where do experts
+   disagree about terms or rules; which rules change together and which
+   independently; which decisions must stay locally consistent; who owns the
+   language and lifecycle of each concept.
 2. Look for linguistic seams: the same term used with two meanings, or two terms
    for one concept. Each ambiguity is a candidate boundary.
 3. Group by business capability: the distinct jobs the business does.
@@ -222,7 +227,11 @@ Watch the two mismatch diagonals the flat labels hide:
 Hard limits: do not spend core-level modeling on a generic subdomain; do not buy
 a generic solution for your core, because that is buying away your advantage.
 High accidental complexity is a signal to simplify, not evidence of a core
-domain.
+domain. Criticality is not differentiation: "we cannot operate without it"
+marks a mission-critical supporting subdomain, not a core one; necessity is an
+operational property. When more than one subdomain is claimed core, or the
+claim rests on criticality, run the distillation gate
+(`core-domain-distillation.md`, *Qualification*).
 
 ### Context-Subdomain Alignment - fork
 

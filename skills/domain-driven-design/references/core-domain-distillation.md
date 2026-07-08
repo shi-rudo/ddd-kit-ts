@@ -40,6 +40,8 @@ fork is entered at the matching condition.
   - Extract what is not core
   - Cohesive mechanism vs generic subdomain vs domain service
 - Part 2 - Decision procedures
+  - Qualification
+  - Inputs - expert elicitation
   - Distillation
   - Highlighted core
   - Extraction
@@ -116,6 +118,48 @@ only when its value warrants.
   differentiation, it stays in the core rather than being factored out.
 
 ## Part 2 - Decision Procedures
+
+### Qualification - fork
+
+Discriminator: does the core need distilling now? Any one trigger suffices.
+
+1. **More than one subdomain is claimed core, or core status is argued from
+   criticality** ("without it nothing works") -> run *Distillation*. Necessity
+   is an operational property, not a classification axis; classification runs
+   on differentiation (`bounded-context-design.md`, *Subdomain
+   Classification*). "Everything is core" means the core is undistilled.
+2. **The core is implicit**: no one can say quickly what is in it and what is
+   out -> run *Distillation*.
+3. **Investment drift**: the best modeling effort or the strongest people sit
+   on non-differentiating parts, or generic concepts dilute the core model ->
+   run *Distillation*, entering at *Extraction*.
+4. **One explicit, highlighted core with matching investment** -> no
+   distillation needed now. Re-run when the classification shifts
+   (*Subdomains Evolve* in `bounded-context-design.md`).
+
+Hard limit: do not accept a core claim at face value when trigger 1 fires; the
+claim is the input to distillation, never its output.
+
+### Inputs - Expert Elicitation
+
+Not a fork: the evidence the procedures consume. The differentiation axis
+belongs to product and business people; gather it with these questions, asked
+of domain experts rather than answered by the modeler:
+
+- Why do customers choose us over the alternatives? Why do suppliers or
+  partners join?
+- What could a competitor not copy within six months? Code rarely qualifies;
+  data depth, relationships, and curation often do.
+- Which parts would you never outsource, and why?
+- For each candidate subdomain: is it a reason to choose us, or table stakes?
+- What is deliberately NOT our core, even though we depend on it every day?
+- Draft the one-sentence differentiator ("what we uniquely make possible") and
+  have the experts correct it in their own words; the corrected sentence seeds
+  the Domain Vision Statement.
+
+The two-axis assessment itself, with its differentiation and complexity clues,
+is owned by `bounded-context-design.md` (*Subdomain Classification*); ask those
+questions in the same session.
 
 ### Distillation - sequence
 
@@ -232,6 +276,10 @@ Distillation table:
 ## Smell Checks
 
 - The core domain is implicit: no one can say what is in it and what is out.
+- Core status is argued from criticality ("nothing works without it") instead
+  of differentiation; a mission-critical supporting subdomain is mislabeled
+  core.
+- Several subdomains claim core and no distillation has been run.
 - The best modeling effort is spent on a supporting or generic subdomain, not the
   core.
 - A generic subdomain is over-engineered for reuse it will never have.
