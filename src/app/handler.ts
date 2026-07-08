@@ -7,6 +7,63 @@ import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import { reportToObserver } from "../utils/observer";
 
+/** Dependencies for {@link withCommit}. */
+export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
+	outbox: Outbox<Evt>;
+	bus?: EventBus<Evt>;
+	scope: TransactionScope<TCtx>;
+	/**
+	 * Observer for post-commit `bus.publish` failures. Called with the
+	 * error and the events that were published. Must not be relied on
+	 * for delivery: the outbox dispatcher is the reliable path.
+	 */
+	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
+	/**
+	 * Observer for post-commit persistence-cleanup failures: a throw from
+	 * `markPersisted`, the user-overridable `onPersisted` hook, or
+	 * `clearPendingEvents`. Called once per failing aggregate with the
+	 * error and that aggregate. Symmetric with {@link onPublishError}: the
+	 * transaction has already committed, so the failure must NOT reject the
+	 * write; without this observer it would otherwise vanish silently. The
+	 * hook is an observer only: if it throws, its error is swallowed so the
+	 * post-commit invariant holds, and the loop continues marking the
+	 * remaining aggregates.
+	 */
+	onPersistError?: (
+		error: unknown,
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	) => void;
+	/**
+	 * Cooperative-cancellation signal. If already aborted, `withCommit`
+	 * rejects with the signal's `reason` BEFORE opening the transaction.
+	 * Otherwise the signal is forwarded to `scope.transactional`, where a
+	 * cancellation-aware scope can abort an in-flight query. The kit does
+	 * not race the work promise: aborting does not kill a running query
+	 * unless the scope honors the signal.
+	 */
+	signal?: AbortSignal;
+}
+
+/** The resolved value of a {@link withCommit} work callback. */
+export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
+	result: R;
+	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+	/**
+	 * Optional marker: which of `aggregates` were DELETED in this unit
+	 * of work. Must be a SUBSET of `aggregates` (enforced inside the
+	 * transaction with `EventHarvestError`: a deleted aggregate missing
+	 * from `aggregates` would lose its deletion events silently).
+	 * Their pending events are harvested like any other
+	 * (deletion events must reach the outbox), but the post-commit
+	 * lifecycle differs: `markPersisted` is NOT called on them. It
+	 * would fire the user-overridable `onPersisted` hook, whose
+	 * post-save semantics (cache fill, read-model warm-up) are a lie
+	 * for a row that was just deleted. Their pending events are
+	 * cleared directly instead, so a later commit cannot re-emit them.
+	 */
+	deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+}
+
 /**
  * Helper for executing a write Use Case inside a transaction scope.
  *
@@ -113,7 +170,7 @@ import { reportToObserver } from "../utils/observer";
  * ```typescript
  * const result = await withCommit({ outbox, bus, scope }, async (tx) => {
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
- *   const order = await orderRepository.getByIdOrFail(orderId);
+ *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await orderRepository.save(order);             // pure persistence; does NOT call markPersisted
  *   return { result: order.id, aggregates: [order] };
@@ -121,62 +178,8 @@ import { reportToObserver } from "../utils/observer";
  * ```
  */
 export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
-	deps: {
-		outbox: Outbox<Evt>;
-		bus?: EventBus<Evt>;
-		scope: TransactionScope<TCtx>;
-		/**
-		 * Observer for post-commit `bus.publish` failures. Called with the
-		 * error and the events that were published. Must not be relied on
-		 * for delivery: the outbox dispatcher is the reliable path.
-		 */
-		onPublishError?: (
-			error: unknown,
-			events: ReadonlyArray<Evt>,
-		) => void;
-		/**
-		 * Observer for post-commit persistence-cleanup failures: a throw from
-		 * `markPersisted`, the user-overridable `onPersisted` hook, or
-		 * `clearPendingEvents`. Called once per failing aggregate with the
-		 * error and that aggregate. Symmetric with {@link onPublishError}: the
-		 * transaction has already committed, so the failure must NOT reject the
-		 * write; without this observer it would otherwise vanish silently. The
-		 * hook is an observer only: if it throws, its error is swallowed so the
-		 * post-commit invariant holds, and the loop continues marking the
-		 * remaining aggregates.
-		 */
-		onPersistError?: (
-			error: unknown,
-			aggregate: IAggregateRoot<Id<string>, Evt>,
-		) => void;
-		/**
-		 * Cooperative-cancellation signal. If already aborted, `withCommit`
-		 * rejects with the signal's `reason` BEFORE opening the transaction.
-		 * Otherwise the signal is forwarded to `scope.transactional`, where a
-		 * cancellation-aware scope can abort an in-flight query. The kit does
-		 * not race the work promise: aborting does not kill a running query
-		 * unless the scope honors the signal.
-		 */
-		signal?: AbortSignal;
-	},
-	fn: (ctx: TCtx) => Promise<{
-		result: R;
-		aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
-		/**
-		 * Optional marker: which of `aggregates` were DELETED in this unit
-		 * of work. Must be a SUBSET of `aggregates` (enforced inside the
-		 * transaction with `EventHarvestError`: a deleted aggregate missing
-		 * from `aggregates` would lose its deletion events silently).
-		 * Their pending events are harvested like any other
-		 * (deletion events must reach the outbox), but the post-commit
-		 * lifecycle differs: `markPersisted` is NOT called on them. It
-		 * would fire the user-overridable `onPersisted` hook, whose
-		 * post-save semantics (cache fill, read-model warm-up) are a lie
-		 * for a row that was just deleted. Their pending events are
-		 * cleared directly instead, so a later commit cannot re-emit them.
-		 */
-		deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
-	}>,
+	deps: WithCommitDeps<Evt, TCtx>,
+	fn: (ctx: TCtx) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;

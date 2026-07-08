@@ -34,8 +34,12 @@ const INDEX_SURFACE = [
 	"EventHarvestError",
 	"EventSourcedAggregate",
 	"HostileStateKeyError",
+	"IdempotencyCompletionWithoutClaimError",
+	"IdempotencyInFlightError",
+	"IdempotencyKeyReuseError",
 	"IdentityMap",
 	"InMemoryEventStore",
+	"InMemoryIdempotencyStore",
 	"InMemoryOutbox",
 	"InfrastructureError",
 	"InvalidDomainMachineContextError",
@@ -91,6 +95,7 @@ const INDEX_SURFACE = [
 	"withClockFactory",
 	"withCommit",
 	"withEventIdFactory",
+	"withIdempotentCommit",
 ] as const;
 
 const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: command idempotency primitive
+
+- `IdempotencyStore` port, `withIdempotentCommit` wrapper, and
+  `InMemoryIdempotencyStore` reference implementation. The wrapper claims the
+  idempotency key inside the `withCommit` transaction (single-transaction
+  pattern: a rollback releases the claim), short-circuits duplicates by
+  replaying the stored outcome without re-running the use case or re-emitting
+  events, and stores the outcome atomically with the aggregate write and the
+  outbox. A failed attempt releases its claim before the error leaves the
+  transactional region, so a `RetryingTransactionScope` retry claims fresh
+  instead of colliding with the previous attempt; after the commit the wrapper
+  confirms the outcome, so a non-transactional store never replays an outcome
+  whose transaction did not commit (`confirm` and `abandon` are no-ops for
+  transactional adapters). New structured errors: `IdempotencyKeyReuseError`
+  (same key, different command fingerprint; not retryable),
+  `IdempotencyInFlightError` (first execution still running; retryable), and
+  `IdempotencyCompletionWithoutClaimError` (wiring bug guard). The same store
+  serves as a message inbox: key = message id. Stored outcomes must be plain,
+  serialisable data, the same discipline as snapshots and event payloads.
+- `WithCommitDeps` and `WithCommitWorkResult` are now exported types
+  (previously inline parameter types of `withCommit`; no behavior change).
+
 ### Changed (breaking): repository load methods follow the get/find contract
 
 - `IRepository` / `IUnitOfWorkRepository`: `getById` is renamed to

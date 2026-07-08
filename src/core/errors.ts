@@ -397,7 +397,7 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  *
  * **Scope of the guard.** A best-effort runtime safety net, not a proof.
  * It only sees aggregates the identity map knows about (those loaded via
- * `getById`), and detects new events by comparing the pending-event COUNT
+ * `findById`), and detects new events by comparing the pending-event COUNT
  * at load against commit, which assumes the kit's append-only event model
  * (so it cannot see events that were recorded and then cleared within the
  * same run). A freshly *created* aggregate that was never enrolled is
@@ -441,10 +441,10 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 }
 
 /**
- * Thrown by `IRepository.getByIdOrFail()` when an aggregate with the
+ * Thrown by `IRepository.getById()` when an aggregate with the
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the
- * nullable variant `getById()` if "not found" is a valid outcome.
+ * nullable variant `findById()` if "not found" is a valid outcome.
  *
  * Accepts an optional `cause` so a `Repository.save()` implementation
  * can wrap a lower-level "row not found" / driver-level error without
@@ -614,6 +614,100 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 }
 
 /**
+ * Options bag for {@link IdempotencyKeyReuseError}.
+ */
+export interface IdempotencyKeyReuseErrorOptions {
+	readonly key: string;
+	readonly storedFingerprint: string;
+	readonly receivedFingerprint: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
+/**
+ * Thrown by `IdempotencyStore.claim()` when the same idempotency key
+ * arrives with a DIFFERENT command fingerprint than the one it was
+ * first claimed with: the caller is reusing a key for a different
+ * command. Replaying the stored outcome would answer a question that
+ * was never asked; rejecting is the only safe reaction.
+ *
+ * `InfrastructureError` because the store detects the collision, same
+ * delegation model as {@link DuplicateAggregateError}. NOT retryable:
+ * re-sending the same mismatched pair cannot succeed. Map it to an
+ * unprocessable/conflict application outcome.
+ */
+export class IdempotencyKeyReuseError extends InfrastructureError<"IDEMPOTENCY_KEY_REUSE"> {
+	readonly key: string;
+	readonly storedFingerprint: string;
+	readonly receivedFingerprint: string;
+
+	constructor(options: IdempotencyKeyReuseErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_KEY_REUSE",
+			message:
+				`Idempotency key reuse on "${options.key}": stored fingerprint ` +
+				`${options.storedFingerprint}, received ${options.receivedFingerprint}`,
+			cause: options.cause,
+		});
+		this.key = options.key;
+		this.storedFingerprint = options.storedFingerprint;
+		this.receivedFingerprint = options.receivedFingerprint;
+	}
+}
+
+/**
+ * Options bag for {@link IdempotencyInFlightError}.
+ */
+export interface IdempotencyInFlightErrorOptions {
+	readonly key: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
+/**
+ * Thrown by `IdempotencyStore.claim()` when the key is already claimed
+ * by an execution that has not completed yet: the first delivery of the
+ * command is still running (or crashed mid-flight on a
+ * non-transactional store). Retryable by design: a later retry either
+ * finds the completed outcome and replays it, or finds the claim
+ * released (rolled back) and executes fresh. `RetryingTransactionScope`
+ * picks this up through the `retryable` flag without extra wiring.
+ */
+export class IdempotencyInFlightError extends InfrastructureError<"IDEMPOTENCY_IN_FLIGHT"> {
+	readonly key: string;
+
+	constructor(options: IdempotencyInFlightErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_IN_FLIGHT",
+			message:
+				`Idempotency key "${options.key}" is claimed by an execution ` +
+				`that has not completed yet`,
+			cause: options.cause,
+			retryable: true,
+		});
+		this.key = options.key;
+	}
+}
+
+/**
+ * Thrown by `IdempotencyStore.complete()` when no pending claim exists
+ * for the key: `complete` ran without a preceding successful `claim`
+ * in the same execution, or against a key whose claim was already
+ * completed or abandoned. Always a wiring bug in hand-rolled
+ * orchestration (`withIdempotentCommit` cannot produce it), hence the
+ * crash-loud category.
+ */
+export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"> {
+	constructor(public readonly key: string) {
+		super(
+			"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM",
+			`IdempotencyStore.complete() called for key "${key}" without a ` +
+				"pending claim; call claim() first (or use withIdempotentCommit)",
+		);
+	}
+}
+
+/**
  * The closed union of every error code the kit itself can produce
  * (consumer subclasses of {@link DomainError} / {@link InfrastructureError}
  * add their own on top). Useful for building `switch` tables or
@@ -631,6 +725,9 @@ export type KitErrorCode =
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_HARVEST_FAILED"
 	| "HOSTILE_STATE_KEY"
+	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
+	| "IDEMPOTENCY_IN_FLIGHT"
+	| "IDEMPOTENCY_KEY_REUSE"
 	| "INVALID_DOMAIN_MACHINE_CONTEXT"
 	| "INVALID_DOMAIN_MACHINE_DEFINITION"
 	| "INVALID_DOMAIN_MACHINE_INPUT"
