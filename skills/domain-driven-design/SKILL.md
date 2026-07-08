@@ -1,6 +1,6 @@
 ---
 name: domain-driven-design
-version: 1.1.0
+version: 1.2.0
 description: Apply Domain-Driven Design to understand and model a business domain. Use when discovering subdomains, designing bounded contexts, distilling the core domain, selecting business-logic implementation patterns, deciding whether a domain model is warranted, defining ubiquitous language, identifying aggregates and invariants, designing use cases and application services, designing domain services, designing repositories, unit of work, transaction managers, designing read models and CQRS read sides, designing error contracts and error management, designing domain events, choosing tactical DDD patterns, mapping context relationships, choosing cross-context coordination patterns, designing sagas or process managers, or reviewing whether a model expresses the domain clearly.
 ---
 
@@ -57,6 +57,10 @@ when the user wants TypeScript code with `@shirudo/ddd-kit`.
 - Use domain events for meaningful business facts that already happened.
 - Keep repositories focused on aggregate persistence, not arbitrary reads.
 - Separate domain decisions from application orchestration and infrastructure.
+- Conclusions are premise-bound. Name the discriminating premises with every
+  verdict; when elicitation answers or a recorded decision overturn a premise,
+  re-run the affected procedure and state which premise fell, instead of
+  defending the earlier conclusion.
 
 ## Workflow
 
