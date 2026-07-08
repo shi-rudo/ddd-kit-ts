@@ -1,26 +1,96 @@
-import { BaseError } from "@shirudo/base-error";
+import { StructuredError } from "@shirudo/base-error";
+
+/**
+ * **The kit's error identity model (since v3).** Every kit error is a
+ * structured error carrying exactly ONE identifier: `code`, a stable
+ * SCREAMING_SNAKE string, and `error.name === error.code` by design, so
+ * there is no name/code drift and nothing to keep in sync. `category`
+ * follows the class hierarchy mechanically (`"DOMAIN"`,
+ * `"INFRASTRUCTURE"`, or `"WIRING"` for the crash-loud family) and
+ * `retryable` is a plain boolean field.
+ *
+ * **No base-error adoption required.** Consumers branch with a plain
+ * `switch (error.code)`, catch via `instanceof DomainError` /
+ * `instanceof InfrastructureError` (exported from this kit), and read
+ * `retryable` / `cause` as ordinary properties. base-error's toolbox
+ * (`matchError` exhaustive dispatch, `isStructuredError`, the
+ * public-error catalog and `toProblem`) works on every kit error as an
+ * OPT-IN benefit on top, never as a prerequisite.
+ */
+
+/**
+ * Options for consumer subclasses of {@link DomainError} and
+ * {@link InfrastructureError}: the `code` (which also becomes
+ * `error.name`) and the technical `message` are the only obligations;
+ * `retryable` defaults to `false` and the category is fixed by the base.
+ */
+export interface KitErrorOptions<TCode extends string> {
+	/** Stable SCREAMING_SNAKE identifier; also becomes `error.name`. */
+	code: TCode;
+	/** Technical message for logs and debugging, never for clients. */
+	message: string;
+	/** Optional underlying error preserved in the cause chain. */
+	cause?: unknown;
+	/** Whether retrying the failed operation can succeed. Default `false`. */
+	retryable?: boolean;
+}
 
 /**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
  * throw `DomainError`-derived exceptions when a business rule is
  * violated. Consumers derive their own concrete errors (e.g.
- * `class OrderAlreadyShippedError extends DomainError<"OrderAlreadyShippedError"> {}`)
+ * `class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED">`)
  * for `instanceof`-style catching at the App-Service boundary, where
  * they typically map to HTTP 400 / business-rule responses.
  *
- * The library itself does **not** ship any concrete `DomainError`
- * subclass: the kit can't know your invariants.
+ * The library itself ships no business-rule `DomainError` subclass: the
+ * kit can't know your invariants. (The domain-state-machine module's
+ * transition errors are the structural exception.)
  *
- * Extends `BaseError<Name>`; see `@shirudo/base-error` for the inherited
- * surface (timestamps, cause chains, `toJSON()`, `isRetryable`, …). For
- * client-safe / localized messages, project errors through the opt-in
- * `@shirudo/base-error/presentation` subpath at the boundary; the technical
- * core deliberately carries no user-facing message.
+ * The `category` is fixed to `"DOMAIN"` and `retryable` defaults to
+ * `false`, so a subclass supplies only its `code` and `message`:
+ *
+ * ```ts
+ * class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
+ *   constructor(orderId: string) {
+ *     super({
+ *       code: "ORDER_ALREADY_SHIPPED",
+ *       message: `Order ${orderId} has already been shipped`,
+ *     });
+ *   }
+ * }
+ * ```
  */
 export abstract class DomainError<
-	Name extends string = string,
-> extends BaseError<Name> {}
+	TCode extends string = string,
+> extends StructuredError<TCode, "DOMAIN"> {
+	protected constructor(options: KitErrorOptions<TCode>) {
+		super({
+			code: options.code,
+			category: "DOMAIN",
+			retryable: options.retryable ?? false,
+			message: options.message,
+			cause: options.cause,
+		});
+	}
+}
+
+/**
+ * Internal base for the kit's crash-loud **WIRING** family: deterministic
+ * programming/configuration bugs that must fail the operation loudly and
+ * never be absorbed by generic domain or infrastructure handlers. One
+ * implementation of the `{ category: "WIRING", retryable: false }` shape
+ * so the family cannot drift. Exported for the kit's own modules only;
+ * not part of the package entries.
+ */
+export abstract class KitWiringError<
+	TCode extends string,
+> extends StructuredError<TCode, "WIRING"> {
+	protected constructor(code: TCode, message: string, cause?: unknown) {
+		super({ code, category: "WIRING", retryable: false, message, cause });
+	}
+}
 
 /**
  * Abstract base for **infrastructure / persistence failures** that the
@@ -30,14 +100,27 @@ export abstract class DomainError<
  * broken); they describe race conditions and missing rows at the
  * storage boundary.
  *
+ * The `category` is fixed to `"INFRASTRUCTURE"`; `retryable` defaults
+ * to `false` (opt in per subclass, see {@link ConcurrencyConflictError}).
+ *
  * Library-internal concrete subclasses: {@link AggregateNotFoundError},
  * {@link ConcurrencyConflictError}, {@link DuplicateAggregateError},
  * plus the unit-of-work lifecycle wrappers `CommitError` and
  * `RollbackError` (in `src/app/unit-of-work.ts`).
  */
 export abstract class InfrastructureError<
-	Name extends string = string,
-> extends BaseError<Name> {}
+	TCode extends string = string,
+> extends StructuredError<TCode, "INFRASTRUCTURE"> {
+	protected constructor(options: KitErrorOptions<TCode>) {
+		super({
+			code: options.code,
+			category: "INFRASTRUCTURE",
+			retryable: options.retryable ?? false,
+			message: options.message,
+			cause: options.cause,
+		});
+	}
+}
 
 /**
  * Thrown by `EventSourcedAggregate.apply()` when no handler is
@@ -56,48 +139,87 @@ export abstract class InfrastructureError<
  * "any structured error from the kit or any other BaseError-using
  * library" at the App boundary.
  */
-export class MissingHandlerError extends BaseError<"MissingHandlerError"> {
+export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 	constructor(
 		public readonly eventType: string,
 		cause?: unknown,
 	) {
-		super(`Missing handler for event type: ${eventType}`, cause, {
-			name: "MissingHandlerError",
-		});
+		super(
+			"MISSING_HANDLER",
+			`Missing handler for event type: ${eventType}`,
+			cause,
+		);
 	}
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory` and
- * `restoreFromSnapshotWithEvents` when the replay target is not fresh:
- * the aggregate carries unflushed `pendingEvents`, or (for
- * `loadFromHistory`) an in-memory version that was never persisted.
- * Replaying onto such an instance would `markRestored` a
- * `persistedVersion` that counts unpersisted history: repository routing
- * flips from INSERT to UPDATE (or appends with a wrong expected version)
- * and harvested events would claim a version baseline the stream does
- * not carry.
+ * Thrown by `Entity` (constructor and `setState`) and by the event
+ * metadata helpers (`createDomainEvent`'s `options.metadata`,
+ * `mergeMetadata`, `copyMetadata`) when the value carries an own
+ * `"__proto__"` data key:
+ * the shape `JSON.parse` produces for hostile DB rows or request bodies
+ * handed to reconstitute factories. Such a key can never be legitimate
+ * domain state; accepting it would hand a prototype-pollution payload to
+ * every downstream consumer that copies the state through `[[Set]]`
+ * (`Object.assign`, for-in assignment loops), and dropping it would be
+ * silent data mutation.
+ *
+ * Deliberately **not** a `DomainError` or `InfrastructureError` (same
+ * posture as {@link MissingHandlerError}): untrusted input reaching the
+ * domain layer unvalidated is a boundary bug, and a generic
+ * business-rule handler must not absorb it. Validate and strip untrusted
+ * input at the application edge; model genuinely arbitrary keys with a
+ * `Map`, not a plain object.
+ */
+export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
+	constructor(
+		public readonly key: string,
+		subject: string = "Entity state",
+	) {
+		super(
+			"HOSTILE_STATE_KEY",
+			`${subject} carries a hostile own "${key}" key, which can never ` +
+				"be legitimate domain data. Validate and strip untrusted input " +
+				"at the boundary, or model arbitrary keys with a Map.",
+		);
+	}
+}
+
+/**
+ * Thrown by `EventSourcedAggregate.loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`, and `AggregateRoot.restoreFromSnapshot`
+ * when the restore/replay target is not fresh: the aggregate carries
+ * unflushed `pendingEvents`, or (for `loadFromHistory`) an in-memory
+ * version that was never persisted. Restoring onto such an instance
+ * would `markRestored` a version baseline the unflushed events were
+ * never part of: repository routing flips from INSERT to UPDATE (or
+ * appends with a wrong expected version) and harvested events would
+ * claim history the stream does not carry.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): a deterministic programming
- * bug in how the aggregate was constructed before replay. It propagates
- * as a throw instead of riding the replay methods' `Result` channel, so
- * a generic corrupted-stream handler cannot absorb it. Reconstitution
- * belongs on a bare instance: construct the aggregate without
- * factory-recorded events or prior mutations, then replay.
+ * bug in how the aggregate was constructed before the restore. It
+ * propagates as a throw instead of riding the replay methods' `Result`
+ * channel, so a generic corrupted-stream handler cannot absorb it.
+ * Reconstitution belongs on a bare instance: construct the aggregate
+ * without factory-recorded events or prior mutations, then restore.
+ *
+ * The safe remedy differs per guard, so each throw site carries its own
+ * in the `reason` it passes: `clearPendingEvents()` when deliberately
+ * discarding unflushed events (an in-memory undo), `markPersisted()`
+ * only for a catch-up replay after the state was actually saved. The
+ * class message itself stays remediation-neutral.
  */
-export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregateError"> {
+export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
 	constructor(
 		public readonly aggregateId: string,
 		reason: string,
 	) {
 		super(
-			`Cannot replay history onto aggregate ${aggregateId}: ${reason}. ` +
+			"UNREPLAYABLE_AGGREGATE",
+			`Cannot restore or replay onto aggregate ${aggregateId}: ${reason}. ` +
 				"Reconstitute on a fresh instance (no factory-recorded events, " +
-				"no unpersisted mutations), or markPersisted the aggregate " +
-				"before a catch-up replay.",
-			undefined,
-			{ name: "UnreplayableAggregateError" },
+				"no unpersisted mutations).",
 		);
 	}
 }
@@ -120,13 +242,29 @@ export class UnreplayableAggregateError extends BaseError<"UnreplayableAggregate
  * why `withCommit` throws it directly and `UnitOfWork.run` passes it
  * through unchanged instead of wrapping it in `CommitError`.
  */
-export class EventHarvestError extends BaseError<"EventHarvestError"> {
+export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 	constructor(
 		message: string,
 		/** The `type` of the offending event, for programmatic routing. */
 		public readonly eventType?: string,
 	) {
-		super(message, undefined, { name: "EventHarvestError" });
+		super("EVENT_HARVEST_FAILED", message);
+	}
+}
+
+/**
+ * Shared guard for the loud-rejection contract on own `__proto__` data
+ * keys (the shape `JSON.parse` produces for hostile rows, bodies, or
+ * envelopes): used by `Entity` state copies and the event metadata
+ * helpers. One implementation so the contract cannot drift.
+ * Module-internal export; not part of the package entries.
+ */
+export function assertNoHostileOwnProtoKey(
+	value: object,
+	subject: string,
+): void {
+	if (Object.hasOwn(value, "__proto__")) {
+		throw new HostileStateKeyError("__proto__", subject);
 	}
 }
 
@@ -144,25 +282,100 @@ export interface UnregisteredHandlerErrorOptions {
  * (typo in the type string, missing `register` call at bootstrap), not
  * a domain or infrastructure failure.
  *
- * Extends `BaseError` directly (same crash-loud family as
+ * Carries the `WIRING` category (same crash-loud family as
  * {@link MissingHandlerError}), and since v3 it is THROWN by `execute`
  * and `executeUnsafe` alike, never delivered through the error channel:
  * the channel carries expected failures a registered handler produced,
  * and a generic err-branch must not absorb a mis-wired bus. Catch it
  * only at a boundary that turns bugs into 500s.
  */
-export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerError"> {
+export class UnregisteredHandlerError extends KitWiringError<"UNREGISTERED_HANDLER"> {
 	readonly busKind: "command" | "query";
 	readonly messageType: string;
 
 	constructor(options: UnregisteredHandlerErrorOptions) {
 		super(
+			"UNREGISTERED_HANDLER",
 			`No handler registered for ${options.busKind} type: ${options.messageType}`,
-			undefined,
-			{ name: "UnregisteredHandlerError" },
 		);
 		this.busKind = options.busKind;
 		this.messageType = options.messageType;
+	}
+}
+
+/** Constructor options for {@link DuplicateHandlerRegistrationError}. */
+export interface DuplicateHandlerRegistrationErrorOptions {
+	/** Which bus rejected the registration. */
+	readonly busKind: "command" | "query";
+	/** The message type a handler was already registered for. */
+	readonly messageType: string;
+}
+
+/**
+ * Produced by `CommandBus.register` / `QueryBus.register` when a handler
+ * is registered for a type that already has one: silent replacement would
+ * turn the first handler into dead code with no signal, so the wiring bug
+ * surfaces at registration time. Same crash-loud family as
+ * {@link UnregisteredHandlerError}; catch it only at a boundary that
+ * turns bugs into 500s.
+ */
+export class DuplicateHandlerRegistrationError extends KitWiringError<"DUPLICATE_HANDLER_REGISTRATION"> {
+	readonly busKind: "command" | "query";
+	readonly messageType: string;
+
+	constructor(options: DuplicateHandlerRegistrationErrorOptions) {
+		super(
+			"DUPLICATE_HANDLER_REGISTRATION",
+			`A handler for ${options.busKind} type "${options.messageType}" is ` +
+				"already registered; the duplicate would silently shadow the " +
+				"first. Register each type exactly once at bootstrap.",
+		);
+		this.busKind = options.busKind;
+		this.messageType = options.messageType;
+	}
+}
+
+/** Constructor options for {@link ErrorMapperFailedError}. */
+export interface ErrorMapperFailedErrorOptions {
+	/** Which bus was mapping the failure. */
+	readonly busKind: "command" | "query";
+	/** The registered handler's ORIGINAL failure (also set as `cause`). */
+	readonly handlerError: unknown;
+	/** The value the errorMapper itself threw. */
+	readonly mapperError: unknown;
+}
+
+/**
+ * Produced by the in-memory `CommandBus` / `QueryBus` when the configured
+ * `errorMapper` THROWS while mapping a registered handler's failure. A
+ * broken mapper is a wiring bug: letting its throw propagate bare would
+ * replace the handler's original failure entirely, and the rest of the
+ * kit is fastidious about never letting a secondary failure mask the
+ * primary one (`RollbackError.rollbackCause`, the neutralized observers).
+ *
+ * The handler's original failure is preserved as `cause` (so cause-chain
+ * walks, retryability checks, and error-type mapping keep working) and
+ * the mapper's own failure rides along as {@link mapperCause}.
+ *
+ * Carries the `WIRING` category (same crash-loud family as
+ * {@link MissingHandlerError} and {@link UnregisteredHandlerError}): it is
+ * thrown, never delivered through the error channel.
+ */
+export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"> {
+	readonly busKind: "command" | "query";
+	/** The value the errorMapper itself threw. */
+	readonly mapperCause: unknown;
+
+	constructor(options: ErrorMapperFailedErrorOptions) {
+		super(
+			"ERROR_MAPPER_FAILED",
+			`The ${options.busKind} bus errorMapper threw while mapping a ` +
+				"handler failure. The original handler error is preserved as " +
+				"cause; the mapper's own failure as mapperCause.",
+			options.handlerError,
+		);
+		this.busKind = options.busKind;
+		this.mapperCause = options.mapperError;
 	}
 }
 
@@ -184,22 +397,21 @@ export class UnregisteredHandlerError extends BaseError<"UnregisteredHandlerErro
  *
  * **Scope of the guard.** A best-effort runtime safety net, not a proof.
  * It only sees aggregates the identity map knows about (those loaded via
- * `getById`), and detects new events by comparing the pending-event COUNT
+ * `findById`), and detects new events by comparing the pending-event COUNT
  * at load against commit, which assumes the kit's append-only event model
  * (so it cannot see events that were recorded and then cleared within the
  * same run). A freshly *created* aggregate that was never enrolled is
  * invisible to the kit. The repository contract test suite remains the
  * full mitigation. See the Unit of Work guide.
  */
-export class UnenrolledChangesError extends BaseError<"UnenrolledChangesError"> {
+export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
 	constructor(public readonly aggregateId: string) {
 		super(
+			"UNENROLLED_CHANGES",
 			`Aggregate ${aggregateId} was loaded in this unit of work and has ` +
 				"pending events, but was never enrolled (no save), so its events " +
 				"would be silently dropped. Call repository.save(aggregate), and " +
 				"ensure save() calls session.enrollSaved before the row write.",
-			undefined,
-			{ name: "UnenrolledChangesError" },
 		);
 	}
 }
@@ -213,27 +425,26 @@ export class UnenrolledChangesError extends BaseError<"UnenrolledChangesError"> 
  * a row the delete just removed (or resurrect it), which is always a
  * use-case bug.
  *
- * Extends `BaseError` directly (same reasoning as
+ * Carries the `WIRING` category (same reasoning as
  * {@link MissingHandlerError}): a programming bug that should crash
  * loud, not be absorbed by a generic infrastructure-error handler.
  */
-export class AggregateDeletedError extends BaseError<"AggregateDeletedError"> {
+export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 	constructor(public readonly aggregateId: string) {
 		super(
+			"AGGREGATE_DELETED",
 			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
 				"cannot be saved or registered again. Deletion is final within an " +
 				"operation; if the aggregate must live, do not delete it.",
-			undefined,
-			{ name: "AggregateDeletedError" },
 		);
 	}
 }
 
 /**
- * Thrown by `IRepository.getByIdOrFail()` when an aggregate with the
+ * Thrown by `IRepository.getById()` when an aggregate with the
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the
- * nullable variant `getById()` if "not found" is a valid outcome.
+ * nullable variant `findById()` if "not found" is a valid outcome.
  *
  * Accepts an optional `cause` so a `Repository.save()` implementation
  * can wrap a lower-level "row not found" / driver-level error without
@@ -249,16 +460,16 @@ export interface AggregateNotFoundErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class AggregateNotFoundError extends InfrastructureError<"AggregateNotFoundError"> {
+export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_FOUND"> {
 	readonly aggregateType: string;
 	readonly id: string;
 
 	constructor(options: AggregateNotFoundErrorOptions) {
-		super(
-			`Aggregate not found: ${options.aggregateType}(${options.id})`,
-			options.cause,
-			{ name: "AggregateNotFoundError" },
-		);
+		super({
+			code: "AGGREGATE_NOT_FOUND",
+			message: `Aggregate not found: ${options.aggregateType}(${options.id})`,
+			cause: options.cause,
+		});
 		this.aggregateType = options.aggregateType;
 		this.id = options.id;
 	}
@@ -290,16 +501,16 @@ export interface DuplicateAggregateErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class DuplicateAggregateError extends InfrastructureError<"DuplicateAggregateError"> {
+export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGREGATE"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 
 	constructor(options: DuplicateAggregateErrorOptions) {
-		super(
-			`Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
-			options.cause,
-			{ name: "DuplicateAggregateError" },
-		);
+		super({
+			code: "DUPLICATE_AGGREGATE",
+			message: `Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
+			cause: options.cause,
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 	}
@@ -329,22 +540,22 @@ export interface SnapshotSchemaMismatchErrorOptions {
 	readonly actualSchemaVersion: number;
 }
 
-export class SnapshotSchemaMismatchError extends InfrastructureError<"SnapshotSchemaMismatchError"> {
+export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_SCHEMA_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 
 	constructor(options: SnapshotSchemaMismatchErrorOptions) {
-		super(
-			`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
+		super({
+			code: "SNAPSHOT_SCHEMA_MISMATCH",
+			message:
+				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
 				`the aggregate expects snapshot schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
 				`migrateSnapshotState to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
-			undefined,
-			{ name: "SnapshotSchemaMismatchError" },
-		);
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
@@ -379,28 +590,162 @@ export interface ConcurrencyConflictErrorOptions {
 	readonly cause?: unknown;
 }
 
-export class ConcurrencyConflictError extends InfrastructureError<"ConcurrencyConflictError"> {
-	/**
-	 * Marks this error as retryable so `isRetryable(err)` returns
-	 * true. The canonical OCC pattern is to reload the aggregate, re-apply
-	 * the use case, and retry on this exception.
-	 */
-	readonly retryable = true as const;
-
+export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedVersion: number;
 	readonly actualVersion: number;
 
 	constructor(options: ConcurrencyConflictErrorOptions) {
-		super(
-			`Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
-			options.cause,
-			{ name: "ConcurrencyConflictError" },
-		);
+		super({
+			code: "CONCURRENCY_CONFLICT",
+			message: `Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
+			cause: options.cause,
+			// The canonical OCC pattern: reload the aggregate, re-apply the
+			// use case, retry in a FRESH unit of work. The structured field
+			// is what the retry classifier (someChainRetryable) reads.
+			retryable: true,
+		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion;
 	}
 }
+
+/**
+ * Options bag for {@link IdempotencyKeyReuseError}.
+ */
+export interface IdempotencyKeyReuseErrorOptions {
+	readonly key: string;
+	readonly storedFingerprint: string;
+	readonly receivedFingerprint: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
+/**
+ * Thrown by `IdempotencyStore.claim()` when the same idempotency key
+ * arrives with a DIFFERENT command fingerprint than the one it was
+ * first claimed with: the caller is reusing a key for a different
+ * command. Replaying the stored outcome would answer a question that
+ * was never asked; rejecting is the only safe reaction.
+ *
+ * `InfrastructureError` because the store detects the collision, same
+ * delegation model as {@link DuplicateAggregateError}. NOT retryable:
+ * re-sending the same mismatched pair cannot succeed. Map it to an
+ * unprocessable/conflict application outcome.
+ */
+export class IdempotencyKeyReuseError extends InfrastructureError<"IDEMPOTENCY_KEY_REUSE"> {
+	readonly key: string;
+	readonly storedFingerprint: string;
+	readonly receivedFingerprint: string;
+
+	constructor(options: IdempotencyKeyReuseErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_KEY_REUSE",
+			message:
+				`Idempotency key reuse on "${options.key}": stored fingerprint ` +
+				`${options.storedFingerprint}, received ${options.receivedFingerprint}`,
+			cause: options.cause,
+		});
+		this.key = options.key;
+		this.storedFingerprint = options.storedFingerprint;
+		this.receivedFingerprint = options.receivedFingerprint;
+	}
+}
+
+/**
+ * Options bag for {@link IdempotencyInFlightError}.
+ */
+export interface IdempotencyInFlightErrorOptions {
+	readonly key: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
+/**
+ * Thrown by `IdempotencyStore.claim()` when the key is already claimed
+ * by an execution that has not completed yet: the first delivery of the
+ * command is still running (or crashed mid-flight on a
+ * non-transactional store). Retryable by design: a later retry either
+ * finds the completed outcome and replays it, or finds the claim
+ * released (rolled back) and executes fresh. `RetryingTransactionScope`
+ * picks this up through the `retryable` flag without extra wiring.
+ */
+export class IdempotencyInFlightError extends InfrastructureError<"IDEMPOTENCY_IN_FLIGHT"> {
+	readonly key: string;
+
+	constructor(options: IdempotencyInFlightErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_IN_FLIGHT",
+			message:
+				`Idempotency key "${options.key}" is claimed by an execution ` +
+				`that has not completed yet`,
+			cause: options.cause,
+			retryable: true,
+		});
+		this.key = options.key;
+	}
+}
+
+/**
+ * Thrown by `IdempotencyStore.complete()` when no pending claim exists
+ * for the key: `complete` ran without a preceding successful `claim`
+ * in the same execution, or against a key whose claim was already
+ * completed or abandoned. Always a wiring bug in hand-rolled
+ * orchestration (`withIdempotentCommit` cannot produce it), hence the
+ * crash-loud category.
+ */
+export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"> {
+	constructor(public readonly key: string) {
+		super(
+			"IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM",
+			`IdempotencyStore.complete() called for key "${key}" without a ` +
+				"pending claim; call claim() first (or use withIdempotentCommit)",
+		);
+	}
+}
+
+/**
+ * The closed union of every error code the kit itself can produce
+ * (consumer subclasses of {@link DomainError} / {@link InfrastructureError}
+ * add their own on top). Useful for building `switch` tables or
+ * base-error `matchError` cases that cover kit and consumer codes
+ * together, without importing anything from base-error.
+ */
+export type KitErrorCode =
+	| "AGGREGATE_DELETED"
+	| "AGGREGATE_NOT_FOUND"
+	| "COMMIT_FAILED"
+	| "CONCURRENCY_CONFLICT"
+	| "DOMAIN_TRANSITION_GUARD_REJECTED"
+	| "DUPLICATE_AGGREGATE"
+	| "DUPLICATE_HANDLER_REGISTRATION"
+	| "ERROR_MAPPER_FAILED"
+	| "EVENT_HARVEST_FAILED"
+	| "HOSTILE_STATE_KEY"
+	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
+	| "IDEMPOTENCY_IN_FLIGHT"
+	| "IDEMPOTENCY_KEY_REUSE"
+	| "INVALID_DOMAIN_MACHINE_CONTEXT"
+	| "INVALID_DOMAIN_MACHINE_DEFINITION"
+	| "INVALID_DOMAIN_MACHINE_INPUT"
+	| "INVALID_DOMAIN_MACHINE_SNAPSHOT"
+	| "INVALID_DOMAIN_TRANSITION"
+	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
+	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_MONEY"
+	| "MISSING_HANDLER"
+	| "MONEY_CURRENCY_MISMATCH"
+	| "MONEY_PRECISION_LOSS"
+	| "MONEY_SCALE_MISMATCH"
+	| "NESTED_UNIT_OF_WORK"
+	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
+	| "ROLLBACK_FAILED"
+	| "SNAPSHOT_SCHEMA_MISMATCH"
+	| "TRANSACTION_CLOSED"
+	| "UNENROLLED_CHANGES"
+	| "UNKNOWN_CURRENCY"
+	| "UNREGISTERED_HANDLER"
+	| "UNREPLAYABLE_AGGREGATE";

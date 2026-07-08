@@ -71,9 +71,13 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 	};
 }
 
-/** Harvested events are stamped with the aggregate's commit version. */
-function stamped(event: TestEvent, aggregateVersion = 1): TestEvent {
-	return { ...event, aggregateVersion };
+/** Harvested events carry the commit version and the harvest index. */
+function stamped(
+	event: TestEvent,
+	aggregateVersion = 1,
+	commitSequence = 0,
+): TestEvent {
+	return { ...event, aggregateVersion, commitSequence };
 }
 
 describe("withCommit", () => {
@@ -392,8 +396,31 @@ describe("withCommit", () => {
 			);
 
 			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(5);
-			// Pre-stamped events pass through as the SAME object (no copy).
-			expect(outbox.added[0]?.[0]).toBe(preStamped);
+			// The version survives, but the harvest still stamps the
+			// commitSequence onto a frozen copy.
+			expect(outbox.added[0]?.[0]?.commitSequence).toBe(0);
+		});
+
+		it("an event with BOTH stamps pre-set passes through as the SAME object (no copy)", async () => {
+			const outbox = createMockOutbox();
+			const fullyStamped = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{
+					aggregateId: "o-1",
+					aggregateType: "MockOrder",
+					aggregateVersion: 5,
+					commitSequence: 0,
+				},
+			);
+			const agg = createMockAggregate([fullyStamped], 7);
+
+			await withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({ result: "ok", aggregates: [agg] }),
+			);
+
+			expect(outbox.added[0]?.[0]).toBe(fullyStamped);
 		});
 
 		it("rejects a pre-set aggregateVersion AHEAD of the commit version (leaked fixture guard)", async () => {
@@ -505,7 +532,13 @@ describe("withCommit", () => {
 			async () => ({ result: "ok", aggregates: [aggA, aggB, aggC] }),
 		);
 
-		const expected = [e1, e2, e3, e4].map((e) => stamped(e));
+		// Sequences restart per aggregate: [e1, e2] on A, [e3] on B, [e4] on C.
+		const expected = [
+			stamped(e1, 1, 0),
+			stamped(e2, 1, 1),
+			stamped(e3, 1, 0),
+			stamped(e4, 1, 0),
+		];
 		expect(outbox.added).toEqual([expected]);
 		expect(bus.published).toEqual([expected]);
 	});
@@ -947,5 +980,105 @@ describe("withCommit", () => {
 			// Rolled back: pending events must survive for a retry.
 			expect(agg.markPersistedCalls).toBe(0);
 		});
+	});
+});
+
+describe("deleted must be a subset of aggregates", () => {
+	it("throws EventHarvestError inside the transaction when a deleted aggregate is not listed in aggregates", async () => {
+		const outbox = createMockOutbox();
+		const deletionEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "inv-1" },
+			{ aggregateId: "inv-1", aggregateType: "MockOrder" },
+		);
+		const listed = createMockAggregate([]);
+		const forgotten = createMockAggregate([deletionEvent]);
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async () => ({
+					result: "r",
+					aggregates: [listed],
+					deleted: [forgotten],
+				}),
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
+
+		// The guard fires inside the transaction: nothing reached the outbox
+		// and the forgotten aggregate keeps its pending events (no silent
+		// loss, no stale double-emit source).
+		expect(outbox.added).toHaveLength(0);
+		expect(forgotten.pendingEvents).toHaveLength(1);
+	});
+});
+
+describe("commitSequence stamping", () => {
+	const eventFor = (orderId: string, options?: object) =>
+		createDomainEvent(
+			"OrderCreated",
+			{ orderId },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder", ...options },
+		);
+
+	it("stamps a zero-based per-aggregate sequence onto the harvested copies", async () => {
+		const outbox = createMockOutbox();
+		const agg = createMockAggregate([eventFor("a"), eventFor("b")], 7);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({ result: "r", aggregates: [agg] }),
+		);
+
+		const [batch] = outbox.added;
+		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);
+		expect(batch?.map((e) => e.aggregateVersion)).toEqual([7, 7]);
+	});
+
+	it("sequences each aggregate independently", async () => {
+		const outbox = createMockOutbox();
+		const first = createMockAggregate([eventFor("a"), eventFor("b")], 3);
+		const second = createMockAggregate([eventFor("c")], 9);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({ result: "r", aggregates: [first, second] }),
+		);
+
+		const [batch] = outbox.added;
+		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1, 0]);
+	});
+
+	it("a pre-set commitSequence is never overwritten (same rule as aggregateVersion)", async () => {
+		const outbox = createMockOutbox();
+		const agg = createMockAggregate(
+			[eventFor("a", { commitSequence: 7 }), eventFor("b")],
+			2,
+		);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({ result: "r", aggregates: [agg] }),
+		);
+
+		const [batch] = outbox.added;
+		expect(batch?.map((e) => e.commitSequence)).toEqual([7, 1]);
+	});
+
+	it("an event with a pre-set aggregateVersion still receives its commitSequence", async () => {
+		const outbox = createMockOutbox();
+		const agg = createMockAggregate(
+			[eventFor("a", { aggregateVersion: 1 }), eventFor("b")],
+			2,
+		);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async () => ({ result: "r", aggregates: [agg] }),
+		);
+
+		const [batch] = outbox.added;
+		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);
+		expect(batch?.map((e) => e.aggregateVersion)).toEqual([1, 2]);
 	});
 });

@@ -94,6 +94,50 @@ describe("RetryingTransactionScope", () => {
 			expect(inner.attempts).toBe(2);
 		});
 
+		it("a throwing isRetryable classifier does not mask the original error", async () => {
+			// The classifier is decision-bearing but must not replace the
+			// transaction's failure: a classifier throw is treated as
+			// "not retryable" and the ORIGINAL error surfaces, so upstream
+			// error-type mapping (ConcurrencyConflictError to HTTP 409)
+			// keeps working.
+			const original = conflict();
+			const inner = flakyScope(99, () => original);
+			const scope = new RetryingTransactionScope(inner, {
+				sleep: instantSleep,
+				isRetryable: () => {
+					throw new Error("classifier bug");
+				},
+			});
+
+			const rejection = await scope
+				.transactional(async () => "ok")
+				.then(() => undefined)
+				.catch((thrown: unknown) => thrown);
+
+			expect(rejection).toBe(original);
+			expect(inner.attempts).toBe(1);
+		});
+
+		it("the DEFAULT classifier's circular-cause-chain throw does not mask the original error", async () => {
+			// base-error's someChainRetryable throws "Circular cause chain
+			// detected" for a self-referential cause chain, which real driver
+			// errors can carry.
+			const original = new Error("tx failed");
+			original.cause = original;
+			const inner = flakyScope(99, () => original);
+			const scope = new RetryingTransactionScope(inner, {
+				sleep: instantSleep,
+			});
+
+			const rejection = await scope
+				.transactional(async () => "ok")
+				.then(() => undefined)
+				.catch((thrown: unknown) => thrown);
+
+			expect(rejection).toBe(original);
+			expect(inner.attempts).toBe(1);
+		});
+
 		it("an async-rejecting onRetry is swallowed and retries proceed", async () => {
 			const inner = flakyScope(1, conflict);
 			const scope = new RetryingTransactionScope(inner, {

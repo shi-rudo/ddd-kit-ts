@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as http from "./http";
 import * as index from "./index";
+import * as money from "./money";
 import * as presentation from "./presentation";
 import * as testing from "./testing";
 import * as utils from "./utils";
@@ -26,12 +27,19 @@ const INDEX_SURFACE = [
 	"DomainStateMachine",
 	"DomainTransitionGuardRejectedError",
 	"DuplicateAggregateError",
+	"DuplicateHandlerRegistrationError",
 	"Entity",
+	"ErrorMapperFailedError",
 	"EventBusImpl",
 	"EventHarvestError",
 	"EventSourcedAggregate",
+	"HostileStateKeyError",
+	"IdempotencyCompletionWithoutClaimError",
+	"IdempotencyInFlightError",
+	"IdempotencyKeyReuseError",
 	"IdentityMap",
 	"InMemoryEventStore",
+	"InMemoryIdempotencyStore",
 	"InMemoryOutbox",
 	"InfrastructureError",
 	"InvalidDomainMachineContextError",
@@ -87,6 +95,7 @@ const INDEX_SURFACE = [
 	"withClockFactory",
 	"withCommit",
 	"withEventIdFactory",
+	"withIdempotentCommit",
 ] as const;
 
 const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
@@ -98,7 +107,40 @@ const TESTING_SURFACE = [
 
 const HTTP_SURFACE = ["toProblemDetails"] as const;
 
-const PRESENTATION_SURFACE = ["toPublicErrorView"] as const;
+const PRESENTATION_SURFACE = [
+	"createKitPublicErrors",
+	"toPublicErrorView",
+] as const;
+
+const MONEY_SURFACE = [
+	"InvalidMoneyError",
+	"MoneyCurrencyMismatchError",
+	"MoneyPrecisionLossError",
+	"MoneyScaleMismatchError",
+	"UnknownCurrencyError",
+	"addMoney",
+	"createMoneyFactory",
+	"createMoneyFormatter",
+	"currencyScaleFromIntl",
+	"currencyScaleFromRecord",
+	"formatMoney",
+	"isMoney",
+	"isNegativeMoney",
+	"isPositiveMoney",
+	"isZeroMoney",
+	"moneyEquals",
+	"moneyFromDto",
+	"moneyFromSnapshot",
+	"moneyFromUnknown",
+	"moneyOfMinor",
+	"moneyToDecimalString",
+	"moneyToDto",
+	"moneyToSnapshot",
+	"negateMoney",
+	"parseMoneyInput",
+	"rescaleMoney",
+	"subtractMoney",
+] as const;
 
 describe("public API surface (runtime exports)", () => {
 	it("the main entry exports exactly the pinned names", () => {
@@ -119,5 +161,9 @@ describe("public API surface (runtime exports)", () => {
 
 	it("the presentation entry exports exactly the pinned names", () => {
 		expect(Object.keys(presentation).sort()).toEqual([...PRESENTATION_SURFACE]);
+	});
+
+	it("the money entry exports exactly the pinned names", () => {
+		expect(Object.keys(money).sort()).toEqual([...MONEY_SURFACE]);
 	});
 });

@@ -15,8 +15,8 @@ import { type VO, vo } from "../value-object/value-object";
  *
  * `ValidationError` comes from `@shirudo/base-error`; import it from there to
  * narrow the `Err` branch, exactly as `Result` is imported from
- * `@shirudo/result`. It serializes to RFC 9457 Problem Details; use
- * {@link validationProblemDetails} at the HTTP boundary to surface the issues.
+ * `@shirudo/result`. At the HTTP boundary, `toProblemDetails` from
+ * `@shirudo/ddd-kit/http` surfaces the issues as an RFC 9457 result.
  *
  * @example
  * ```ts

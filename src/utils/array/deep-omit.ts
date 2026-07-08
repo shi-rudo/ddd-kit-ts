@@ -1,4 +1,8 @@
-import { isBuiltInObject, REFERENCE_COMPARED_TAGS } from "./is-built-in";
+import {
+	isBuiltInObject,
+	isOpaqueExoticTag,
+	REFERENCE_COMPARED_TAGS,
+} from "./is-built-in";
 
 export type DeepOmitKey = string | symbol;
 export type DeepOmitPathSegment = string | number | symbol;
@@ -172,14 +176,28 @@ function omitInternal(
 		return builtInClone;
 	}
 
+	// Opaque intrinsics (boxed Symbol, generator, WeakRef, ...): pass
+	// through by reference, mirroring deepEqual's identity comparison; a
+	// plain "clone" would carry none of their internal state and could
+	// never compare equal to anything, including itself.
+	if (isOpaqueExoticTag(tag)) {
+		visited.set(obj, obj);
+		return obj;
+	}
+
 	// Plain / Custom Objects: filter keys, recursively process values.
 	const clone = Object.create(Object.getPrototypeOf(obj));
 	visited.set(obj, clone);
 
-	const stringKeys = Object.keys(obj);
+	// Own property NAMES, not Object.keys: deepEqual compares plain objects
+	// via getOwnPropertyNames (including non-enumerables, test-pinned
+	// there), so dropping non-enumerable keys here would break the
+	// deepEqualExcept-equals-deepEqual equivalence. getOwnPropertySymbols
+	// includes non-enumerable symbols the same way.
+	const stringKeys = Object.getOwnPropertyNames(obj);
 	const symbolKeys = Object.getOwnPropertySymbols(obj);
 
-	for (const key of stringKeys) {
+	for (const key of [...stringKeys, ...symbolKeys]) {
 		if (shouldIgnoreKey(key, path, ignoreKeys, options)) continue;
 		path.push(key);
 		assignOwn(
@@ -193,23 +211,10 @@ function omitInternal(
 				visited,
 				budget,
 			),
-		);
-		path.pop();
-	}
-	for (const key of symbolKeys) {
-		if (shouldIgnoreKey(key, path, ignoreKeys, options)) continue;
-		path.push(key);
-		assignOwn(
-			clone,
-			key,
-			omitInternal(
-				(obj as Record<PropertyKey, unknown>)[key],
-				options,
-				ignoreKeys,
-				path,
-				visited,
-				budget,
-			),
+			// Preserve the source's enumerability so the clone stays an
+			// exact key-set image (JSON.stringify, for-in, spread behave
+			// the same on clone and original).
+			Object.getOwnPropertyDescriptor(obj, key)?.enumerable ?? true,
 		);
 		path.pop();
 	}
@@ -235,11 +240,16 @@ function arrayPathSegment(key: string | symbol): DeepOmitPathSegment {
  * even when `key === "__proto__"`. Required to defeat prototype-pollution
  * payloads that ship `__proto__` as a parsed-JSON own key.
  */
-function assignOwn(target: object, key: PropertyKey, value: unknown): void {
+function assignOwn(
+	target: object,
+	key: PropertyKey,
+	value: unknown,
+	enumerable = true,
+): void {
 	Object.defineProperty(target, key, {
 		value,
 		writable: true,
-		enumerable: true,
+		enumerable,
 		configurable: true,
 	});
 }
@@ -285,6 +295,9 @@ function shouldIgnoreKey(
 	options: DeepOmitOptions,
 ): boolean {
 	if (ignoreKeys?.has(key)) return true;
-	if (options.ignoreKeyPredicate?.(key, path)) return true;
+	// The walk reuses ONE path array via push/pop; hand the predicate a
+	// snapshot so paths it captures stay valid after the walk. Paid only
+	// on the (already path-sensitive, budget-guarded) predicate mode.
+	if (options.ignoreKeyPredicate?.(key, path.slice())) return true;
 	return false;
 }

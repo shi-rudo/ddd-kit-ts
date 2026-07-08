@@ -166,3 +166,30 @@ describe("IdentityMap", () => {
 		expect(() => map.set(Restaurant, id, new Restaurant(id))).not.toThrow();
 	});
 });
+
+describe("clear() resets the pending-event baselines", () => {
+	class EventfulAggregate {
+		pendingEvents: unknown[] = [];
+		constructor(public readonly id: RestaurantId) {}
+	}
+
+	it("re-registering the same instance after clear() captures a fresh baseline", () => {
+		const map = new IdentityMap();
+		const id = "r-1" as RestaurantId;
+		const aggregate = new EventfulAggregate(id);
+		aggregate.pendingEvents = [{}, {}];
+
+		map.set(EventfulAggregate, id, aggregate);
+		map.clear();
+
+		// The instance was flushed elsewhere; a REUSED map must capture the
+		// new, lower baseline instead of keeping the stale count of 2,
+		// which would hide the next recorded event from the
+		// UnenrolledChangesError safety net.
+		aggregate.pendingEvents = [];
+		map.set(EventfulAggregate, id, aggregate);
+		aggregate.pendingEvents = [{}];
+
+		expect(map.instancesWithNewPendingEvents()).toHaveLength(1);
+	});
+});

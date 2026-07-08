@@ -6,7 +6,7 @@ import {
 	assert,
 	assertEqual,
 	captureRejection,
-	chainContainsErrorNamed,
+	assertChainContainsKitError,
 	describeError,
 	loadAggregateOrFail,
 	runInContractEnvironment,
@@ -16,7 +16,7 @@ import {
 /**
  * The repository surface the contract suite exercises: the minimal
  * structural subset of the canonical `IUnitOfWorkRepository` (exported
- * from the main entry) that the tests need. `getById` is typed over
+ * from the main entry) that the tests need. `findById` is typed over
  * the aggregate's own branded id (`TAgg["id"]`), so concrete adapters,
  * including arrow-function-property style repositories, which are
  * checked contravariantly, match without casts.
@@ -24,7 +24,7 @@ import {
 export interface ContractRepository<
 	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 > {
-	getById(id: TAgg["id"]): Promise<TAgg | null>;
+	findById(id: TAgg["id"]): Promise<TAgg | null>;
 	save(aggregate: TAgg): Promise<void>;
 	delete(aggregate: TAgg): Promise<void>;
 }
@@ -101,7 +101,7 @@ export interface RepositoryContractHarness<
 
 	/**
 	 * Optional: a version-bumping mutation whose state is deep-equal to
-	 * the previous state (`setState({...state}, true)`). Enables the
+	 * the previous state (`setState({...state})`). Enables the
 	 * version-only-change-still-persists test: the skip-save/OCC-desync
 	 * trap.
 	 */
@@ -238,7 +238,7 @@ export interface RepositoryContractTest {
  * ```
  *
  * **`env.run` must provide unit-of-work semantics.** Three core tests
- * (identity-map sameness, getById-null-after-delete, deletion
+ * (identity-map sameness, findById-null-after-delete, deletion
  * finality) exercise the session machinery: `session.identityMap`,
  * the `isDeleted` probe, the deleted-gate. Wiring `run` through the
  * kit's `UnitOfWork` gives you all of it; a hand-rolled `withCommit`
@@ -251,7 +251,7 @@ export interface RepositoryContractTest {
  * `instanceof`.** The suite ships in its own bundle entry; comparing
  * class identity would spuriously fail whenever the adapter's errors
  * come from a different copy of the kit (the main entry's bundle, or a
- * second installed version). `error.name === "ConcurrencyConflictError"`
+ * second installed version). `error.name === "CONCURRENCY_CONFLICT"`
  * anywhere in the chain is the contract.
  *
  * **What each test proves.** The OCC, routing, rollback, and outbox
@@ -378,6 +378,18 @@ export function createRepositoryContractTests<
 							`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
 							`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
 					);
+					// ...and a gapless zero-based commitSequence: the pair
+					// (aggregateVersion, commitSequence) is the consumer's
+					// total order and compact idempotency watermark.
+					const sequences = newSinceSeed
+						.map((event) => event.commitSequence)
+						.sort((a, b) => (a ?? -1) - (b ?? -1));
+					assert(
+						sequences.every((sequence, index) => sequence === index),
+						`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
+							`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
+							`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
+					);
 
 					// Writer B mutates its stale instance and tries to commit.
 					harness.mutate(staleB);
@@ -390,8 +402,9 @@ export function createRepositoryContractTests<
 						rejection !== undefined,
 						"the second writer's commit must reject - it committed on a stale version instead (OCC predicate missing?)",
 					);
-					assert(
-						chainContainsErrorNamed(rejection, "ConcurrencyConflictError"),
+					assertChainContainsKitError(
+						rejection,
+						["CONCURRENCY_CONFLICT"],
 						`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
 					);
 
@@ -513,14 +526,14 @@ export function createRepositoryContractTests<
 				}),
 		},
 		{
-			name: "identity map: two getById calls in one unit of work return the same instance",
+			name: "identity map: two findById calls in one unit of work return the same instance",
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
 
 					await env.run(async ({ repository }) => {
-						const first = await repository.getById(seeded.id);
-						const second = await repository.getById(seeded.id);
+						const first = await repository.findById(seeded.id);
+						const second = await repository.findById(seeded.id);
 						assert(
 							first !== null && first === second,
 							"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
@@ -529,7 +542,7 @@ export function createRepositoryContractTests<
 				}),
 		},
 		{
-			name: "delete: getById returns null in the same unit of work and after the commit",
+			name: "delete: findById returns null in the same unit of work and after the commit",
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
@@ -537,15 +550,15 @@ export function createRepositoryContractTests<
 					await env.run(async ({ repository }) => {
 						const loaded = await loadOrFail(repository, seeded.id);
 						await repository.delete(loaded);
-						const probe = await repository.getById(seeded.id);
+						const probe = await repository.findById(seeded.id);
 						assert(
 							probe === null,
-							"after delete, getById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
+							"after delete, findById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
 						);
 					});
 
 					await env.run(async ({ repository }) => {
-						const probe = await repository.getById(seeded.id);
+						const probe = await repository.findById(seeded.id);
 						assert(
 							probe === null,
 							"after the deleting unit of work committed, the aggregate must be gone",
@@ -567,8 +580,9 @@ export function createRepositoryContractTests<
 							await repository.save(loaded);
 						}),
 					);
-					assert(
-						chainContainsErrorNamed(rejection, "AggregateDeletedError"),
+					assertChainContainsKitError(
+						rejection,
+						["AGGREGATE_DELETED"],
 						`save-after-delete must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}. ` +
 							`If you see ConcurrencyConflictError here instead, your save() probably enrolls AFTER the row write - enroll first.`,
 					);
@@ -723,8 +737,9 @@ export function createRepositoryContractTests<
 									await repository.save(resurrected);
 								}),
 							);
-							assert(
-								chainContainsErrorNamed(rejection, "AggregateDeletedError"),
+							assertChainContainsKitError(
+								rejection,
+								["AGGREGATE_DELETED"],
 								`saving a re-created instance of a deleted aggregate must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}`,
 							);
 						}),
@@ -761,8 +776,9 @@ export function createRepositoryContractTests<
 									await repository.save(duplicate);
 								}),
 							);
-							assert(
-								chainContainsErrorNamed(rejection, "DuplicateAggregateError"),
+							assertChainContainsKitError(
+								rejection,
+								["DUPLICATE_AGGREGATE"],
 								`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
 									`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
 									`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
@@ -823,15 +839,16 @@ export function createRepositoryContractTests<
 									await repository.delete(staleB);
 								}),
 							);
-							assert(
-								chainContainsErrorNamed(rejection, "ConcurrencyConflictError"),
+							assertChainContainsKitError(
+								rejection,
+								["CONCURRENCY_CONFLICT"],
 								`a stale delete must reject with (or wrap) ConcurrencyConflictError; got: ${describeError(rejection)} - an unpredicated DELETE silently destroys the concurrent writer's update`,
 							);
 
 							// A's write survived - load nullable on purpose: the
 							// rejected delete must not have destroyed the row.
 							const final = await env.run(({ repository }) =>
-								repository.getById(seeded.id),
+								repository.findById(seeded.id),
 							);
 							assert(
 								final !== null,

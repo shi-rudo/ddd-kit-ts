@@ -67,7 +67,7 @@ Broken in any flow where a fresh aggregate is mutated before its first save (fac
 
 Use `aggregate.persistedVersion === undefined` for the INSERT marker: that field tracks the DB state, not in-memory mutations. The OCC predicate's `WHERE version = ?` also uses `persistedVersion` (the load-time / last-save baseline), not `aggregate.version`. Reconstitute factories use `order.markRestored(version)`, not `order.setVersion(version)`. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 
-### Repository that returns a fresh aggregate instance for every `getById(id)` call within one `withCommit`
+### Repository that returns a fresh aggregate instance for every `findById(id)` call within one `withCommit`
 
 Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same logical id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work: the [`UnitOfWork` facade ships one as `session.identityMap`](./unit-of-work.md#identity-map), with a deletion-tombstone guard hand-rolled maps usually lack; hand-rolling remains for `withCommit`-only setups. See [Repository](./repository.md).
 
@@ -85,13 +85,11 @@ See [Domain Events → Factory bootstrap](./domain-events.md).
 
 ### Storing aggregate instances at module top level on Cloudflare Workers / Vercel Edge
 
-Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.getById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
+Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.findById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
 
-### Calling `isChainRetryable(err)` on a wrapped ddd-kit error
+### Assuming the strict base-error helpers cannot see ddd-kit errors
 
-`@shirudo/base-error`'s `isChainRetryable` filters strictly on the `StructuredError` shape (`code` + `category` + `retryable`). ddd-kit's errors (`DomainError`, `InfrastructureError`, `ConcurrencyConflictError`, `AggregateNotFoundError`) extend `BaseError` directly without `code` / `category` (they discriminate by class, not RFC 9457 fields), so `isChainRetryable` returns `false` silently and OCC retry middleware skips the conflict.
-
-Use `someChainRetryable(err)` for whole-chain checks or `isRetryable(err)` for single-level. Same trap for `getRootCauseRetryable` and `getFirstRetryableCause`. See [Result vs Throw](./result-vs-throw.md).
+Outdated pre-v3 advice, inverted since the StructuredError migration: every kit error now carries `code` + `category` + `retryable`, so `isChainRetryable`, `isStructuredError`, `getRootCauseRetryable`, and `getFirstRetryableCause` all work on kit errors (a wrapped `ConcurrencyConflictError` IS found by `isChainRetryable`). `someChainRetryable(err)` remains the tolerant default (it also matches bare `retryable === true` markers from other libraries) and is what `RetryingTransactionScope` uses. See [Result vs Throw](./result-vs-throw.md).
 
 ## Architectural / testing mistakes
 

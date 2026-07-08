@@ -5,17 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added: command idempotency primitive
+
+- `IdempotencyStore` port, `withIdempotentCommit` wrapper, and
+  `InMemoryIdempotencyStore` reference implementation. The wrapper claims the
+  idempotency key inside the `withCommit` transaction (single-transaction
+  pattern: a rollback releases the claim), short-circuits duplicates by
+  replaying the stored outcome without re-running the use case or re-emitting
+  events, and stores the outcome atomically with the aggregate write and the
+  outbox. A failed attempt releases its claim before the error leaves the
+  transactional region, so a `RetryingTransactionScope` retry claims fresh
+  instead of colliding with the previous attempt; after the commit the wrapper
+  confirms the outcome, so a non-transactional store never replays an outcome
+  whose transaction did not commit (`confirm` and `abandon` are no-ops for
+  transactional adapters). New structured errors: `IdempotencyKeyReuseError`
+  (same key, different command fingerprint; not retryable),
+  `IdempotencyInFlightError` (first execution still running; retryable), and
+  `IdempotencyCompletionWithoutClaimError` (wiring bug guard). The same store
+  serves as a message inbox: key = message id. Stored outcomes must be plain,
+  serialisable data, the same discipline as snapshots and event payloads.
+- `WithCommitDeps` and `WithCommitWorkResult` are now exported types
+  (previously inline parameter types of `withCommit`; no behavior change).
+
+### Changed (breaking): repository load methods follow the get/find contract
+
+- `IRepository` / `IUnitOfWorkRepository`: `getById` is renamed to
+  `findById` (unchanged semantics: returns the aggregate or `null`), and
+  `getByIdOrFail` is renamed to `getById` (unchanged semantics: returns the
+  aggregate or throws `AggregateNotFoundError`). The names now carry the
+  contract: `find*` makes absence explicit in the signature, `get*` never
+  returns `null`. Migration warning: the type system does NOT catch a missed
+  old `getById` call site. A null check against the new non-nullable `getById`
+  compiles cleanly; the null branch is silently dead and a missing aggregate
+  now throws `AggregateNotFoundError` instead of returning `null`. Migrate
+  mechanically in three steps so no site is missed: rename `getByIdOrFail` to
+  a placeholder, rename every `getById` to `findById`, rename the placeholder
+  to `getById`. A plain two-step rename leaves old `getById` call sites
+  compiling against the new throwing method.
+
 ## [3.0.0] - 2026-07-05
 
 v3 is a deliberately small "tightening" major: every breaking change
 fails at COMPILE time instead of changing runtime semantics silently.
 Upgrade checklist (details and rationale in the sections below):
 
-1. Add the second argument to every `AggregateRoot.setState` call:
-   `this.setState(next)` becomes `this.setState(next, true)` (pass
-   `false` only for data whose loss under a concurrent write is
-   acceptable). Remove `autoVersionBump` from configs; overrides keep
-   the two-argument signature and delegate to `super`.
+0. Kit errors are structured now: every error carries a stable
+   SCREAMING_SNAKE `code`, and `error.name === error.code` (the old
+   PascalCase class names are gone from `error.name`). Re-key
+   `error.name` matching to the codes (e.g. "ConcurrencyConflictError"
+   becomes "CONCURRENCY_CONFLICT"); consumer subclasses of
+   `DomainError` / `InfrastructureError` switch to the options-object
+   super call with an explicit `code`.
+1. `AggregateRoot.setState(next)` now ALWAYS bumps the OCC version.
+   Call sites that relied on the implicit non-bumping default and
+   genuinely tolerate loss under a concurrent write switch to the new
+   `setStateWithoutVersionBump(next)`; everything else keeps its
+   one-argument call and gains the safe behavior. Remove
+   `autoVersionBump` from configs.
 2. Remove err-branches that matched the "No handler registered" message
    or the `UnregisteredHandlerError` type on the bus error channel:
    `execute` now throws it. Catch the named type where the case must be
@@ -28,15 +76,55 @@ Upgrade checklist (details and rationale in the sections below):
    `computeBackoffDelay` (internal).
 5. Runtime and peers: Node 22+ and `@shirudo/base-error` ^8.
 
+### Changed (breaking): kit errors are StructuredErrors with one identifier
+
+- Every kit error is now a base-error `StructuredError` carrying a
+  stable SCREAMING_SNAKE `code`, a `category` derived mechanically from
+  the hierarchy (`DOMAIN` / `INFRASTRUCTURE` / `WIRING` for the
+  crash-loud family), and a plain `retryable` boolean
+  (`ConcurrencyConflictError`'s hand-rolled marker became the
+  structured field). By base-error's design `error.name === error.code`,
+  so there is exactly ONE identifier and no name/code drift: the old
+  PascalCase names ("ConcurrencyConflictError") are gone from
+  `error.name`; the contract-test suites and `toPublicErrorView` match
+  on the codes now (and ONLY the codes). Troubleshooting note: if a
+  contract-suite failure's cause chain shows a PascalCase kit error
+  name, the adapter under test resolves a pre-v3 `@shirudo/ddd-kit`
+  copy; align the versions in your dependency graph.
+- **No base-error adoption required.** Consumers branch with a plain
+  `switch (error.code)`, catch via the kit-exported `instanceof
+  DomainError` / `instanceof InfrastructureError`, and read
+  `retryable` / `cause` as ordinary properties. base-error's toolbox
+  (exhaustive `matchError` on the codes, `isStructuredError`, the
+  public-error pipeline) works on every kit error as an opt-in benefit
+  on top, never as a prerequisite.
+- Consumer subclasses of `DomainError` / `InfrastructureError` supply
+  their `code` and `message` via an options object; `category` is fixed
+  by the base and `retryable` defaults to `false`:
+  `class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
+  constructor(id: string) { super({ code: "ORDER_ALREADY_SHIPPED",
+  message: ... }); } }`.
+- Added: the `KitErrorCode` union (every code the kit itself produces)
+  and the `KitErrorOptions` type are exported from the main entry.
+
 ### Changed (breaking): Node 22+ and `@shirudo/base-error` ^8
 
 - `engines.node` moves to `>=22`: Node 20 reached end-of-life on
   2026-04-30, and a major is the right window to drop it. Cloudflare
   Workers, Vercel Edge, Deno, and Bun remain supported unchanged.
 - The `@shirudo/base-error` peer dependency moves from `^7.1.1` to
-  `^8.0.0`. The kit compiles and its full test suite passes against 8.x
-  without source changes; consumers that use base-error's API directly
-  follow its own migration notes.
+  `^8.0.0`, and the kit follows 8.x's public-error consolidation: the
+  `/presentation` and `/problem-details` subpaths merged into
+  `/public-error`, so `toPublicErrorView` now returns base-error's
+  `LocalizedPublicError` (structurally the same `code` / `message` /
+  `locale` / `details` view the 7.x `PublicErrorView` carried) and
+  `toProblemDetails` returns the 8.x `ProblemDetails`, whose contract
+  includes the machine-readable public `code` member; the body now
+  carries the `ValidationError`'s own code (`"VALIDATION_FAILED"` by
+  default). For catalog-driven mapping use 8.x's `toProblem` /
+  `definePublicErrors` (the 7.x `defineProblemDetailsAdapter` /
+  `PublicErrorPresenter` are gone); consumers that use base-error's
+  API directly follow its own migration notes.
 
 ### Changed (breaking): one repository delete contract, on the aggregate
 
@@ -65,27 +153,43 @@ Upgrade checklist (details and rationale in the sections below):
   migration is a find-and-replace on the two type names (the shapes are
   identical).
 
-### Changed (breaking): `AggregateRoot.setState` requires the `bumpVersion` argument
+### Changed (breaking): `AggregateRoot.setState` always bumps; the no-bump path is a named method
 
-- `setState(newState, bumpVersion)` takes a REQUIRED boolean: every mutation
-  states its optimistic-concurrency intent at the call site. The implicit
-  no-bump default permitted silent lost updates (a save whose version did
-  not move writes `WHERE version = v SET version = v`, so a concurrent
-  writer that loaded the same `v` commits over it without a
+- `setState(newState)` now ALWAYS advances the OCC version, and the
+  rare non-bumping mutation moved to the deliberately loud
+  `setStateWithoutVersionBump(newState)`. The optimistic-concurrency
+  decision is a WORD at the call site, not a boolean flag a reader has
+  to look up. The previously implicit no-bump default permitted silent
+  lost updates (a save whose version did not move writes
+  `WHERE version = v SET version = v`, so a concurrent writer that
+  loaded the same `v` commits over it without a
   `ConcurrencyConflictError`); deprecated since 2.2.0, removed now.
 - The `autoVersionBump` option is removed; `AggregateConfig` is now an
-  alias of `EntityConfig` (the per-call argument replaced the config
+  alias of `EntityConfig` (the named methods replaced the config
   fallback entirely).
 - Calls that bypass the compiler (an `Entity`-typed reference, plain
-  JavaScript) fail loud with a `TypeError` before anything mutates.
-- Migration: add the second argument to every `setState` call site
-  (`this.setState(next)` becomes `this.setState(next, true)`; pass
-  `false` only for data whose loss under a concurrent write is
-  acceptable). Aggregates configured with `autoVersionBump: true` pass
-  `true` per call; `commit()` users are unaffected. If you OVERRIDE
-  `setState`, keep the two-argument signature and delegate to `super`:
-  method bivariance also accepts a narrower single-argument override,
-  which would silently disable both guards for that subclass.
+  JavaScript) hit the same safe bumping default: `setState` keeps the
+  identical one-argument signature as `Entity.setState`, so the
+  bivariant-override footgun and the runtime `TypeError` guard of the
+  interim two-argument design are gone.
+- Migration from 2.x: audit every `setState` call site. Domain
+  mutations keep their one-argument call and gain the version bump;
+  only mutations that genuinely tolerate loss under a concurrent write
+  (cosmetic caches, denormalized display fields) switch to
+  `setStateWithoutVersionBump(next)`. Aggregates configured with
+  `autoVersionBump: true` drop the config and change nothing else;
+  `commit()` users are unaffected.
+
+### Changed (breaking): `apply()` is only for new facts; the `isNew` flag is gone
+
+- `EventSourcedAggregate.apply(event)` drops its optional `isNew`
+  boolean (the same flag-argument cleanup as `setState`): `apply()`
+  always records the event and bumps the version. Replaying history is
+  a different operation with its own entry points, `loadFromHistory`
+  and `restoreFromSnapshotWithEvents`; internally both share the
+  record-free `dispatch` transition path. No known consumer passed
+  `isNew` explicitly; call sites using `this.apply(event)` are
+  unaffected.
 
 ### Changed (breaking): buses throw `UnregisteredHandlerError` for unregistered types
 
@@ -100,6 +204,316 @@ Upgrade checklist (details and rationale in the sections below):
   "No handler registered" message (default string channel) or the
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
+
+### Added: `commitSequence` on harvested events
+
+- `withCommit` stamps every harvested event with `commitSequence`, the
+  zero-based index of the event within its aggregate's harvest batch,
+  next to `aggregateVersion` (same pre-set-wins rule). All events of
+  one commit share the version, so the pair
+  `(aggregateVersion, commitSequence)` is a total order per aggregate
+  and a compact idempotency watermark: consumers sort and advance by
+  the tuple instead of keeping an `eventId` set (which remains the
+  general fallback for events stamped outside `withCommit`). Additive
+  and optional at the type level; `createDomainEvent` accepts a
+  pre-set value; the repository contract suite enforces a gapless
+  sequence on committed outbox events.
+
+### Added: `@shirudo/ddd-kit/money`, the money contract and its boundaries
+
+- New opt-in entry point shipping the canonical money shape so
+  consumers stop re-implementing (and mis-implementing) it. `Money` is
+  `{ amountMinor: bigint, currency, scale }`: exact, frozen plain data
+  that is safe inside aggregate state, event payloads, and snapshots
+  (survives `structuredClone`, deep-freeze, and dirty diffing), with
+  `MoneyDto` carrying `amountMinor` as an integer string for JSON
+  safety. Exact operations only: `addMoney` / `subtractMoney` (exact on
+  aligned minor units with same-currency and same-scale guards raising
+  `MONEY_CURRENCY_MISMATCH` / `MONEY_SCALE_MISMATCH`), `negateMoney`,
+  and lossless `rescaleMoney` (upscaling and exact downscaling; inexact
+  conversions throw `MONEY_PRECISION_LOSS`), so domain code needs no
+  third-party import and the kit never rounds outside parsing.
+  Deliberately NOT shipped: everything carrying a rounding or
+  distribution policy (multiplication, ratios, fees, division, lossy
+  rescaling, allocation, FX); those are domain policy executed by a
+  calculation library at the use-case boundary, and `moneyFromSnapshot`
+  / `moneyToSnapshot` bridge its structural `{ amount, currency, scale }`
+  snapshot shape without depending on any of them (non-base-10
+  currencies and unsafe number amounts are rejected loudly at the
+  boundary).
+- `parseMoneyInput` parses decimal strings into exact minor units (the
+  safe replacement for `Number(input) * 100`) and is EXACT OR
+  REJECTED: over-precise input throws `MONEY_PRECISION_LOSS`, and the
+  kit ships NO rounding at all (no modes, no rounding engine). Whether
+  `10.999 EUR` is rejected or becomes `11.00 EUR` is a business
+  decision; the guide shows how to put it in a domain-named policy
+  function that rounds via the calculation library.
+  `moneyToDecimalString` is the exact inverse; `formatMoney` /
+  `createMoneyFormatter` feed `Intl.NumberFormat` the exact decimal
+  string, precision-safe past 2^53.
+- The kit ships no currency table: `createMoneyFactory({ scaleFor })`
+  binds a consumer-provided `CurrencyScaleResolver` once
+  (`currencyScaleFromRecord`, `currencyScaleFromIntl`, or a one-liner
+  over a calculation library's currency package); unresolved
+  currencies throw `UNKNOWN_CURRENCY`.
+- New codes in the `KitErrorCode` union: `INVALID_MONEY`,
+  `MONEY_CURRENCY_MISMATCH`, `MONEY_SCALE_MISMATCH`,
+  `MONEY_PRECISION_LOSS`, `UNKNOWN_CURRENCY` (DomainErrors, registered
+  in `createKitPublicErrors()` at status 422 with client-safe
+  messages).
+- `Money` is branded with a NON-EXPORTED unique symbol: structural
+  literals do not type-check as `Money`, not even ones spelling out a
+  `__brand` property; only the module's constructors mint it.
+  `moneyFromUnknown` re-hydrates foreign plain shapes by validating,
+  copying, and freezing (later mutation of the input cannot reach
+  domain state); `isMoney` is a check, not a door. The trust-boundary
+  parsers (`moneyFromDto`, `parseMoneyInput`, `moneyFromSnapshot`,
+  `factory.parse`) take `unknown`, so raw request or storage values go straight in
+  without casts or lossy `String(...)` coercion. The Intl-backed resolver
+  accepts only canonical uppercase ISO codes ("eur" resolves to
+  `undefined` instead of silently aliasing "EUR") and is documented as
+  a convenience, not an enterprise source of truth (production paths
+  pin a closed, versioned currency map).
+- Hard bounds by construction, sized for hostile input on the parse and
+  DTO boundaries: amounts up to 96 digits (uint256 fits with headroom),
+  scale up to 64, currency up to 32 characters, parse input up to 256
+  characters. Oversized input is rejected in O(1) before any bigint
+  conversion, diagnostic messages truncate what they echo, the
+  Intl-backed resolver and formatter caches are size-capped, and every
+  emitting boundary (`moneyToDto`, `moneyToSnapshot`,
+  `moneyToDecimalString`, the formatters) rejects non-Money input
+  loudly.
+
+### Fixed: audit follow-ups across entity, aggregate, state machine, and utils
+
+- A clock factory returning a SHARED `Date` (the documented
+  `withClockFactory(() => fixed, ...)` pattern) is no longer frozen in
+  place by `createDomainEvent` nor aliased into `createSnapshot`'s
+  `snapshotAt`; both copy the reading.
+- `Entity` construction and `setState` share one order (copy, freeze,
+  validate, assign): `validateState` always sees the exact frozen
+  object that will be stored, so a normalizing or input-reading
+  override cannot behave differently between the two paths.
+- `Entity` state copies preserve own enumerable NON-INDEX keys on array
+  states (`items.total = 5` style annotations), mirroring the
+  plain-object branch instead of silently dropping them.
+- `IdentityMap.clear()` resets the pending-event baselines; a reused
+  map no longer under-reports new events to the
+  `UnenrolledChangesError` safety net.
+- The domain state machine re-validates the defensive COPY of raw
+  definitions and snapshots, closing the Proxy TOCTOU where a lying
+  `getOwnPropertyDescriptor` could smuggle values validation never
+  saw (exhaustively pinned over every read position); the
+  `DomainStateMachine` constructor now shares
+  `prepareDomainMachineSnapshot` with the pure path instead of
+  hand-rolling it.
+- `deepEqual` compares opaque exotics (boxed Symbols, generator
+  objects, WeakRefs; tags outside every curated set) by identity
+  instead of as empty plain objects that all equaled each other;
+  `deepOmit` passes them through by reference so `deepEqualExcept`
+  stays consistent.
+- `withCommit` enforces the documented subset contract inside the
+  transaction: an aggregate listed in `deleted` but missing from
+  `aggregates` throws `EventHarvestError` instead of silently losing
+  its deletion events (never harvested into the outbox) and
+  double-emitting them on a later commit. The `UnitOfWork` facade was
+  always immune; only direct `withCommit` callers could trip this.
+- `transitionDomainState` outcomes are `Object.freeze`d like every
+  sibling return value (snapshots, outputs, the analyzer result), so a
+  cast can no longer rewrite `from`/`to` at runtime despite the
+  readonly typing.
+- `deepOmit`'s `ignoreKeyPredicate` receives a stable path snapshot;
+  captured paths no longer read as empty after the walk.
+- `mergeMetadata` and `copyMetadata` reject an own `__proto__` data key
+  with `HostileStateKeyError` (same contract as entity state) instead
+  of carrying the pollution payload into event metadata.
+- Added: `DuplicateHandlerRegistrationError` (code
+  `DUPLICATE_HANDLER_REGISTRATION`, WIRING): duplicate bus handler
+  registration now throws a named, routable error instead of an
+  anonymous `Error`; the message still contains "already registered"
+  for existing matchers.
+- Performance: `InMemoryEventStore.append` pushes in place (O(batch)
+  instead of O(stream) per append), `InMemoryOutbox.getPending(limit)`
+  stops at the limit instead of materializing the whole backlog, and
+  `hasChanges` reads an internal pending-event count instead of
+  allocating the frozen `pendingEvents` copy per save.
+- `updateEntityById` / `replaceEntityById` / `removeEntityById` use
+  structural sharing: they return the ORIGINAL array when nothing
+  changed (no match, same-reference result) so the reference-based
+  `changedKeys` diff stays clean and partial-write repositories skip
+  untouched collections; a new array only when an element reference
+  actually changed. Their return type is now `ReadonlyArray<T>` (the
+  result may BE the frozen input); spread it for a mutable copy.
+- Docs: the transaction-scope module doc now attaches to
+  `TransactionScope`; the remaining German test names were translated.
+
+### Added: `createKitPublicErrors`, and `toPublicErrorView` rides the pipeline
+
+- New `createKitPublicErrors()` (presentation entry) builds base-error's
+  `PublicErrorCatalog` with one descriptor per public code the kit can
+  emit (`AGGREGATE_NOT_FOUND` 404, `CONCURRENCY_CONFLICT` 409 retryable,
+  `DUPLICATE_AGGREGATE` 409, the validation family 422 with sanitized
+  issues under `details.issues`, `INTERNAL_ERROR` 500 fallback).
+  Deliberately a FACTORY: base-error's `registerByCode` / `register`
+  widen the type but register into the same instance, so a shared
+  export would leak one consumer's extensions into every other. Build
+  your catalog at the composition root and extend it there:
+  `createKitPublicErrors().registerByCode("ORDER_ALREADY_SHIPPED", ...)`.
+- `toPublicErrorView` now delegates to that pipeline (`project` +
+  `localize` over a private default catalog) and accepts a `catalog`
+  option, so consumer codes and locales resolve through the same
+  machinery. Totality and the validation hardening are unchanged and
+  stay test-pinned.
+- Breaking within the unreleased 3.0.0: the `locale` option is now a
+  PREFERENCE (RFC 4647 lookup); the view carries the locale that
+  actually RESOLVED instead of stamping the requested one onto an
+  English message (`locale: "de-DE"` with the built-in messages now
+  yields `locale: "en"`).
+
+### Changed (breaking): `toProblemDetails` delegates to base-error's `toProblem`
+
+- `toProblemDetails` now runs base-error's transport stage instead of
+  hand-building the body: one pipeline, one wire profile, one hardening
+  implementation. It returns `toProblem`'s `ProblemDetailsResult`
+  (`{ status, headers, body, outcome }`), so boundaries stop restating
+  the status and content-type; the whitelisted issues ride under
+  `details.issues` (the same shape `toPublicErrorView` uses) and the
+  body carries the error's public `code`.
+- Wire changes: the `member` option (`errors` / `invalid-params`, both
+  non-standard conventions) is gone; the `ValidationProblemMember` type
+  was removed and `ValidationProblemDetails` added. The body inherits
+  `toProblem`'s guarantees: deeply frozen, null prototype, JSON-safe (a
+  non-serializable value drops that member into `outcome.omitted`
+  instead of corrupting the wire), and an extensions set colliding with
+  reserved members is dropped and recorded rather than merged.
+- Migration: `Response.json(toProblemDetails(e), { status: 422 })`
+  becomes `const p = toProblemDetails(e); Response.json(p.body,
+  { status: p.status, headers: p.headers })`; clients read the issues
+  from `details.issues` instead of the `errors` member.
+
+### Fixed: the analyzer honors the prepared-definition fast path
+
+- `analyzeDomainMachineDefinition` hand-rolled validate-and-copy
+  instead of going through the shared entry-point normalization, so a
+  definition prepared with `prepareDomainMachineDefinition` paid the
+  full O(definition) re-validation and deep re-copy on every analysis
+  call, contradicting the documented prepared-definition contract. It
+  now uses the same fast path as the other pure functions and the
+  `DomainStateMachine` constructor: prepared definitions pass through
+  untouched, raw definitions keep the per-call validate-and-copy.
+
+### Fixed: `deepOmit` preserves non-enumerable own string properties
+
+- `deepOmit` cloned plain objects from `Object.keys` only, silently
+  dropping non-enumerable own string properties, while `deepEqual`
+  deliberately compares via `Object.getOwnPropertyNames`: two objects
+  differing only in such a property gave `deepEqual` `false` but
+  `deepEqualExcept` `true`, and `deepEqual(deepOmit(x, {}), x)` was
+  `false`. The clone now walks `Object.getOwnPropertyNames` (matching
+  `deepEqual`, and matching the symbol and array-property handling that
+  already survived) and preserves each property's enumerability, so
+  the omit of nothing is an exact key-set image of the input.
+
+### Fixed: `restoreFromSnapshot` rejects targets carrying pending events
+
+- `AggregateRoot.restoreFromSnapshot` silently kept pre-restore
+  `pendingEvents` while re-baselining the version via `markRestored`,
+  so events recorded before the restore would later be harvested with
+  a version baseline from a state lineage the snapshot had discarded.
+  The event-sourced replay methods already guarded against exactly
+  this; the guard is now one shared, non-overridable module-internal
+  function checking the public `pendingEvents` surface, and both
+  restore paths throw `UnreplayableAggregateError` before anything
+  moves.
+- Migration for the in-memory undo pattern (snapshot before a risky
+  operation, restore on failure): take the undo snapshot while the
+  aggregate is CLEAN (no `pendingEvents`, e.g. right after load or
+  save), since `createSnapshot` bakes pending events' version bumps
+  into `snapshot.version`; on failure call `clearPendingEvents()`
+  BEFORE `restoreFromSnapshot` to discard the events recorded since
+  that clean point. Restoring first and clearing afterwards now
+  throws.
+- The `UnreplayableAggregateError` message no longer recommends a bare
+  `markPersisted` (harmful on the snapshot-restore path: it flips
+  repository routing to UPDATE and silently drops the unflushed
+  events); it names `clearPendingEvents()` as the deliberate-discard
+  remedy instead.
+
+### Fixed: a throwing retry classifier no longer masks the transaction error
+
+- `RetryingTransactionScope` invoked the `isRetryable` classifier
+  unguarded inside its catch block, so a throwing classifier replaced
+  the original transaction failure with its own error (losing the
+  error type upstream mapping relies on, e.g.
+  `ConcurrencyConflictError` to HTTP 409). Reachable with the DEFAULT
+  policy: base-error's `someChainRetryable` throws on a circular cause
+  chain. The classifier is now guarded like the `onRetry` observer: a
+  classifier throw counts as "not retryable" and the ORIGINAL error
+  surfaces unchanged.
+
+### Fixed: bus error channels are honest for literal unions and broken mappers
+
+- A string-literal-union error channel (e.g.
+  `E = "DB_CONN" | "TIMEOUT"`) slipped through the `errorMapper`
+  requirement: every subtype of `string` passed the
+  `[E] extends [string]` gate, so the built-in `describeThrown`
+  fallback could deliver arbitrary strings outside the declared union,
+  falling through exhaustive switches. The gate now tests both
+  directions, so options are optional only when `E` IS `string` (and
+  the unavoidable `any`); literal unions, object types, and `unknown`
+  all require an explicit `errorMapper` at compile time, for both
+  buses.
+- A THROWING `errorMapper` no longer replaces the handler's original
+  failure: `execute` now throws the new `ErrorMapperFailedError`
+  (crash-loud, same family as `UnregisteredHandlerError`) carrying the
+  handler's error as `cause` and the mapper's own failure as
+  `mapperCause`. Like a nested `UnregisteredHandlerError`, a nested
+  dispatch's `ErrorMapperFailedError` stays a throw and is never
+  mapped into the outer bus's channel. The default mapper
+  `describeThrown` is also total now: it no longer throws for a cyclic
+  null-prototype thrown value, a revoked Proxy, or an Error subclass
+  with a hostile `message` getter.
+- Internal: the buses' shared wiring semantics (constructor-args
+  conditional, mapper resolution, register-once guard, no-handler
+  gate, handler-failure mapping) moved into one internal module, so a
+  fix to one bus can no longer silently miss the other; `CommandBus`
+  adopted the factored no-handler gate `QueryBus` already had.
+- Added: `ErrorMapperFailedError` (and its options type) is exported
+  from the main entry.
+
+### Fixed: `toPublicErrorView` is total and no longer trusts duck-typed `publicIssues()`
+
+- A throwing `publicIssues()` implementation (or a throwing `name` /
+  `publicIssues` accessor) crashed the presenter inside the 500 path,
+  contradicting the documented totality over `unknown`; any non-kit
+  object that happened to expose a `publicIssues()` method also had
+  its raw `name` emitted as the client-facing `code` and its arbitrary
+  return value shipped to the client in `details.issues`. The mapper
+  now degrades to the `INTERNAL_ERROR` fallback view on any throw, and
+  the validation branch requires a SCREAMING_SNAKE `name` (the shape
+  base-error gives a `ValidationError`, which is named after its code)
+  in addition to the capability, so class-named infrastructure errors
+  can no longer masquerade as validation errors. Issues are re-emitted
+  through the `PublicIssue` whitelist (`message`, `path`, `code`,
+  `pointer`): unknown fields, non-conforming entries, and non-array
+  `publicIssues()` results are dropped.
+
+### Fixed: entity state rejects `__proto__` prototype pollution loudly
+
+- An own `__proto__` data key on a plain-object state (the shape
+  `JSON.parse` produces for DB rows or request bodies handed to
+  reconstitute factories) was applied through the `Object.prototype`
+  setter by `Object.assign` during `Entity`'s internal shallow copy:
+  the copy's prototype was replaced with the injected object and the
+  key was dropped. The constructor and `setState` now throw the new
+  `HostileStateKeyError` when a plain-object, null-prototype, or array
+  state carries such a key: it can never be legitimate domain state,
+  carrying it onward would re-arm pollution in downstream
+  `Object.assign`-style consumers of `state`, and dropping it would be
+  silent data mutation. On `setState` the previous state is kept. The
+  internal copy also switched from `Object.assign` to object spread
+  (data properties, never `[[Set]]`) as defense in depth.
+- Added: `HostileStateKeyError` is exported from the main entry.
 
 ## [2.2.0] - 2026-07-04
 

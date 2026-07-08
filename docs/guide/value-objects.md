@@ -1,6 +1,6 @@
 # Value Objects
 
-Value Objects are immutable, defined by their attributes rather than identity. Equality is structural: two Money value objects with the same amount and currency are the same.
+Value Objects are immutable, defined by their attributes rather than identity. Equality is structural: two Money value objects with the same amount, currency, and scale are the same. (For money specifically, use the shipped canonical shape from [`@shirudo/ddd-kit/money`](/guide/money) instead of hand-rolling one; its `moneyEquals` is deliberately strict on all three attributes.)
 
 ## Functional: `vo()`
 

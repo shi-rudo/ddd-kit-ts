@@ -76,7 +76,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 	/** Version-only change: deep-equal state, bumped version, no event. */
 	touch(): void {
-		this.setState({ ...this.state }, true);
+		this.setState({ ...this.state });
 	}
 }
 
@@ -117,7 +117,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 		protected readonly session: UnitOfWorkSession<OrderEvent>,
 	) {}
 
-	async getById(id: OrderId): Promise<ContractOrder | null> {
+	async findById(id: OrderId): Promise<ContractOrder | null> {
 		const cached = this.session.identityMap.get(ContractOrder, id);
 		if (cached) return cached;
 		if (this.session.identityMap.isDeleted(ContractOrder, id)) return null;

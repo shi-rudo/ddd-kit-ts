@@ -40,7 +40,7 @@ export interface ReadStreamOptions {
  * Repository usage (see the event-sourcing guide):
  *
  * ```ts
- * async getById(id: OrderId): Promise<Order | null> {
+ * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   const history = await this.eventStore.readStream(id);

@@ -121,6 +121,27 @@ That's Vernon-pure: no globals touched, no scoped helpers needed, every event's 
 
 Even in a DI-leaning codebase, `withEventIdFactory` / `withClockFactory` remain the right tool for one case: **events constructed deep inside a domain method** where threading an explicit `{ eventId, occurredAt }` through every `createDomainEvent` call is awkward. A test that wraps the whole operation in `withEventIdFactory(() => "deterministic", () => order.processBatch(...))` is cleaner than refactoring `processBatch` to thread the id-gen through three layers of internal helpers.
 
+## Collection helpers practice structural sharing
+
+`updateEntityById`, `replaceEntityById`, and `removeEntityById` return the
+ORIGINAL array when nothing changed (no match, a same-reference updater
+result or replacement, an absent id on remove) and a new array only when an
+element reference actually changed, with unchanged siblings keeping their
+identity. This is the immutable-update idiom (Immer / Redux / persistent
+data structures), and in this kit it is load-bearing: `changedKeys` is a
+reference-based per-key diff, so a helper returning a fresh array for a
+no-op would falsely mark the collection key dirty and cost partial-write
+repositories a pointless child-table write. The reference is the honest
+change signal.
+
+Two consequences are deliberate. The return type is `ReadonlyArray<T>`
+because the result may BE the (shallow-frozen) input; a mutable `T[]`
+would be a lie (spread the result when a mutable copy is needed). And a
+miss stays a silent no-op: the helper is a data-structure operation with
+no domain context, so whether a missing element is an error is the
+aggregate method's decision, and structural sharing makes the miss
+detectable there for free (`result === input`).
+
 ## No deep clone on every state read
 
 `Entity.state` is **shallowly frozen** on every assignment. Direct property writes (`entity.state.foo = …`) throw in strict mode, but writes to nested objects bypass the freeze. For deep immutability either model nested data with `vo()` (deep-freezes by construction) or reach for Immer / Immutable.js at the App layer. The shallow contract is deliberate: deep freezing on every state write would dominate hot paths.

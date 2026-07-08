@@ -45,7 +45,19 @@ export {
 	type ICommandBus,
 } from "./app/command-bus";
 // App orchestration: withCommit + Unit of Work
-export { withCommit } from "./app/handler";
+export {
+	withCommit,
+	type WithCommitDeps,
+	type WithCommitWorkResult,
+} from "./app/handler";
+export {
+	type IdempotencyClaim,
+	type IdempotencyStore,
+	type IdempotentCommitRequest,
+	type IdempotentCommitResult,
+	withIdempotentCommit,
+} from "./app/idempotency";
+export { InMemoryIdempotencyStore } from "./app/in-memory-idempotency-store";
 export type { Query, QueryHandler } from "./app/query";
 export {
 	type IQueryBus,
@@ -75,8 +87,20 @@ export {
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
+	DuplicateHandlerRegistrationError,
+	type DuplicateHandlerRegistrationErrorOptions,
+	ErrorMapperFailedError,
+	type ErrorMapperFailedErrorOptions,
 	EventHarvestError,
+	HostileStateKeyError,
+	IdempotencyCompletionWithoutClaimError,
+	IdempotencyInFlightError,
+	type IdempotencyInFlightErrorOptions,
+	IdempotencyKeyReuseError,
+	type IdempotencyKeyReuseErrorOptions,
 	InfrastructureError,
+	type KitErrorCode,
+	type KitErrorOptions,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

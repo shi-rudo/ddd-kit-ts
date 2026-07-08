@@ -1,3 +1,18 @@
+/** Options passed to {@link TransactionScope.transactional}. */
+export interface TransactionalOptions {
+	/**
+	 * Cooperative-cancellation signal forwarded from `withCommit` /
+	 * `UnitOfWork.run`. The kit does not interrupt an in-flight query
+	 * itself: it pre-checks `aborted` before opening the transaction and
+	 * exposes the signal for the work callback to poll. A scope whose
+	 * driver supports cancellation (passing the signal to the query, an
+	 * interactive-transaction timeout) SHOULD honor it to abort work
+	 * already in progress; scopes that ignore it stay correct, just not
+	 * eagerly cancellable.
+	 */
+	readonly signal?: AbortSignal;
+}
+
 /**
  * Transaction-scope abstraction.
  *
@@ -41,7 +56,7 @@
  *   // Construct tx-bound repos from ctx (your factory / DI of choice)
  *   const orderRepository = makeOrderRepository(tx);
  *
- *   const order = await orderRepository.getByIdOrFail(orderId);
+ *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await orderRepository.save(order);
  * });
@@ -53,21 +68,6 @@
  * (constructor injection, factory functions, `withTx` chains); pick one
  * and keep it consistent.
  */
-/** Options passed to {@link TransactionScope.transactional}. */
-export interface TransactionalOptions {
-	/**
-	 * Cooperative-cancellation signal forwarded from `withCommit` /
-	 * `UnitOfWork.run`. The kit does not interrupt an in-flight query
-	 * itself: it pre-checks `aborted` before opening the transaction and
-	 * exposes the signal for the work callback to poll. A scope whose
-	 * driver supports cancellation (passing the signal to the query, an
-	 * interactive-transaction timeout) SHOULD honor it to abort work
-	 * already in progress; scopes that ignore it stay correct, just not
-	 * eagerly cancellable.
-	 */
-	readonly signal?: AbortSignal;
-}
-
 export interface TransactionScope<TCtx> {
 	transactional<T>(
 		fn: (ctx: TCtx) => Promise<T>,

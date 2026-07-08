@@ -22,9 +22,12 @@ export type OrderCancelled = DomainEvent<"OrderCancelled", { reason: string }>;
 
 export type OrderEvent = OrderPlaced | OrderConfirmed | OrderCancelled;
 
-export class OrderInWrongStateError extends DomainError<"OrderInWrongStateError"> {
+export class OrderInWrongStateError extends DomainError<"ORDER_IN_WRONG_STATE"> {
 	constructor(orderId: OrderId, current: string, attempted: string) {
-		super(`Order ${orderId} is ${current}; cannot ${attempted}`);
+		super({
+			code: "ORDER_IN_WRONG_STATE",
+			message: `Order ${orderId} is ${current}; cannot ${attempted}`,
+		});
 	}
 }
 

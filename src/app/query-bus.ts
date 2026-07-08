@@ -1,6 +1,11 @@
-import { err, ok, type Result } from "@shirudo/result";
-import { UnregisteredHandlerError } from "../core/errors";
-import { describeThrown } from "./describe-thrown";
+import { ok, type Result } from "@shirudo/result";
+import {
+	type BusArgs,
+	handlerOrThrow,
+	mapHandlerFailure,
+	registerOnce,
+	resolveErrorMapper,
+} from "./bus-internals";
 import type { Query, QueryHandler } from "./query";
 
 /**
@@ -44,7 +49,7 @@ export interface QueryBusOptions<E = string> {
 	 * Maps a value thrown by a registered handler into the bus's error
 	 * channel `E`. Dispatching an unregistered query type is NOT mapped:
 	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
-	 * {@link describeThrown}, which renders any thrown value as a `string`.
+	 * `describeThrown`, which renders any thrown value as a `string`.
 	 * base-error's `toStructuredError` fits this slot directly when `E` is a
 	 * `StructuredError`.
 	 */
@@ -53,13 +58,12 @@ export interface QueryBusOptions<E = string> {
 
 /**
  * Constructor arguments for {@link QueryBus}. When `E` is the default `string`,
- * options are optional (the built-in {@link describeThrown} mapper applies).
+ * options are optional (the built-in `describeThrown` mapper applies).
  * When `E` is widened, an `errorMapper` is required, so a typed channel can
- * never silently fall back to string values.
+ * never silently fall back to string values. The conditional lives in the
+ * shared {@link BusArgs} so the two buses cannot drift.
  */
-type QueryBusArgs<E> = [E] extends [string]
-	? [options?: QueryBusOptions<E>]
-	: [options: QueryBusOptions<E> & { errorMapper: (thrown: unknown) => E }];
+type QueryBusArgs<E> = BusArgs<E, QueryBusOptions<E>>;
 
 /**
  * Query Bus interface for dispatching queries to their handlers.
@@ -165,7 +169,7 @@ export interface IQueryBus<
  *
  * // Without type map – same as before
  * const bus = new QueryBus();
- * bus.register("GetOrder", async (query) => repository.getById(query.orderId));
+ * bus.register("GetOrder", async (query) => repository.findById(query.orderId));
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */
@@ -176,25 +180,16 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	private readonly errorMapper: (thrown: unknown) => E;
 
 	constructor(...args: QueryBusArgs<E>) {
-		// describeThrown produces a string; that is the correct mapper only for
-		// the default E = string. QueryBusArgs makes errorMapper mandatory once
-		// E is widened, so this fallback is never reached with a non-string E.
-		this.errorMapper =
-			args[0]?.errorMapper ?? (describeThrown as (thrown: unknown) => E);
+		this.errorMapper = resolveErrorMapper(args[0]);
 	}
 
 	register<
 		K extends keyof TMap & string,
 		Q extends Query & { type: K } = Query & { type: K },
 	>(queryType: K, handler: QueryHandler<Q, TMap[K]>): void {
-		// Silent replacement would turn the first handler into dead code
-		// with no signal; wiring bugs must surface at registration time.
-		if (this.handlers.has(queryType)) {
-			throw new Error(
-				`QueryBus: a handler for query type "${queryType}" is already registered`,
-			);
-		}
-		this.handlers.set(queryType, (query) => handler(query as Q));
+		registerOnce(this.handlers, "query", queryType, (query: Query) =>
+			handler(query as Q),
+		);
 	}
 
 	async execute<Q extends Query & { type: keyof TMap & string }>(
@@ -202,32 +197,13 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	): Promise<Result<TMap[Q["type"]], E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
-		const handler = this.handlerOrThrow(query.type);
+		const handler = handlerOrThrow(this.handlers, "query", query.type);
 		try {
 			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
-			// A NESTED dispatch's wiring bug must stay a throw; see
-			// CommandBus.execute for the rationale.
-			if (error instanceof UnregisteredHandlerError) throw error;
-			return err(this.errorMapper(error));
+			return mapHandlerFailure(error, this.errorMapper, "query");
 		}
-	}
-
-	/**
-	 * Shared no-handler gate for `execute` and `executeUnsafe`: a wiring
-	 * bug throws (same posture as CommandBus), it never rides the error
-	 * channel. One implementation so the two paths cannot drift.
-	 */
-	private handlerOrThrow(type: string): StoredQueryHandler {
-		const handler = this.handlers.get(type);
-		if (!handler) {
-			throw new UnregisteredHandlerError({
-				busKind: "query",
-				messageType: type,
-			});
-		}
-		return handler;
 	}
 
 	async executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
@@ -235,7 +211,9 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	): Promise<TMap[Q["type"]]>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
-		const handler = this.handlerOrThrow(query.type);
+		// Same no-handler gate as execute: one implementation so the two
+		// paths cannot drift.
+		const handler = handlerOrThrow(this.handlers, "query", query.type);
 		return (await handler(query)) as R;
 	}
 }

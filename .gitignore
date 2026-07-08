@@ -173,3 +173,6 @@ skills-lock.json
 # metadata.json, and README.md are shared project conventions. Beads'
 # own .beads/.gitignore handles the per-file ignores (Dolt files,
 # sockets, lock files, ephemeral state, backups).
+
+# bv (beads viewer) local config and caches
+.bv/

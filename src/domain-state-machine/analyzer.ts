@@ -1,8 +1,5 @@
 import type { DomainMachineDefinition, DomainMachineInput } from "./contracts";
-import {
-	copyDomainMachineDefinition,
-	validateDomainMachineDefinition,
-} from "./definition";
+import { ensureStableDomainMachineDefinition } from "./definition";
 
 export type DomainMachineDefinitionDiagnostic<TState extends string> =
 	| {
@@ -56,8 +53,10 @@ export function analyzeDomainMachineDefinition<
 >(
 	definition: DomainMachineDefinition<TState, TContext, TInput, TOutput>,
 ): DomainMachineDefinitionAnalysis<TState, TInput["type"]> {
-	validateDomainMachineDefinition(definition);
-	const stableDefinition = copyDomainMachineDefinition(definition);
+	// The shared entry-point normalization: a prepared definition passes
+	// through untouched (already validated, copied, frozen), a raw one
+	// pays the documented per-call validate-and-copy.
+	const stableDefinition = ensureStableDomainMachineDefinition(definition);
 	const states = (Object.keys(stableDefinition.states) as TState[]).sort(
 		compareStrings,
 	);

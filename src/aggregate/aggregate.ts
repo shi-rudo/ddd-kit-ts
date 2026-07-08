@@ -1,6 +1,6 @@
 import type { Result } from "@shirudo/result";
-import type { Id } from "../core/id";
 import type { DomainError } from "../core/errors";
+import type { Id } from "../core/id";
 import type { AnyDomainEvent } from "./domain-event";
 
 // Re-export domain event types for convenience
@@ -96,9 +96,9 @@ export interface IEventSourcedAggregate<
  *
  * @example
  * ```typescript
- * const before = await repository.getById(id);
+ * const before = await repository.findById(id);
  * // ... some operations ...
- * const after = await repository.getById(id);
+ * const after = await repository.findById(id);
  *
  * if (!sameVersion(before, after)) {
  *   throw new Error("Aggregate was modified by another process");

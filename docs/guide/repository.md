@@ -9,30 +9,30 @@ In DDD, a Repository is a collection illusion for aggregates: load by id, save t
 
 ```ts
 interface IRepository<TAgg extends IAggregateRoot<TId>, TId extends Id<string>> {
-  getById(id: TId):            Promise<TAgg | null>;
-  getByIdOrFail(id: TId):      Promise<TAgg>;       // throws AggregateNotFoundError
+  findById(id: TId):            Promise<TAgg | null>;
+  getById(id: TId):      Promise<TAgg>;       // throws AggregateNotFoundError
   exists(id: TId):             Promise<boolean>;
   save(aggregate: TAgg):       Promise<void>;
   delete(aggregate: TAgg):     Promise<void>;
 }
 ```
 
-### `getById` vs `getByIdOrFail`
+### `findById` vs `getById`
 
 Two flavours so the Use Case picks the right contract:
 
-- **`getById`** returns `null` when not found. Use when "missing is a valid outcome" (e.g. idempotent upsert, optional lookup).
-- **`getByIdOrFail`** throws `AggregateNotFoundError` (an `InfrastructureError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
+- **`findById`** returns `null` when not found. Use when "missing is a valid outcome" (e.g. idempotent upsert, optional lookup).
+- **`getById`** throws `AggregateNotFoundError` (an `InfrastructureError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
 
 #### Inside the read path: reconstituting the aggregate
 
-Both `getById` variants need to **reconstitute** the aggregate: read its persisted row(s), build the in-memory representation, and return it. This is *not* a factory call: the aggregate already exists; we're not creating it now, so no creation event should fire.
+Both load methods, `findById` and `getById`, need to **reconstitute** the aggregate: read its persisted row(s), build the in-memory representation, and return it. This is *not* a factory call: the aggregate already exists; we're not creating it now, so no creation event should fire.
 
 The aggregate's class exposes a `static reconstitute(...)` paired with its factory (see [Reconstitution](./aggregates.md#reconstitution-loading-existing-aggregates-from-persistence) in the aggregates guide). The repository just calls it:
 
 ```ts
 // State-stored aggregate
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const row = await this.db
     .select()
     .from(orders)
@@ -47,7 +47,7 @@ async getById(id: OrderId): Promise<Order | null> {
 }
 
 // Event-sourced aggregate: loadFromHistory IS the reconstitution path
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
   const order = new Order(id, blankInitialState);
@@ -67,9 +67,9 @@ This is Fowler's **Identity Map** pattern (*Patterns of Enterprise Application A
 Repositories built for the [`UnitOfWork` facade](./unit-of-work.md#identity-map) get a per-operation `session.identityMap` (class-keyed, deletion-tombstoned, cleared on close) instead of hand-rolling the per-UoW `Map` shown below. The hand-rolled pattern remains correct for `withCommit`-only setups.
 :::
 
-**The contract.** Two `getById(id)` calls (or `getByIdOrFail(id)`) within the same Unit of Work (typically the same `withCommit` invocation, or any sequence sharing a transactional scope) MUST return the **same in-memory instance**.
+**The contract.** Two `findById(id)` calls (or `getById(id)`) within the same Unit of Work (typically the same `withCommit` invocation, or any sequence sharing a transactional scope) MUST return the **same in-memory instance**.
 
-**Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `getById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** (i.e. your repository violates the Identity Map contract), the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
+**Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `findById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** (i.e. your repository violates the Identity Map contract), the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
 
 **How to maintain it.** Most ORM-backed repositories get this for free:
 
@@ -86,7 +86,7 @@ class TxScopedOrderRepository implements IRepository<Order, OrderId> {
 
   constructor(private readonly tx: DrizzleTx) {}
 
-  async getById(id: OrderId): Promise<Order | null> {
+  async findById(id: OrderId): Promise<Order | null> {
     const cached = this.identityMap.get(id);
     if (cached) return cached;
 
@@ -119,13 +119,13 @@ The identity map's lifetime is **the Unit of Work**, fresh per `withCommit` call
 
 Every aggregate exposes two version fields with distinct roles:
 
-- **`aggregate.version`**: the in-memory post-mutation value. Bumped by `setState(_, true)`, `commit()`, and every `apply()` on an event-sourced aggregate.
+- **`aggregate.version`**: the in-memory post-mutation value. Bumped by `setState()`, `commit()`, and every `apply()` on an event-sourced aggregate.
 - **`aggregate.persistedVersion`**: the version the persistence layer currently holds. `undefined` until the aggregate has been persisted or restored from persistence at least once. Repository implementations route INSERT vs UPDATE on this field and use it as the OCC baseline.
 
 The two diverge as soon as a domain method mutates the aggregate: `version` advances; `persistedVersion` stays at the load-time / last-save baseline.
 
 ::: warning `version` is a mutation sequence, not a commit revision
-Every version-bumping mutation (`commit()`, `setState(_, true)`, each `apply()` on an event-sourced aggregate) advances `version` by one. Three domain methods in one unit of work advance it by three: a baseline of 7 commits as 10, **not** 8. This is deliberate (it matches the event-sourced convention where version IS the mutation count), and it is OCC-correct either way, because the predicate compares against the load-time baseline (`WHERE version = 7`), never against deltas. If your tests assume `+1 per commit`, they are testing the wrong convention.
+Every version-bumping mutation (`commit()`, `setState()`, each `apply()` on an event-sourced aggregate) advances `version` by one. Three domain methods in one unit of work advance it by three: a baseline of 7 commits as 10, **not** 8. This is deliberate (it matches the event-sourced convention where version IS the mutation count), and it is OCC-correct either way, because the predicate compares against the load-time baseline (`WHERE version = 7`), never against deltas. If your tests assume `+1 per commit`, they are testing the wrong convention.
 :::
 
 ```ts
@@ -243,9 +243,9 @@ Rules that make this sound:
 
 1. **The root-row write (with the OCC version predicate) rides every save, and it goes first.** Only the child-table writes are scoped by `changedKeys`. Root-first ordering serves both paths: on insert, the parent row exists before child rows reference it; on update, an OCC conflict aborts the save before any child table is touched.
 2. **The whole save shares one transaction.** A multi-statement save must run on the transaction handle the repository was constructed with (the `withCommit` scope), never on a bare connection; otherwise a `ConcurrencyConflictError` from the root-row predicate leaves already-executed child writes committed against the winner's root row.
-3. **The OCC guarantee assumes version-bumping mutations.** `commit()` always bumps; `setState(newState, true)` bumps. A no-bump `setState(newState, false)` marks keys dirty but does **not** advance the version, so the save writes data without moving the OCC predicate: a concurrent writer holding the same version still passes its own check. Reserve no-bump mutations for data a concurrent writer may safely overwrite (cosmetic caches, denormalized counters); never use them for domain-meaningful changes.
+3. **The OCC guarantee assumes version-bumping mutations.** `commit()` and `setState(newState)` always bump. A no-bump `setStateWithoutVersionBump(newState)` marks keys dirty but does **not** advance the version, so the save writes data without moving the OCC predicate: a concurrent writer holding the same version still passes its own check. Reserve no-bump mutations for data a concurrent writer may safely overwrite (cosmetic caches, denormalized counters); never use them for domain-meaningful changes.
 4. **`changedKeys` is table-granular, not row-granular.** A dirty `openingHours` key means "this collection changed", not which rows. Delete + reinsert the child table, or run your own row diff inside that branch.
-5. **Skipping `save()` entirely is safe exactly when `hasChanges === false`.** The version clause is what protects OCC: a state-only check would break in four steps: (1) `setState({...state}, true)` with identical values bumps the version but leaves `changedKeys` empty; (2) the repo skips `save()`; (3) `withCommit` still calls `markPersisted(version)` after commit, so `persistedVersion` now claims a version the DB row never got; (4) the next uncontended save's OCC predicate matches zero rows → false `ConcurrencyConflictError`. The pending-events clause protects the decoupled `addDomainEvent` path (an event recorded with no state change, like the deletion pattern below): the aggregate still needs its trip through `withCommit`, so it must not look like "nothing to do".
+5. **Skipping `save()` entirely is safe exactly when `hasChanges === false`.** The version clause is what protects OCC: a state-only check would break in four steps: (1) `setState({...state})` with identical values bumps the version but leaves `changedKeys` empty; (2) the repo skips `save()`; (3) `withCommit` still calls `markPersisted(version)` after commit, so `persistedVersion` now claims a version the DB row never got; (4) the next uncontended save's OCC predicate matches zero rows → false `ConcurrencyConflictError`. The pending-events clause protects the decoupled `addDomainEvent` path (an event recorded with no state change, like the deletion pattern below): the aggregate still needs its trip through `withCommit`, so it must not look like "nothing to do".
 6. **Don't mutate the aggregate after `save()` inside the `withCommit` callback.** Post-commit `markPersisted` re-baselines the diff against the *current* state; a mutation between `save()` and commit would be silently marked clean and lost on the next save. (See the `withCommit` JSDoc: mutate first, save last.)
 
 ::: warning The same immutability contract as `freezeShallow`
@@ -295,7 +295,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 // Use case
 await withCommit({ scope, outbox, bus }, async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  const order = await orderRepository.getByIdOrFail(orderId);
+  const order = await orderRepository.getById(orderId);
   order.archive(reason);
   await orderRepository.save(order);          // state change persists; outbox gets OrderArchived
   return { result: undefined, aggregates: [order] };
@@ -323,7 +323,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 await withCommit({ scope, outbox, bus }, async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  const order = await orderRepository.getByIdOrFail(orderId);
+  const order = await orderRepository.getById(orderId);
   order.recordDeletion(reason);              // records the event
   await orderRepository.delete(order);       // removes the row in the same tx
   return { result: undefined, aggregates: [order], deleted: [order] };
@@ -346,10 +346,10 @@ When the aggregate has no domain meaning anymore and no subscriber needs to know
 ```ts
 await scope.transactional(async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  // getById, not getByIdOrFail: cleanup stays idempotent. A retried job
+  // findById, not getById: cleanup stays idempotent. A retried job
   // (or a concurrent cleaner) finding the row already gone is a no-op,
   // not an AggregateNotFoundError crash.
-  const order = await orderRepository.getById(orderId);
+  const order = await orderRepository.findById(orderId);
   if (order) {
     await orderRepository.delete(order);
   }
@@ -432,9 +432,9 @@ const id = userIds.next(); // Id<"UserId">
 
 ## `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError`
 
-All three are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent, stale, or already taken, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, and `toJSON()` out of the box. For client-safe, localized messages, project them through the opt-in `@shirudo/base-error/presentation` subpath at the boundary; the technical core carries no user-facing message.
+All three are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent, stale, or already taken, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, and `toJSON()` out of the box. For client-safe, localized messages, project them through the opt-in `@shirudo/base-error/public-error` subpath at the boundary; the technical core carries no user-facing message.
 
-- **`AggregateNotFoundError({ aggregateType, id, cause? })`**: thrown by `getByIdOrFail`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
+- **`AggregateNotFoundError({ aggregateType, id, cause? })`**: thrown by `getById`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
 - **`ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, actualVersion, cause? })`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry **in a fresh unit of work**. Wrap your scope in [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) to automate exactly that (classification via `someChainRetryable`, exponential backoff with jitter, abort-bounded) instead of hand-rolling the loop.
 - **`DuplicateAggregateError({ aggregateType, aggregateId, cause? })`**: thrown by `save`'s INSERT path when a row with the id already exists: two concurrent creators raced on a business-derived id, or the id generator collided. Same delegation model as the OCC predicate: the kit ships the class, your repository maps the driver's unique-violation signal to it (Postgres `23505`, MySQL `1062`, SQLite `SQLITE_CONSTRAINT_UNIQUE`) instead of letting a raw driver error escape. Not retryable: re-running the same INSERT cannot succeed; map to HTTP 409, or for idempotency-key flows load the existing aggregate and treat the request as already applied. The [repository contract test suite](./unit-of-work.md#proving-the-contract-the-repository-contract-test-suite) covers it (capability-gated on `createAggregateWithId`).
 
@@ -463,7 +463,7 @@ try {
 ```
 
 ::: tip Why `someChainRetryable`, not `isChainRetryable` or `isRetryable`
-`isChainRetryable` from `@shirudo/base-error` filters on the strict `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for `ConcurrencyConflictError`. `isRetryable(err)` only inspects the top-level error: if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` walks the whole chain with the loose predicate.
+Since v3 `ConcurrencyConflictError` is a full `StructuredError`, so the strict `isChainRetryable` works on it too; `someChainRetryable` stays the default because it also accepts bare `retryable === true` markers from other libraries. `isRetryable(err)` only inspects the top-level error: if your infrastructure adapter wraps the conflict in another error, it misses it. `someChainRetryable` walks the whole chain with the loose predicate.
 :::
 
 Catch them at the App-Service layer to map to HTTP 404 / HTTP 409 as appropriate (`ConcurrencyConflictError` and `DuplicateAggregateError` are both 409-shaped, with different retry semantics: the former retries in a fresh unit of work, the latter never).

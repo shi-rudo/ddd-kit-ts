@@ -3,6 +3,7 @@ dolt/
 dolt-access.lock
 
 # Runtime files
+.bv.lock
 bd.sock
 bd.sock.startlock
 sync-state.json

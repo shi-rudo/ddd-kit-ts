@@ -52,11 +52,11 @@ describe("Repository contract", () => {
 			class InMemoryOrders implements IRepository<Order, OrderId> {
 				private readonly byId = new Map<OrderId, Order>();
 
-				async getById(id: OrderId): Promise<Order | null> {
+				async findById(id: OrderId): Promise<Order | null> {
 					return this.byId.get(id) ?? null;
 				}
 
-				async getByIdOrFail(id: OrderId): Promise<Order> {
+				async getById(id: OrderId): Promise<Order> {
 					const existing = this.byId.get(id);
 					if (!existing) {
 						throw new AggregateNotFoundError({ aggregateType: "Order", id });
@@ -95,10 +95,10 @@ describe("Repository contract", () => {
 
 			expect(await repo.exists("o-1" as OrderId)).toBe(true);
 			expect(await repo.exists("o-missing" as OrderId)).toBe(false);
-			expect(await repo.getById("o-1" as OrderId)).toBe(order);
-			expect(await repo.getById("o-missing" as OrderId)).toBeNull();
+			expect(await repo.findById("o-1" as OrderId)).toBe(order);
+			expect(await repo.findById("o-missing" as OrderId)).toBeNull();
 			await expect(
-				repo.getByIdOrFail("o-missing" as OrderId),
+				repo.getById("o-missing" as OrderId),
 			).rejects.toBeInstanceOf(AggregateNotFoundError);
 		});
 	});
@@ -109,10 +109,10 @@ describe("Repository contract", () => {
 			// harvest, the identity-map tombstone, and an OCC predicate all
 			// need the instance, which a bare id cannot provide.
 			class V2ShapedRepo implements IRepository<Order, OrderId> {
-				async getById(): Promise<Order | null> {
+				async findById(): Promise<Order | null> {
 					return null;
 				}
-				async getByIdOrFail(id: OrderId): Promise<Order> {
+				async getById(id: OrderId): Promise<Order> {
 					throw new AggregateNotFoundError({ aggregateType: "Order", id });
 				}
 				async exists(): Promise<boolean> {
@@ -137,7 +137,7 @@ describe("Repository contract", () => {
 			});
 			const after = Date.now();
 
-			expect(e.name).toBe("AggregateNotFoundError");
+			expect(e.name).toBe("AGGREGATE_NOT_FOUND");
 			expect(e.timestamp).toBeGreaterThanOrEqual(before);
 			expect(e.timestamp).toBeLessThanOrEqual(after);
 			expect(typeof e.timestampIso).toBe("string");
@@ -184,7 +184,7 @@ describe("Repository contract", () => {
 			});
 			const json = e.toJSON();
 
-			expect(json.name).toBe("ConcurrencyConflictError");
+			expect(json.name).toBe("CONCURRENCY_CONFLICT");
 			expect(json.message).toContain("Order(o-1)");
 			expect(json.timestamp).toBeDefined();
 		});
@@ -194,9 +194,13 @@ describe("Repository contract", () => {
 				"@shirudo/base-error"
 			);
 
-			class FailedToProcessOrderError extends DomainError<"FailedToProcessOrderError"> {
+			class FailedToProcessOrderError extends DomainError<"FAILED_TO_PROCESS_ORDER"> {
 				constructor(cause: unknown) {
-					super("Failed to process order", cause);
+					super({
+						code: "FAILED_TO_PROCESS_ORDER",
+						message: "Failed to process order",
+						cause,
+					});
 				}
 			}
 
@@ -242,9 +246,12 @@ describe("Repository contract", () => {
 		});
 
 		it("a consumer-derived DomainError is NOT an InfrastructureError", () => {
-			class OrderAlreadyConfirmedError extends DomainError {
+			class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
 				constructor() {
-					super("Order already confirmed");
+					super({
+						code: "ORDER_ALREADY_CONFIRMED",
+						message: "Order already confirmed",
+					});
 				}
 			}
 			const e = new OrderAlreadyConfirmedError();
@@ -275,10 +282,10 @@ describe("Repository contract", () => {
 		it("is the canonical error a Repository.save() implementation throws on optimistic-lock mismatch", () => {
 			// Smoke check: a Repository implementation can construct + throw it.
 			class StaleRepo implements IRepository<Order, OrderId> {
-				async getById(): Promise<Order | null> {
+				async findById(): Promise<Order | null> {
 					return null;
 				}
-				async getByIdOrFail(id: OrderId): Promise<Order> {
+				async getById(id: OrderId): Promise<Order> {
 					throw new AggregateNotFoundError({ aggregateType: "Order", id });
 				}
 				async exists(): Promise<boolean> {
@@ -320,10 +327,10 @@ describe("Repository contract", () => {
 			{
 				private readonly byId = new Map<OrderId, Order>();
 
-				async getById(id: OrderId): Promise<Order | null> {
+				async findById(id: OrderId): Promise<Order | null> {
 					return this.byId.get(id) ?? null;
 				}
-				async getByIdOrFail(id: OrderId): Promise<Order> {
+				async getById(id: OrderId): Promise<Order> {
 					const existing = this.byId.get(id);
 					if (!existing)
 						throw new AggregateNotFoundError({ aggregateType: "Order", id });
@@ -384,10 +391,10 @@ describe("Repository contract", () => {
 			class StructuralOrders
 				implements IQueryableRepository<Order, OrderId, OrderFilter>
 			{
-				async getById(): Promise<Order | null> {
+				async findById(): Promise<Order | null> {
 					return null;
 				}
-				async getByIdOrFail(id: OrderId): Promise<Order> {
+				async getById(id: OrderId): Promise<Order> {
 					throw new AggregateNotFoundError({ aggregateType: "Order", id });
 				}
 				async exists(): Promise<boolean> {

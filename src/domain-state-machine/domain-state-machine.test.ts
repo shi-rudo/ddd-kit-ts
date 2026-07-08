@@ -77,9 +77,12 @@ type CheckoutOutput =
 			readonly reason: string;
 	  };
 
-class PaymentRequiredBeforeShippingError extends DomainError<"PaymentRequiredBeforeShippingError"> {
+class PaymentRequiredBeforeShippingError extends DomainError<"PAYMENT_REQUIRED_BEFORE_SHIPPING"> {
 	constructor() {
-		super("Payment is required before shipping.");
+		super({
+			code: "PAYMENT_REQUIRED_BEFORE_SHIPPING",
+			message: "Payment is required before shipping.",
+		});
 	}
 }
 
@@ -1689,7 +1692,7 @@ describe("DomainStateMachine", () => {
 		}
 
 		expect(thrown).toMatchObject({
-			name: "ReentrantDomainStateMachineEvaluationError",
+			name: "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
 		});
 		expect(machine.state).toBe("open");
 	});
@@ -1725,7 +1728,7 @@ describe("DomainStateMachine", () => {
 
 		expect(() => machine.can({ type: "Check" })).toThrowError(
 			expect.objectContaining({
-				name: "ReentrantDomainStateMachineEvaluationError",
+				name: "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION",
 			}),
 		);
 		expect(machine.state).toBe("open");
@@ -3625,5 +3628,118 @@ describe("DomainStateMachine", () => {
 
 		expect(result.snapshot.context.nested.value).toBe("closed");
 		expect(result.outputs[0]?.payload.value).toBe("closed");
+	});
+});
+
+describe("validate-then-copy is not Proxy-defeatable (single-read contract)", () => {
+	type TocState = "draft" | "done";
+	type TocInput = { readonly type: "Finish" };
+
+	const validDefinition = (): DomainMachineDefinition<
+		TocState,
+		{ n: number },
+		TocInput
+	> => ({
+		initial: "draft",
+		initialContext: () => ({ n: 0 }),
+		states: {
+			draft: { on: { Finish: { target: "done" } } },
+			done: { terminal: true },
+		},
+	});
+
+	it("a definition Proxy lying on ANY single read either fails preparation or yields a consistent copy", () => {
+		// Exhaustive over lie positions: whatever read the copy performs,
+		// the STORED definition must be one validation approved.
+		for (let lieOn = 1; lieOn <= 10; lieOn++) {
+			const target = validDefinition();
+			let reads = 0;
+			const lying = new Proxy(target, {
+				getOwnPropertyDescriptor(t, key) {
+					const descriptor = Reflect.getOwnPropertyDescriptor(t, key);
+					if (key === "initial" && descriptor) {
+						reads += 1;
+						if (reads === lieOn) {
+							return { ...descriptor, value: "nowhere" };
+						}
+					}
+					return descriptor;
+				},
+			});
+
+			try {
+				const prepared = prepareDomainMachineDefinition(
+					lying as unknown as DomainMachineDefinition<
+						TocState,
+						{ n: number },
+						TocInput
+					>,
+				);
+				expect(Object.hasOwn(prepared.states, prepared.initial)).toBe(true);
+			} catch (error) {
+				expect(error).toBeInstanceOf(InvalidDomainMachineDefinitionError);
+			}
+		}
+	});
+
+	it("a snapshot Proxy lying on ANY single read either fails construction or yields a known state", () => {
+		for (let lieOn = 1; lieOn <= 10; lieOn++) {
+			const machine = new DomainStateMachine(validDefinition());
+			let reads = 0;
+			const lying = new Proxy(
+				{ ...machine.snapshot },
+				{
+					getOwnPropertyDescriptor(t, key) {
+						const descriptor = Reflect.getOwnPropertyDescriptor(t, key);
+						if (key === "state" && descriptor) {
+							reads += 1;
+							if (reads === lieOn) {
+								return { ...descriptor, value: "nowhere" };
+							}
+						}
+						return descriptor;
+					},
+				},
+			);
+
+			try {
+				const restored = new DomainStateMachine(
+					validDefinition(),
+					lying as unknown as DomainMachineSnapshot<TocState, { n: number }>,
+				);
+				expect(["draft", "done"]).toContain(restored.snapshot.state);
+			} catch (error) {
+				expect(error).toBeInstanceOf(InvalidDomainMachineSnapshotError);
+			}
+		}
+	});
+});
+
+describe("transition outcomes are frozen like every sibling return value", () => {
+	it("transitionDomainState returns a frozen outcome object", () => {
+		const outcome = transitionDomainState(
+			{
+				initial: "draft",
+				initialContext: () => ({}),
+				states: {
+					draft: { on: { Finish: { target: "done" } } },
+					done: { terminal: true },
+				},
+			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>,
+			createInitialDomainMachineSnapshot({
+				initial: "draft",
+				initialContext: () => ({}),
+				states: {
+					draft: { on: { Finish: { target: "done" } } },
+					done: { terminal: true },
+				},
+			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>),
+			{ type: "Finish" },
+		);
+
+		expect(Object.isFrozen(outcome)).toBe(true);
+		expect(() => {
+			(outcome as { to: string }).to = "draft";
+		}).toThrow();
 	});
 });

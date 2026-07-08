@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Id } from "../core/id";
 import {
-	createDomainEvent,
 	copyMetadata,
-	mergeMetadata,
-	sameVersion,
+	createDomainEvent,
 	type DomainEvent,
 	type EventMetadata,
+	mergeMetadata,
+	sameVersion,
 	type Version,
 } from "./aggregate";
 
@@ -24,17 +24,25 @@ describe("Domain Events", () => {
 
 		it("should create event with custom occurredAt", () => {
 			const customDate = new Date("2024-01-01");
-			const event = createDomainEvent("OrderCreated", { orderId: "123" }, {
-				occurredAt: customDate,
-			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "123" },
+				{
+					occurredAt: customDate,
+				},
+			);
 
 			expect(event.occurredAt).toEqual(customDate);
 		});
 
 		it("should create event with custom version", () => {
-			const event = createDomainEvent("OrderCreated", { orderId: "123" }, {
-				version: 2,
-			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "123" },
+				{
+					version: 2,
+				},
+			);
 
 			expect(event.version).toBe(2);
 		});
@@ -45,9 +53,13 @@ describe("Domain Events", () => {
 				userId: "user-456",
 			};
 
-			const event = createDomainEvent("OrderCreated", { orderId: "123" }, {
-				metadata,
-			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "123" },
+				{
+					metadata,
+				},
+			);
 
 			expect(event.metadata).toEqual(metadata);
 		});
@@ -58,11 +70,15 @@ describe("Domain Events", () => {
 				correlationId: "corr-123",
 			};
 
-			const event = createDomainEvent("OrderCreated", { orderId: "123" }, {
-				occurredAt: customDate,
-				version: 2,
-				metadata,
-			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "123" },
+				{
+					occurredAt: customDate,
+					version: 2,
+					metadata,
+				},
+			);
 
 			expect(event.type).toBe("OrderCreated");
 			expect(event.payload).toEqual({ orderId: "123" });
@@ -362,9 +378,13 @@ describe("Domain Events", () => {
 	describe("Event versioning", () => {
 		it("should support different event versions for schema evolution", () => {
 			// Version 1 event
-			const eventV1 = createDomainEvent("OrderCreated", { orderId: "123" }, {
-				version: 1,
-			});
+			const eventV1 = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "123" },
+				{
+					version: 1,
+				},
+			);
 
 			// Version 2 event with additional fields
 			const eventV2 = createDomainEvent(
@@ -468,4 +488,3 @@ describe("Domain Events", () => {
 		});
 	});
 });
-

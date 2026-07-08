@@ -2,40 +2,40 @@
 import { describe, expect, it } from "vitest";
 import { deepEqual } from "./deep-equal";
 
-describe("deepEqual – Primitive", () => {
-	it("vergleicht Zahlen korrekt", () => {
+describe("deepEqual – Primitives", () => {
+	it("compares numbers correctly", () => {
 		expect(deepEqual(1, 1)).toBe(true);
 		expect(deepEqual(1, 2)).toBe(false);
 		expect(deepEqual(0, -0)).toBe(true); // SameValueZero
 	});
 
-	it("vergleicht Strings korrekt", () => {
+	it("compares strings correctly", () => {
 		expect(deepEqual("a", "a")).toBe(true);
 		expect(deepEqual("a", "b")).toBe(false);
 	});
 
-	it("vergleicht Booleans korrekt", () => {
+	it("compares booleans correctly", () => {
 		expect(deepEqual(true, true)).toBe(true);
 		expect(deepEqual(true, false)).toBe(false);
 	});
 
-	it("vergleicht null und undefined korrekt", () => {
+	it("compares null and undefined correctly", () => {
 		expect(deepEqual(null, null)).toBe(true);
 		expect(deepEqual(undefined, undefined)).toBe(true);
 		expect(deepEqual(null, undefined)).toBe(false);
 	});
 
-	it("behandelt NaN als gleich", () => {
+	it("treats NaN as equal", () => {
 		expect(deepEqual(NaN, NaN)).toBe(true);
 		expect(deepEqual(NaN, 1)).toBe(false);
 	});
 
-	it("vergleicht BigInt korrekt", () => {
+	it("compares BigInt correctly", () => {
 		expect(deepEqual(1n, 1n)).toBe(true);
 		expect(deepEqual(1n, 2n)).toBe(false);
 	});
 
-	it("vergleicht Funktionen nur referenzbasiert", () => {
+	it("compares functions by reference only", () => {
 		const fn1 = () => {};
 		const fn2 = () => {};
 		expect(deepEqual(fn1, fn1)).toBe(true);
@@ -44,23 +44,23 @@ describe("deepEqual – Primitive", () => {
 });
 
 describe("deepEqual – Plain Objects", () => {
-	it("vergleicht einfache Objekte", () => {
+	it("compares plain objects", () => {
 		expect(deepEqual({ a: 1 }, { a: 1 })).toBe(true);
 		expect(deepEqual({ a: 1 }, { a: 2 })).toBe(false);
 	});
 
-	it("ignoriert Property-Reihenfolge", () => {
+	it("ignores property order", () => {
 		const a = { a: 1, b: 2 };
 		const b = { b: 2, a: 1 };
 		expect(deepEqual(a, b)).toBe(true);
 	});
 
-	it("erkennt zusätzliche oder fehlende Properties", () => {
+	it("detects added or missing properties", () => {
 		expect(deepEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false);
 		expect(deepEqual({ a: 1, b: 2 }, { a: 1 })).toBe(false);
 	});
 
-	it("unterstützt Object.create(null)", () => {
+	it("supports Object.create(null)", () => {
 		const a = Object.create(null);
 		const b = Object.create(null);
 		a.x = 1;
@@ -68,7 +68,7 @@ describe("deepEqual – Plain Objects", () => {
 		expect(deepEqual(a, b)).toBe(true);
 	});
 
-	it("behandelt unterschiedliche Prototypen mit gleichen Keys als gleich (wie implementiert)", () => {
+	it("treats different prototypes with equal keys as equal (as implemented)", () => {
 		const a = { x: 1 };
 		const b = Object.create(null) as any;
 		b.x = 1;
@@ -95,22 +95,22 @@ describe("deepEqual – Plain Objects", () => {
 });
 
 describe("deepEqual – Arrays", () => {
-	it("vergleicht Arrays elementweise", () => {
+	it("compares arrays element-wise", () => {
 		expect(deepEqual([1, 2, 3], [1, 2, 3])).toBe(true);
 		expect(deepEqual([1, 2, 3], [1, 2, 4])).toBe(false);
 	});
 
-	it("erkennt unterschiedliche Längen", () => {
+	it("detects differing lengths", () => {
 		expect(deepEqual([1, 2], [1, 2, 3])).toBe(false);
 	});
 
-	it("unterscheidet Array und Objekt", () => {
+	it("distinguishes array and object", () => {
 		const arr = [1, 2];
 		const obj = { 0: 1, 1: 2, length: 2 };
 		expect(deepEqual(arr, obj)).toBe(false);
 	});
 
-	it("vergleicht verschachtelte Arrays und Objekte", () => {
+	it("compares nested arrays and objects", () => {
 		const a = [{ x: 1 }, { y: [2, 3] }];
 		const b = [{ x: 1 }, { y: [2, 3] }];
 		expect(deepEqual(a, b)).toBe(true);
@@ -148,7 +148,7 @@ describe("deepEqual – Arrays", () => {
 });
 
 describe("deepEqual – Date, RegExp, Wrapper", () => {
-	it("vergleicht Date-Objekte nach Zeitstempel", () => {
+	it("compares Date objects by timestamp", () => {
 		const a = new Date("2020-01-01T00:00:00Z");
 		const b = new Date("2020-01-01T00:00:00Z");
 		const c = new Date("2021-01-01T00:00:00Z");
@@ -157,13 +157,13 @@ describe("deepEqual – Date, RegExp, Wrapper", () => {
 		expect(deepEqual(a, c)).toBe(false);
 	});
 
-	it("vergleicht RegExp-Objekte nach source und flags", () => {
+	it("compares RegExp objects by source and flags", () => {
 		expect(deepEqual(/abc/i, /abc/i)).toBe(true);
 		expect(deepEqual(/abc/i, /abc/g)).toBe(false);
 		expect(deepEqual(/abc/, /abcd/)).toBe(false);
 	});
 
-	it("vergleicht Wrapper-Objekte (Number/String/Boolean)", () => {
+	it("compares wrapper objects (Number/String/Boolean)", () => {
 		expect(deepEqual(new Number(1), new Number(1))).toBe(true);
 		expect(deepEqual(new Number(1), new Number(2))).toBe(false);
 		expect(deepEqual(new String("a"), new String("a"))).toBe(true);
@@ -172,7 +172,7 @@ describe("deepEqual – Date, RegExp, Wrapper", () => {
 });
 
 describe("deepEqual – Map", () => {
-	it("vergleicht Maps mit primitiven Keys und Values", () => {
+	it("compares Maps with primitive keys and values", () => {
 		const a = new Map<string, number>([
 			["a", 1],
 			["b", 2],
@@ -190,7 +190,7 @@ describe("deepEqual – Map", () => {
 		expect(deepEqual(a, c)).toBe(false);
 	});
 
-	it("vergleicht Maps mit Objekt-Values tief", () => {
+	it("compares Maps with object values deeply", () => {
 		const keyObj = { id: 1 };
 		const a = new Map<unknown, unknown>([
 			["x", { foo: "bar" }],
@@ -209,7 +209,7 @@ describe("deepEqual – Map", () => {
 		expect(deepEqual(a, c)).toBe(false);
 	});
 
-	it("nutzt Referenzgleichheit für Map-Keys (JS-Semantik)", () => {
+	it("uses reference equality for Map keys (JS semantics)", () => {
 		const k1 = { id: 1 };
 		const k2 = { id: 1 };
 		const a = new Map<unknown, number>([[k1, 1]]);
@@ -223,7 +223,7 @@ describe("deepEqual – Map", () => {
 });
 
 describe("deepEqual – Set", () => {
-	it("vergleicht Sets mit primitiven Werten", () => {
+	it("compares Sets with primitive values", () => {
 		const a = new Set([1, 2, 3]);
 		const b = new Set([3, 2, 1]);
 		const c = new Set([1, 2, 4]);
@@ -232,7 +232,7 @@ describe("deepEqual – Set", () => {
 		expect(deepEqual(a, c)).toBe(false);
 	});
 
-	it("nutzt Referenzgleichheit für Set-Elemente", () => {
+	it("uses reference equality for Set elements", () => {
 		const v1 = { id: 1 };
 		const v2 = { id: 1 };
 		const a = new Set([v1]);
@@ -242,8 +242,8 @@ describe("deepEqual – Set", () => {
 	});
 });
 
-describe("deepEqual – Typed Arrays und DataView", () => {
-	it("vergleicht Typed Arrays elementweise", () => {
+describe("deepEqual – Typed Arrays and DataView", () => {
+	it("compares typed arrays element-wise", () => {
 		const a = new Uint8Array([1, 2, 3]);
 		const b = new Uint8Array([1, 2, 3]);
 		const c = new Uint8Array([1, 2, 4]);
@@ -252,7 +252,7 @@ describe("deepEqual – Typed Arrays und DataView", () => {
 		expect(deepEqual(a, c)).toBe(false);
 	});
 
-	it("vergleicht DataView byteweise", () => {
+	it("compares DataView byte-wise", () => {
 		const buf1 = new ArrayBuffer(4);
 		const buf2 = new ArrayBuffer(4);
 		const buf3 = new ArrayBuffer(4);
@@ -270,8 +270,8 @@ describe("deepEqual – Typed Arrays und DataView", () => {
 	});
 });
 
-describe("deepEqual – Zirkuläre Referenzen", () => {
-	it("handhabt einfache Selbstreferenzen", () => {
+describe("deepEqual – Cyclic references", () => {
+	it("handles simple self references", () => {
 		const a: any = { value: 1 };
 		a.self = a;
 		const b: any = { value: 1 };
@@ -280,7 +280,7 @@ describe("deepEqual – Zirkuläre Referenzen", () => {
 		expect(deepEqual(a, b)).toBe(true);
 	});
 
-	it("erkennt Unterschiede in zirkulären Strukturen", () => {
+	it("detects differences in cyclic structures", () => {
 		const a: any = { value: 1 };
 		a.self = a;
 
@@ -290,7 +290,7 @@ describe("deepEqual – Zirkuläre Referenzen", () => {
 		expect(deepEqual(a, b)).toBe(false);
 	});
 
-	it("erkennt asymmetrische Zyklen", () => {
+	it("detects asymmetric cycles", () => {
 		const a: any = {};
 		a.self = a;
 
@@ -393,8 +393,8 @@ describe("deepEqual – Plain object vs class instance with identical keys", () 
 	});
 });
 
-describe("deepEqual – Typ-Mismatches", () => {
-	it("unterscheidet klar nach Typen/Tags", () => {
+describe("deepEqual – Type mismatches", () => {
+	it("discriminates strictly by type/tag", () => {
 		expect(deepEqual([], {})).toBe(false);
 		expect(deepEqual(new Date(), {})).toBe(false);
 		expect(deepEqual(new Map(), {})).toBe(false);
@@ -495,5 +495,38 @@ describe("deepEqual – NaN consistency across containers", () => {
 	it("treats two NaN Number wrappers as equal", () => {
 		expect(deepEqual(new Number(NaN), new Number(NaN))).toBe(true);
 		expect(deepEqual(new Number(NaN), new Number(1))).toBe(false);
+	});
+});
+
+describe("deepEqual – opaque exotics (unlisted tags)", () => {
+	it("still compares user classes with a custom Symbol.toStringTag structurally", () => {
+		class Money {
+			constructor(public readonly amount: number) {}
+			get [Symbol.toStringTag]() {
+				return "Money";
+			}
+		}
+
+		expect(deepEqual(new Money(5), new Money(5))).toBe(true);
+		expect(deepEqual(new Money(5), new Money(6))).toBe(false);
+	});
+
+	it("compares boxed symbols by identity, never as empty plain objects", () => {
+		const a = Object(Symbol("a"));
+		const b = Object(Symbol("b"));
+
+		expect(deepEqual(a, b)).toBe(false);
+		expect(deepEqual(a, a)).toBe(true);
+	});
+
+	it("compares generator objects by identity", () => {
+		function* gen() {
+			yield 1;
+		}
+		const a = gen();
+		const b = gen();
+
+		expect(deepEqual(a, b)).toBe(false);
+		expect(deepEqual(a, a)).toBe(true);
 	});
 });

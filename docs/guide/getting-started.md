@@ -35,9 +35,12 @@ type OrderState = {
 
 type OrderEvent = DomainEvent<"OrderConfirmed", { orderId: OrderId }>;
 
-class OrderAlreadyConfirmedError extends DomainError {
+class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
   constructor(public readonly orderId: OrderId) {
-    super(`Order ${orderId} is already confirmed`);
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${orderId} is already confirmed`,
+    });
   }
 }
 

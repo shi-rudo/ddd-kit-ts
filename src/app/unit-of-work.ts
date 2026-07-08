@@ -1,10 +1,10 @@
-import { BaseError } from "@shirudo/base-error";
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
 	EventHarvestError,
 	InfrastructureError,
+	KitWiringError,
 	UnenrolledChangesError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -21,7 +21,7 @@ import { withCommit } from "./handler";
  * instance.
  *
  * Both are contract violations, not recoverable infrastructure
- * failures, so this extends `BaseError` directly (same reasoning as
+ * failures, so this carries the `WIRING` category (same reasoning as
  * `MissingHandlerError`): a generic `catch (e instanceof
  * InfrastructureError)` handler must not mask it.
  *
@@ -32,15 +32,14 @@ import { withCommit } from "./handler";
  * construct one `UnitOfWork` per operation (construction is trivially
  * cheap; the dependency object is the thing you share).
  */
-export class NestedUnitOfWorkError extends BaseError<"NestedUnitOfWorkError"> {
+export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK"> {
 	constructor() {
 		super(
+			"NESTED_UNIT_OF_WORK",
 			"UnitOfWork.run() was called while this instance is already running. " +
 				"A nested run() would open an independent transaction, not join the " +
 				"outer one - merge the work into a single run() callback. For " +
 				"concurrent operations, construct one UnitOfWork per operation.",
-			undefined,
-			{ name: "NestedUnitOfWorkError" },
 		);
 	}
 }
@@ -53,7 +52,7 @@ export class NestedUnitOfWorkError extends BaseError<"NestedUnitOfWorkError"> {
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so
- * this extends `BaseError` directly and should crash loud.
+ * this carries the `WIRING` category and should crash loud.
  *
  * **Honest scope of this guard:** the kit can only invalidate what it
  * controls - the context getters and the session. A repository or raw
@@ -61,14 +60,13 @@ export class NestedUnitOfWorkError extends BaseError<"NestedUnitOfWorkError"> {
  * working as far as the kit can see; whether the underlying tx handle
  * rejects is ORM-specific. Do not let references escape the callback.
  */
-export class TransactionClosedError extends BaseError<"TransactionClosedError"> {
+export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED"> {
 	constructor(public readonly operation: string) {
 		super(
+			"TRANSACTION_CLOSED",
 			`Unit of work is closed: ${operation} was called after the ` +
 				"transaction committed or rolled back. Do not use the context or " +
 				"session outside the run() callback.",
-			undefined,
-			{ name: "TransactionClosedError" },
 		);
 	}
 }
@@ -93,16 +91,17 @@ export class TransactionClosedError extends BaseError<"TransactionClosedError"> 
  * {@link EventHarvestError} instead, which does NOT extend
  * `InfrastructureError`, so it stays out of retry paths by construction.
  */
-export class CommitError extends InfrastructureError<"CommitError"> {
+export class CommitError extends InfrastructureError<"COMMIT_FAILED"> {
 	constructor(cause: unknown) {
-		super(
-			"Unit of work failed after the work callback completed: the outbox " +
+		super({
+			code: "COMMIT_FAILED",
+			message:
+				"Unit of work failed after the work callback completed: the outbox " +
 				"write or the transaction commit rejected. The transaction did " +
 				"not commit; this failure may be transient, inspect the cause " +
 				"(e.g. someChainRetryable) before retrying.",
 			cause,
-			{ name: "CommitError" },
-		);
+		});
 	}
 }
 
@@ -119,18 +118,19 @@ export class CommitError extends InfrastructureError<"CommitError"> {
  * produce this; scopes that WRAP the original are detected via the
  * cause chain and passed through unchanged instead.
  */
-export class RollbackError extends InfrastructureError<"RollbackError"> {
+export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 	constructor(
 		cause: unknown,
 		public readonly rollbackCause: unknown,
 	) {
-		super(
-			"The work callback failed and the transaction scope rejected with a " +
+		super({
+			code: "ROLLBACK_FAILED",
+			message:
+				"The work callback failed and the transaction scope rejected with a " +
 				"different error (possible rollback failure). The callback's error " +
 				"is the cause; the scope's error is in rollbackCause.",
 			cause,
-			{ name: "RollbackError" },
-		);
+		});
 	}
 }
 
@@ -146,7 +146,7 @@ export class RollbackError extends InfrastructureError<"RollbackError"> {
  * tests pin it once.
  *
  * Contract for repository implementations:
- * - `getById(id)` checks `identityMap.get` BEFORE hydrating, treats
+ * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats
  *   `identityMap.isDeleted` as not-found (`null`), and registers the
  *   hydrated instance after - two loads of the same aggregate in one
  *   unit of work must return the same instance.
@@ -210,7 +210,7 @@ export interface UnitOfWorkContext<
 	 * A write issued on the raw handle bypasses the repository contract,
 	 * enrollment (its aggregate's events are NOT harvested unless you
 	 * also call `session.enrollSaved`), and the identity map (a later
-	 * `getById` of the same aggregate hydrates a SECOND instance:
+	 * `findById` of the same aggregate hydrates a SECOND instance:
 	 * double harvest, double `markPersisted`). Use it only for writes no
 	 * repository covers, pair it with manual enrollment, and prefer
 	 * adding a repository method whenever one could exist.
@@ -348,7 +348,7 @@ export interface UnitOfWorkDeps<
  *
  * const uow = new UnitOfWork(deps);
  * const result = await uow.run(async ({ repositories }) => {
- *   const restaurant = await repositories.restaurants.getByIdOrFail(id);
+ *   const restaurant = await repositories.restaurants.getById(id);
  *   restaurant.changeOpeningHours(openingHours);
  *   await repositories.restaurants.save(restaurant); // save() enrolls
  *   return restaurant.id;
@@ -526,7 +526,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 
 	/**
 	 * End-of-run safety net: a loaded aggregate (registered in the identity
-	 * map via `getById`) that carries pending events but was never enrolled
+	 * map via `findById`) that carries pending events but was never enrolled
 	 * is almost certainly a forgotten `save()` / `enrollSaved`, whose events
 	 * would otherwise be silently dropped. Convert that silent loss into a
 	 * loud, rolling-back {@link UnenrolledChangesError}. Only sees loaded

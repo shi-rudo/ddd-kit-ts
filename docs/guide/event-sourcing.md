@@ -19,9 +19,12 @@ type OrderCreated   = DomainEvent<"OrderCreated",   { customerId: string }>;
 type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: OrderId }>;
 type OrderEvent = OrderCreated | OrderConfirmed;
 
-class OrderAlreadyConfirmedError extends DomainError {
+class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
   constructor(public readonly id: OrderId) {
-    super(`Order ${id} is already confirmed`);
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${id} is already confirmed`,
+    });
   }
 }
 
@@ -259,7 +262,7 @@ async function snapshotSweep(): Promise<void> {
     LIMIT 1000
   `);
   for (const { aggregate_id, last_snapshot_version } of candidates) {
-    const order = await orderRepository.getByIdOrFail(aggregate_id);
+    const order = await orderRepository.getById(aggregate_id);
     await snapshotStore.save(aggregate_id, order.createSnapshot());
   }
 }

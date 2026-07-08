@@ -1,4 +1,7 @@
-import { SnapshotSchemaMismatchError } from "../core/errors";
+import {
+	SnapshotSchemaMismatchError,
+	UnreplayableAggregateError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import { Entity } from "../entity/entity";
 import { isBuiltInObject } from "../utils/array/is-built-in";
@@ -102,9 +105,28 @@ export abstract class BaseAggregate<
 	}
 
 	/**
+	 * Count-only accessor for internal hot paths (`hasChanges` runs per
+	 * save): the public {@link pendingEvents} getter allocates and freezes
+	 * a defensive copy per read, which a length check does not need.
+	 */
+	protected get pendingEventCount(): number {
+		return this._pendingEvents.length;
+	}
+
+	/**
 	 * Clears the pending-event list. Called by `markPersisted` after a
 	 * successful write: the events have been handed off to the outbox
 	 * / event store and are no longer the aggregate's responsibility.
+	 *
+	 * Also the deliberate-discard escape hatch for the in-memory undo
+	 * pattern: call it BEFORE `restoreFromSnapshot` / the replay methods
+	 * when the recorded events belong to work that is being rolled back.
+	 * The undo snapshot itself must have been taken on a CLEAN aggregate
+	 * (no pending events): `createSnapshot` bakes pending events' version
+	 * bumps into `snapshot.version`, so restoring a dirty-taken snapshot
+	 * after clearing desyncs `persistedVersion` from the store and loses
+	 * those events. See {@link UnreplayableAggregateError} for the guard
+	 * rationale.
 	 */
 	public clearPendingEvents(): void {
 		this._pendingEvents = [];
@@ -116,7 +138,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState(_, true)` / `commit()` paths and by the
+	 * aggregates' `setState()` / `commit()` paths and by the
 	 * event-sourced replay path after each applied event.
 	 */
 	protected bumpVersion(): void {
@@ -256,6 +278,7 @@ export abstract class BaseAggregate<
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
+			// now() returns a defensive copy at the source (see clock.ts).
 			snapshotAt: now(),
 			schemaVersion: this.snapshotSchemaVersion,
 		};
@@ -392,7 +415,6 @@ export abstract class BaseAggregate<
 }
 
 /**
-/**
  * Walks a state graph and throws a descriptive error (with the offending
  * path) when it contains anything `structuredClone` would either reject
  * (functions, Promise/WeakMap/WeakSet) or silently degrade (class
@@ -514,4 +536,38 @@ function assertSnapshotSafe(
 			`Override toSnapshotState()/fromSnapshotState() to map child ` +
 			`entities to plain data.`,
 	);
+}
+
+/**
+ * Restore/replay-target guard shared by `AggregateRoot.restoreFromSnapshot`
+ * and the event-sourced replay methods (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`): a target carrying unflushed
+ * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
+ * moves. Every restore path re-baselines the version via `markRestored`, so
+ * unflushed events recorded against the old baseline would later be
+ * harvested claiming a version baseline they were never part of. When the
+ * discard is deliberate (an in-memory undo), call `clearPendingEvents()`
+ * first.
+ *
+ * Deliberately a module-level function, not a class method: it MUST not be
+ * overridable by consumer subclasses (a no-op override would silently
+ * disable the guard for all three call sites), and it checks the PUBLIC
+ * `pendingEvents` getter, the same surface `withCommit` harvests.
+ *
+ * @internal Shared by the aggregate flavours in this package; not part of
+ * the public API.
+ */
+export function assertRestoreTargetHasNoPendingEvents(aggregate: {
+	readonly id: unknown;
+	readonly pendingEvents: ReadonlyArray<unknown>;
+}): void {
+	const pending = aggregate.pendingEvents.length;
+	if (pending > 0) {
+		throw new UnreplayableAggregateError(
+			String(aggregate.id),
+			`it carries ${pending} unflushed pending event(s) that are not ` +
+				"part of the persisted stream; if discarding them is deliberate " +
+				"(an in-memory undo), call clearPendingEvents() before restoring",
+		);
+	}
 }

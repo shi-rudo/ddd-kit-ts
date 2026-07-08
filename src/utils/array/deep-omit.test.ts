@@ -539,3 +539,56 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 		);
 	});
 });
+
+describe("deepOmit – non-enumerable own string properties", () => {
+	// deepEqual compares plain objects via Object.getOwnPropertyNames
+	// (test-pinned there), so the omit clone must preserve exactly that
+	// key set or deepEqualExcept diverges from deepEqual.
+	const withHidden = (visible: number, hidden: number) => {
+		const obj: Record<string, unknown> = { visible };
+		Object.defineProperty(obj, "hidden", {
+			value: hidden,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
+		return obj;
+	};
+
+	it("preserves a non-enumerable own string property including its enumerability", () => {
+		const clone = deepOmit(withHidden(1, 2), {});
+
+		const descriptor = Object.getOwnPropertyDescriptor(clone, "hidden");
+		expect(descriptor?.value).toBe(2);
+		expect(descriptor?.enumerable).toBe(false);
+		// The enumerable sibling stays enumerable.
+		expect(Object.getOwnPropertyDescriptor(clone, "visible")?.enumerable).toBe(
+			true,
+		);
+	});
+
+	it("still applies ignore rules to non-enumerable keys", () => {
+		const clone = deepOmit(withHidden(1, 2), { ignoreKeys: ["hidden"] });
+
+		expect(Object.hasOwn(clone, "hidden")).toBe(false);
+	});
+});
+
+describe("deepOmit – predicate receives a stable path snapshot", () => {
+	it("paths captured by the predicate stay valid after the walk", () => {
+		const captured: ReadonlyArray<readonly unknown[]> = [];
+		const input = { a: { b: 1 }, c: 2 };
+
+		deepOmit(input, {
+			ignoreKeyPredicate: (_key, path) => {
+				(captured as Array<readonly unknown[]>).push(path);
+				return false;
+			},
+		});
+
+		// The walk reuses one internal array via push/pop; the predicate
+		// must receive a snapshot, not the live reference that ends up
+		// empty after the walk.
+		expect(captured.some((path) => path.length > 0)).toBe(true);
+	});
+});

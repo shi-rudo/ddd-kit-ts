@@ -1,126 +1,107 @@
-import type { PublicIssue } from "@shirudo/base-error";
-import type { PublicErrorView } from "@shirudo/base-error/presentation";
+import {
+	localize,
+	type LocalizedPublicError,
+	project,
+	type PublicError,
+	type PublicErrorCatalog,
+} from "@shirudo/base-error/public-error";
+import {
+	createKitPublicErrors,
+	type PublicErrorViewDetails,
+} from "./kit-public-errors";
 
-/**
- * Safe, client-facing English messages for the kit's known errors. They carry
- * no occurrence data (no id, version, or technical detail), so they never leak
- * across the boundary. This is the transport-neutral *presentation* layer: the
- * technical error classes stay free of these strings (removed from the core in
- * 2.0); here is their opt-in home.
- *
- * Keyed by the kit's pinned `error.name` (stable across minification and
- * duplicate installs), so matching does not depend on `instanceof`.
- */
-const KIT_PUBLIC_MESSAGES: Readonly<Record<string, string>> = {
-	AggregateNotFoundError: "The requested resource could not be found.",
-	ConcurrencyConflictError:
-		"The resource was modified by another request. Please reload and try again.",
-	DuplicateAggregateError: "The resource already exists.",
-};
+export type { PublicErrorViewDetails } from "./kit-public-errors";
 
-/** Message for a `ValidationError`, which is detected by capability, not name. */
-const VALIDATION_MESSAGE = "The submitted data is invalid.";
 /** Public code and message used for any unmapped or non-kit error. */
 const FALLBACK_CODE = "INTERNAL_ERROR";
 const FALLBACK_MESSAGE = "An unexpected error occurred.";
 /** BCP 47 locale the built-in messages are written in. */
 const DEFAULT_LOCALE = "en";
 
-/** Details shape carried by the view for a {@link toPublicErrorView} result. */
-export interface PublicErrorViewDetails {
-	/** Whitelisted field issues, present only for a `ValidationError`. */
-	readonly issues: readonly PublicIssue[];
-}
+// Private default instance: never exported and never handed out, so no
+// consumer can register into it (extensions go through options.catalog
+// on a consumer-built createKitPublicErrors() instance).
+const defaultCatalog = createKitPublicErrors();
 
 /** Options for {@link toPublicErrorView}. */
 export interface PublicErrorViewOptions {
 	/**
-	 * BCP 47 locale tag stamped on the view. The built-in messages are English;
-	 * pass a locale only when you supply your own message resolution upstream.
-	 * Default `"en"`.
+	 * PREFERRED BCP 47 locale tag. Resolution follows base-error's
+	 * `localize` (RFC 4647 lookup with base-locale fallback), and the view
+	 * carries the locale that actually RESOLVED, never a claimed one: with
+	 * the kit's built-in English messages a `"de-DE"` preference still
+	 * yields `locale: "en"` unless the catalog carries German. Default
+	 * `"en"`.
 	 */
 	locale?: string;
+	/**
+	 * The public-error catalog to resolve against. Defaults to a private
+	 * {@link createKitPublicErrors} instance; pass your own extended
+	 * catalog (`createKitPublicErrors().registerByCode(...)`) so your own
+	 * codes and locales resolve through the same pipeline.
+	 */
+	catalog?: PublicErrorCatalog<string>;
 }
 
 /**
  * Maps a kit error (or any caught value) to a base-error
- * {@link PublicErrorView}: a **transport-neutral**, client-safe representation
- * (`code`, `message`, `locale`, optional `details`). It is deliberately *not* a
- * transport adapter: it carries no HTTP status, header, or exit code, because
- * those are the consumer's concern. Feed the view into base-error's
- * `defineProblemDetailsAdapter` (HTTP / RFC 9457), a gRPC status mapper, or a
- * CLI exit-code table, whichever boundary you are at.
+ * {@link LocalizedPublicError} by delegating to the public-error pipeline:
+ * `project` against a catalog (default {@link createKitPublicErrors}), then
+ * `localize` with the catalog's messages. A **transport-neutral**,
+ * client-safe representation (`code`, `message`, `locale`, optional
+ * `details`); feed it into base-error's `toProblem` (HTTP / RFC 9457), a
+ * gRPC status mapper, or a CLI exit-code table, whichever boundary you
+ * are at.
  *
- * Total over `unknown`: an unmapped or non-kit value degrades to a generic
- * `INTERNAL_ERROR` view rather than leaking the technical message or throwing.
- * The kit's class-based errors match by their pinned `error.name`, so it
- * survives minification and duplicate installs (no `instanceof`). A
- * `ValidationError` is detected by its `publicIssues()` whitelist (base-error
- * names it after its code), and those issues ride along in `details.issues`.
- *
- * For richer, multi-locale messages, register the kit's errors in a base-error
- * `PublicErrorRegistry` and use `PublicErrorPresenter` instead; this helper is
- * the lean, single-locale default.
+ * Total over `unknown`: an unmatched or hostile value (throwing
+ * accessors, a throwing or lying `publicIssues()`) degrades to the
+ * catalog's fallback view rather than leaking the technical message or
+ * crashing the 500 path. Kit errors resolve by their stable `code`
+ * (`error.name === error.code`, minification- and duplicate-install-
+ * stable); the base-error validation family resolves by capability with
+ * its whitelisted issues sanitized under `details.issues` (see the
+ * catalog). No base-error adoption is required to consume the view: it
+ * is a plain object read with plain property access.
  *
  * @example
  * ```ts
  * import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
- * import { defineProblemDetailsAdapter } from "@shirudo/base-error/problem-details";
+ * import { toProblem } from "@shirudo/base-error/public-error";
  *
- * const adapter = defineProblemDetailsAdapter({
- *   definitions: { AggregateNotFoundError: { type: "about:blank", status: 404 } },
- *   fallback: { type: "about:blank", status: 500 },
- * });
- *
- * const { body, status } = adapter.map(toPublicErrorView(error));
+ * const { body, status } = toProblem(
+ *   { status: 500 }, // or the catalog, for per-code type/status
+ *   toPublicErrorView(error),
+ * );
  * return Response.json(body, { status });
  * ```
  */
 export function toPublicErrorView(
 	error: unknown,
 	options: PublicErrorViewOptions = {},
-): PublicErrorView<PublicErrorViewDetails> {
+): LocalizedPublicError<PublicErrorViewDetails> {
 	const locale = options.locale ?? DEFAULT_LOCALE;
-	const name = errorName(error);
-
-	// ValidationError (and subclasses) are detected by the publicIssues()
-	// whitelist, not by name: base-error names a ValidationError after its code
-	// ("VALIDATION_FAILED"), so a name match would miss it.
-	if (hasPublicIssues(error)) {
+	const catalog = options.catalog ?? defaultCatalog;
+	// The catch is the totality guarantee's last line: `project` is total
+	// by contract, but a hostile catalog or message set handed in via
+	// options must still degrade to the fallback view, never crash the
+	// 500 path.
+	try {
+		const view = project(catalog, error) as PublicError<
+			PublicErrorViewDetails,
+			string
+		>;
+		const messages = catalog.messagesFor(view.code);
+		if (messages !== undefined) {
+			return localize(view, messages, { locales: [locale] });
+		}
+		// A consumer descriptor without userMessages: keep the view, attach
+		// the generic fallback text so the type stays LocalizedPublicError.
+		return { ...view, message: FALLBACK_MESSAGE, locale: DEFAULT_LOCALE };
+	} catch {
 		return {
-			code: name ?? "VALIDATION_FAILED",
-			message: VALIDATION_MESSAGE,
-			locale,
-			details: { issues: error.publicIssues() },
+			code: FALLBACK_CODE,
+			message: FALLBACK_MESSAGE,
+			locale: DEFAULT_LOCALE,
 		};
 	}
-
-	const message = name ? KIT_PUBLIC_MESSAGES[name] : undefined;
-	if (message === undefined) {
-		return { code: FALLBACK_CODE, message: FALLBACK_MESSAGE, locale };
-	}
-
-	return { code: name as string, message, locale };
-}
-
-/** Reads a string `name` off a caught value without assuming it is an Error. */
-function errorName(error: unknown): string | undefined {
-	if (typeof error !== "object" || error === null) return undefined;
-	const { name } = error as { name?: unknown };
-	return typeof name === "string" ? name : undefined;
-}
-
-/**
- * Duck-types base-error's `ValidationError.publicIssues()` accessor. The
- * null/object guard keeps `toPublicErrorView` total: a thrown `null` or
- * `undefined` must degrade to the fallback view, not crash the presenter.
- */
-function hasPublicIssues(
-	error: unknown,
-): error is { publicIssues(): PublicIssue[] } {
-	return (
-		typeof error === "object" &&
-		error !== null &&
-		typeof (error as { publicIssues?: unknown }).publicIssues === "function"
-	);
 }

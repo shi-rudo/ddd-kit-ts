@@ -41,7 +41,7 @@ A use case then runs:
 const uow = new UnitOfWork(deps);
 
 const result = await uow.run(async ({ repositories }) => {
-  const restaurant = await repositories.restaurants.getByIdOrFail(restaurantId);
+  const restaurant = await repositories.restaurants.getById(restaurantId);
 
   restaurant.changeOpeningHours(openingHours);
 
@@ -50,7 +50,7 @@ const result = await uow.run(async ({ repositories }) => {
 });
 ```
 
-Every factory is invoked once per `run()` with the **same** transaction handle, so all writes of one unit of work share one transaction by construction. The context also exposes `session` (manual enrollment) and `rawTransaction`, deliberately named to look like what it is: an **escape hatch**. A write on the raw handle leaves the unit of work's guarantees: no enrollment (events silently skipped unless you call `session.enrollSaved` yourself), no identity-map registration (a later `getById` hydrates a second instance: double harvest, double `markPersisted`). Prefer adding a repository method; reach for `rawTransaction` only for writes no repository could reasonably cover.
+Every factory is invoked once per `run()` with the **same** transaction handle, so all writes of one unit of work share one transaction by construction. The context also exposes `session` (manual enrollment) and `rawTransaction`, deliberately named to look like what it is: an **escape hatch**. A write on the raw handle leaves the unit of work's guarantees: no enrollment (events silently skipped unless you call `session.enrollSaved` yourself), no identity-map registration (a later `findById` hydrates a second instance: double harvest, double `markPersisted`). Prefer adding a repository method; reach for `rawTransaction` only for writes no repository could reasonably cover.
 
 A **read-only `run()`** is fine. A callback that only reads and enrolls nothing produces an empty harvest: no `outbox.add`, no `markPersisted`, no publish. The transaction still opens and commits, which at the storage layer is a no-op for reads. You get the callback's result back. Reach for it when several reads should share one consistent snapshot; for a single read, calling the repository directly is lighter.
 
@@ -76,7 +76,7 @@ The callback runs inside an open database transaction. Nothing that talks to the
 ```ts
 // ❌ WRONG: external call inside the transaction
 await uow.run(async ({ repositories }) => {
-  const booking = await repositories.bookings.getByIdOrFail(id);
+  const booking = await repositories.bookings.getById(id);
   booking.confirm();
   await stripe.capturePayment(paymentId); // ⚠️ tx still open!
   await repositories.bookings.save(booking);
@@ -143,7 +143,7 @@ This moves the event-handoff responsibility from *every call site* (the `withCom
 The read path checks before hydrating and registers after:
 
 ```ts
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const cached = this.session.identityMap.get(Order, id);
   if (cached) return cached;
   // Deleted in this unit of work = uniformly not-found, even when the
@@ -176,7 +176,7 @@ Semantics worth knowing:
 | `NestedUnitOfWorkError` | `run()` while the same instance is already running (nesting or instance-sharing across concurrent operations) | `BaseError`: programming bug, crash loud |
 | `TransactionClosedError` | context/session used after `run()` settled | `BaseError`: programming bug |
 | `AggregateDeletedError` | save (or identity-map re-registration) after delete of the same aggregate in one unit of work: same instance via the enrollment gate, *or* a different instance with the same class+id via the deletion tombstone (e.g. re-created through a factory, or re-hydrated by a deferred-write repository that skips the `isDeleted` check) | `BaseError`: programming bug |
-| `UnenrolledChangesError` | a **loaded** aggregate (registered in the identity map via `getById`) recorded new events after load but was never enrolled (a forgotten `save`/`enrollSaved`), so its events would be silently dropped. A runtime safety net that converts the silent loss into a rolling-back throw; it only sees loaded aggregates, so a freshly *created* one that is never enrolled is not caught (the contract suite is the full mitigation) | `BaseError`: programming bug |
+| `UnenrolledChangesError` | a **loaded** aggregate (registered in the identity map via `findById`) recorded new events after load but was never enrolled (a forgotten `save`/`enrollSaved`), so its events would be silently dropped. A runtime safety net that converts the silent loss into a rolling-back throw; it only sees loaded aggregates, so a freshly *created* one that is never enrolled is not caught (the contract suite is the full mitigation) | `BaseError`: programming bug |
 
 Scopes that rethrow the callback's error (Drizzle, Prisma) never produce `RollbackError`; scopes that *wrap* it are detected via the standard `cause` chain and passed through unchanged.
 
@@ -207,7 +207,7 @@ The same honesty applies inside the callback: **do not mutate an aggregate after
 ```ts
 const result = await uow.run(
   async ({ repositories, signal }) => {
-    const order = await repositories.orders.getByIdOrFail(orderId);
+    const order = await repositories.orders.getById(orderId);
     order.confirm();
     // Poll between steps of a long operation and bail out cleanly.
     if (signal?.aborted) throw signal.reason;

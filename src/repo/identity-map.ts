@@ -26,7 +26,7 @@ export type AggregateClass<TAgg> =
  *
  * This is the shipped implementation of the contract the
  * [Repository guide](../../docs/guide/repository.md) places on
- * `IRepository` implementations: two `getById(id)` calls in the same
+ * `IRepository` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because `withCommit`'s
  * aggregate dedupe (and therefore exactly-once event harvest and
  * `markPersisted`) is keyed on JavaScript object identity.
@@ -38,7 +38,7 @@ export type AggregateClass<TAgg> =
  * Repository read-path contract:
  *
  * ```ts
- * async getById(id: OrderId): Promise<Order | null> {
+ * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   // Deleted in this unit of work = gone, even if the physical
@@ -72,7 +72,7 @@ export class IdentityMap {
 	// pendingEvents length captured when an instance was first registered
 	// (load time), so the unit of work can tell events RECORDED AFTER load
 	// apart from a "dirty" reconstitution that already carried events.
-	private readonly _pendingAtRegistration = new WeakMap<object, number>();
+	private _pendingAtRegistration = new WeakMap<object, number>();
 
 	/** The cached instance for type+id, or `undefined` (also after {@link delete}). */
 	public get<TAgg>(
@@ -200,6 +200,11 @@ export class IdentityMap {
 	public clear(): void {
 		this._stores.clear();
 		this._deleted.clear();
+		// A WeakMap cannot be emptied in place; replace it so a reused map
+		// captures FRESH pending-event baselines. A stale (higher) baseline
+		// would make instancesWithNewPendingEvents under-report and defeat
+		// the UnenrolledChangesError safety net.
+		this._pendingAtRegistration = new WeakMap<object, number>();
 	}
 }
 

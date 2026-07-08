@@ -16,11 +16,15 @@ import {
   type Id,
   type DomainEvent,
 } from "@shirudo/ddd-kit";
+import type { Money } from "@shirudo/ddd-kit/money";
 
 type OrderId = Id<"OrderId">;
 type OrderState = {
   customerId: string;
-  items: { id: string; qty: number; priceCents: number }[];
+  // Money carries a bigint amount: clone- and snapshot-safe, but a
+  // JSON-serializing store adapter must map it through MoneyDto (see
+  // the Money guide's wire-format section).
+  items: { id: string; qty: number; price: Money }[];
   status: "draft" | "confirmed" | "shipped";
 };
 
@@ -28,9 +32,12 @@ type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: OrderId }>;
 type OrderShipped   = DomainEvent<"OrderShipped",   { orderId: OrderId; tracking: string }>;
 type OrderEvent = OrderConfirmed | OrderShipped;
 
-class OrderAlreadyConfirmedError extends DomainError {
+class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
   constructor(public readonly id: OrderId) {
-    super(`Order ${id} is already confirmed`);
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${id} is already confirmed`,
+    });
   }
 }
 
@@ -91,7 +98,7 @@ The factory shape buys two things Vernon §11 specifically calls out, plus one e
 
 ### Reconstitution: loading existing aggregates from persistence
 
-`Order.place(...)` creates a *new* aggregate: the order is being born into the system, and the factory records the creation event. But when `Repository.getById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
+`Order.place(...)` creates a *new* aggregate: the order is being born into the system, and the factory records the creation event. But when `Repository.findById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
 
 Vernon IDDD §11 distinguishes these two paths explicitly:
 
@@ -134,10 +141,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 A naive Repository might route INSERT vs UPDATE on `aggregate.version === 0`. That breaks the moment a fresh aggregate is mutated before its first save. `Order.place(...)` typically calls `commit(state, event)` which bumps `version` to 1; a follow-up `order.updateProfile(...)` bumps it to 2, but no DB row exists yet. Routing on `version === 0` would misroute to UPDATE, hit zero rows, and throw a spurious `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the persistence layer's state, not in-memory mutations. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 :::
 
-The Repository's `getById` becomes mechanical:
+The Repository's `findById` becomes mechanical:
 
 ```ts
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const row = await this.db
     .select()
     .from(orders)
@@ -159,7 +166,7 @@ async getById(id: OrderId): Promise<Order | null> {
 For `EventSourcedAggregate`, reconstitution means *replaying the event history*. The kit already exposes this as `loadFromHistory(events)`:
 
 ```ts
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
 
@@ -184,7 +191,7 @@ The kit's two reconstitution paths enforce this structurally: `markRestored` wri
 
 The canonical record-after-mutation helper:
 
-1. Calls `setState(newState, /* bumpVersion */ true)`, which runs `validateState` and throws on rejection
+1. Calls `setState(newState)`, which runs `validateState` and throws on rejection
 2. Only if state mutated successfully, appends the event(s) via `addDomainEvent`
 3. Always bumps the version
 
@@ -198,7 +205,7 @@ this.commit(newState, [eventA, eventB]); // two events in one transition
 ```
 
 ::: info `commit()` always bumps the version
-The `bumpVersion` parameter was deliberately removed. Recording a domain event implies "something version-worthy happened". If you need to mutate state without bumping (cosmetic caches, internal state), call `setState(newState, false)` directly.
+Recording a domain event implies "something version-worthy happened". If you need to mutate state without bumping (cosmetic caches, internal state), call `setStateWithoutVersionBump(newState)` directly and skip `commit` entirely.
 :::
 
 ## Where invariants live
@@ -309,9 +316,9 @@ If you find yourself wanting to enforce a cross-aggregate invariant transactiona
 ```ts
 import { sameVersion } from "@shirudo/ddd-kit";
 
-const before = await repo.getById(id);
+const before = await repo.findById(id);
 // ... time passes, maybe another writer comes in
-const after = await repo.getById(id);
+const after = await repo.findById(id);
 
 if (!sameVersion(before!, after!)) {
   // version mismatch: another writer modified the aggregate
@@ -334,6 +341,12 @@ fresh.restoreFromSnapshot(snapshot);
 
 `createSnapshot` uses `structuredClone` so the snapshot is fully isolated from later mutations. `restoreFromSnapshot` runs `validateState` on the restored state before assigning it.
 
+::: warning The restore target must not carry pending events
+`restoreFromSnapshot` throws `UnreplayableAggregateError` when the aggregate has unflushed `pendingEvents` (same guard as the event-sourced replay methods): the restore re-baselines the version via `markRestored`, so events recorded against the old baseline would later be harvested claiming a version they were never part of.
+
+For a deliberate in-memory undo, BOTH ends must be clean. Take the undo snapshot while the aggregate has no `pendingEvents` (right after load or save): `createSnapshot` bakes any pending events' version bumps into `snapshot.version`, so restoring a dirty-taken snapshot after clearing would desync `persistedVersion` from the store and lose those events. On failure, call `clearPendingEvents()` to discard the events recorded since that clean point, then `restoreFromSnapshot`.
+:::
+
 ## When to skip `commit()`
 
 `commit()` is the safe default. Reach for `setState` + `addDomainEvent` separately when:
@@ -345,5 +358,5 @@ fresh.restoreFromSnapshot(snapshot);
 In any of those cases, **mutate state first, then record events.** See [Design Decisions](./design-decisions.md#event-sourcing-structurally-enforces-record-after-mutation).
 
 ::: warning Un-bumped mutations are invisible to optimistic concurrency
-A `setState` that does not bump the version writes `WHERE version = v SET version = v`. A concurrent writer that loaded the same `v` then commits its own `WHERE version = v` successfully and replaces your state, with no `ConcurrencyConflictError` on either side: a silent lost update. Skip the bump only for data whose loss under a concurrent write is acceptable, never for domain state. Since v3 the `bumpVersion` argument is required (the `autoVersionBump` config is gone), so every mutation states its OCC intent at the call site; a call that bypasses the compiler (an `Entity`-typed reference, plain JavaScript) fails loud with a `TypeError` before anything mutates. If you override `setState`, keep the two-argument signature and delegate to `super.setState(newState, bumpVersion)`: TypeScript's method bivariance also accepts a narrower single-argument override, which would silently disable both guards for that subclass.
+A mutation that does not bump the version writes `WHERE version = v SET version = v`. A concurrent writer that loaded the same `v` then commits its own `WHERE version = v` successfully and replaces your state, with no `ConcurrencyConflictError` on either side: a silent lost update. That is why the no-bump path has its own, deliberately loud method name: `setStateWithoutVersionBump`. Since v3 the OCC decision lives in the method name (the `autoVersionBump` config and the interim boolean argument are gone): `setState(newState)` always bumps, and the rare loss-tolerant mutation (cosmetic caches, denormalized display fields) spells out what it gives up. A call through an `Entity`-typed reference or plain JavaScript hits the same safe bumping default, so no runtime guard is needed.
 :::

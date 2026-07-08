@@ -37,9 +37,12 @@ export type PaymentEvent =
 	| PaymentFailed
 	| PaymentRefunded;
 
-export class PaymentInWrongStateError extends DomainError<"PaymentInWrongStateError"> {
+export class PaymentInWrongStateError extends DomainError<"PAYMENT_IN_WRONG_STATE"> {
 	constructor(paymentId: PaymentId, current: string, attempted: string) {
-		super(`Payment ${paymentId} is ${current}; cannot ${attempted}`);
+		super({
+			code: "PAYMENT_IN_WRONG_STATE",
+			message: `Payment ${paymentId} is ${current}; cannot ${attempted}`,
+		});
 	}
 }
 

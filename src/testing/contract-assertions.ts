@@ -52,14 +52,14 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
  * vs broken replay read).
  */
 export async function loadAggregateOrFail<TAgg, TId>(
-	repository: { getById(id: TId): Promise<TAgg | null> },
+	repository: { findById(id: TId): Promise<TAgg | null> },
 	id: TId,
 	suspectHint: string,
 ): Promise<TAgg> {
-	const loaded = await repository.getById(id);
+	const loaded = await repository.findById(id);
 	assert(
 		loaded !== null,
-		`getById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
+		`findById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
 	);
 	return loaded;
 }
@@ -115,13 +115,15 @@ export function assertEqual(
  * bundle entry, and the adapter's errors come from the main entry's
  * copy of the kit (or even a second installed kit version) -
  * cross-copy `instanceof` is always false, name identity is the stable
- * contract. The kit's error classes pin their runtime `name` via
- * BaseError's `options.name`, so the match survives consumer-side
- * minification AND subclassing (a `PgConflictError extends
- * ConcurrencyConflictError` inherits the pinned name). For errors from
- * OLDER kit versions (no pinned name), the prototype chain's
- * constructor names are checked as a fallback, so subclasses still
- * match.
+ * contract. Since v3 the kit's errors are StructuredErrors whose
+ * runtime `name` IS their SCREAMING_SNAKE code, minification-stable by
+ * construction and inherited by subclasses (a `PgConflictError extends
+ * ConcurrencyConflictError` keeps the code as its name). The suites
+ * match ONLY the v3 codes. Failure diagnostics render the rejection's
+ * cause-chain names ({@link describeError}), so an unexpected error,
+ * including one from a different kit copy in the dependency graph, is
+ * identifiable from the message without version-specific knowledge in
+ * the suite.
  */
 export function chainContainsErrorNamed(error: unknown, name: string): boolean {
 	const seen = new Set<unknown>();
@@ -143,12 +145,24 @@ export function chainContainsErrorNamed(error: unknown, name: string): boolean {
 	return false;
 }
 
-/** Like {@link chainContainsErrorNamed}, but accepts any of several names. */
-export function chainContainsErrorNamedAnyOf(
-	error: unknown,
-	names: readonly string[],
-): boolean {
-	return names.some((name) => chainContainsErrorNamed(error, name));
+/**
+ * Asserts that the cause chain carries a kit error with one of the given
+ * codes (since v3, `error.name === error.code`; the codes are the ONLY
+ * accepted identity). Failure messages built with {@link describeError}
+ * render the rejection's cause-chain names, so an unexpected error, e.g.
+ * one from a different `@shirudo/ddd-kit` copy in the dependency graph,
+ * is identifiable from the diagnostic without the suite carrying any
+ * version-specific knowledge.
+ */
+export function assertChainContainsKitError(
+	rejection: unknown,
+	codes: readonly string[],
+	message: string,
+): void {
+	if (codes.some((code) => chainContainsErrorNamed(rejection, code))) {
+		return;
+	}
+	throw new Error(`Repository contract violated: ${message}`);
 }
 
 function errorMatchesName(candidate: object, name: string): boolean {
@@ -159,9 +173,9 @@ function errorMatchesName(candidate: object, name: string): boolean {
 	} catch {
 		// Hostile `name` getter: treat as non-matching, keep walking.
 	}
-	// Fallback for errors from kit versions without a pinned runtime
-	// name: a subclass instance's own `name` is the subclass name, but
-	// its prototype chain still carries the base class's constructor.
+	// Fallback for errors whose own `name` was overridden (a subclass
+	// that re-assigns `this.name` after super): the prototype chain
+	// still carries the base class's constructor name.
 	try {
 		let proto: object | null = Object.getPrototypeOf(candidate);
 		for (let depth = 0; proto !== null && depth < 20; depth++) {
@@ -180,7 +194,38 @@ function errorMatchesName(candidate: object, name: string): boolean {
 
 export function describeError(error: unknown): string {
 	if (error instanceof Error) {
-		return `${error.name}: ${error.message}`;
+		const chain = causeChainNames(error);
+		const suffix =
+			chain.length > 1 ? ` (cause chain: ${chain.join(" -> ")})` : "";
+		return `${error.name}: ${error.message}${suffix}`;
 	}
 	return String(error);
+}
+
+/**
+ * Names along the `cause` chain (cycle-safe, hostile-getter-safe), for
+ * failure diagnostics: a wrapped rejection shows WHAT it wraps, so an
+ * unexpected error deep in the chain (a raw driver error, or an error
+ * from a different kit copy) is identifiable from the message alone.
+ */
+function causeChainNames(error: Error): string[] {
+	const names: string[] = [];
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+	while (
+		current !== null &&
+		current !== undefined &&
+		typeof current === "object" &&
+		!seen.has(current)
+	) {
+		seen.add(current);
+		try {
+			const { name } = current as { name?: unknown };
+			names.push(typeof name === "string" ? name : "(unnamed)");
+			current = (current as { cause?: unknown }).cause;
+		} catch {
+			break;
+		}
+	}
+	return names;
 }

@@ -45,7 +45,7 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 			...this.state,
 			items: [...this.state.items, newItem],
 			total: newTotal,
-		}, true);
+		});
 	}
 
 	confirm(): void {
@@ -56,7 +56,7 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 			throw new Error("Cannot confirm an order without items");
 		}
 
-		this.setState({ ...this.state, status: "confirmed" }, true);
+		this.setState({ ...this.state, status: "confirmed" });
 	}
 
 	ship(): void {
@@ -64,7 +64,7 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 			throw new Error("Only confirmed orders can be shipped");
 		}
 
-		this.setState({ ...this.state, status: "shipped" }, true);
+		this.setState({ ...this.state, status: "shipped" });
 	}
 
 	cancel(): void {
@@ -72,6 +72,6 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 			throw new Error("Cannot cancel a shipped order");
 		}
 
-		this.setState({ ...this.state, status: "cancelled" }, true);
+		this.setState({ ...this.state, status: "cancelled" });
 	}
 }

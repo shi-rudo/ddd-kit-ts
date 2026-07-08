@@ -7,6 +7,63 @@ import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import { reportToObserver } from "../utils/observer";
 
+/** Dependencies for {@link withCommit}. */
+export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
+	outbox: Outbox<Evt>;
+	bus?: EventBus<Evt>;
+	scope: TransactionScope<TCtx>;
+	/**
+	 * Observer for post-commit `bus.publish` failures. Called with the
+	 * error and the events that were published. Must not be relied on
+	 * for delivery: the outbox dispatcher is the reliable path.
+	 */
+	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
+	/**
+	 * Observer for post-commit persistence-cleanup failures: a throw from
+	 * `markPersisted`, the user-overridable `onPersisted` hook, or
+	 * `clearPendingEvents`. Called once per failing aggregate with the
+	 * error and that aggregate. Symmetric with {@link onPublishError}: the
+	 * transaction has already committed, so the failure must NOT reject the
+	 * write; without this observer it would otherwise vanish silently. The
+	 * hook is an observer only: if it throws, its error is swallowed so the
+	 * post-commit invariant holds, and the loop continues marking the
+	 * remaining aggregates.
+	 */
+	onPersistError?: (
+		error: unknown,
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	) => void;
+	/**
+	 * Cooperative-cancellation signal. If already aborted, `withCommit`
+	 * rejects with the signal's `reason` BEFORE opening the transaction.
+	 * Otherwise the signal is forwarded to `scope.transactional`, where a
+	 * cancellation-aware scope can abort an in-flight query. The kit does
+	 * not race the work promise: aborting does not kill a running query
+	 * unless the scope honors the signal.
+	 */
+	signal?: AbortSignal;
+}
+
+/** The resolved value of a {@link withCommit} work callback. */
+export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
+	result: R;
+	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+	/**
+	 * Optional marker: which of `aggregates` were DELETED in this unit
+	 * of work. Must be a SUBSET of `aggregates` (enforced inside the
+	 * transaction with `EventHarvestError`: a deleted aggregate missing
+	 * from `aggregates` would lose its deletion events silently).
+	 * Their pending events are harvested like any other
+	 * (deletion events must reach the outbox), but the post-commit
+	 * lifecycle differs: `markPersisted` is NOT called on them. It
+	 * would fire the user-overridable `onPersisted` hook, whose
+	 * post-save semantics (cache fill, read-model warm-up) are a lie
+	 * for a row that was just deleted. Their pending events are
+	 * cleared directly instead, so a later commit cannot re-emit them.
+	 */
+	deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+}
+
 /**
  * Helper for executing a write Use Case inside a transaction scope.
  *
@@ -113,7 +170,7 @@ import { reportToObserver } from "../utils/observer";
  * ```typescript
  * const result = await withCommit({ outbox, bus, scope }, async (tx) => {
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
- *   const order = await orderRepository.getByIdOrFail(orderId);
+ *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await orderRepository.save(order);             // pure persistence; does NOT call markPersisted
  *   return { result: order.id, aggregates: [order] };
@@ -121,59 +178,8 @@ import { reportToObserver } from "../utils/observer";
  * ```
  */
 export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
-	deps: {
-		outbox: Outbox<Evt>;
-		bus?: EventBus<Evt>;
-		scope: TransactionScope<TCtx>;
-		/**
-		 * Observer for post-commit `bus.publish` failures. Called with the
-		 * error and the events that were published. Must not be relied on
-		 * for delivery: the outbox dispatcher is the reliable path.
-		 */
-		onPublishError?: (
-			error: unknown,
-			events: ReadonlyArray<Evt>,
-		) => void;
-		/**
-		 * Observer for post-commit persistence-cleanup failures: a throw from
-		 * `markPersisted`, the user-overridable `onPersisted` hook, or
-		 * `clearPendingEvents`. Called once per failing aggregate with the
-		 * error and that aggregate. Symmetric with {@link onPublishError}: the
-		 * transaction has already committed, so the failure must NOT reject the
-		 * write; without this observer it would otherwise vanish silently. The
-		 * hook is an observer only: if it throws, its error is swallowed so the
-		 * post-commit invariant holds, and the loop continues marking the
-		 * remaining aggregates.
-		 */
-		onPersistError?: (
-			error: unknown,
-			aggregate: IAggregateRoot<Id<string>, Evt>,
-		) => void;
-		/**
-		 * Cooperative-cancellation signal. If already aborted, `withCommit`
-		 * rejects with the signal's `reason` BEFORE opening the transaction.
-		 * Otherwise the signal is forwarded to `scope.transactional`, where a
-		 * cancellation-aware scope can abort an in-flight query. The kit does
-		 * not race the work promise: aborting does not kill a running query
-		 * unless the scope honors the signal.
-		 */
-		signal?: AbortSignal;
-	},
-	fn: (ctx: TCtx) => Promise<{
-		result: R;
-		aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
-		/**
-		 * Optional marker: which of `aggregates` were DELETED in this unit
-		 * of work. Their pending events are harvested like any other
-		 * (deletion events must reach the outbox), but the post-commit
-		 * lifecycle differs: `markPersisted` is NOT called on them. It
-		 * would fire the user-overridable `onPersisted` hook, whose
-		 * post-save semantics (cache fill, read-model warm-up) are a lie
-		 * for a row that was just deleted. Their pending events are
-		 * cleared directly instead, so a later commit cannot re-emit them.
-		 */
-		deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
-	}>,
+	deps: WithCommitDeps<Evt, TCtx>,
+	fn: (ctx: TCtx) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;
@@ -192,6 +198,23 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// markPersisted twice. Distinct instances with the same logical
 			// id are NOT detected here; that's a different misuse class.
 			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
+			// Subset guard: `deleted` is a MARKER over `aggregates`, not a
+			// second harvest source. A deleted aggregate missing from
+			// `aggregates` would have its deletion events silently lost
+			// (never harvested into the outbox) and double-emitted by a
+			// later commit; fail inside the transaction like the other
+			// harvest guards so nothing commits.
+			const aggregateSet = new Set(uniqueAggregates);
+			for (const deletedAggregate of fnResult.deleted ?? []) {
+				if (!aggregateSet.has(deletedAggregate)) {
+					throw new EventHarvestError(
+						"withCommit: an aggregate in `deleted` is not listed in " +
+							"`aggregates`. The harvest only reads `aggregates`, so " +
+							"its deletion events would be silently dropped. List " +
+							"every deleted aggregate in BOTH arrays.",
+					);
+				}
+			}
 			// Stamp each harvested event with its aggregate's COMMIT version
 			// (the value the OCC row write carries for saved aggregates).
 			// Events are deeply frozen at creation, so the stamp goes onto a
@@ -202,19 +225,17 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			// (the createDomainEvent / recordEvent contract); class-based
 			// event objects with prototype members are unsupported.
 			const harvested = uniqueAggregates.flatMap((agg) =>
-				agg.pendingEvents.map((event) => {
-					if (event.aggregateVersion === undefined) {
-						return Object.freeze({
-							...event,
-							aggregateVersion: agg.version as number,
-						}) as Evt;
-					}
+				agg.pendingEvents.map((event, index) => {
 					// Pre-set values win (replay fixtures, backfills) - but a
-					// pre-set AHEAD of the commit version is always a leaked
-					// fixture or copied options object, and consumers key
-					// idempotency watermarks on this number: fail fast, same
-					// posture as the aggregateId/aggregateType guard below.
-					if (event.aggregateVersion > (agg.version as number)) {
+					// pre-set aggregateVersion AHEAD of the commit version is
+					// always a leaked fixture or copied options object, and
+					// consumers key idempotency watermarks on this number:
+					// fail fast, same posture as the aggregateId/aggregateType
+					// guard below.
+					if (
+						event.aggregateVersion !== undefined &&
+						event.aggregateVersion > (agg.version as number)
+					) {
 						throw new EventHarvestError(
 							`withCommit: event "${event.type}" carries a pre-set ` +
 								`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
@@ -222,10 +243,23 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 								`copied pre-set would advance consumer idempotency ` +
 								`watermarks past real history; remove the manual ` +
 								`aggregateVersion or correct it.`,
-								event.type,
+							event.type,
 						);
 					}
-					return event;
+					// Stamp the commit version AND the zero-based harvest
+					// index: the pair (aggregateVersion, commitSequence) is a
+					// total order per aggregate and a compact consumer
+					// watermark (all events of one commit share the version).
+					const needsVersion = event.aggregateVersion === undefined;
+					const needsSequence = event.commitSequence === undefined;
+					if (!needsVersion && !needsSequence) return event;
+					return Object.freeze({
+						...event,
+						aggregateVersion: needsVersion
+							? (agg.version as number)
+							: event.aggregateVersion,
+						commitSequence: needsSequence ? index : event.commitSequence,
+					}) as Evt;
 				}),
 			);
 			// Guard: every event harvested from an aggregate MUST carry

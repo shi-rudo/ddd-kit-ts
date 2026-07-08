@@ -63,7 +63,7 @@ type TrackedRecord<Evt extends AnyDomainEvent> = {
  *
  * await withCommit({ scope, outbox, bus }, async (tx) => {
  *   const orderRepository = makeOrderRepository(tx);
- *   const order = await orderRepository.getByIdOrFail(id);
+ *   const order = await orderRepository.getById(id);
  *   order.confirm();
  *   await orderRepository.save(order);
  *   return { result: order.id, aggregates: [order] };
@@ -123,22 +123,31 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	async getPending(
-		limit?: number,
-	): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
+	async getPending(limit?: number): Promise<ReadonlyArray<OutboxRecord<Evt>>> {
 		// Copies, not the tracked internals: a caller mutating a returned
 		// record must not corrupt the attempt bookkeeping. Map iteration
-		// preserves insertion order, satisfying the port's ordering contract.
-		const all = [...this.pending.values()].map((record) => ({
-			dispatchId: record.dispatchId,
-			event: record.event,
-			attempts: record.attempts,
-		}));
-		if (typeof limit !== "number") return all;
-		// Clamp: slice's end-relative indexing would turn a negative limit
-		// (e.g. a dispatcher's batchSize - inFlight going negative) into
+		// preserves insertion order, satisfying the port's ordering
+		// contract. Stop at the limit instead of materializing the whole
+		// backlog: a dispatcher polling a large backlog with a small batch
+		// pays O(limit), not O(total pending). The clamp keeps a negative
+		// limit (batchSize - inFlight going negative) at "nothing", not
 		// "everything but the last records".
-		return all.slice(0, Math.max(0, limit));
+		// NaN (e.g. batchSize - inFlight with an undefined operand) clamps
+		// to zero like the old slice(0, NaN) did, never to "everything".
+		const max =
+			typeof limit === "number"
+				? Math.max(0, Number.isNaN(limit) ? 0 : limit)
+				: Number.POSITIVE_INFINITY;
+		const batch: Array<OutboxRecord<Evt>> = [];
+		for (const record of this.pending.values()) {
+			if (batch.length >= max) break;
+			batch.push({
+				dispatchId: record.dispatchId,
+				event: record.event,
+				attempts: record.attempts,
+			});
+		}
+		return batch;
 	}
 
 	async markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void> {

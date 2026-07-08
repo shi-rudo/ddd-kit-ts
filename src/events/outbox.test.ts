@@ -241,3 +241,16 @@ describe("InMemoryOutbox", () => {
 		});
 	});
 });
+
+describe("getPending limit edge cases", () => {
+	it("a NaN limit yields an empty batch, never the whole backlog", async () => {
+		const outbox = new InMemoryOutbox();
+		await outbox.add([
+			{ eventId: "e1", type: "T", aggregateType: "A" } as never,
+		]);
+
+		const batchSize = undefined as unknown as number;
+		const inFlight = 0;
+		expect(await outbox.getPending(batchSize - inFlight)).toHaveLength(0);
+	});
+});

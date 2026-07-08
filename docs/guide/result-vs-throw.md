@@ -54,21 +54,19 @@ A handler may also return `err(typedError)` directly; that value passes through 
 
 ## Error hierarchy
 
-The kit ships two abstract bases plus a small set of concrete library-internal errors, all built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). The abstract bases give the App-Service the discriminators it needs to map errors to HTTP responses without conflating categories; `BaseError<Name>` gives every error timestamps, cause chains, retryable hints, and `toJSON()` for structured logging out of the box. Client-safe, localized messages are a separate boundary concern: project errors through the opt-in `@shirudo/base-error/presentation` subpath.
+The kit ships two abstract bases plus a small set of concrete library-internal errors, all structured errors built on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error). Every kit error carries exactly ONE identifier: a stable SCREAMING_SNAKE `code`, and `error.name === error.code` by design. `category` follows the hierarchy mechanically (`"DOMAIN"`, `"INFRASTRUCTURE"`, or `"WIRING"` for the crash-loud programming-bug family) and `retryable` is a plain boolean field. Timestamps, cause chains, and `toJSON()` come along for structured logging. Client-safe, localized messages are a separate boundary concern: project errors through the opt-in `@shirudo/base-error/public-error` subpath.
 
 ```ts
-import { BaseError } from "@shirudo/base-error";
+abstract class DomainError<Code>         // business-rule violations; category "DOMAIN"
+abstract class InfrastructureError<Code> // persistence + concurrency; category "INFRASTRUCTURE"
 
-abstract class DomainError<Name>         extends BaseError<Name> {}   // business-rule violations
-abstract class InfrastructureError<Name> extends BaseError<Name> {}   // persistence + concurrency
-
-class AggregateNotFoundError    extends InfrastructureError<"AggregateNotFoundError"> {}    // Repository.getByIdOrFail()
-class ConcurrencyConflictError  extends InfrastructureError<"ConcurrencyConflictError"> {}  // Repository.save() on version mismatch; retryable: true
-class DuplicateAggregateError   extends InfrastructureError<"DuplicateAggregateError"> {}   // Repository.save() INSERT hit an existing id; NOT retryable
-class MissingHandlerError       extends BaseError<"MissingHandlerError"> {}                 // programming bug: NOT a DomainError
+class AggregateNotFoundError   // code AGGREGATE_NOT_FOUND;   Repository.getById()
+class ConcurrencyConflictError // code CONCURRENCY_CONFLICT;  Repository.save() on version mismatch; retryable: true
+class DuplicateAggregateError  // code DUPLICATE_AGGREGATE;   Repository.save() INSERT hit an existing id; NOT retryable
+class MissingHandlerError      // code MISSING_HANDLER;       category "WIRING": programming bug, NOT a DomainError
 ```
 
-(The Unit of Work adds `CommitError` / `RollbackError` (also `InfrastructureError` subclasses) and the BaseError-direct programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`, `EventHarvestError`, `UnenrolledChangesError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
+(The Unit of Work adds `CommitError` / `RollbackError` (`InfrastructureError` subclasses, codes `COMMIT_FAILED` / `ROLLBACK_FAILED`) and the `WIRING`-category programming-bug classes `AggregateDeletedError`, `NestedUnitOfWorkError`, `TransactionClosedError`, `EventHarvestError`, `UnenrolledChangesError`; see the [Unit of Work guide](./unit-of-work.md#error-taxonomy).)
 
 | Catch | Map to | Reason |
 |---|---|---|
@@ -87,19 +85,25 @@ Consumers derive their own concrete errors for invariant violations:
 ```ts
 import { DomainError } from "@shirudo/ddd-kit";
 
-class OrderAlreadyConfirmedError extends DomainError {
+class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
   constructor(public readonly orderId: string) {
-    super(`Order ${orderId} is already confirmed`);
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${orderId} is already confirmed`,
+    });
   }
 }
 
-class CreditLimitExceededError extends DomainError {
+class CreditLimitExceededError extends DomainError<"CREDIT_LIMIT_EXCEEDED"> {
   constructor(
     public readonly customerId: string,
     public readonly limit: number,
     public readonly attempted: number,
   ) {
-    super(`Credit limit ${limit} exceeded by customer ${customerId} (attempted ${attempted})`);
+    super({
+      code: "CREDIT_LIMIT_EXCEEDED",
+      message: `Credit limit ${limit} exceeded by customer ${customerId} (attempted ${attempted})`,
+    });
   }
 }
 ```
@@ -140,20 +144,15 @@ try {
 
 Because every library error extends `BaseError<Name>`:
 
-- **`error.toJSON()` / `error.toLogObject()`**: structured **log** entry with name, message, timestamp, stack, cause chain. Log-only: never return it to a client. For client-safe, localized output, project the error through the opt-in `@shirudo/base-error/presentation` subpath (`PublicErrorPresenter`) at the boundary; the technical core carries no user-facing message.
+- **`error.toJSON()` / `error.toLogObject()`**: structured **log** entry with name, message, timestamp, stack, cause chain. Log-only: never return it to a client. For client-safe, localized output, project the error through the opt-in `@shirudo/base-error/public-error` subpath (`the public-error projection pipeline`) at the boundary; the technical core carries no user-facing message.
 - **`error.timestamp` / `error.timestampIso`**: epoch + ISO, useful for sorting / correlating log entries across distributed systems.
-- **`error.name`**: typed literal (`"ConcurrencyConflictError"`, not just `string`), so you get exhaustiveness checking in `switch` on `error.name`.
+- **`error.code`**: typed literal (`"CONCURRENCY_CONFLICT"`, not just `string`), the ONE stable identifier (`error.name === error.code` by design), so you get exhaustiveness checking in a plain `switch` on `error.code`, no base-error import required.
 - **`error.cause` + traversal helpers** (`getRootCause`, `findInCauseChain`, `filterCauseChain`): for wrapping infrastructure errors in domain errors and still finding the root cause for retry decisions.
-- **`isRetryable(error)`**: single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint set `readonly retryable = true as const`.
-- **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it matches ddd-kit errors that extend `BaseError` directly. Prefer this over `isChainRetryable`, which filters strictly on the full `StructuredError` shape (`code` + `category` + `retryable`) and returns `false` for ddd-kit errors. The kit's [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) uses `someChainRetryable` as its default retry classifier.
+- **`isRetryable(error)`**: single-level retry predicate. `ConcurrencyConflictError.retryable === true`; consumer-derived errors that need the same hint pass `retryable: true` in the options-object `super` call.
+- **`someChainRetryable(error)`**: whole-chain retry predicate. Walks the cause chain with the same loose `retryable === true` check as `isRetryable`, so it also matches plain objects and errors from other libraries that only carry the marker. Since v3 kit errors are full `StructuredError`s, so the strict `isChainRetryable` works on them too; `someChainRetryable` stays the more tolerant default. The kit's [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) uses `someChainRetryable` as its default retry classifier.
 
-::: warning Which `@shirudo/base-error` helpers work with ddd-kit errors
-ddd-kit's `DomainError`, `InfrastructureError`, `AggregateNotFoundError`, `ConcurrencyConflictError`, and `DuplicateAggregateError` extend `BaseError<Name>` directly; they do NOT carry `code` and `category` (the kit discriminates by class, Vernon-canonical DDD, not RFC 9457). Helpers that filter on the full `StructuredError` shape return `false` / `undefined` for ddd-kit errors:
-
-- **Works** (loose / class-based): `isBaseError`, `isRetryable`, `someChainRetryable`, `someCauseChain`, `findInCauseChain`, `filterCauseChain`, `everyCauseChain`, `getRootCause`, `instanceof` checks.
-- **Returns false / undefined for ddd-kit errors** (strict `StructuredError` filter): `isStructuredError`, `isRetryableStructuredError`, `isChainRetryable`, `getRootCauseRetryable`, `getFirstRetryableCause`.
-
-If you also throw `StructuredError`-shaped errors from your own code, those keep working with the strict helpers; only the ddd-kit-supplied errors fall through the strict filter.
+::: tip Every `@shirudo/base-error` helper works with ddd-kit errors
+Since v3 every kit error IS a `StructuredError` (`code` + `category` + `retryable`), so both the loose helpers (`isBaseError`, `isRetryable`, `someChainRetryable`, the cause-chain traversals) and the strict ones (`isStructuredError`, `isRetryableStructuredError`, `isChainRetryable`, `getRootCauseRetryable`, `getFirstRetryableCause`) and exhaustive `matchError` on the codes all see them. None of this is required: a plain `switch (error.code)` and the kit-exported `instanceof` bases cover the same ground without importing base-error.
 :::
 
 ## What `Result` is (and isn't)
@@ -219,16 +218,21 @@ This is where the kit's error model has **two deliberate styles**, and the rule 
 
 ### Rendering RFC 9457 at the boundary
 
-`@shirudo/base-error` is **safe by default**: a `ValidationError` does not expose its issues on its own; they only cross to a client through the `publicIssues()` whitelist. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free. It returns base-error's own `ProblemDetails` type (from `@shirudo/base-error/problem-details`), so the RFC 9457 shape stays a single source of truth:
+`@shirudo/base-error` is **safe by default**: a `ValidationError` does not expose its issues on its own; they only cross to a client through the `publicIssues()` whitelist. The opt-in `@shirudo/ddd-kit/http` entry point wires that projection for you (and defaults to `422` / `"Validation Failed"`), so the core kit stays transport-free. It returns base-error's own `ProblemDetails` type (from `@shirudo/base-error/public-error`), so the RFC 9457 shape stays a single source of truth:
 
 ```ts
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
 
 if (result.isErr()) {
-  return Response.json(toProblemDetails(result.error), { status: 422 });
+  const problem = toProblemDetails(result.error);
+  return Response.json(problem.body, {
+    status: problem.status,
+    headers: problem.headers,
+  });
 }
-// → { type: "about:blank", title: "Validation Failed", status: 422,
-//     errors: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] }
+// body → { type: "about:blank", title: "Validation Failed", status: 422,
+//          code: "VALIDATION_FAILED",
+//          details: { issues: [{ message: "must be a valid email", path: ["email"], pointer: "email" }] } }
 ```
 
-For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a `PublicErrorView`), reach for base-error's `defineProblemDetailsAdapter` directly; `toProblemDetails` is the narrow validation shortcut.
+For the general error-to-Problem-Details mapping (a public-code catalog with per-code `type` / `status` over a projected `PublicError`), reach for base-error's `toProblem` directly; `toProblemDetails` is the narrow validation shortcut.

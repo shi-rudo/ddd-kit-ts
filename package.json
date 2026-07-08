@@ -22,6 +22,10 @@
 			"types": "./dist/http.d.ts",
 			"import": "./dist/http.js"
 		},
+		"./money": {
+			"types": "./dist/money.d.ts",
+			"import": "./dist/money.js"
+		},
 		"./presentation": {
 			"types": "./dist/presentation.d.ts",
 			"import": "./dist/presentation.js"
@@ -72,7 +76,7 @@
 		"typescript": "^5.9.2",
 		"vitepress": "^1.6.4",
 		"vitepress-plugin-llms": "^1.13.0",
-		"vitest": "^3.2.4"
+		"vitest": "^3.2.6"
 	},
 	"private": false,
 	"author": "Shirudo",

@@ -3,6 +3,7 @@
 // domain results to HTTP responses.
 export {
 	toProblemDetails,
-	type ValidationProblemMember,
+	type ValidationProblemDetails,
 	type ValidationProblemOptions,
+	type ValidationProblemResult,
 } from "./http/problem-details";

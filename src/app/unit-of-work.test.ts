@@ -129,8 +129,12 @@ function createUow(overrides?: {
 }
 
 /** Harvested events are stamped with the aggregate's commit version. */
-function stamped(event: TestEvent, aggregateVersion = 1): TestEvent {
-	return { ...event, aggregateVersion };
+function stamped(
+	event: TestEvent,
+	aggregateVersion = 1,
+	commitSequence = 0,
+): TestEvent {
+	return { ...event, aggregateVersion, commitSequence };
 }
 
 describe("UnitOfWork", () => {
@@ -625,7 +629,7 @@ describe("UnitOfWork", () => {
 				private readonly session: UnitOfWorkSession<TestEvent>,
 			) {}
 
-			async getById(id: TestId): Promise<OrderAggregate | null> {
+			async findById(id: TestId): Promise<OrderAggregate | null> {
 				const cached = this.session.identityMap.get(OrderAggregate, id);
 				if (cached) return cached;
 				// Deleted in this unit of work = uniformly not-found, even
@@ -672,14 +676,14 @@ describe("UnitOfWork", () => {
 			return { uow, outbox, repos };
 		}
 
-		it("two getById calls return the SAME instance with one hydration; saving via both refs marks persisted once", async () => {
+		it("two findById calls return the SAME instance with one hydration; saving via both refs marks persisted once", async () => {
 			const event = testEvent("o-1");
 			const rows = new Map([["o-1", [event]]]);
 			const { uow, outbox, repos } = createCachingUow(rows);
 
 			await uow.run(async ({ repositories }) => {
-				const a = await repositories.orders.getById("o-1" as TestId);
-				const b = await repositories.orders.getById("o-1" as TestId);
+				const a = await repositories.orders.findById("o-1" as TestId);
+				const b = await repositories.orders.findById("o-1" as TestId);
 
 				expect(a).not.toBeNull();
 				expect(b).toBe(a);
@@ -715,7 +719,7 @@ describe("UnitOfWork", () => {
 			>;
 
 			await uow.run(async ({ repositories, session }) => {
-				await repositories.orders.getById("o-1" as TestId);
+				await repositories.orders.findById("o-1" as TestId);
 				leakedMap = session.identityMap; // captured while open
 				expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(true);
 				return undefined;
@@ -724,7 +728,7 @@ describe("UnitOfWork", () => {
 			expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(false);
 		});
 
-		it("after delete, getById reads uniformly as null - even when the physical delete is deferred", async () => {
+		it("after delete, findById reads uniformly as null, even when the physical delete is deferred", async () => {
 			const event = testEvent("o-1");
 			// The row store deliberately keeps the row: simulates a repo
 			// whose physical delete is deferred within the transaction.
@@ -732,13 +736,13 @@ describe("UnitOfWork", () => {
 			const { uow } = createCachingUow(rows);
 
 			const probe = await uow.run(async ({ repositories }) => {
-				const order = await repositories.orders.getById("o-1" as TestId);
+				const order = await repositories.orders.findById("o-1" as TestId);
 				await repositories.orders.delete(order as OrderAggregate);
 
 				// Row still visible in the tx; the isDeleted check makes a
 				// read-only probe behave like not-found instead of crashing
 				// at registration.
-				return repositories.orders.getById("o-1" as TestId);
+				return repositories.orders.findById("o-1" as TestId);
 			});
 
 			expect(probe).toBeNull();
@@ -750,7 +754,7 @@ describe("UnitOfWork", () => {
 
 			await expect(
 				uow.run(async ({ repositories }) => {
-					const order = await repositories.orders.getById("o-1" as TestId);
+					const order = await repositories.orders.findById("o-1" as TestId);
 					await repositories.orders.delete(order as OrderAggregate);
 
 					// A DIFFERENT instance with the same logical identity, e.g.
@@ -771,7 +775,7 @@ describe("UnitOfWork", () => {
 			let deletedOrder!: OrderAggregate;
 
 			await uow.run(async ({ repositories }) => {
-				deletedOrder = (await repositories.orders.getById(
+				deletedOrder = (await repositories.orders.findById(
 					"o-1" as TestId,
 				)) as OrderAggregate;
 				await repositories.orders.delete(deletedOrder);
@@ -1129,7 +1133,7 @@ describe("UnitOfWork", () => {
 
 	describe("enrollment guard: events recorded after load but never enrolled", () => {
 		// A dummy class token to register instances under, simulating a
-		// repository's getById path (identityMap.set after hydration).
+		// repository's findById path (identityMap.set after hydration).
 		class MockOrder {}
 
 		/** A loadable aggregate with a directly-pushable pending list. */
@@ -1160,7 +1164,7 @@ describe("UnitOfWork", () => {
 
 			const rejection = await uow
 				.run(async ({ session }) => {
-					session.identityMap.set(MockOrder, agg.id, agg); // getById
+					session.identityMap.set(MockOrder, agg.id, agg); // findById
 					agg.record(testEvent("o-1")); // a domain method records an event
 					// ...but the repo's save (and thus enrollSaved) is never called
 					return undefined;

@@ -27,7 +27,10 @@ let currentClockFactory: ClockFactory = defaultClockFactory;
  * covers every timestamp the kit stamps.
  */
 export function now(): Date {
-	return currentClockFactory();
+	// Defensive copy at the single source: a factory returning a SHARED
+	// Date (the withClockFactory(() => fixed, ...) pattern above) must
+	// not be frozen by event creation nor aliased into snapshots.
+	return new Date(currentClockFactory().getTime());
 }
 
 /**
