@@ -108,7 +108,7 @@ type Queries = {
 };
 
 const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => {
-  return await orderRepository.getById(q.orderId as OrderId);
+  return await orderRepository.findById(q.orderId as OrderId);
 };
 
 const queryBus = new QueryBus<Queries>();
@@ -133,7 +133,7 @@ import { withCommit } from "@shirudo/ddd-kit";
 const result = await withCommit(
   { outbox, bus, scope },
   async () => {
-    const order = await repo.getByIdOrFail(orderId);
+    const order = await repo.getById(orderId);
     order.confirm();
     await repo.save(order);
     return { result: order.id, aggregates: [order] };

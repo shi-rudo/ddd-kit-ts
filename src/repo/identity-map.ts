@@ -26,7 +26,7 @@ export type AggregateClass<TAgg> =
  *
  * This is the shipped implementation of the contract the
  * [Repository guide](../../docs/guide/repository.md) places on
- * `IRepository` implementations: two `getById(id)` calls in the same
+ * `IRepository` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because `withCommit`'s
  * aggregate dedupe (and therefore exactly-once event harvest and
  * `markPersisted`) is keyed on JavaScript object identity.
@@ -38,7 +38,7 @@ export type AggregateClass<TAgg> =
  * Repository read-path contract:
  *
  * ```ts
- * async getById(id: OrderId): Promise<Order | null> {
+ * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   // Deleted in this unit of work = gone, even if the physical

@@ -60,7 +60,7 @@ The kit ships two abstract bases plus a small set of concrete library-internal e
 abstract class DomainError<Code>         // business-rule violations; category "DOMAIN"
 abstract class InfrastructureError<Code> // persistence + concurrency; category "INFRASTRUCTURE"
 
-class AggregateNotFoundError   // code AGGREGATE_NOT_FOUND;   Repository.getByIdOrFail()
+class AggregateNotFoundError   // code AGGREGATE_NOT_FOUND;   Repository.getById()
 class ConcurrencyConflictError // code CONCURRENCY_CONFLICT;  Repository.save() on version mismatch; retryable: true
 class DuplicateAggregateError  // code DUPLICATE_AGGREGATE;   Repository.save() INSERT hit an existing id; NOT retryable
 class MissingHandlerError      // code MISSING_HANDLER;       category "WIRING": programming bug, NOT a DomainError

@@ -52,14 +52,14 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
  * vs broken replay read).
  */
 export async function loadAggregateOrFail<TAgg, TId>(
-	repository: { getById(id: TId): Promise<TAgg | null> },
+	repository: { findById(id: TId): Promise<TAgg | null> },
 	id: TId,
 	suspectHint: string,
 ): Promise<TAgg> {
-	const loaded = await repository.getById(id);
+	const loaded = await repository.findById(id);
 	assert(
 		loaded !== null,
-		`getById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
+		`findById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
 	);
 	return loaded;
 }

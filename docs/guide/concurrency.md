@@ -43,7 +43,7 @@ Each operation gets its own aggregate instance. Load → Mutate → Save → Dis
 
 ```ts
 async function updateQuantity(orderId: OrderId, itemId: ItemId, quantity: number) {
-  const order = await orderRepository.getByIdOrFail(orderId); // fresh load
+  const order = await orderRepository.getById(orderId); // fresh load
   order.updateItemQuantity(itemId, quantity);
   await orderRepository.save(order);                          // save, throws on conflict
 }

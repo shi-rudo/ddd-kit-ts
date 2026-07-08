@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking): repository load methods follow the get/find contract
+
+- `IRepository` / `IUnitOfWorkRepository`: `getById` is renamed to
+  `findById` (unchanged semantics: returns the aggregate or `null`), and
+  `getByIdOrFail` is renamed to `getById` (unchanged semantics: returns the
+  aggregate or throws `AggregateNotFoundError`). The names now carry the
+  contract: `find*` makes absence explicit in the signature, `get*` never
+  returns `null`. Migration warning: the type system does NOT catch a missed
+  old `getById` call site. A null check against the new non-nullable `getById`
+  compiles cleanly; the null branch is silently dead and a missing aggregate
+  now throws `AggregateNotFoundError` instead of returning `null`. Migrate
+  mechanically in three steps so no site is missed: rename `getByIdOrFail` to
+  a placeholder, rename every `getById` to `findById`, rename the placeholder
+  to `getById`. A plain two-step rename leaves old `getById` call sites
+  compiling against the new throwing method.
+
 ## [3.0.0] - 2026-07-05
 
 v3 is a deliberately small "tightening" major: every breaking change

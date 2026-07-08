@@ -28,10 +28,10 @@ function inMemoryRepo<
 >(name: string): IRepository<TAgg, TId> {
 	const store = new Map<TId, TAgg>();
 	return {
-		async getById(id) {
+		async findById(id) {
 			return store.get(id) ?? null;
 		},
-		async getByIdOrFail(id) {
+		async getById(id) {
 			const a = store.get(id);
 			if (!a) throw new AggregateNotFoundError({ aggregateType: name, id });
 			return a;
@@ -144,7 +144,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		cmd,
 	) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
-			const order = await deps.orderRepository.getByIdOrFail(cmd.orderId);
+			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.confirm();
 			await deps.orderRepository.save(order);
 			return { result: ok(undefined as void), aggregates: [order] };
@@ -152,7 +152,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 
 	const cancelOrder: CommandHandler<CancelOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
-			const order = await deps.orderRepository.getByIdOrFail(cmd.orderId);
+			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.cancel(cmd.reason);
 			await deps.orderRepository.save(order);
 			return { result: ok(undefined as void), aggregates: [order] };
@@ -162,7 +162,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		cmd,
 	) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
-			const payment = await deps.paymentRepository.getByIdOrFail(cmd.paymentId);
+			const payment = await deps.paymentRepository.getById(cmd.paymentId);
 			payment.refund();
 			await deps.paymentRepository.save(payment);
 			return { result: ok(undefined as void), aggregates: [payment] };
@@ -204,13 +204,13 @@ function wireSaga(deps: AppDeps, paymentIdGen: () => PaymentId, shipmentIdGen: (
 	});
 
 	eventBus.subscribe("PaymentRequested", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.recordPaymentRequested(event.aggregateId as PaymentId);
 		await sagaRepository.save(saga);
 	});
 
 	eventBus.subscribe("PaymentReceived", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.advanceToShipping();
 		await sagaRepository.save(saga);
 		await commandBus.execute({
@@ -221,7 +221,7 @@ function wireSaga(deps: AppDeps, paymentIdGen: () => PaymentId, shipmentIdGen: (
 	});
 
 	eventBus.subscribe("PaymentFailed", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.cancelOnPaymentFailure();
 		await sagaRepository.save(saga);
 		await commandBus.execute({
@@ -232,13 +232,13 @@ function wireSaga(deps: AppDeps, paymentIdGen: () => PaymentId, shipmentIdGen: (
 	});
 
 	eventBus.subscribe("ShippingRequested", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.recordShippingRequested(event.aggregateId as ShipmentId);
 		await sagaRepository.save(saga);
 	});
 
 	eventBus.subscribe("ShippingCompleted", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.complete();
 		await sagaRepository.save(saga);
 		await commandBus.execute({
@@ -248,7 +248,7 @@ function wireSaga(deps: AppDeps, paymentIdGen: () => PaymentId, shipmentIdGen: (
 	});
 
 	eventBus.subscribe("ShippingFailed", async (event) => {
-		const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.cancelOnShippingFailure();
 		await sagaRepository.save(saga);
 		// Compensating sequence: refund payment first, then cancel order.
@@ -277,7 +277,7 @@ async function simulatePaymentResult(
 ): Promise<void> {
 	const { outbox, eventBus, scope, paymentRepository } = deps;
 	await withCommit({ outbox, bus: eventBus, scope }, async () => {
-		const payment = await paymentRepository.getByIdOrFail(paymentId);
+		const payment = await paymentRepository.getById(paymentId);
 		if (outcome.kind === "received") payment.receive();
 		else payment.fail(outcome.reason);
 		await paymentRepository.save(payment);
@@ -294,7 +294,7 @@ async function simulateShippingResult(
 ): Promise<void> {
 	const { outbox, eventBus, scope, shipmentRepository } = deps;
 	await withCommit({ outbox, bus: eventBus, scope }, async () => {
-		const shipment = await shipmentRepository.getByIdOrFail(shipmentId);
+		const shipment = await shipmentRepository.getById(shipmentId);
 		if (outcome.kind === "completed") shipment.complete(outcome.trackingId);
 		else shipment.fail(outcome.reason);
 		await shipmentRepository.save(shipment);
@@ -357,24 +357,24 @@ describe("Checkout saga (Process Manager)", () => {
 
 		// At this point the saga has dispatched RequestPayment and the
 		// Payment aggregate has been created with status "requested".
-		const saga = await deps.sagaRepository.getByIdOrFail(orderId);
+		const saga = await deps.sagaRepository.getById(orderId);
 		expect(saga.state.step).toBe("awaiting-payment");
 		const paymentId = saga.state.paymentId!;
 		expect(paymentId).toBeDefined();
 
-		const payment = await deps.paymentRepository.getByIdOrFail(paymentId);
+		const payment = await deps.paymentRepository.getById(paymentId);
 		expect(payment.state.status).toBe("requested");
 
 		// 2. Payment gateway calls back successfully
 		await simulatePaymentResult(deps, paymentId, { kind: "received" });
 
 		// Saga transitions to awaiting-shipping; RequestShipping dispatched.
-		const sagaAfterPayment = await deps.sagaRepository.getByIdOrFail(orderId);
+		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
 		expect(sagaAfterPayment.state.step).toBe("awaiting-shipping");
 		const shipmentId = sagaAfterPayment.state.shipmentId!;
 		expect(shipmentId).toBeDefined();
 
-		const shipment = await deps.shipmentRepository.getByIdOrFail(shipmentId);
+		const shipment = await deps.shipmentRepository.getById(shipmentId);
 		expect(shipment.state.status).toBe("requested");
 
 		// 3. Shipping carrier reports completion
@@ -384,14 +384,14 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		// Final state: saga completed, order confirmed.
-		const finalSaga = await deps.sagaRepository.getByIdOrFail(orderId);
+		const finalSaga = await deps.sagaRepository.getById(orderId);
 		expect(finalSaga.state.step).toBe("completed");
 
-		const finalOrder = await deps.orderRepository.getByIdOrFail(orderId);
+		const finalOrder = await deps.orderRepository.getById(orderId);
 		expect(finalOrder.state.status).toBe("confirmed");
 
 		const finalShipment =
-			await deps.shipmentRepository.getByIdOrFail(shipmentId);
+			await deps.shipmentRepository.getById(shipmentId);
 		expect(finalShipment.state.status).toBe("shipped");
 		expect(finalShipment.state.trackingId).toBe("TRACK-001");
 	});
@@ -407,7 +407,7 @@ describe("Checkout saga (Process Manager)", () => {
 			totalCents: 5000,
 		});
 
-		const saga = await deps.sagaRepository.getByIdOrFail(orderId);
+		const saga = await deps.sagaRepository.getById(orderId);
 		const paymentId = saga.state.paymentId!;
 
 		// Payment gateway rejects the charge
@@ -417,16 +417,16 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		// Compensation: saga cancelled, order cancelled, no shipment touched.
-		const finalSaga = await deps.sagaRepository.getByIdOrFail(orderId);
+		const finalSaga = await deps.sagaRepository.getById(orderId);
 		expect(finalSaga.state.step).toBe("cancelled-payment-failed");
 		expect(finalSaga.state.shipmentId).toBeUndefined();
 
-		const finalOrder = await deps.orderRepository.getByIdOrFail(orderId);
+		const finalOrder = await deps.orderRepository.getById(orderId);
 		expect(finalOrder.state.status).toBe("cancelled");
 		expect(finalOrder.state.cancelReason).toContain("payment-failed");
 		expect(finalOrder.state.cancelReason).toContain("insufficient-funds");
 
-		const finalPayment = await deps.paymentRepository.getByIdOrFail(paymentId);
+		const finalPayment = await deps.paymentRepository.getById(paymentId);
 		expect(finalPayment.state.status).toBe("failed");
 	});
 
@@ -441,13 +441,13 @@ describe("Checkout saga (Process Manager)", () => {
 			totalCents: 7500,
 		});
 
-		const sagaAfterPlace = await deps.sagaRepository.getByIdOrFail(orderId);
+		const sagaAfterPlace = await deps.sagaRepository.getById(orderId);
 		const paymentId = sagaAfterPlace.state.paymentId!;
 
 		// Payment succeeds
 		await simulatePaymentResult(deps, paymentId, { kind: "received" });
 
-		const sagaAfterPayment = await deps.sagaRepository.getByIdOrFail(orderId);
+		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
 		const shipmentId = sagaAfterPayment.state.shipmentId!;
 
 		// Shipping carrier reports failure (warehouse on fire, etc.)
@@ -457,19 +457,19 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		// Compensation sequence: payment refunded, then order cancelled.
-		const finalSaga = await deps.sagaRepository.getByIdOrFail(orderId);
+		const finalSaga = await deps.sagaRepository.getById(orderId);
 		expect(finalSaga.state.step).toBe("cancelled-shipping-failed");
 
-		const finalPayment = await deps.paymentRepository.getByIdOrFail(paymentId);
+		const finalPayment = await deps.paymentRepository.getById(paymentId);
 		expect(finalPayment.state.status).toBe("refunded");
 
-		const finalOrder = await deps.orderRepository.getByIdOrFail(orderId);
+		const finalOrder = await deps.orderRepository.getById(orderId);
 		expect(finalOrder.state.status).toBe("cancelled");
 		expect(finalOrder.state.cancelReason).toContain("shipping-failed");
 		expect(finalOrder.state.cancelReason).toContain("warehouse-unavailable");
 
 		const finalShipment =
-			await deps.shipmentRepository.getByIdOrFail(shipmentId);
+			await deps.shipmentRepository.getById(shipmentId);
 		expect(finalShipment.state.status).toBe("failed");
 	});
 });

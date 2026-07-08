@@ -16,7 +16,7 @@ import {
 /**
  * The repository surface the contract suite exercises: the minimal
  * structural subset of the canonical `IUnitOfWorkRepository` (exported
- * from the main entry) that the tests need. `getById` is typed over
+ * from the main entry) that the tests need. `findById` is typed over
  * the aggregate's own branded id (`TAgg["id"]`), so concrete adapters,
  * including arrow-function-property style repositories, which are
  * checked contravariantly, match without casts.
@@ -24,7 +24,7 @@ import {
 export interface ContractRepository<
 	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 > {
-	getById(id: TAgg["id"]): Promise<TAgg | null>;
+	findById(id: TAgg["id"]): Promise<TAgg | null>;
 	save(aggregate: TAgg): Promise<void>;
 	delete(aggregate: TAgg): Promise<void>;
 }
@@ -238,7 +238,7 @@ export interface RepositoryContractTest {
  * ```
  *
  * **`env.run` must provide unit-of-work semantics.** Three core tests
- * (identity-map sameness, getById-null-after-delete, deletion
+ * (identity-map sameness, findById-null-after-delete, deletion
  * finality) exercise the session machinery: `session.identityMap`,
  * the `isDeleted` probe, the deleted-gate. Wiring `run` through the
  * kit's `UnitOfWork` gives you all of it; a hand-rolled `withCommit`
@@ -526,14 +526,14 @@ export function createRepositoryContractTests<
 				}),
 		},
 		{
-			name: "identity map: two getById calls in one unit of work return the same instance",
+			name: "identity map: two findById calls in one unit of work return the same instance",
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
 
 					await env.run(async ({ repository }) => {
-						const first = await repository.getById(seeded.id);
-						const second = await repository.getById(seeded.id);
+						const first = await repository.findById(seeded.id);
+						const second = await repository.findById(seeded.id);
 						assert(
 							first !== null && first === second,
 							"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
@@ -542,7 +542,7 @@ export function createRepositoryContractTests<
 				}),
 		},
 		{
-			name: "delete: getById returns null in the same unit of work and after the commit",
+			name: "delete: findById returns null in the same unit of work and after the commit",
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
@@ -550,15 +550,15 @@ export function createRepositoryContractTests<
 					await env.run(async ({ repository }) => {
 						const loaded = await loadOrFail(repository, seeded.id);
 						await repository.delete(loaded);
-						const probe = await repository.getById(seeded.id);
+						const probe = await repository.findById(seeded.id);
 						assert(
 							probe === null,
-							"after delete, getById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
+							"after delete, findById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
 						);
 					});
 
 					await env.run(async ({ repository }) => {
-						const probe = await repository.getById(seeded.id);
+						const probe = await repository.findById(seeded.id);
 						assert(
 							probe === null,
 							"after the deleting unit of work committed, the aggregate must be gone",
@@ -848,7 +848,7 @@ export function createRepositoryContractTests<
 							// A's write survived - load nullable on purpose: the
 							// rejected delete must not have destroyed the row.
 							const final = await env.run(({ repository }) =>
-								repository.getById(seeded.id),
+								repository.findById(seeded.id),
 							);
 							assert(
 								final !== null,

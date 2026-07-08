@@ -117,7 +117,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 		protected readonly session: UnitOfWorkSession<OrderEvent>,
 	) {}
 
-	async getById(id: OrderId): Promise<ContractOrder | null> {
+	async findById(id: OrderId): Promise<ContractOrder | null> {
 		const cached = this.session.identityMap.get(ContractOrder, id);
 		if (cached) return cached;
 		if (this.session.identityMap.isDeleted(ContractOrder, id)) return null;

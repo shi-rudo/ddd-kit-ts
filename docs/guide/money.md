@@ -436,7 +436,7 @@ rounding policy is explicit and reviewable.
 
 ```ts
 interface InvoiceRepository {
-  getByIdOrFail(id: InvoiceId): Promise<Invoice>;
+  getById(id: InvoiceId): Promise<Invoice>;
   save(invoice: Invoice): Promise<void>;
 }
 ```
@@ -460,7 +460,7 @@ function moneyFromColumns(
 class PgInvoiceRepository implements InvoiceRepository {
   constructor(private readonly tx: PgTx) {}
 
-  async getByIdOrFail(id: InvoiceId): Promise<Invoice> {
+  async getById(id: InvoiceId): Promise<Invoice> {
     // not-found mapping to AggregateNotFoundError elided
     const row = await this.tx.one("select * from invoice where id = $1", [id]);
     const lines = await this.tx.many(
@@ -531,7 +531,7 @@ app.post("/invoices/:id/lines", async (req, res) => {
 
   const total = await withCommit({ scope, outbox, bus }, async (tx) => {
     const invoices = new PgInvoiceRepository(tx);
-    const invoice = await invoices.getByIdOrFail(asInvoiceId(req.params.id));
+    const invoice = await invoices.getById(asInvoiceId(req.params.id));
     invoice.addLine(String(req.body.sku), amount);
     await invoices.save(invoice);
     return { result: invoice.total, aggregates: [invoice] };

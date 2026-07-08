@@ -23,7 +23,7 @@
  *
  * // Handler typed with QueryHandler for type safety
  * const handler: QueryHandler<GetOrderQuery, Order | null> = async (query) => {
- *   return await repository.getById(query.orderId);
+ *   return await repository.findById(query.orderId);
  * };
  *
  * // Can be used with any external framework
@@ -53,7 +53,7 @@ export interface Query {
  * @example
  * ```typescript
  * const handler: QueryHandler<GetOrderQuery, Order | null> = async (query) => {
- *   return await repository.getById(query.orderId);
+ *   return await repository.findById(query.orderId);
  * };
  * ```
  *
@@ -61,7 +61,7 @@ export interface Query {
  * ```typescript
  * // Handler typed with QueryHandler for type safety
  * const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (query) => {
- *   return await repository.getById(query.orderId);
+ *   return await repository.findById(query.orderId);
  * };
  *
  * // Can be used with any external bus/framework

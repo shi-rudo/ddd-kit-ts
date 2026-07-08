@@ -22,8 +22,8 @@ export interface IUnitOfWorkRepository<
 	TId extends Id<string>,
 	Evt extends AnyDomainEvent = AnyDomainEvent,
 > {
-	getById(id: TId): Promise<TAgg | null>;
-	getByIdOrFail(id: TId): Promise<TAgg>;
+	findById(id: TId): Promise<TAgg | null>;
+	getById(id: TId): Promise<TAgg>;
 	save(aggregate: TAgg): Promise<void>;
 	delete(aggregate: TAgg): Promise<void>;
 }
@@ -55,18 +55,18 @@ export interface IRepository<
 	/**
 	 * Loads an aggregate by id. Returns `null` when not found.
 	 */
-	getById(id: TId): Promise<TAgg | null>;
+	findById(id: TId): Promise<TAgg | null>;
 
 	/**
 	 * Loads an aggregate by id and throws `AggregateNotFoundError` when not
 	 * found. Use this when "not found" is a programming/contract error in
-	 * the calling Use Case; use `getById` when null is a valid outcome.
+	 * the calling Use Case; use `findById` when null is a valid outcome.
 	 */
-	getByIdOrFail(id: TId): Promise<TAgg>;
+	getById(id: TId): Promise<TAgg>;
 
 	/**
 	 * Returns whether an aggregate with the given id exists. Cheaper than
-	 * `getById !== null` if your storage supports `EXISTS`-style queries.
+	 * `findById !== null` if your storage supports `EXISTS`-style queries.
 	 */
 	exists(id: TId): Promise<boolean>;
 

@@ -23,7 +23,7 @@ import {
 export interface EsContractRepository<
 	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 > {
-	getById(id: TAgg["id"]): Promise<TAgg | null>;
+	findById(id: TAgg["id"]): Promise<TAgg | null>;
 	save(aggregate: TAgg): Promise<void>;
 }
 
@@ -356,28 +356,28 @@ export function createEsRepositoryContractTests<
 				}),
 		},
 		{
-			name: "getById returns null for a stream that does not exist",
+			name: "findById returns null for a stream that does not exist",
 			run: () =>
 				withEnvironment(async (env) => {
 					const never = harness.createAggregate();
 					const probe = await env.run(({ repository }) =>
-						repository.getById(never.id),
+						repository.findById(never.id),
 					);
 					assert(
 						probe === null,
-						"getById of a never-persisted id must return null (empty stream = no aggregate)",
+						"findById of a never-persisted id must return null (empty stream = no aggregate)",
 					);
 				}),
 		},
 		{
-			name: "identity map: two getById calls in one unit of work return the same instance",
+			name: "identity map: two findById calls in one unit of work return the same instance",
 			run: () =>
 				withEnvironment(async (env) => {
 					const seeded = await seed(env);
 
 					await env.run(async ({ repository }) => {
-						const first = await repository.getById(seeded.id);
-						const second = await repository.getById(seeded.id);
+						const first = await repository.findById(seeded.id);
+						const second = await repository.findById(seeded.id);
 						assert(
 							first !== null && first === second,
 							"repeated loads within one unit of work must return the SAME instance (identity map); distinct instances double-harvest events",

@@ -50,7 +50,7 @@ The whole right column is **eventually consistent** with the left. Sub-second la
 
 You don't always. Rules of thumb:
 
-- **Small app, no scale problems**: skip projections. A `QueryHandler` that calls `orderRepository.getById(id)` and returns the aggregate is fine. The pieces in this guide are dormant until you need them.
+- **Small app, no scale problems**: skip projections. A `QueryHandler` that calls `orderRepository.findById(id)` and returns the aggregate is fine. The pieces in this guide are dormant until you need them.
 - **The read query needs fields from multiple aggregates**: projections start paying for themselves. Loading three aggregates per request to derive one view is the wrong shape.
 - **You need to scale reads independently from writes**: projections are the canonical answer.
 - **Read patterns differ from write patterns** (search, full-text, aggregations, list views): yes.
@@ -266,7 +266,7 @@ Contrast with the typical write-side handler shown in [CQRS & Buses](./cqrs-and-
 ```ts
 // Loads the aggregate. Fine for "GetOrder by id"; awful for "GetOrderList".
 const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => {
-  return await orderRepository.getById(q.orderId as OrderId);
+  return await orderRepository.findById(q.orderId as OrderId);
 };
 ```
 

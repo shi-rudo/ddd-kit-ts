@@ -67,7 +67,7 @@ Broken in any flow where a fresh aggregate is mutated before its first save (fac
 
 Use `aggregate.persistedVersion === undefined` for the INSERT marker: that field tracks the DB state, not in-memory mutations. The OCC predicate's `WHERE version = ?` also uses `persistedVersion` (the load-time / last-save baseline), not `aggregate.version`. Reconstitute factories use `order.markRestored(version)`, not `order.setVersion(version)`. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 
-### Repository that returns a fresh aggregate instance for every `getById(id)` call within one `withCommit`
+### Repository that returns a fresh aggregate instance for every `findById(id)` call within one `withCommit`
 
 Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same logical id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work: the [`UnitOfWork` facade ships one as `session.identityMap`](./unit-of-work.md#identity-map), with a deletion-tombstone guard hand-rolled maps usually lack; hand-rolling remains for `withCommit`-only setups. See [Repository](./repository.md).
 
@@ -85,7 +85,7 @@ See [Domain Events → Factory bootstrap](./domain-events.md).
 
 ### Storing aggregate instances at module top level on Cloudflare Workers / Vercel Edge
 
-Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.getById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
+Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.findById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
 
 ### Assuming the strict base-error helpers cannot see ddd-kit errors
 

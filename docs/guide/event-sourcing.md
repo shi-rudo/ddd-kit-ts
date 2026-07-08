@@ -262,7 +262,7 @@ async function snapshotSweep(): Promise<void> {
     LIMIT 1000
   `);
   for (const { aggregate_id, last_snapshot_version } of candidates) {
-    const order = await orderRepository.getByIdOrFail(aggregate_id);
+    const order = await orderRepository.getById(aggregate_id);
     await snapshotStore.save(aggregate_id, order.createSnapshot());
   }
 }

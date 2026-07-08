@@ -169,7 +169,7 @@ export interface IQueryBus<
  *
  * // Without type map – same as before
  * const bus = new QueryBus();
- * bus.register("GetOrder", async (query) => repository.getById(query.orderId));
+ * bus.register("GetOrder", async (query) => repository.findById(query.orderId));
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * ```
  */

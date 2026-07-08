@@ -63,7 +63,7 @@ type TrackedRecord<Evt extends AnyDomainEvent> = {
  *
  * await withCommit({ scope, outbox, bus }, async (tx) => {
  *   const orderRepository = makeOrderRepository(tx);
- *   const order = await orderRepository.getByIdOrFail(id);
+ *   const order = await orderRepository.getById(id);
  *   order.confirm();
  *   await orderRepository.save(order);
  *   return { result: order.id, aggregates: [order] };

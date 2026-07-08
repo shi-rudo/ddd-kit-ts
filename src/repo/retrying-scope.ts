@@ -111,7 +111,7 @@ function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * **Retries the transaction only.** Each attempt re-invokes the inner
  * `transactional` with a fresh transaction, so the work callback must be
- * reload-safe (load aggregates via `getById` inside it, never capture an
+ * reload-safe (load aggregates via `findById` inside it, never capture an
  * aggregate from a previous attempt) and free of non-transactional side
  * effects before commit. `withCommit` publishes AFTER the commit, so the
  * in-process publish is outside the retried region and never duplicated;

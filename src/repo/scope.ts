@@ -56,7 +56,7 @@ export interface TransactionalOptions {
  *   // Construct tx-bound repos from ctx (your factory / DI of choice)
  *   const orderRepository = makeOrderRepository(tx);
  *
- *   const order = await orderRepository.getByIdOrFail(orderId);
+ *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await orderRepository.save(order);
  * });

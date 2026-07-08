@@ -118,7 +118,7 @@ class InMemoryEsOrderRepository
 		protected readonly session: UnitOfWorkSession<EsOrderEvent>,
 	) {}
 
-	async getById(id: EsOrderId): Promise<ContractEsOrder | null> {
+	async findById(id: EsOrderId): Promise<ContractEsOrder | null> {
 		const cached = this.session.identityMap.get(ContractEsOrder, id);
 		if (cached) return cached;
 		if (this.session.identityMap.isDeleted(ContractEsOrder, id)) return null;
@@ -283,7 +283,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 
 	it("the suite EXPOSES a wrong fold order: a reversed read fails the replay-equality test", async () => {
 		class ReversedReadRepository extends InMemoryEsOrderRepository {
-			override async getById(id: EsOrderId): Promise<ContractEsOrder | null> {
+			override async findById(id: EsOrderId): Promise<ContractEsOrder | null> {
 				const cached = this.session.identityMap.get(ContractEsOrder, id);
 				if (cached) return cached;
 				const history = this.db.streams.get(id);

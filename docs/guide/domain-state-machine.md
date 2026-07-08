@@ -419,7 +419,7 @@ type CheckoutRow = {
   lifecycle: DomainMachineSnapshot<CheckoutState, CheckoutContext>;
 };
 
-const row = await checkoutRepository.getByIdOrFail("checkout-1");
+const row = await checkoutRepository.getById("checkout-1");
 const machine = new DomainStateMachine(checkoutLifecycle, row.lifecycle);
 
 const result = machine.dispatch({

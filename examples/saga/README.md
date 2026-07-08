@@ -77,7 +77,7 @@ Either way the core principle holds: Process Managers turn events into commands.
 
 ```ts
 eventBus.subscribe("PaymentReceived", async (event) => {
-  const saga = await sagaRepository.getByIdOrFail(event.payload.orderId);
+  const saga = await sagaRepository.getById(event.payload.orderId);
   saga.advanceToShipping();
   await sagaRepository.save(saga);
   await commandBus.execute({

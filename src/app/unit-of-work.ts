@@ -146,7 +146,7 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  * tests pin it once.
  *
  * Contract for repository implementations:
- * - `getById(id)` checks `identityMap.get` BEFORE hydrating, treats
+ * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats
  *   `identityMap.isDeleted` as not-found (`null`), and registers the
  *   hydrated instance after - two loads of the same aggregate in one
  *   unit of work must return the same instance.
@@ -210,7 +210,7 @@ export interface UnitOfWorkContext<
 	 * A write issued on the raw handle bypasses the repository contract,
 	 * enrollment (its aggregate's events are NOT harvested unless you
 	 * also call `session.enrollSaved`), and the identity map (a later
-	 * `getById` of the same aggregate hydrates a SECOND instance:
+	 * `findById` of the same aggregate hydrates a SECOND instance:
 	 * double harvest, double `markPersisted`). Use it only for writes no
 	 * repository covers, pair it with manual enrollment, and prefer
 	 * adding a repository method whenever one could exist.
@@ -348,7 +348,7 @@ export interface UnitOfWorkDeps<
  *
  * const uow = new UnitOfWork(deps);
  * const result = await uow.run(async ({ repositories }) => {
- *   const restaurant = await repositories.restaurants.getByIdOrFail(id);
+ *   const restaurant = await repositories.restaurants.getById(id);
  *   restaurant.changeOpeningHours(openingHours);
  *   await repositories.restaurants.save(restaurant); // save() enrolls
  *   return restaurant.id;
@@ -526,7 +526,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 
 	/**
 	 * End-of-run safety net: a loaded aggregate (registered in the identity
-	 * map via `getById`) that carries pending events but was never enrolled
+	 * map via `findById`) that carries pending events but was never enrolled
 	 * is almost certainly a forgotten `save()` / `enrollSaved`, whose events
 	 * would otherwise be silently dropped. Convert that silent loss into a
 	 * loud, rolling-back {@link UnenrolledChangesError}. Only sees loaded

@@ -98,7 +98,7 @@ The factory shape buys two things Vernon §11 specifically calls out, plus one e
 
 ### Reconstitution: loading existing aggregates from persistence
 
-`Order.place(...)` creates a *new* aggregate: the order is being born into the system, and the factory records the creation event. But when `Repository.getById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
+`Order.place(...)` creates a *new* aggregate: the order is being born into the system, and the factory records the creation event. But when `Repository.findById(orderId)` reads an existing order's row from the database, the order *already exists in the world*. We just need to assemble its in-memory representation. No creation event should fire; the order wasn't placed just now, it was placed weeks ago.
 
 Vernon IDDD §11 distinguishes these two paths explicitly:
 
@@ -141,10 +141,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 A naive Repository might route INSERT vs UPDATE on `aggregate.version === 0`. That breaks the moment a fresh aggregate is mutated before its first save. `Order.place(...)` typically calls `commit(state, event)` which bumps `version` to 1; a follow-up `order.updateProfile(...)` bumps it to 2, but no DB row exists yet. Routing on `version === 0` would misroute to UPDATE, hit zero rows, and throw a spurious `ConcurrencyConflictError`. `persistedVersion === undefined` is the correct INSERT marker because it tracks the persistence layer's state, not in-memory mutations. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 :::
 
-The Repository's `getById` becomes mechanical:
+The Repository's `findById` becomes mechanical:
 
 ```ts
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const row = await this.db
     .select()
     .from(orders)
@@ -166,7 +166,7 @@ async getById(id: OrderId): Promise<Order | null> {
 For `EventSourcedAggregate`, reconstitution means *replaying the event history*. The kit already exposes this as `loadFromHistory(events)`:
 
 ```ts
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
 
@@ -316,9 +316,9 @@ If you find yourself wanting to enforce a cross-aggregate invariant transactiona
 ```ts
 import { sameVersion } from "@shirudo/ddd-kit";
 
-const before = await repo.getById(id);
+const before = await repo.findById(id);
 // ... time passes, maybe another writer comes in
-const after = await repo.getById(id);
+const after = await repo.findById(id);
 
 if (!sameVersion(before!, after!)) {
   // version mismatch: another writer modified the aggregate

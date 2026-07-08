@@ -96,9 +96,9 @@ export interface IEventSourcedAggregate<
  *
  * @example
  * ```typescript
- * const before = await repository.getById(id);
+ * const before = await repository.findById(id);
  * // ... some operations ...
- * const after = await repository.getById(id);
+ * const after = await repository.findById(id);
  *
  * if (!sameVersion(before, after)) {
  *   throw new Error("Aggregate was modified by another process");

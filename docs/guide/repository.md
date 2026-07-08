@@ -9,30 +9,30 @@ In DDD, a Repository is a collection illusion for aggregates: load by id, save t
 
 ```ts
 interface IRepository<TAgg extends IAggregateRoot<TId>, TId extends Id<string>> {
-  getById(id: TId):            Promise<TAgg | null>;
-  getByIdOrFail(id: TId):      Promise<TAgg>;       // throws AggregateNotFoundError
+  findById(id: TId):            Promise<TAgg | null>;
+  getById(id: TId):      Promise<TAgg>;       // throws AggregateNotFoundError
   exists(id: TId):             Promise<boolean>;
   save(aggregate: TAgg):       Promise<void>;
   delete(aggregate: TAgg):     Promise<void>;
 }
 ```
 
-### `getById` vs `getByIdOrFail`
+### `findById` vs `getById`
 
 Two flavours so the Use Case picks the right contract:
 
-- **`getById`** returns `null` when not found. Use when "missing is a valid outcome" (e.g. idempotent upsert, optional lookup).
-- **`getByIdOrFail`** throws `AggregateNotFoundError` (an `InfrastructureError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
+- **`findById`** returns `null` when not found. Use when "missing is a valid outcome" (e.g. idempotent upsert, optional lookup).
+- **`getById`** throws `AggregateNotFoundError` (an `InfrastructureError`) when missing. Use when "missing is a programming/contract error in the calling Use Case".
 
 #### Inside the read path: reconstituting the aggregate
 
-Both `getById` variants need to **reconstitute** the aggregate: read its persisted row(s), build the in-memory representation, and return it. This is *not* a factory call: the aggregate already exists; we're not creating it now, so no creation event should fire.
+Both load methods, `findById` and `getById`, need to **reconstitute** the aggregate: read its persisted row(s), build the in-memory representation, and return it. This is *not* a factory call: the aggregate already exists; we're not creating it now, so no creation event should fire.
 
 The aggregate's class exposes a `static reconstitute(...)` paired with its factory (see [Reconstitution](./aggregates.md#reconstitution-loading-existing-aggregates-from-persistence) in the aggregates guide). The repository just calls it:
 
 ```ts
 // State-stored aggregate
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const row = await this.db
     .select()
     .from(orders)
@@ -47,7 +47,7 @@ async getById(id: OrderId): Promise<Order | null> {
 }
 
 // Event-sourced aggregate: loadFromHistory IS the reconstitution path
-async getById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
   const order = new Order(id, blankInitialState);
@@ -67,9 +67,9 @@ This is Fowler's **Identity Map** pattern (*Patterns of Enterprise Application A
 Repositories built for the [`UnitOfWork` facade](./unit-of-work.md#identity-map) get a per-operation `session.identityMap` (class-keyed, deletion-tombstoned, cleared on close) instead of hand-rolling the per-UoW `Map` shown below. The hand-rolled pattern remains correct for `withCommit`-only setups.
 :::
 
-**The contract.** Two `getById(id)` calls (or `getByIdOrFail(id)`) within the same Unit of Work (typically the same `withCommit` invocation, or any sequence sharing a transactional scope) MUST return the **same in-memory instance**.
+**The contract.** Two `findById(id)` calls (or `getById(id)`) within the same Unit of Work (typically the same `withCommit` invocation, or any sequence sharing a transactional scope) MUST return the **same in-memory instance**.
 
-**Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `getById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** (i.e. your repository violates the Identity Map contract), the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
+**Why it matters.** `withCommit` dedupes the returned `aggregates` array by JavaScript object identity (`new Set(aggregates)`). If two `findById` calls during one use case return the **same instance**, the dedupe works correctly: events are harvested once and `markPersisted` fires once. If two calls return **distinct instances with the same id** (i.e. your repository violates the Identity Map contract), the dedupe sees two different references and treats them as separate aggregates. Both get their events harvested into the outbox; `markPersisted` runs twice on two different instances. Silent duplicate dispatch.
 
 **How to maintain it.** Most ORM-backed repositories get this for free:
 
@@ -86,7 +86,7 @@ class TxScopedOrderRepository implements IRepository<Order, OrderId> {
 
   constructor(private readonly tx: DrizzleTx) {}
 
-  async getById(id: OrderId): Promise<Order | null> {
+  async findById(id: OrderId): Promise<Order | null> {
     const cached = this.identityMap.get(id);
     if (cached) return cached;
 
@@ -295,7 +295,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 // Use case
 await withCommit({ scope, outbox, bus }, async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  const order = await orderRepository.getByIdOrFail(orderId);
+  const order = await orderRepository.getById(orderId);
   order.archive(reason);
   await orderRepository.save(order);          // state change persists; outbox gets OrderArchived
   return { result: undefined, aggregates: [order] };
@@ -323,7 +323,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 await withCommit({ scope, outbox, bus }, async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  const order = await orderRepository.getByIdOrFail(orderId);
+  const order = await orderRepository.getById(orderId);
   order.recordDeletion(reason);              // records the event
   await orderRepository.delete(order);       // removes the row in the same tx
   return { result: undefined, aggregates: [order], deleted: [order] };
@@ -346,10 +346,10 @@ When the aggregate has no domain meaning anymore and no subscriber needs to know
 ```ts
 await scope.transactional(async (tx) => {
   const orderRepository = makeOrderRepository(tx);
-  // getById, not getByIdOrFail: cleanup stays idempotent. A retried job
+  // findById, not getById: cleanup stays idempotent. A retried job
   // (or a concurrent cleaner) finding the row already gone is a no-op,
   // not an AggregateNotFoundError crash.
-  const order = await orderRepository.getById(orderId);
+  const order = await orderRepository.findById(orderId);
   if (order) {
     await orderRepository.delete(order);
   }
@@ -434,7 +434,7 @@ const id = userIds.next(); // Id<"UserId">
 
 All three are `InfrastructureError` subclasses (not `DomainError`: the storage boundary decided the row is absent, stale, or already taken, not a business rule). They extend `@shirudo/base-error`'s `BaseError`, so they carry timestamps, cause chains, and `toJSON()` out of the box. For client-safe, localized messages, project them through the opt-in `@shirudo/base-error/public-error` subpath at the boundary; the technical core carries no user-facing message.
 
-- **`AggregateNotFoundError({ aggregateType, id, cause? })`**: thrown by `getByIdOrFail`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
+- **`AggregateNotFoundError({ aggregateType, id, cause? })`**: thrown by `getById`. The technical message carries the type and id; do not return it to a client unprojected. Not retryable (the row isn't there; retry won't help).
 - **`ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, actualVersion, cause? })`**: thrown by `save` on OCC mismatch. Marks itself `retryable: true` so the `someChainRetryable(err)` predicate from `@shirudo/base-error` picks it up even when an outer infrastructure layer wraps it; the canonical OCC pattern is to reload, re-apply, and retry **in a fresh unit of work**. Wrap your scope in [`RetryingTransactionScope`](./concurrency.md#retrying-conflicts-retryingtransactionscope) to automate exactly that (classification via `someChainRetryable`, exponential backoff with jitter, abort-bounded) instead of hand-rolling the loop.
 - **`DuplicateAggregateError({ aggregateType, aggregateId, cause? })`**: thrown by `save`'s INSERT path when a row with the id already exists: two concurrent creators raced on a business-derived id, or the id generator collided. Same delegation model as the OCC predicate: the kit ships the class, your repository maps the driver's unique-violation signal to it (Postgres `23505`, MySQL `1062`, SQLite `SQLITE_CONSTRAINT_UNIQUE`) instead of letting a raw driver error escape. Not retryable: re-running the same INSERT cannot succeed; map to HTTP 409, or for idempotency-key flows load the existing aggregate and treat the request as already applied. The [repository contract test suite](./unit-of-work.md#proving-the-contract-the-repository-contract-test-suite) covers it (capability-gated on `createAggregateWithId`).
 

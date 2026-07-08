@@ -44,7 +44,7 @@ await withCommit({ scope, outbox, bus }, async (tx) => {
   // Constructor injection / factory / `.withTx()` are all valid idioms.
   const orderRepository = makeOrderRepository(tx);
 
-  const order = await orderRepository.getByIdOrFail(orderId);
+  const order = await orderRepository.getById(orderId);
   order.confirm();
   await orderRepository.save(order);                       // pure persistence
   return { result: order.id, aggregates: [order] }; // withCommit harvests pendingEvents
@@ -158,7 +158,7 @@ import { withCommit } from "@shirudo/ddd-kit";
 const orderId = await withCommit(
   { outbox, bus, scope },
   async () => {
-    const order = await repo.getByIdOrFail(id);
+    const order = await repo.getById(id);
     order.confirm();
     await repo.save(order);                      // pure persistence
     return {
