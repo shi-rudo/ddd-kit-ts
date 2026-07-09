@@ -157,6 +157,9 @@ const MONEY_SURFACE = [
 	"parseMoneyInput",
 	"rescaleMoney",
 	"subtractMoney",
+	"tryMoneyFromDto",
+	"tryMoneyFromSnapshot",
+	"tryParseMoneyInput",
 ] as const;
 
 describe("public API surface (runtime exports)", () => {
