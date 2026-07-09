@@ -105,6 +105,7 @@ export {
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
 	UnenrolledChangesError,
+	UnprojectableEventError,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
@@ -182,6 +183,20 @@ export type {
 	OutboxRecord,
 	OutboxWriter,
 } from "./events/ports";
+
+// Projections: checkpoint port, runner, in-memory reference
+export { InMemoryProjectionCheckpointStore } from "./projections/in-memory-checkpoint-store";
+export {
+	isPositionAfter,
+	type Projection,
+	type ProjectionCheckpointStore,
+	type ProjectionPosition,
+} from "./projections/ports";
+export {
+	type ProjectionBatchResult,
+	Projector,
+	type ProjectorOptions,
+} from "./projections/projector";
 
 // Repository: ports, identity map, event store, scopes
 export type {

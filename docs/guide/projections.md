@@ -84,50 +84,26 @@ You'll typically have several read-model tables per bounded context, one per vie
 
 ## The dispatcher loop
 
-A background process polls the outbox, dispatches each pending event to one or more projection handlers, and marks the events dispatched on success. The kit doesn't ship a dispatcher (implementations differ too much across runtimes), but the pattern is straightforward.
+A background process polls the outbox, dispatches each pending event to one or more projection handlers, and marks the events dispatched on success. The kit ships `OutboxDispatcher` for exactly this (see the [outbox guide](./outbox.md), "The kit dispatcher"): long-running `run(signal)` for workers, `drainOnce()` per tick for cron and serverless. Wire a projector into it via `projector.toOutboxSink()` (below), or any handler via a custom `OutboxSink`.
 
-### Polling-based dispatcher
+**Poison events are a projection concern too.** The dispatcher is sequential
+with stop-on-failure, so one event that deterministically fails in a
+projection handler (a malformed payload, a handler bug) blocks EVERY event
+behind it: all read models on that dispatcher stop updating. Your two options
+are the two halves of a real trade-off:
 
-```ts
-import type { Outbox } from "@shirudo/ddd-kit";
-
-const BATCH_SIZE = 100;
-const POLL_INTERVAL_MS = 250;
-
-async function dispatcherLoop<Evt extends AnyDomainEvent>(
-  outbox: Outbox<Evt>,
-  handle: (event: Evt) => Promise<void>,
-  signal: AbortSignal,
-): Promise<void> {
-  while (!signal.aborted) {
-    const pending = await outbox.getPending(BATCH_SIZE);
-    if (pending.length === 0) {
-      await sleep(POLL_INTERVAL_MS);
-      continue;
-    }
-
-    const dispatched: string[] = [];
-    for (const record of pending) {
-      try {
-        await handle(record.event);
-        dispatched.push(record.dispatchId);
-      } catch (err) {
-        // Log and continue; the event stays pending and will be
-        // re-attempted on the next tick. For a poison message you
-        // want a max-retry counter on the outbox row or a dead-letter
-        // strategy; both are storage-specific and out of scope here.
-        logger.error("Projection handler failed", { record, err });
-      }
-    }
-
-    if (dispatched.length > 0) {
-      await outbox.markDispatched(dispatched);
-    }
-  }
-}
-```
-
-Run this in a long-lived worker, a `setInterval` in a single-process Node app, or a cron job for batchier workloads. Edge runtimes typically delegate to a separate worker: `setInterval` in a Cloudflare Worker invocation won't survive past the request.
+- **Plain `Outbox`**: the poison event retries forever (rate-limited by the
+  backoff). The read model stalls but stays consistent; delivery resumes the
+  moment you fix the handler.
+- **`DispatchTrackingOutbox`**: the attempt ceiling dead-letters the poison
+  event and the queue flows again, but that leaves a **permanent hole** in the
+  read model. Later events of the same aggregate advance the projection's
+  watermark past the dead letter, and the cursor cannot distinguish "already
+  applied" from "never applied": redelivering the dead letter afterwards is a
+  silent skip, and applying it out of order would be wrong anyway. The
+  remediation for a dead-lettered projection event is a rebuild
+  (`projector.reset()` + replay) or a manual read-model correction, which is
+  why wiring `deadLetters()` to alerting matters doubly for projections.
 
 ### Queue-based alternative
 
@@ -138,9 +114,85 @@ For higher throughput or multi-tenant fanout, replace polling with a queue:
 
 This shifts the back-pressure problem from "polling rate" to "queue capacity" and lets you parallelise projections across consumers, at the cost of an extra moving piece.
 
+## The kit projector
+
+The mechanics `read-model-design.md` demands (idempotent apply, update and checkpoint committed atomically, ordering cursor, rebuild, wait-for-version) ship as `Projector` plus the `ProjectionCheckpointStore` port, so your handler is a plain event-to-row mapping:
+
+```ts
+import {
+  Projector,
+  type Projection,
+  type ProjectionCheckpointStore,
+} from "@shirudo/ddd-kit";
+
+const orderList: Projection<OrderEvent, KnexTx> = {
+  name: "order-list", // keys the checkpoints; renaming replays from zero
+  apply: async (tx, event) => {
+    switch (event.type) {
+      case "OrderCreated":
+        await tx("order_list_views").insert({ /* ... */ });
+        return;
+      case "OrderCancelled":
+        // Deletes/tombstones handled explicitly, not upsert-only.
+        await tx("order_list_views").where({ id: event.aggregateId }).delete();
+        return;
+    }
+  },
+  truncate: async (tx) => {
+    await tx("order_list_views").truncate(); // rebuild support
+  },
+};
+
+const projector = new Projector({
+  scope,                       // the SAME database as the read model
+  checkpoints: checkpointStore, // your ProjectionCheckpointStore adapter
+  projection: orderList,
+});
+
+// Feed it: straight from the dispatcher...
+const dispatcher = new OutboxDispatcher({ outbox, sink: projector.toOutboxSink() });
+// ...or batch-wise from any source (queue consumer, replay):
+await projector.project(events);
+```
+
+What the runner guarantees:
+
+- **Update and checkpoint commit atomically.** One `project(batch)` call is one `TransactionScope` transaction; a failure rolls back rows AND checkpoints together, so at-least-once redelivery replays cleanly. It is never possible to checkpoint an unapplied event.
+- **Duplicates and stale events are skipped by the cursor.** The watermark is the `(aggregateVersion, commitSequence)` pair `withCommit` already stamps on every harvested event: a total order per aggregate. Your `apply` never sees an event at or behind the watermark, so plain writes are safe without `last_event_id` tricks.
+- **Uncursored events fail loudly.** Events that did not pass through `withCommit` carry no stamps; either stamp them or supply the `position` extractor option (an event-sourced replay uses the store's own position).
+- **Wait-for-version**: `projector.hasProcessed(aggregateId, position)` answers "has this projection caught up to my commit". Pass the position of the last event your commit emitted; comparing on the version alone would report "reached" while later events of the same commit are still unapplied.
+- **Rebuild**: `projector.reset()` truncates the read model (via the projection's `truncate`) and clears the checkpoints in one transaction; then replay the history through `project`. This is why `apply` must be side-effect-free.
+
+One `Projector` per read model; several projectors share one checkpoint store under distinct projection names. Like the dispatcher, run one logical projector instance per projection unless your checkpoint adapter serializes the check-then-apply (row lock on the checkpoint row).
+
+### Several projections, one outbox
+
+The outbox has ONE dispatched flag per record, so fan-out to several read
+models happens in the sink, not in the outbox. A composite sink feeds each
+projector in turn; the per-projector watermark is exactly the per-consumer
+cursor that makes this safe:
+
+```ts
+const sink: OutboxSink<OrderEvent> = {
+  publish: async (record) => {
+    await orderListProjector.project([record.event]);
+    await orderDetailProjector.project([record.event]);
+  },
+};
+```
+
+When `orderDetailProjector` fails, the record stays pending and the whole sink
+retries; `orderListProjector` then skips its already-applied event via the
+watermark instead of double-applying it. The record is acked only once every
+projector has processed it.
+
+The `ProjectionCheckpointStore` adapter (a two-column table keyed by `(projection, aggregate_id)` next to your read models) is verified with `createProjectionCheckpointStoreContractTests` from `@shirudo/ddd-kit/testing`; `InMemoryProjectionCheckpointStore` is the reference for tests and in-memory views.
+
+**Why a per-aggregate cursor, not a global one:** the watermark rides on the event itself (`withCommit` stamps it), so it survives every transport (outbox, broker, replay), and per-aggregate order is the only order the kit guarantees; a global cursor would need a globally ordered, gap-free feed the ports deliberately do not promise. The cost is honest: one checkpoint row per `(projection, aggregate)` instead of one per projection, the same cardinality the common `last_event_id` column pattern hides inside the read model. For a source that does carry a global position (an event store), feed it through the `position` extractor. Projection lag is monitored on the outbox side (age of the oldest pending record, see the outbox production checklist), not on the checkpoint table.
+
 ## Projection handlers
 
-A projection handler maps **one event** to **one read-model update**. The canonical shape is an event-type-keyed map, mirroring `EventSourcedAggregate.handlers`:
+A projection handler maps **one event** to **one read-model update**. Where you bypass the kit projector (or inside `apply` when you prefer the shape), the canonical routing is an event-type-keyed map, mirroring `EventSourcedAggregate.handlers`:
 
 ```ts
 import type { DomainEvent } from "@shirudo/ddd-kit";
@@ -293,6 +345,8 @@ import {
   EventBusImpl,
   CommandBus,
   QueryBus,
+  OutboxDispatcher,
+  Projector,
   withCommit,
 } from "@shirudo/ddd-kit";
 
@@ -301,12 +355,20 @@ const bus    = new EventBusImpl<OrderEvent>();
 const commands = new CommandBus<OrderCommands>();
 const queries  = new QueryBus<OrderQueries>();
 
-// Wire the projection
-const orderListProjection = new OrderListProjection(db);
+// Wire the projection (see "The kit projector" above)
+const orderListProjector = new Projector({
+  scope,
+  checkpoints: checkpointStore,
+  projection: orderList,
+});
 
 // Start the dispatcher
 const controller = new AbortController();
-void dispatcherLoop(outbox, orderListProjection.handle, controller.signal);
+const dispatcher = new OutboxDispatcher({
+  outbox,
+  sink: orderListProjector.toOutboxSink(),
+});
+void dispatcher.run(controller.signal);
 
 // Command path: writes go through withCommit -> outbox
 commands.register("CreateOrder", async (cmd) => {
@@ -335,12 +397,11 @@ If all three hold, the read model converges to a function of the event history. 
 
 ## What the library does NOT ship
 
-- **No `ProjectionHandler<E>` type or `Projector` base class.** A projection is just an `(event: E) => Promise<void>` function. The eventType-keyed map pattern shown above is convention; the kit has no opinion.
-- **No outbox-dispatcher implementation.** Runtime-specific (Node `setInterval`, Cloudflare cron triggers, AWS Lambda + EventBridge, etc.). Pseudocode above is the contract.
-- **No read-model storage abstraction.** Projections write to your existing database. Pick whatever DDL/ORM your write side already uses, or a separate read-store if you want true scale separation.
-- **No event-replay tooling for rebuilding projections.** Projections converge to the event history; rebuilding (after a schema change, or when adding a new view) means re-applying the history. The source you replay from depends on whether you keep one:
-  - **Event-sourced aggregates**: the event store IS the durable history. Replay reads from it directly. The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
-  - **State-stored aggregates**: there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table the dispatcher copies events to before delivery.
-  Either path is a consumer decision. The kit's outbox is a transient handoff buffer, not a durable event log.
+- **No read-model storage abstraction.** `Projection.apply` writes to your existing database with whatever DDL/ORM your write side already uses, or a separate read-store if you want true scale separation. The kit owns the mechanics around the write, never the write itself.
+- **No replay SOURCE for rebuilding projections.** `Projector.reset()` gives you the consistent zero; where the history you replay through `project` comes from is a consumer decision:
+  - **Event-sourced aggregates**: the event store IS the durable history. Replay reads from it directly (supply the `position` extractor; the store's position is the cursor there). The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
+  - **State-stored aggregates**: there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table a second consumer copies events into.
+  The kit's outbox is a transient handoff buffer, not a durable event log.
+- **No privacy handling.** A rebuild must not resurrect erased or anonymized data; replaying from a permitted source view is your retention policy's job, not the projector's.
 
-The kit's role is the **write-side guarantee** (`withCommit` → outbox is transactional; projections see every event ≥ once). Everything to the right of the outbox is consumer territory.
+The kit's role is the **write-side guarantee** (`withCommit` → outbox is transactional; projections see every event ≥ once) plus the **projection mechanics** (cursor, atomic checkpoint, rebuild entry, wait-for-version). The read-model shape and its store are consumer territory.
