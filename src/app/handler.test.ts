@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
+import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
@@ -15,10 +15,7 @@ type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
 	markPersistedCalls: number;
 };
 
-function createMockAggregate(
-	events: TestEvent[],
-	version = 1,
-): MockAggregate {
+function createMockAggregate(events: TestEvent[], version = 1): MockAggregate {
 	let pending: TestEvent[] = [...events];
 	let calls = 0;
 	return {
@@ -67,6 +64,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 			published.push([...events]);
 		},
 		subscribe: () => () => {},
+		subscribeAll: () => () => {},
 		once: () => new Promise(() => {}),
 	};
 }
@@ -92,13 +90,17 @@ describe("withCommit", () => {
 
 	it("harvests pendingEvents from the returned aggregates into the outbox", async () => {
 		const outbox = createMockOutbox();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+		);
 		const agg = createMockAggregate([event]);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "ok", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg],
+		}));
 
 		expect(outbox.added).toHaveLength(1);
 		expect(outbox.added[0]).toEqual([stamped(event)]);
@@ -107,13 +109,17 @@ describe("withCommit", () => {
 	it("publishes harvested events to the bus when provided", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+		);
 		const agg = createMockAggregate([event]);
 
-		await withCommit(
-			{ outbox, bus, scope: createMockScope() },
-			async () => ({ result: "ok", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg],
+		}));
 
 		expect(bus.published).toHaveLength(1);
 		expect(bus.published[0]).toEqual([stamped(event)]);
@@ -121,7 +127,11 @@ describe("withCommit", () => {
 
 	it("works without a bus", async () => {
 		const outbox = createMockOutbox();
-		const event = createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" });
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+		);
 		const agg = createMockAggregate([event]);
 
 		const result = await withCommit(
@@ -144,13 +154,10 @@ describe("withCommit", () => {
 			},
 		};
 
-		await withCommit(
-			{ outbox: createMockOutbox(), scope },
-			async () => {
-				callOrder.push("fn");
-				return { result: "ok", aggregates: [] };
-			},
-		);
+		await withCommit({ outbox: createMockOutbox(), scope }, async () => {
+			callOrder.push("fn");
+			return { result: "ok", aggregates: [] };
+		});
 
 		expect(callOrder).toEqual(["tx-start", "fn", "tx-end"]);
 	});
@@ -175,14 +182,18 @@ describe("withCommit", () => {
 			markDispatched: async () => {},
 		};
 		const agg = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "order-1" }, { aggregateId: "order-1", aggregateType: "MockOrder" }),
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "order-1" },
+				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			),
 		]);
 
 		await expect(
-			withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [agg] }),
-			),
+			withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [agg],
+			})),
 		).rejects.toThrow("Outbox failed");
 	});
 
@@ -208,11 +219,16 @@ describe("withCommit", () => {
 				callOrder.push("bus.publish");
 			},
 			subscribe: () => () => {},
+			subscribeAll: () => () => {},
 			once: () => new Promise(() => {}),
 		};
 		// A specifically-instrumented mock that records when markPersisted is called.
 		let pending: TestEvent[] = [
-			createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" }),
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "o-1", aggregateType: "MockOrder" },
+			),
 		];
 		const agg: IAggregateRoot<TestId, TestEvent> = {
 			id: "agg-1" as TestId,
@@ -230,13 +246,10 @@ describe("withCommit", () => {
 			},
 		};
 
-		await withCommit(
-			{ outbox, bus, scope },
-			async () => {
-				callOrder.push("fn");
-				return { result: "ok", aggregates: [agg] };
-			},
-		);
+		await withCommit({ outbox, bus, scope }, async () => {
+			callOrder.push("fn");
+			return { result: "ok", aggregates: [agg] };
+		});
 
 		expect(callOrder).toEqual([
 			"tx-start",
@@ -259,13 +272,10 @@ describe("withCommit", () => {
 		};
 
 		let received: DrizzleLikeTx | undefined;
-		await withCommit(
-			{ outbox: createMockOutbox(), scope },
-			async (ctx) => {
-				received = ctx;
-				return { result: ctx.id, aggregates: [] };
-			},
-		);
+		await withCommit({ outbox: createMockOutbox(), scope }, async (ctx) => {
+			received = ctx;
+			return { result: ctx.id, aggregates: [] };
+		});
 
 		expect(received).toBe(tx);
 	});
@@ -273,16 +283,17 @@ describe("withCommit", () => {
 	it("calls markPersisted only AFTER the tx commits (not on a rolled-back tx)", async () => {
 		const scope = createMockScope();
 		const agg = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" }),
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "o-1", aggregateType: "MockOrder" },
+			),
 		]);
 
 		await expect(
-			withCommit(
-				{ outbox: createMockOutbox(), scope },
-				async () => {
-					throw new Error("write failed");
-				},
-			),
+			withCommit({ outbox: createMockOutbox(), scope }, async () => {
+				throw new Error("write failed");
+			}),
 		).rejects.toThrow("write failed");
 
 		// fn threw before withCommit even saw the aggregate; markPersisted
@@ -297,12 +308,9 @@ describe("withCommit", () => {
 		const bus = createMockBus();
 
 		await expect(
-			withCommit(
-				{ outbox, bus, scope },
-				async () => {
-					throw new Error("write failed");
-				},
-			),
+			withCommit({ outbox, bus, scope }, async () => {
+				throw new Error("write failed");
+			}),
 		).rejects.toThrow("write failed");
 
 		expect(bus.published).toHaveLength(0);
@@ -310,10 +318,18 @@ describe("withCommit", () => {
 
 	it("calls markPersisted on EACH returned aggregate", async () => {
 		const a = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "a" }, { aggregateId: "a", aggregateType: "MockOrder" }),
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			),
 		]);
 		const b = createMockAggregate([
-			createDomainEvent("OrderCreated", { orderId: "b" }, { aggregateId: "b", aggregateType: "MockOrder" }),
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "b" },
+				{ aggregateId: "b", aggregateType: "MockOrder" },
+			),
 		]);
 
 		await withCommit(
@@ -338,10 +354,10 @@ describe("withCommit", () => {
 			);
 			const agg = createMockAggregate([event], 7);
 
-			await withCommit(
-				{ outbox, bus, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [agg] }),
-			);
+			await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [agg],
+			}));
 
 			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(7);
 			expect(bus.published[0]?.[0]?.aggregateVersion).toBe(7);
@@ -364,10 +380,10 @@ describe("withCommit", () => {
 			const aggA = createMockAggregate([eventA], 3);
 			const aggB = createMockAggregate([eventB], 11);
 
-			await withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [aggA, aggB] }),
-			);
+			await withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [aggA, aggB],
+			}));
 
 			expect(
 				outbox.added[0]?.map((e) => [e.aggregateId, e.aggregateVersion]),
@@ -390,10 +406,10 @@ describe("withCommit", () => {
 			);
 			const agg = createMockAggregate([preStamped], 7);
 
-			await withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [agg] }),
-			);
+			await withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [agg],
+			}));
 
 			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(5);
 			// The version survives, but the harvest still stamps the
@@ -415,10 +431,10 @@ describe("withCommit", () => {
 			);
 			const agg = createMockAggregate([fullyStamped], 7);
 
-			await withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [agg] }),
-			);
+			await withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [agg],
+			}));
 
 			expect(outbox.added[0]?.[0]).toBe(fullyStamped);
 		});
@@ -460,10 +476,10 @@ describe("withCommit", () => {
 			);
 			const agg = createMockAggregate([event], 7);
 
-			await withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({ result: "ok", aggregates: [agg] }),
-			);
+			await withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "ok",
+				aggregates: [agg],
+			}));
 
 			// The original event object was never mutated...
 			expect(event.aggregateVersion).toBeUndefined();
@@ -493,17 +509,16 @@ describe("withCommit", () => {
 		const savedAgg = createMockAggregate([savedEvent]);
 		const outbox = createMockOutbox();
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({
-				result: "ok",
-				aggregates: [savedAgg, deletedAgg],
-				deleted: [deletedAgg],
-			}),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [savedAgg, deletedAgg],
+			deleted: [deletedAgg],
+		}));
 
 		// Both aggregates' events were harvested, in array order.
-		expect(outbox.added).toEqual([[stamped(savedEvent), stamped(deletionEvent)]]);
+		expect(outbox.added).toEqual([
+			[stamped(savedEvent), stamped(deletionEvent)],
+		]);
 		// Saved aggregate: full post-commit lifecycle.
 		expect(savedAgg.markPersistedCalls).toBe(1);
 		// Deleted aggregate: events cleared (no re-emission on a later
@@ -515,10 +530,26 @@ describe("withCommit", () => {
 	it("preserves harvest order: aggregates-array order, then each aggregate's emission order", async () => {
 		// Subscribers will come to rely on this. Concatenation is:
 		//   aggregates[0].pendingEvents... aggregates[1].pendingEvents... etc.
-		const e1 = createDomainEvent("OrderCreated", { orderId: "a-evt-1" }, { aggregateId: "a-evt-1", aggregateType: "MockOrder" });
-		const e2 = createDomainEvent("OrderCreated", { orderId: "a-evt-2" }, { aggregateId: "a-evt-2", aggregateType: "MockOrder" });
-		const e3 = createDomainEvent("OrderCreated", { orderId: "b-evt-1" }, { aggregateId: "b-evt-1", aggregateType: "MockOrder" });
-		const e4 = createDomainEvent("OrderCreated", { orderId: "c-evt-1" }, { aggregateId: "c-evt-1", aggregateType: "MockOrder" });
+		const e1 = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "a-evt-1" },
+			{ aggregateId: "a-evt-1", aggregateType: "MockOrder" },
+		);
+		const e2 = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "a-evt-2" },
+			{ aggregateId: "a-evt-2", aggregateType: "MockOrder" },
+		);
+		const e3 = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "b-evt-1" },
+			{ aggregateId: "b-evt-1", aggregateType: "MockOrder" },
+		);
+		const e4 = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "c-evt-1" },
+			{ aggregateId: "c-evt-1", aggregateType: "MockOrder" },
+		);
 
 		const aggA = createMockAggregate([e1, e2]);
 		const aggB = createMockAggregate([e3]);
@@ -527,10 +558,10 @@ describe("withCommit", () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
 
-		await withCommit(
-			{ outbox, bus, scope: createMockScope() },
-			async () => ({ result: "ok", aggregates: [aggA, aggB, aggC] }),
-		);
+		await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [aggA, aggB, aggC],
+		}));
 
 		// Sequences restart per aggregate: [e1, e2] on A, [e3] on B, [e4] on C.
 		const expected = [
@@ -549,16 +580,20 @@ describe("withCommit", () => {
 		// harvest its events through the outbox and call markPersisted
 		// twice. Dedupe is by JavaScript object identity; distinct
 		// instances with the same logical id are NOT detected here.
-		const event = createDomainEvent("OrderCreated", { orderId: "o-1" }, { aggregateId: "o-1", aggregateType: "MockOrder" });
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
 		const agg = createMockAggregate([event]);
 
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
 
-		await withCommit(
-			{ outbox, bus, scope: createMockScope() },
-			async () => ({ result: "ok", aggregates: [agg, agg, agg] }),
-		);
+		await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg, agg, agg],
+		}));
 
 		// Event harvested exactly once.
 		expect(outbox.added).toEqual([[stamped(event)]]);
@@ -572,10 +607,14 @@ describe("withCommit", () => {
 		// break downstream routing. The guard catches it at the harvest
 		// boundary with a diagnostic message naming the event type and
 		// the missing field.
-		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
-			// aggregateType set, aggregateId NOT set → guard rejects
-			aggregateType: "MockOrder",
-		});
+		const badEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "x" },
+			{
+				// aggregateType set, aggregateId NOT set → guard rejects
+				aggregateType: "MockOrder",
+			},
+		);
 		const agg = createMockAggregate([badEvent]);
 
 		await expect(
@@ -587,9 +626,13 @@ describe("withCommit", () => {
 	});
 
 	it("the harvest guard throws EventHarvestError, not a retryable InfrastructureError", async () => {
-		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
-			aggregateType: "MockOrder",
-		});
+		const badEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "x" },
+			{
+				aggregateType: "MockOrder",
+			},
+		);
 		const agg = createMockAggregate([badEvent]);
 
 		const rejection = await withCommit(
@@ -602,10 +645,14 @@ describe("withCommit", () => {
 	});
 
 	it("throws if a harvested event is missing aggregateType (recordEvent guard)", async () => {
-		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
-			aggregateId: "x",
-			// aggregateType missing → guard rejects
-		});
+		const badEvent = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "x" },
+			{
+				aggregateId: "x",
+				// aggregateType missing → guard rejects
+			},
+		);
 		const agg = createMockAggregate([badEvent]);
 
 		await expect(
@@ -635,10 +682,10 @@ describe("withCommit", () => {
 		const bus = createMockBus();
 		const agg = createMockAggregate([]);
 
-		await withCommit(
-			{ outbox, bus, scope: createMockScope() },
-			async () => ({ result: "ok", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg],
+		}));
 
 		expect(outbox.added).toHaveLength(0);
 		expect(bus.published).toHaveLength(0);
@@ -867,6 +914,7 @@ describe("withCommit", () => {
 					throw error;
 				},
 				subscribe: () => () => {},
+				subscribeAll: () => () => {},
 				once: () => new Promise(() => {}),
 			};
 		}
@@ -903,8 +951,10 @@ describe("withCommit", () => {
 		it("reports the publish error and the affected events via onPublishError", async () => {
 			const agg = createAggWithEvent();
 			const publishError = new Error("subscriber blew up");
-			const reported: Array<{ error: unknown; events: ReadonlyArray<TestEvent> }> =
-				[];
+			const reported: Array<{
+				error: unknown;
+				events: ReadonlyArray<TestEvent>;
+			}> = [];
 
 			await withCommit(
 				{
@@ -995,14 +1045,11 @@ describe("deleted must be a subset of aggregates", () => {
 		const forgotten = createMockAggregate([deletionEvent]);
 
 		await expect(
-			withCommit(
-				{ outbox, scope: createMockScope() },
-				async () => ({
-					result: "r",
-					aggregates: [listed],
-					deleted: [forgotten],
-				}),
-			),
+			withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "r",
+				aggregates: [listed],
+				deleted: [forgotten],
+			})),
 		).rejects.toBeInstanceOf(EventHarvestError);
 
 		// The guard fires inside the transaction: nothing reached the outbox
@@ -1025,10 +1072,10 @@ describe("commitSequence stamping", () => {
 		const outbox = createMockOutbox();
 		const agg = createMockAggregate([eventFor("a"), eventFor("b")], 7);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "r", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "r",
+			aggregates: [agg],
+		}));
 
 		const [batch] = outbox.added;
 		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);
@@ -1040,10 +1087,10 @@ describe("commitSequence stamping", () => {
 		const first = createMockAggregate([eventFor("a"), eventFor("b")], 3);
 		const second = createMockAggregate([eventFor("c")], 9);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "r", aggregates: [first, second] }),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "r",
+			aggregates: [first, second],
+		}));
 
 		const [batch] = outbox.added;
 		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1, 0]);
@@ -1056,10 +1103,10 @@ describe("commitSequence stamping", () => {
 			2,
 		);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "r", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "r",
+			aggregates: [agg],
+		}));
 
 		const [batch] = outbox.added;
 		expect(batch?.map((e) => e.commitSequence)).toEqual([7, 1]);
@@ -1072,10 +1119,10 @@ describe("commitSequence stamping", () => {
 			2,
 		);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async () => ({ result: "r", aggregates: [agg] }),
-		);
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "r",
+			aggregates: [agg],
+		}));
 
 		const [batch] = outbox.added;
 		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);

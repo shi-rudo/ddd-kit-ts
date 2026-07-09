@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: EventBus.subscribeAll
+
+- `subscribeAll(handler)` on the `EventBus` port and `EventBusImpl`: the
+  typed catch-all subscription for cross-cutting consumers (audit log,
+  metrics, dev logging, forward-all) that would otherwise have to
+  enumerate the event union and silently miss every type added later.
+  Catch-all handlers run in the same `Promise.allSettled` batch as the
+  event's typed handlers, so the publish contract is unchanged: awaited
+  delivery, no handler skipped when a peer fails, errors collected and
+  thrown after the batch, events in input order. A catch-all consumer
+  also counts as a subscriber under `eventBusSink`'s zero-subscriber
+  rule (no event is acked unseen while one is registered). Deliberately
+  minimal: no predicate subscriptions (filter in the handler) and no
+  glob/topic patterns (topic routing belongs to broker sinks). Breaking
+  for hand-rolled `EventBus` implementations: the interface gained a
+  required method.
+
 ### Added: adapter contract suites for outbox and idempotency store
 
 - `createOutboxContractTests` and `createIdempotencyStoreContractTests`

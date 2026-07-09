@@ -77,7 +77,8 @@ export interface OutboxSink<Evt extends AnyDomainEvent> {
  * so the dispatcher acks the record and it never comes back. Records
  * polled in a startup window before module wiring registered its
  * subscriptions are therefore consumed without any handler seeing
- * them; register every subscription before `run()`/`drainOnce()`. The
+ * them; register every subscription before `run()`/`drainOnce()`. A
+ * `subscribeAll` consumer counts as a subscriber for every type. The
  * same holds for reactions added later: a new subscriber does not see
  * already-dispatched history; replay is a read-model concern, not a
  * bus feature.

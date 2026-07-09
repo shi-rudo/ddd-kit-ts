@@ -230,7 +230,115 @@ describe("EventBusImpl", () => {
 				orderId: "order-123",
 			}) as OrderCreated;
 
-			await expect(bus.publish([event])).rejects.toThrow("Multiple event handlers failed");
+			await expect(bus.publish([event])).rejects.toThrow(
+				"Multiple event handlers failed",
+			);
+		});
+	});
+
+	describe("subscribeAll", () => {
+		const created = (orderId: string) =>
+			createDomainEvent("OrderCreated", { orderId }) as OrderCreated;
+		const shipped = (orderId: string) =>
+			createDomainEvent("OrderShipped", { orderId }) as OrderShipped;
+
+		it("receives every event type, in input order, without enumerating the union", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			bus.subscribeAll(async (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([created("o-1"), shipped("o-1"), created("o-2")]);
+
+			expect(seen).toEqual(["OrderCreated", "OrderShipped", "OrderCreated"]);
+		});
+
+		it("runs even when the event type has no typed subscriber", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			bus.subscribeAll(async (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([shipped("o-1")]);
+
+			expect(seen).toEqual(["OrderShipped"]);
+		});
+
+		it("shares one batch with typed handlers: a failing peer skips nobody", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const ran: string[] = [];
+
+			bus.subscribe("OrderCreated", async () => {
+				ran.push("typed");
+				throw new Error("typed handler failed");
+			});
+			bus.subscribeAll(async () => {
+				ran.push("catch-all");
+				throw new Error("catch-all handler failed");
+			});
+			bus.subscribe("OrderCreated", async () => {
+				ran.push("typed-healthy");
+			});
+
+			const rejection = await bus
+				.publish([created("o-1")])
+				.then(() => undefined)
+				.catch((thrown: unknown) => thrown);
+
+			// Every handler ran despite two failures in the same batch, and
+			// both errors are collected into the one aggregated throw.
+			expect(ran.sort()).toEqual(["catch-all", "typed", "typed-healthy"]);
+			expect(rejection).toBeInstanceOf(AggregateError);
+			expect((rejection as AggregateError).errors).toHaveLength(2);
+		});
+
+		it("unsubscribe removes exactly one subscription of a twice-subscribed handler", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			const handler = async () => {
+				calls += 1;
+			};
+
+			const first = bus.subscribeAll(handler);
+			bus.subscribeAll(handler);
+			first();
+			first(); // idempotent: a second call must not remove the sibling
+
+			await bus.publish([created("o-1")]);
+
+			expect(calls).toBe(1);
+		});
+
+		it("a synchronous throw in a catch-all handler is collected, not escaping the batch", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			bus.subscribeAll(() => {
+				throw new Error("sync catch-all bug");
+			});
+
+			await expect(bus.publish([created("o-1")])).rejects.toThrow(
+				"sync catch-all bug",
+			);
+		});
+
+		it("does not disturb once(): the waiter resolves alongside a catch-all", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribeAll(async (event) => {
+				seen.push(event.type);
+			});
+
+			const waiter = bus.once("OrderShipped");
+			await bus.publish([shipped("o-9")]);
+
+			await expect(waiter).resolves.toMatchObject({
+				payload: { orderId: "o-9" },
+			});
+			expect(seen).toEqual(["OrderShipped"]);
 		});
 	});
 
@@ -596,4 +704,3 @@ describe("EventBusImpl", () => {
 		});
 	});
 });
-
