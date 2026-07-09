@@ -486,6 +486,212 @@ need a paged write-side query, add a concrete method such as
 If the query is for a UI list, search page, dashboard, or report, build a
 projection instead.
 
+## Specifications
+
+Sometimes the lookup criteria belong to the domain, not to the storage
+layer. "Which invoices qualify for dunning?" is a business question, and the
+answer changes when the business changes. For criteria like that, write a
+`Specification` and use it as the `TFilter`:
+
+```ts
+import { Specification, type SpecificationComposite, specification } from "@shirudo/ddd-kit";
+
+class OverdueInvoice extends Specification<Invoice> {
+  readonly name = "overdue invoice";
+  constructor(readonly today: Date) { super(); } // readonly: adapters read it
+  isSatisfiedBy(invoice: Invoice): boolean {
+    return invoice.dueDate < this.today && invoice.status === "open";
+  }
+}
+
+const dunningCandidates = new OverdueInvoice(today).and(
+  specification("in dunning grace period", (i: Invoice) => i.remindersSent < 3),
+);
+
+class InvoiceRepository
+  implements IQueryableRepository<Invoice, InvoiceId, Specification<Invoice>> {}
+```
+
+What does this buy over an inline predicate? Three things.
+
+First, it runs in memory as-is. Domain logic can ask
+`spec.isSatisfiedBy(candidate)` directly, and an in-memory repository or
+test fake implements its lookup as a plain filter:
+`rows.filter((r) => spec.isSatisfiedBy(r))`. Your tests never need a
+translation layer. (Call the lookup method whatever fits; `findSatisfying`
+is a common name, and `IQueryableRepository.find` works as-is with
+`Specification` as the `TFilter`.)
+
+Second, it composes. `and`, `or`, and `not` build rules that still read
+like the business rule, and the derived names, for example
+`"(overdue invoice and (not high value))"`, show up in error messages and
+test output.
+
+Third, a storage adapter can translate it. The adapter recurses through the
+`composite` structure for combinator nodes and translates each leaf
+explicitly. Note that there are two kinds of leaves: one without parameters,
+where the name alone tells the adapter what to emit, and one with parameters
+(the reference date above), where the adapter has to narrow to the class and
+read its fields, because the name cannot carry the data:
+
+```ts
+function toSql(spec: Specification<Invoice>): SQL {
+  const composite = spec.composite;
+  if (composite) {
+    switch (composite.operator) {
+      case "and": return and(toSql(composite.left), toSql(composite.right));
+      case "or":  return or(toSql(composite.left), toSql(composite.right));
+      case "not": return not(toSql(composite.inner));
+    }
+  }
+  // A parameterized leaf: narrow to the class, translate the whole
+  // predicate (both conditions), and take the date from the instance
+  // rather than substituting the adapter's own clock.
+  if (spec instanceof OverdueInvoice) {
+    return and(eq(invoices.status, "open"), lt(invoices.dueDate, spec.today));
+  }
+  // Parameterless leaves: the name alone identifies the translation.
+  switch (spec.name) {
+    case "in dunning grace period": return lt(invoices.remindersSent, 3);
+    default:
+      throw new Error(`No SQL translation for specification '${spec.name}'`);
+  }
+}
+```
+
+### A visitor layer on top (double dispatch)
+
+The recursive walker above is single dispatch plus type narrowing, which is
+how TypeScript usually replaces the classic visitor pattern, and for most
+codebases it is the right place to stop. It has one weakness worth knowing
+about. Leaves are matched by name or `instanceof` in a switch, so when
+someone adds a new specification, nothing forces the translator to handle
+it. The gap only shows up at runtime, as the `No SQL translation` error.
+With a single translation target and decent test coverage, that loud
+runtime error is a perfectly workable contract.
+
+The picture changes once several translators exist for the same
+specifications, say SQL for the write side, a Mongo filter for an archive,
+and a search-index query. Now a forgotten leaf means three places to hunt
+down. This is where classic double dispatch earns its ceremony: each new
+specification adds a method to a visitor interface, and every translator
+stops compiling until it handles the new leaf. The compiler does the
+hunting. The kit's combinators are deliberately overridable so that you can
+build this layer yourself when you reach that point:
+
+```ts
+interface InvoiceSpecVisitor<R> {
+  visitOverdue(spec: OverdueInvoice): R;
+  visitGracePeriod(spec: InGracePeriod): R;
+  visitAnd(left: TranslatableSpec, right: TranslatableSpec): R;
+  visitOr(left: TranslatableSpec, right: TranslatableSpec): R;
+  visitNot(inner: TranslatableSpec): R;
+}
+
+abstract class TranslatableSpec extends Specification<Invoice> {
+  abstract accept<R>(visitor: InvoiceSpecVisitor<R>): R;
+
+  // Override the combinators so composites are visitor-aware too. The
+  // overrides narrow the operand type: inside this hierarchy you can
+  // only combine translatable specifications, which is the point.
+  override and(other: TranslatableSpec): TranslatableSpec {
+    return new AndSpec(this, other);
+  }
+  override or(other: TranslatableSpec): TranslatableSpec {
+    return new OrSpec(this, other);
+  }
+  override not(): TranslatableSpec {
+    return new NotSpec(this);
+  }
+}
+
+class OverdueInvoice extends TranslatableSpec {
+  readonly name = "overdue invoice";
+  constructor(readonly today: Date) { super(); }
+  isSatisfiedBy(i: Invoice): boolean {
+    return i.dueDate < this.today && i.status === "open";
+  }
+  accept<R>(v: InvoiceSpecVisitor<R>): R {
+    return v.visitOverdue(this);
+  }
+}
+
+class AndSpec extends TranslatableSpec {
+  override readonly composite: SpecificationComposite<Invoice>;
+  constructor(readonly left: TranslatableSpec, readonly right: TranslatableSpec) {
+    super();
+    // Set `composite` like the kit's own combinators do: walker-based
+    // tooling and adapters keep working unchanged, whoever built the tree.
+    this.composite = Object.freeze({ operator: "and" as const, left, right });
+  }
+  get name(): string {
+    return `(${this.left.name} and ${this.right.name})`;
+  }
+  isSatisfiedBy(i: Invoice): boolean {
+    return this.left.isSatisfiedBy(i) && this.right.isSatisfiedBy(i);
+  }
+  accept<R>(v: InvoiceSpecVisitor<R>): R {
+    return v.visitAnd(this.left, this.right);
+  }
+}
+// OrSpec / NotSpec follow the same shape.
+
+// A translator is now a compile-time-complete implementation:
+class SqlVisitor implements InvoiceSpecVisitor<SQL> {
+  visitOverdue(s: OverdueInvoice) {
+    return and(eq(invoices.status, "open"), lt(invoices.dueDate, s.today));
+  }
+  visitGracePeriod() { return lt(invoices.remindersSent, 3); }
+  visitAnd(l: TranslatableSpec, r: TranslatableSpec) {
+    return and(l.accept(this), r.accept(this));
+  }
+  visitOr(l: TranslatableSpec, r: TranslatableSpec) {
+    return or(l.accept(this), r.accept(this));
+  }
+  visitNot(inner: TranslatableSpec) { return not(inner.accept(this)); }
+}
+```
+
+Everything else keeps working as before. `isSatisfiedBy`, the derived
+names, and the `composite` introspection behave the same whether the kit's
+combinators or yours built the tree, so in-memory evaluation and any
+walker-based tooling don't care which hierarchy they are looking at.
+
+One caveat: mixed trees. A factory-built specification from
+`specification("...", ...)` has no `accept` method, so if one ends up inside
+a `TranslatableSpec` tree, the pure visitor path breaks on it. You can
+either keep the hierarchy closed, which the narrowed combinator overrides
+already enforce at compile time, or give your visitor a fallback that walks
+`composite` for nodes and matches leaves without `accept` by name. That
+fallback is exactly the walker from the previous section, so you lose
+nothing by having it around.
+
+If you are unsure which to pick: start with the walker. It is less ceremony,
+and its runtime error is hard to miss. Reach for the visitor layer when a
+second translation target appears, or when new specifications arrive often
+enough that you would rather have the compiler find the untranslated leaf
+than production. The kit ships neither a visitor interface nor a base class
+for this, because both would have to enumerate your domain's specifications,
+and only you can do that. What the kit promises instead is that the layer
+stays buildable: the combinators can be overridden, `composite` can be set
+by subclasses, and nothing is sealed.
+
+Be aware of what dual use actually means: a specification that is both
+evaluated in memory and translated to SQL is one rule with two
+implementations, the predicate and the translation, and the two can drift
+apart without anything failing. The way to keep them honest is a shared
+fixture test, where the same set of candidates goes through `isSatisfiedBy`
+and through the translated query against a real store, and both must select
+the same rows. If that test is more than you want to maintain, use the
+specification on one side only. A specification that never leaves memory
+(domain logic, test fakes) needs no translation in the first place.
+
+A final word on scope. Specifications are for write-side lookups whose
+criteria live in the domain language. A UI list or a dashboard query still
+belongs in a projection, and a one-off lookup is usually better served by an
+intent-revealing method like `findByEmail` than by a specification nobody
+would ever name in conversation.
+
 ## Id Generation
 
 Identity generation belongs in the application, not in the repository.

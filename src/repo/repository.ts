@@ -176,11 +176,17 @@ export interface IRepository<
  * Prisma `WhereInput`, a MongoDB filter document, a plain
  * `(t: TAgg) => boolean` predicate for in-memory repos, or anything else.
  *
- * The library does not prescribe a Specification or query DSL: the
- * Repository implementation owns its query language. This avoids the
- * phantom-interface trap of a library-level `ISpecification<T>` with no
- * methods and lets each Repository expose the strongest possible types for
- * its storage backend.
+ * The Repository implementation owns its query language, so `TFilter`
+ * can be the storage's native shape for the strongest possible typing.
+ * When the lookup criteria are DOMAIN language rather than storage
+ * language, use the kit's `Specification<TAgg>` as the `TFilter` for
+ * this extension's `find`/`findOne`, or name your own
+ * `findSatisfying(spec)` method (see the repository guide): it is
+ * deliberately not a method-less marker interface but carries
+ * evaluation semantics (`isSatisfiedBy`, combinators, and a
+ * translatable ubiquitous-language name), so in-memory repositories
+ * honor it with a one-line filter while storage adapters translate the
+ * named leaves explicitly.
  *
  * Aggregates that are only ever accessed by id should implement
  * `IRepository` directly and skip this extension.

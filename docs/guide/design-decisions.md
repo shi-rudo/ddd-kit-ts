@@ -55,20 +55,20 @@ That split keeps handlers portable. `CommandHandler<C, R>` and `QueryHandler<Q, 
 
 The kit also avoids middleware pipeline machinery. Logging, authorization, metrics, tracing, and correlation can be added with handler decorators. A library-level pipeline would quickly become an application framework, and this kit intentionally stops before that point.
 
-## The Specification pattern was deliberately not shipped
+## The Specification primitive ships without translation machinery
 
-The repository query extension is `IQueryableRepository<TAgg, TId, TFilter>`. The filter type is owned by the adapter.
-
-That is deliberate. Drizzle, Prisma, MongoDB, SQL builders, in-memory predicates, and document stores already have different query languages. A generic `Specification<T>` that is powerful enough to translate across all of them becomes an expression-tree system. A generic marker that is not powerful enough cannot do useful work.
-
-So the current kit chooses adapter-native filters:
+The repository query extension is `IQueryableRepository<TAgg, TId, TFilter>`, and the filter type is owned by the adapter:
 
 - a Drizzle repository can use SQL fragments
 - a Prisma repository can use `WhereInput`
 - a Mongo repository can use filter documents
 - an in-memory repository can use predicates
 
-If your codebase benefits from named domain specifications, you can still define them locally and translate them inside each repository adapter. The kit does not force that abstraction into every consumer.
+For criteria that belong to the domain language rather than to a storage language, the kit ships `Specification<T>`: a named, executable criterion with `isSatisfiedBy`, combinators for `and`/`or`/`not`, and an introspectable composite structure, usable as the `TFilter`.
+
+What the kit still does not ship is translation machinery. A `Specification<T>` powerful enough to translate itself across Drizzle, Prisma, Mongo, and SQL builders would have to become an expression-tree system, and an expression-tree system is a query framework. So predicates stay opaque, evaluation stays in memory, and a storage adapter translates the named leaves explicitly, recursing through the composite structure. The repository guide's Specifications section walks through this, including the drift risk when one rule lives as both a predicate and a query, and the shared-fixture test that contains it.
+
+The same reasoning explains why there is no visitor interface in the kit: a visitor's methods enumerate the specifications of one particular domain, and only that domain's owner can write them. What the kit guarantees instead is that such a layer stays buildable. The combinators can be overridden and the composite structure can be set by subclasses; the repository guide shows the full double-dispatch construction for teams that want the compiler to enforce translation completeness across several targets.
 
 ## Event sourcing structurally enforces "record-after-mutation"
 

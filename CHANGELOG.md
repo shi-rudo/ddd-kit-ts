@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Specification primitive
+
+- `Specification<T>` (abstract class) and the `specification(name,
+  predicate)` factory: named, executable domain criteria with
+  `isSatisfiedBy` and short-circuiting `and`/`or`/`not` combinators,
+  whose derived names (`"(overdue and (not high value))"`) show up in
+  diagnostics. The name comes from the ubiquitous language and is what
+  a storage adapter translates. Combinator nodes expose their boolean
+  structure via `composite` so an adapter can walk down to the named
+  leaves and translate each one explicitly; the kit deliberately ships
+  no expression trees and no translation machinery. In-memory
+  repositories and test fakes implement `findSatisfying`-style lookups
+  (`IQueryableRepository.find` with `Specification` as the `TFilter`,
+  or a method of your own naming) as a one-line filter. The class is
+  deliberately left open, so a consumer can layer a classic
+  double-dispatch translation on top; the repository guide's new
+  Specifications section covers that construction, the drift risk of
+  rules living as both predicate and query, and the shared-fixture
+  test that contains it.
+
 ### Added: SnapshotStore port for event-sourced aggregates
 
 - `SnapshotStore` port, `InMemorySnapshotStore` reference, and
