@@ -24,10 +24,9 @@ import type { EventBus, EventHandler, OnceOptions } from "./ports";
  * // Both handlers will be called
  * ```
  */
-export class EventBusImpl<Evt extends AnyDomainEvent>
-	implements EventBus<Evt>
-{
+export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
+	private readonly catchAllHandlers: EventHandler<Evt>[] = [];
 
 	subscribe<K extends Evt["type"]>(
 		eventType: K,
@@ -54,6 +53,27 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 			}
 			if (handlersForType.length === 0) {
 				this.handlers.delete(type);
+			}
+		};
+	}
+
+	/**
+	 * See {@link EventBus.subscribeAll}: every published event, in the
+	 * same dispatch batch as its typed handlers.
+	 */
+	subscribeAll(handler: EventHandler<Evt>): () => void {
+		this.catchAllHandlers.push(handler);
+
+		// Unsubscribe semantics as in subscribe(): removes exactly this
+		// subscription, even when the same handler reference was
+		// subscribed multiple times.
+		let removed = false;
+		return () => {
+			if (removed) return;
+			const idx = this.catchAllHandlers.indexOf(handler);
+			if (idx !== -1) {
+				this.catchAllHandlers.splice(idx, 1);
+				removed = true;
 			}
 		};
 	}
@@ -122,15 +142,21 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 		const errors: Error[] = [];
 
 		for (const event of events) {
-			const handlersForType = this.handlers.get(event.type);
-			if (handlersForType) {
-				// Snapshot so a handler unsubscribing during dispatch doesn't
-				// shift indices while we iterate. The async wrapper converts a
-				// synchronous throw (EventHandler may return void) into a
-				// rejection; otherwise it would escape before allSettled sees
-				// the array, skipping peers and orphaning their promises.
+			// Typed and catch-all handlers share ONE allSettled batch, so the
+			// contract holds across both kinds: none sees the others' errors,
+			// none is skipped when a peer fails. Snapshot so a handler
+			// unsubscribing during dispatch doesn't shift indices while we
+			// iterate. The async wrapper converts a synchronous throw
+			// (EventHandler may return void) into a rejection; otherwise it
+			// would escape before allSettled sees the array, skipping peers
+			// and orphaning their promises.
+			const batch = [
+				...(this.handlers.get(event.type) ?? []),
+				...this.catchAllHandlers,
+			];
+			if (batch.length > 0) {
 				const results = await Promise.allSettled(
-					handlersForType.slice().map(async (handler) => handler(event)),
+					batch.map(async (handler) => handler(event)),
 				);
 				for (const result of results) {
 					if (result.status === "rejected") {
@@ -157,4 +183,3 @@ export class EventBusImpl<Evt extends AnyDomainEvent>
 		}
 	}
 }
-

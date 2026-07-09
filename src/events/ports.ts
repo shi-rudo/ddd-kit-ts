@@ -84,6 +84,34 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	) => () => void;
 
 	/**
+	 * Subscribes a handler to EVERY event type: the subscription for
+	 * cross-cutting consumers (audit log, metrics, dev logging,
+	 * forward-all) that would otherwise have to enumerate the union's
+	 * event types and silently miss every type added later.
+	 *
+	 * Catch-all handlers run in the SAME `Promise.allSettled` batch as
+	 * the event's typed handlers, so the publish contract is unchanged:
+	 * awaited delivery, no handler skipped when a peer fails, errors
+	 * collected and thrown after the batch, events in input order.
+	 *
+	 * Deliberately minimal: no predicate subscriptions (filter in your
+	 * handler; it is one line) and no glob/topic patterns (topic routing
+	 * belongs to broker sinks: Kafka topics, JetStream subjects).
+	 *
+	 * @param handler - Called with every published event, typed as the
+	 * full event union; narrow via `event.type` in the handler
+	 * @returns A function to unsubscribe the handler
+	 *
+	 * @example
+	 * ```typescript
+	 * const unsubscribe = bus.subscribeAll(async (event) => {
+	 *   await auditLog.append(event.type, event.eventId, event.payload);
+	 * });
+	 * ```
+	 */
+	subscribeAll: (handler: EventHandler<Evt>) => () => void;
+
+	/**
 	 * Subscribes to the next occurrence of an event type.
 	 * Returns a Promise that resolves with the event data.
 	 * Automatically unsubscribes after the first event.

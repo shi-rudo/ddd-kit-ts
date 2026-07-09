@@ -88,6 +88,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 			published.push([...events]);
 		},
 		subscribe: () => () => {},
+		subscribeAll: () => () => {},
 		once: () => new Promise(() => {}),
 	};
 }
@@ -178,7 +179,12 @@ describe("UnitOfWork", () => {
 
 		it("a repository ConcurrencyConflictError passes through as the same instance (stays distinguishable)", async () => {
 			const { uow } = createUow();
-			const conflict = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 4 });
+			const conflict = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 4,
+			});
 
 			await expect(
 				uow.run(async () => {
@@ -280,6 +286,7 @@ describe("UnitOfWork", () => {
 					callOrder.push("bus.publish");
 				},
 				subscribe: () => () => {},
+				subscribeAll: () => () => {},
 				once: () => new Promise(() => {}),
 			};
 			const event = testEvent("o-1");
@@ -382,8 +389,9 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[stamped(event)]]);
+			expect(
+				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+			).toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});
 
@@ -397,8 +405,9 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[stamped(deletionEvent)]]);
+			expect(
+				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+			).toEqual([[stamped(deletionEvent)]]);
 		});
 
 		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {
@@ -428,8 +437,9 @@ describe("UnitOfWork", () => {
 				return undefined;
 			});
 
-			expect((outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added)
-				.toEqual([[stamped(event)]]);
+			expect(
+				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+			).toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});
 	});
@@ -847,9 +857,13 @@ describe("UnitOfWork", () => {
 			// misuse: deterministic, fails identically on every retry. It must
 			// NOT be wrapped in CommitError (an InfrastructureError a retry
 			// loop would spin on forever).
-			const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
-				aggregateType: "MockOrder",
-			}) as TestEvent;
+			const badEvent = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "x" },
+				{
+					aggregateType: "MockOrder",
+				},
+			) as TestEvent;
 			const agg = createMockAggregate("x", [badEvent]);
 			const { uow } = createUow();
 
@@ -883,9 +897,13 @@ describe("UnitOfWork", () => {
 					}
 				},
 			};
-			const badEvent = createDomainEvent("OrderCreated", { orderId: "x" }, {
-				aggregateType: "MockOrder",
-			}) as TestEvent;
+			const badEvent = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "x" },
+				{
+					aggregateType: "MockOrder",
+				},
+			) as TestEvent;
 			const agg = createMockAggregate("x", [badEvent]);
 			const { uow } = createUow({ scope });
 
@@ -951,9 +969,7 @@ describe("UnitOfWork", () => {
 				);
 
 			expect(rejection).toBeInstanceOf(RollbackError);
-			expect((rejection as RollbackError).rollbackCause).toBe(
-				rollbackFailure,
-			);
+			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
 		});
 
 		it("a throwing `cause` getter on the scope's error cannot replace the real failure", async () => {
@@ -993,7 +1009,12 @@ describe("UnitOfWork", () => {
 		});
 
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {
-			const original = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 4 });
+			const original = new ConcurrencyConflictError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				expectedVersion: 3,
+				actualVersion: 4,
+			});
 			const rollbackFailure = new Error("ROLLBACK failed: connection lost");
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -1020,9 +1041,7 @@ describe("UnitOfWork", () => {
 			// still find the ConcurrencyConflictError)...
 			expect((rejection as RollbackError).cause).toBe(original);
 			// ...and the scope's own failure rides along.
-			expect((rejection as RollbackError).rollbackCause).toBe(
-				rollbackFailure,
-			);
+			expect((rejection as RollbackError).rollbackCause).toBe(rollbackFailure);
 		});
 	});
 
@@ -1060,7 +1079,10 @@ describe("UnitOfWork", () => {
 			// A spec-compliant AbortSignal always populates `reason` when
 			// aborted; a minimal polyfill might not. The pre-flight must not
 			// `throw undefined`.
-			const polyfillSignal = { aborted: true, reason: undefined } as AbortSignal;
+			const polyfillSignal = {
+				aborted: true,
+				reason: undefined,
+			} as AbortSignal;
 
 			await expect(
 				uow.run(async () => "x", { signal: polyfillSignal }),
