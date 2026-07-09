@@ -1,0 +1,25 @@
+{
+	"$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+	"mutate": ["src/money/*.ts", "!src/money/*.test.ts"],
+	"testRunner": "vitest",
+	"reporters": ["clear-text", "progress"],
+	"thresholds": {
+		"high": 90,
+		"low": 80,
+		"break": 85
+	},
+	"tempDirName": ".stryker-tmp",
+	"incremental": false,
+	"ignorePatterns": [
+		".claude",
+		".beads",
+		".bv",
+		"docs",
+		"examples",
+		"skills",
+		"dist",
+		"coverage",
+		".stryker-tmp"
+	],
+	"plugins": ["@stryker-mutator/vitest-runner"]
+}
