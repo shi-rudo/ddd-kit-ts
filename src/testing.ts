@@ -30,6 +30,12 @@ export {
 	type OutboxContractTest,
 } from "./testing/outbox-contract";
 export {
+	createProjectionCheckpointStoreContractTests,
+	type ProjectionCheckpointStoreContractEnvironment,
+	type ProjectionCheckpointStoreContractHarness,
+	type ProjectionCheckpointStoreContractTest,
+} from "./testing/projection-checkpoint-contract";
+export {
 	type ContractRepository,
 	createRepositoryContractTests,
 	type RepositoryContractEnvironment,

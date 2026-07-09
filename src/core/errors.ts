@@ -153,6 +153,34 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
+ * Thrown by `Projector.project` when an event cannot be watermarked:
+ * it carries no `(aggregateVersion, commitSequence)` cursor (and no
+ * custom `position` extractor covered it) or no `aggregateId`. An
+ * unwatermarkable event cannot be deduped or ordered, so applying it
+ * would silently break projection idempotency on redelivery; the
+ * batch fails BEFORE anything is applied. Events written by
+ * `withCommit` are stamped automatically; for other sources supply
+ * the `position` extractor.
+ *
+ * A wiring error, not a `DomainError`: see {@link MissingHandlerError}
+ * for the rationale of crashing loud at the App layer.
+ */
+export class UnprojectableEventError extends KitWiringError<"UNPROJECTABLE_EVENT"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		reason: string,
+		cause?: unknown,
+	) {
+		super(
+			"UNPROJECTABLE_EVENT",
+			`Projector(${projection}): event ${eventId} ${reason}`,
+			cause,
+		);
+	}
+}
+
+/**
  * Thrown by `Entity` (constructor and `setState`) and by the event
  * metadata helpers (`createDomainEvent`'s `options.metadata`,
  * `mergeMetadata`, `copyMetadata`) when the value carries an own

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: projection support (checkpoint port, projector runner, position query)
+
+- `ProjectionCheckpointStore` port, `Projector` runner, and
+  `InMemoryProjectionCheckpointStore` reference: the projection
+  mechanics `read-model-design.md` demands, so a consumer's
+  `Projection.apply` is a plain event-to-row mapping. One
+  `project(batch)` call is one `TransactionScope` transaction, the
+  read-model update and checkpoint commit atomically and roll back
+  together; duplicates and stale events are skipped via the
+  `(aggregateVersion, commitSequence)` watermark `withCommit` already
+  stamps (per-aggregate total order), with a `position` extractor
+  option for sources that carry their own cursor (event-store
+  replays); uncursored events reject loudly, with the structured
+  `UnprojectableEventError`, before anything applies.
+  `hasProcessed(aggregateId, position)` is the wait-for-version
+  building block (full-pair comparison: version-only would report
+  "reached" mid-commit); `reset()` truncates the read model (via the
+  projection's optional `truncate`) and clears checkpoints in one
+  transaction as the rebuild entry point; `toOutboxSink()` plugs the
+  projector straight into `OutboxDispatcher`. New contract suite
+  `createProjectionCheckpointStoreContractTests` in
+  `@shirudo/ddd-kit/testing` (rollback capability-gated, like the
+  sibling suites). The projections guide is rewritten around the
+  shipped runner.
+
 ### Added: EventBus.subscribeAll
 
 - `subscribeAll(handler)` on the `EventBus` port and `EventBusImpl`: the
