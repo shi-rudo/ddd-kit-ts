@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Sagas guide page
+
+- New guide page composing the existing pieces into a saga / process
+  manager, with no new machinery: the saga as a regular aggregate with
+  a `DomainStateMachine` core, event intake through the dispatcher-fed
+  bus, the idempotency store as the inbox, decisions leaving through
+  the outbox (including why dispatching commands straight from a
+  subscriber has a crash window), timeouts as inputs via the
+  `DeadlineStore`, and compensation as plain business logic. Documents
+  what deliberately does not ship (no `SagaStore`, no correlation
+  machinery, no workflow DSL) and points to `examples/saga` as the
+  runnable reference.
+
 ### Added: DeadlineStore port (durable timeout-as-input)
 
 - `DeadlineStore` port, `InMemoryDeadlineStore` reference, and

@@ -8,8 +8,8 @@ import { AggregateNotFoundError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import { InvalidDomainTransitionError } from "../../src/domain-state-machine/domain-state-machine";
 import { EventBusImpl } from "../../src/events/event-bus";
-import { InMemoryOutbox } from "../../src/events/outbox";
-import type { EventBus, Outbox } from "../../src/events/ports";
+import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
+import type { EventBus, OutboxWriter } from "../../src/events/ports";
 import type { IRepository } from "../../src/repo/repository";
 import type { TransactionScope } from "../../src/repo/scope";
 
@@ -22,10 +22,9 @@ import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 // Tiny test helpers
 // ----------------------------------------------------------------------------
 
-function inMemoryRepo<
-	TAgg extends IAggregateRoot<TId>,
-	TId extends Id<string>,
->(name: string): IRepository<TAgg, TId> {
+function inMemoryRepo<TAgg extends IAggregateRoot<TId>, TId extends Id<string>>(
+	name: string,
+): IRepository<TAgg, TId> {
 	const store = new Map<TId, TAgg>();
 	return {
 		async findById(id) {
@@ -42,8 +41,8 @@ function inMemoryRepo<
 		async save(agg) {
 			store.set(agg.id, agg);
 		},
-		async delete(id) {
-			store.delete(id);
+		async delete(aggregate) {
+			store.delete(aggregate.id);
 		},
 	};
 }
@@ -102,7 +101,7 @@ type AppCommands = {
 interface AppDeps {
 	commandBus: CommandBus<AppCommands>;
 	eventBus: EventBus<AppEvent>;
-	outbox: Outbox<AppEvent>;
+	outbox: OutboxWriter<AppEvent>;
 	scope: TransactionScope<undefined>;
 	orderRepository: IRepository<Order, OrderId>;
 	paymentRepository: IRepository<Payment, PaymentId>;
@@ -120,29 +119,31 @@ function registerCommandHandlers(deps: AppDeps): void {
 			return { result: ok(order.id), aggregates: [order] };
 		});
 
-	const requestPayment: CommandHandler<RequestPaymentCommand, PaymentId> =
-		async (cmd) =>
-			withCommit({ outbox, bus: eventBus, scope }, async () => {
-				const payment = Payment.request(
-					cmd.paymentId,
-					cmd.orderId,
-					cmd.amountCents,
-				);
-				await deps.paymentRepository.save(payment);
-				return { result: ok(payment.id), aggregates: [payment] };
-			});
+	const requestPayment: CommandHandler<
+		RequestPaymentCommand,
+		PaymentId
+	> = async (cmd) =>
+		withCommit({ outbox, bus: eventBus, scope }, async () => {
+			const payment = Payment.request(
+				cmd.paymentId,
+				cmd.orderId,
+				cmd.amountCents,
+			);
+			await deps.paymentRepository.save(payment);
+			return { result: ok(payment.id), aggregates: [payment] };
+		});
 
-	const requestShipping: CommandHandler<RequestShippingCommand, ShipmentId> =
-		async (cmd) =>
-			withCommit({ outbox, bus: eventBus, scope }, async () => {
-				const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
-				await deps.shipmentRepository.save(shipment);
-				return { result: ok(shipment.id), aggregates: [shipment] };
-			});
+	const requestShipping: CommandHandler<
+		RequestShippingCommand,
+		ShipmentId
+	> = async (cmd) =>
+		withCommit({ outbox, bus: eventBus, scope }, async () => {
+			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
+			await deps.shipmentRepository.save(shipment);
+			return { result: ok(shipment.id), aggregates: [shipment] };
+		});
 
-	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (
-		cmd,
-	) =>
+	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.confirm();
@@ -183,11 +184,17 @@ function registerCommandHandlers(deps: AppDeps): void {
  * the next command (if any). Failure-path subscribers compensate by
  * dispatching CancelOrder + RefundPayment as needed.
  *
- * In production: replace EventBus.subscribe with a durable outbox
- * dispatcher reading from the outbox table. The choreography logic
- * stays identical; only the trigger mechanism changes.
+ * In production the trigger is durable: withCommit writes a real
+ * outbox, an OutboxDispatcher with eventBusSink delivers from it, and
+ * each reaction runs under withIdempotentCommit so redelivery cannot
+ * double-fire a step. The subscriber logic stays identical; the sagas
+ * guide (docs/guide/sagas.md) shows that wiring end to end.
  */
-function wireSaga(deps: AppDeps, paymentIdGen: () => PaymentId, shipmentIdGen: () => ShipmentId): void {
+function wireSaga(
+	deps: AppDeps,
+	paymentIdGen: () => PaymentId,
+	shipmentIdGen: () => ShipmentId,
+): void {
 	const { eventBus, commandBus, sagaRepository } = deps;
 
 	eventBus.subscribe("OrderPlaced", async (event) => {
@@ -309,15 +316,19 @@ async function simulateShippingResult(
 function bootstrap() {
 	let nextPaymentSeq = 1;
 	let nextShipmentSeq = 1;
-	const paymentIdGen = (): PaymentId =>
-		`pay-${nextPaymentSeq++}` as PaymentId;
+	const paymentIdGen = (): PaymentId => `pay-${nextPaymentSeq++}` as PaymentId;
 	const shipmentIdGen = (): ShipmentId =>
 		`ship-${nextShipmentSeq++}` as ShipmentId;
 
 	const deps: AppDeps = {
 		commandBus: new CommandBus<AppCommands>(),
 		eventBus: new EventBusImpl<AppEvent>(),
-		outbox: new InMemoryOutbox<AppEvent>(),
+		// Demo wiring: events reach the saga over the bus fast path only,
+		// so the outbox slot gets the explicit event-loss writer instead of
+		// an InMemoryOutbox nobody drains (that dummy would grow unbounded;
+		// its own docs say so). The durable wiring, outbox drained by an
+		// OutboxDispatcher into eventBusSink, is what the sagas guide shows.
+		outbox: outboxWriterAcceptingEventLoss<AppEvent>(),
 		scope: noTxScope,
 		orderRepository: inMemoryRepo<Order, OrderId>("Order"),
 		paymentRepository: inMemoryRepo<Payment, PaymentId>("Payment"),
@@ -390,8 +401,7 @@ describe("Checkout saga (Process Manager)", () => {
 		const finalOrder = await deps.orderRepository.getById(orderId);
 		expect(finalOrder.state.status).toBe("confirmed");
 
-		const finalShipment =
-			await deps.shipmentRepository.getById(shipmentId);
+		const finalShipment = await deps.shipmentRepository.getById(shipmentId);
 		expect(finalShipment.state.status).toBe("shipped");
 		expect(finalShipment.state.trackingId).toBe("TRACK-001");
 	});
@@ -468,8 +478,7 @@ describe("Checkout saga (Process Manager)", () => {
 		expect(finalOrder.state.cancelReason).toContain("shipping-failed");
 		expect(finalOrder.state.cancelReason).toContain("warehouse-unavailable");
 
-		const finalShipment =
-			await deps.shipmentRepository.getById(shipmentId);
+		const finalShipment = await deps.shipmentRepository.getById(shipmentId);
 		expect(finalShipment.state.status).toBe("failed");
 	});
 });
