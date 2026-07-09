@@ -99,6 +99,7 @@ export default defineConfig({
 						{ text: "Outbox & Transactions", link: "/guide/outbox" },
 						{ text: "Read-Side Projections", link: "/guide/projections" },
 						{ text: "Deadlines", link: "/guide/deadlines" },
+						{ text: "Sagas & Process Managers", link: "/guide/sagas" },
 					],
 				},
 				{
