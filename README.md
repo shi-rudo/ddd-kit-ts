@@ -165,7 +165,7 @@ where the domain model needs them and stays out of the rest.
 - No ORM adapter is bundled.
 - No queue or broker is required.
 - No global application container is introduced.
-- No Specification DSL is shipped.
+- No query DSL or expression trees: `Specification` evaluates in memory and is translated explicitly by adapters, never reverse-engineered into SQL.
 - No money rounding, allocation, or FX policy is hidden in the library.
 - No cross-process command bus is pretended to be in-process code.
 

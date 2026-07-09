@@ -224,6 +224,13 @@ export type {
 } from "./repo/scope";
 export type { SnapshotStore } from "./repo/snapshot-store";
 
+// Specifications
+export {
+	Specification,
+	type SpecificationComposite,
+	specification,
+} from "./specification/specification";
+
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,
