@@ -1,28 +1,40 @@
 # @shirudo/ddd-kit
 
-Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canonical building blocks (Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, and CQRS handlers) without a framework or runtime lock-in. ESM-only; runs on Node 22+, Cloudflare Workers, Vercel Edge, Deno, and Bun.
+Tactical Domain-Driven Design building blocks for TypeScript.
+
+`@shirudo/ddd-kit` gives you the pieces you need to model a real domain:
+value objects, entities, aggregates, domain events, repositories, command and
+query handlers, an outbox, a Unit of Work facade, event-store ports,
+projections, and adapter contract tests.
+
+It is not an application framework. You keep your HTTP layer, database, queue,
+ORM, and runtime choices. The kit gives your domain model a strong center and
+clear boundaries around persistence and side effects.
 
 > **Stable: 3.0**
 >
-> The public API is stable and follows [Semantic Versioning](https://semver.org/). Breaking changes bump the major and ship with a migration path in the [CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md).
+> The public API follows [Semantic Versioning](https://semver.org/). Breaking
+> changes bump the major version and are documented with migration notes in the
+> [CHANGELOG](./CHANGELOG.md).
 
 ![npm version](https://img.shields.io/npm/v/@shirudo/ddd-kit)
 ![license](https://img.shields.io/npm/l/@shirudo/ddd-kit)
 
-## Features
+## When This Helps
 
-- **Value Objects:** deep-frozen, by-attribute equality (`vo`, `ValueObject`, `voEquals`).
-- **Entities:** identity + lifecycle, with collection helpers branded by `Id<Tag>`.
-- **Aggregate Roots:** state-stored (`AggregateRoot`) and event-sourced (`EventSourcedAggregate`), with optimistic-concurrency versioning.
-- **Domain Events:** typed, deeply frozen, carry metadata for traceability and schema evolution.
-- **Domain State Machine:** finite, named domain states with typed context, guards, reducers, terminal states, and value outputs for aggregate lifecycles and process managers.
-- **Repositories:** technology-agnostic persistence ports with an Identity-Map contract and OCC.
-- **CQRS:** zero-config in-memory `CommandBus` / `QueryBus`, plus `CommandHandler` / `QueryHandler` types for external brokers.
-- **Unit of Work:** opt-in `UnitOfWork` facade with tx-bound repositories, repository-side enrollment, a per-operation Identity Map, and aggregate-level dirty tracking (`changedKeys` / `hasChanges`) for partial writes. Honestly speaking: a transaction coordinator with registration and Identity Map; writes stay explicit by design (no auto-flush).
-- **Outbox:** `withCommit` harvests pending events inside the transaction, stamps them with the aggregate's commit version, and publishes them atomically.
-- **Event Store:** `EventStore` port with expectedVersion-guarded appends and snapshot catch-up reads, plus `InMemoryEventStore` as the reference implementation.
-- **Repository contract tests:** `@shirudo/ddd-kit/testing` ships the suites (state-stored and event-sourced) every adapter must pass: OCC is a testable contract, not a documented pattern.
-- **Result-first boundary:** a typed error hierarchy on [`@shirudo/base-error`](https://www.npmjs.com/package/@shirudo/base-error) and `Result` from [`@shirudo/result`](https://www.npmjs.com/package/@shirudo/result); `voValidated` collects field violations and renders RFC 9457 via the opt-in `@shirudo/ddd-kit/http` entry.
+Use this kit when your TypeScript code has domain rules that deserve more than
+DTOs and service functions:
+
+- an order can only be confirmed once
+- a booking must stay inside an allowed date range
+- money must never lose precision at a JSON boundary
+- optimistic concurrency conflicts must be handled deliberately
+- domain events must be persisted and dispatched reliably
+- repository adapters must prove they enforce the same contract
+
+The library is intentionally boring at the edges. It does not ship an ORM, a
+message broker, decorators, a dependency-injection container, or a web
+framework. Those choices belong to the application.
 
 ## Installation
 
@@ -30,60 +42,177 @@ Composable TypeScript toolkit for tactical Domain-Driven Design. Ships the canon
 pnpm add @shirudo/ddd-kit @shirudo/result @shirudo/base-error
 ```
 
-`@shirudo/result` and `@shirudo/base-error` are peer dependencies; install them once in the consuming app.
+`@shirudo/result` and `@shirudo/base-error` are peer dependencies. Install them
+once in the consuming app.
 
-## Quick start
+The package is ESM-only, requires TypeScript 5.9+, and supports Node 22+,
+Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
-```typescript
-import { vo, type VO } from "@shirudo/ddd-kit";
+## A Small Aggregate
 
-type EmailAddress = VO<{ value: string }>;
+```ts
+import {
+  AggregateRoot,
+  DomainError,
+  type DomainEvent,
+  type Id,
+} from "@shirudo/ddd-kit";
 
-function createEmail(value: string): EmailAddress {
-  if (!value.includes("@")) throw new Error("Invalid email address");
-  return vo({ value }); // deeply frozen, immutable
+type OrderId = Id<"OrderId">;
+
+type OrderState = {
+  status: "draft" | "confirmed";
+};
+
+type OrderConfirmed = DomainEvent<
+  "OrderConfirmed",
+  { orderId: OrderId }
+>;
+
+type OrderEvent = OrderConfirmed;
+
+class OrderAlreadyConfirmedError extends DomainError<
+  "ORDER_ALREADY_CONFIRMED"
+> {
+  constructor(orderId: OrderId) {
+    super({
+      code: "ORDER_ALREADY_CONFIRMED",
+      message: `Order ${orderId} is already confirmed.`,
+    });
+  }
 }
 
-const email = createEmail("user@example.com");
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
+  private constructor(id: OrderId, state: OrderState) {
+    super(id, state);
+  }
+
+  static draft(id: OrderId): Order {
+    return new Order(id, { status: "draft" });
+  }
+
+  confirm(): void {
+    if (this.state.status === "confirmed") {
+      throw new OrderAlreadyConfirmedError(this.id);
+    }
+
+    this.commit(
+      { status: "confirmed" },
+      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+    );
+  }
+}
+
+const order = Order.draft("order-1" as OrderId);
+
+order.confirm();
+
+order.state.status; // "confirmed"
+order.version; // 1
+order.pendingEvents[0]?.type; // "OrderConfirmed"
 ```
 
-For a complete walkthrough (a minimal `Order` aggregate with typed events, `commit()`, and the App-Service boundary), see [Getting Started](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/getting-started.md).
+That example is deliberately small, but it shows the core shape:
 
-## Core concepts
+- the aggregate owns the rule
+- the domain throws when an invariant is broken
+- `commit(...)` changes state and records the event together
+- `recordEvent(...)` stamps aggregate identity onto the event
+- persistence is still outside the aggregate
 
-Each building block has a dedicated guide. Start with [Design Decisions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/design-decisions.md) for the non-obvious calls (Result at the App boundary, no Specification pattern, the TransactionScope/Unit-of-Work layering, class-based aggregates).
+In production, a repository and `withCommit` or `UnitOfWork` persist the state,
+write the events to an outbox inside the same transaction, and mark the
+aggregate as persisted after the transaction commits.
 
-| Concept | Guide |
-|---|---|
-| Value Objects (`vo`, `ValueObject`, `voWithValidation`, `voValidated`) | [Value Objects](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/value-objects.md) |
-| Entities and identity | [Entities](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/entities.md) |
-| Aggregate Roots, factories, reconstitution | [Aggregate Roots](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/aggregates.md) |
-| Event sourcing (`apply`, replay, snapshots) | [Event Sourcing](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/event-sourcing.md) |
-| Domain Events (`createDomainEvent`, metadata) | [Domain Events](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-events.md) |
-| Domain State Machine (`DomainStateMachine`, `transitionDomainState`) | [Domain State Machine](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/domain-state-machine.md) |
-| Errors: throw vs Result, `ValidationError`, RFC 9457 | [Result vs Throw](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/result-vs-throw.md) |
-| Commands, queries, buses | [CQRS & Buses](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/cqrs-and-buses.md) |
-| Repositories, Identity Map, OCC | [Repository](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/repository.md) |
-| Unit of Work, enrollment, contract test suite | [Unit of Work](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/unit-of-work.md) |
-| Outbox, `withCommit`, transactions | [Outbox & Transactions](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/outbox.md) |
-| Read-side projections | [Projections](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/projections.md) |
-| Concurrency & operation-scoped aggregates | [Concurrency](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/concurrency.md) |
-| Edge runtimes (Workers, Deno, Bun) | [Edge Runtimes](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/edge-runtimes.md) |
+## What You Get
 
-## Documentation
+**Domain modeling**
 
-- **[LLM.md](https://github.com/shi-rudo/ddd-kit-ts/blob/main/LLM.md):** hand-curated, high-signal guide for LLM coding tools and a fast human skim of the whole surface.
-- **[Common Mistakes](https://github.com/shi-rudo/ddd-kit-ts/blob/main/docs/guide/common-mistakes.md):** the footgun catalogue; read it before writing consumer code.
-- **API reference:** full type definitions ship with the package (`node_modules/@shirudo/ddd-kit/dist/index.d.ts`); the `@shirudo/ddd-kit/http` subpath exports the RFC 9457 presenter.
-- **[CHANGELOG](https://github.com/shi-rudo/ddd-kit-ts/blob/main/CHANGELOG.md):** release history with a migration path for every breaking change.
+- value objects via `vo()` and `ValueObject<T>`
+- exact Money helpers in `@shirudo/ddd-kit/money`
+- child entities with branded identity
+- state-stored and event-sourced aggregate roots
+- domain events with metadata, schema version, and commit stamps
+- a domain state machine for named lifecycle states
 
-## TypeScript support
+**Application boundaries**
 
-Requires TypeScript 5.9+. The kit leans on branded, conditional, and mapped types for a type-safe DDD experience; all APIs are fully typed.
+- `CommandHandler` and `QueryHandler` types
+- in-process `CommandBus` and `QueryBus` for modular apps, tests, and edge
+  runtimes
+- a clear error split: domain code throws, command/query boundaries return
+  `Result`
+- `voValidated` for collecting field-level validation issues
+- optional HTTP/RFC 9457 presentation helpers
+
+**Persistence and delivery**
+
+- repository interfaces for id-based and filtered access
+- a per-operation Identity Map contract
+- optimistic concurrency errors and duplicate-insert errors
+- `withCommit` for transaction, outbox, event harvest, and post-commit cleanup
+- `UnitOfWork` for repository registration and enrollment
+- outbox dispatcher, projection, event-store, and snapshot ports
+- contract tests for repository and outbox adapters
+
+## What It Does Not Do
+
+The kit does not decide your architecture for you. It gives you hard boundaries
+where the domain model needs them and stays out of the rest.
+
+- No ORM adapter is bundled.
+- No queue or broker is required.
+- No global application container is introduced.
+- No Specification DSL is shipped.
+- No money rounding, allocation, or FX policy is hidden in the library.
+- No cross-process command bus is pretended to be in-process code.
+
+Those are application decisions. The guides show the recommended seams.
+
+## Guide Map
+
+Start with [Getting Started](./docs/guide/getting-started.md) if you want the
+short walkthrough. Read [Design Decisions](./docs/guide/design-decisions.md) if
+you want to understand why the kit is shaped this way. Keep
+[Common Mistakes](./docs/guide/common-mistakes.md) nearby when writing your
+first adapter or aggregate.
+
+| Topic | Guide |
+| --- | --- |
+| Value objects and validation helpers | [Value Objects](./docs/guide/value-objects.md) |
+| Exact money values | [Money](./docs/guide/money.md) |
+| Child entities and identity | [Entities](./docs/guide/entities.md) |
+| State-stored aggregates | [Aggregate Roots](./docs/guide/aggregates.md) |
+| Event-sourced aggregates and snapshots | [Event Sourcing](./docs/guide/event-sourcing.md) |
+| Domain event shape and factories | [Domain Events](./docs/guide/domain-events.md) |
+| Named lifecycle states | [Domain State Machine](./docs/guide/domain-state-machine.md) |
+| Throwing in the domain, returning `Result` at the boundary | [Result vs Throw](./docs/guide/result-vs-throw.md) |
+| Commands, queries, and in-process buses | [CQRS & Buses](./docs/guide/cqrs-and-buses.md) |
+| Repository contracts and Identity Map | [Repository](./docs/guide/repository.md) |
+| Transaction-scoped repositories | [Unit of Work](./docs/guide/unit-of-work.md) |
+| Reliable event harvest and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
+| Read models and projectors | [Projections](./docs/guide/projections.md) |
+| Event schema changes | [Event Upcasting](./docs/guide/event-upcasting.md) |
+| Optimistic concurrency | [Concurrency](./docs/guide/concurrency.md) |
+| Workers, Deno, Bun, and other edge runtimes | [Edge Runtimes](./docs/guide/edge-runtimes.md) |
+
+The generated API reference lives in [docs/api](./docs/api/).
+
+## Examples
+
+- [examples/order](./examples/order): a minimal state-stored aggregate
+- [examples/order-with-entity-items](./examples/order-with-entity-items): an
+  aggregate with child entities
+- [examples/rugby](./examples/rugby): an event-sourced aggregate
+- [examples/saga](./examples/saga): a process manager / saga workflow
 
 ## Contributing
 
-Contributions are welcome. For bugs and feature requests, use the [issue tracker](https://github.com/shi-rudo/ddd-kit-ts/issues); open a pull request against `main`.
+Bug reports, questions, and pull requests are welcome on
+[GitHub](https://github.com/shi-rudo/ddd-kit-ts). Please open pull requests
+against `main`.
 
 ## License
 
@@ -91,4 +220,7 @@ MIT.
 
 ## Author
 
-**Shirudo:** [@shi-rudo](https://github.com/shi-rudo) · [npm](https://www.npmjs.com/package/@shirudo/ddd-kit) · [repo](https://github.com/shi-rudo/ddd-kit-ts)
+**Shirudo**:
+[@shi-rudo](https://github.com/shi-rudo) |
+[npm](https://www.npmjs.com/package/@shirudo/ddd-kit) |
+[repository](https://github.com/shi-rudo/ddd-kit-ts)
