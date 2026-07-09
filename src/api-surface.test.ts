@@ -51,6 +51,7 @@ const INDEX_SURFACE = [
 	"InvalidDomainTransitionResultError",
 	"MissingHandlerError",
 	"NestedUnitOfWorkError",
+	"OutboxDispatcher",
 	"QueryBus",
 	"ReentrantDomainStateMachineEvaluationError",
 	"RetryingTransactionScope",
@@ -72,10 +73,12 @@ const INDEX_SURFACE = [
 	"deepFreeze",
 	"deepOmit",
 	"entityIds",
+	"eventBusSink",
 	"findEntityById",
 	"freezeShallow",
 	"hasEntityId",
 	"mergeMetadata",
+	"outboxWriterAcceptingEventLoss",
 	"prepareDomainMachineDefinition",
 	"removeEntityById",
 	"replaceEntityById",
@@ -102,6 +105,8 @@ const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
 
 const TESTING_SURFACE = [
 	"createEsRepositoryContractTests",
+	"createIdempotencyStoreContractTests",
+	"createOutboxContractTests",
 	"createRepositoryContractTests",
 ] as const;
 

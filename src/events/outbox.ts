@@ -1,9 +1,42 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import { assertPositiveInteger } from "../utils/validate";
 import type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	OutboxRecord,
+	OutboxWriter,
 } from "./ports";
+
+/**
+ * An {@link OutboxWriter} that deliberately drops every event: the
+ * no-op (noop) writer, named for its consequence rather than its
+ * mechanism, so the call site reads as the decision it is.
+ *
+ * `withCommit` and `UnitOfWork` require an outbox on purpose: the
+ * asymmetry against the optional `bus` is the design. The bus is the
+ * best-effort in-process fast path (post-commit, no durability), so it
+ * may be omitted; the outbox is the delivery GUARANTEE, so running
+ * without one is a decision, not a default. This writer is that
+ * decision, made readable at the call site.
+ *
+ * Legitimate uses: aggregates that emit no events (`TEvent = never`,
+ * nothing will ever be written), and deliberate best-effort setups
+ * where the in-process bus is the only delivery and event loss on a
+ * crash between commit and publish is ACCEPTED. Do not reach for an
+ * undrained `InMemoryOutbox` instead: its pending map grows unbounded
+ * (see the class docs).
+ *
+ * The name is long on purpose, same discipline as
+ * `setStateWithoutVersionBump`: the dangerous variant carries the loud
+ * name.
+ */
+export function outboxWriterAcceptingEventLoss<
+	Evt extends AnyDomainEvent,
+>(): OutboxWriter<Evt> {
+	return {
+		add: async () => {},
+	};
+}
 
 /** Construction options for {@link InMemoryOutbox}. */
 export interface InMemoryOutboxOptions {
@@ -46,7 +79,11 @@ type TrackedRecord<Evt extends AnyDomainEvent> = {
  * For production, back the outbox with a transactional store so the
  * outbox row participates in the same transaction as the aggregate
  * write (see `TransactionScope` + `withCommit`). This class lives in
- * memory only: events are lost on process restart. Sharper still:
+ * memory only: events are lost on process restart. Do NOT use it as a
+ * dummy for bus-only setups without a dispatcher draining it: records
+ * that are never `markDispatched` accumulate in the pending map
+ * unbounded. For a deliberate no-delivery setup use
+ * {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
  * events `add()`ed inside a transaction that later rolls back are NOT
  * removed (the Map knows nothing about your scope's rollback). Tests
  * that assert rollback purity need an outbox that participates in the
@@ -79,11 +116,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	constructor(options?: InMemoryOutboxOptions) {
 		const max = options?.maxDeliveryAttempts ?? 5;
-		if (!Number.isInteger(max) || max < 1) {
-			throw new Error(
-				`InMemoryOutbox: maxDeliveryAttempts must be an integer >= 1, got ${max}`,
-			);
-		}
+		assertPositiveInteger("InMemoryOutbox", "maxDeliveryAttempts", max);
 		this.maxDeliveryAttempts = max;
 	}
 

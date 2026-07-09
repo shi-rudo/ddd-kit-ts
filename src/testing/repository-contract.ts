@@ -4,13 +4,14 @@ import type { Id } from "../core/id";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
-	assertEqual,
-	captureRejection,
 	assertChainContainsKitError,
+	assertEqual,
+	bindContractEnvironment,
+	type ContractTest,
+	captureRejection,
 	describeError,
+	gatedContractTest,
 	loadAggregateOrFail,
-	runInContractEnvironment,
-	skippedContractTest,
 } from "./contract-assertions";
 
 /**
@@ -178,12 +179,7 @@ export interface RepositoryContractHarness<
  * like green coverage, and a naive binding that ignores `skipped`
  * fails loud instead of passing silently.
  */
-export interface RepositoryContractTest {
-	name: string;
-	run: () => Promise<void>;
-	/** Present when the harness lacks the capability this test needs. */
-	skipped?: { capability: string };
-}
+export type RepositoryContractTest = ContractTest;
 
 /**
  * The repository contract test suite: the proof that an adapter
@@ -286,8 +282,7 @@ export function createRepositoryContractTests<
 
 	// Runner plumbing shared with the event-sourced suite; see
 	// ./contract-assertions for the teardown-never-masks rule.
-	const withEnvironment = (body: (env: Env) => Promise<void>): Promise<void> =>
-		runInContractEnvironment(() => harness.createEnvironment(), body);
+	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
 
 	const loadOrFail = (
 		repository: ContractRepository<TAgg>,
@@ -331,330 +326,313 @@ export function createRepositoryContractTests<
 	const insertsAreDuplicateChecked =
 		harness.insertsAreDuplicateChecked !== false;
 
-	const skippedTest = (
-		name: string,
-		capability: string,
-	): RepositoryContractTest => skippedContractTest(name, capability);
-
 	const tests: RepositoryContractTest[] = [
 		{
 			name: "MANDATORY two-writer conflict: the stale writer throws ConcurrencyConflictError and persists nothing",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
-					const seedEvents = await env.committedOutboxEvents();
-					const seedEventIds = new Set(seedEvents.map((e) => e.eventId));
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
+				const seedEvents = await env.committedOutboxEvents();
+				const seedEventIds = new Set(seedEvents.map((e) => e.eventId));
 
-					// Writer B loads first - its persistedVersion baseline is
-					// now fixed at the pre-conflict version.
-					const staleB = await reload(env, seeded.id);
+				// Writer B loads first - its persistedVersion baseline is
+				// now fixed at the pre-conflict version.
+				const staleB = await reload(env, seeded.id);
 
-					// Writer A loads the same version, mutates, commits.
-					const committedA = await env.run(async ({ repository }) => {
-						const a = await loadOrFail(repository, seeded.id);
-						harness.mutate(a);
-						await repository.save(a);
-						return a;
-					});
-					const outboxAfterA = await env.committedOutboxEvents();
-					assert(
-						outboxAfterA.length > seedEvents.length,
-						"writer A's events must reach the outbox on commit",
-					);
-					// Writer A's NEW events must carry A's ACTUAL committed
-					// version - not merely some number. A wrong value here
-					// (hardcoded, schema version, persistedVersion) would
-					// poison every consumer's ordering/idempotency watermark.
-					const newSinceSeed = outboxAfterA.filter(
-						(event) => !seedEventIds.has(event.eventId),
-					);
-					assert(
-						newSinceSeed.length > 0 &&
-							newSinceSeed.every(
-								(event) => event.aggregateVersion === committedA.version,
-							),
-						`writer A's committed outbox events must carry aggregateVersion === ${committedA.version} (A's commit version). ` +
-							`Suspect #1: your outbox read-back (committedOutboxEvents) reconstructs events from an explicit column list ` +
-							`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
-							`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
-					);
-					// ...and a gapless zero-based commitSequence: the pair
-					// (aggregateVersion, commitSequence) is the consumer's
-					// total order and compact idempotency watermark.
-					const sequences = newSinceSeed
-						.map((event) => event.commitSequence)
-						.sort((a, b) => (a ?? -1) - (b ?? -1));
-					assert(
-						sequences.every((sequence, index) => sequence === index),
-						`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
-							`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
-							`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
-					);
+				// Writer A loads the same version, mutates, commits.
+				const committedA = await env.run(async ({ repository }) => {
+					const a = await loadOrFail(repository, seeded.id);
+					harness.mutate(a);
+					await repository.save(a);
+					return a;
+				});
+				const outboxAfterA = await env.committedOutboxEvents();
+				assert(
+					outboxAfterA.length > seedEvents.length,
+					"writer A's events must reach the outbox on commit",
+				);
+				// Writer A's NEW events must carry A's ACTUAL committed
+				// version - not merely some number. A wrong value here
+				// (hardcoded, schema version, persistedVersion) would
+				// poison every consumer's ordering/idempotency watermark.
+				const newSinceSeed = outboxAfterA.filter(
+					(event) => !seedEventIds.has(event.eventId),
+				);
+				assert(
+					newSinceSeed.length > 0 &&
+						newSinceSeed.every(
+							(event) => event.aggregateVersion === committedA.version,
+						),
+					`writer A's committed outbox events must carry aggregateVersion === ${committedA.version} (A's commit version). ` +
+						`Suspect #1: your outbox read-back (committedOutboxEvents) reconstructs events from an explicit column list ` +
+						`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
+						`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
+				);
+				// ...and a gapless zero-based commitSequence: the pair
+				// (aggregateVersion, commitSequence) is the consumer's
+				// total order and compact idempotency watermark.
+				const sequences = newSinceSeed
+					.map((event) => event.commitSequence)
+					.sort((a, b) => (a ?? -1) - (b ?? -1));
+				assert(
+					sequences.every((sequence, index) => sequence === index),
+					`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
+						`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
+						`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
+				);
 
-					// Writer B mutates its stale instance and tries to commit.
-					harness.mutate(staleB);
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.save(staleB);
-						}),
-					);
-					assert(
-						rejection !== undefined,
-						"the second writer's commit must reject - it committed on a stale version instead (OCC predicate missing?)",
-					);
-					assertChainContainsKitError(
-						rejection,
-						["CONCURRENCY_CONFLICT"],
-						`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
-					);
+				// Writer B mutates its stale instance and tries to commit.
+				harness.mutate(staleB);
+				const rejection = await captureRejection(
+					env.run(async ({ repository }) => {
+						await repository.save(staleB);
+					}),
+				);
+				assert(
+					rejection !== undefined,
+					"the second writer's commit must reject - it committed on a stale version instead (OCC predicate missing?)",
+				);
+				assertChainContainsKitError(
+					rejection,
+					["CONCURRENCY_CONFLICT"],
+					`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
+				);
 
-					// Final persisted state equals writer A's.
-					const final = await reload(env, seeded.id);
-					assertEqual(
-						final.version,
-						committedA.version,
-						"the persisted version must equal writer A's committed version",
-					);
-					if (snapshotState) {
-						assert(
-							deepEqual(
-								snapshotState.call(harness, final),
-								snapshotState.call(harness, committedA),
-							),
-							"the persisted STATE must equal writer A's. Two suspects: " +
-								"(a) a predicate that guards only the version write lets the stale writer's state survive; " +
-								"(b) your snapshotState projection is not roundtrip-stable (date precision, undefined-valued keys, decimal representation) - see its JSDoc",
-						);
-					}
-
-					// Outbox contains exactly the events it contained after A's
-					// commit - same records, not merely the same count.
-					const outboxFinal = await env.committedOutboxEvents();
+				// Final persisted state equals writer A's.
+				const final = await reload(env, seeded.id);
+				assertEqual(
+					final.version,
+					committedA.version,
+					"the persisted version must equal writer A's committed version",
+				);
+				if (snapshotState) {
 					assert(
-						deepEqual(eventIds(outboxFinal), eventIds(outboxAfterA)),
-						"the outbox must contain exactly the winning writer's events (compared by eventId) - nothing from the stale writer, nothing replaced",
+						deepEqual(
+							snapshotState.call(harness, final),
+							snapshotState.call(harness, committedA),
+						),
+						"the persisted STATE must equal writer A's. Two suspects: " +
+							"(a) a predicate that guards only the version write lets the stale writer's state survive; " +
+							"(b) your snapshotState projection is not roundtrip-stable (date precision, undefined-valued keys, decimal representation) - see its JSDoc",
 					);
-				}),
+				}
+
+				// Outbox contains exactly the events it contained after A's
+				// commit - same records, not merely the same count.
+				const outboxFinal = await env.committedOutboxEvents();
+				assert(
+					deepEqual(eventIds(outboxFinal), eventIds(outboxAfterA)),
+					"the outbox must contain exactly the winning writer's events (compared by eventId) - nothing from the stale writer, nothing replaced",
+				);
+			}),
 		},
 		{
 			name: "insert routing: a never-persisted aggregate INSERTs even after pre-save mutations",
-			run: () =>
-				withEnvironment(async (env) => {
-					const aggregate = harness.createAggregate();
-					assert(
-						aggregate.persistedVersion === undefined,
-						"harness contract: createAggregate() must return a never-persisted aggregate (persistedVersion === undefined)",
-					);
-					// Mutate BEFORE the first save: version moves past zero in
-					// memory while no row exists. Routing on version === 0
-					// would attempt an UPDATE that affects zero rows.
-					harness.mutate(aggregate);
-					harness.mutate(aggregate);
+			run: inEnv(async (env) => {
+				const aggregate = harness.createAggregate();
+				assert(
+					aggregate.persistedVersion === undefined,
+					"harness contract: createAggregate() must return a never-persisted aggregate (persistedVersion === undefined)",
+				);
+				// Mutate BEFORE the first save: version moves past zero in
+				// memory while no row exists. Routing on version === 0
+				// would attempt an UPDATE that affects zero rows.
+				harness.mutate(aggregate);
+				harness.mutate(aggregate);
 
-					await env.run(async ({ repository }) => {
-						await repository.save(aggregate);
-					});
+				await env.run(async ({ repository }) => {
+					await repository.save(aggregate);
+				});
 
-					const loaded = await reload(env, aggregate.id);
-					assertEqual(
-						loaded.version,
-						aggregate.version,
-						"the INSERT must persist the in-memory version (route on persistedVersion === undefined, not version === 0)",
-					);
-				}),
+				const loaded = await reload(env, aggregate.id);
+				assertEqual(
+					loaded.version,
+					aggregate.version,
+					"the INSERT must persist the in-memory version (route on persistedVersion === undefined, not version === 0)",
+				);
+			}),
 		},
 		{
 			name: "update writes the in-memory version and predicates on persistedVersion",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
-					const baseline = seeded.version;
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
+				const baseline = seeded.version;
 
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						harness.mutate(loaded);
-						harness.mutate(loaded);
-						await repository.save(loaded);
-					});
+				await env.run(async ({ repository }) => {
+					const loaded = await loadOrFail(repository, seeded.id);
+					harness.mutate(loaded);
+					harness.mutate(loaded);
+					await repository.save(loaded);
+				});
 
-					const final = await reload(env, seeded.id);
-					assertEqual(
-						final.version,
-						baseline + 2,
-						"two mutations must persist as baseline + 2 (version is a mutation sequence)",
-					);
-					assertEqual(
-						final.persistedVersion,
-						final.version,
-						"a reloaded aggregate's persistedVersion must equal its version",
-					);
-				}),
+				const final = await reload(env, seeded.id);
+				assertEqual(
+					final.version,
+					baseline + 2,
+					"two mutations must persist as baseline + 2 (version is a mutation sequence)",
+				);
+				assertEqual(
+					final.persistedVersion,
+					final.version,
+					"a reloaded aggregate's persistedVersion must equal its version",
+				);
+			}),
 		},
 		{
 			name: "rollback persists nothing: state, version, and outbox untouched",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
-					const versionBefore = seeded.version;
-					const outboxBefore = (await env.committedOutboxEvents()).length;
-					const probe = new Error("contract rollback probe");
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
+				const versionBefore = seeded.version;
+				const outboxBefore = (await env.committedOutboxEvents()).length;
+				const probe = new Error("contract rollback probe");
 
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							const loaded = await loadOrFail(repository, seeded.id);
-							harness.mutate(loaded);
-							await repository.save(loaded);
-							throw probe;
-						}),
-					);
-					assert(
-						rejection !== undefined,
-						"a throwing unit of work must reject",
-					);
+				const rejection = await captureRejection(
+					env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						harness.mutate(loaded);
+						await repository.save(loaded);
+						throw probe;
+					}),
+				);
+				assert(rejection !== undefined, "a throwing unit of work must reject");
 
-					const final = await reload(env, seeded.id);
-					assertEqual(
-						final.version,
-						versionBefore,
-						"a rolled-back write must not change the persisted version",
-					);
-					assertEqual(
-						(await env.committedOutboxEvents()).length,
-						outboxBefore,
-						"a rolled-back transaction must not leave events in the outbox",
-					);
-				}),
+				const final = await reload(env, seeded.id);
+				assertEqual(
+					final.version,
+					versionBefore,
+					"a rolled-back write must not change the persisted version",
+				);
+				assertEqual(
+					(await env.committedOutboxEvents()).length,
+					outboxBefore,
+					"a rolled-back transaction must not leave events in the outbox",
+				);
+			}),
 		},
 		{
 			name: "identity map: two findById calls in one unit of work return the same instance",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
 
-					await env.run(async ({ repository }) => {
-						const first = await repository.findById(seeded.id);
-						const second = await repository.findById(seeded.id);
-						assert(
-							first !== null && first === second,
-							"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
-						);
-					});
-				}),
+				await env.run(async ({ repository }) => {
+					const first = await repository.findById(seeded.id);
+					const second = await repository.findById(seeded.id);
+					assert(
+						first !== null && first === second,
+						"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
+					);
+				});
+			}),
 		},
 		{
 			name: "delete: findById returns null in the same unit of work and after the commit",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
 
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						await repository.delete(loaded);
-						const probe = await repository.findById(seeded.id);
-						assert(
-							probe === null,
-							"after delete, findById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
-						);
-					});
+				await env.run(async ({ repository }) => {
+					const loaded = await loadOrFail(repository, seeded.id);
+					await repository.delete(loaded);
+					const probe = await repository.findById(seeded.id);
+					assert(
+						probe === null,
+						"after delete, findById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
+					);
+				});
 
-					await env.run(async ({ repository }) => {
-						const probe = await repository.findById(seeded.id);
-						assert(
-							probe === null,
-							"after the deleting unit of work committed, the aggregate must be gone",
-						);
-					});
-				}),
+				await env.run(async ({ repository }) => {
+					const probe = await repository.findById(seeded.id);
+					assert(
+						probe === null,
+						"after the deleting unit of work committed, the aggregate must be gone",
+					);
+				});
+			}),
 		},
 		{
 			name: "deletion is final: saving the deleted aggregate in the same unit of work throws AggregateDeletedError",
-			run: () =>
-				withEnvironment(async (env) => {
-					const seeded = await seed(env);
+			run: inEnv(async (env) => {
+				const seeded = await seed(env);
 
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							const loaded = await loadOrFail(repository, seeded.id);
-							harness.mutate(loaded);
-							await repository.delete(loaded);
-							await repository.save(loaded);
-						}),
-					);
-					assertChainContainsKitError(
-						rejection,
-						["AGGREGATE_DELETED"],
-						`save-after-delete must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}. ` +
-							`If you see ConcurrencyConflictError here instead, your save() probably enrolls AFTER the row write - enroll first.`,
-					);
-				}),
+				const rejection = await captureRejection(
+					env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						harness.mutate(loaded);
+						await repository.delete(loaded);
+						await repository.save(loaded);
+					}),
+				);
+				assertChainContainsKitError(
+					rejection,
+					["AGGREGATE_DELETED"],
+					`save-after-delete must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}. ` +
+						`If you see ConcurrencyConflictError here instead, your save() probably enrolls AFTER the row write - enroll first.`,
+				);
+			}),
 		},
 		{
 			name: "events are cleared after a committed unit of work and kept after a rollback",
-			run: () =>
-				withEnvironment(async (env) => {
-					const committed = harness.createAggregate();
-					harness.mutate(committed);
-					assert(
-						committed.pendingEvents.length > 0,
-						"harness contract: mutate() must record at least one domain event",
-					);
-					await env.run(async ({ repository }) => {
-						await repository.save(committed);
-					});
-					assertEqual(
-						committed.pendingEvents.length,
-						0,
-						"pending events must be cleared after a successful commit",
-					);
+			run: inEnv(async (env) => {
+				const committed = harness.createAggregate();
+				harness.mutate(committed);
+				assert(
+					committed.pendingEvents.length > 0,
+					"harness contract: mutate() must record at least one domain event",
+				);
+				await env.run(async ({ repository }) => {
+					await repository.save(committed);
+				});
+				assertEqual(
+					committed.pendingEvents.length,
+					0,
+					"pending events must be cleared after a successful commit",
+				);
 
-					const rolledBack = harness.createAggregate();
-					harness.mutate(rolledBack);
-					const pendingBefore = rolledBack.pendingEvents.length;
-					await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.save(rolledBack);
-							throw new Error("contract rollback probe");
-						}),
-					);
-					assertEqual(
-						rolledBack.pendingEvents.length,
-						pendingBefore,
-						"pending events must survive a rollback (so a fresh load + retry can re-emit them)",
-					);
-				}),
+				const rolledBack = harness.createAggregate();
+				harness.mutate(rolledBack);
+				const pendingBefore = rolledBack.pendingEvents.length;
+				await captureRejection(
+					env.run(async ({ repository }) => {
+						await repository.save(rolledBack);
+						throw new Error("contract rollback probe");
+					}),
+				);
+				assertEqual(
+					rolledBack.pendingEvents.length,
+					pendingBefore,
+					"pending events must survive a rollback (so a fresh load + retry can re-emit them)",
+				);
+			}),
 		},
 		{
 			name: "persistedVersion syncs only after a successful commit",
-			run: () =>
-				withEnvironment(async (env) => {
-					// Re-saving the SAME instance after the rollback is the
-					// documented carve-out from "don't reuse aggregates after a
-					// rollback": a NEVER-persisted aggregate has no row and its
-					// baseline is still undefined, so there is nothing to
-					// reload - retrying its first save is the only path.
-					const aggregate = harness.createAggregate();
-					harness.mutate(aggregate);
+			run: inEnv(async (env) => {
+				// Re-saving the SAME instance after the rollback is the
+				// documented carve-out from "don't reuse aggregates after a
+				// rollback": a NEVER-persisted aggregate has no row and its
+				// baseline is still undefined, so there is nothing to
+				// reload - retrying its first save is the only path.
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
 
-					await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.save(aggregate);
-							throw new Error("contract rollback probe");
-						}),
-					);
-					assert(
-						aggregate.persistedVersion === undefined,
-						"a rolled-back first save must leave persistedVersion undefined (the aggregate is still unpersisted)",
-					);
-
-					await env.run(async ({ repository }) => {
+				await captureRejection(
+					env.run(async ({ repository }) => {
 						await repository.save(aggregate);
-					});
-					assertEqual(
-						aggregate.persistedVersion,
-						aggregate.version,
-						"after a successful commit, persistedVersion must equal version (markPersisted ran)",
-					);
-				}),
+						throw new Error("contract rollback probe");
+					}),
+				);
+				assert(
+					aggregate.persistedVersion === undefined,
+					"a rolled-back first save must leave persistedVersion undefined (the aggregate is still unpersisted)",
+				);
+
+				await env.run(async ({ repository }) => {
+					await repository.save(aggregate);
+				});
+				assertEqual(
+					aggregate.persistedVersion,
+					aggregate.version,
+					"after a successful commit, persistedVersion must equal version (markPersisted ran)",
+				);
+			}),
 		},
 	];
 
@@ -663,208 +641,225 @@ export function createRepositoryContractTests<
 	// the gap stays visible in every test report (it.skip) and a naive
 	// binding fails instead of green-no-op'ing.
 	tests.push(
-		mutateVersionOnly
-			? {
-					name: "version-only change still persists (skip-save must not desync the OCC baseline)",
-					run: () =>
-						withEnvironment(async (env) => {
-							const seeded = await seed(env);
-							const baseline = seeded.version;
+		gatedContractTest(
+			{
+				capability: "mutateVersionOnly",
+				satisfiedBy: Boolean(mutateVersionOnly),
+			},
+			{
+				name: "version-only change still persists (skip-save must not desync the OCC baseline)",
+				run: inEnv(async (env) => {
+					// The gate above guarantees the capability; narrow for TS.
+					assert(
+						mutateVersionOnly !== undefined,
+						"gate guarantees mutateVersionOnly",
+					);
+					const seeded = await seed(env);
+					const baseline = seeded.version;
 
-							await env.run(async ({ repository }) => {
-								const loaded = await loadOrFail(repository, seeded.id);
-								mutateVersionOnly.call(harness, loaded);
-								await repository.save(loaded);
-							});
+					await env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						mutateVersionOnly.call(harness, loaded);
+						await repository.save(loaded);
+					});
 
-							const final = await reload(env, seeded.id);
-							assertEqual(
-								final.version,
-								baseline + 1,
-								"a version-only change (empty changedKeys, bumped version) must still be persisted - skipping it desyncs persistedVersion and produces false ConcurrencyConflictErrors later",
-							);
-						}),
-				}
-			: skippedTest(
-					"version-only change still persists (skip-save must not desync the OCC baseline)",
-					"mutateVersionOnly",
-				),
+					const final = await reload(env, seeded.id);
+					assertEqual(
+						final.version,
+						baseline + 1,
+						"a version-only change (empty changedKeys, bumped version) must still be persisted - skipping it desyncs persistedVersion and produces false ConcurrencyConflictErrors later",
+					);
+				}),
+			},
+		),
 	);
 	tests.push(
-		mutateChildCollection
-			? {
-					name: "a child-collection-only change bumps the persisted root version",
-					run: () =>
-						withEnvironment(async (env) => {
-							const seeded = await seed(env);
-							const baseline = seeded.version;
+		gatedContractTest(
+			{
+				capability: "mutateChildCollection",
+				satisfiedBy: Boolean(mutateChildCollection),
+			},
+			{
+				name: "a child-collection-only change bumps the persisted root version",
+				run: inEnv(async (env) => {
+					// The gate above guarantees the capability; narrow for TS.
+					assert(
+						mutateChildCollection !== undefined,
+						"gate guarantees mutateChildCollection",
+					);
+					const seeded = await seed(env);
+					const baseline = seeded.version;
 
-							await env.run(async ({ repository }) => {
-								const loaded = await loadOrFail(repository, seeded.id);
-								mutateChildCollection.call(harness, loaded);
-								await repository.save(loaded);
-							});
+					await env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						mutateChildCollection.call(harness, loaded);
+						await repository.save(loaded);
+					});
 
-							const final = await reload(env, seeded.id);
-							assert(
-								final.version > baseline,
-								"a child-collection-only change must advance the persisted ROOT version - otherwise concurrent writers interleave with collection writes undetected",
-							);
-						}),
-				}
-			: skippedTest(
-					"a child-collection-only change bumps the persisted root version",
-					"mutateChildCollection",
-				),
+					const final = await reload(env, seeded.id);
+					assert(
+						final.version > baseline,
+						"a child-collection-only change must advance the persisted ROOT version - otherwise concurrent writers interleave with collection writes undetected",
+					);
+				}),
+			},
+		),
 	);
 	tests.push(
-		createAggregateWithId
-			? {
-					name: "deletion is final across instances: a re-created aggregate with the same id cannot be saved",
-					run: () =>
-						withEnvironment(async (env) => {
-							const seeded = await seed(env);
+		gatedContractTest(
+			{
+				capability: "createAggregateWithId",
+				satisfiedBy: Boolean(createAggregateWithId),
+			},
+			{
+				name: "deletion is final across instances: a re-created aggregate with the same id cannot be saved",
+				run: inEnv(async (env) => {
+					// The gate above guarantees the capability; narrow for TS.
+					assert(
+						createAggregateWithId !== undefined,
+						"gate guarantees createAggregateWithId",
+					);
+					const seeded = await seed(env);
 
-							const rejection = await captureRejection(
-								env.run(async ({ repository }) => {
-									const loaded = await loadOrFail(repository, seeded.id);
-									await repository.delete(loaded);
-									const resurrected = createAggregateWithId.call(
-										harness,
-										seeded.id,
-									);
-									harness.mutate(resurrected);
-									await repository.save(resurrected);
-								}),
-							);
-							assertChainContainsKitError(
-								rejection,
-								["AGGREGATE_DELETED"],
-								`saving a re-created instance of a deleted aggregate must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}`,
-							);
-						}),
-				}
-			: skippedTest(
-					"deletion is final across instances: a re-created aggregate with the same id cannot be saved",
-					"createAggregateWithId",
-				),
-	);
-	tests.push(
-		createAggregateWithId && insertsAreDuplicateChecked
-			? {
-					name: "duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
-					run: () =>
-						withEnvironment(async (env) => {
-							const seeded = await seed(env);
-
-							// A second NEVER-persisted instance with the same id:
-							// two concurrent creators racing on a business-derived
-							// id, or an id-generator collision. The INSERT must
-							// surface as the kit's error class, not a raw driver
-							// error. Mutated TWICE so its version differs from the
-							// seeded row's - a clobbering insert is then visible
-							// in the version check below even without a state
-							// snapshot.
-							const duplicate = createAggregateWithId.call(
+					const rejection = await captureRejection(
+						env.run(async ({ repository }) => {
+							const loaded = await loadOrFail(repository, seeded.id);
+							await repository.delete(loaded);
+							const resurrected = createAggregateWithId.call(
 								harness,
 								seeded.id,
 							);
-							harness.mutate(duplicate);
-							harness.mutate(duplicate);
-							const rejection = await captureRejection(
-								env.run(async ({ repository }) => {
-									await repository.save(duplicate);
-								}),
-							);
-							assertChainContainsKitError(
-								rejection,
-								["DUPLICATE_AGGREGATE"],
-								`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
-									`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
-									`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
-							);
-
-							// The existing row is untouched by the rejected insert:
-							// version AND (capability permitting) state.
-							const final = await reload(env, seeded.id);
-							assertEqual(
-								final.version,
-								seeded.version,
-								"the existing row must be untouched by the rejected duplicate insert - a duplicate check that fires AFTER the write (or outside the transaction) clobbers the existing row",
-							);
-							if (snapshotState) {
-								assert(
-									deepEqual(
-										snapshotState.call(harness, final),
-										snapshotState.call(harness, seeded),
-									),
-									"the existing row's STATE must be untouched by the rejected duplicate insert",
-								);
-							}
+							harness.mutate(resurrected);
+							await repository.save(resurrected);
 						}),
-				}
-			: skippedTest(
-					"duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
-					// Name the capability that is actually missing: the
-					// mechanical one (cannot build the duplicate) or the
-					// semantic opt-out (deliberately upserting adapter).
-					createAggregateWithId
-						? "insertsAreDuplicateChecked"
-						: "createAggregateWithId",
-				),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["AGGREGATE_DELETED"],
+						`saving a re-created instance of a deleted aggregate must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}`,
+					);
+				}),
+			},
+		),
 	);
 	tests.push(
-		deletesAreVersionChecked
-			? {
-					name: "stale delete conflicts: deleting from a stale instance throws ConcurrencyConflictError",
-					run: () =>
-						withEnvironment(async (env) => {
-							const seeded = await seed(env);
-
-							// Writer B loads, writer A commits an update, B deletes
-							// from its stale baseline - the predicated DELETE must
-							// affect zero rows and conflict, not destroy A's write.
-							const staleB = await reload(env, seeded.id);
-							const versionAfterA = await env.run(
-								async ({ repository }) => {
-									const a = await loadOrFail(repository, seeded.id);
-									harness.mutate(a);
-									await repository.save(a);
-									return a.version;
-								},
-							);
-
-							const rejection = await captureRejection(
-								env.run(async ({ repository }) => {
-									await repository.delete(staleB);
-								}),
-							);
-							assertChainContainsKitError(
-								rejection,
-								["CONCURRENCY_CONFLICT"],
-								`a stale delete must reject with (or wrap) ConcurrencyConflictError; got: ${describeError(rejection)} - an unpredicated DELETE silently destroys the concurrent writer's update`,
-							);
-
-							// A's write survived - load nullable on purpose: the
-							// rejected delete must not have destroyed the row.
-							const final = await env.run(({ repository }) =>
-								repository.findById(seeded.id),
-							);
-							assert(
-								final !== null,
-								"the row must still exist after the stale delete was rejected - the predicate must PREVENT the destructive delete, not merely report it",
-							);
-							assertEqual(
-								final.version,
-								versionAfterA,
-								"the surviving row must carry writer A's version",
-							);
-						}),
-				}
-			: skippedTest(
-					"stale delete conflicts: deleting from a stale instance throws ConcurrencyConflictError",
-					"deletesAreVersionChecked",
+		gatedContractTest(
+			{
+				// Name the capability that is actually missing: the mechanical
+				// one (cannot build the duplicate) or the semantic opt-out
+				// (deliberately upserting adapter).
+				capability: createAggregateWithId
+					? "insertsAreDuplicateChecked"
+					: "createAggregateWithId",
+				satisfiedBy: Boolean(
+					createAggregateWithId && insertsAreDuplicateChecked,
 				),
+			},
+			{
+				name: "duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
+				run: inEnv(async (env) => {
+					// The gate above guarantees the capability; narrow for TS.
+					assert(
+						createAggregateWithId !== undefined,
+						"gate guarantees createAggregateWithId",
+					);
+					const seeded = await seed(env);
+
+					// A second NEVER-persisted instance with the same id:
+					// two concurrent creators racing on a business-derived
+					// id, or an id-generator collision. The INSERT must
+					// surface as the kit's error class, not a raw driver
+					// error. Mutated TWICE so its version differs from the
+					// seeded row's - a clobbering insert is then visible
+					// in the version check below even without a state
+					// snapshot.
+					const duplicate = createAggregateWithId.call(harness, seeded.id);
+					harness.mutate(duplicate);
+					harness.mutate(duplicate);
+					const rejection = await captureRejection(
+						env.run(async ({ repository }) => {
+							await repository.save(duplicate);
+						}),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["DUPLICATE_AGGREGATE"],
+						`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
+							`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
+							`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
+					);
+
+					// The existing row is untouched by the rejected insert:
+					// version AND (capability permitting) state.
+					const final = await reload(env, seeded.id);
+					assertEqual(
+						final.version,
+						seeded.version,
+						"the existing row must be untouched by the rejected duplicate insert - a duplicate check that fires AFTER the write (or outside the transaction) clobbers the existing row",
+					);
+					if (snapshotState) {
+						assert(
+							deepEqual(
+								snapshotState.call(harness, final),
+								snapshotState.call(harness, seeded),
+							),
+							"the existing row's STATE must be untouched by the rejected duplicate insert",
+						);
+					}
+				}),
+			},
+		),
+	);
+	tests.push(
+		gatedContractTest(
+			{
+				capability: "deletesAreVersionChecked",
+				satisfiedBy: Boolean(deletesAreVersionChecked),
+			},
+			{
+				name: "stale delete conflicts: deleting from a stale instance throws ConcurrencyConflictError",
+				run: inEnv(async (env) => {
+					const seeded = await seed(env);
+
+					// Writer B loads, writer A commits an update, B deletes
+					// from its stale baseline - the predicated DELETE must
+					// affect zero rows and conflict, not destroy A's write.
+					const staleB = await reload(env, seeded.id);
+					const versionAfterA = await env.run(async ({ repository }) => {
+						const a = await loadOrFail(repository, seeded.id);
+						harness.mutate(a);
+						await repository.save(a);
+						return a.version;
+					});
+
+					const rejection = await captureRejection(
+						env.run(async ({ repository }) => {
+							await repository.delete(staleB);
+						}),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["CONCURRENCY_CONFLICT"],
+						`a stale delete must reject with (or wrap) ConcurrencyConflictError; got: ${describeError(rejection)} - an unpredicated DELETE silently destroys the concurrent writer's update`,
+					);
+
+					// A's write survived - load nullable on purpose: the
+					// rejected delete must not have destroyed the row.
+					const final = await env.run(({ repository }) =>
+						repository.findById(seeded.id),
+					);
+					assert(
+						final !== null,
+						"the row must still exist after the stale delete was rejected - the predicate must PREVENT the destructive delete, not merely report it",
+					);
+					assertEqual(
+						final.version,
+						versionAfterA,
+						"the surviving row must carry writer A's version",
+					);
+				}),
+			},
+		),
 	);
 
 	return tests;

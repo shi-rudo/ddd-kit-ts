@@ -1,7 +1,13 @@
 import { someChainRetryable } from "@shirudo/base-error";
 import { abortReason } from "../utils/abort";
+import { computeBackoffDelay } from "../utils/backoff";
 import { reportToObserver } from "../utils/observer";
-import type { TransactionScope, TransactionalOptions } from "./scope";
+import { sleepRejectingOnAbort } from "../utils/sleep";
+import {
+	assertNonNegativeFinite,
+	assertPositiveInteger,
+} from "../utils/validate";
+import type { TransactionalOptions, TransactionScope } from "./scope";
 
 /**
  * Tuning for {@link RetryingTransactionScope}. All fields are optional;
@@ -49,55 +55,11 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 50;
 const DEFAULT_MAX_DELAY_MS = 1000;
 
-/**
- * Backoff delay for the attempt that just failed (1-based): exponential
- * (`baseDelayMs * 2^(attempt-1)`), capped at `maxDelayMs`, then a +/-20%
- * jitter band (`* random(0.8, 1.2)`) applied and re-clamped to the cap.
- * Pure and deterministic given `random`. Result is never negative.
- *
- * @internal Exported only so it can be unit-tested directly; not part of
- * the supported public API and may change without a major version.
- */
-export function computeBackoffDelay(
-	attempt: number,
-	opts: { baseDelayMs: number; maxDelayMs: number; random: () => number },
-): number {
-	const exponential = opts.baseDelayMs * 2 ** (attempt - 1);
-	const capped = Math.min(opts.maxDelayMs, exponential);
-	const jitter = 0.8 + opts.random() * 0.4; // [0.8, 1.2)
-	return Math.max(0, Math.min(opts.maxDelayMs, Math.round(capped * jitter)));
-}
-
-function assertNonNegativeFinite(field: string, value: number): void {
-	if (!Number.isFinite(value) || value < 0) {
-		throw new Error(
-			`RetryingTransactionScope: ${field} must be a non-negative finite number, got ${value}`,
-		);
-	}
-}
-
 const ABORT_MESSAGE = "RetryingTransactionScope aborted";
 
 /** Abortable `setTimeout`; rejects with the signal reason if aborted. */
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		if (signal?.aborted) {
-			reject(abortReason(signal, ABORT_MESSAGE));
-			return;
-		}
-		let onAbort: (() => void) | undefined;
-		const timer = setTimeout(() => {
-			if (onAbort && signal) signal.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		if (signal) {
-			onAbort = () => {
-				clearTimeout(timer);
-				reject(abortReason(signal, ABORT_MESSAGE));
-			};
-			signal.addEventListener("abort", onAbort, { once: true });
-		}
-	});
+	return sleepRejectingOnAbort(ms, signal, ABORT_MESSAGE);
 }
 
 /**
@@ -147,13 +109,21 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 		this.maxAttempts = policy.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
 		this.baseDelayMs = policy.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
 		this.maxDelayMs = policy.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
-		if (!Number.isInteger(this.maxAttempts) || this.maxAttempts < 1) {
-			throw new Error(
-				`RetryingTransactionScope: maxAttempts must be an integer >= 1, got ${this.maxAttempts}`,
-			);
-		}
-		assertNonNegativeFinite("baseDelayMs", this.baseDelayMs);
-		assertNonNegativeFinite("maxDelayMs", this.maxDelayMs);
+		assertPositiveInteger(
+			"RetryingTransactionScope",
+			"maxAttempts",
+			this.maxAttempts,
+		);
+		assertNonNegativeFinite(
+			"RetryingTransactionScope",
+			"baseDelayMs",
+			this.baseDelayMs,
+		);
+		assertNonNegativeFinite(
+			"RetryingTransactionScope",
+			"maxDelayMs",
+			this.maxDelayMs,
+		);
 		this.isRetryable = policy.isRetryable ?? someChainRetryable;
 		this.sleep = policy.sleep ?? defaultSleep;
 		this.random = policy.random ?? Math.random;

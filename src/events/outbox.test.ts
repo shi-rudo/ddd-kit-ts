@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
-import { InMemoryOutbox } from "./outbox";
+import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
@@ -252,5 +252,19 @@ describe("getPending limit edge cases", () => {
 		const batchSize = undefined as unknown as number;
 		const inFlight = 0;
 		expect(await outbox.getPending(batchSize - inFlight)).toHaveLength(0);
+	});
+});
+
+describe("outboxWriterAcceptingEventLoss", () => {
+	it("drops every event and retains nothing", async () => {
+		const writer = outboxWriterAcceptingEventLoss<OrderCreated>();
+		await expect(
+			writer.add([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }),
+				createDomainEvent("OrderCreated", { orderId: "o-2" }),
+			]),
+		).resolves.toBeUndefined();
+		// Nothing to poll, nothing retained: the writer has no read side at
+		// all; the type system already prevents getPending on it.
 	});
 });
