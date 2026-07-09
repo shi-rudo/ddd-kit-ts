@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: Result-returning money parsers
+
+- `tryParseMoneyInput`, `tryMoneyFromDto`, and `tryMoneyFromSnapshot`
+  in `@shirudo/ddd-kit/money`: `Result` twins of the three boundary
+  parsers for batch call sites (imports, migrations, replays), with
+  the `voValidated` contract: only the documented domain rejections
+  become `Err` (`InvalidMoneyError`, plus `MoneyPrecisionLossError`
+  for decimal-string parsing), while anything else keeps throwing, so
+  a bug can never be silently counted as a bad input row. The money
+  guide gains a throw-or-Result section mirroring the result-vs-throw
+  guide.
+
 ### Added: property-based and mutation testing for the money module
 
 - `src/money/money.properties.test.ts` (fast-check): the exact-money

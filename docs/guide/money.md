@@ -126,6 +126,34 @@ function normalizeSupplierPrice(raw: unknown): Money {
 policy has a name. Nobody reviewing this code has to guess whether parser
 rounding is tax policy, supplier policy, display cleanup, or a mistake.
 
+### Throw or Result: pick per call site
+
+The parsers throw, and for a single request-scoped value that is the right
+shape: one bad amount fails the request, the error mapper turns it into a
+422, done (the [result-vs-throw guide](./result-vs-throw.md) covers the
+general rule). Batch call sites are the other case. A CSV import with ten
+thousand rows should collect the bad ones, not abort on the first, and
+wrapping every row in try/catch both reads badly and, hand-rolled, usually
+catches too much. For those call sites each parser has a Result-returning
+twin: `tryParseMoneyInput`, `tryMoneyFromDto`, `tryMoneyFromSnapshot`.
+
+```ts
+import { tryParseMoneyInput } from "@shirudo/ddd-kit/money";
+
+const results = rows.map((row) =>
+  tryParseMoneyInput(row.amount, { currency: "EUR", scale: 2 }),
+);
+const parsed = results.filter((r) => r.isOk()).map((r) => r.value);
+const rejects = results.filter((r) => r.isErr()).map((r) => r.error);
+```
+
+The wrappers keep the discipline a hand-rolled try/catch tends to lose:
+only the parser's documented domain rejections become `Err`
+(`InvalidMoneyError`, and for decimal-string parsing also
+`MoneyPrecisionLossError`); anything else keeps throwing, because a bug
+wrapped in `Err` is a bug silently counted as a bad input row. Same
+contract as `voValidated`, same `Result` from `@shirudo/result`.
+
 ## Currency Scales
 
 The kit does not ship a currency table. That is intentional. Different
