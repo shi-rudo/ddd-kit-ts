@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: DeadlineStore port (durable timeout-as-input)
+
+- `DeadlineStore` port, `InMemoryDeadlineStore` reference, and
+  `createDeadlineStoreContractTests` in `@shirudo/ddd-kit/testing`:
+  durable deadlines for processes that wait (saga timeouts, reservation
+  holds, offer expiry). `schedule` and `cancel` join the write
+  transaction (a committed wait without its deadline never wakes up; a
+  rolled-back one must not leave a ghost input, both proven by the
+  suite's rollback capability); `due`/`markDelivered`/`markFailed`/
+  `deadLetters` form the poll surface, at-least-once, with the clock
+  passed in by the poll loop. Addresses are `(scope, key)` pairs with
+  at most one pending deadline each; scheduling an occupied address IS
+  the reschedule and mints a fresh incarnation, so stale
+  acknowledgements cannot consume a successor. Failure tracking is part
+  of the port (attempts, ceiling, dead letters); deadlines carry no
+  cross-address ordering, so a poison deadline blocks only itself.
+  Deliberately not a scheduler: no recurrence, no cron abstraction, no
+  execution engine; firing a deadline means delivering a record.
+  `DeadlineProcessor` ships the hardened delivery loop (never rejects,
+  jittered streak backoff, reentrancy-safe `drainOnce` for cron ticks,
+  graceful stop, neutralized callbacks, injectable clock guarded even
+  against Invalid Dates) while the handler and the poll cadence stay
+  yours. A handler failure never stops the batch (deadlines carry no
+  cross-address ordering); deliveries are acknowledged in one batch
+  call per cycle, and an ack failure ends the cycle since it signals
+  the store's write path, not a poison record. The loop shell itself
+  (run/drainOnce, join semantics, backoff, option validation) is now
+  shared between `OutboxDispatcher` and `DeadlineProcessor` as one
+  internal base, so the hardening cannot drift. New guide page:
+  Deadlines.
+
 ### Added: Specification primitive
 
 - `Specification<T>` (abstract class) and the `specification(name,

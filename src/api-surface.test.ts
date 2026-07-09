@@ -23,6 +23,7 @@ const INDEX_SURFACE = [
 	"CommandBus",
 	"CommitError",
 	"ConcurrencyConflictError",
+	"DeadlineProcessor",
 	"DomainError",
 	"DomainStateMachine",
 	"DomainTransitionGuardRejectedError",
@@ -38,6 +39,7 @@ const INDEX_SURFACE = [
 	"IdempotencyInFlightError",
 	"IdempotencyKeyReuseError",
 	"IdentityMap",
+	"InMemoryDeadlineStore",
 	"InMemoryEventStore",
 	"InMemoryIdempotencyStore",
 	"InMemoryOutbox",
@@ -111,6 +113,7 @@ const INDEX_SURFACE = [
 const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
 
 const TESTING_SURFACE = [
+	"createDeadlineStoreContractTests",
 	"createEsRepositoryContractTests",
 	"createIdempotencyStoreContractTests",
 	"createOutboxContractTests",

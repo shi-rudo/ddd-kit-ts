@@ -76,7 +76,6 @@ export {
 	type UnitOfWorkDeps,
 	type UnitOfWorkSession,
 } from "./app/unit-of-work";
-
 // Core: errors + branded ids
 export {
 	AggregateDeletedError,
@@ -111,6 +110,20 @@ export {
 	UnreplayableAggregateError,
 } from "./core/errors";
 export type { Id, IdGenerator } from "./core/id";
+// Deadlines: durable timeout-as-input
+export {
+	DeadlineProcessor,
+	type DeadlineProcessorOptions,
+} from "./deadlines/deadline-processor";
+export type {
+	DeadLetterDeadline,
+	DeadlineStore,
+	DueDeadline,
+} from "./deadlines/deadline-store";
+export {
+	InMemoryDeadlineStore,
+	type InMemoryDeadlineStoreOptions,
+} from "./deadlines/in-memory-deadline-store";
 
 // Domain State Machine
 export {
