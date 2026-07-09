@@ -1,122 +1,78 @@
 # Read-Side Projections
 
-In CQRS the write side and the read side have different shapes. Aggregates are optimised for **invariants and mutation** (Vernon IDDD §10: small, single-transaction-bounded). Read models are optimised for **the queries your UI actually asks** (denormalised, often spanning multiple aggregate types, often duplicated across views).
+Aggregates are built for decisions. Read models are built for screens.
 
-The bridge between the two is the **transactional outbox + projection** pipeline. The pieces ship in this kit; their composition is your call. This page documents the canonical wiring.
+That is the reason projections exist. A command handler loads an aggregate
+because it must protect invariants. A query handler should usually not load
+three aggregates, calculate display fields, and sort them in memory. It should
+read a table shaped for the query.
 
-## The flow at a glance
+The normal flow is:
 
-```
-┌──────────────────┐  withCommit          ┌─────────────┐
-│ Use Case         │  ──────────────────▶ │ outbox table │
-│ (writes order)   │   tx-atomic add      └─────────────┘
-└──────────────────┘                            │
-                                                │ polled by
-                                                ▼
-                                         ┌──────────────┐
-                                         │ dispatcher   │
-                                         │ (cron / loop)│
-                                         └──────────────┘
-                                                │
-                                                │ event → projection handler
-                                                ▼
-                                         ┌──────────────┐
-                                         │ projection   │  (eventType-keyed map,
-                                         │ handlers     │   idempotent updates)
-                                         └──────────────┘
-                                                │
-                                                │ UPSERT
-                                                ▼
-                                         ┌──────────────┐
-                                         │ read model   │  (denormalised table,
-                                         │ table        │   one per query view)
-                                         └──────────────┘
-                                                │
-                                                │ SELECT
-                                                ▼
-                                         ┌──────────────┐
-                                         │ QueryHandler │
-                                         └──────────────┘
-                                                │
-                                                ▼
-                                         ┌──────────────┐
-                                         │ QueryBus     │
-                                         └──────────────┘
-```
+1. A use case mutates an aggregate.
+2. `withCommit` saves the aggregate and writes its domain events to the
+   outbox in the same transaction.
+3. A dispatcher delivers those events to a `Projector`.
+4. The `Projector` updates one read-model table and advances its checkpoint
+   in the same transaction.
+5. Query handlers read that table.
 
-The whole right column is **eventually consistent** with the left. Sub-second lag is typical; the trade-off is the read side can be denormalised, replicated, and scaled independently.
+The read side is eventually consistent with the write side. That is the
+trade-off: the read model can be denormalized, indexed, replicated, and tuned
+for the UI, but it may lag behind the write by a small amount.
 
-## When you need this
+## When To Use One
 
-You don't always. Rules of thumb:
+Do not add projections just because the app uses CQRS. Add them when the read
+shape is different from the write shape.
 
-- **Small app, no scale problems**: skip projections. A `QueryHandler` that calls `orderRepository.findById(id)` and returns the aggregate is fine. The pieces in this guide are dormant until you need them.
-- **The read query needs fields from multiple aggregates**: projections start paying for themselves. Loading three aggregates per request to derive one view is the wrong shape.
-- **You need to scale reads independently from writes**: projections are the canonical answer.
-- **Read patterns differ from write patterns** (search, full-text, aggregations, list views): yes.
+Good reasons:
 
-### Projection vs Process Manager (Saga)
+- A list view needs fields from several aggregates.
+- A query needs sorting, filtering, search, or aggregation that the aggregate
+  repository is bad at.
+- The UI needs denormalized rows such as `order_list_views`.
+- Reads must scale independently from writes.
+- You want rebuildable read models from an event history.
 
-Both projections and process managers consume events from the outbox. They are different things:
+Weak reasons:
 
-- A **projection** updates a read model: a table you `SELECT` from. It does not issue commands, does not change domain state, does not have invariants. Pure state-of-the-world for queries.
-- A **process manager / saga** orchestrates multi-step business workflows by **issuing commands** in response to events (e.g. on `OrderConfirmed`, dispatch a `RequestPayment` command; on `PaymentReceived`, dispatch `RequestShipping`). Its own state lives in an aggregate; the kit treats it as a regular aggregate that happens to be driven by events instead of direct user commands.
+- "All queries must avoid aggregates" as a rule.
+- A single-id query already has a cheap repository method.
+- The projection would duplicate a table without making the query simpler.
 
-A single application has many of both. They share the dispatcher pipeline but serve different purposes; this page is about projections only.
+It is normal to mix both styles. A `GetOrderById` query can read the
+aggregate. A `GetOrdersForCustomer` query should usually read a projection.
 
-## The read-model schema
+## Read-Model Shape
 
-A read model is a **table shaped exactly for the query that reads it**. It is not an aggregate. It is not normalised. It carries denormalised copies of whatever fields the view needs:
+A read model is not an aggregate and it is not a normalized domain model. It
+is a table for one query or one family of queries.
 
 ```sql
-CREATE TABLE order_list_views (
-  id              TEXT PRIMARY KEY,
-  customer_name   TEXT NOT NULL,    -- denormalised from Customer
-  total_cents     INT  NOT NULL,
-  item_count      INT  NOT NULL,    -- derived; not on the aggregate
-  status          TEXT NOT NULL,
-  last_event_id   TEXT NOT NULL,    -- for projection idempotency, see below
-  updated_at      TIMESTAMP
+create table order_list_views (
+  id text primary key,
+  customer_id text not null,
+  customer_name text not null,
+  total_minor bigint not null,
+  total_currency char(3) not null,
+  total_scale smallint not null,
+  item_count integer not null,
+  status text not null,
+  updated_at timestamptz not null
 );
 ```
 
-You'll typically have several read-model tables per bounded context, one per view shape. `order_list_views`, `order_detail_views`, `order_invoice_views` are three separate tables, each populated by a different projection handler reading the same event stream.
+You might also have `order_detail_views`, `customer_order_summary_views`, or
+`invoice_export_views`. They can all be fed by the same events. Keep each
+projection focused on one read shape; that makes rebuilds and failures much
+easier to reason about.
 
-## The dispatcher loop
+## The Kit Projector
 
-A background process polls the outbox, dispatches each pending event to one or more projection handlers, and marks the events dispatched on success. The kit ships `OutboxDispatcher` for exactly this (see the [outbox guide](./outbox.md), "The kit dispatcher"): long-running `run(signal)` for workers, `drainOnce()` per tick for cron and serverless. Wire a projector into it via `projector.toOutboxSink()` (below), or any handler via a custom `OutboxSink`.
-
-**Poison events are a projection concern too.** The dispatcher is sequential
-with stop-on-failure, so one event that deterministically fails in a
-projection handler (a malformed payload, a handler bug) blocks EVERY event
-behind it: all read models on that dispatcher stop updating. Your two options
-are the two halves of a real trade-off:
-
-- **Plain `Outbox`**: the poison event retries forever (rate-limited by the
-  backoff). The read model stalls but stays consistent; delivery resumes the
-  moment you fix the handler.
-- **`DispatchTrackingOutbox`**: the attempt ceiling dead-letters the poison
-  event and the queue flows again, but that leaves a **permanent hole** in the
-  read model. Later events of the same aggregate advance the projection's
-  watermark past the dead letter, and the cursor cannot distinguish "already
-  applied" from "never applied": redelivering the dead letter afterwards is a
-  silent skip, and applying it out of order would be wrong anyway. The
-  remediation for a dead-lettered projection event is a rebuild
-  (`projector.reset()` + replay) or a manual read-model correction, which is
-  why wiring `deadLetters()` to alerting matters doubly for projections.
-
-### Queue-based alternative
-
-For higher throughput or multi-tenant fanout, replace polling with a queue:
-
-1. The outbox dispatcher pushes each pending event to a durable queue (SQS, NATS, Redis Streams) and marks dispatched on enqueue success.
-2. Projection handlers subscribe to the queue and process events independently.
-
-This shifts the back-pressure problem from "polling rate" to "queue capacity" and lets you parallelise projections across consumers, at the cost of an extra moving piece.
-
-## The kit projector
-
-The mechanics `read-model-design.md` demands (idempotent apply, update and checkpoint committed atomically, ordering cursor, rebuild, wait-for-version) ship as `Projector` plus the `ProjectionCheckpointStore` port, so your handler is a plain event-to-row mapping:
+`Projector` runs one projection with the mechanics that are easy to get wrong:
+cursor checks, duplicate skipping, atomic checkpointing, rebuild reset, and
+wait-for-version.
 
 ```ts
 import {
@@ -125,52 +81,180 @@ import {
   type ProjectionCheckpointStore,
 } from "@shirudo/ddd-kit";
 
-const orderList: Projection<OrderEvent, KnexTx> = {
-  name: "order-list", // keys the checkpoints; renaming replays from zero
+const orderListProjection: Projection<OrderEvent, DbTx> = {
+  name: "order-list",
+
   apply: async (tx, event) => {
     switch (event.type) {
       case "OrderCreated":
-        await tx("order_list_views").insert({ /* ... */ });
+        await tx("order_list_views").insert({
+          id: event.aggregateId,
+          customer_id: event.payload.customerId,
+          customer_name: event.payload.customerName,
+          total_minor: "0",
+          total_currency: event.payload.currency,
+          total_scale: event.payload.scale,
+          item_count: 0,
+          status: "pending",
+          updated_at: event.occurredAt,
+        });
         return;
+
+      case "OrderLineAdded":
+        await tx("order_list_views")
+          .where({ id: event.aggregateId })
+          .update({
+            total_minor: tx.raw("total_minor + ?", [
+              event.payload.lineTotal.amountMinor.toString(),
+            ]),
+            item_count: tx.raw("item_count + 1"),
+            updated_at: event.occurredAt,
+          });
+        return;
+
+      case "OrderConfirmed":
+        await tx("order_list_views")
+          .where({ id: event.aggregateId })
+          .update({
+            status: "confirmed",
+            updated_at: event.occurredAt,
+          });
+        return;
+
       case "OrderCancelled":
-        // Deletes/tombstones handled explicitly, not upsert-only.
         await tx("order_list_views").where({ id: event.aggregateId }).delete();
         return;
     }
   },
+
   truncate: async (tx) => {
-    await tx("order_list_views").truncate(); // rebuild support
+    await tx("order_list_views").truncate();
   },
 };
 
 const projector = new Projector({
-  scope,                       // the SAME database as the read model
-  checkpoints: checkpointStore, // your ProjectionCheckpointStore adapter
-  projection: orderList,
+  scope,
+  checkpoints: checkpointStore,
+  projection: orderListProjection,
 });
-
-// Feed it: straight from the dispatcher...
-const dispatcher = new OutboxDispatcher({ outbox, sink: projector.toOutboxSink() });
-// ...or batch-wise from any source (queue consumer, replay):
-await projector.project(events);
 ```
 
-What the runner guarantees:
+`apply` receives one event and writes the read model. It should not send mail,
+call another service, issue commands, or update domain state. A rebuild
+replays events; side effects would run again.
 
-- **Update and checkpoint commit atomically.** One `project(batch)` call is one `TransactionScope` transaction; a failure rolls back rows AND checkpoints together, so at-least-once redelivery replays cleanly. It is never possible to checkpoint an unapplied event.
-- **Duplicates and stale events are skipped by the cursor.** The watermark is the `(aggregateVersion, commitSequence)` pair `withCommit` already stamps on every harvested event: a total order per aggregate. Your `apply` never sees an event at or behind the watermark, so plain writes are safe without `last_event_id` tricks.
-- **Uncursored events fail loudly.** Events that did not pass through `withCommit` carry no stamps; either stamp them or supply the `position` extractor option (an event-sourced replay uses the store's own position).
-- **Wait-for-version**: `projector.hasProcessed(aggregateId, position)` answers "has this projection caught up to my commit". Pass the position of the last event your commit emitted; comparing on the version alone would report "reached" while later events of the same commit are still unapplied.
-- **Rebuild**: `projector.reset()` truncates the read model (via the projection's `truncate`) and clears the checkpoints in one transaction; then replay the history through `project`. This is why `apply` must be side-effect-free.
+The projection name is part of the checkpoint key. Rename it only when you
+intend to replay from the beginning.
 
-One `Projector` per read model; several projectors share one checkpoint store under distinct projection names. Like the dispatcher, run one logical projector instance per projection unless your checkpoint adapter serializes the check-then-apply (row lock on the checkpoint row).
+## Checkpoints
 
-### Several projections, one outbox
+The projector stores one watermark per `(projection, aggregateId)`.
 
-The outbox has ONE dispatched flag per record, so fan-out to several read
-models happens in the sink, not in the outbox. A composite sink feeds each
-projector in turn; the per-projector watermark is exactly the per-consumer
-cursor that makes this safe:
+```ts
+interface ProjectionPosition {
+  aggregateVersion: number;
+  commitSequence: number;
+}
+
+interface ProjectionCheckpointStore<TCtx> {
+  load(
+    ctx: TCtx,
+    projection: string,
+    aggregateId: string,
+  ): Promise<ProjectionPosition | undefined>;
+
+  save(
+    ctx: TCtx,
+    projection: string,
+    aggregateId: string,
+    position: ProjectionPosition,
+  ): Promise<void>;
+
+  hasReached(
+    projection: string,
+    aggregateId: string,
+    position: ProjectionPosition,
+  ): Promise<boolean>;
+
+  reset(ctx: TCtx, projection: string): Promise<void>;
+}
+```
+
+`withCommit` stamps harvested events with `aggregateVersion` and
+`commitSequence`. Together they form a total order for one aggregate. The
+projector uses that pair to skip duplicates and stale events.
+
+This means your `apply` handler does not need a per-row event-id column for
+the normal kit path. If the dispatcher redelivers the same event after a
+crash, the checkpoint sees that the event is at or behind the watermark and
+skips it before `apply` runs.
+
+The checkpoint table must live in the same database as the read model. The
+read-model update and checkpoint save are one transaction. A checkpoint
+without the row update loses events; a row update without the checkpoint
+replays work. The projector keeps those two writes together, but your adapter
+must participate in the same transaction.
+
+Use `createProjectionCheckpointStoreContractTests` from
+`@shirudo/ddd-kit/testing` to verify a production adapter.
+
+`InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
+not transaction-aware, so it does not prove production rollback behavior.
+
+## Feeding The Projector
+
+For the common outbox path, adapt the projector as an `OutboxSink`:
+
+```ts
+import { OutboxDispatcher } from "@shirudo/ddd-kit";
+
+const dispatcher = new OutboxDispatcher({
+  outbox,
+  sink: projector.toOutboxSink(),
+});
+
+const stop = new AbortController();
+void dispatcher.run(stop.signal);
+```
+
+`toOutboxSink()` projects one outbox record at a time. If projection fails,
+the sink throws, the dispatcher leaves the outbox record pending, and the next
+poll retries it.
+
+You can also feed batches directly:
+
+```ts
+const result = await projector.project(events);
+
+log.info({
+  applied: result.applied,
+  skipped: result.skipped,
+});
+```
+
+That is useful for queue consumers, tests, and replay jobs.
+
+Events must have a cursor. The default cursor is
+`(event.aggregateVersion, event.commitSequence)`, which `withCommit` supplies.
+For another source, pass a custom extractor:
+
+```ts
+const projector = new Projector({
+  scope,
+  checkpoints,
+  projection,
+  position: (event) => event.storePosition,
+});
+```
+
+Use this when replaying from an event store whose own stream position is the
+authority. An event with no cursor rejects with `UnprojectableEventError`
+because it cannot be safely deduped.
+
+## Several Projections From One Outbox
+
+The outbox has one dispatched flag per record. If one event feeds several read
+models, fan out in the sink:
 
 ```ts
 const sink: OutboxSink<OrderEvent> = {
@@ -181,109 +265,26 @@ const sink: OutboxSink<OrderEvent> = {
 };
 ```
 
-When `orderDetailProjector` fails, the record stays pending and the whole sink
-retries; `orderListProjector` then skips its already-applied event via the
-watermark instead of double-applying it. The record is acked only once every
-projector has processed it.
+If `orderDetailProjector` fails after `orderListProjector` succeeds, the
+outbox record stays pending. On retry, `orderListProjector` skips the event
+via its checkpoint, then `orderDetailProjector` gets another chance. The
+record is acknowledged only after every projector has processed it.
 
-The `ProjectionCheckpointStore` adapter (a two-column table keyed by `(projection, aggregate_id)` next to your read models) is verified with `createProjectionCheckpointStoreContractTests` from `@shirudo/ddd-kit/testing`; `InMemoryProjectionCheckpointStore` is the reference for tests and in-memory views.
+Run one logical projector instance per projection unless your checkpoint
+adapter serializes the check-then-apply path, for example with a row lock on
+the checkpoint row.
 
-**Why a per-aggregate cursor, not a global one:** the watermark rides on the event itself (`withCommit` stamps it), so it survives every transport (outbox, broker, replay), and per-aggregate order is the only order the kit guarantees; a global cursor would need a globally ordered, gap-free feed the ports deliberately do not promise. The cost is honest: one checkpoint row per `(projection, aggregate)` instead of one per projection, the same cardinality the common `last_event_id` column pattern hides inside the read model. For a source that does carry a global position (an event store), feed it through the `position` extractor. Projection lag is monitored on the outbox side (age of the oldest pending record, see the outbox production checklist), not on the checkpoint table.
+## QueryHandlers Read The Projection
 
-## Projection handlers
-
-A projection handler maps **one event** to **one read-model update**. Where you bypass the kit projector (or inside `apply` when you prefer the shape), the canonical routing is an event-type-keyed map, mirroring `EventSourcedAggregate.handlers`:
-
-```ts
-import type { DomainEvent } from "@shirudo/ddd-kit";
-
-type OrderCreated  = DomainEvent<"OrderCreated",  { customerId: string; customerName: string }>;
-type OrderConfirmed = DomainEvent<"OrderConfirmed", { confirmedAt: string }>;
-type OrderItemAdded = DomainEvent<"OrderItemAdded", { productId: string; quantity: number; priceCents: number }>;
-
-type OrderEvent = OrderCreated | OrderConfirmed | OrderItemAdded;
-
-class OrderListProjection {
-  constructor(private readonly db: Db) {}
-
-  // Single entry point the dispatcher calls; routes on event.type.
-  handle = async (event: OrderEvent): Promise<void> => {
-    const handler = this.handlers[event.type] as
-      | ((e: typeof event) => Promise<void>)
-      | undefined;
-    if (handler) await handler(event);
-  };
-
-  private readonly handlers: {
-    [K in OrderEvent["type"]]: (
-      e: Extract<OrderEvent, { type: K }>,
-    ) => Promise<void>;
-  } = {
-    OrderCreated: async (e) => {
-      // Idempotent UPSERT: insert if missing, no-op if last_event_id
-      // already matches this event's id.
-      await this.db.execute(sql`
-        INSERT INTO order_list_views (id, customer_name, total_cents, item_count, status, last_event_id)
-        VALUES (${e.aggregateId}, ${e.payload.customerName}, 0, 0, 'pending', ${e.eventId})
-        ON CONFLICT (id) DO UPDATE SET
-          customer_name = EXCLUDED.customer_name,
-          last_event_id = EXCLUDED.last_event_id
-        WHERE order_list_views.last_event_id <> EXCLUDED.last_event_id
-      `);
-    },
-
-    OrderItemAdded: async (e) => {
-      await this.db.execute(sql`
-        UPDATE order_list_views
-        SET total_cents   = total_cents + ${e.payload.quantity * e.payload.priceCents},
-            item_count    = item_count  + ${e.payload.quantity},
-            last_event_id = ${e.eventId}
-        WHERE id = ${e.aggregateId}
-          AND last_event_id <> ${e.eventId}
-      `);
-    },
-
-    OrderConfirmed: async (e) => {
-      await this.db.execute(sql`
-        UPDATE order_list_views
-        SET status = 'confirmed', last_event_id = ${e.eventId}
-        WHERE id = ${e.aggregateId} AND last_event_id <> ${e.eventId}
-      `);
-    },
-  };
-}
-```
-
-A few things to notice:
-
-1. **Routing is on `event.type`**, the same pattern as `EventSourcedAggregate.handlers`. The dispatcher hands the projection a typed `OrderEvent`; the handler narrows via the discriminator.
-2. **One projection class per read-model table.** `OrderListProjection` only touches `order_list_views`. A separate `OrderDetailProjection` would handle the same events but write to `order_detail_views`. This keeps each projection's failure mode isolated.
-3. **Many projections from one outbox.** The dispatcher can route the same event to multiple projections, and each gets its own `markDispatched` accounting (use a separate "subscription cursor" per projection, or extend `Outbox` with multi-consumer tracking if your store supports it).
-
-### Idempotency: the `last_event_id` trick
-
-The dispatcher may retry on partial failure (process killed between `handle` succeeding and `markDispatched` succeeding). The projection handler MUST be safe to apply the same event twice.
-
-The simplest pattern is the `last_event_id` column above:
-
-- Every UPDATE / UPSERT carries `WHERE last_event_id <> incoming.eventId`.
-- A retry of the same event is a no-op (the predicate fails; zero rows affected).
-- This works regardless of whether the events are commutative (`OrderItemAdded` adding `+5` to a total is NOT commutative: applying it twice would double-count).
-
-For projections that span aggregates (a `customer_with_recent_orders_view` updated by both `CustomerCreated` and `OrderCreated`), the **same single column still works**: `eventId` is globally unique, so `WHERE last_event_id <> incoming.eventId` skips duplicates regardless of source. Per-aggregate tracking columns are only needed if you also need **per-stream ordering guarantees** ("apply `CustomerCreated` before any `OrderCreated` for that customer"), and that's a separate concern from idempotency. The simplest pattern for ordering is a `processed_events(projection_id, event_id)` audit table queried before applying.
-
-### Pure projections
-
-Projections do not have invariants. They do not return `DomainError`. They do not validate. They are stateless functions of `(currentRow, event) → newRow`. The closest the kit gets to encoding this is: a `ProjectionHandler<E>` is just `(event: E) => Promise<void>`. There is no library type for it because there is nothing to constrain; projections are just functions.
-
-If a projection handler throws, **let it throw**. The dispatcher will leave the event in the outbox and retry next tick. Don't catch-and-swallow inside the handler; that silently drops events from the read model.
-
-## QueryHandlers read from projections
-
-Once a read model exists, the `QueryHandler` reads from it directly, **not** from the aggregate repository:
+Once the read model exists, the query handler reads it directly.
 
 ```ts
-import type { QueryHandler } from "@shirudo/ddd-kit";
+import type { Query, QueryHandler } from "@shirudo/ddd-kit";
+import {
+  moneyFromDto,
+  moneyToDto,
+  type MoneyDto,
+} from "@shirudo/ddd-kit/money";
 
 type GetOrderListQuery = Query & {
   type: "GetOrderList";
@@ -294,114 +295,213 @@ type GetOrderListQuery = Query & {
 type OrderListItem = {
   id: string;
   customerName: string;
-  totalCents: number;
+  total: MoneyDto;
   itemCount: number;
   status: string;
 };
 
-const getOrderListHandler: QueryHandler<GetOrderListQuery, OrderListItem[]> = async (q) => {
-  return await db.execute(sql`
-    SELECT id, customer_name AS "customerName", total_cents AS "totalCents",
-           item_count AS "itemCount", status
-    FROM order_list_views
-    WHERE customer_id = ${q.customerId}
-    ORDER BY updated_at DESC
-    LIMIT ${q.limit ?? 50}
-  `);
+function moneyDtoFromColumns(
+  amountMinor: string,
+  currency: string,
+  scale: number,
+): MoneyDto {
+  return moneyToDto(moneyFromDto({ amountMinor, currency, scale }));
+}
+
+const getOrderList: QueryHandler<
+  GetOrderListQuery,
+  ReadonlyArray<OrderListItem>
+> = async (query) => {
+  const rows = await db("order_list_views")
+    .select(
+      "id",
+      "customer_name",
+      "total_minor",
+      "total_currency",
+      "total_scale",
+      "item_count",
+      "status",
+    )
+    .where({ customer_id: query.customerId })
+    .orderBy("updated_at", "desc")
+    .limit(query.limit ?? 50);
+
+  return rows.map((row) => ({
+    id: row.id,
+    customerName: row.customer_name,
+    total: moneyDtoFromColumns(
+      String(row.total_minor),
+      row.total_currency,
+      Number(row.total_scale),
+    ),
+    itemCount: row.item_count,
+    status: row.status,
+  }));
 };
 
-queryBus.register("GetOrderList", getOrderListHandler);
+queryBus.register("GetOrderList", getOrderList);
 ```
 
-Contrast with the typical write-side handler shown in [CQRS & Buses](./cqrs-and-buses.md):
+A query handler returns data. `QueryBus.execute(...)` wraps that result in the
+kit's `Result` type; the handler itself does not return `ok(...)`.
+
+## Eventual Consistency
+
+Projection lag is normal. In a healthy local setup it is often tiny, but it is
+still real: write, outbox, dispatcher, projector, query.
+
+Handle that in the product flow:
+
+- Optimistic UI: update the local screen after the command succeeds, then let
+  the projection catch up.
+- Read-your-own-write: for the user who just wrote, return or query the
+  aggregate result from the command path.
+- Bounded wait: wait until the projection reaches the commit position, then
+  read the view. If it does not catch up before the deadline, return the stale
+  view with an explicit pending state.
+
+`Projector.hasProcessed(...)` is the primitive for bounded waits:
 
 ```ts
-// Loads the aggregate. Fine for "GetOrder by id"; awful for "GetOrderList".
-const getOrderHandler: QueryHandler<GetOrderQuery, Order | null> = async (q) => {
-  return await orderRepository.findById(q.orderId as OrderId);
-};
+const caughtUp = await projector.hasProcessed(orderId, {
+  aggregateVersion: 12,
+  commitSequence: 1,
+});
 ```
 
-Both shapes coexist in one codebase. Single-id lookups can hit the aggregate; list/search/aggregation queries hit projections. Mix as needed.
+Pass the position of the last event your command emitted. Version alone is not
+enough because several events in one commit can share the same
+`aggregateVersion`.
 
-## Eventual consistency
+## Rebuilds
 
-The write→outbox→dispatcher→projection→query chain has measurable lag. In a healthy in-process system, sub-second is typical. Under load, it can stretch.
-
-The library does not hide this: eventual consistency is a fact of distributed systems, not a bug to abstract over. UX strategies:
-
-1. **Optimistic UI updates**: after a successful command, update the local UI without waiting for the projection. The next refresh confirms.
-2. **Read-your-own-writes via the aggregate**: for the user who just wrote, query the aggregate directly (write-side) instead of the projection. Inconsistent everywhere else, but the writer sees their own action immediately.
-3. **Bounded wait**: poll the projection for up to N ms; if the expected change hasn't landed, return the stale view.
-
-Vernon discusses these in IDDD §4. None of them require library support; they are application-layer decisions.
-
-## The full topology
+`projector.reset()` clears this projection's checkpoints and calls
+`projection.truncate(...)` in one transaction when `truncate` exists.
 
 ```ts
-// Application bootstrap
+await projector.reset();
+
+for await (const batch of eventHistory.readBatches()) {
+  await projector.project(batch);
+}
+```
+
+The reset is only the start. You still need a history source:
+
+- Event-sourced aggregates can replay from the event store.
+- State-stored aggregates need a separate event archive if you want full
+  historical rebuilds.
+- Without history, you can seed a read model from current aggregate state, but
+  that is not the same as replay.
+
+The outbox is not an event log. It is a handoff buffer. Once records are
+dispatched, it may mark them done or remove them depending on the adapter.
+
+A rebuild must also respect privacy and retention rules. Do not replay data
+that the system is no longer allowed to materialize.
+
+## Poison Events
+
+Projection failures are delivery failures. If `apply` throws, the dispatcher
+does not ack the outbox record.
+
+There are two real strategies:
+
+- Plain `Outbox`: the poison event retries forever with backoff. The read
+  model stalls, but it does not skip the bad event.
+- `DispatchTrackingOutbox`: after the attempt ceiling, the event is
+  dead-lettered and later events can flow.
+
+Dead-lettering projection events is not free. If a later event from the same
+aggregate advances the checkpoint, redelivering the old dead letter later will
+look stale and be skipped. Applying it out of order would be wrong anyway.
+
+The normal remediation is a code/data fix followed by a projection rebuild, or
+a manual read-model correction when a rebuild is not appropriate. Wire
+`deadLetters()` to alerting.
+
+## Projection vs Process Manager
+
+Both consume events, but they have different responsibilities.
+
+A projection updates a read model. It does not issue commands, does not make
+business decisions, and does not protect invariants.
+
+A process manager coordinates a workflow. It reacts to events by issuing
+commands, and if it needs state, that state should be modeled explicitly.
+
+Do not hide workflow decisions in a projection handler. If an event should
+trigger payment, shipping, email, or another command, that is not a read-model
+update.
+
+## Full Wiring Sketch
+
+```ts
 import {
-  InMemoryOutbox,
-  EventBusImpl,
   CommandBus,
-  QueryBus,
+  EventBusImpl,
+  InMemoryOutbox,
   OutboxDispatcher,
   Projector,
+  QueryBus,
   withCommit,
 } from "@shirudo/ddd-kit";
+import { ok } from "@shirudo/result";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
-const bus    = new EventBusImpl<OrderEvent>();
+const bus = new EventBusImpl<OrderEvent>();
 const commands = new CommandBus<OrderCommands>();
-const queries  = new QueryBus<OrderQueries>();
+const queries = new QueryBus<OrderQueries>();
 
-// Wire the projection (see "The kit projector" above)
 const orderListProjector = new Projector({
   scope,
   checkpoints: checkpointStore,
-  projection: orderList,
+  projection: orderListProjection,
 });
 
-// Start the dispatcher
-const controller = new AbortController();
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink: orderListProjector.toOutboxSink(),
 });
-void dispatcher.run(controller.signal);
 
-// Command path: writes go through withCommit -> outbox
-commands.register("CreateOrder", async (cmd) => {
-  return withCommit({ outbox, bus, scope }, async (tx) => {
-    const orderRepository = makeOrderRepository(tx);
-    const order = Order.create(idGen.next(), cmd.customerId);
-    for (const item of cmd.items) {
-      order.addItem(item.productId, item.quantity, item.priceCents);
+const stop = new AbortController();
+void dispatcher.run(stop.signal);
+
+commands.register("CreateOrder", async (command) => {
+  return withCommit({ scope, outbox, bus }, async (tx) => {
+    const orders = makeOrderRepository(tx);
+    const order = Order.create(orderIds.next(), command.customerId);
+
+    for (const line of command.lines) {
+      order.addLine(line.sku, line.quantity, line.price);
     }
-    await orderRepository.save(order);
+
+    await orders.save(order);
+
     return { result: ok(order.id), aggregates: [order] };
   });
 });
 
-// Query path: reads from the projection
-queries.register("GetOrderList", getOrderListHandler);
+queries.register("GetOrderList", getOrderList);
 ```
 
-Three contracts hold this together:
+This sketch has three contracts:
 
-1. **`withCommit` writes the outbox atomically with the aggregate.** No "publish before commit" race.
-2. **The dispatcher is at-least-once.** It will deliver each event ≥1 times until `markDispatched`.
-3. **Projection handlers are idempotent.** `last_event_id` (or your store's equivalent) ensures duplicates are no-ops.
+- `withCommit` writes state and outbox events atomically.
+- The dispatcher delivers at least once.
+- The projector updates the read model and checkpoint atomically.
 
-If all three hold, the read model converges to a function of the event history. Order of arrival within an aggregate is preserved by `withCommit` ([event-ordering contract](./outbox.md)); across aggregates, order is by aggregate-array position, then by emission order within each.
+If those hold, the read model converges to the event history.
 
-## What the library does NOT ship
+## What The Kit Does Not Own
 
-- **No read-model storage abstraction.** `Projection.apply` writes to your existing database with whatever DDL/ORM your write side already uses, or a separate read-store if you want true scale separation. The kit owns the mechanics around the write, never the write itself.
-- **No replay SOURCE for rebuilding projections.** `Projector.reset()` gives you the consistent zero; where the history you replay through `project` comes from is a consumer decision:
-  - **Event-sourced aggregates**: the event store IS the durable history. Replay reads from it directly (supply the `position` extractor; the store's position is the cursor there). The outbox holds *unpublished* events only; once `markDispatched` runs, they're gone (or marked, depending on the implementation), so the outbox is **not** a rebuild source.
-  - **State-stored aggregates**: there is no built-in event archive. Without one, projections cannot be rebuilt from history; you'd seed the read model from current aggregate state (losing the history) or maintain a separate event-archive table a second consumer copies events into.
-  The kit's outbox is a transient handoff buffer, not a durable event log.
-- **No privacy handling.** A rebuild must not resurrect erased or anonymized data; replaying from a permitted source view is your retention policy's job, not the projector's.
+The kit does not define your read-model schema. That belongs to the query.
 
-The kit's role is the **write-side guarantee** (`withCommit` → outbox is transactional; projections see every event ≥ once) plus the **projection mechanics** (cursor, atomic checkpoint, rebuild entry, wait-for-version). The read-model shape and its store are consumer territory.
+It does not ship a read-model ORM abstraction. `Projection.apply` writes with
+your database tool.
+
+It does not provide a universal replay source. Event stores, event archives,
+CDC logs, and current-state rebuilds have different semantics.
+
+It does not make projection handlers safe for side effects. Keep side effects
+out of projections.

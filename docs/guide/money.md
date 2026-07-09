@@ -1,174 +1,145 @@
 # Money
 
-Money must be exact. Floating-point numbers are not: `0.1 + 0.2` is
-`0.30000000000000004`, and a JSON number silently loses integer precision
-past 2^53. The `@shirudo/ddd-kit/money` entry point ships the canonical
-money **contract** and its **boundaries**, so every consumer stops
-re-inventing (and mis-inventing) the same shape:
+Money is one of the places where "close enough" becomes a production bug.
+The kit therefore treats money as an exact domain value:
 
 ```ts
 import { moneyOfMinor } from "@shirudo/ddd-kit/money";
 
 const price = moneyOfMinor(1099n, "EUR", 2);
-// { amountMinor: 1099n, currency: "EUR", scale: 2 } and frozen
+// { amountMinor: 1099n, currency: "EUR", scale: 2 }
 ```
 
-- `amountMinor` is a `bigint` in minor units. Never a `number`, never a
-  decimal string, never `amountCents`.
-- `currency` is required. Operations never mix currencies.
-- `scale` is required and explicit. JPY has scale 0, KWD has 3; nothing
-  assumes 2.
-- Everything is bounded by construction: amounts up to 96 digits
-  (uint256 fits with headroom), scale up to 64, currency up to 32
-  characters. Hostile input past a bound is `INVALID_MONEY` and cannot
-  buy unbounded CPU or memory.
-- `Money` is branded with a NON-EXPORTED unique symbol: only the
-  module's constructors mint it, and no hand-written literal
-  type-checks as `Money`, not even one that spells out a `__brand`
-  property. Re-hydrate foreign plain shapes with `moneyFromUnknown`
-  (validates, copies, and freezes, so a later mutation of the input
-  cannot reach domain state) or `moneyFromDto` for wire strings; the
-  boundary parsers take `unknown`, so no cast is ever needed before
-  validation. `isMoney` is a CHECK, not a door: it neither copies nor
-  freezes.
+Read that shape literally:
 
-## Exact operations only
+- `amountMinor` is a `bigint` in the value's minor units.
+- `currency` is part of the value. `10 EUR` and `10 USD` are different.
+- `scale` is part of the value. `1099n` at scale `2` means `10.99`; at
+  scale `3` it means `1.099`.
 
-The kit ships the money contract and every operation that cannot lose
-information: construction, validation, the wire format, parsing,
-formatting, and the lossless arithmetic (`addMoney`, `subtractMoney`,
-`negateMoney`, lossless `rescaleMoney`). These are small, exact, and
-total.
+The rule for application code is simple: parse money at the edge, keep
+`Money` inside the domain, store integer minor units, and convert to DTOs
+only at JSON boundaries.
 
-Everything that carries a rounding or distribution POLICY is
-deliberately not implemented here: multiplication, ratios, fees,
-division, lossy rescaling, allocation (splitting 10.00 EUR three ways
-must hand out 3.34 + 3.33 + 3.33, not round three times), and FX.
-Whether tax rounds per line or per invoice, inclusive or exclusive,
-and in which order, is domain policy, not generic money mechanics.
-The pattern: your domain NAMES the policy in ubiquitous language, and
-a battle-tested calculation library EXECUTES it behind that name,
-bridged through the snapshot helpers:
-
-```ts
-// Domain services named after the policy, not the mechanics. Inside,
-// they bridge Money to your calculation library and back.
-const gross = calculateVat(net, vatPolicy);
-const installments = allocateInstallments(total, paymentPlan);
-const settled = convertCurrency(source, quotedRate);
-```
-
-| Concern | Helper |
+| Place | Shape |
 | --- | --- |
-| Domain state, events, snapshots | `Money` (plain, frozen, clone-safe) |
-| Lossless arithmetic (same currency and scale) | `addMoney`, `subtractMoney`, `negateMoney` |
-| Lossless scale alignment | `rescaleMoney` (inexact conversions throw) |
-| JSON wire format | `MoneyDto`, `moneyFromDto`, `moneyToDto` |
-| Exact input parsing | `parseMoneyInput` |
-| Calculation-library bridge (lossy math, allocation, FX) | `moneyFromSnapshot`, `moneyToSnapshot` |
-| Currency scales, wired once | `createMoneyFactory` + resolvers |
-| Display | `formatMoney`, `createMoneyFormatter` |
+| HTML form, API input | Decimal string, parsed with `parseMoneyInput` or a `MoneyFactory` |
+| Aggregate state | `Money` |
+| Domain event payloads | `Money` |
+| Database columns | `amount_minor`, `currency`, `scale` |
+| JSON response or event-store JSON | `MoneyDto` with `amountMinor` as a string |
+| Calculation library | Snapshot bridge via `moneyToSnapshot` and `moneyFromSnapshot` |
 
-The division of labor in one use case, shown with dinero.js (any
-library with the same snapshot shape works identically):
+Do not pass floats around and do not hide the scale in a field name. If
+the scale matters, make it data.
+
+## The Contract
+
+`Money` is plain frozen data. It has no methods, no library internals, and
+no hidden runtime brand. That is deliberate: aggregate state, event
+payloads, snapshots, and deep-freeze checks can all handle it without
+special cases.
 
 ```ts
-import { dinero, multiply, toSnapshot } from "dinero.js";
 import {
-  moneyFromSnapshot,
+  moneyFromDto,
+  moneyFromUnknown,
+  moneyOfMinor,
   moneyToDto,
-  moneyToSnapshot,
-  parseMoneyInput,
 } from "@shirudo/ddd-kit/money";
 
-// 1. Boundary in: exact parse, no floats involved
-const amount = parseMoneyInput(input.amount, { currency: "EUR", scale: 2 });
+const fromCode = moneyOfMinor(1099n, "EUR", 2);
 
-// 2. Domain: Money lives in aggregate state and domain events
-order.addLine(sku, amount);
+const fromWire = moneyFromDto({
+  amountMinor: "1099",
+  currency: "EUR",
+  scale: 2,
+});
 
-// 3. Calculation: bridge to dinero, compute, store the result back
-const net = dinero(moneyToSnapshot(order.net));
-const gross = multiply(net, { amount: 119, scale: 2 });
-order.applyGross(moneyFromSnapshot(toSnapshot(gross)));
+const fromPlainObject = moneyFromUnknown({
+  amountMinor: 1099n,
+  currency: "EUR",
+  scale: 2,
+});
 
-// 4. Boundary out: JSON-safe DTO, amountMinor as a string
-res.json(moneyToDto(order.total));
+const dto = moneyToDto(fromCode);
+// { amountMinor: "1099", currency: "EUR", scale: 2 }
 ```
 
-## Why plain data matters in this kit
+Use the constructors as the door into the type:
 
-Calculation-library objects carry functions and internals. They do not
-survive `structuredClone`, and they do not belong in aggregate state or
-event payloads that the kit deep-freezes, snapshots, and diffs for
-optimistic concurrency. `Money` is a frozen plain record, so it passes
-every one of those machines untouched. Keep library objects inside the
-use case; store `Money`.
+- `moneyOfMinor` is for trusted code that already has a `bigint`.
+- `moneyFromDto` is for JSON-safe wire data where the amount is a string.
+- `moneyFromUnknown` is for foreign plain objects that already contain a
+  `bigint` amount.
+- `isMoney` is only a check. It does not copy or freeze the value, so it is
+  not the right boundary for domain state.
 
-## Parsing input
+Construction also applies hard bounds. Amounts stay below 97 digits, scale
+is between `0` and `64`, and currency is a non-empty string without
+whitespace. That is not business validation; it is input safety. A
+multi-megabyte amount string should fail before it can buy CPU, memory, or
+log space.
 
-`parseMoneyInput` is the safe replacement for the classic bug
-`Number(input) * 100`:
+## Parsing User Input
+
+Never turn user input into a number first. This is the bug:
 
 ```ts
+const minor = Number(req.body.amount) * 100;
+```
+
+It accepts values you did not mean to accept, loses precision, and puts a
+rounding decision in the wrong place.
+
+Use exact parsing instead:
+
+```ts
+import { parseMoneyInput } from "@shirudo/ddd-kit/money";
+
 parseMoneyInput("10.99", { currency: "EUR", scale: 2 });  // 1099n
 parseMoneyInput("10", { currency: "JPY", scale: 0 });     // 10n
-parseMoneyInput("10.5", { currency: "EUR", scale: 2 });   // 1050n (lossless pad)
-parseMoneyInput("10.990", { currency: "EUR", scale: 2 }); // 1099n (lossless)
+parseMoneyInput("10.5", { currency: "EUR", scale: 2 });   // 1050n
+parseMoneyInput("10.990", { currency: "EUR", scale: 2 }); // 1099n
 
 parseMoneyInput("10.999", { currency: "EUR", scale: 2 });
-// throws MONEY_PRECISION_LOSS: exact parse or rejection, NEVER rounding
+// throws MONEY_PRECISION_LOSS
 ```
 
-**Parsing is exact or it fails; the kit never rounds.** Whether
-`10.999 EUR` should be rejected or become `11.00 EUR` is a business
-decision, not a parsing feature, and a generic `rounding` parameter on
-a parser would hide that decision behind a technical knob. When your
-domain wants to accept over-precise input, give the decision a name
-and a home:
+The parser accepts a plain decimal string matching `/^-?\d+(\.\d+)?$/`.
+It does not accept exponents, `Infinity`, currency symbols, grouping
+separators, or locale decimals such as `"10,99"`. Normalize UI text before
+calling it.
+
+The important part is the failure behavior: parsing is exact or rejected.
+If your product wants to accept `"10.999"` and round it to `"11.00"`, that
+is a business rule. Name it and put it somewhere reviewable:
 
 ```ts
-// A domain-named policy function: it says WHOSE rule this is, rounds
-// via your calculation library, and returns Money.
-function normalizeQuotedPrice(raw: unknown): Money {
-  // parse exactly at the supplier feed's precision, then apply the
-  // pricing policy's rounding through the snapshot bridge
+function normalizeSupplierPrice(raw: unknown): Money {
   const quoted = parseMoneyInput(raw, { currency: "EUR", scale: 4 });
-  return moneyFromSnapshot(toSnapshot(applyPricingPolicy(quoted)));
+  return roundSupplierPrice(quoted);
 }
 ```
 
-The grammar is strictly `/^-?\d+(\.\d+)?$/`. No exponents, no
-`Infinity`, no locale separators; normalize UI input ("10,99") before
-calling.
+`roundSupplierPrice` can use a calculation library. The point is that the
+policy has a name. Nobody reviewing this code has to guess whether parser
+rounding is tax policy, supplier policy, display cleanup, or a mistake.
 
-Input longer than 256 characters is rejected outright, before any
-conversion work, and error messages truncate what they echo: a hostile
-multi-megabyte "amount" costs O(1) and never lands in your logs.
+## Currency Scales
 
-## The wire format
+The kit does not ship a currency table. That is intentional. Different
+systems have different accepted currencies, custom tokens, historical
+requirements, and release processes for currency metadata.
 
-JSON numbers are floats, and `JSON.stringify` throws on bigint. Money
-therefore travels as a string:
+For one-off construction, pass the scale explicitly:
 
-```json
-{ "amountMinor": "1099", "currency": "EUR", "scale": 2 }
+```ts
+const eur = moneyOfMinor(1099n, "EUR", 2);
+const jpy = moneyOfMinor(1099n, "JPY", 0);
 ```
 
-`moneyFromDto` validates (`/^-?\d+$/`) and converts immediately after
-deserialization; `moneyToDto` emits right before serialization. The same
-applies to persistence: store `amount_minor` as a SQL `bigint` (not
-`integer`, never a float type) alongside `currency` and `scale`.
-
-Domain events that carry money should carry the `Money` shape; if your
-event store serializes payloads as JSON, convert to the DTO shape in the
-store adapter, exactly like any other bigint field.
-
-## Currency scales, wired once
-
-The kit ships **no currency table**; which currencies exist and which
-scale they use is the consumer's decision. Wire a resolver once at the
-composition root:
+For application code, wire a factory once at the composition root:
 
 ```ts
 import {
@@ -177,60 +148,121 @@ import {
   currencyScaleFromRecord,
 } from "@shirudo/ddd-kit/money";
 
-// a) explicit record: a closed, auditable set
-const fromRecord = createMoneyFactory({
-  scaleFor: currencyScaleFromRecord({ EUR: 2, USD: 2, JPY: 0 }),
+export const money = createMoneyFactory({
+  scaleFor: currencyScaleFromRecord({
+    EUR: 2,
+    USD: 2,
+    JPY: 0,
+  }),
 });
 
-// b) the runtime's own ICU data: zero shipped tables
-const fromIntl = createMoneyFactory({ scaleFor: currencyScaleFromIntl() });
+money.parse("10.99", "EUR");
+money.ofMinor(1099n, "EUR");
+money.zero("JPY");
+money.scaleOf("USD");
+```
 
-// c) your calculation library's currency package: a one-liner
-//    (here: @dinero.js/currencies)
+That factory turns an unknown currency into `UNKNOWN_CURRENCY` instead of
+guessing.
+
+`currencyScaleFromRecord` is the normal production choice when you want a
+closed, auditable set. You can also source the scale from a calculation
+library's currency package:
+
+```ts
 import * as currencies from "@dinero.js/currencies";
 import type { Currency } from "dinero.js";
+import { createMoneyFactory } from "@shirudo/ddd-kit/money";
 
 const money = createMoneyFactory({
   scaleFor: (code) =>
     (currencies as Record<string, Currency<number>>)[code]?.exponent,
 });
-
-money.parse("10.99", "EUR"); // scale resolved to 2
-money.ofMinor(1099n, "EUR");
-money.zero("JPY");
-money.scaleOf("CHF"); // throws UNKNOWN_CURRENCY if unresolved
 ```
 
-`currencyScaleFromIntl` is a CONVENIENCE, not an enterprise source of
-truth: it resolves only canonical uppercase codes ("eur" is not a
-silent alias for "EUR"), but ICU resolves well-formed UNASSIGNED codes
-to its default of 2 instead of `undefined`, and the data shifts with
-the runtime's ICU version. For production money paths, pin a closed,
-versioned currency map (option a) or your calculation library's
-versioned currency package (option c); reach for the Intl resolver in
-demos, prototypes, and internal tooling.
+`currencyScaleFromIntl()` is useful for demos and internal tools:
 
-## Bridging to a calculation library
+```ts
+const demoMoney = createMoneyFactory({
+  scaleFor: currencyScaleFromIntl(),
+});
+```
 
-`moneyFromSnapshot` and `moneyToSnapshot` speak the structural
-`{ amount, currency, scale }` snapshot shape that the common calculation
-libraries serialize to and construct from (dinero.js's `toSnapshot()` /
-`toJSON()` result, for example), with no dependency on any of them. The
-anti-corruption checks run once, at the boundary:
+Do not treat it as an enterprise source of truth. It only resolves
+canonical uppercase ISO-style codes, well-formed but unassigned codes can
+fall back to a default scale in ICU, and the data follows the runtime's ICU
+version. Pin your production set if money correctness matters.
 
-- non-decimal currencies are rejected (currency packages model MGA and
-  MRU with base 5; their minor units do not map onto a power-of-ten
-  scale)
-- `number` amounts must be safe integers; fractional or beyond-2^53
-  amounts throw instead of corrupting silently
-- `bigint` calculator snapshots pass through exactly
+## Exact Arithmetic
 
-`moneyToSnapshot` emits number-based snapshots (the libraries' default
-calculators are number-based) and refuses amounts past
-`Number.MAX_SAFE_INTEGER`; wire such amounts into a bigint calculator
-directly from `money.amountMinor`.
+The kit includes only operations that cannot lose information:
 
-With dinero.js, the round-trip is:
+```ts
+import {
+  addMoney,
+  negateMoney,
+  rescaleMoney,
+  subtractMoney,
+} from "@shirudo/ddd-kit/money";
+
+const a = moneyOfMinor(1099n, "EUR", 2);
+const b = moneyOfMinor(901n, "EUR", 2);
+
+addMoney(a, b);        // 2000n EUR scale 2
+subtractMoney(a, b);   // 198n EUR scale 2
+negateMoney(a);        // -1099n EUR scale 2
+rescaleMoney(a, 3);    // 10990n EUR scale 3
+```
+
+`addMoney` and `subtractMoney` require the same currency and the same
+scale. Mismatches throw `MONEY_CURRENCY_MISMATCH` or
+`MONEY_SCALE_MISMATCH`. The kit does not silently convert either side.
+
+`rescaleMoney` is also exact. Upscaling works. Downscaling works only when
+the removed digits are zero:
+
+```ts
+rescaleMoney(moneyOfMinor(10990n, "EUR", 3), 2); // 1099n
+rescaleMoney(moneyOfMinor(10999n, "EUR", 3), 2); // MONEY_PRECISION_LOSS
+```
+
+There is deliberately no rounding parameter. Rounding is not mechanical
+plumbing in a money system. It is policy.
+
+## Rounding, Allocation, Fees, And FX
+
+This is the line between the kit and your domain:
+
+- The kit owns the exact contract and lossless operations.
+- Your domain owns policy names such as `calculateVat`, `allocateRefund`,
+  `applyCardFee`, or `convertAtBookedRate`.
+- A calculation library executes the math behind those policy names.
+
+For example, summing already aligned invoice lines is safe in an aggregate:
+
+```ts
+const nextTotal = addMoney(this.state.total, lineAmount);
+```
+
+Calculating VAT is different. You need to know whether to round per line or
+per invoice, which rounding mode applies, and whether the price is net or
+gross. That rule belongs in application code or a domain service with a
+business name:
+
+```ts
+function calculateVat(net: Money, policy: VatPolicy): Money {
+  const calculatorMoney = dinero(moneyToSnapshot(net));
+  const vat = applyVatPolicy(calculatorMoney, policy);
+  return moneyFromSnapshot(toSnapshot(vat));
+}
+```
+
+The exact library does not matter to the kit. The boundary shape does.
+
+## Calculation Library Bridge
+
+`moneyToSnapshot` and `moneyFromSnapshot` use the structural shape common
+to money calculation libraries:
 
 ```ts
 import { add, dinero, toSnapshot } from "dinero.js";
@@ -240,96 +272,114 @@ import {
   moneyToSnapshot,
 } from "@shirudo/ddd-kit/money";
 
-const a = dinero(moneyToSnapshot(moneyOfMinor(1099n, "EUR", 2)));
-const b = dinero(moneyToSnapshot(moneyOfMinor(901n, "EUR", 2)));
+const first = dinero(moneyToSnapshot(moneyOfMinor(1099n, "EUR", 2)));
+const second = dinero(moneyToSnapshot(moneyOfMinor(901n, "EUR", 2)));
 
-const sum = moneyFromSnapshot(toSnapshot(add(a, b)));
-// { amountMinor: 2000n, currency: "EUR", scale: 2 }
+const sum = moneyFromSnapshot(toSnapshot(add(first, second)));
 ```
 
-For amounts past 2^53, use dinero's bigint calculator and skip the
-number-based snapshot on the way in; on the way back,
-`moneyFromSnapshot` accepts bigint snapshots exactly:
+The bridge is an anti-corruption layer:
+
+- non-decimal currency bases are rejected, because they do not map to a
+  power-of-ten scale;
+- number amounts must be safe integers;
+- bigint snapshots are accepted exactly.
+
+`moneyToSnapshot` emits number-based snapshots because that is what many
+default calculators use. If an amount is past `Number.MAX_SAFE_INTEGER`, it
+throws instead of corrupting the value. In that case, build the library
+object with its bigint calculator directly from `money.amountMinor`:
 
 ```ts
-import { createDinero, toSnapshot } from "dinero.js";
 import { calculator } from "@dinero.js/calculator-bigint";
+import { createDinero, toSnapshot } from "dinero.js";
 
 const dineroBigint = createDinero({ calculator });
 const EUR = { code: "EUR", base: 10n, exponent: 2n };
 
-const large = dineroBigint({
-  amount: money.amountMinor, // bigint, no conversion, no precision cliff
+const value = dineroBigint({
+  amount: money.amountMinor,
   currency: EUR,
   scale: BigInt(money.scale),
 });
 
-const back = moneyFromSnapshot(toSnapshot(large));
+const back = moneyFromSnapshot(toSnapshot(value));
 ```
 
-## Display
+Keep library objects inside the use case. Store `Money` in aggregates,
+events, snapshots, and persistence models.
 
-Formatting is presentation only. It feeds `Intl.NumberFormat` the exact
-decimal string, never a float, and its output must never flow back into
-parsing or arithmetic:
+## Wire And Persistence
+
+JSON cannot carry `bigint`, and JSON numbers are floating point. Money
+therefore uses `MoneyDto` on JSON boundaries:
+
+```json
+{ "amountMinor": "1099", "currency": "EUR", "scale": 2 }
+```
+
+Convert immediately after deserialization and immediately before
+serialization:
 
 ```ts
-formatMoney(moneyOfMinor(1099n, "EUR", 2), "de-DE"); // "10,99 €"
+const amount = moneyFromDto(req.body.amount);
 
-const format = createMoneyFormatter("en-US"); // caches formatters
-format(moneyOfMinor(9007199254740993n, "USD", 2));
-// "$90,071,992,547,409.93": exact past 2^53
+res.json({
+  total: moneyToDto(invoice.total),
+});
 ```
 
-## A full slice through the hexagon
-
-One money value crosses four seams, and each seam has exactly one
-correct shape: a decimal **string** at the UI edge, **`Money`** inside
-the hexagon, a **`bigint` column triple** in the database, and
-**`MoneyDto`** on the wire out. Everything below is the same invoice
-example; the kit machinery (identity map, OCC mapping, outbox) is each
-linked guide's topic, so only the money seams are spelled out.
-
-### Database (schema)
+For a relational database, store the same three pieces separately:
 
 ```sql
 create table invoice (
-  id             text     primary key,
-  version        integer  not null,
-  customer_id    text     not null,
-  status         text     not null,
-  total_minor    bigint   not null,
-  total_currency char(3)  not null check (total_currency ~ '^[A-Z]{3}$'),
-  total_scale    smallint not null check (total_scale between 0 and 12)
-);
-
-create table invoice_line (
-  invoice_id      text     not null references invoice(id),
-  position        integer  not null,
-  sku             text     not null,
-  amount_minor    bigint   not null check (amount_minor >= 0),
-  amount_currency char(3)  not null,
-  amount_scale    smallint not null,
-  primary key (invoice_id, position)
+  id text primary key,
+  version integer not null,
+  total_minor bigint not null,
+  total_currency char(3) not null,
+  total_scale smallint not null check (total_scale between 0 and 64)
 );
 ```
 
-`bigint`, never `integer` (2^31 minor units caps a 2-scale currency at
-about 21 million) and never a float type. The `amount_minor >= 0` check
-is for prices; ledger tables drop it because the sign carries meaning.
+Use `bigint` for ordinary fiat systems. A signed SQL `bigint` gives you
+about 9.2e18 minor units, which is far beyond normal business balances.
+The domain type allows larger values because some domains need token-like
+amounts. If your domain really needs that headroom, use `numeric(96, 0)`
+for the minor amount and make the range explicit in the schema.
 
-One range caveat, stated explicitly because the two bounds differ: SQL
-`bigint` is signed 64-bit (up to ~9.2e18, 19 digits), while the domain
-shape admits amounts up to 96 digits. For fiat money, `bigint` is the
-right column and its range is beyond any real balance sheet; if your
-domain actually uses the headroom (uint256 token amounts), store
-`numeric(96, 0)` instead and add
-`check (amount_minor between -1e96 and 1e96)`. The same asymmetry
-exists at the snapshot bridge, where `moneyToSnapshot` refuses amounts
-past 2^53; the storage adapter is where you decide which range your
-system really supports.
+Drivers differ. `node-postgres` returns SQL `bigint` as a string, which
+maps naturally through `moneyFromDto`. An ORM that returns native `bigint`
+can call `moneyOfMinor` directly.
 
-### Domain (inside the hexagon)
+```ts
+import { moneyFromDto, moneyOfMinor, type Money } from "@shirudo/ddd-kit/money";
+
+function moneyFromPgColumns(
+  amountMinor: string,
+  currency: string,
+  scale: number,
+): Money {
+  return moneyFromDto({ amountMinor, currency, scale });
+}
+
+function moneyFromNativeColumns(
+  amountMinor: bigint,
+  currency: string,
+  scale: number,
+): Money {
+  return moneyOfMinor(amountMinor, currency, scale);
+}
+```
+
+If an event store serializes payloads as JSON, the adapter should convert
+money values to `MoneyDto` in the stored JSON and convert them back when
+loading. Do that in the adapter, not inside the aggregate.
+
+## A Small Invoice Slice
+
+This example shows the same money value crossing the boundary, domain, and
+repository. The important part is not the invoice model; it is where each
+shape appears.
 
 ```ts
 import {
@@ -342,6 +392,7 @@ import {
 import {
   addMoney,
   isNegativeMoney,
+  moneyToDto,
   type Money,
 } from "@shirudo/ddd-kit/money";
 
@@ -350,27 +401,26 @@ type InvoiceId = Id<"InvoiceId">;
 type InvoiceState = {
   customerId: string;
   lines: ReadonlyArray<{ sku: string; amount: Money }>;
-  total: Money; // Money in aggregate state: plain, frozen, exact
+  total: Money;
   status: "open" | "issued";
 };
 
 type InvoiceIssued = DomainEvent<
   "InvoiceIssued",
-  { invoiceId: InvoiceId; total: Money } // Money in event payloads too
+  { invoiceId: InvoiceId; total: Money }
 >;
+
 type InvoiceEvent = InvoiceIssued;
 
 class InvoiceLineRejectedError extends DomainError<"INVOICE_LINE_REJECTED"> {
-  constructor(reason: string) {
-    super({ code: "INVOICE_LINE_REJECTED", message: reason });
+  constructor(message: string) {
+    super({ code: "INVOICE_LINE_REJECTED", message });
   }
 }
 
 class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
   protected readonly aggregateType = "Invoice";
 
-  // `zero` fixes the invoice's currency AND scale at opening time:
-  // pass money.zero("EUR") from your composition root's factory.
   static open(id: InvoiceId, customerId: string, zero: Money): Invoice {
     return new Invoice(id, {
       customerId,
@@ -394,13 +444,10 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
     if (this.state.status !== "open") {
       throw new InvoiceLineRejectedError("invoice is already issued");
     }
-    // Domain invariants speak the contract's language:
     if (isNegativeMoney(amount)) {
-      throw new InvoiceLineRejectedError("line amounts must not be negative");
+      throw new InvoiceLineRejectedError("line amount must not be negative");
     }
-    // Lossless contract arithmetic: exact, and the currency/scale
-    // match is enforced by addMoney itself (MONEY_CURRENCY_MISMATCH /
-    // MONEY_SCALE_MISMATCH). No third-party import, no rounding.
+
     this.setState({
       ...this.state,
       lines: [...this.state.lines, { sku, amount }],
@@ -424,62 +471,36 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
 }
 ```
 
-Note what the domain does NOT import: the calculation library. Summing
-aligned lines is lossless contract arithmetic, so the aggregate needs
-nothing beyond the kit it is already built on. Lossy math moves to the
-use case as NAMED policy (`calculateVat(net, vatPolicy)`, an
-installment allocation, a payout split), and the calculation library
-executes it behind that name via the snapshot bridge, where the
-rounding policy is explicit and reviewable.
+The aggregate stores `Money`, not calculation-library objects. It uses
+`addMoney` because summing same-currency, same-scale line values is
+lossless. It records `Money` in the domain event too.
 
-### Port and driven adapter (repository)
+The repository maps database columns at the adapter boundary:
 
 ```ts
-interface InvoiceRepository {
-  getById(id: InvoiceId): Promise<Invoice>;
-  save(invoice: Invoice): Promise<void>;
-}
-```
-
-The adapter is where rows become `Money` and `Money` becomes
-parameters, in exactly one place. node-postgres returns SQL `bigint`
-columns as strings, which is precisely the `MoneyDto` discipline, so
-the row mapping IS `moneyFromDto`:
-
-```ts
-import { type Money, moneyFromDto } from "@shirudo/ddd-kit/money";
-
-function moneyFromColumns(
-  minor: string,
-  currency: string,
-  scale: number,
-): Money {
-  return moneyFromDto({ amountMinor: minor, currency, scale });
-}
-
-class PgInvoiceRepository implements InvoiceRepository {
+class PgInvoiceRepository {
   constructor(private readonly tx: PgTx) {}
 
   async getById(id: InvoiceId): Promise<Invoice> {
-    // not-found mapping to AggregateNotFoundError elided
     const row = await this.tx.one("select * from invoice where id = $1", [id]);
     const lines = await this.tx.many(
       "select * from invoice_line where invoice_id = $1 order by position",
       [id],
     );
+
     return Invoice.reconstitute(
       id,
       {
         customerId: row.customer_id,
         lines: lines.map((line) => ({
           sku: line.sku,
-          amount: moneyFromColumns(
+          amount: moneyFromPgColumns(
             line.amount_minor,
             line.amount_currency,
             line.amount_scale,
           ),
         })),
-        total: moneyFromColumns(
+        total: moneyFromPgColumns(
           row.total_minor,
           row.total_currency,
           row.total_scale,
@@ -492,13 +513,14 @@ class PgInvoiceRepository implements InvoiceRepository {
 
   async save(invoice: Invoice): Promise<void> {
     const { total } = invoice.state;
-    // bigint parameters travel as strings; toString() is exact.
-    // Insert routing, line writes, and the zero-rows-affected to
-    // ConcurrencyConflictError mapping follow the repository guide.
+
     await this.tx.query(
       `update invoice
-          set version = $2, status = $3,
-              total_minor = $4, total_currency = $5, total_scale = $6
+          set version = $2,
+              status = $3,
+              total_minor = $4,
+              total_currency = $5,
+              total_scale = $6
         where id = $1 and version = $7`,
       [
         invoice.id,
@@ -507,67 +529,129 @@ class PgInvoiceRepository implements InvoiceRepository {
         total.amountMinor.toString(),
         total.currency,
         total.scale,
-        invoice.persistedVersion, // the OCC baseline
+        invoice.persistedVersion,
       ],
     );
   }
 }
 ```
 
-An ORM whose driver hands you native `bigint` (Drizzle's
-`bigint({ mode: "bigint" })`, for example) skips the string hop: feed
-the value to `moneyOfMinor` directly.
-
-### Driving adapter (HTTP in, HTTP out)
+The HTTP entry point parses raw input once and emits DTOs once:
 
 ```ts
 app.post("/invoices/:id/lines", async (req, res) => {
-  // Boundary in: the RAW value goes straight into the parser, which
-  // takes unknown and validates. Never coerce first: String([...])
-  // silently joins arrays. INVALID_MONEY, MONEY_PRECISION_LOSS, and
-  // UNKNOWN_CURRENCY surface as 422 through the presentation entry's
-  // catalog in your error middleware.
   const amount = money.parse(req.body.amount, "EUR");
 
   const total = await withCommit({ scope, outbox, bus }, async (tx) => {
     const invoices = new PgInvoiceRepository(tx);
     const invoice = await invoices.getById(asInvoiceId(req.params.id));
+
     invoice.addLine(String(req.body.sku), amount);
     await invoices.save(invoice);
+
     return { result: invoice.total, aggregates: [invoice] };
   });
 
-  // Boundary out: amountMinor as a string, never a JSON number.
   res.status(200).json({ total: moneyToDto(total) });
 });
 ```
 
-That is the whole discipline: the decimal string exists for one line at
-the edge, the database sees only integers, the wire sees only strings,
-and everything between them is exact `bigint` money.
+Notice the direction:
+
+1. Raw string enters at the edge.
+2. `Money` lives inside the use case and aggregate.
+3. Repository writes integer minor units, currency, and scale.
+4. JSON response uses `MoneyDto`.
+
+That discipline keeps parsing, persistence, and domain invariants from
+leaking into each other.
+
+## Formatting
+
+Formatting is presentation, not parsing and not arithmetic:
+
+```ts
+import {
+  createMoneyFormatter,
+  formatMoney,
+  moneyOfMinor,
+} from "@shirudo/ddd-kit/money";
+
+formatMoney(moneyOfMinor(1099n, "EUR", 2), "de-DE");
+// "10,99 €"
+
+const format = createMoneyFormatter("en-US");
+format(moneyOfMinor(9007199254740993n, "USD", 2));
+// "$90,071,992,547,409.93"
+```
+
+`formatMoney` feeds `Intl.NumberFormat` an exact decimal string, not a
+float. Use `createMoneyFormatter` in hot paths such as tables and exports;
+it caches one formatter per currency and scale.
+
+Do not parse formatted output. Locale output is text for humans.
+
+## Common Mistakes
+
+**Using `number` because the UI sends a number**
+
+Reject it. A JSON number is already the wrong shape for money input. Accept
+a decimal string and parse it exactly.
+
+```ts
+money.parse(req.body.amount, "EUR");
+```
+
+**Assuming every currency has scale 2**
+
+The scale belongs to the value. JPY, KWD, custom token units, and
+intermediate calculation precision all exist. Wire a `MoneyFactory` instead
+of hard-coding a global default.
+
+**Rounding in the parser**
+
+Parsing answers one question: can this string be represented exactly at
+this scale? If the answer is no, a domain policy must decide what happens
+next.
+
+**Putting calculation-library objects in aggregate state**
+
+Those objects usually carry methods and internal fields. They are fine
+inside a use case. They are the wrong persistence and event contract.
+Bridge them back to `Money` before storing state or recording events.
+
+**Using `moneyToSnapshot` for huge values**
+
+`moneyToSnapshot` is number-based and rejects values past
+`Number.MAX_SAFE_INTEGER`. That is good. For huge values, use your
+calculation library's bigint calculator and pass `money.amountMinor`
+directly.
+
+**Letting display text flow back into the system**
+
+`"10,99 €"` is not input for `parseMoneyInput`. It is presentation output.
+Normalize UI text into a plain decimal string first.
 
 ## Errors
 
-All money errors follow the kit's error model (`code === name`,
-`category`, `retryable: false`):
+Money errors are `DomainError`s and are registered by
+`createKitPublicErrors()` as client-safe 422 responses.
 
-| Code | Kind | Raised by |
-| --- | --- | --- |
-| `INVALID_MONEY` | `DomainError` | malformed amounts, DTOs, inputs, snapshots; anything past a hard bound |
-| `MONEY_CURRENCY_MISMATCH` | `DomainError` | `addMoney`/`subtractMoney` across currencies |
-| `MONEY_SCALE_MISMATCH` | `DomainError` | `addMoney`/`subtractMoney` across scales (lossless `rescaleMoney` is the explicit alignment) |
-| `MONEY_PRECISION_LOSS` | `DomainError` | over-precise input in the exact-only `parseMoneyInput`, or an inexact `rescaleMoney` |
-| `UNKNOWN_CURRENCY` | `DomainError` | factory resolver has no entry |
+| Code | Raised when |
+| --- | --- |
+| `INVALID_MONEY` | malformed values, DTOs, inputs, snapshots, invalid bounds |
+| `MONEY_CURRENCY_MISMATCH` | adding or subtracting different currencies |
+| `MONEY_SCALE_MISMATCH` | adding or subtracting different scales |
+| `MONEY_PRECISION_LOSS` | exact parse or exact rescale would lose non-zero digits |
+| `UNKNOWN_CURRENCY` | a `MoneyFactory` resolver has no scale for the currency |
 
-The domain codes are registered in `createKitPublicErrors()` at status
-422 with client-safe messages, so they flow through `toPublicErrorView`
-and `toProblem` like every other kit error.
+Treat these as validation and domain errors. Do not retry them.
 
 ## FX
 
-Currency conversion is never just a rate. Resolve rates and multiply in
-your FX adapter, then persist the whole conversion record, never just
-the result:
+Currency conversion is not just multiplication by a rate. A booked
+conversion needs the source amount, target amount, rate, source, timestamp,
+and rounding mode:
 
 ```ts
 type FxConversion = {
@@ -576,12 +660,10 @@ type FxConversion = {
   rate: string;
   rateSource: string;
   resolvedAt: Date;
-  roundingMode: string; // your calculation library's mode
+  roundingMode: string;
 };
 ```
 
-Never recompute a historical conversion from a newer rate; the record
-above is what makes the booked number explainable years later. The kit
-deliberately ships no FX code (rate resolution and multiplication are
-your adapter's and calculation library's job), so this shape lives in
-your codebase.
+Persist that record. Do not recompute historical conversions from a newer
+rate. The kit deliberately ships no FX helper because rate resolution,
+rounding, and audit policy belong to your application.

@@ -1,68 +1,153 @@
 # Entities
 
-In DDD, Entities are objects with identity and state. Unlike Value Objects (compared by value), Entities are compared by identity (`id`). The kit ships **two shapes**: a class-based `Entity<TState, TId>` for behaviour-rich child entities and a functional `Identifiable<TId>` interface for simple records.
+An entity is a domain object whose identity matters across time.
 
-## Class-based: `Entity<TState, TId>`
+If two objects have the same id, they represent the same entity even when their
+current state differs. That is the difference from a Value Object: two equal
+addresses or two equal money values can be interchangeable; two order items
+with the same id are the same line item evolving over time.
 
-Use this for child entities inside an aggregate that have their own state and business methods. An `Entity` has identity and state but **no own `version`**: optimistic-concurrency versioning lives on the aggregate root; see [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for why, and what to do if you think you need a versioned child.
+The kit has two entity shapes:
+
+- `Entity<TState, TId>` for child entities with state and methods
+- `Identifiable<TId>` for plain records that only need an id
+
+Aggregate roots are entities too, but they need versioning, pending events, and
+repository lifecycle. Use `AggregateRoot` or `EventSourcedAggregate` for roots.
+Use `Entity` or `Identifiable` for children inside an aggregate boundary.
+
+## When an object needs identity
+
+Reach for an entity when the domain needs to track "this same thing" across
+state changes.
+
+Good entity candidates:
+
+- an order item that can change quantity but remains the same line item
+- a restaurant table that can be reserved, joined, or moved
+- a workflow step that can be retried and audited by id
+
+Poor entity candidates:
+
+- a money amount
+- an address
+- a date range
+- a small immutable settings object
+
+Those usually want Value Objects because equality by value is the point.
+
+Inside an aggregate, child entities do not get their own optimistic-concurrency
+version. The aggregate root is the consistency boundary, so the root version
+moves when the child collection changes. If a child really needs to be loaded,
+saved, and versioned independently, you are probably looking at a separate
+aggregate.
+
+See [Design Decisions: Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects).
+
+## Class-based child entities
+
+Use `Entity<TState, TId>` when the child has meaningful behavior of its own.
+The class owns an id, a frozen state reference, a `validateState` hook, and a
+protected `setState(...)` method.
 
 ```ts
-import { Entity, type Id } from "@shirudo/ddd-kit";
+import {
+  DomainError,
+  Entity,
+  type Id,
+} from "@shirudo/ddd-kit";
 
 type ItemId = Id<"ItemId">;
 
 type OrderItemState = {
   productId: string;
   quantity: number;
-  unitPriceCents: number;
 };
 
+class InvalidOrderItemQuantityError extends DomainError<
+  "INVALID_ORDER_ITEM_QUANTITY"
+> {
+  constructor(quantity: number) {
+    super({
+      code: "INVALID_ORDER_ITEM_QUANTITY",
+      message: `Order item quantity must be positive, got ${quantity}.`,
+    });
+  }
+}
+
 class OrderItem extends Entity<OrderItemState, ItemId> {
-  constructor(id: ItemId, productId: string, quantity: number, unitPriceCents: number) {
-    super(id, { productId, quantity, unitPriceCents });
+  constructor(id: ItemId, productId: string, quantity: number) {
+    super(id, { productId, quantity });
   }
 
-  protected validateState(state: OrderItemState): void {
-    if (state.quantity <= 0) throw new Error("quantity must be > 0");
-    if (state.unitPriceCents < 0) throw new Error("price must be non-negative");
+  changeQuantity(quantity: number): void {
+    this.setState({
+      ...this.state,
+      quantity,
+    });
   }
 
-  updateQuantity(qty: number): void {
-    this.setState({ ...this.state, quantity: qty });
-  }
-
-  subtotalCents(): number {
-    return this.state.quantity * this.state.unitPriceCents;
+  protected override validateState(state: OrderItemState): void {
+    if (state.quantity < 1) {
+      throw new InvalidOrderItemQuantityError(state.quantity);
+    }
   }
 }
 ```
 
-`Entity` gives you:
+The important details:
 
-- A `readonly id`, with null/undefined rejected at construction
-- A `state` getter that is **shallowly frozen** by default (direct property writes throw; nested writes bypass the freeze)
-- An opt-in **deep freeze** via `super(id, state, { deepFreezeState: true })`, so nested outside writes throw too; only for plain-data states (class-based child entities would be frozen along with the graph), and nested objects passed in become frozen in place (ownership transfer)
-- A `protected setState(newState)` that runs `validateState` then re-freezes
-- A `validateState(state)` hook for invariant checks
+- `id` is readonly and cannot be `null` or `undefined`
+- `state` is exposed as the current frozen state value
+- `setState(...)` validates the next state and only then replaces the old one
+- if validation throws, the previous state remains in place
+- `validateState(state)` receives the state to check
 
-::: warning Constructor-ordering
-`validateState` is called from `Entity`'s constructor before the subclass's field initializers run. Don't reach into `this.someField` from `validateState`; use only the `state` argument. See [Design Decisions](./design-decisions.md#no-deep-clone-on-every-state-read) for the freeze caveats.
-:::
+Prefer `setState(...)` for mutations. `_state` is protected for advanced
+subclasses, but direct assignment can skip validation and the configured freeze
+mode unless you are careful. If you really need a custom assignment path, pass
+the value through `freezeState(...)`.
 
-## Functional: `Identifiable<TId>`
+### Constructor ordering
 
-For simple records that only need an id:
+`validateState` runs from the base `Entity` constructor. In JavaScript and
+TypeScript, subclass field initializers have not run yet at that point.
+
+Do not read subclass fields from `validateState`:
 
 ```ts
-import type { Identifiable, Id } from "@shirudo/ddd-kit";
+class BadItem extends Entity<{ quantity: number }, ItemId> {
+  private readonly minQuantity = 1;
+
+  protected override validateState(state: { quantity: number }): void {
+    // Wrong: minQuantity is undefined during the base constructor call.
+    if (state.quantity < this.minQuantity) {
+      throw new Error("invalid quantity");
+    }
+  }
+}
+```
+
+Use the `state` argument as the source of truth. If a rule needs configuration,
+put that configuration in state or enforce the additional rule in a named static
+factory after construction.
+
+## Plain identifiable records
+
+Use `Identifiable<TId>` when the child only needs an id and data. This is the
+cleaner choice for many aggregate child collections.
+
+```ts
 import {
-  sameEntity,
+  entityIds,
   findEntityById,
   hasEntityId,
   removeEntityById,
-  updateEntityById,
   replaceEntityById,
-  entityIds,
+  sameEntity,
+  updateEntityById,
+  type Id,
+  type Identifiable,
 } from "@shirudo/ddd-kit";
 
 type ItemId = Id<"ItemId">;
@@ -72,23 +157,217 @@ type OrderItem = Identifiable<ItemId> & {
   quantity: number;
 };
 
-const items: OrderItem[] = [
-  { id: "i-1" as ItemId, productId: "p-1", quantity: 2 },
-  { id: "i-2" as ItemId, productId: "p-2", quantity: 1 },
+const items: readonly OrderItem[] = [
+  { id: "item-1" as ItemId, productId: "product-1", quantity: 2 },
+  { id: "item-2" as ItemId, productId: "product-2", quantity: 1 },
 ];
 
-findEntityById(items, "i-1" as ItemId); // ...
-hasEntityId(items, "i-1" as ItemId);    // true
-sameEntity(items[0]!, items[1]!);       // false (compared by id)
+findEntityById(items, "item-1" as ItemId);
+hasEntityId(items, "item-1" as ItemId); // true
+sameEntity(items[0]!, items[1]!); // false
+entityIds(items); // ["item-1", "item-2"]
 ```
 
-All helpers compare by **branded id equality** (`a.id === b.id`), never deep equality. `Identifiable<TId extends Id<string>>` is constrained to branded ids, so plain strings are rejected at compile time (the brand discipline is uniform across `IAggregateRoot`, `IEntity`, and `Identifiable`).
+`Identifiable<TId>` is constrained to branded `Id<Tag>` values. A plain string
+does not satisfy the type. That keeps a `UserId`, `OrderId`, and `ItemId` from
+being mixed accidentally.
 
-## When to reach for which
+All helpers compare by id. They do not compare state:
 
-| Use case | Reach for |
-|---|---|
-| Child entity inside an aggregate with methods | `Entity<TState, TId>` |
-| Plain record with id, no behaviour | `Identifiable<TId>` |
-| Root entity of an aggregate | `AggregateRoot` (see next page) |
-| Event-sourced root entity | `EventSourcedAggregate` |
+```ts
+sameEntity(
+  { id: "item-1" as ItemId, productId: "old", quantity: 1 },
+  { id: "item-1" as ItemId, productId: "new", quantity: 99 },
+); // true
+```
+
+That result is correct. It says "same entity", not "same state".
+
+## Updating child collections
+
+The collection helpers are deliberately small:
+
+| Helper | Behavior |
+| --- | --- |
+| `findEntityById(items, id)` | returns the matching entity or `undefined` |
+| `hasEntityId(items, id)` | returns whether a matching id exists |
+| `sameEntity(a, b)` | compares `a.id === b.id` |
+| `entityIds(items)` | returns the ids in collection order |
+| `removeEntityById(items, id)` | returns a new array without the id, or the original array on a miss |
+| `updateEntityById(items, id, fn)` | replaces one entity with `fn(entity)`, or returns the original array when nothing changed |
+| `replaceEntityById(items, id, replacement)` | replaces one entity, or returns the original array when nothing changed |
+
+The "original array when nothing changed" behavior is important. The aggregate
+dirty tracker uses shallow reference comparison for top-level state keys. A
+helper that allocates a new array for a no-op would make repositories write a
+child table that did not actually change.
+
+Use the helpers inside aggregate methods, where the domain can decide what a
+miss means:
+
+```ts
+class OrderItemNotFoundError extends DomainError<"ORDER_ITEM_NOT_FOUND"> {
+  constructor(itemId: ItemId) {
+    super({
+      code: "ORDER_ITEM_NOT_FOUND",
+      message: `Order item ${itemId} was not found.`,
+    });
+  }
+}
+
+function changeItemQuantity(
+  items: readonly OrderItem[],
+  itemId: ItemId,
+  quantity: number,
+): readonly OrderItem[] {
+  let found = false;
+
+  const nextItems = updateEntityById(items, itemId, (item) => {
+    found = true;
+    if (item.quantity === quantity) return item;
+    return { ...item, quantity };
+  });
+
+  if (!found) {
+    throw new OrderItemNotFoundError(itemId);
+  }
+
+  return nextItems;
+}
+```
+
+Notice the explicit `found` flag. `nextItems === items` can mean "the id was not
+found" or "the item was already in the requested state" when the updater returns
+the same reference. The aggregate method owns that distinction.
+
+## Class children inside aggregate state
+
+Class-based child entities can be useful, but they need extra care inside an
+aggregate.
+
+If a child entity mutates itself and the aggregate state reference does not
+change, the root's shallow dirty tracking cannot see the mutation. The helper
+contract is reference-based too: an updater that mutates a class instance and
+returns that same instance causes `updateEntityById` to return the original
+array.
+
+This is not a bug in the helper. It is the price of a cheap, predictable
+reference-diff model.
+
+When persistence depends on aggregate dirty tracking, prefer plain
+`Identifiable` child records for collections. If you use class-based children,
+prefer replacing the child instance by id instead of mutating it in place:
+
+```ts
+changeItemQuantity(itemId: ItemId, quantity: number): void {
+  const item = findEntityById(this.state.items, itemId);
+  if (!item) {
+    throw new OrderItemNotFoundError(itemId);
+  }
+
+  const replacement = new OrderItem(
+    item.id,
+    item.state.productId,
+    quantity,
+  );
+
+  this.commit({
+    ...this.state,
+    items: replaceEntityById(this.state.items, itemId, replacement),
+  });
+}
+```
+
+The new array reference tells the root that the child collection changed. The
+new child instance avoids another subtle problem: if you mutate the existing
+child first and a later aggregate-level validation throws, the child has already
+moved. Replacement keeps the old aggregate state intact until `commit(...)`
+accepts the new state.
+
+If the aggregate also needs to publish a domain event, pass it to `commit(...)`
+in the same call.
+
+The stronger rule is still the DDD rule: outside application code should not
+hold and mutate child entity references. The aggregate root is the entry point.
+
+## State freezing and ownership
+
+`Entity` shallow-freezes state by default.
+
+That gives you a useful guard: direct writes to top-level state fail in strict
+mode.
+
+```ts
+item.state.quantity = 10; // throws
+```
+
+It does not deeply freeze nested objects:
+
+```ts
+type BoxState = {
+  meta: { label: string };
+};
+
+class Box extends Entity<BoxState, ItemId> {
+  constructor(id: ItemId, state: BoxState) {
+    super(id, state);
+  }
+}
+
+const meta = { label: "old" };
+const box = new Box("item-1" as ItemId, { meta });
+
+box.state.meta.label = "new"; // bypasses the shallow freeze
+```
+
+For nested data, choose one of these:
+
+- model nested immutable concepts as Value Objects
+- replace nested state structurally through `setState(...)`
+- enable `deepFreezeState` for plain-data state graphs
+
+```ts
+class DeepBox extends Entity<BoxState, ItemId> {
+  constructor(id: ItemId, state: BoxState) {
+    super(id, state, { deepFreezeState: true });
+  }
+}
+```
+
+Use `deepFreezeState` only for plain data. It walks the whole graph. If your
+state contains class-based child entities, those child instances are frozen too
+and their mutation methods can start throwing.
+
+The ownership rules are precise:
+
+- plain object and array state is shallow-copied before freezing, so the
+  caller's top-level object remains mutable
+- nested objects remain shared under the default shallow freeze
+- with `deepFreezeState`, nested objects are frozen in place
+- class instance state is treated as an ownership transfer and is frozen in
+  place because copying it would strip its prototype
+
+The entity constructor and `setState(...)` reject an own `"__proto__"` data key
+on plain object, null-prototype object, or array state. Validate and normalize
+untrusted JSON at the boundary before it reaches domain objects.
+
+## Choosing the shape
+
+| Use case | Use |
+| --- | --- |
+| immutable concept compared by value | Value Object |
+| child record with id and simple data | `Identifiable<TId>` |
+| child object with id, state, and meaningful methods | `Entity<TState, TId>` |
+| root of a consistency boundary | `AggregateRoot` |
+| root rebuilt from an event stream | `EventSourcedAggregate` |
+
+Review signals:
+
+- If a child entity has its own repository, it may be an aggregate root.
+- If a child needs its own version, it may be an aggregate root.
+- If two values are interchangeable when their fields match, they are probably
+  Value Objects, not entities.
+- If code compares entity state to decide identity, it is using the wrong
+  equality model.
+- If external code mutates child entities directly, the aggregate boundary is
+  leaking.

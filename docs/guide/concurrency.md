@@ -1,140 +1,260 @@
 # Concurrency & Thread Safety
 
-JavaScript is single-threaded, but `async / await` creates concurrency risks. This page covers the patterns the kit assumes.
+JavaScript runs user code on one thread, but that does not make your domain model concurrency-safe.
 
-## What we mean by "operation"
+Every `await` is a pause point. While one request is waiting for the database, another request, worker, retry, or background job can load and change the same aggregate. The kit's concurrency model is built around that fact:
 
-- An **HTTP request** in a web API
-- A **command execution** in CQRS (CreateOrder, UpdateQuantity, …)
-- A **query execution** (GetOrder, ListOrders, …)
-- A **background job** (email sender, report generator, scheduled task)
-- An **event handler** processing a single domain event
+- Keep aggregates scoped to one operation.
+- Persist them with optimistic concurrency control.
+- Retry only by rerunning the whole operation with fresh state.
+- Publish domain events only after the transaction commits.
 
-The cardinal rule: **each operation loads fresh aggregate instances, makes changes, saves them, discards them.** Aggregates are never cached, shared, or held across operations.
+## What Counts as an Operation
 
-## The race-condition trap
+An operation is one unit of application work:
+
+- an HTTP request
+- a CQRS command, such as `PlaceOrder` or `UpdateQuantity`
+- a query, such as `GetOrder` or `ListOrders`
+- a background job
+- an event handler processing one event
+
+The rule is simple: load fresh aggregate instances, make decisions, save, then discard them.
+
+Do not cache aggregates across operations. Do not put them in module scope. Do not keep them on long-lived services. An aggregate is an in-memory view of persisted state at a point in time. Once the operation ends, that view is stale.
+
+Within one operation, repeated loads of the same aggregate id should return the same object through an identity map. Across operations, they should not.
+
+## The `await` Race
+
+This is the bug JavaScript makes easy to underestimate:
 
 ```ts
-// ❌ DANGEROUS: race condition
 class OrderService {
-  private cachedOrder: Order; // NEVER cache aggregates
+  private cachedOrder: Order;
 
-  async updateQuantity(itemId: ItemId, quantity: number) {
+  async incrementQuantity(itemId: ItemId): Promise<void> {
     const item = this.cachedOrder.getItem(itemId);
-    const oldQty = item.state.quantity;       // reads 5
+    const oldQty = item.state.quantity; // reads 5
 
-    await someAsyncOperation();               // ⚠️ context switch here
-    // Meanwhile Request 2 updated qty to 10
+    await someAsyncOperation();
 
-    item.updateQuantity(oldQty + 1);          // writes 6, should be 11!
+    // Another request may have changed the same order while we waited.
+    item.updateQuantity(oldQty + 1); // writes 6, even if the real value is 10
   }
 }
 ```
 
-What goes wrong:
-- `await` yields control to the event loop
-- Other async operations can run while we wait
-- The cached aggregate now holds stale data
-- Last write wins, silent data loss
+Nothing ran in parallel inside that stack frame. The danger is that the stack frame paused. During the pause, another operation was free to run and commit.
 
-## Solution 1: Operation-scoped aggregates (canonical)
+The cached aggregate is now stale. If you save it, you can overwrite another writer's work. If you publish events from it, you can publish facts based on old state.
 
-Each operation gets its own aggregate instance. Load → Mutate → Save → Discard.
+The fix is not a mutex in application memory. A mutex only protects one process. It does nothing across Node workers, serverless isolates, queue consumers, or another deployment replica. The fix is operation scope plus a database-level version predicate.
+
+## Operation-Scoped Aggregates
+
+Load the aggregate inside the operation that needs it. Make the decision there. Save it there. Then let it go.
 
 ```ts
-async function updateQuantity(orderId: OrderId, itemId: ItemId, quantity: number) {
-  const order = await orderRepository.getById(orderId); // fresh load
-  order.updateItemQuantity(itemId, quantity);
-  await orderRepository.save(order);                          // save, throws on conflict
+async function updateQuantity(
+  orderId: OrderId,
+  itemId: ItemId,
+  quantity: number,
+): Promise<void> {
+  await uow.run(async ({ orders }) => {
+    const order = await orders.getById(orderId);
+
+    order.updateItemQuantity(itemId, quantity);
+    await orders.save(order);
+
+    return { result: undefined, aggregates: [order] };
+  });
 }
 ```
 
-The kit's `withCommit` makes this the default shape: the transactional callback explicitly loads, mutates, returns. Nothing leaks across operations.
+This shape gives each operation its own aggregate instance. It also gives the repository one clear place to enforce optimistic concurrency.
 
-## Solution 2: Optimistic concurrency control (OCC)
+The aggregate can still be loaded more than once inside the same operation. In that case the repository or `UnitOfWork` identity map should return the same object for the same id. That gives the operation one in-memory version history, not two competing copies.
 
-When two operations might still race despite operation-scoping (two Workers, two replicas, retry storms), the version field catches the conflict:
+## Optimistic Concurrency Control
+
+Optimistic concurrency control, usually called OCC, assumes conflicts are possible but not constant. You let operations proceed without taking a lock up front, then reject the save if another writer committed first.
+
+The aggregate carries two version values with different meanings:
+
+- `aggregate.version` is the current in-memory version after domain changes.
+- `aggregate.persistedVersion` is the version loaded from persistence, or `undefined` if the aggregate has never been persisted.
+
+Those values diverge as soon as a domain method changes the aggregate. That is why the repository must use `persistedVersion` as the expected database version.
 
 ```ts
 async function save(order: Order): Promise<void> {
-  const expectedVersion = order.version - order.pendingEvents.length;
-  const writeResult = await db
-    .update(orders)
-    .set({ ...orderToRow(order) })
-    .where(and(eq(orders.id, order.id), eq(orders.version, expectedVersion)))
-    .returning();
-
-  if (writeResult.length === 0) {
-    throw new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: order.id, expectedVersion, actualVersion: order.version });
+  if (order.persistedVersion === undefined) {
+    await db.insert(orders).values({
+      id: order.id,
+      state: order.state,
+      version: order.version,
+    });
+    return;
   }
 
-  order.markPersisted(order.version);
+  const expectedVersion = order.persistedVersion;
+  const nextVersion = order.version;
+
+  const result = await db
+    .update(orders)
+    .set({
+      state: order.state,
+      version: nextVersion,
+    })
+    .where(and(eq(orders.id, order.id), eq(orders.version, expectedVersion)));
+
+  if (result.rowsAffected === 0) {
+    const current = await db
+      .select({ version: orders.version })
+      .from(orders)
+      .where(eq(orders.id, order.id))
+      .get();
+
+    throw new ConcurrencyConflictError({
+      aggregateType: "Order",
+      aggregateId: order.id,
+      expectedVersion,
+      actualVersion: current?.version ?? -1,
+    });
+  }
 }
 ```
 
-The Use Case catches `ConcurrencyConflictError` at the App-Service boundary and decides: retry the operation (re-load, re-mutate), surface the conflict to the caller (HTTP 409), or accept last-write-wins for that path.
+Notice what the repository does not do: it does not call `order.markPersisted(...)`. `save()` is persistence only. `withCommit` and `UnitOfWork` mark aggregates as persisted after the transaction commits and after pending events have been harvested.
 
-The `version` lives on the aggregate root, not on its child entities or value objects; OCC is enforced at the consistency boundary. See [Version lives on the aggregate boundary](./design-decisions.md#version-lives-on-the-aggregate-boundary-not-on-entities-or-value-objects) for the rationale and the alternatives when you think a child needs its own version.
+### Why `persistedVersion` Matters
 
-::: tip Multi-table aggregates: the version bump must ride every save
-A classic OCC failure mode in aggregates that span multiple tables: collection writes are orchestrated outside the aggregate, so a collection-only change never bumps the root version, and teams patch over it with a manual "touch" method (`markCollectionsRevised()`-style) that every service method must remember to call. The kit's answer is [`changedKeys` / `hasChanges` on `AggregateRoot`](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges): the repository scopes child-table writes by dirty key while the root-row version write rides every save, and the touch-method workaround dissolves. One precondition: the bump rides the save only for **version-bumping mutations**: `commit()` (always bumps) or `setState(newState, true)`. A no-bump `setState(newState, false)` dirties the key without advancing the version, so the OCC predicate doesn't move; reserve no-bump mutations for data a concurrent writer may safely overwrite.
-:::
+Do not route insert vs update with `aggregate.version === 0`.
 
-### Retrying conflicts: `RetryingTransactionScope`
+A new aggregate can already be at version 1 or 2 before its first save. A factory can record a creation event. A setup method can change state again. The row still does not exist in the database.
 
-Retrying an OCC conflict means a **fresh `run()`**: reload, re-apply, save. The kit ships a `TransactionScope` wrapper that does exactly that, so you do not hand-roll the retry loop (the part teams reliably get wrong):
+`version` answers, "how many version-worthy changes has this aggregate seen in memory?"
+
+`persistedVersion` answers, "what version does persistence currently know about?"
+
+The insert/update branch uses `persistedVersion === undefined`. The update predicate uses `persistedVersion` as the baseline. The row's new version is `version`.
+
+See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+
+### Multi-Table Aggregates
+
+If one aggregate spans several tables, the root row still owns the version.
+
+A common failure mode is to update only a child collection table and forget to move the root version. The next writer then sees the old version and commits over your change without a conflict.
+
+The kit's state-stored aggregate support gives repositories two helpers:
+
+- `changedKeys` tells the repository which top-level state keys changed.
+- `hasChanges` tells the repository whether skipping `save()` is safe.
+
+Use those helpers to scope child-table writes, but still write the root row version whenever the aggregate has version-worthy changes. This keeps the OCC predicate attached to the aggregate boundary, not scattered across child rows.
+
+There is one deliberate escape hatch: `setStateWithoutVersionBump(newState)`. It marks state dirty without advancing the version. Use it only for data a concurrent writer may safely overwrite, such as cosmetic caches or denormalized display fields. Do not use it for domain-meaningful changes.
+
+See [Repository -> Partial writes](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges).
+
+## Handling Conflicts
+
+When a repository throws `ConcurrencyConflictError`, the application service has three reasonable choices:
+
+- retry the whole operation
+- return a conflict to the caller, such as HTTP 409
+- accept last-write-wins for a path where that is explicitly safe
+
+Do not catch the conflict inside the same `run()` callback and keep going. The aggregate instance is stale. The identity map still points to it. Its pending events may describe a write that failed.
+
+Retry means starting over: open a fresh transaction, reload the aggregate, re-apply the command, save again.
+
+## Retrying with `RetryingTransactionScope`
+
+The kit ships `RetryingTransactionScope` so retry logic can live at the transaction boundary instead of inside every use case.
 
 ```ts
 import { RetryingTransactionScope, UnitOfWork } from "@shirudo/ddd-kit";
 
 const scope = new RetryingTransactionScope(drizzleScope, {
-  maxAttempts: 3,   // default; 1 initial + 2 retries
-  baseDelayMs: 50,  // default; doubles each retry
-  maxDelayMs: 1000, // default ceiling
+  maxAttempts: 3,
+  baseDelayMs: 50,
+  maxDelayMs: 1000,
 });
+
 const uow = new UnitOfWork({ scope, outbox, repositories });
 ```
 
-Compose it transparently as the unit of work's scope; nothing else changes. What it guarantees so you don't have to:
+Use it as the `UnitOfWork` scope. Your application callback stays the same, but each retry gets fresh per-attempt state.
 
-- **Classification, not guesswork.** Only errors a predicate accepts are retried (default `someChainRetryable`, which matches `ConcurrencyConflictError` even when wrapped). A `DomainError`, `EventHarvestError`, `UnenrolledChangesError`, `DuplicateAggregateError`, or any non-retryable error surfaces immediately instead of looping. Override `isRetryable` to add driver serialization codes (Postgres 40001, MySQL 1213, SQLite SQLITE_BUSY) your adapter has not mapped to a retryable kit error.
-- **Exponential backoff with a +/-20% jitter band**, capped at `maxDelayMs`, to decorrelate simultaneous conflicts without unbounded latency.
-- **Last error unchanged on exhaustion**, so the caller can still match `ConcurrencyConflictError` and return HTTP 409.
-- **Cancellation via the existing `AbortSignal`.** Pass `AbortSignal.timeout(ms)` to `run()`; it aborts the backoff *waits* between attempts and the pre-attempt check. It does **not** interrupt a query already in flight unless your scope's driver honors the signal (see [`TransactionalOptions`](./outbox.md)), so a single slow attempt can still overshoot the deadline; there is no separate max-elapsed knob.
+What it provides:
 
-The retried region is the transaction only: each attempt opens a fresh transaction and the unit of work resets its per-attempt state, so your work callback must reload its aggregates inside `run()` and avoid non-transactional side effects before commit. The post-commit publish runs once, after the retried region.
+- retry classification through `someChainRetryable` by default, which matches `ConcurrencyConflictError` even when wrapped
+- exponential backoff with jitter, capped at `maxDelayMs`
+- the final error unchanged when attempts are exhausted
+- cancellation through the `AbortSignal` passed to `run()`
+
+Override `isRetryable` when your adapter surfaces database serialization errors directly, such as Postgres `40001`, MySQL `1213`, or SQLite `SQLITE_BUSY`.
+
+The retried region is the transaction. Keep non-transactional side effects out of the callback. Do not send email, call webhooks, publish to a broker, or mutate process-global state before commit. Put those effects behind the outbox or after the committed operation.
 
 ::: warning Retry requires a transactional outbox
-`outbox.add` runs **inside** the retried transaction. With a transactional outbox (the events row participates in the same DB transaction as the aggregate write, the production pattern), a rolled-back attempt's events roll back with it, so only the committed attempt's events survive. The shipped in-memory reference outbox is **not** transactional: a rolled-back attempt's events stay in it, and because each retry reloads the aggregate and records events with fresh ids, those orphans accumulate (a dispatcher would publish phantom events for transactions that never committed). Use `RetryingTransactionScope` only with a transactional outbox; the in-memory outbox is for tests and single-attempt flows.
+`outbox.add` must participate in the same database transaction as the aggregate write.
+
+With a transactional outbox, rolled-back attempts roll back their events too. Only the committed attempt survives.
+
+The in-memory outbox is not transactional. If you use it with retry, rolled-back attempts can leave orphaned events behind. Use `RetryingTransactionScope` only with a transactional outbox in production.
 :::
 
-## Isolation levels: what the kit assumes
+## Isolation Levels
 
-The kit's OCC pattern is correct under **READ COMMITTED** (the default of Postgres, MySQL/InnoDB's default, REPEATABLE READ, differs, but the predicate works there too): the version predicate compares against the row's committed state at write time, so a concurrent committed write makes the `UPDATE … WHERE version = $baseline` affect zero rows regardless of what was read earlier in the transaction. Three rules keep that sound:
+The kit's OCC pattern works under `READ COMMITTED`, the common default for Postgres. It also works under stronger isolation levels, though stronger databases may report conflicts differently.
 
-1. **Reads that feed decisions happen inside the same transaction** as the write (the `withCommit` / `UnitOfWork.run()` shape does this naturally). Deciding outside the transaction and writing blindly later defeats OCC: the version you compare against must be the version you loaded.
-2. **Keep transactions short.** No external calls inside (see the Unit of Work guide); long transactions turn OCC conflicts into lock waits and serialization failures.
-3. **SERIALIZABLE-class databases** (CockroachDB, Postgres with `SERIALIZABLE`) may abort transactions with serialization failures instead of letting the predicate miss; wrap your scope in [`RetryingTransactionScope`](#retrying-conflicts-retryingtransactionscope) (mapping the driver's serialization code to a retryable error via `isRetryable`), since the kit's `UnitOfWork` creates fresh per-attempt state, so scope-level retries are safe.
+The important part is the write predicate:
 
-Pessimistic locking (`SELECT … FOR UPDATE`) is not part of any kit contract; if a hot row genuinely needs it, implement it inside a repository method, explicitly, and document why OCC was insufficient.
+```sql
+UPDATE orders
+SET state = ?, version = ?
+WHERE id = ? AND version = ?
+```
 
-## EventBus is sequential per event-type, parallel per handler
+The final `version = ?` compares against the loaded `persistedVersion`. If another transaction committed first, the row no longer matches and the update affects zero rows.
 
-`EventBus.publish(events)`:
+Three rules keep this sound:
 
-1. Events run in **input order**, sequentially. `publish([a, b, c])` dispatches `a`, awaits all of its handlers, then dispatches `b`, and so on.
-2. Handlers within a single event run in **parallel** via `Promise.allSettled`.
-3. Errors are collected and thrown **after** the whole batch dispatches: a single `Error` if one handler failed, an `AggregateError` ("Multiple event handlers failed") otherwise.
+1. Read the aggregate that drives the decision inside the same operation that writes it.
+2. Keep transactions short.
+3. Retry serialization failures by rerunning the operation with fresh state.
 
-The bus does not provide retry, backpressure, or dead-letter handling; for cross-process delivery use the `Outbox` port and a dedicated dispatcher.
+Serializable databases, including Postgres in `SERIALIZABLE` mode and CockroachDB, may abort a transaction with a serialization failure before your update returns zero rows. Treat that as another retryable infrastructure conflict by mapping the driver error or by configuring `RetryingTransactionScope.isRetryable`.
 
-## The kit's invariants in summary
+Pessimistic locking, such as `SELECT ... FOR UPDATE`, is not part of the kit contract. If a hot path genuinely needs it, put it inside an explicit repository method and document why OCC is not enough for that use case.
 
-- `EventSourcedAggregate.apply()` is atomic: handler throws? state and events stay in sync
-- `AggregateRoot.commit(state, events)` is atomic: validateState throws? no event recorded
-- `withCommit` publishes events **after** the transaction commits, so rolled-back state never produces visible events
-- `loadFromHistory` and `restoreFromSnapshotWithEvents` are atomic: a mid-replay failure rolls back to the pre-call state
-- Domain events are deeply frozen, so a mutating subscriber can't poison its peers
-- Repositories enforce OCC via `ConcurrencyConflictError`
+## EventBus Dispatch Order
 
-If you stick to operation-scoped aggregates + the above invariants, the kit's concurrency story is well-defined.
+`EventBus.publish(events)` has deterministic ordering at the event level:
+
+1. Events are dispatched in input order. `publish([a, b, c])` finishes `a` before starting `b`.
+2. Handlers for one event run in parallel.
+3. Handler errors are collected and thrown after the whole `publish([...])` batch reaches the end.
+
+If one handler fails for event `a`, the other handlers for `a` still run, and events `b` and `c` still publish. Once the batch is complete, `publish` throws the single captured error, or an `AggregateError` if several handlers failed.
+
+The bus is an in-process dispatcher. It does not provide retry, backpressure, cross-process delivery, or dead-letter handling. For durable delivery, write events to an outbox in the same transaction and let a dispatcher publish them.
+
+This matters for concurrency because in-process event handlers should not be treated as a durability boundary. The transaction and outbox are the durability boundary. The bus is delivery inside the current process.
+
+## Invariants the Kit Protects
+
+The kit's concurrency story depends on a few invariants:
+
+- `AggregateRoot.commit(state, events)` records events only after state validation succeeds.
+- `EventSourcedAggregate.apply(event)` records the event only after the handler produces valid state.
+- `withCommit` harvests pending events inside the transaction and publishes after commit.
+- `loadFromHistory` and `restoreFromSnapshotWithEvents` roll back in-memory replay if replay fails.
+- Domain events are deeply frozen so one subscriber cannot mutate an event seen by another subscriber.
+- Repositories enforce OCC with `ConcurrencyConflictError`.
+
+If you keep aggregates operation-scoped, use `persistedVersion` as the OCC baseline, and let `withCommit` own event harvesting, the concurrency model stays predictable.

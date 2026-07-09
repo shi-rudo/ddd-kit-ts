@@ -1,156 +1,274 @@
 # Value Objects
 
-Value Objects are immutable, defined by their attributes rather than identity. Equality is structural: two Money value objects with the same amount, currency, and scale are the same. (For money specifically, use the shipped canonical shape from [`@shirudo/ddd-kit/money`](/guide/money) instead of hand-rolling one; its `moneyEquals` is deliberately strict on all three attributes.)
+A value object models a concept by its content, not by identity. Two addresses
+with the same street, city, and postal code are the same value. Two entities
+with the same display name are not.
 
-## Functional: `vo()`
+Reach for a value object when the value has rules you want to protect, when
+equality should be structural, or when passing a raw primitive around would make
+the code ambiguous. For money, use the dedicated [Money](./money.md) helpers
+instead of inventing another casual two-field shape.
 
-The fastest way to a deeply immutable value object:
+## Which API Should I Use?
+
+| Need | Use |
+| --- | --- |
+| A deeply immutable plain-data value | `vo()` |
+| One fail-fast validation error at the application edge | `voWithValidation()` |
+| All validation issues at once | `voValidated()` |
+| Domain behavior or throwing invariants | `ValueObject<T>` |
+| Equality while ignoring selected metadata | `voEqualsExcept()` |
+
+The split is intentional. Application input parsing is a `Result` flow. Domain
+construction is usually a throwing invariant flow. See
+[Result vs Throw](./result-vs-throw.md#validation-helpers) for the broader
+error-handling model.
+
+## Plain Values With `vo()`
+
+Use `vo()` when the value is plain data and does not need methods:
 
 ```ts
 import { vo, voEquals } from "@shirudo/ddd-kit";
 
-const money = vo({ amount: 100, currency: "EUR" });
-// money is Readonly<{ amount: number; currency: string }>
-// nested writes throw in strict mode
+const input = {
+  street: "Main St",
+  city: "Berlin",
+  coordinates: { lat: 52.5, lng: 13.4 },
+};
 
-const a = vo({ amount: 100, currency: "EUR" });
-const b = vo({ amount: 100, currency: "EUR" });
-voEquals(a, b); // true
+const address = vo(input);
+
+input.coordinates.lat = 0;
+address.coordinates.lat; // 52.5
+
+const sameAddress = vo({
+  street: "Main St",
+  city: "Berlin",
+  coordinates: { lat: 52.5, lng: 13.4 },
+});
+
+voEquals(address, sameAddress); // true
 ```
 
-`vo()` deep-clones its input before freezing, so the caller's object graph is **never** mutated as a side-effect. Mutating the original after `vo(input)` does not bleed into the value object. Symbol-keyed properties are preserved, including symbols on arrays and non-enumerable symbols; they participate in `voEquals` like any other key. Accessor properties are rejected without invoking their getters or setters.
+`vo()` clones first and freezes the clone. That matters more than it sounds:
+the caller keeps ownership of the original object, and later mutations to the
+original cannot leak into the value object.
 
-Function values and custom class instances (including subclasses of built-ins) are rejected with a `TypeError`. Cloning a class instance without running its constructor can silently discard private fields, non-enumerable state, and built-in internal slots. Pass plain records, arrays, or the explicitly supported built-ins instead; put Value Object behaviour on a class that extends `ValueObject<T>`, not inside its `props` graph. Plain records from another JavaScript Realm are accepted and normalized to the local `Object.prototype`.
+Keep the input boring: plain records, arrays, and supported built-ins. Do not
+put functions, services, repositories, custom class instances, `Error` objects,
+buffers, typed arrays, promises, weak collections, or other behavior-bearing
+objects inside a value object. If a value needs methods, make the value object a
+class instead of smuggling behavior through `props`.
 
-Every accepted VO value must be both immutable and compared by value. `Error`,
-`ArrayBuffer`, `SharedArrayBuffer`, TypedArrays, and `DataView` are therefore
-rejected instead of introducing reference equality or mutable bytes. `Promise`,
-`WeakMap`, and `WeakSet` remain rejected as non-value data. Convert binary data
-to an immutable representation such as a plain number array or encoded string
-before constructing a VO.
+## Parse Input With Validation Helpers
 
-Inputs to `vo()` must be trusted and Proxy-free. ECMAScript provides no
-portable, side-effect-free way to identify a transparent `Proxy`, so reflective
-cloning can execute Proxy traps. `vo()` is an immutable-value constructor, not
-a sandbox for hostile in-process objects. Parse untrusted wire data into an
-ordinary DTO before passing it to `vo()` or `voWithValidation`.
+Use these helpers after you have converted untrusted input into an ordinary DTO.
+They are good for HTTP bodies, queue messages, forms, and file imports.
 
-Date, Map and Set keep internal-slot mutability under `Object.freeze` (`setTime`, `set`, `add`, … succeed on frozen instances), so `deepFreeze` additionally shadows their mutator methods with throwing own properties and freezes Map values recursively, so a mutating consumer gets a `TypeError` instead of silently poisoning shared state. Reads (`get`, `has`, iteration, `getTime`) work unchanged. Map keys and Set members must be primitive values: JavaScript defines their lookup semantics by identity, so cloning object keys or members would make separately constructed Value Objects compare unequal. Use an array when members are structured values. The mutator blocking is deny-by-enumeration: mutators added by future runtimes (e.g. the stage-3 `Map.prototype.getOrInsert` proposal) are not blocked until the list is updated. Treat it as a guard rail, not a security boundary.
-
-The standalone `deepFreeze` utility still documents its JavaScript-level
-limitations, but `vo()` and `ValueObject` do not inherit a weaker contract from
-it: unsupported mutable values are rejected before freezing.
-
-### Validation at the App boundary
+`voWithValidation()` is fail-fast and returns `Result<VO<T>, string>`:
 
 ```ts
 import { voWithValidation } from "@shirudo/ddd-kit";
-import type { Result } from "@shirudo/result";
 
-type Money = { amount: number; currency: string };
+type ShippingAddressInput = {
+  street: string;
+  city: string;
+  postalCode: string;
+};
 
-const result: Result<Money, string> = voWithValidation(
-  { amount: 100, currency: "EUR" },
-  (m) => m.amount >= 0 && m.currency.length === 3,
-  "Invalid Money",
+const dto: ShippingAddressInput = {
+  street: String(body.street ?? ""),
+  city: String(body.city ?? ""),
+  postalCode: String(body.postalCode ?? ""),
+};
+
+const parsed = voWithValidation(
+  dto,
+  (address) =>
+    address.street.trim() !== "" &&
+    address.city.trim() !== "" &&
+    /^[0-9]{5}$/.test(address.postalCode),
+  "Shipping address is invalid",
 );
 
-if (result.isOk()) {
-  // result.value is the validated, frozen Money
+if (parsed.isErr()) {
+  return Response.json({ error: parsed.error }, { status: 400 });
 }
+
+const address = parsed.value;
 ```
 
-`voWithValidation` is the **App-boundary parser**: use it when validating untrusted input (HTTP body, queue message, file). For Domain construction, prefer the class-based `ValueObject` so the constructor itself enforces invariants and throws on violation.
-
-### Collecting every violation: `voValidated`
-
-`voWithValidation` fails fast with a single message. When you parse a form and want to report *all* the broken fields at once, `voValidated` collects each violation into one `ValidationError` (from `@shirudo/base-error`):
+`voValidated()` collects every issue into one `ValidationError`:
 
 ```ts
 import { voValidated } from "@shirudo/ddd-kit";
 
-const result = voValidated(
-  { email, age },
-  (issues, m) => {
-    if (!isEmail(m.email))
-      issues.addIssue({ message: "must be a valid email", path: ["email"] });
-    if (m.age < 0)
-      issues.addIssue({ message: "must not be negative", path: ["age"] });
+const parsed = voValidated(
+  dto,
+  (issues, address) => {
+    if (address.street.trim() === "") {
+      issues.addIssue({
+        path: ["street"],
+        message: "must not be empty",
+      });
+    }
+
+    if (!/^[0-9]{5}$/.test(address.postalCode)) {
+      issues.addIssue({
+        path: ["postalCode"],
+        message: "must be a five-digit postal code",
+      });
+    }
   },
+  "Shipping address is invalid",
 );
 
-if (result.isErr()) {
-  // result.error.publicIssues() → every violation, in order
+if (parsed.isErr()) {
+  return Response.json(
+    { issues: parsed.error.publicIssues() },
+    { status: 400 },
+  );
 }
 ```
 
-The returned `ValidationError` is a **value you destructure, not a throw you catch**: it lives on the Result axis, distinct from the thrown `DomainError` hierarchy. See [Result vs Throw](./result-vs-throw.md#vovalidated-collects-every-violation) for that distinction and for rendering it as RFC 9457 via `@shirudo/ddd-kit/http`.
+Both helpers return validation failures as values. They still call `vo()` on the
+success path, so non-data JavaScript values can still throw `TypeError`. That is
+deliberate: a function or mutable buffer in a DTO is a programming error, not a
+user validation error.
 
-## Class-based: `ValueObject<T>`
+## Add Behavior With `ValueObject<T>`
 
-When the value object has methods, or when you want construction to throw rather than return a Result:
+Use a class when the type owns behavior, when construction should throw, or when
+you want to keep raw `props` out of the rest of the domain model.
 
 ```ts
 import { ValueObject } from "@shirudo/ddd-kit";
 
-class Money extends ValueObject<{ amount: number; currency: string }> {
-  protected validate(props: { amount: number; currency: string }): void {
-    if (props.amount < 0) throw new Error("amount must be non-negative");
-    if (props.currency.length !== 3) throw new Error("currency must be ISO-4217");
+type DateRangeProps = {
+  from: Date;
+  to: Date;
+};
+
+class DateRange extends ValueObject<DateRangeProps> {
+  protected validate(props: DateRangeProps): void {
+    if (props.to.getTime() < props.from.getTime()) {
+      throw new Error("DateRange.to must be on or after DateRange.from");
+    }
   }
 
-  add(other: Money): Money {
-    if (this.props.currency !== other.props.currency) {
-      throw new Error("currency mismatch");
-    }
-    return new Money({
-      amount: this.props.amount + other.props.amount,
-      currency: this.props.currency,
-    });
+  get from(): Date {
+    return this.props.from;
+  }
+
+  get to(): Date {
+    return this.props.to;
+  }
+
+  includes(date: Date): boolean {
+    const time = date.getTime();
+    return this.from.getTime() <= time && time <= this.to.getTime();
+  }
+
+  extendTo(to: Date): DateRange {
+    return this.clone({ to });
   }
 }
 
-const a = new Money({ amount: 100, currency: "EUR" });
-const b = new Money({ amount: 50, currency: "EUR" });
-const c = a.add(b); // Money { amount: 150, currency: "EUR" }
-a.equals(b); // false (constructor-aware deep equality)
+const bookingWindow = new DateRange({
+  from: new Date("2026-07-01T00:00:00.000Z"),
+  to: new Date("2026-07-31T00:00:00.000Z"),
+});
+
+bookingWindow.includes(new Date("2026-07-09T12:00:00.000Z")); // true
 ```
 
-`ValueObject` includes:
-- `equals(other)`: deep equality plus a constructor check, so `new Money(…)` is never equal to a `new Coupon(…)` with the same shape
-- `clone(props?)`: creates a new instance with optional overrides
-- `toJSON()`: exposes `props` for serialisation
+The base class gives you:
 
-::: warning Constructor-ordering footgun
-`validate(props)` is called from the base constructor *before* the subclass's field initializers run. Treat `validate` as pure with respect to `this`; use only the `props` argument. If your invariants depend on per-instance config, put that config into `props` itself or check it in a static factory method.
+- `props`: deeply immutable cloned props
+- `equals(other)`: constructor-aware deep equality
+- `clone(props?)`: a new instance with optional overrides
+- `toJSON()`: the raw immutable props for serialization
+
+`equals()` checks the constructor as well as the props. A `DateRange` is not
+equal to another class with the same `{ from, to }` shape, because the type is
+part of the meaning.
+
+::: warning Constructor ordering
+`validate(props)` runs from the base constructor before subclass field
+initializers run. Treat `validate` as a pure check over the `props` argument. If
+an invariant needs configuration, pass that configuration in `props` or enforce
+it in a static factory before calling `new`.
 :::
 
-## Equality with ignored keys
+## Equality With Ignored Keys
 
-For value objects that carry metadata (`createdAt`, `updatedAt`, internal ids) you don't want in equality checks:
+Most value objects should not carry metadata. If you do have metadata, be
+explicit about whether it belongs to equality.
 
 ```ts
 import { voEqualsExcept } from "@shirudo/ddd-kit";
 
-voEqualsExcept(a, b, {
+voEqualsExcept(firstAddress, secondAddress, {
   ignoreKeys: ["updatedAt"],
-  // OR: ignoreKeyPredicate: (key, path) => path.includes("metadata"),
 });
 ```
 
-`voEqualsExcept` compares deep-omitted copies of both sides. Every value admitted
-by the VO constructors has value semantics, so equality never falls back to
-identity for valid VOs. The lower-level `deepEqualExcept` utility can still
-receive arbitrary JavaScript objects and documents its broader behavior
-separately.
+Use this sparingly. If a field never participates in equality, ask whether it
+belongs on the value object at all. Timestamps, database ids, and audit data
+usually belong to an entity, a persistence record, or an event envelope.
 
-## When to reach for `vo()` vs `ValueObject<T>`
+## Data Rules That Matter
 
-| Use case | Reach for |
-|---|---|
-| Quick immutable record, no methods | `vo()` |
-| Methods on the value object (`add`, `subtract`, `convertTo`) | `ValueObject` |
-| Construction must throw on invalid input | `ValueObject` |
-| Parsing untrusted input at the App boundary | `voWithValidation` |
-| Reporting every invalid field at once | `voValidated` |
-| Equality ignoring some keys | `voEqualsExcept` |
+Value objects only work when their content has value semantics. The library is
+strict here because loose value objects create subtle bugs.
+
+Plain records and arrays are accepted. Symbol-keyed properties are preserved and
+participate in equality. Accessor properties are rejected without calling their
+getters or setters.
+
+Dates, Maps, Sets, RegExp values, and primitive wrappers are accepted only when
+they can behave like immutable values. Date, Map, and Set mutator methods are
+shadowed on the frozen clone so accidental mutation throws. Map keys and Set
+members must be primitives, because JavaScript compares object keys and set
+members by identity.
+
+Functions and custom class instances are rejected. A class instance can hide
+private fields, non-enumerable state, and runtime-owned internal slots. Cloning
+it as data would produce a value that looks valid but has lost part of its
+meaning.
+
+Buffers, typed arrays, `DataView`, `Error`, promises, `WeakMap`, and `WeakSet`
+are rejected. They are mutable, reference-oriented, or process state rather
+than stable value data. Convert binary data to an encoded string or a plain
+number array before constructing a value object.
+
+Do not pass hostile Proxy objects to `vo()`. JavaScript has no portable,
+side-effect-free way to identify a transparent Proxy, so reflective cloning can
+trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
+
+The exported `deepFreeze()` helper freezes in place and is used by lower-level
+internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
+because they clone first and do not freeze caller-owned objects.
+
+## Common Mistakes
+
+Do not use a value object when the concept has a lifecycle. If users can rename
+an address book entry, deactivate it, merge it, or refer to the same thing over
+time, you probably have an entity.
+
+Do not let persistence shape leak into the value. A database row can have
+`id`, `createdAt`, `updatedAt`, and migration fields. The domain value should
+contain only the data that gives the concept its meaning.
+
+Do not hide invalid states behind optional fields. If a date range always needs
+both dates, model both dates and reject invalid ranges at construction. A value
+object should make invalid combinations hard to express.
+
+Do not use `voWithValidation()` for domain invariants that must never be
+ignored. The helper is useful at boundaries where callers expect `Result`.
+Inside the domain, prefer a constructor or factory that cannot produce an
+invalid value.
+
+Do not model money as an ad-hoc value object. Use the Money helpers so scale,
+exact minor units, parsing, and serialization stay consistent across the system.

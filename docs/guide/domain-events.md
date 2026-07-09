@@ -1,173 +1,313 @@
 # Domain Events
 
-A domain event represents something that has **just happened** in the domain. The kit treats events as facts of the past: immutable, identifiable, and (by convention) recorded after the state change they describe.
+A domain event is a fact that has just happened in the domain.
+
+Use events for facts other parts of the system may care about: an order was confirmed, a payment was captured, a shipment failed. The event should describe the fact, not the command that requested it. `ConfirmOrder` is a command. `OrderConfirmed` is an event.
+
+The kit treats domain events as plain, immutable data:
+
+- they have a stable `eventId`
+- they carry a `type` discriminator
+- they are deeply frozen
+- they can carry correlation metadata
+- aggregate events can be routed by `aggregateId` and `aggregateType`
+- `withCommit` can stamp commit-position metadata for outbox and projection consumers
 
 ## Shape
 
 ```ts
 interface DomainEvent<T extends string, P = void> {
-  eventId: string;                // auto-generated UUID v4 by default
-  type: T;                        // discriminator tag
-  aggregateId?: string;           // set whenever the producing aggregate is known
+  eventId: string;
+  type: T;
+  aggregateId?: string;
   aggregateType?: string;
-  payload: P;                     // undefined when P = void
+  payload: P;
   occurredAt: Date;
-  version: number;                // event schema version
-  metadata?: EventMetadata;       // correlationId, causationId, userId, source, ...
+  version: number;
+  aggregateVersion?: number;
+  commitSequence?: number;
+  metadata?: EventMetadata;
 }
 ```
 
-## Construction: `createDomainEvent`
+The fields have different jobs:
+
+| Field | Meaning |
+| --- | --- |
+| `eventId` | Unique id for this event instance. Use it for idempotency and deduplication. |
+| `type` | Routing discriminator, such as `"OrderConfirmed"`. |
+| `aggregateId` / `aggregateType` | Source aggregate. `recordEvent` fills these in automatically. |
+| `payload` | Domain data for the fact that happened. |
+| `occurredAt` | Time the event was created. |
+| `version` | Event schema version, used for payload evolution and upcasting. |
+| `aggregateVersion` | Producing aggregate's version at commit time. |
+| `commitSequence` | Event position within one aggregate's commit batch. |
+| `metadata` | Correlation, causation, user, source, and custom tracing fields. |
+
+Do not confuse `version` with `aggregateVersion`. `version` says which shape the event payload has. `aggregateVersion` says which aggregate state revision emitted the event.
+
+## Creating Events
+
+Outside an aggregate, use `createDomainEvent`:
 
 ```ts
 import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
 
-type OrderConfirmed = DomainEvent<"OrderConfirmed", { orderId: string }>;
+type OrderConfirmed = DomainEvent<
+  "OrderConfirmed",
+  { orderId: string }
+>;
 
-const event = createDomainEvent("OrderConfirmed", { orderId: "o-1" }, {
-  aggregateId: "o-1",
-  aggregateType: "Order",
-  metadata: { correlationId: "req-42", userId: "u-7" },
-}) as OrderConfirmed;
+const event = createDomainEvent(
+  "OrderConfirmed",
+  { orderId: "o-1" },
+  {
+    aggregateId: "o-1",
+    aggregateType: "Order",
+    metadata: {
+      correlationId: "req-42",
+      userId: "u-7",
+    },
+  },
+) as OrderConfirmed;
 ```
 
-The returned event is **deeply frozen**. Mutating it (or any nested object) throws, so a mutating EventBus subscriber cannot poison subsequent handlers.
+The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
-::: tip Inside an aggregate method? Prefer `this.recordEvent(...)`
-`createDomainEvent` is the construction primitive and stays the right call for system events, integration events, and anything outside an aggregate (process managers / sagas, outbox dispatch, tests). **Inside an aggregate domain method**, use the `this.recordEvent(type, payload, options?)` helper on `AggregateRoot` / `EventSourcedAggregate` instead; it auto-injects `aggregateId = this.id` and `aggregateType = this.aggregateType`. `withCommit`'s harvest guard throws on any event with either field missing, so calling `createDomainEvent(...)` from inside an aggregate is a footgun the helper closes. See [Aggregate Roots → State + Version + Domain Events](./aggregates.md#state-version-domain-events).
-:::
+Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records.
 
-### Auto-generated fields and override hooks
+## Inside Aggregates: Use `recordEvent`
 
-| Field | Default | Override |
-|---|---|---|
-| `eventId` | `crypto.randomUUID()` (UUID **v4**) | `options.eventId` (per-call) or `setEventIdFactory(fn)` (global) |
-| `occurredAt` | `new Date()` | `options.occurredAt` (per-call) or `setClockFactory(fn)` (global) |
-| `version` | `1` | `options.version` |
-| `metadata` | `undefined` | `options.metadata` |
-
-::: tip Prefer time-ordered ids in production
-`crypto.randomUUID()` is always **UUID v4**: purely random, no time component. Fine for tests and small workloads, but it scatters across B-tree indexes and amplifies writes once the event store grows. For production, swap in UUID v7 (RFC 9562), ULID, or KSUID via `setEventIdFactory`; all three are time-ordered, so `ORDER BY eventId ASC` matches creation order and indexes stay clustered. See [Edge Runtimes → Event ids](./edge-runtimes.md#event-ids-ulid-ksuid-snowflake) for the drop-ins.
-:::
-
-#### Where to bootstrap the factory
-
-Both `setEventIdFactory` and `setClockFactory` are **process-wide singletons**: call them **once, at your app's entry point**, before any code constructs a domain event. Subsequent calls overwrite the previous factory (last setter wins), so a per-request `setEventIdFactory(...)` is almost always a bug. For per-request / per-tenant variance, use the per-call `options.eventId` / `options.occurredAt` overrides on `createDomainEvent` instead.
-
-The right place depends on your runtime:
-
-**Node / Bun entry point:** at the top of your main module, before any handler or use case imports a domain event:
+Inside aggregate methods, prefer `this.recordEvent(...)`:
 
 ```ts
-// src/main.ts  (or index.ts, server.ts: your process entry)
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
+  confirm(): void {
+    this.commit(
+      { ...this.state, status: "confirmed" },
+      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+    );
+  }
+}
+```
+
+`recordEvent` calls `createDomainEvent` and fills in `aggregateId` and `aggregateType` from the aggregate. That metadata is how outbox dispatchers, projection handlers, audit logs, and process managers know which aggregate produced the event.
+
+Calling `createDomainEvent(...)` directly inside an aggregate is easy to get wrong because you must remember those routing fields by hand. `withCommit` validates harvested aggregate events and throws if the fields are missing, but the better path is to make the wrong event hard to create.
+
+Use `createDomainEvent(...)` directly for events that do not come from an aggregate: system events, integration events, test fixtures, process-manager events, and adapter-level events.
+
+See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
+
+## Auto-Generated Fields
+
+`createDomainEvent` fills in common fields when you omit them:
+
+| Field | Default | Override |
+| --- | --- | --- |
+| `eventId` | `crypto.randomUUID()` | `options.eventId` or `setEventIdFactory(fn)` |
+| `occurredAt` | current clock time | `options.occurredAt` or `setClockFactory(fn)` |
+| `version` | `1` | `options.version` |
+| `metadata` | `undefined` | `options.metadata` |
+| `aggregateVersion` | stamped by `withCommit` when unset | `options.aggregateVersion` |
+| `commitSequence` | stamped by `withCommit` when unset | `options.commitSequence` |
+
+The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
+
+## Where to bootstrap the factory
+
+`setEventIdFactory` and `setClockFactory` are module-level singletons. Call them once at application bootstrap, not per request.
+
+Node or Bun entry point:
+
+```ts
 import { setEventIdFactory } from "@shirudo/ddd-kit";
 import { v7 as uuidv7 } from "uuid";
 
 setEventIdFactory(() => uuidv7());
 
-// ... then the rest of the bootstrap (express server, fastify, etc.)
 import { startServer } from "./server";
+
 startServer();
 ```
 
-**Cloudflare Workers / Vercel Edge:** at module top level in the worker file. Module top-level code runs **once per isolate boot**, not per request, so the factory is set once and lives for the lifetime of that isolate:
+Cloudflare Workers, Vercel Edge, and similar runtimes:
 
 ```ts
-// worker.ts
 import { setEventIdFactory } from "@shirudo/ddd-kit";
-import { v7 as uuidv7 } from "uuid";
+import { ulid } from "ulid";
 
-// Runs once when the isolate boots. Don't put this inside fetch().
-setEventIdFactory(() => uuidv7());
+setEventIdFactory(() => ulid());
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
-    // ... domain events created here use the v7 factory ...
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Events created during this invocation use the configured factory.
   },
 };
 ```
 
-**Test setup file:** once per test file, or globally via your test runner's setup config. The reset helpers exist so each test sees the default again unless it opts in:
+Module top-level code runs when the isolate boots, not once per request. That is the right scope for a process-wide default.
+
+For tests, prefer reset hooks or scoped helpers:
 
 ```ts
-// vitest.setup.ts  (referenced from vitest.config.ts `setupFiles`)
-import { afterEach } from "vitest";
-import { resetEventIdFactory, resetClockFactory } from "@shirudo/ddd-kit";
+import { afterEach, it } from "vitest";
+import {
+  createDomainEvent,
+  resetClockFactory,
+  resetEventIdFactory,
+  setClockFactory,
+  withEventIdFactory,
+} from "@shirudo/ddd-kit";
 
 afterEach(() => {
   resetEventIdFactory();
   resetClockFactory();
 });
-```
 
-```ts
-// A single test that needs determinism opts in:
-import { setEventIdFactory, setClockFactory } from "@shirudo/ddd-kit";
-
-it("emits a deterministic event", () => {
-  let n = 0;
-  setEventIdFactory(() => `evt-${++n}`);
+it("emits deterministic ids", () => {
   setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
 
-  // ... assertions on event.eventId === "evt-1", event.occurredAt fixed ...
+  withEventIdFactory(() => "evt-1", () => {
+    const event = createDomainEvent("OrderConfirmed", { orderId: "o-1" });
+    expect(event.eventId).toBe("evt-1");
+  });
 });
 ```
 
-::: warning Module-scoped: last setter wins
-Both factories live in module-level singletons. In a multi-tenant request flow (e.g. one Worker invocation serving multiple tenants, two libraries that both call `setEventIdFactory` at import time), **don't mutate the global per request**; that's a race waiting to happen. Use the per-call `options.eventId` / `options.occurredAt` on `createDomainEvent` instead; it always wins over the factory.
+`withEventIdFactory` and `withClockFactory` are synchronous scoped helpers. They restore the previous factory in a `finally` block, and they reject async callbacks so the factory cannot be restored before awaited code runs.
+
+For async code, prefer per-call options, constructor-injected factories, or an application-level async context such as Node's `AsyncLocalStorage`.
+
+::: warning Last setter wins
+The factories are globals inside the module. If two libraries call `setEventIdFactory` during import, the later import wins. If request code changes the factory per tenant, concurrent requests can affect each other.
+
+Use per-call `eventId` and `occurredAt` options for per-request or per-tenant variation.
 :::
 
-#### Custom id formats (UUID v7, ULID, KSUID)
+## Custom id formats
+
+Swap the default id factory once at bootstrap:
 
 ```ts
-// UUID v7: RFC 9562 standards-track, time-ordered
+// UUID v7: time-ordered and standards-track
 import { v7 as uuidv7 } from "uuid";
 setEventIdFactory(() => uuidv7());
 
-// ULID: 26-char Crockford base32, time-ordered, URL-safe
+// ULID: compact, URL-safe, time-ordered
 import { ulid } from "ulid";
-setEventIdFactory(() => ulid()); // call once at bootstrap
+setEventIdFactory(() => ulid());
 ```
+
+The kit only requires a string. Choose the id format that fits your storage and interoperability needs.
 
 ## Metadata
 
-`EventMetadata` is a free-form bag with conventional fields:
+`EventMetadata` is a plain object with conventional fields:
 
 ```ts
 interface EventMetadata {
-  correlationId?: string;     // groups related events across services
-  causationId?: string;       // the eventId / commandId that produced this event
+  correlationId?: string;
+  causationId?: string;
   userId?: string;
-  source?: string;            // producing service/component name
-  [key: string]: unknown;     // extensible
+  source?: string;
+  [key: string]: unknown;
 }
 ```
 
-Helpers to keep correlation chains intact:
+Use metadata for tracing and operational context, not for core domain state. If a value is required to understand the event as a domain fact, put it in the payload.
+
+The usual meanings:
+
+- `correlationId` groups work that belongs to one request or workflow.
+- `causationId` points to the event or command that caused this event.
+- `userId` records the actor when known.
+- `source` names the producing component or bounded context.
+
+### Copying Correlation
+
+Use `copyMetadata` when one event causes another:
 
 ```ts
-import { copyMetadata, mergeMetadata } from "@shirudo/ddd-kit";
+import { copyMetadata, createDomainEvent } from "@shirudo/ddd-kit";
 
-const previous = await loadLastEvent();
-
-const next = createDomainEvent("OrderShipped", { trackingNumber: "T-1" }, {
-  metadata: copyMetadata(previous, { causationId: previous.eventId }),
-});
-
-// Merge multiple metadata layers (later overrides earlier on the same key):
-const md = mergeMetadata(
-  { correlationId: "corr-1" },
-  { userId: "u-7" },
-  { source: "order-service" },
+const shipped = createDomainEvent(
+  "OrderShipped",
+  { orderId: "o-1", trackingNumber: "T-1" },
+  {
+    metadata: copyMetadata(confirmed, {
+      causationId: confirmed.eventId,
+    }),
+  },
 );
 ```
 
-## Convention: record after mutation
+The new event keeps the previous correlation fields and adds or overrides the fields you pass.
 
-A domain event represents something that has **just happened**. The state change must already have committed before the event is recorded.
+Use `mergeMetadata` when you are composing context from several layers:
 
-- `EventSourcedAggregate.apply()` enforces this structurally: state and event commit atomically.
-- `AggregateRoot.commit(newState, events)` enforces this via the helper: state mutates first (and throws on validateState), only then are events appended.
-- Direct `setState` + `addDomainEvent` is fine but the ordering is convention only; keep them in that order, and never record an event before the state change that justifies it.
+```ts
+import { mergeMetadata } from "@shirudo/ddd-kit";
 
-Recording before mutation is a footgun: if a subsequent invariant throws, the event has been queued for a fact that never actually happened.
+const metadata = mergeMetadata(
+  { correlationId: "corr-1" },
+  { userId: "u-7" },
+  { source: "orders" },
+);
+```
+
+Later objects override earlier ones for the same key.
+
+Both helpers reject hostile own `__proto__` metadata keys. That matters for events that were hand-built or deserialized from a message envelope, where metadata did not necessarily come through `createDomainEvent`.
+
+## Commit Stamps
+
+`withCommit` can stamp aggregate events with:
+
+- `aggregateVersion`
+- `commitSequence`
+
+All events produced by one aggregate in one commit share the same `aggregateVersion`. `commitSequence` is the zero-based position of the event inside that aggregate's harvest batch.
+
+Together, `(aggregateVersion, commitSequence)` is a compact per-aggregate ordering key. Projection handlers can use it as a watermark when they process kit-harvested events in order.
+
+`eventId` is still the general-purpose deduplication key. Use it when events come from mixed sources, older versions, or hand-rolled orchestration that may not provide commit stamps.
+
+See [Outbox & Transactions](./outbox.md) and [Read-Side Projections](./projections.md).
+
+## Record After Mutation
+
+A domain event says something happened. The state change must succeed before the event is recorded.
+
+The kit gives you safe paths:
+
+- `EventSourcedAggregate.apply(event)` validates and applies the event before recording it as pending.
+- `AggregateRoot.commit(newState, events)` validates and assigns state before appending events.
+
+The lower-level `setState` and `addDomainEvent` methods are still available for special cases, but then the ordering is your responsibility:
+
+```ts
+this.setState(nextState);
+this.addDomainEvent(this.recordEvent("OrderConfirmed", { orderId: this.id }));
+```
+
+Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.
+
+## Naming Events
+
+Name events in past tense:
+
+- `OrderPlaced`
+- `OrderConfirmed`
+- `PaymentCaptured`
+- `ShipmentFailed`
+
+Avoid command names:
+
+- `PlaceOrder`
+- `ConfirmOrder`
+- `CapturePayment`
+
+The distinction matters. A command can be rejected. An event says the domain already accepted the change.

@@ -1,10 +1,68 @@
-# Outbox & Transactions
+# Outbox And Transactions
 
-The transactional outbox is the canonical pattern for "domain event must persist atomically with the state change, even if downstream delivery is asynchronous". The kit ships two small ports (`TransactionScope` and `Outbox<Evt>`) plus a `withCommit` helper that wires them together.
+A domain event is useful only if it survives the same commit as the state
+change that produced it. The transactional outbox is the pattern for that:
+write the aggregate and enqueue its events in one database transaction, then
+deliver the events after the commit.
 
-## `TransactionScope<TCtx>`
+The kit gives you four pieces:
 
-A minimal transaction-scope abstraction generic over the persistence layer's transaction handle:
+- `TransactionScope<TCtx>`: opens the storage transaction.
+- `withCommit`: runs the use case, harvests aggregate events, writes the
+  outbox row, commits, then publishes optional in-process notifications.
+- `OutboxWriter<Evt>` / `Outbox<Evt>`: the durable queue boundary.
+- `OutboxDispatcher`: a small poller for setups that do not already have CDC
+  or broker-owned delivery.
+
+The main path looks like this:
+
+```ts
+import { InMemoryOutbox, withCommit } from "@shirudo/ddd-kit";
+
+const outbox = new InMemoryOutbox<OrderEvent>();
+
+const orderId = await withCommit({ scope, outbox }, async (tx) => {
+  const orders = makeOrderRepository(tx);
+  const order = await orders.getById(id);
+
+  order.confirm();
+  await orders.save(order);
+
+  return { result: order.id, aggregates: [order] };
+});
+```
+
+The important line is the return value. The use case returns the aggregates
+it touched, not `order.pendingEvents`. `withCommit` owns event harvesting and
+persistence cleanup. Repositories save state; they do not clear events and
+they do not call `markPersisted`.
+
+## What Happens On Commit
+
+`withCommit` does the same sequence every time:
+
+1. It calls `scope.transactional(...)`.
+2. Your callback loads aggregates, mutates them, and saves them through
+   repositories bound to the transaction handle.
+3. Still inside the transaction, `withCommit` harvests `pendingEvents` from
+   the returned aggregates and calls `outbox.add(events)`.
+4. The transaction commits.
+5. After commit, `withCommit` marks the aggregates as persisted and clears
+   their pending events.
+6. If a `bus` was supplied, it publishes the same committed events to
+   in-process subscribers.
+
+If the transaction rolls back, step 5 never happens. The aggregate still has
+its pending events, so the caller can retry or discard the instance.
+
+If `bus.publish` fails after the commit, `withCommit` does not reject. The
+write already succeeded, and returning an error would make normal callers
+retry a committed command. Wire `onPublishError` to logs or metrics, and let
+the outbox deliver the durable copy.
+
+## TransactionScope
+
+`TransactionScope<TCtx>` is intentionally small:
 
 ```ts
 interface TransactionalOptions {
@@ -19,39 +77,43 @@ interface TransactionScope<TCtx> {
 }
 ```
 
-`fn` runs inside the persistence layer's native transaction (Postgres `BEGIN`/`COMMIT`, Mongo session, Drizzle transaction, etc.). The transaction commits when the callback resolves, rolls back if it throws. The `ctx` parameter is the live transaction handle: `tx` in Drizzle and Prisma, `session` in Mongo, `undefined` in the no-context fake used for tests. The `options` argument is additive and optional: a one-parameter implementation still satisfies the interface, and a cancellation-aware scope can honor `options.signal` to abort an in-flight query (see [Cancellation and deadlines](./unit-of-work.md#cancellation-and-deadlines)).
-
-`TCtx` has no default: every implementor names it explicitly so "what lives in my unit-of-work boundary" is a conscious decision. Context-free scopes spell it out as `TransactionScope<undefined>`; that's the honest "there is nothing meaningful here" statement, not an inherited `unknown` fallback.
-
-The use case binds its repositories to `ctx`, typically by constructing tx-scoped repos from a factory. `IRepository`'s methods take only the id / aggregate; the transaction handle is wired into the repo at construction, not threaded through every call.
+`TCtx` is whatever your persistence layer exposes inside a transaction:
+Drizzle `tx`, Prisma `tx`, a Mongo session, or `undefined` for a fake test
+scope. Name it explicitly. A context-free scope should be
+`TransactionScope<undefined>`, not an accidental `unknown`.
 
 ```ts
-// Drizzle implementation
+import type { TransactionScope } from "@shirudo/ddd-kit";
 import type { drizzle } from "drizzle-orm/node-postgres";
+
 type DrizzleDb = ReturnType<typeof drizzle>;
 type DrizzleTx = Parameters<Parameters<DrizzleDb["transaction"]>[0]>[0];
 
 class DrizzleScope implements TransactionScope<DrizzleTx> {
-  constructor(private db: DrizzleDb) {}
-  async transactional<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
+  constructor(private readonly db: DrizzleDb) {}
+
+  transactional<T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> {
     return this.db.transaction((tx) => fn(tx));
   }
 }
+```
 
-// Use case
-await withCommit({ scope, outbox, bus }, async (tx) => {
-  // Bind your repos to the live transaction however your ORM expects.
-  // Constructor injection / factory / `.withTx()` are all valid idioms.
-  const orderRepository = makeOrderRepository(tx);
+Repositories are usually created inside the callback from that transaction
+handle:
 
-  const order = await orderRepository.getById(orderId);
+```ts
+await withCommit({ scope, outbox }, async (tx) => {
+  const orders = makeOrderRepository(tx);
+  const order = await orders.getById(orderId);
+
   order.confirm();
-  await orderRepository.save(order);                       // pure persistence
-  return { result: order.id, aggregates: [order] }; // withCommit harvests pendingEvents
+  await orders.save(order);
+
+  return { result: order.id, aggregates: [order] };
 });
 ```
 
-For tests or no-context flows, write `TransactionScope<undefined>` explicitly:
+For a no-context test scope:
 
 ```ts
 const scope: TransactionScope<undefined> = {
@@ -60,223 +122,335 @@ const scope: TransactionScope<undefined> = {
 
 await withCommit({ scope, outbox }, async () => ({
   result: "ok",
-  events: [],
+  aggregates: [],
 }));
 ```
 
-::: info The scope stays minimal; the Unit of Work lives above it
-`TransactionScope` itself does no change tracking (`registerDirty` / `registerNew` / `registerDeleted`) and no commit-time flush; row-level change detection is the ORM's home turf. The kit's equivalents live in the layers above: the aggregate detects its own changes ([`changedKeys` / `hasChanges`](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges)), `withCommit` orchestrates the commit lifecycle, and the opt-in [`UnitOfWork` facade](./unit-of-work.md) adds tx-bound repositories, enrollment, and a per-operation identity map. See [the revised design decision](./design-decisions.md#transactionscope-stays-minimal-the-unit-of-work-lives-above-it).
-:::
+`TransactionScope` does not track dirty objects, registered repositories, or
+deletes. That lives above it. Use `withCommit` for the commit lifecycle, and
+use `UnitOfWork` when you want tx-bound repositories, enrollment, and an
+identity map.
 
-::: tip Persist routing columns, not just the payload
-Every event harvested by `withCommit` carries `aggregateId` and `aggregateType` (guard-enforced at the harvest boundary) and is stamped with `aggregateVersion` AND `commitSequence`: the version is the commit version for saved aggregates (the OCC version the row write carries; for deletion events, the aggregate's version at deletion time), and `commitSequence` is the zero-based index of the event within its aggregate's harvest batch. Manually pre-set values pass through unchanged (an `aggregateVersion` ahead of the commit version throws). **Schema version ≠ aggregate version**: `event.version` is the payload's schema revision (upcasting); `event.aggregateVersion` is the producing aggregate's state revision. Outbox table implementations should persist `eventId`, `aggregateId`, `aggregateType`, `aggregateVersion`, and `commitSequence` as indexed columns.
+## The Outbox Ports
 
-**Use them correctly:** all events of one commit share the same `aggregateVersion`, so the version alone is only a *per-commit* watermark; the pair **`(aggregateVersion, commitSequence)`** is a total order per aggregate and the compact idempotency watermark ("processed `Restaurant:123` up to (12, 1)"): sort by the tuple, advance the tuple after each processed event, and no `eventId` set is needed for kit-harvested events. Set-based dedup on **`eventId`** (as the [projections guide](./projections.md) shows) remains the fully general fallback, e.g. for events that reached the outbox outside `withCommit` and carry neither stamp.
+The write side depends only on `OutboxWriter`:
 
-**Scope of the stamps:** `aggregateVersion` and `commitSequence` are `withCommit`-harvest-boundary guarantees. Events appended to an event STORE from `pendingEvents` (the ES save path), published via `bus.publish` by hand, or written via `outbox.add` outside `withCommit` do NOT carry it; for event-sourced streams, the store's own position/`expectedVersion` is the authority. A hand-rolled orchestration that wants the fields must stamp them itself (`aggregateVersion = aggregate.version`, `commitSequence` = harvest index); the repository contract test suite enforces both on committed outbox events.
-:::
+```ts
+interface OutboxWriter<Evt extends AnyDomainEvent> {
+  add(events: ReadonlyArray<Evt>): Promise<void>;
+}
+```
 
-## `Outbox<Evt>`
+`withCommit` calls `add()` inside the same transaction as the aggregate
+write. That is the delivery guarantee. The actual delivery mechanism is a
+separate decision.
+
+If the kit's dispatcher will poll the outbox, implement the full `Outbox`
+port:
 
 ```ts
 interface OutboxRecord<Evt extends AnyDomainEvent> {
-  dispatchId: string;     // opaque: the impl chooses (eventId, UUID, row PK, …)
+  dispatchId: string;
   event: Evt;
-}
-
-interface OutboxWriter<Evt extends AnyDomainEvent> {
-  add(events: ReadonlyArray<Evt>):                 Promise<void>;
+  attempts?: number;
 }
 
 interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
-  getPending(limit?: number):                      Promise<ReadonlyArray<OutboxRecord<Evt>>>;
+  getPending(limit?: number): Promise<ReadonlyArray<OutboxRecord<Evt>>>;
   markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void>;
 }
 ```
 
-`Evt` is constrained to [`AnyDomainEvent`](../api/) so the outbox only stores proper domain events with the standard envelope (`eventId`, `type`, `payload`, `occurredAt`, etc.).
+`getPending` must return records in commit order. In SQL, that means a
+monotonic position column and an `ORDER BY`. A bare `SELECT` is not an
+ordering guarantee.
 
-The split is the seam: **the write side (`withCommit`, `UnitOfWork`) depends only on `OutboxWriter`**. The kit guarantees the atomic enqueue; delivery is a replaceable concern. Implement the full `Outbox` when the kit's poll-based dispatcher (or your own) delivers, or only `OutboxWriter` when an external delivery solution owns the read side (see [External dispatchers](#external-dispatchers-cdc-delivery-libraries-broker-native)).
+`markDispatched` must be idempotent. Re-acking a dispatched id or an unknown
+id should be a no-op. This lets the dispatcher recover from partial failures
+without turning duplicates into crashes.
 
-Lifecycle:
+`add()` should dedupe on `eventId`. The usual implementation is a unique
+constraint plus an idempotent insert, not a unique-constraint exception:
 
-1. **`add`** is called inside the write transaction (typically from `withCommit`), so events persist atomically with the state change.
-2. An **outbox dispatcher** (the kit's `OutboxDispatcher` or an external one) polls `getPending` and forwards the events to subscribers / external brokers.
-3. After successful dispatch, the dispatcher calls `markDispatched(dispatchIds)` so they don't come back next poll.
-
-### Ordering is part of the port contract
-
-`getPending` must return records **in the order `add()` persisted them** (commit order). `withCommit` promises subscribers per-aggregate causal order, and a sequential dispatcher can only honor that promise when this read is ordered. SQL-backed implementations need a monotonic position column (an auto-increment primary key works) plus an `ORDER BY` on it: a bare `SELECT` returns rows in storage order, not insertion order, and silently violates the causal-order promise under load.
-
-### Idempotency
-
-Both `add` and `markDispatched` should be idempotent; the dispatcher may retry on partial failure. A unique constraint on `(eventId)` for the outbox row is the standard pattern; the implementation can reuse the event's own `eventId` as the `dispatchId` (the common, clean choice).
-
-### Failure tracking and dead letters (`DispatchTrackingOutbox`)
-
-Without failure tracking, a poison message (an event whose delivery always throws) is redelivered forever: it comes back from every poll, blocks per-aggregate ordering behind it, and burns dispatcher cycles. The optional `DispatchTrackingOutbox` extension adds the bounded-retry story:
-
-```ts
-interface DispatchTrackingOutbox<Evt> extends Outbox<Evt> {
-  markFailed(dispatchId: string, error?: unknown): Promise<void>;
-  deadLetters():                                   Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
-}
+```sql
+create table outbox (
+  position bigserial primary key,
+  event_id text not null unique,
+  aggregate_id text not null,
+  aggregate_type text not null,
+  aggregate_version integer,
+  commit_sequence integer,
+  event_type text not null,
+  payload jsonb not null,
+  dispatched_at timestamptz
+);
 ```
 
-The dispatcher loop becomes: deliver, `markDispatched` on success, `markFailed` on failure, **and stop the batch on the first failure**. Continuing past a failed record would deliver later events of the same aggregate before the failed earlier one, breaking exactly the per-aggregate causal order the `getPending` contract exists to preserve; the next poll retries from the failed record (the implementation counts attempts, surfaced as `OutboxRecord.attempts`, so the dispatcher can add backoff per record):
+Persist routing columns, not only the JSON payload. `withCommit` harvests
+events that carry `aggregateId` and `aggregateType`, and it stamps harvested
+events with `aggregateVersion` and `commitSequence`.
 
-```ts
-for (const record of await outbox.getPending(batchSize)) {
-  try {
-    await broker.publish(record.event);
-    await outbox.markDispatched([record.dispatchId]);
-  } catch (error) {
-    await outbox.markFailed(record.dispatchId, error);
-    break; // later records must not overtake a failed predecessor
-  }
-}
-```
+Those stamps have a specific meaning:
 
-A dispatcher that partitions by aggregate (`record.event.aggregateId`) can scope the stop to the failing aggregate's lane instead of the whole batch; the invariant is per-aggregate order, not global order.
+- `event.version` is the event payload schema version used for upcasting.
+- `event.aggregateVersion` is the producing aggregate's state version at
+  commit time.
+- `event.commitSequence` is the zero-based order of that event within the
+  aggregate's commit batch.
 
-Wire `deadLetters()` to alerting: a growing dead-letter set is an incident signal, not a log line. **Dead-lettering deliberately forfeits ordering for that aggregate's successors**: once the poison record leaves the pending set, later events of the same aggregate flow without their predecessor; that trade-off (bounded retries over strict order) is the point of the ceiling, and the alert is what makes it safe. Recovery paths: fix the cause and re-`add` the event (requeues it with a fresh attempts budget), or deliver by hand and ack via `markDispatched` (which clears dead-lettered records too). `InMemoryOutbox` implements the extension with a configurable `maxDeliveryAttempts` (default 5).
+For a projection of one aggregate stream, `(aggregateVersion, commitSequence)`
+is a compact watermark. For general deduplication across all event sources,
+use `eventId`.
 
-### Reference implementation
+## InMemoryOutbox
 
-The kit ships an in-memory reference outbox; use it for tests, single-process workers, and quick-start demos:
+`InMemoryOutbox` is the reference implementation. Use it for tests, examples,
+single-process demos, and small workers where process restart losing pending
+events is acceptable.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
-const outbox = new InMemoryOutbox<OrderCreated>();
+const outbox = new InMemoryOutbox<OrderCreated>({
+  maxDeliveryAttempts: 5,
+});
 ```
 
-It uses each event's own `eventId` as the `dispatchId` (the standard choice) and keys storage on `eventId`, so re-adds are naturally idempotent. For production, swap it for an outbox that writes to your transactional store: the outbox row should participate in the same transaction as the aggregate write so events and state commit atomically.
+It uses `event.eventId` as `dispatchId`, preserves insertion order, dedupes
+re-adds by `eventId`, and implements dispatch tracking.
 
-### The kit dispatcher (`OutboxDispatcher`)
-
-The kit ships the dispatcher loop above as a minimal, runnable poller. It is
-deliberately a loop over the `Outbox` port, not a messaging framework: use it
-for tests, moduliths without a broker, and single-process deployments; reach
-for an external dispatcher (next section) when you already run one.
+It is not a production outbox for a database-backed app. It is not part of
+your database transaction, and it does not roll back when the database rolls
+back. If you use it without a dispatcher, pending records accumulate in
+memory. For a deliberate no-delivery setup, use the explicit writer:
 
 ```ts
-import { OutboxDispatcher, eventBusSink } from "@shirudo/ddd-kit";
+import { outboxWriterAcceptingEventLoss } from "@shirudo/ddd-kit";
+
+const outbox = outboxWriterAcceptingEventLoss<OrderEvent>();
+```
+
+The name is long because the decision is serious. Use it only when the
+events are deliberately best-effort or when the aggregate cannot emit events.
+
+## Dispatching Events
+
+If you do not already have CDC, a broker-owned outbox, or another delivery
+system, use `OutboxDispatcher`.
+
+```ts
+import {
+  OutboxDispatcher,
+  eventBusSink,
+} from "@shirudo/ddd-kit";
 
 const dispatcher = new OutboxDispatcher({
-  outbox,                    // DispatchTrackingOutbox recommended (bounded retries)
-  sink: eventBusSink(bus),   // or your own OutboxSink against a broker
+  outbox,
+  sink: eventBusSink(bus),
   onDispatchError: (error, record) =>
     log.warn({ error, eventId: record.event.eventId }, "dispatch failed"),
   onPollError: (error) => log.warn({ error }, "outbox poll failed"),
 });
 
 const stop = new AbortController();
-void dispatcher.run(stop.signal); // resolves when the signal aborts, never rejects
-// on shutdown: stop.abort();
+void dispatcher.run(stop.signal);
+
+// On shutdown:
+stop.abort();
 ```
 
-For cron triggers and serverless runtimes, skip the long-running loop and call
-`drainOnce()` per tick: it dispatches until the backlog is empty (`"drained"`)
-or a failure stops progress (`"stopped"`), then returns without sleeping; the
-next tick retries. Overlapping ticks on the same dispatcher instance are safe:
-a call that fires while a pass is still running joins that pass instead of
-starting a competing one, so a slow tick never double-delivers or interleaves
-the per-aggregate order. (Two separate dispatcher INSTANCES on one outbox
-remain an adapter concern: that needs a claiming `getPending`.)
+The dispatcher has a narrow contract:
 
-**Double-delivery warning:** `withCommit({ scope, outbox, bus })` already
-publishes every committed event to that bus post-commit, and the outbox record
-stays pending regardless. A dispatcher with `eventBusSink(bus)` on the SAME
-bus therefore delivers every event to every in-process subscriber twice, on
-every commit. Pick one: omit `bus` from `withCommit` and let the dispatcher
-deliver (durable, replayable), or keep the fast path and point the
-dispatcher's sink at a different transport.
+- It is at-least-once. A crash after publish but before ack means the record
+  will be delivered again.
+- It dispatches sequentially in commit order.
+- It stops the batch on the first delivery failure.
+- It never rejects from `run()` or `drainOnce()`. Failures go to observers
+  and the loop backs off.
+- It does not coordinate multiple process instances. If several dispatchers
+  poll the same outbox, your adapter must claim records in `getPending`
+  (`FOR UPDATE SKIP LOCKED`, leases, visibility timeouts, or equivalent).
 
-**Subscribe first, then start the dispatcher:** publishing to a bus with zero
-subscribers for an event's type resolves as delivered (pub/sub semantics), so
-the dispatcher acks the record and it never comes back. Records polled in a
-startup window before your modules registered their subscriptions are
-consumed without any handler seeing them; make dispatcher start the LAST step
-of wiring. A subscriber added later does not see already-dispatched history
-either; replay is a read-model concern, not a bus feature.
-
-Its contract, in short: **at-least-once** (the delivered prefix of a batch is
-acked in ONE `markDispatched` call, only after successful publishes; consumers
-dedupe on `eventId` or the `(aggregateVersion, commitSequence)` watermark),
-**sequential with stop-on-failure** (per-aggregate causal order is never
-broken; the escape for poison messages is the tracking outbox's attempt
-ceiling), **never rejects** (poll and ack failures are reported to the
-observers and absorbed; every failed cycle grows the jittered backoff toward
-`maxDelayMs`, so a persistent fault degrades to a slow, observable retry
-cadence), and **one logical instance per outbox** unless your adapter's
-`getPending` claims records (`FOR UPDATE SKIP LOCKED` or equivalent). The
-`OutboxSink` is the one port you implement against your transport;
-`eventBusSink` adapts the in-process bus for zero-broker setups.
-
-#### Sinks for common brokers
-
-A sink adapter is a few lines around the broker's publish call. Two rules make
-it correct for every broker: **resolve `publish` only after the broker
-acknowledged** (Kafka ack, RabbitMQ publisher confirm, HTTP 200), because
-`markDispatched` follows your resolution, and **throw on failure**, so the
-dispatcher retries with backoff. Breaking the first rule is silent event loss:
-a fire-and-forget publish resolves before the broker stored anything, the
-dispatcher acks the record, and a broker hiccup at that moment drops the event
-with the outbox none the wiser; at-least-once is gone exactly where the outbox
-was supposed to guarantee it. The kit's event fields map directly onto the
-brokers' ordering and dedup features:
-
-| Broker | Adapter shape | Ordering / dedup mapping |
-|---|---|---|
-| Kafka | `producer.send`, await ack | partition key = `aggregateId` keeps per-aggregate order downstream; consumer dedup on `eventId` |
-| RabbitMQ | publish with **publisher confirms**, await confirm | routing key from `aggregateType`/`type`; consumer dedup on `eventId` |
-| SQS (FIFO) | `SendMessage` | `MessageGroupId` = `aggregateId` (per-group order), `MessageDeduplicationId` = `eventId` (broker-side dedup) |
-| SNS | `Publish` (FIFO topics: same group/dedup mapping as SQS) | fan-out; subscriber-side dedup on `eventId` |
-| Google Pub/Sub | `topic.publishMessage` with ordering enabled | `orderingKey` = `aggregateId`; consumer dedup on `eventId` |
-| NATS JetStream | `js.publish` | `Nats-Msg-Id` = `eventId` gives a broker dedup window; subject from `aggregateType` |
-| Redis Streams | `XADD` | one stream per context/topic; consumer groups; dedup on `eventId` |
+For cron and serverless runtimes, call `drainOnce()` instead of running a
+permanent loop:
 
 ```ts
-// Example shape (SQS FIFO): the same three lines vary per broker.
+const result = await dispatcher.drainOnce(AbortSignal.timeout(25_000));
+
+if (result === "stopped") {
+  log.info("outbox drain stopped before the backlog was empty");
+}
+```
+
+Overlapping `drainOnce()` calls on the same dispatcher instance join the
+in-flight pass instead of starting a competing pass.
+
+## Dispatch Tracking And Dead Letters
+
+A plain `Outbox` can retry forever. That may be acceptable in tests, but it
+is usually not acceptable in production. A poison event can block every later
+record behind it.
+
+Use `DispatchTrackingOutbox` when you run a poller:
+
+```ts
+interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
+  extends Outbox<Evt> {
+  markFailed(dispatchId: string, error?: unknown): Promise<void>;
+  deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
+}
+```
+
+On delivery failure, the dispatcher calls `markFailed` if the outbox exposes
+both `markFailed` and `deadLetters`. The store counts attempts and moves the
+record to a dead-letter set when it reaches the configured ceiling.
+
+Dead-lettering is a trade-off. Once the poison record leaves the pending set,
+later records can flow again, but strict ordering for that aggregate has been
+forfeited. That is why `deadLetters()` must be wired to alerting. A growing
+dead-letter set is an incident, not background noise.
+
+Recovery is explicit:
+
+- Fix the cause and re-add the event. `InMemoryOutbox` requeues a dead-lettered
+  event with a fresh attempt budget.
+- Deliver the event manually and call `markDispatched` to clear it.
+
+The dispatcher also supports `countsTowardCeiling`:
+
+```ts
+const dispatcher = new OutboxDispatcher({
+  outbox,
+  sink,
+  countsTowardCeiling: (error) => isPermanentDeliveryError(error),
+});
+```
+
+Use it when transient outages should back off but not consume the poison
+message budget. Without this classifier, every delivery failure counts.
+
+## Sinks And Brokers
+
+An `OutboxSink` is the adapter from an outbox record to a real delivery
+target:
+
+```ts
+interface OutboxSink<Evt extends AnyDomainEvent> {
+  publish(record: OutboxRecord<Evt>): Promise<void>;
+}
+```
+
+The rule is simple: resolve `publish` only after the transport has accepted
+the message. Await the Kafka producer ack, RabbitMQ publisher confirm, SQS
+response, JetStream publish ack, or HTTP `2xx`. If you fire-and-forget and
+return early, the dispatcher will mark the record as dispatched even though
+the broker may never store it.
+
+Broker mapping is usually straightforward:
+
+| Broker | Mapping |
+| --- | --- |
+| Kafka | partition key = `aggregateId`, consumer dedup = `eventId` |
+| RabbitMQ | publisher confirms, routing key from `aggregateType` or `type` |
+| SQS FIFO | `MessageGroupId` = `aggregateId`, `MessageDeduplicationId` = `eventId` |
+| SNS FIFO | same group and dedup mapping as SQS FIFO |
+| Google Pub/Sub | `orderingKey` = `aggregateId`, consumer dedup = `eventId` |
+| NATS JetStream | `Nats-Msg-Id` = `eventId`, subject from `aggregateType` or `type` |
+| Redis Streams | stream per context or topic, consumer dedup = `eventId` |
+
+Example SQS FIFO sink:
+
+```ts
+import type { AnyDomainEvent, OutboxSink } from "@shirudo/ddd-kit";
+
 const sqsSink: OutboxSink<AnyDomainEvent> = {
   publish: async ({ event }) => {
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: queueUrl,
-      MessageBody: JSON.stringify(event),
-      MessageGroupId: event.aggregateId ?? event.type,
-      MessageDeduplicationId: event.eventId,
-    }));
+    await sqs.send(
+      new SendMessageCommand({
+        QueueUrl: queueUrl,
+        MessageBody: JSON.stringify(event),
+        MessageGroupId: event.aggregateId ?? event.type,
+        MessageDeduplicationId: event.eventId,
+      }),
+    );
   },
 };
 ```
 
-Note the division of labor: the dispatcher guarantees per-aggregate order **up
-to the broker**; whether consumers still see that order is the broker mapping
-above (partition key, message group, ordering key). A broker without an
-ordering feature delivers unordered, and consumers fall back to the
-`(aggregateVersion, commitSequence)` watermark for stale-event rejection.
+The dispatcher preserves order up to the sink. After that, broker
+configuration decides what consumers observe. If the broker cannot preserve
+per-aggregate order, consumers must reject stale events using
+`(aggregateVersion, commitSequence)` or dedupe with `eventId`.
 
-### External dispatchers (CDC, delivery libraries, broker-native)
+## EventBus And Outbox
 
-The other way to run delivery: do not implement `getPending`/`markDispatched`
-at all. Implement **only `OutboxWriter`** against the external solution's
-storage, and let its own listener deliver. `withCommit` and `UnitOfWork` never
-notice the difference, because they only ever call `add()`.
+The in-process bus and the outbox solve different problems.
 
-The adapter shape is always the same, regardless of the solution: `add()`
-writes into the delivery solution's outbox table using the ambient
-transaction's handle, so the enqueue stays atomic with the aggregate write;
-everything after the commit belongs to the external listener.
+Use the bus for same-process, post-commit reactions whose loss is acceptable:
+metrics, dev logging, local cache cleanup, tests, and live UI notifications
+that can be recomputed.
+
+Use the outbox for consequences that must survive a crash: emails, billing,
+workflow triggers, projections you do not want to rebuild, and anything that
+leaves the process or bounded context.
+
+The litmus test is: would it be a bug if this reaction disappeared after the
+state commit? If yes, it belongs behind the outbox.
+
+You may use both channels for different audiences:
 
 ```ts
-import type { OutboxWriter, AnyDomainEvent } from "@shirudo/ddd-kit";
+await withCommit({ scope, outbox, bus }, async (tx) => {
+  // bus: in-process fast path after commit
+  // outbox: durable handoff for dispatchers
+});
+```
 
-// The tx-bound handle is whatever your TransactionScope exposes; the
-// enqueue call is whatever your delivery solution's storage API offers.
-// The only hard requirement: it must join the SAME transaction.
+Do not point `OutboxDispatcher` with `eventBusSink(bus)` at the same bus that
+you passed to `withCommit`. `withCommit` already publishes to that bus after
+the commit, and the outbox record remains pending. The dispatcher would later
+deliver the same event to the same subscribers again.
+
+Pick one of these:
+
+- Durable in-process delivery: omit `bus` from `withCommit`, then use
+  `OutboxDispatcher` with `eventBusSink(bus)`.
+- Fast in-process delivery plus durable external delivery: pass `bus` to
+  `withCommit`, and point the dispatcher at a broker sink, not the same bus.
+
+If you use `eventBusSink`, register subscribers before starting the
+dispatcher. Publishing to a bus with no subscribers is still a successful
+publish; the dispatcher will ack the outbox record.
+
+## Ordering Rules
+
+There are two different ordering stories.
+
+Within one aggregate, event order is causal. If an aggregate emits
+`OrderPlaced` and then `OrderConfirmed`, subscribers must process those in
+that order. `withCommit` harvests events in the order the aggregate recorded
+them, and a sequential outbox dispatcher preserves that order.
+
+Across aggregates, order is not a domain guarantee. `aggregates: [a, b]`
+creates a deterministic harvest order, but brokers, parallel dispatchers, and
+separate processes may reorder events from `a` against events from `b`.
+
+If a consumer depends on the order of events from different aggregates, model
+the dependency explicitly. Use `metadata.causationId`, a process manager, or a
+read-model policy that tolerates eventual consistency. Do not rely on the
+array order of one `withCommit` call as a cross-aggregate contract.
+
+## External Dispatchers
+
+If another system already owns delivery, implement only `OutboxWriter`.
+`withCommit` does not care whether delivery is done by the kit dispatcher,
+Debezium, a delivery library, or a platform outbox.
+
+```ts
+import type { AnyDomainEvent, OutboxWriter } from "@shirudo/ddd-kit";
+
 function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
   return {
     add: async (events) => {
@@ -285,6 +459,8 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
           id: event.eventId,
           aggregateId: event.aggregateId,
           aggregateType: event.aggregateType,
+          aggregateVersion: event.aggregateVersion,
+          commitSequence: event.commitSequence,
           type: event.type,
           payload: event,
         });
@@ -294,167 +470,48 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
 }
 ```
 
-Placement notes per variant:
+The hard requirement is transaction participation. The enqueue must join the
+same transaction as the aggregate write. If the external API cannot do that,
+you are back to a dual write.
 
-- **CDC / transaction-log tailing** ([Debezium](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html)
-  is the industry reference): `add()` writes the outbox row; the connector
-  reads the WAL/binlog and routes to the broker. Lowest latency, no poll
-  load, heaviest infrastructure.
-- **Delivery libraries**: the Node ecosystem has no dominant transactional
-  outbox library; several small community packages implement the pattern
-  (polling or logical-replication listeners). The adapter shape above fits
-  any of them; do your own due diligence on maintenance and maturity before
-  adopting one, or hand-roll the outbox table and let the kit's
-  `OutboxDispatcher` deliver.
-- **Broker-native outboxes** (framework or platform features): implement
-  `OutboxWriter` against their enqueue API inside the transaction, if and only
-  if they can genuinely join your database transaction; otherwise they are not
-  a transactional outbox and the dual-write problem returns.
-- **Inbox side**: external solutions often bring their own inbox. The kit's
-  `IdempotencyStore` covers the same ground (key = message id); pick one, both
-  is redundant bookkeeping.
+Common variants:
 
-## `withCommit`: putting it together
+- CDC or transaction-log tailing: write the outbox row; a connector reads the
+  WAL/binlog and publishes to the broker.
+- Delivery library: write through the library's outbox table inside the same
+  transaction and let its listener deliver.
+- Broker-native outbox: valid only when the broker/framework enqueue truly
+  joins your database transaction.
+- Inbox side: if the external solution brings an inbox, do not also model the
+  same dedup table with `IdempotencyStore` unless you intentionally need both.
 
-```ts
-import { withCommit } from "@shirudo/ddd-kit";
+## Production Checklist
 
-const orderId = await withCommit(
-  { outbox, bus, scope },
-  async () => {
-    const order = await repo.getById(id);
-    order.confirm();
-    await repo.save(order);                      // pure persistence
-    return {
-      result: order.id,
-      aggregates: [order],                       // withCommit owns the rest
-    };
-  },
-);
-```
+Use this checklist before calling an outbox production-ready:
 
-Order of operations:
+- Transactional adapter: outbox rows commit and roll back with aggregate rows.
+- Contract tests: run `@shirudo/ddd-kit/testing` outbox contracts against the
+  real storage adapter.
+- Commit-order reads: `getPending` is ordered by a monotonic position.
+- Multi-instance claiming: if more than one dispatcher runs, `getPending`
+  claims records or uses visibility timeouts.
+- Idempotent add and ack: duplicates on `eventId` do not create duplicate
+  records, and repeated `markDispatched` calls are safe.
+- Dispatch tracking: poison records have bounded retries and dead-lettering.
+- Alerting: `deadLetters()`, oldest pending age, poll failures, dispatch
+  failures, and ack failures are visible.
+- Consumer dedup: every subscriber tolerates at-least-once delivery.
+- Shutdown: `run(signal)` receives the runtime stop signal, or `drainOnce` is
+  bounded by a deadline.
 
-1. **`scope.transactional(fn)`:** `fn` runs inside the persistence layer's native transaction. The use case mutates state and calls `repo.save`. `repo.save` is **pure persistence**; it does NOT clear pending events.
-2. **Still inside the transaction**, `withCommit` harvests `pendingEvents` from every aggregate returned by `fn` and calls `outbox.add(events)`, so events persist atomically with the state change. Skipped when no events were recorded. **Harvest order:** events are concatenated in the order aggregates appear in the returned `aggregates` array, then in each aggregate's emission order. See the [ordering note](#two-ordering-guarantees-not-one) below before designing subscribers against it.
-3. **Transaction commits.**
-4. **After commit:** `aggregate.markPersisted(aggregate.version)` fires on each returned aggregate. Only now are pending events considered flushed.
-5. `bus.publish(events)` fires for in-process subscribers (optional; `bus` is omitted when no in-process fast path is wired).
+## Which Piece Do I Need?
 
-Publishing *after* the commit is the key invariant: in-process subscribers never react to events from a rolled-back transaction. If `bus.publish` itself throws, `withCommit` does **not** reject: the write is committed, so the caller always receives the committed `result`; surfacing a subscriber failure as a rejection would make a typical caller retry and double-execute the write. The error is reported to the optional `onPublishError(error, events)` dep (observer-only; wire it to your logger/metrics). The events are still in the outbox; the dispatcher will deliver them on the next poll (eventual consistency).
-
-If the transaction rolls back, `markPersisted` is **not** called: the aggregate keeps its pending events, so the caller can retry or discard.
-
-### Two ordering guarantees, not one
-
-The events harvested in step 2 carry two different ordering guarantees that consumers conflate at their peril:
-
-- **Within a single aggregate: causal order.** `apply` / `commit` / `addDomainEvent` push to `pendingEvents` in domain-method invocation order, and that order reflects real causality: the second event happened *because* the first one did. Subscribers (in-process handlers, projection handlers, event-store replay) MUST process these in order. Out-of-order processing within an aggregate breaks state derivation. Vernon IDDD §10; Greg Young's ES talks treat this as inviolable.
-
-- **Across aggregates within one `withCommit`: incidental, not domain.** The order in which `aggregates: [a, b, c]` were written into the array is deterministic, and the in-process `EventBus.publish` and sequential outbox-dispatchers preserve it. But this is an *implementation* artifact, not a domain guarantee. DDD treats aggregates as independent consistency boundaries; events across them are eventually consistent (Vernon §10). Parallel outbox dispatchers, message brokers, or cross-process delivery may reorder events from `a` against events from `b` at delivery time.
-
-**Practical rule:** if a subscriber depends on the order in which events from *different aggregates* arrive, that's the wrong design. Use `EventMetadata.causationId` to express explicit causation across events (the event from `b` carries the `eventId` of the event from `a` that triggered it), or use a Process Manager to coordinate. Don't engineer against the harvest-order luck of being in the same batch.
-
-For the downstream side (outbox-dispatcher → projection-handlers → read-model tables → `QueryBus`), see [Read-Side Projections](./projections.md).
-
-::: tip Why the use case returns `aggregates`, not `events`
-The Vernon / Axon / EventFlow pattern: `Repository.save` is pure persistence; "this aggregate has been committed" is the orchestrator's call to make, not the repo's. Returning aggregates lets `withCommit` harvest pending events itself and call `markPersisted` at the right moment (post-commit, before publish). The earlier pattern of returning `events: order.pendingEvents` directly was a footgun: if `repo.save` cleared events early, the harvest would see an empty list and the outbox would receive nothing.
-:::
-
-## Production checklist
-
-The in-memory pieces define semantics; production readiness is the following
-list, checked off, not a property the kit can ship on its own:
-
-- [ ] **Transactional outbox adapter**: the outbox table lives in the same
-      database as the aggregates and `add()` joins the ambient transaction.
-      Verify it against the contract suite in `@shirudo/ddd-kit/testing`.
-- [ ] **Claiming for multiple instances**: if more than one dispatcher polls,
-      `getPending` claims records (`FOR UPDATE SKIP LOCKED` or equivalent);
-      otherwise pin one logical dispatcher per outbox. A claiming adapter
-      declares `claimsOnGetPending` in its contract-suite harness and proves
-      the claim/expiry semantics in its own tests.
-- [ ] **`DispatchTrackingOutbox`, not the plain port**: bounded retries and
-      dead-lettering are what stop a poison message from blocking delivery.
-- [ ] **Transient-outage policy**: by default every publish failure counts
-      toward the attempt ceiling, so a transport outage longer than roughly
-      `ceiling x maxDelayMs` dead-letters healthy head records one after
-      another, and they wait in `deadLetters()` for manual redelivery. Size
-      the ceiling for the longest outage you tolerate, or pass
-      `countsTowardCeiling` so only genuine poison counts.
-- [ ] **`deadLetters()` wired to alerting**: a growing dead-letter set is an
-      incident signal, not a log line.
-- [ ] **Lag metric with an SLA**: age of the oldest pending record, alerted
-      when it breaches the freshness your reads promised (see the read-model
-      guide for wait-for-version and staleness handling).
-- [ ] **Observers wired**: `onDispatchError` and `onPollError` go to your
-      logger/metrics; without them the dispatcher degrades silently.
-- [ ] **Graceful shutdown**: the runtime's stop signal aborts `run(signal)`
-      (or bounds `drainOnce` with `AbortSignal.timeout`), so deploys do not
-      kill the loop mid-batch more often than necessary.
-- [ ] **Consumer dedup**: every subscriber handles duplicates (`eventId` or
-      the `(aggregateVersion, commitSequence)` watermark); at-least-once is
-      the contract, not a rare edge case.
-
-## Bus vs outbox: which reactions ride where
-
-In DDD terms, a domain event has consumers with different consistency needs,
-and the choice of channel follows the consumer, not the event. The bus and the
-outbox are the two post-commit channels; they differ in exactly one promise:
-
-- **EventBus, in-process, post-commit, best-effort.** For reactions inside the
-  same bounded context and deployable whose loss is tolerable or whose effect
-  is recomputable: invalidating this instance's caches, live in-app
-  notifications, dev logging, metrics counters, test observation. If the
-  process crashes between commit and publish, the reaction is gone and nobody
-  is owed anything.
-- **Outbox, durable, at-least-once.** For every consequence that MUST happen
-  (mails, billing, workflow triggers, projections you do not want to rebuild
-  after a crash), and for everything that leaves the process or the bounded
-  context, where the domain event is first translated into an integration
-  event at the boundary.
-
-The litmus test is one question: **would it be a bug if this reaction were
-missing after a crash?** Yes: outbox. No: the bus is enough, and cheaper.
-
-The same event may legitimately ride both channels for different audiences
-(in-process fast path via `bus`, external consumers via outbox and a broker
-sink); the one forbidden combination is both channels feeding the SAME
-in-process subscribers (see the double-delivery warning above).
-
-## EventBus production notes
-
-`EventBusImpl` is production-ready as the in-process bus of a single
-deployable; what makes a deployment sound are four architecture rules, not
-code caveats:
-
-1. **Publish only after commit**, in practice: through `withCommit` /
-   `UnitOfWork`, never directly from domain code. The bus cannot enforce
-   this; the orchestration does.
-2. **Nothing business-critical rides on the bus alone.** It is volatile by
-   design: a crash between commit and publish silently loses the reaction.
-   Anything that MUST happen goes through the outbox; the bus is the
-   low-latency path for dispensable reactions, or the delivery target
-   BEHIND the outbox (`eventBusSink`).
-3. **Handler latency adds to the command response.** `withCommit` awaits
-   `bus.publish`, and `publish` awaits every handler. Keep handlers fast,
-   move slow work behind the outbox, and wire `onPublishError`; collected
-   handler errors surface there and nowhere else.
-4. **Horizontal scaling changes the semantics.** Each instance has its own
-   bus; handlers hear only the instance's OWN commits. That is complete for
-   react-to-the-commit work (every commit publishes locally somewhere), but
-   cross-instance effects, the classic case being per-instance cache
-   invalidation, never arrive over an in-process bus; they need a broker
-   sink. Check this rule again the day the app goes from one instance to
-   two.
-
-## When you need each piece
-
-| You have | You need |
-|---|---|
-| A single Worker invocation, no external services | EventBus + `withCommit({ scope, outbox, bus })` |
-| Modular monolith, in-process subscribers + external consumers | EventBus (in-process fast path) + Outbox (durable handoff) + `OutboxDispatcher` (long-running `run`, or `drainOnce` per cron tick) |
-| Existing delivery infrastructure (CDC, delivery library, broker-native) | `OutboxWriter` adapter only; the external listener delivers |
-| Pure microservices, no in-process subscribers | Outbox + dispatcher only; omit `bus` from `withCommit` |
-| No events, or deliberate best-effort (MVP: bus-only, event loss on crash accepted) | `outboxWriterAcceptingEventLoss()` + optional EventBus; upgrade later by swapping the writer for a real outbox, use cases untouched |
-| Tests | In-memory Outbox + EventBus (both ship as plug-ins) |
+| Situation | Use |
+| --- | --- |
+| Tests or examples | `InMemoryOutbox` |
+| No events, or accepted event loss | `outboxWriterAcceptingEventLoss()` |
+| Single process with durable in-process subscribers | `OutboxDispatcher` + `eventBusSink(bus)`, omit `bus` from `withCommit` |
+| Modular monolith with fast local reactions and external consumers | `withCommit({ scope, outbox, bus })` plus dispatcher to a broker sink |
+| Pure external delivery | `Outbox` + `OutboxDispatcher` to a broker sink |
+| Existing CDC or delivery platform | `OutboxWriter` adapter only |
+| Multiple dispatcher instances | Outbox adapter with claiming reads |

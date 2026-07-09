@@ -1,81 +1,162 @@
 # Design Decisions
 
-This page collects the non-obvious calls the kit has made and *why*: the choices a consumer is most likely to want to push back on before adopting the library.
+This page explains the choices in the kit that are not obvious from the API alone.
+
+Most of these decisions are trade-offs, not universal rules. The point is to show where the kit draws its boundaries, why those boundaries exist, and when a consumer might reasonably choose a different shape on top.
 
 ## Result lives at the App-Service boundary, not in the domain
 
-**The rule:**
-- **Domain layer throws** `DomainError`-derived exceptions. Aggregates, value-object constructors, and the `validateEvent` hook all throw.
-- **App-Service boundary returns `Result`.** `CommandBus.execute`, `QueryBus.execute`, `CommandHandler<C,R>`, `QueryHandler<Q,R>`, and `withCommit` return `Result<T, E>` so HTTP handlers can map errors to status codes / logs.
-- **Infrastructure boundary returns `Result` where corruption is recoverable.** `EventSourcedAggregate.loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a corrupt event stream is the kind of failure the caller might want to inspect, not fail-fast on.
+The kit keeps one clear error axis:
 
-**Why:** mixing throw + Result in the same code path is the worst of both worlds. Vernon, Evans, and Khononov all model aggregate invariants as exceptions because that's what they are (programming-error level "this should never happen for a valid request"). Result is the right shape *at the boundary* where you serialise to JSON. See [Result vs Throw](./result-vs-throw.md) for the full discussion.
+- Domain code throws typed errors.
+- Application boundaries decide whether to turn those errors into `Result`.
+- Infrastructure replay paths return `Result` when corrupted input is an expected recoverable case.
+
+Aggregates, entities, value-object constructors, `validateState`, and `validateEvent` throw `DomainError` subclasses. That matches the DDD model: an invariant violation means the current operation tried to put the domain into a state the domain rejects. A stack trace and a concrete class such as `OrderAlreadyConfirmedError` are useful there.
+
+The boundary is different. A command handler or HTTP adapter often wants to return `Result` because it is translating an application outcome into a transport response:
+
+```ts
+const result = await commandBus.execute({
+  type: "ConfirmOrder",
+  orderId,
+});
+
+if (result.isErr()) {
+  return conflictOrBadRequest(result.error);
+}
+```
+
+Be precise about the APIs:
+
+- `CommandHandler<C, R, E>` returns `Promise<Result<R, E>>`.
+- `CommandBus.execute(...)` returns `Promise<Result<R, E>>`.
+- `QueryHandler<Q, R>` returns `Promise<R>` because read handlers usually return data directly.
+- `QueryBus.execute(...)` wraps query output in `Result<R, E>` for callers that want a safe boundary.
+- `QueryBus.executeUnsafe(...)` returns `R` and lets handler failures throw.
+- `withCommit(...)` returns the committed result `R`; it is a transaction orchestrator, not a `Result` wrapper.
+
+Event-sourced replay is a third case. `loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a persisted stream or snapshot can be corrupt. The repository may need to inspect that error, rebuild from zero, discard a bad snapshot, or fail the load without treating it as a programmer bug.
+
+The design goal is not "never throw" or "always throw". The design goal is that each layer uses one failure style for the job it owns. See [Result vs Throw](./result-vs-throw.md).
 
 ## In-process buses are first-class for edge runtimes
 
-`CommandBus` and `QueryBus` are zero-config in-memory dispatchers. They're not toys for tests; they're the right tool for:
+`CommandBus` and `QueryBus` are small in-memory dispatchers. They are not fake production buses. They are the right tool when the handler runs in the same process as the caller:
 
-- **Cloudflare Workers / Vercel Edge / Deno Deploy:** each worker invocation is short-lived, no broker to call.
-- **Modular monoliths:** in-process routing between bounded contexts; events leave the process via outbox when other services need them.
-- **Tests and small CLIs.**
+- Cloudflare Workers, Vercel Edge, Deno Deploy, and similar runtimes
+- modular monoliths
+- tests
+- CLIs and local scripts
 
-For cross-process messaging (RabbitMQ, NATS, Kafka, SQS), keep the `CommandHandler<C,R>` and `QueryHandler<Q,R>` types as the contract and wire them to your transport. No middleware/pipeline machinery in the library: wrap handlers with decorator functions for logging, auth, metrics.
+The important limitation is equally deliberate: they are not message brokers. They do not provide retries, dead-letter queues, backpressure, cross-process delivery, or transport-level observability.
+
+That split keeps handlers portable. `CommandHandler<C, R>` and `QueryHandler<Q, R>` are the contract. The in-process bus is one dispatcher for that contract. RabbitMQ, Kafka, SQS, NATS, or a framework-specific bus can be another dispatcher.
+
+The kit also avoids middleware pipeline machinery. Logging, authorization, metrics, tracing, and correlation can be added with handler decorators. A library-level pipeline would quickly become an application framework, and this kit intentionally stops before that point.
 
 ## The Specification pattern was deliberately not shipped
 
-`IQueryableRepository<TAgg, TId, TFilter>` is generic over the filter shape. Drizzle `SQL`, Prisma `WhereInput`, Mongo filter documents, plain predicates: every repository implementation owns its filter language. The library does **not** ship an `ISpecification<T>` interface because a brand-only marker with no `isSatisfiedBy` / `and` / `or` / `not` combinators can't be used generically, and a full Specification pattern in TypeScript fights the ORM query DSLs people actually use.
+The repository query extension is `IQueryableRepository<TAgg, TId, TFilter>`. The filter type is owned by the adapter.
+
+That is deliberate. Drizzle, Prisma, MongoDB, SQL builders, in-memory predicates, and document stores already have different query languages. A generic `Specification<T>` that is powerful enough to translate across all of them becomes an expression-tree system. A generic marker that is not powerful enough cannot do useful work.
+
+So the current kit chooses adapter-native filters:
+
+- a Drizzle repository can use SQL fragments
+- a Prisma repository can use `WhereInput`
+- a Mongo repository can use filter documents
+- an in-memory repository can use predicates
+
+If your codebase benefits from named domain specifications, you can still define them locally and translate them inside each repository adapter. The kit does not force that abstraction into every consumer.
 
 ## Event sourcing structurally enforces "record-after-mutation"
 
-`EventSourcedAggregate.apply(event)` is the only mutation path. The dispatch is atomic:
+In an event-sourced aggregate, `apply(event)` is the only mutation path for new facts.
 
-1. `validateEvent(event)`, which throws if the event violates an invariant
-2. handler lookup (throws `MissingHandlerError` if absent)
-3. compute `nextState`
-4. **commit:** state, pending event, and version bump in one tick
+The order is:
 
-If anything in (1)–(3) throws, no state is mutated and no event is queued. Vernon's canonical "events are facts of the past" rule is enforced by the structure, not by convention.
+1. Validate the event against current state.
+2. Find the handler.
+3. Compute the next state.
+4. Assign state, record the event, and bump the version.
 
-For `AggregateRoot` (non-event-sourced), use the `commit(newState, events)` helper to get the same guarantee. The unscoped `setState` + `addDomainEvent` pair stays available for cases that don't fit the helper (state-only mutations, audit-only events, multi-step transactions).
+If validation, handler lookup, or state computation fails, the aggregate is unchanged and no event is queued.
+
+That is the important event-sourcing rule in code form: an event is a fact that happened. The aggregate must not record an event for a transition that did not successfully change state.
+
+State-stored aggregates get the same safety through `commit(newState, events)`. Lower-level `setState` and `addDomainEvent` stay available for unusual cases, but the normal path should be `commit` because it preserves the order: state first, event second, version with the transition.
 
 ## `commit()` keeps its transaction-flavored name
 
-An architecture review flagged `commit()` as transaction vocabulary inside the domain API (a ubiquitous-language purist would prefer `record` or `applyChange`). The name stays, deliberately: the method's whole point is its transactional SEMANTICS (state, events, and version land together or not at all), and the name says exactly that. `record` would undersell the atomicity, `applyChange` would collide with the event-sourced `apply()`, and renaming a central 2.x API would cost every consumer a mechanical migration for a vocabulary preference. Consumers who want domain verbs on the outside get them for free: `commit()` is `protected`, so the public surface of an aggregate is always the domain method (`confirm()`, `cancel()`) that calls it.
+The name `commit()` is intentionally a little mechanical.
+
+The public aggregate API should be domain language: `confirm()`, `cancel()`, `ship()`, `register()`. Inside those methods, `commit()` is the protected helper that says "this state change, these events, and this version bump land together."
+
+Alternatives were worse:
+
+- `record()` sounds like it only records an event.
+- `applyChange()` collides conceptually with event-sourced `apply()`.
+- a domain-specific name cannot work for a shared base-class helper.
+
+The method name communicates atomicity. It is protected, so it does not leak into the application-facing aggregate API.
 
 ## Events are deeply frozen at construction
 
-`createDomainEvent` returns a deeply frozen object. A mutating subscriber on the `EventBus` throws instead of poisoning subsequent handlers. Events are facts of the past, immutable by definition (Vernon, IDDD §8).
+`createDomainEvent` returns a deeply frozen event.
+
+That is not just defensive programming. Domain events are facts. A subscriber should not be able to mutate a fact before the next subscriber sees it. In an in-process `EventBus`, all handlers receive the same event object. Without freezing, one handler could rewrite metadata, payload, or correlation fields and poison its peers.
+
+Freezing makes that failure loud. If a handler needs a derived shape, it should create one.
 
 ## Identity ids are branded strings, generated app-side
 
-`Id<Tag>` is `string & { readonly __brand: Tag }`. Generators are bound to a single tag at creation:
+`Id<Tag>` is a branded string:
 
 ```ts
-const userIds: IdGenerator<"UserId"> = { next: () => ulid() as Id<"UserId"> };
+type UserId = Id<"UserId">;
+
+const userIds: IdGenerator<"UserId"> = {
+  next: () => ulid() as UserId,
+};
 ```
 
-Per Vernon's "Identity from User-Side", id generation happens in the application, not in the repository; `IRepository` deliberately does not expose `nextId()`. The library provides an `EventIdFactory` and `ClockFactory` for deterministic tests.
+The brand keeps ids from different concepts from being accidentally passed to the wrong API. A `UserId` and an `OrderId` are both strings at runtime, but they are not interchangeable in TypeScript.
+
+Id generation belongs in the application, not in the repository. The repository persists and loads aggregates; it does not decide their identity. That keeps creation workflows explicit and makes ids available before the first save, which is useful for domain events, child references, idempotency, and API responses.
+
+The kit provides event id and clock factories because events need ids and timestamps even when the consumer does not care about custom generation. Aggregate ids stay app-side.
 
 ## `EventIdFactory` / `ClockFactory`: globals by default, DI on top when you need it
 
-The kit ships module-level globals (`setEventIdFactory`, `setClockFactory`), scoped helpers (`withEventIdFactory`, `withClockFactory`), and per-call overrides on `createDomainEvent` (`{ eventId, occurredAt }`). This is **not** the DI-canonical shape Vernon's IDDD §13 prefers: Vernon's pattern is constructor-injected `clock: () => Date` and `idGen: () => string` threaded through every aggregate. Both designs are available; the kit defaults to globals because the production fast path (95% of methods emit events with default clock + UUID) benefits more from minimal aggregate-construction surface than from per-instance factory control.
+The kit offers three levels of control:
+
+- module-level defaults through `setEventIdFactory` and `setClockFactory`
+- scoped test helpers through `withEventIdFactory` and `withClockFactory`
+- per-event overrides on `createDomainEvent` and `recordEvent`
+
+This is a pragmatic default, not the purest possible dependency-injection design.
+
+Vernon-style DI would inject a clock and id generator into every aggregate that emits events. That is structurally race-free and very explicit. It also widens every constructor and every reconstitution path, even for aggregates that only need a timestamp and UUID once in a while.
+
+The kit optimizes for the common path: production aggregates can record events without carrying factories through every constructor. Tests and specialized domains still get deterministic control through scoped helpers or per-call overrides.
 
 ### Trade-off
 
-|  | Globals + scoped helpers (kit default) | Vernon-style DI |
-|---|---|---|
-| Race-free structurally | ❌ (mitigated via `withEventIdFactory` / `withClockFactory` + per-call options) | ✅ |
-| Aggregate constructor surface | minimal (`id, state`) | wider (`id, state, clock, idGen, …`) |
-| Reconstitution signature | `Order.reconstitute(id, state, version)` | + factories threaded through |
-| Test isolation | scoped helpers or per-call options | constructor-injected mocks |
-| Edge-runtime plumbing | none (defaults work) | factories must be wired per worker invocation |
-| DDD-canon strictness | pragmatic | hard Vernon §13 |
+| Concern | Globals + scoped helpers | Constructor DI |
+| --- | --- | --- |
+| Aggregate constructor surface | small | wider |
+| Reconstitution signature | simple | must thread factories |
+| Test isolation | use scoped helpers or per-call options | inject mocks |
+| Edge-runtime setup | no extra wiring | wire factories per invocation |
+| Race-free by construction | no, use scopes carefully | yes |
+| DDD strictness | pragmatic | stricter Vernon-style DI |
 
-If you're shipping a production aggregate that mostly records events with default clock + UUID, the globals + scoped helpers cover you with zero ceremony. If you're shipping a research / time-travel / multi-tenant codebase where time-control is per-call, Vernon-DI eliminates the race window entirely and is worth the heavier constructors.
+Use constructor DI when time and id generation are part of the domain's explicit test surface, or when concurrent tests cannot tolerate module-level overrides. Use the kit defaults when the aggregate should not care how event ids and timestamps are made.
 
 ### Vernon-DI works on top of the existing API, no library change needed
 
-`createDomainEvent` already accepts per-call `{ eventId, occurredAt }`. A consumer can ignore the globals entirely:
+Per-call event options let consumers avoid the globals entirely:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -97,114 +178,182 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     idGen: () => string,
   ): Order {
     const order = new Order(id, { customerId, status: "draft" }, clock, idGen);
-    // `recordEvent` here auto-injects aggregateId + aggregateType but
-    // still threads through the per-call eventId/occurredAt overrides,
-    // so the DI pattern survives.
+
     order.addDomainEvent(
       order.recordEvent(
         "OrderPlaced",
         { customerId },
         {
           eventId: idGen(),
-          occurredAt: clock(),  // per-call options bypass the globals
+          occurredAt: clock(),
         },
       ),
     );
+
     return order;
   }
 }
 ```
 
-That's Vernon-pure: no globals touched, no scoped helpers needed, every event's clock and id come from the aggregate's injected factories. Test mocks pass in deterministic factories at construction time.
+`recordEvent` still injects `aggregateId` and `aggregateType`; the per-call options supply the event id and timestamp.
 
 ### When the scoped helpers still win
 
-Even in a DI-leaning codebase, `withEventIdFactory` / `withClockFactory` remain the right tool for one case: **events constructed deep inside a domain method** where threading an explicit `{ eventId, occurredAt }` through every `createDomainEvent` call is awkward. A test that wraps the whole operation in `withEventIdFactory(() => "deterministic", () => order.processBatch(...))` is cleaner than refactoring `processBatch` to thread the id-gen through three layers of internal helpers.
+Scoped helpers are useful when you want deterministic tests without widening the domain API:
+
+```ts
+withEventIdFactory(() => "event-1", () => {
+  withClockFactory(() => fixedDate, () => {
+    order.processBatch(input);
+  });
+});
+```
+
+Use them around one synchronous operation, not around an entire test file. They deliberately reject async callbacks, because restoring a global factory before awaited code resumes would make the test nondeterministic. For async flows, use per-call event options, constructor-injected factories, or an application-level async context. Module-level factories are global state; scoped helpers keep that state contained.
 
 ## Collection helpers practice structural sharing
 
-`updateEntityById`, `replaceEntityById`, and `removeEntityById` return the
-ORIGINAL array when nothing changed (no match, a same-reference updater
-result or replacement, an absent id on remove) and a new array only when an
-element reference actually changed, with unchanged siblings keeping their
-identity. This is the immutable-update idiom (Immer / Redux / persistent
-data structures), and in this kit it is load-bearing: `changedKeys` is a
-reference-based per-key diff, so a helper returning a fresh array for a
-no-op would falsely mark the collection key dirty and cost partial-write
-repositories a pointless child-table write. The reference is the honest
-change signal.
+`updateEntityById`, `replaceEntityById`, and `removeEntityById` preserve references when nothing changed.
 
-Two consequences are deliberate. The return type is `ReadonlyArray<T>`
-because the result may BE the (shallow-frozen) input; a mutable `T[]`
-would be a lie (spread the result when a mutable copy is needed). And a
-miss stays a silent no-op: the helper is a data-structure operation with
-no domain context, so whether a missing element is an error is the
-aggregate method's decision, and structural sharing makes the miss
-detectable there for free (`result === input`).
+That means:
+
+- no matching entity returns the original array
+- an updater that returns the same entity reference returns the original array
+- replacing with the same reference returns the original array
+- unchanged siblings keep their identity
+
+This is the same immutable-update idea used by Redux, Immer, and persistent data structures. In this kit it is load-bearing because `AggregateRoot.changedKeys` is a shallow reference diff. If a helper returned a fresh array for a no-op, a repository would think the collection changed and perform unnecessary child-table writes.
+
+The return type is `ReadonlyArray<T>` because the returned value may be the shallow-frozen input. If a caller needs a mutable copy, it can spread the result.
+
+A missing child is also a silent no-op at the helper level. The helper does not know whether "missing" is a domain error. The aggregate method does:
+
+```ts
+const nextItems = updateEntityById(this.state.items, itemId, update);
+
+if (nextItems === this.state.items) {
+  throw new OrderItemNotFoundError(itemId);
+}
+```
+
+The structural sharing gives the aggregate a cheap way to decide.
 
 ## No deep clone on every state read
 
-`Entity.state` is **shallowly frozen** on every assignment. Direct property writes (`entity.state.foo = …`) throw in strict mode, but writes to nested objects bypass the freeze. For deep immutability either model nested data with `vo()` (deep-freezes by construction) or reach for Immer / Immutable.js at the App layer. The shallow contract is deliberate: deep freezing on every state write would dominate hot paths.
+`Entity.state` is shallowly frozen on assignment. Direct writes to top-level state fail in strict mode. Nested objects are not deeply frozen by the entity base.
+
+That is intentional. Deep cloning or deep freezing on every read/write would make hot aggregate paths pay for a guarantee many models do not need.
+
+The contract is:
+
+- replace state through `setState`, `commit`, or event-sourced `apply`
+- model deeply immutable nested data as value objects with `vo()` or `ValueObject`
+- use an immutable-update library at the application layer if your state is deeply nested
+
+Do not mutate nested state in place and expect `changedKeys` to notice. The aggregate change model is whole-state replacement with shallow structural sharing.
 
 ## Version lives on the aggregate boundary, not on entities or value objects
 
-`version` / `persistedVersion` enter the class hierarchy at `BaseAggregate`, between `Entity` and the two aggregate flavours; `Entity<TState, TId>` has identity and state but **no own version**. That split is deliberate, and the reasons differ for the two building blocks below it.
+`version` and `persistedVersion` belong to aggregates, not to every entity and value object.
 
-**Value Objects carry no version; it would contradict what a VO is.** A VO has no identity and no lifecycle: it is replaced wholesale, never mutated, and two VOs with equal attributes *are* the same value (`voEquals`). A version presupposes "the same thing over time whose changes you count", i.e. identity. The moment you want a versioned VO, you actually want an Entity. (The only version-like concept near VOs is the schema/event `version` used for [upcasting](./event-upcasting.md), a serialisation concern at the persistence edge, not a VO attribute.)
+That follows directly from the DDD consistency boundary.
 
-**Child entities carry no version because OCC belongs to the consistency boundary.** The `version` the kit tracks is an optimistic-concurrency token (`WHERE version = persistedVersion` on save; see [Concurrency](./concurrency.md)). Per Evans and Vernon (IDDD §10) the aggregate is the unit of consistency and persistence: loaded, mutated, and saved transactionally as one whole, with OCC on the root. Giving a child entity its own version would imply it can be modified concurrently and independently, exactly what the aggregate boundary forbids. A child entity inherits its "versioning" through the version of *its* aggregate.
+Value objects have no identity. They are values. If two value objects have the same attributes, they are the same value. A version would imply "this same thing changed over time", which is identity language. If you need that, you probably need an entity.
 
-If you find yourself wanting a version lower down, one of these is the DDD-aligned move:
+Child entities do have identity, but they do not own persistence. They live inside the aggregate boundary. The aggregate is loaded, changed, and saved as one consistency unit, so optimistic concurrency belongs on the aggregate root.
 
-| What you actually want | Do this instead |
-|---|---|
-| A child entity that can be edited concurrently on its own | Promote it to its **own aggregate root**; then it has its own OCC version |
-| "Which change was this?" per entity, for audit | **Domain events** (they carry `version` + `occurredAt`), not a field on the entity |
-| Migrate the shape of an embedded structure | **Event upcasting**, or a schema-version field inside the plain-data state, not a library concept |
+If a child needs independent concurrent editing, it is probably not a child entity. Promote it to its own aggregate root.
 
-The absence of an entity-level version is a guard rail: a generic `version` on `Entity` would invite consumers to split work across what should be a single aggregate.
+| What you want | Better model |
+| --- | --- |
+| independently edited child state | a separate aggregate root |
+| audit history for a child | domain events |
+| migration of embedded state shape | event upcasting or state schema migration |
+| conflict detection for one part of a large aggregate | reconsider the aggregate boundary |
+
+A generic `version` field on `Entity` would invite consumers to split work across what should be one consistency boundary. The kit leaves it out on purpose.
 
 ## TransactionScope stays minimal; the Unit of Work lives above it
 
-The transaction abstraction is `TransactionScope.transactional<T>(fn): Promise<T>`: honest naming for what it actually does: delegate to the ORM's native transaction. The scope itself does no change tracking (`registerDirty` / `registerNew` / `registerDeleted`); ORMs handle row-level change detection differently (Prisma, Drizzle, TypeORM), and competing with them at that level only creates incompatibility.
+`TransactionScope` has one job:
 
-Earlier versions of this page said flatly "no Fowler-style UoW". That stance has been **consciously revised**, not because the original reasoning was wrong, but because the pieces it argued against landed in different places than Fowler's pattern puts them:
+```ts
+transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>
+```
 
-- **Change detection lives on the aggregate, not in the scope.** `AggregateRoot.changedKeys` / `hasChanges` detect changes by a shallow reference diff against the state captured at the persistence-lifecycle markers: the aggregate reports *what* changed, the repository decides *what to write* (see [Partial writes for multi-table aggregates](./repository.md#partial-writes-for-multi-table-aggregates-changedkeys--haschanges)). This is deliberately NOT ORM-style change tracking: no proxies, no entity metadata, no registration calls; it falls out of the kit's immutable-`setState` convention for free.
-- **Commit orchestration lives in `withCommit`** (the Vernon / Axon / EventFlow unit-of-work pattern): pending events are harvested into the outbox inside the transaction, `markPersisted` fires after the commit, the in-process publish happens last.
-- **An opt-in [`UnitOfWork` facade](./unit-of-work.md) ships on top of `withCommit`**: tx-bound repositories handed to the use case via a registry, a per-operation identity map (`session.identityMap`), and repository-side aggregate enrollment (`save()` / `delete()` enroll the aggregate with the UoW). Enrollment-by-repository removes `withCommit`'s known footgun: forgetting to list an aggregate in the returned `aggregates` array silently drops its events; with enrollment, the mistake becomes impossible per call site and is tested once per repository implementation instead. **Honest classification:** in Fowler's PoEAA taxonomy this is a *transaction coordinator with registration and Identity Map*, Unit of Work minus the commit-time flush. Writes stay explicit (`save()`), deliberately; auto-flush is a designed, optional later phase. Caller registration is a variant Fowler himself describes, and ours improves on its known weakness by moving registration from every call site into the repository.
+It delegates to the persistence layer's native transaction and returns the callback result. It does not track dirty objects, register new aggregates, flush changes, or own an identity map.
 
-What stays true: `TransactionScope` remains the minimal port everything above builds on, and nothing forces the higher layers on you; `withCommit` with hand-rolled, tx-bound repositories remains a fully supported way to use the kit.
+That minimal shape keeps it compatible with Drizzle, Prisma, Mongo sessions, custom SQL adapters, and in-memory tests. ORMs already disagree about row-level change tracking. A generic transaction port should not pretend to solve that.
 
-`withCommit` publishes events **after** `transactional` resolves, so an in-process EventBus subscriber never sees events from a rolled-back transaction.
+The higher-level pieces live above it:
+
+- aggregates track their own dirty state through `changedKeys` and `hasChanges`
+- repositories decide what rows to write
+- `withCommit` orchestrates save, event harvest, outbox write, commit, mark-persisted, and post-commit publish
+- `UnitOfWork` adds tx-bound repositories, enrollment, and a per-operation identity map
+
+Earlier docs said "no Fowler-style Unit of Work" too bluntly. The current design is more precise: the kit does ship an opt-in unit-of-work facade, but not an ORM-style auto-flush engine.
+
+In Fowler's terms, it is a transaction coordinator with registration and Identity Map. Repositories enroll aggregates when `save()` or `delete()` is called. Writes stay explicit. Auto-flush remains outside the current public contract.
+
+`withCommit` with hand-rolled transaction-bound repositories remains supported. `UnitOfWork` is a convenience layer for teams that want repository registration and identity-map support built in.
 
 ## Domain Services are consumer constructs, no library marker
 
-Vernon IDDD §7 describes Domain Services as the home for business logic that doesn't naturally belong to an Aggregate or a Value Object: operations that span multiple aggregates without owning state ("compute exchange rate", "check inventory across warehouses", "evaluate a credit-risk policy"). The kit deliberately ships no `IDomainService` marker, no `DomainService` base class, no decorator.
+A Domain Service holds domain logic that does not naturally belong to one aggregate or value object.
 
-The reason is the same one Evans gives for not over-marking patterns: a marker that does nothing at the type or runtime level adds noise without adding constraint. A Domain Service in this kit is just a function or interface defined alongside your aggregates; file naming and module structure already identify it:
+Examples:
+
+- calculate a shipping cost from an order, destination, and rate table
+- evaluate a credit policy across several inputs
+- check inventory across warehouses
+
+The kit does not ship `DomainService`, `IDomainService`, or a decorator. A marker would not enforce any useful rule. It would only add ceremony.
+
+Use a function or interface in your domain module:
 
 ```ts
-// pricing/exchange-rate.service.ts
 export function calculateShippingCost(
   order: Order,
   destination: Address,
   rates: ExchangeRateTable,
 ): Money {
-  // pure function over aggregates + value objects; no state of its own
+  // Pure domain logic, no state of its own.
 }
 ```
 
-If you find yourself wanting to make a Domain Service stateful, that's the strongest signal in DDD that you've found a new aggregate (Vernon §7). Promote it.
+If the service starts carrying identity, lifecycle, state transitions, or versioned persistence, it is no longer a stateless domain service. That is a signal to look for a missing aggregate.
 
 ## Bounded Contexts: the kit is agnostic
 
-ddd-kit is bounded-context-agnostic. Each Bounded Context (Evans, *Domain-Driven Design* §14) is a module or package (or a separate repo for larger systems) that imports the kit; the library does not prescribe a layout, naming convention, or inter-BC integration pattern.
+The kit does not prescribe a bounded-context layout.
 
-Inter-BC communication is typically via published domain events through the outbox + a message broker (the topology the kit is designed for, but enforces nothing). The receiving BC translates incoming events into its own ubiquitous language at the boundary (an Anti-Corruption Layer, Evans §14) using plain functions or adapter classes; again, no library construct.
+A bounded context can be a directory, a package, a repository, or a deployable service. The kit provides tactical building blocks inside that context: aggregates, value objects, repositories, events, buses, and unit-of-work orchestration.
 
-The kit is small enough that a single TypeScript codebase can host multiple BCs comfortably, with each BC in its own directory tree of aggregates / repositories / use cases. Larger systems split BCs across repos and treat the outbox as the only contract that crosses the boundary.
+Inter-context communication is a boundary concern. A common shape is:
+
+1. One bounded context publishes domain events through an outbox.
+2. Another bounded context receives those events through a broker or dispatcher.
+3. The receiver translates the incoming event into its own language at the boundary.
+
+That translation is the Anti-Corruption Layer. It can be a function, adapter, mapper, or application service. The kit does not need a special class for it.
+
+Small systems can host several bounded contexts in one TypeScript codebase. Larger systems can split them across packages or repositories. In both cases, the important rule is the same: do not let another context's model leak directly into your domain objects.
 
 ## The kit is small on purpose
 
-`dist/index.js` is around 30 KB. Operators that have entire ecosystems behind them (a Result type with 30+ combinators, a deep-equal that handles every corner of JavaScript, a frozen value-object library) are pulled in from peer deps rather than re-implemented. The kit's job is to ship the *DDD-specific* shapes; the surrounding TypeScript ecosystem is rich enough to handle the rest.
+The kit is not trying to be a full application framework.
+
+It ships DDD-specific shapes:
+
+- aggregate and entity bases
+- domain events
+- repository and transaction ports
+- command, query, and event buses
+- outbox and projection support
+- value-object helpers
+- testing contracts for adapters
+
+It relies on peer dependencies and the TypeScript ecosystem for general-purpose concerns such as `Result`, structured errors, deep equality, money calculations, HTTP frameworks, and database clients.
+
+That keeps the surface area small enough to understand. The trade-off is that the kit asks you to compose it with your application architecture instead of hiding that architecture behind framework magic.
