@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: property-based and mutation testing for the money module
+
+- `src/money/money.properties.test.ts` (fast-check): the exact-money
+  laws as properties instead of examples: parse/render inversion with
+  the zero-excess acceptance and the non-zero-excess rejection,
+  add/subtract inverse plus commutativity and associativity, negate as
+  involution and additive inverse, lossless rescale up-and-back
+  identity with rendered-value preservation and the lossy-downscale
+  rejection, DTO and snapshot round-trips through JSON, and the
+  snapshot bridge's safe-integer domain pinned from both sides (exact
+  inside, loud refusal outside). `pnpm mutate:money` runs a
+  Stryker mutation pass scoped to the module (dev-dependency only, not
+  part of the default test run; break threshold 85, current score
+  89.8 after the guard-edge tests the first pass motivated, with the
+  remaining survivors dominated by behaviorally equivalent mutants:
+  cache internals, fallback-masked branches, an unreachable
+  comparison).
+
 ### Added: Sagas guide page
 
 - New guide page composing the existing pieces into a saga / process
