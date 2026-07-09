@@ -152,22 +152,20 @@ export interface DeadLetterRecord<Evt extends AnyDomainEvent> {
 }
 
 /**
- * Transactional outbox port: the bridge between the write-side
- * transaction and the (out-of-band) event dispatcher.
+ * Write half of the transactional outbox: the only outbox capability the
+ * write side (`withCommit`, `UnitOfWork`) depends on. Persisting the
+ * events atomically with the aggregate state is the kit's guarantee;
+ * DELIVERY is a separate, replaceable concern.
  *
- * Lifecycle:
- *  1. `add()` inside the write transaction (`withCommit` calls this) so
- *     events persist atomically with the aggregate state.
- *  2. A separate outbox dispatcher polls `getPending()` and forwards the
- *     events to subscribers / external brokers.
- *  3. After successful dispatch, the dispatcher calls `markDispatched()`
- *     with the records' `dispatchId`s so they don't come back next poll.
- *
- * `markDispatched` is required to be idempotent: calling it with an id
- * that's already marked is a no-op, not an error. This lets the
- * dispatcher safely retry on partial-failure.
+ * Implement ONLY this interface to plug in an external delivery
+ * solution: `add()` writes into that solution's outbox storage inside
+ * the ambient transaction, and its own listener (polling or
+ * WAL/CDC-based, such as a Debezium-style connector, a delivery
+ * library, or a broker-native outbox) owns delivery entirely. The
+ * kit-side poll surface ({@link Outbox}) is then never involved. See
+ * the outbox guide, "External dispatchers".
  */
-export interface Outbox<Evt extends AnyDomainEvent> {
+export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	/**
 	 * Persists events. Called from inside `withCommit`'s transactional
 	 * callback, atomically with the aggregate write.
@@ -180,7 +178,33 @@ export interface Outbox<Evt extends AnyDomainEvent> {
 	 * table is the standard implementation.
 	 */
 	add: (events: ReadonlyArray<Evt>) => Promise<void>;
+}
 
+/**
+ * Transactional outbox port: the bridge between the write-side
+ * transaction and the (out-of-band) event dispatcher.
+ *
+ * Lifecycle:
+ *  1. `add()` inside the write transaction (`withCommit` calls this) so
+ *     events persist atomically with the aggregate state
+ *     ({@link OutboxWriter}, the only part the write side needs).
+ *  2. An outbox dispatcher (the kit's `OutboxDispatcher` or your own)
+ *     polls `getPending()` and forwards the events to subscribers /
+ *     external brokers.
+ *  3. After successful dispatch, the dispatcher calls `markDispatched()`
+ *     with the records' `dispatchId`s so they don't come back next poll.
+ *
+ * `markDispatched` is required to be idempotent: calling it with an id
+ * that's already marked is a no-op, not an error. This lets the
+ * dispatcher safely retry on partial-failure.
+ *
+ * **Competing dispatcher instances** are an adapter contract, not a
+ * dispatcher feature: a transactional implementation that should
+ * support several concurrent pollers must make `getPending` claim the
+ * returned records (`FOR UPDATE SKIP LOCKED` or equivalent). Without
+ * claiming, run one logical dispatcher per outbox.
+ */
+export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 	/**
 	 * Returns up to `limit` outbox records that have not yet been
 	 * dispatched, **in the order `add()` persisted them** (commit order).
@@ -237,4 +261,25 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
 	 * messages surface instead of rotting silently.
 	 */
 	deadLetters: () => Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
+}
+
+/**
+ * Discriminates a {@link DispatchTrackingOutbox} from a plain
+ * {@link Outbox} at runtime. The single source of truth for the check;
+ * the dispatcher and the contract suite both use it, so what counts as
+ * a tracking outbox cannot drift between them. Both tracking methods
+ * must be present: a plain adapter that happens to expose an unrelated
+ * `markFailed` helper must not be mistaken for one that implements the
+ * tracking protocol and then be fed `(dispatchId, error)` arguments it
+ * never asked for. Internal plumbing, not exported from the package
+ * entries.
+ */
+export function isDispatchTrackingOutbox<Evt extends AnyDomainEvent>(
+	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>,
+): outbox is DispatchTrackingOutbox<Evt> {
+	const candidate = outbox as DispatchTrackingOutbox<Evt>;
+	return (
+		typeof candidate.markFailed === "function" &&
+		typeof candidate.deadLetters === "function"
+	);
 }

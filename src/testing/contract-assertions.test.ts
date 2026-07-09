@@ -40,7 +40,7 @@ describe("assertChainContainsKitError", () => {
 				["CONCURRENCY_CONFLICT"],
 				"stale writer must conflict",
 			),
-		).toThrow(/Repository contract violated: stale writer must conflict/);
+		).toThrow(/Contract violated: stale writer must conflict/);
 	});
 
 	it("never matches a legacy PascalCase name; the code is the only contract", () => {

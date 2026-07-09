@@ -8,7 +8,7 @@ import {
 	UnenrolledChangesError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type { EventBus, Outbox } from "../events/ports";
+import type { EventBus, OutboxWriter } from "../events/ports";
 import { type AggregateClass, IdentityMap } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
@@ -259,20 +259,18 @@ export type RepositoryFactories<
 	TRepos,
 	Evt extends AnyDomainEvent = AnyDomainEvent,
 > = {
-	[K in keyof TRepos]: (
-		tx: TCtx,
-		session: UnitOfWorkSession<Evt>,
-	) => TRepos[K];
+	[K in keyof TRepos]: (tx: TCtx, session: UnitOfWorkSession<Evt>) => TRepos[K];
 };
 
 /** Dependencies for {@link UnitOfWork}; the app-level singleton part. */
-export interface UnitOfWorkDeps<
-	Evt extends AnyDomainEvent,
-	TCtx,
-	TRepos,
-> {
+export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
 	scope: TransactionScope<TCtx>;
-	outbox: Outbox<Evt>;
+	/**
+	 * The write half of the outbox; see `WithCommitDeps.outbox` for the
+	 * required-vs-optional-bus asymmetry and the explicit opt-out
+	 * (`outboxWriterAcceptingEventLoss`).
+	 */
+	outbox: OutboxWriter<Evt>;
 	bus?: EventBus<Evt>;
 	/** See `withCommit`: observer for post-commit `bus.publish` failures. */
 	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
@@ -381,7 +379,10 @@ export class UnitOfWork<
 		// nesting error. The `??` fallback mirrors event-bus.ts and guards a
 		// non-spec polyfill whose `reason` is undefined.
 		if (options?.signal?.aborted) {
-			throw abortReason(options.signal, "UnitOfWork.run aborted before opening a transaction");
+			throw abortReason(
+				options.signal,
+				"UnitOfWork.run aborted before opening a transaction",
+			);
 		}
 		if (this._active) {
 			throw new NestedUnitOfWorkError();
@@ -455,10 +456,7 @@ export class UnitOfWork<
 		}
 	}
 
-	private buildRepositories(
-		tx: TCtx,
-		session: UnitOfWorkSession<Evt>,
-	): TRepos {
+	private buildRepositories(tx: TCtx, session: UnitOfWorkSession<Evt>): TRepos {
 		const repositories = {} as TRepos;
 		for (const key of Object.keys(this.deps.repositories) as Array<
 			keyof TRepos

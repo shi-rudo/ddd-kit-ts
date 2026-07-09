@@ -46,9 +46,9 @@ export {
 } from "./app/command-bus";
 // App orchestration: withCommit + Unit of Work
 export {
-	withCommit,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
+	withCommit,
 } from "./app/handler";
 export {
 	type IdempotencyClaim,
@@ -159,9 +159,19 @@ export {
 	updateEntityById,
 } from "./entity/entity";
 
-// Events: bus, outbox, ports
+// Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./events/event-bus";
-export { InMemoryOutbox, type InMemoryOutboxOptions } from "./events/outbox";
+export {
+	InMemoryOutbox,
+	type InMemoryOutboxOptions,
+	outboxWriterAcceptingEventLoss,
+} from "./events/outbox";
+export {
+	eventBusSink,
+	OutboxDispatcher,
+	type OutboxDispatcherOptions,
+	type OutboxSink,
+} from "./events/outbox-dispatcher";
 export type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
@@ -170,6 +180,7 @@ export type {
 	OnceOptions,
 	Outbox,
 	OutboxRecord,
+	OutboxWriter,
 } from "./events/ports";
 
 // Repository: ports, identity map, event store, scopes

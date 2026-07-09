@@ -2,14 +2,25 @@ import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { EventBus, Outbox } from "../events/ports";
+import type { EventBus, OutboxWriter } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import { reportToObserver } from "../utils/observer";
 
 /** Dependencies for {@link withCommit}. */
 export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
-	outbox: Outbox<Evt>;
+	/**
+	 * The write half of the outbox: `withCommit` only ever calls `add()`.
+	 * Pass a full `Outbox` for the kit's poll-based dispatch, or a bare
+	 * `OutboxWriter` backed by an external delivery solution.
+	 *
+	 * Required on purpose, while `bus` is optional: the bus is the
+	 * best-effort in-process fast path, the outbox is the delivery
+	 * guarantee. Running without delivery reliability is a decision, not
+	 * a default; make it explicit with
+	 * `outboxWriterAcceptingEventLoss()`.
+	 */
+	outbox: OutboxWriter<Evt>;
 	bus?: EventBus<Evt>;
 	scope: TransactionScope<TCtx>;
 	/**
@@ -186,119 +197,123 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// the `??` fallback mirrors event-bus.ts and guards a non-spec polyfill
 	// whose `reason` is undefined (a bare `throw undefined` is unusable).
 	if (deps.signal?.aborted) {
-		throw abortReason(deps.signal, "withCommit aborted before opening a transaction");
+		throw abortReason(
+			deps.signal,
+			"withCommit aborted before opening a transaction",
+		);
 	}
 
-	const { result, aggregates, deleted, events } = await deps.scope.transactional(
-		async (ctx) => {
-			const fnResult = await fn(ctx);
-			// Dedupe by object identity. A use case that touches the same
-			// aggregate via two repository references (same identity-map
-			// entry) would otherwise double-harvest its events and call
-			// markPersisted twice. Distinct instances with the same logical
-			// id are NOT detected here; that's a different misuse class.
-			const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
-			// Subset guard: `deleted` is a MARKER over `aggregates`, not a
-			// second harvest source. A deleted aggregate missing from
-			// `aggregates` would have its deletion events silently lost
-			// (never harvested into the outbox) and double-emitted by a
-			// later commit; fail inside the transaction like the other
-			// harvest guards so nothing commits.
-			const aggregateSet = new Set(uniqueAggregates);
-			for (const deletedAggregate of fnResult.deleted ?? []) {
-				if (!aggregateSet.has(deletedAggregate)) {
-					throw new EventHarvestError(
-						"withCommit: an aggregate in `deleted` is not listed in " +
-							"`aggregates`. The harvest only reads `aggregates`, so " +
-							"its deletion events would be silently dropped. List " +
-							"every deleted aggregate in BOTH arrays.",
-					);
-				}
-			}
-			// Stamp each harvested event with its aggregate's COMMIT version
-			// (the value the OCC row write carries for saved aggregates).
-			// Events are deeply frozen at creation, so the stamp goes onto a
-			// frozen shallow copy - the aggregate's own pendingEvents stay
-			// untouched, and a manually pre-set aggregateVersion is never
-			// overwritten. The outbox and the bus receive the stamped copies.
-			// NOTE: the shallow copy assumes events are PLAIN DATA objects
-			// (the createDomainEvent / recordEvent contract); class-based
-			// event objects with prototype members are unsupported.
-			const harvested = uniqueAggregates.flatMap((agg) =>
-				agg.pendingEvents.map((event, index) => {
-					// Pre-set values win (replay fixtures, backfills) - but a
-					// pre-set aggregateVersion AHEAD of the commit version is
-					// always a leaked fixture or copied options object, and
-					// consumers key idempotency watermarks on this number:
-					// fail fast, same posture as the aggregateId/aggregateType
-					// guard below.
-					if (
-						event.aggregateVersion !== undefined &&
-						event.aggregateVersion > (agg.version as number)
-					) {
+	const { result, aggregates, deleted, events } =
+		await deps.scope.transactional(
+			async (ctx) => {
+				const fnResult = await fn(ctx);
+				// Dedupe by object identity. A use case that touches the same
+				// aggregate via two repository references (same identity-map
+				// entry) would otherwise double-harvest its events and call
+				// markPersisted twice. Distinct instances with the same logical
+				// id are NOT detected here; that's a different misuse class.
+				const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
+				// Subset guard: `deleted` is a MARKER over `aggregates`, not a
+				// second harvest source. A deleted aggregate missing from
+				// `aggregates` would have its deletion events silently lost
+				// (never harvested into the outbox) and double-emitted by a
+				// later commit; fail inside the transaction like the other
+				// harvest guards so nothing commits.
+				const aggregateSet = new Set(uniqueAggregates);
+				for (const deletedAggregate of fnResult.deleted ?? []) {
+					if (!aggregateSet.has(deletedAggregate)) {
 						throw new EventHarvestError(
-							`withCommit: event "${event.type}" carries a pre-set ` +
-								`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
-								`aggregate's commit version (${agg.version}). A stale-or-` +
-								`copied pre-set would advance consumer idempotency ` +
-								`watermarks past real history; remove the manual ` +
-								`aggregateVersion or correct it.`,
+							"withCommit: an aggregate in `deleted` is not listed in " +
+								"`aggregates`. The harvest only reads `aggregates`, so " +
+								"its deletion events would be silently dropped. List " +
+								"every deleted aggregate in BOTH arrays.",
+						);
+					}
+				}
+				// Stamp each harvested event with its aggregate's COMMIT version
+				// (the value the OCC row write carries for saved aggregates).
+				// Events are deeply frozen at creation, so the stamp goes onto a
+				// frozen shallow copy - the aggregate's own pendingEvents stay
+				// untouched, and a manually pre-set aggregateVersion is never
+				// overwritten. The outbox and the bus receive the stamped copies.
+				// NOTE: the shallow copy assumes events are PLAIN DATA objects
+				// (the createDomainEvent / recordEvent contract); class-based
+				// event objects with prototype members are unsupported.
+				const harvested = uniqueAggregates.flatMap((agg) =>
+					agg.pendingEvents.map((event, index) => {
+						// Pre-set values win (replay fixtures, backfills) - but a
+						// pre-set aggregateVersion AHEAD of the commit version is
+						// always a leaked fixture or copied options object, and
+						// consumers key idempotency watermarks on this number:
+						// fail fast, same posture as the aggregateId/aggregateType
+						// guard below.
+						if (
+							event.aggregateVersion !== undefined &&
+							event.aggregateVersion > (agg.version as number)
+						) {
+							throw new EventHarvestError(
+								`withCommit: event "${event.type}" carries a pre-set ` +
+									`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
+									`aggregate's commit version (${agg.version}). A stale-or-` +
+									`copied pre-set would advance consumer idempotency ` +
+									`watermarks past real history; remove the manual ` +
+									`aggregateVersion or correct it.`,
+								event.type,
+							);
+						}
+						// Stamp the commit version AND the zero-based harvest
+						// index: the pair (aggregateVersion, commitSequence) is a
+						// total order per aggregate and a compact consumer
+						// watermark (all events of one commit share the version).
+						const needsVersion = event.aggregateVersion === undefined;
+						const needsSequence = event.commitSequence === undefined;
+						if (!needsVersion && !needsSequence) return event;
+						return Object.freeze({
+							...event,
+							aggregateVersion: needsVersion
+								? (agg.version as number)
+								: event.aggregateVersion,
+							commitSequence: needsSequence ? index : event.commitSequence,
+						}) as Evt;
+					}),
+				);
+				// Guard: every event harvested from an aggregate MUST carry
+				// aggregateId + aggregateType. Downstream consumers (outbox
+				// dispatchers, projection handlers, audit logs) route by these
+				// fields; missing them silently breaks routing. The
+				// `this.recordEvent(...)` helper on AggregateRoot /
+				// EventSourcedAggregate injects them automatically; this guard
+				// catches the case where someone called `createDomainEvent(...)`
+				// directly inside an aggregate method and forgot the options.
+				for (const event of harvested) {
+					const missing: string[] = [];
+					if (!event.aggregateId) missing.push("aggregateId");
+					if (!event.aggregateType) missing.push("aggregateType");
+					if (missing.length > 0) {
+						throw new EventHarvestError(
+							`withCommit: event "${event.type}" is missing ${missing.join(
+								" and ",
+							)}. ` +
+								`Use this.recordEvent(type, payload) inside aggregate methods ` +
+								`instead of createDomainEvent(...); recordEvent auto-injects ` +
+								`aggregateId and aggregateType. Outbox dispatchers and ` +
+								`projection handlers rely on these fields for routing.`,
 							event.type,
 						);
 					}
-					// Stamp the commit version AND the zero-based harvest
-					// index: the pair (aggregateVersion, commitSequence) is a
-					// total order per aggregate and a compact consumer
-					// watermark (all events of one commit share the version).
-					const needsVersion = event.aggregateVersion === undefined;
-					const needsSequence = event.commitSequence === undefined;
-					if (!needsVersion && !needsSequence) return event;
-					return Object.freeze({
-						...event,
-						aggregateVersion: needsVersion
-							? (agg.version as number)
-							: event.aggregateVersion,
-						commitSequence: needsSequence ? index : event.commitSequence,
-					}) as Evt;
-				}),
-			);
-			// Guard: every event harvested from an aggregate MUST carry
-			// aggregateId + aggregateType. Downstream consumers (outbox
-			// dispatchers, projection handlers, audit logs) route by these
-			// fields; missing them silently breaks routing. The
-			// `this.recordEvent(...)` helper on AggregateRoot /
-			// EventSourcedAggregate injects them automatically; this guard
-			// catches the case where someone called `createDomainEvent(...)`
-			// directly inside an aggregate method and forgot the options.
-			for (const event of harvested) {
-				const missing: string[] = [];
-				if (!event.aggregateId) missing.push("aggregateId");
-				if (!event.aggregateType) missing.push("aggregateType");
-				if (missing.length > 0) {
-					throw new EventHarvestError(
-						`withCommit: event "${event.type}" is missing ${missing.join(
-							" and ",
-						)}. ` +
-							`Use this.recordEvent(type, payload) inside aggregate methods ` +
-							`instead of createDomainEvent(...); recordEvent auto-injects ` +
-							`aggregateId and aggregateType. Outbox dispatchers and ` +
-							`projection handlers rely on these fields for routing.`,
-							event.type,
-					);
 				}
-			}
-			if (harvested.length > 0) {
-				await deps.outbox.add(harvested);
-			}
-			return {
-				...fnResult,
-				aggregates: uniqueAggregates,
-				deleted: new Set(fnResult.deleted ?? []),
-				events: harvested,
-			};
-		},
-		{ signal: deps.signal },
-	);
+				if (harvested.length > 0) {
+					await deps.outbox.add(harvested);
+				}
+				return {
+					...fnResult,
+					aggregates: uniqueAggregates,
+					deleted: new Set(fnResult.deleted ?? []),
+					events: harvested,
+				};
+			},
+			{ signal: deps.signal },
+		);
 
 	// Post-commit: mark each aggregate as persisted (clears pendingEvents).
 	// Done AFTER the tx commits so a rolled-back transaction never silently

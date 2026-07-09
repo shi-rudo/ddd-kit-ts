@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: adapter contract suites for outbox and idempotency store
+
+- `createOutboxContractTests` and `createIdempotencyStoreContractTests`
+  in `@shirudo/ddd-kit/testing`, mirroring the repository contract
+  suites: framework-agnostic test lists an adapter binds with
+  `(test.skipped ? it.skip : it)(test.name, test.run)`. Both suites test
+  the PORT, not the in-memory reference: every port-sanctioned adapter
+  variation is a declared capability, and each skip stays visible as the
+  unproven guarantee it is. The outbox suite proves commit-order reads,
+  explicit-limit paging, idempotent acks, the dispatch-tracking
+  lifecycle (attempts, dead-lettering, no resurrection, manual
+  redelivery ack), and, capability-gated, eventId dedupe
+  (`dedupesOnEventId`), head stability for non-claiming reads
+  (`claimsOnGetPending`), and rollback purity (`providesRolledBackAdds`).
+  The idempotency suite follows the adapter's declared `family`:
+  shared lifecycle proofs (claim, replay, fingerprint reuse rejection
+  on a completed record, the one same-key state both families reach)
+  for both; retryable in-flight claims, staged-never-replays, and
+  abandon-releases for the `non-transactional` two-phase-hooks family
+  (a committed-yet-pending claim is unreachable in the
+  single-transaction pattern, so the in-flight proof cannot be forced
+  onto it); rollback-releases-the-claim and commit-is-the-finalize for
+  the `transactional` single-transaction family. The in-memory references
+  pass their suites with exactly the capabilities they lack skipped
+  (their documented limitations). The outbox guide gains a production
+  checklist.
+
+### Added: outbox seam and minimal dispatcher
+
+- `OutboxWriter` port: the write half of the outbox (`add` only). Implement
+  it alone to plug in an external delivery solution (a CDC connector, a
+  delivery library, a broker-native outbox) whose own listener owns delivery;
+  the kit-side poll surface is then never involved. `Outbox` extends
+  `OutboxWriter`, so existing implementations keep working unchanged.
+- `outboxWriterAcceptingEventLoss()`: the explicit opt-out for setups
+  without delivery reliability (no events, or MVP bus-only where event
+  loss on a crash between commit and publish is accepted). The outbox
+  stays required while `bus` is optional on purpose: the bus is the
+  best-effort fast path, the outbox is the guarantee; running without
+  one is a decision the call site now spells out. Also documents the
+  footgun it replaces: an undrained `InMemoryOutbox` as dummy grows its
+  pending map unbounded.
+- `OutboxDispatcher`: a minimal runnable poller over the `Outbox` port for
+  tests, moduliths without a broker, and single-process deployments.
+  At-least-once with batched prefix acks (one `markDispatched` call per
+  delivered batch, only after successful publishes), sequential with
+  stop-on-failure to preserve per-aggregate causal order, never rejects
+  (poll and ack failures are absorbed into the `onPollError` /
+  `onDispatchError` observers, and every failed cycle grows the jittered
+  backoff toward `maxDelayMs`, also with plain non-tracking outboxes),
+  bounded retries and dead-lettering when given a `DispatchTrackingOutbox`
+  (an ack failure never counts toward the poison ceiling and is reported
+  per affected record; its duplicates are rate-limited by the backoff),
+  an optional `countsTowardCeiling` classifier so a transient transport
+  outage does not progressively dead-letter healthy records (by default
+  every failure counts; the trade-off is documented on the option and in
+  the production checklist), `drainOnce()` for cron and serverless ticks
+  (reentrancy-safe: a tick that overlaps an in-flight pass joins it
+  instead of double-delivering, while a joining `run(signal)` still
+  honors its own abort), graceful stop via `AbortSignal`, a readonly
+  `usesDispatchTracking` flag for wiring tests (tracking detection is
+  structural; a decorator that drops `markFailed`/`deadLetters` turns
+  bounded retries off, and this flag is where that becomes assertable),
+  and validated numeric options.
+  `OutboxSink.publish(record)` is the transport port; `eventBusSink`
+  adapts the in-process `EventBus` for zero-broker setups (never combine
+  it with `withCommit`'s `bus` fast path on the same bus, that delivers
+  every event twice; and subscribe before starting the dispatcher, an
+  event published to zero subscribers counts as delivered and is acked). The outbox guide gains "The kit dispatcher" and
+  "External dispatchers" sections, including sink mappings for common
+  brokers (Kafka, RabbitMQ, SQS/SNS, Google Pub/Sub, NATS JetStream,
+  Redis Streams).
+
 ### Added: command idempotency primitive
 
 - `IdempotencyStore` port, `withIdempotentCommit` wrapper, and
@@ -28,6 +101,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serialisable data, the same discipline as snapshots and event payloads.
 - `WithCommitDeps` and `WithCommitWorkResult` are now exported types
   (previously inline parameter types of `withCommit`; no behavior change).
+
+### Changed: contract-suite assertion messages generalized
+
+- The repository contract suites' failure messages no longer start with
+  "Repository contract violated:" and "Repository contract test
+  skipped:"; the shared assertion helpers now serve the outbox and
+  idempotency suites too, and the prefixes are "Contract violated:" and
+  "Contract test skipped:". Behavior and test names are unchanged, but
+  meta-tests, log greps, or snapshots that match the old prefixes must
+  update their patterns.
+
+### Changed (breaking): `withCommit` and `UnitOfWork` depend on `OutboxWriter` only
+
+- The `outbox` dependency in `WithCommitDeps` and `UnitOfWorkDeps` is
+  narrowed from `Outbox` to `OutboxWriter`: the write side needs `add()`
+  and nothing else. Passing a full `Outbox` keeps working (it extends
+  `OutboxWriter`), but READING `deps.outbox` back out of the deps object
+  and expecting `getPending`/`markDispatched` no longer typechecks: hold
+  your own reference to the full `Outbox` for the delivery side.
 
 ### Changed (breaking): repository load methods follow the get/find contract
 

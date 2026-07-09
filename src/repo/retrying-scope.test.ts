@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConcurrencyConflictError, EventHarvestError } from "../core/errors";
+import { computeBackoffDelay } from "../utils/backoff";
+import { RetryingTransactionScope } from "./retrying-scope";
 import type { TransactionScope } from "./scope";
-import {
-	computeBackoffDelay,
-	RetryingTransactionScope,
-} from "./retrying-scope";
 
 /** A scope whose callback runs immediately (no real transaction). */
 function passthroughScope(): TransactionScope<undefined> {
@@ -20,7 +18,9 @@ function flakyScope(
 ): TransactionScope<undefined> & { attempts: number } {
 	const scope = {
 		attempts: 0,
-		transactional: async <T>(fn: (ctx: undefined) => Promise<T>): Promise<T> => {
+		transactional: async <T>(
+			fn: (ctx: undefined) => Promise<T>,
+		): Promise<T> => {
 			scope.attempts += 1;
 			if (scope.attempts <= failures) throw error();
 			return fn(undefined);
@@ -32,7 +32,13 @@ function flakyScope(
 /** No-wait sleep so tests never touch real timers. */
 const instantSleep = async () => {};
 
-const conflict = () => new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 1, actualVersion: 2 });
+const conflict = () =>
+	new ConcurrencyConflictError({
+		aggregateType: "Order",
+		aggregateId: "o-1",
+		expectedVersion: 1,
+		actualVersion: 2,
+	});
 
 describe("computeBackoffDelay", () => {
 	const opts = (random: () => number) => ({
@@ -51,13 +57,28 @@ describe("computeBackoffDelay", () => {
 	});
 
 	it("applies a +/-20% jitter band", () => {
-		expect(computeBackoffDelay(2, opts(() => 0))).toBe(80); // 100 * 0.8
-		expect(computeBackoffDelay(2, opts(() => 0.999999))).toBe(120); // ~100 * 1.2
+		expect(
+			computeBackoffDelay(
+				2,
+				opts(() => 0),
+			),
+		).toBe(80); // 100 * 0.8
+		expect(
+			computeBackoffDelay(
+				2,
+				opts(() => 0.999999),
+			),
+		).toBe(120); // ~100 * 1.2
 	});
 
 	it("never exceeds maxDelayMs even after jitter", () => {
 		// attempt 10 -> 50*2^9 = 25600, capped to 1000, *1.2 -> clamped to 1000
-		expect(computeBackoffDelay(10, opts(() => 0.999999))).toBe(1000);
+		expect(
+			computeBackoffDelay(
+				10,
+				opts(() => 0.999999),
+			),
+		).toBe(1000);
 	});
 });
 
@@ -149,9 +170,7 @@ describe("RetryingTransactionScope", () => {
 				},
 			});
 
-			await expect(scope.transactional(async () => "ok")).resolves.toBe(
-				"ok",
-			);
+			await expect(scope.transactional(async () => "ok")).resolves.toBe("ok");
 			expect(inner.attempts).toBe(2);
 		});
 	});
@@ -259,9 +278,9 @@ describe("RetryingTransactionScope", () => {
 
 	it("rejects an invalid maxAttempts at construction instead of silently dropping the write", () => {
 		const inner = passthroughScope();
-		expect(() => new RetryingTransactionScope(inner, { maxAttempts: 0 })).toThrow(
-			/maxAttempts/,
-		);
+		expect(
+			() => new RetryingTransactionScope(inner, { maxAttempts: 0 }),
+		).toThrow(/maxAttempts/);
 		expect(
 			() => new RetryingTransactionScope(inner, { maxAttempts: -1 }),
 		).toThrow(/maxAttempts/);

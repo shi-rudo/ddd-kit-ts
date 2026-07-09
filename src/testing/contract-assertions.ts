@@ -5,6 +5,19 @@
  */
 
 /**
+ * One entry of a contract test suite. Every suite (repository,
+ * event-sourced repository, outbox, idempotency store) returns a list
+ * of these; bind them with
+ * `(test.skipped ? it.skip : it)(test.name, test.run)`.
+ */
+export interface ContractTest {
+	name: string;
+	run: () => Promise<void>;
+	/** Present when the harness lacks the capability this test needs. */
+	skipped?: { capability: string };
+}
+
+/**
  * Runs one contract-test body against a fresh environment and tears it
  * down in a finally-like discipline with one subtle, load-bearing rule:
  * a teardown failure (dropping a schema on an aborted pool) must never
@@ -36,6 +49,20 @@ export async function runInContractEnvironment<
 	if (bodyFailed) {
 		throw bodyError;
 	}
+}
+
+/**
+ * Binds a harness's environment factory into the per-test wrapper the
+ * suites build their entries from: `inEnv(body)` yields a test `run`
+ * that creates a fresh environment, runs the body, and tears down via
+ * {@link runInContractEnvironment}.
+ */
+export function bindContractEnvironment<
+	Env extends { teardown?(): Promise<void> },
+>(
+	createEnvironment: () => Promise<Env>,
+): (body: (env: Env) => Promise<void>) => () => Promise<void> {
+	return (body) => () => runInContractEnvironment(createEnvironment, body);
 }
 
 /** Resolves to the rejection reason, or `undefined` when the promise resolved. */
@@ -72,27 +99,39 @@ export async function loadAggregateOrFail<TAgg, TId>(
 export function skippedContractTest(
 	name: string,
 	capability: string,
-): {
-	name: string;
-	run: () => Promise<void>;
-	skipped: { capability: string };
-} {
+): ContractTest & { skipped: { capability: string } } {
 	return {
 		name,
 		skipped: { capability },
 		run: async () => {
 			throw new Error(
-				`Repository contract test skipped: harness capability '${capability}' is not provided. ` +
+				`Contract test skipped: harness capability '${capability}' is not provided. ` +
 					`Bind skipped tests with it.skip ((test.skipped ? it.skip : it)(test.name, test.run)) ` +
-					`or provide the capability; each one closes a real OCC hole.`,
+					`or provide the capability; each skipped capability is an unproven guarantee.`,
 			);
 		},
 	};
 }
 
+/**
+ * Capability gate that keeps a test's NAME single-sourced: a harness
+ * that satisfies the gate gets the real test, everyone else gets the
+ * loud skipped entry under the same name (see
+ * {@link skippedContractTest}). Nests for tests behind several gates;
+ * the outermost failing gate's capability wins the skip report.
+ */
+export function gatedContractTest(
+	gate: { capability: string; satisfiedBy: boolean },
+	test: ContractTest,
+): ContractTest {
+	return gate.satisfiedBy
+		? test
+		: skippedContractTest(test.name, gate.capability);
+}
+
 export function assert(condition: boolean, message: string): asserts condition {
 	if (!condition) {
-		throw new Error(`Repository contract violated: ${message}`);
+		throw new Error(`Contract violated: ${message}`);
 	}
 }
 
@@ -103,7 +142,7 @@ export function assertEqual(
 ): void {
 	if (actual !== expected) {
 		throw new Error(
-			`Repository contract violated: ${message} (expected ${String(expected)}, got ${String(actual)})`,
+			`Contract violated: ${message} (expected ${String(expected)}, got ${String(actual)})`,
 		);
 	}
 }
@@ -126,23 +165,44 @@ export function assertEqual(
  * the suite.
  */
 export function chainContainsErrorNamed(error: unknown, name: string): boolean {
+	let found = false;
+	walkCauseChain(error, (node) => {
+		found = errorMatchesName(node, name);
+		return found;
+	});
+	return found;
+}
+
+/**
+ * The one cause-chain walk every chain-inspecting helper in this file
+ * is expressed through (cycle-safe, hostile-cause-getter-safe): visits
+ * each object node until `visit` asks to stop by returning `true`, the
+ * chain ends, repeats, or advancing turns hostile. Single-sourced on
+ * purpose: a hardening fix (a depth cap, a new hostile shape) must land
+ * in ALL walkers at once, or the suites judge the same adapter
+ * rejection inconsistently. Per-node property reads stay the visitor's
+ * responsibility; only the `cause` advance is guarded here.
+ */
+function walkCauseChain(
+	error: unknown,
+	visit: (node: object) => boolean,
+): void {
 	const seen = new Set<unknown>();
 	let current: unknown = error;
-	while (current !== null && current !== undefined && !seen.has(current)) {
-		if (typeof current !== "object") {
-			return false;
-		}
-		if (errorMatchesName(current, name)) {
-			return true;
-		}
+	while (
+		current !== null &&
+		current !== undefined &&
+		typeof current === "object" &&
+		!seen.has(current)
+	) {
 		seen.add(current);
+		if (visit(current)) return;
 		try {
 			current = (current as { cause?: unknown }).cause;
 		} catch {
-			return false;
+			return;
 		}
 	}
-	return false;
 }
 
 /**
@@ -162,7 +222,37 @@ export function assertChainContainsKitError(
 	if (codes.some((code) => chainContainsErrorNamed(rejection, code))) {
 		return;
 	}
-	throw new Error(`Repository contract violated: ${message}`);
+	throw new Error(`Contract violated: ${message}`);
+}
+
+/**
+ * Walks the `cause` chain (cycle-safe, hostile-getter-safe) looking for
+ * `retryable === true`: the same loose, property-based contract the
+ * kit's retry classifier (`someChainRetryable`) applies. Suites assert
+ * retryability with this instead of reading the top-level rejection, so
+ * an adapter that wraps a kit error in its own error chain, which
+ * {@link assertChainContainsKitError} deliberately tolerates, is judged
+ * exactly the way a consumer's retry loop will judge it.
+ *
+ * Deliberately NOT a call to `someChainRetryable` itself: that
+ * classifier throws on a circular cause chain (its callers handle
+ * that), while a hardened suite must survive whatever error shape an
+ * adapter rejects with and answer with a contract diagnostic, never a
+ * helper crash. Same hardening discipline as
+ * {@link chainContainsErrorNamed}.
+ */
+export function chainContainsRetryable(error: unknown): boolean {
+	let found = false;
+	walkCauseChain(error, (node) => {
+		try {
+			found = (node as { retryable?: unknown }).retryable === true;
+		} catch {
+			// Hostile `retryable` getter: stop the walk, keep found=false.
+			return true;
+		}
+		return found;
+	});
+	return found;
 }
 
 function errorMatchesName(candidate: object, name: string): boolean {
@@ -210,22 +300,15 @@ export function describeError(error: unknown): string {
  */
 function causeChainNames(error: Error): string[] {
 	const names: string[] = [];
-	const seen = new Set<unknown>();
-	let current: unknown = error;
-	while (
-		current !== null &&
-		current !== undefined &&
-		typeof current === "object" &&
-		!seen.has(current)
-	) {
-		seen.add(current);
+	walkCauseChain(error, (node) => {
 		try {
-			const { name } = current as { name?: unknown };
+			const { name } = node as { name?: unknown };
 			names.push(typeof name === "string" ? name : "(unnamed)");
-			current = (current as { cause?: unknown }).cause;
 		} catch {
-			break;
+			// Hostile `name` getter: stop with the partial chain collected.
+			return true;
 		}
-	}
+		return false;
+	});
 	return names;
 }

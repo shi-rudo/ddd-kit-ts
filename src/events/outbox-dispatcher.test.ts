@@ -1,0 +1,571 @@
+import { describe, expect, it, vi } from "vitest";
+import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import { EventBusImpl } from "./event-bus";
+import { InMemoryOutbox } from "./outbox";
+import {
+	eventBusSink,
+	OutboxDispatcher,
+	type OutboxSink,
+} from "./outbox-dispatcher";
+import type { Outbox, OutboxRecord } from "./ports";
+
+type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
+
+function makeEvent(n: number): TestEvent {
+	return createDomainEvent("ThingHappened", { n }, { eventId: `evt-${n}` });
+}
+
+function fastDispatcher<Evt extends TestEvent>(
+	options: ConstructorParameters<typeof OutboxDispatcher<Evt>>[0],
+): OutboxDispatcher<Evt> {
+	return new OutboxDispatcher({
+		pollIntervalMs: 1,
+		baseDelayMs: 1,
+		maxDelayMs: 2,
+		random: () => 0.5,
+		...options,
+	});
+}
+
+/** Runs the dispatcher until `until` resolves, then stops it. */
+async function runUntil<Evt extends TestEvent>(
+	dispatcher: OutboxDispatcher<Evt>,
+	until: () => Promise<void> | void,
+): Promise<void> {
+	const stop = new AbortController();
+	const loop = dispatcher.run(stop.signal);
+	try {
+		await until();
+	} finally {
+		stop.abort();
+		await loop;
+	}
+}
+
+/** Polls a condition via vitest's waitFor; fails the test after ~500ms. */
+function eventually(check: () => boolean): Promise<void> {
+	return vi.waitFor(() => expect(check()).toBe(true), {
+		interval: 1,
+		timeout: 500,
+	});
+}
+
+/** Delegating wrapper around an InMemoryOutbox with targeted overrides. */
+function interceptOutbox(
+	inner: InMemoryOutbox<TestEvent>,
+	overrides: Partial<Outbox<TestEvent>>,
+): Outbox<TestEvent> {
+	return {
+		add: (events) => inner.add(events),
+		getPending: (limit) => inner.getPending(limit),
+		markDispatched: (ids) => inner.markDispatched(ids),
+		...overrides,
+	};
+}
+
+describe("OutboxDispatcher", () => {
+	it("delivers in commit order and acks the delivered batch in one call, only after publish", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		const ackCalls: ReadonlyArray<string>[] = [];
+		const outbox = interceptOutbox(inner, {
+			markDispatched: async (ids) => {
+				ackCalls.push(ids);
+				return inner.markDispatched(ids);
+			},
+		});
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 3));
+
+		expect(delivered).toEqual([1, 2, 3]);
+		// Batch ack: one markDispatched call for the whole delivered batch.
+		expect(ackCalls[0]).toEqual(["evt-1", "evt-2", "evt-3"]);
+		expect(await inner.getPending()).toHaveLength(0);
+	});
+
+	it("stops the batch on the first failure, acks the delivered prefix, and preserves order across retries", async () => {
+		const inner = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
+		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		const ackCalls: ReadonlyArray<string>[] = [];
+		const outbox = interceptOutbox(inner, {
+			markDispatched: async (ids) => {
+				ackCalls.push(ids);
+				return inner.markDispatched(ids);
+			},
+		});
+		const delivered: number[] = [];
+		let failuresLeft = 2;
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (record.event.payload.n === 2 && failuresLeft > 0) {
+					failuresLeft--;
+					throw new Error("transient");
+				}
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 3));
+
+		// Event 3 must never overtake event 2, and the prefix ack of the
+		// failed pass must not include the failed record.
+		expect(delivered).toEqual([1, 2, 3]);
+		expect(ackCalls[0]).toEqual(["evt-1"]);
+	});
+
+	it("survives transient getPending failures and reports them to onPollError", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeEvent(1)]);
+		let pollFailures = 2;
+		const outbox = interceptOutbox(inner, {
+			getPending: async (limit) => {
+				if (pollFailures > 0) {
+					pollFailures--;
+					throw new Error("storage blip");
+				}
+				return inner.getPending(limit);
+			},
+		});
+		const delivered: number[] = [];
+		const pollErrors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			onPollError: (error) => {
+				pollErrors.push(error);
+			},
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
+
+		expect(delivered).toEqual([1]);
+		expect(pollErrors).toHaveLength(2);
+	});
+
+	it("reports failures to the tracking outbox so poison messages dead-letter and unblock the queue", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 2 });
+		await outbox.add([makeEvent(1), makeEvent(2)]);
+		const delivered: number[] = [];
+		const errors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (record.event.payload.n === 1) throw new Error("poison");
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			onDispatchError: (error) => {
+				errors.push(error);
+			},
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
+
+		expect(delivered).toEqual([2]);
+		const dead = await outbox.deadLetters();
+		expect(dead).toHaveLength(1);
+		expect(dead[0]?.event.payload.n).toBe(1);
+		expect(dead[0]?.attempts).toBe(2);
+		expect(errors.length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("does not count a failed ack toward the poison ceiling and redelivers instead", async () => {
+		const inner = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await inner.add([makeEvent(1)]);
+		let failAcks = 1;
+		const outbox = interceptOutbox(inner, {
+			markDispatched: async (ids) => {
+				if (failAcks > 0) {
+					failAcks--;
+					throw new Error("ack failed");
+				}
+				return inner.markDispatched(ids);
+			},
+		});
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		await runUntil(dispatcher, () => eventually(() => delivered.length >= 2));
+
+		// Delivered twice (the documented at-least-once duplicate), never
+		// dead-lettered: the wrapped outbox has a ceiling of 1, which a
+		// markFailed report would have tripped.
+		expect(delivered.slice(0, 2)).toEqual([1, 1]);
+		expect(await inner.deadLetters()).toHaveLength(0);
+	});
+
+	it("a drainOnce call during an in-flight pass joins it instead of double-delivering", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		await outbox.add([makeEvent(1), makeEvent(2)]);
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				await gate;
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		const first = dispatcher.drainOnce();
+		const second = dispatcher.drainOnce(); // overlapping cron tick
+		release();
+
+		expect(await first).toBe("drained");
+		expect(await second).toBe("drained");
+		// One pass, one delivery each: the joining call started no
+		// competing poll over the same un-acked records.
+		expect(delivered).toEqual([1, 2]);
+		expect(await outbox.getPending(10)).toHaveLength(0);
+	});
+
+	it("run(signal) shuts down gracefully even while a joined signal-less pass is mid-flight", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		await outbox.add([makeEvent(1)]);
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const sink: OutboxSink<TestEvent> = {
+			publish: async () => {
+				await gate;
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		// An unbounded cron-style pass, blocked mid-publish.
+		const cronPass = dispatcher.drainOnce();
+		const stop = new AbortController();
+		const loop = dispatcher.run(stop.signal);
+		stop.abort();
+
+		// run() must resolve on abort instead of waiting the foreign,
+		// signal-less pass out; the pass keeps running for its owner.
+		await loop;
+		release();
+		expect(await cronPass).toBe("drained");
+	});
+
+	it("failures classified as not counting toward the ceiling never dead-letter", async () => {
+		// Ceiling 1: with the default classifier the FIRST failure would
+		// dead-letter the record; the transient classifier keeps it alive
+		// through a simulated outage until delivery succeeds.
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeEvent(1)]);
+		let outage = 3;
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (outage > 0) {
+					outage--;
+					throw new Error("broker down");
+				}
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			countsTowardCeiling: () => false,
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
+
+		expect(delivered).toEqual([1]);
+		expect(await outbox.deadLetters()).toHaveLength(0);
+	});
+
+	it("a throwing countsTowardCeiling classifier counts the failure and cannot break the loop", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeEvent(1), makeEvent(2)]);
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (record.event.payload.n === 1) throw new Error("poison");
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			countsTowardCeiling: () => {
+				throw new Error("classifier bug");
+			},
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
+
+		// The safe default under a broken classifier: the failure counted,
+		// the poison record dead-lettered, the successor flowed.
+		expect(delivered).toEqual([2]);
+		expect(await outbox.deadLetters()).toHaveLength(1);
+	});
+
+	it("reports a failed ack once per record of the delivered prefix", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		let failAcks = 1;
+		const outbox = interceptOutbox(inner, {
+			markDispatched: async (ids) => {
+				if (failAcks > 0) {
+					failAcks--;
+					throw new Error("ack failed");
+				}
+				return inner.markDispatched(ids);
+			},
+		});
+		const reported: string[] = [];
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			onDispatchError: (_error, record) => reported.push(record.event.eventId),
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length >= 6));
+
+		// Every record of the delivered prefix redelivers; each one gets its
+		// own report, so the duplicates are traceable to the ack failure.
+		expect(reported).toEqual(["evt-1", "evt-2", "evt-3"]);
+	});
+
+	it("does not mistake a plain outbox with an unrelated markFailed helper for a tracking outbox", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeEvent(1), makeEvent(2)]);
+		const helperCalls: unknown[] = [];
+		// Structurally an Outbox, plus a markFailed that is NOT the tracking
+		// protocol (no deadLetters); the dispatcher must never call it.
+		const outbox: Outbox<TestEvent> & {
+			markFailed: (reason: string) => Promise<void>;
+		} = {
+			add: (events) => inner.add(events),
+			getPending: (limit) => inner.getPending(limit),
+			markDispatched: (ids) => inner.markDispatched(ids),
+			markFailed: async (reason) => {
+				helperCalls.push(reason);
+			},
+		};
+		const delivered: number[] = [];
+		let poisonAttempts = 0;
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (record.event.payload.n === 1 && poisonAttempts < 2) {
+					poisonAttempts++;
+					throw new Error("poison");
+				}
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink });
+		// The wiring-test assertion the option docs recommend: tracking is
+		// structurally OFF for this outbox, visible before anything runs.
+		expect(dispatcher.usesDispatchTracking).toBe(false);
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 2));
+
+		expect(delivered).toEqual([1, 2]);
+		expect(helperCalls).toEqual([]);
+	});
+
+	it("exposes active dispatch tracking via usesDispatchTracking", () => {
+		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+		const tracking = fastDispatcher({
+			outbox: new InMemoryOutbox<TestEvent>(),
+			sink,
+		});
+		expect(tracking.usesDispatchTracking).toBe(true);
+
+		const plain = fastDispatcher({
+			outbox: interceptOutbox(new InMemoryOutbox<TestEvent>(), {}),
+			sink,
+		});
+		expect(plain.usesDispatchTracking).toBe(false);
+	});
+
+	it("a throwing onDispatchError observer cannot break the loop", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeEvent(1), makeEvent(2)]);
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				if (record.event.payload.n === 1) throw new Error("poison");
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			onDispatchError: () => {
+				throw new Error("observer bug");
+			},
+		});
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
+
+		expect(delivered).toEqual([2]);
+	});
+
+	it("drains a backlog larger than the batch size", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		await outbox.add(Array.from({ length: 10 }, (_, i) => makeEvent(i)));
+		const delivered: number[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (record) => {
+				delivered.push(record.event.payload.n);
+			},
+		};
+
+		const dispatcher = fastDispatcher({ outbox, sink, batchSize: 3 });
+		await runUntil(dispatcher, () => eventually(() => delivered.length === 10));
+
+		expect(delivered).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+	});
+
+	it("resolves promptly on abort while idle", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+		const dispatcher = new OutboxDispatcher({
+			outbox,
+			sink,
+			pollIntervalMs: 60_000, // would hang without abortable sleep
+		});
+
+		const stop = new AbortController();
+		const loop = dispatcher.run(stop.signal);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		stop.abort();
+		await expect(loop).resolves.toBeUndefined();
+	});
+
+	it("validates numeric options at construction", () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+		expect(() => new OutboxDispatcher({ outbox, sink, batchSize: 0 })).toThrow(
+			"batchSize",
+		);
+		expect(
+			() => new OutboxDispatcher({ outbox, sink, pollIntervalMs: -1 }),
+		).toThrow("pollIntervalMs");
+		expect(
+			() => new OutboxDispatcher({ outbox, sink, baseDelayMs: Number.NaN }),
+		).toThrow("baseDelayMs");
+	});
+
+	describe("drainOnce", () => {
+		it("dispatches the whole backlog in one pass and reports drained", async () => {
+			const outbox = new InMemoryOutbox<TestEvent>();
+			await outbox.add(Array.from({ length: 7 }, (_, i) => makeEvent(i)));
+			const delivered: number[] = [];
+			const sink: OutboxSink<TestEvent> = {
+				publish: async (record) => {
+					delivered.push(record.event.payload.n);
+				},
+			};
+
+			const dispatcher = fastDispatcher({ outbox, sink, batchSize: 3 });
+			await expect(dispatcher.drainOnce()).resolves.toBe("drained");
+
+			expect(delivered).toEqual([0, 1, 2, 3, 4, 5, 6]);
+			expect(await outbox.getPending()).toHaveLength(0);
+		});
+
+		it("returns stopped on a failure, leaving the failed record for the next tick", async () => {
+			const outbox = new InMemoryOutbox<TestEvent>({
+				maxDeliveryAttempts: 99,
+			});
+			await outbox.add([makeEvent(1), makeEvent(2)]);
+			let fail = true;
+			const sink: OutboxSink<TestEvent> = {
+				publish: async (record) => {
+					if (record.event.payload.n === 2 && fail) {
+						throw new Error("transient");
+					}
+				},
+			};
+
+			const dispatcher = fastDispatcher({ outbox, sink });
+			await expect(dispatcher.drainOnce()).resolves.toBe("stopped");
+			expect(await outbox.getPending()).toHaveLength(1);
+
+			// Next tick succeeds.
+			fail = false;
+			await expect(dispatcher.drainOnce()).resolves.toBe("drained");
+			expect(await outbox.getPending()).toHaveLength(0);
+		});
+
+		it("never rejects on a poll failure", async () => {
+			const outbox: Outbox<TestEvent> = {
+				add: async () => {},
+				getPending: async () => {
+					throw new Error("storage down");
+				},
+				markDispatched: async () => {},
+			};
+			const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+			const pollErrors: unknown[] = [];
+
+			const dispatcher = fastDispatcher({
+				outbox,
+				sink,
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			});
+			await expect(dispatcher.drainOnce()).resolves.toBe("stopped");
+			expect(pollErrors).toHaveLength(1);
+		});
+	});
+});
+
+describe("eventBusSink", () => {
+	it("delivers through the in-process bus and propagates handler failures", async () => {
+		const bus = new EventBusImpl<TestEvent>();
+		const seen: number[] = [];
+		bus.subscribe("ThingHappened", (event) => {
+			if (event.payload.n === 99) throw new Error("handler failed");
+			seen.push(event.payload.n);
+		});
+		const sink = eventBusSink<TestEvent>(bus);
+
+		const ok = makeEvent(7);
+		const okRecord: OutboxRecord<TestEvent> = {
+			dispatchId: ok.eventId,
+			event: ok,
+		};
+		await sink.publish(okRecord);
+		expect(seen).toEqual([7]);
+
+		const bad = makeEvent(99);
+		await expect(
+			sink.publish({ dispatchId: bad.eventId, event: bad }),
+		).rejects.toThrow("handler failed");
+	});
+});
