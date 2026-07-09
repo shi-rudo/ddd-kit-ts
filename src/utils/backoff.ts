@@ -21,3 +21,20 @@ export function computeBackoffDelay(
 	const jitter = 0.8 + opts.random() * 0.4; // [0.8, 1.2)
 	return Math.max(0, Math.min(opts.maxDelayMs, Math.round(capped * jitter)));
 }
+
+/**
+ * Wraps an injected jitter source with observer-grade robustness: a
+ * throwing or non-finite source degrades to the midpoint multiplier
+ * (no jitter) instead of rejecting the poller that uses it, which
+ * documents itself as never rejecting and is typically `void`ed.
+ */
+export function neutralJitterSource(source: () => number): () => number {
+	return () => {
+		try {
+			const value = source();
+			return Number.isFinite(value) ? value : 0.5;
+		} catch {
+			return 0.5;
+		}
+	};
+}

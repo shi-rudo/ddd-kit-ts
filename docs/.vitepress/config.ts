@@ -98,6 +98,7 @@ export default defineConfig({
 						{ text: "Unit of Work", link: "/guide/unit-of-work" },
 						{ text: "Outbox & Transactions", link: "/guide/outbox" },
 						{ text: "Read-Side Projections", link: "/guide/projections" },
+						{ text: "Deadlines", link: "/guide/deadlines" },
 					],
 				},
 				{

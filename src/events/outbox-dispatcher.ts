@@ -1,11 +1,7 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { computeBackoffDelay } from "../utils/backoff";
+
 import { reportToObserver } from "../utils/observer";
-import { sleepResolvingOnAbort } from "../utils/sleep";
-import {
-	assertNonNegativeFinite,
-	assertPositiveInteger,
-} from "../utils/validate";
+import { PollLoop } from "../utils/poll-loop";
 import {
 	type DispatchTrackingOutbox,
 	type EventBus,
@@ -89,30 +85,6 @@ export function eventBusSink<Evt extends AnyDomainEvent>(
 	return {
 		publish: (record) => bus.publish([record.event]),
 	};
-}
-
-/**
- * Awaits an in-flight pass on behalf of a joining `drainOnce` call
- * without letting a signal-less pass hold the joiner hostage: on the
- * joiner's abort this resolves `"stopped"` and leaves the pass running
- * for its owner. The pass promise never rejects (dispatcher contract),
- * so a plain `then` suffices; the abort listener is removed once the
- * pass settles.
- */
-function joinWithoutBlockingOnAbort(
-	pass: Promise<"drained" | "stopped">,
-	signal: AbortSignal | undefined,
-): Promise<"drained" | "stopped"> {
-	if (signal === undefined) return pass;
-	if (signal.aborted) return Promise.resolve("stopped");
-	return new Promise((resolve) => {
-		const onAbort = (): void => resolve("stopped");
-		signal.addEventListener("abort", onAbort, { once: true });
-		void pass.then((outcome) => {
-			signal.removeEventListener("abort", onAbort);
-			resolve(outcome);
-		});
-	});
 }
 
 /** Construction options for {@link OutboxDispatcher}. */
@@ -262,14 +234,9 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  * stop.abort();
  * ```
  */
-export class OutboxDispatcher<Evt extends AnyDomainEvent> {
+export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	private readonly outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
 	private readonly sink: OutboxSink<Evt>;
-	private readonly batchSize: number;
-	private readonly pollIntervalMs: number;
-	private readonly baseDelayMs: number;
-	private readonly maxDelayMs: number;
-	private readonly random: () => number;
 	private readonly countsTowardCeiling?: (error: unknown) => boolean;
 	private readonly onDispatchError?: (
 		error: unknown,
@@ -291,104 +258,27 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> {
 	/** The tracking view of the outbox, when it qualifies (see above). */
 	private readonly trackingOutbox?: DispatchTrackingOutbox<Evt>;
 
-	/** In-flight pass; overlapping drainOnce calls join it (see drainOnce). */
-	private inFlightPass?: Promise<"drained" | "stopped">;
-
-	/**
-	 * Failed cycles since the last successful ack. Drives the backoff
-	 * even when the store tracks no attempts (plain `Outbox`) and for
-	 * poll/ack failures that must not count toward the poison ceiling.
-	 */
-	private consecutiveFailures = 0;
-
 	constructor(options: OutboxDispatcherOptions<Evt>) {
-		const batchSize = options.batchSize ?? 32;
-		assertPositiveInteger("OutboxDispatcher", "batchSize", batchSize);
-		this.pollIntervalMs = options.pollIntervalMs ?? 250;
-		this.baseDelayMs = options.baseDelayMs ?? 50;
-		this.maxDelayMs = options.maxDelayMs ?? 5000;
-		assertNonNegativeFinite(
-			"OutboxDispatcher",
-			"pollIntervalMs",
-			this.pollIntervalMs,
-		);
-		assertNonNegativeFinite(
-			"OutboxDispatcher",
-			"baseDelayMs",
-			this.baseDelayMs,
-		);
-		assertNonNegativeFinite("OutboxDispatcher", "maxDelayMs", this.maxDelayMs);
+		super("OutboxDispatcher", options);
 		this.outbox = options.outbox;
 		this.trackingOutbox = isDispatchTrackingOutbox(options.outbox)
 			? options.outbox
 			: undefined;
 		this.usesDispatchTracking = this.trackingOutbox !== undefined;
 		this.sink = options.sink;
-		this.batchSize = batchSize;
-		this.random = options.random ?? Math.random;
 		this.countsTowardCeiling = options.countsTowardCeiling;
 		this.onDispatchError = options.onDispatchError;
 		this.onPollError = options.onPollError;
 	}
 
 	/**
-	 * Runs the poll loop until `signal` aborts, then resolves. Never
-	 * rejects; see the class contract for delivery and failure
-	 * semantics.
+	 * One full dispatch pass (the `run`/`drainOnce` shell lives on
+	 * {@link PollLoop}): dispatches pending records batch by batch until
+	 * the backlog is empty or a failure stops progress. A `"stopped"`
+	 * pass leaves the failed record pending (or dead-lettered by a
+	 * tracking outbox); the next cycle retries it.
 	 */
-	async run(signal: AbortSignal): Promise<void> {
-		while (!signal.aborted) {
-			const outcome = await this.drainOnce(signal);
-			if (signal.aborted) return;
-			if (outcome === "drained") {
-				await sleepResolvingOnAbort(this.pollIntervalMs, signal);
-			} else {
-				await sleepResolvingOnAbort(this.currentBackoff(), signal);
-			}
-		}
-	}
-
-	/**
-	 * Single dispatch pass for cron triggers and serverless runtimes:
-	 * dispatches pending records batch by batch until the backlog is
-	 * empty (`"drained"`) or a failure stops progress (`"stopped"`), then
-	 * returns without sleeping. Never rejects. A `"stopped"` pass leaves
-	 * the failed record pending (or dead-lettered by a tracking outbox);
-	 * the next tick retries it.
-	 *
-	 * With producers that keep writing, "until the backlog is empty" can
-	 * outlast a bounded invocation: pass a `signal` wired to your
-	 * runtime's deadline (`AbortSignal.timeout(...)`) so the pass ends
-	 * cleanly; delivered batches stay acked, the rest waits for the next
-	 * tick.
-	 *
-	 * **Reentrancy-safe.** A call while a pass is in flight returns that
-	 * pass's outcome instead of starting a competing pass: overlapping
-	 * cron ticks would otherwise poll the same un-acked records,
-	 * double-deliver them, and interleave the per-aggregate order this
-	 * class promises. A joining call still honors its OWN `signal`: on
-	 * abort it returns `"stopped"` immediately instead of waiting the
-	 * foreign pass out (so `run(signal)` shuts down gracefully even
-	 * while an unbounded cron pass is mid-flight); the in-flight pass
-	 * itself keeps running for its owner.
-	 */
-	async drainOnce(signal?: AbortSignal): Promise<"drained" | "stopped"> {
-		if (this.inFlightPass !== undefined) {
-			return joinWithoutBlockingOnAbort(this.inFlightPass, signal);
-		}
-		const pass = this.dispatchPass(signal);
-		this.inFlightPass = pass;
-		try {
-			return await pass;
-		} finally {
-			this.inFlightPass = undefined;
-		}
-	}
-
-	/** One full pass over the backlog; only ever one in flight. */
-	private async dispatchPass(
-		signal?: AbortSignal,
-	): Promise<"drained" | "stopped"> {
+	protected async pass(signal?: AbortSignal): Promise<"drained" | "stopped"> {
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<OutboxRecord<Evt>>;
 			try {
@@ -426,31 +316,6 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> {
 			return true;
 		}
 	}
-
-	/** Backoff for the current consecutive-failure streak. */
-	private currentBackoff(): number {
-		return computeBackoffDelay(Math.max(1, this.consecutiveFailures), {
-			baseDelayMs: this.baseDelayMs,
-			maxDelayMs: this.maxDelayMs,
-			random: this.neutralizedRandom,
-		});
-	}
-
-	/**
-	 * The injected jitter source with observer-grade robustness, like
-	 * every other user callback: a throwing or non-finite source
-	 * degrades to the midpoint multiplier (no jitter) instead of
-	 * rejecting `run()`, which documents itself as never rejecting and
-	 * is typically `void`ed by the caller.
-	 */
-	private readonly neutralizedRandom = (): number => {
-		try {
-			const value = this.random();
-			return Number.isFinite(value) ? value : 0.5;
-		} catch {
-			return 0.5;
-		}
-	};
 
 	/**
 	 * Dispatches one batch sequentially and acks the delivered prefix in

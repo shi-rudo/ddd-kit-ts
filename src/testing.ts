@@ -11,6 +11,12 @@
  * plumbing in contract-assertions stays internal.
  */
 export {
+	createDeadlineStoreContractTests,
+	type DeadlineStoreContractEnvironment,
+	type DeadlineStoreContractHarness,
+	type DeadlineStoreContractTest,
+} from "./testing/deadline-store-contract";
+export {
 	createEsRepositoryContractTests,
 	type EsContractRepository,
 	type EsRepositoryContractEnvironment,
