@@ -42,6 +42,7 @@ const INDEX_SURFACE = [
 	"InMemoryIdempotencyStore",
 	"InMemoryOutbox",
 	"InMemoryProjectionCheckpointStore",
+	"InMemorySnapshotStore",
 	"InfrastructureError",
 	"InvalidDomainMachineContextError",
 	"InvalidDomainMachineDefinitionError",
@@ -113,6 +114,7 @@ const TESTING_SURFACE = [
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",
 	"createRepositoryContractTests",
+	"createSnapshotStoreContractTests",
 ] as const;
 
 const HTTP_SURFACE = ["toProblemDetails"] as const;

@@ -42,3 +42,9 @@ export {
 	type RepositoryContractHarness,
 	type RepositoryContractTest,
 } from "./testing/repository-contract";
+export {
+	createSnapshotStoreContractTests,
+	type SnapshotStoreContractEnvironment,
+	type SnapshotStoreContractHarness,
+	type SnapshotStoreContractTest,
+} from "./testing/snapshot-store-contract";
