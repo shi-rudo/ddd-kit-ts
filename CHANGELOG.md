@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: SnapshotStore port for event-sourced aggregates
+
+- `SnapshotStore` port, `InMemorySnapshotStore` reference, and
+  `createSnapshotStoreContractTests` in `@shirudo/ddd-kit/testing`:
+  the persistence half of the snapshot-plus-recent-events load path
+  whose aggregate half (`createSnapshot`,
+  `restoreFromSnapshotWithEvents`, `snapshotSchemaVersion`) already
+  shipped. Latest-only per `(aggregateType, aggregateId)`, verbatim
+  round-trip of state, version, `snapshotAt` (millisecond fidelity),
+  and `schemaVersion` including its absence; loads are detached
+  copies and saves capture by value. Deliberately transaction-free:
+  a snapshot is derived data written after the commit, so the port
+  (unlike outbox and idempotency store) takes no transaction context,
+  and WHEN to snapshot stays consumer policy. `delete` serves the
+  schema-migration fallback (mismatch or corrupt snapshot: discard,
+  refold from the stream) and erasure. The event-sourcing guide's
+  snapshot section now shows the full load path with both fallback
+  branches and the out-of-band save policy.
+
 ### Added: projection support (checkpoint port, projector runner, position query)
 
 - `ProjectionCheckpointStore` port, `Projector` runner, and

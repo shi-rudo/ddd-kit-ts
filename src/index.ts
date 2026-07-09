@@ -206,6 +206,7 @@ export type {
 } from "./repo/event-store";
 export { type AggregateClass, IdentityMap } from "./repo/identity-map";
 export { InMemoryEventStore } from "./repo/in-memory-event-store";
+export { InMemorySnapshotStore } from "./repo/in-memory-snapshot-store";
 export type {
 	IQueryableRepository,
 	IRepository,
@@ -221,6 +222,7 @@ export type {
 	TransactionalOptions,
 	TransactionScope,
 } from "./repo/scope";
+export type { SnapshotStore } from "./repo/snapshot-store";
 
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {

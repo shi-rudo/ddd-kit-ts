@@ -156,14 +156,78 @@ The version is advanced **additively**: `startVersion + history.length`. A fresh
 
 The replay target must be **fresh or persisted**. An aggregate that carries unflushed `pendingEvents`, or whose in-memory version was never persisted (a factory-created instance holding its creation event), throws `UnreplayableAggregateError` before anything moves: replaying onto it would set a `persistedVersion` that counts unpersisted history, flipping repository routing from INSERT to UPDATE (or appending with a wrong expected version). This is a crash-loud programming bug, deliberately a throw and never a `Result` `Err`. `restoreFromSnapshotWithEvents` applies the same pending-events guard (a never-persisted in-memory version is fine there, because the snapshot overwrites state and version wholesale).
 
-## Snapshots: `restoreFromSnapshotWithEvents`
+## Snapshots
+
+When streams grow long, replaying from event zero on every load stops being
+free. The snapshot-plus-recent-events path caps that cost: persist a snapshot
+every N events, load it, and replay only the tail. The kit ships all three
+mechanical pieces: the aggregate half (`createSnapshot` /
+`restoreFromSnapshotWithEvents`), the catch-up read
+(`readStream(id, { fromVersion })`), and the persistence port
+(`SnapshotStore`, with `InMemorySnapshotStore` as the reference and
+`createSnapshotStoreContractTests` in `@shirudo/ddd-kit/testing` as the
+adapter proof).
+
+The load path, including both fallback branches:
 
 ```ts
-const snapshot = order.createSnapshot();
-const eventsAfterSnapshot = await eventStore.readSince(orderId, snapshot.version);
+async findById(id: OrderId): Promise<Order | null> {
+  const snapshot = await this.snapshots.load("Order", id);
+  if (snapshot === undefined) return this.replayFromZero(id);
 
-const order2 = new Order(orderId, blankState);
-const result = order2.restoreFromSnapshotWithEvents(snapshot, eventsAfterSnapshot);
+  const tail = await this.eventStore.readStream(id, {
+    fromVersion: snapshot.version,
+  });
+  const order = new Order(id, blankState);
+  try {
+    const result = order.restoreFromSnapshotWithEvents(snapshot, tail);
+    if (result.isErr()) {
+      // An Err may implicate the SNAPSHOT (corrupt state rejected by
+      // validateState / fromSnapshotState, a failed migrateSnapshotState)
+      // or the TAIL (a bad event replayed on top). Refold from zero
+      // FIRST and delete the snapshot only when the refold succeeds:
+      // then the snapshot was provably at fault. If the refold fails
+      // too, the stream is the problem and the snapshot survives for
+      // the fix-and-retry.
+      const refolded = await this.replayFromZero(id);
+      await this.snapshots.delete("Order", id);
+      return refolded;
+    }
+  } catch (error) {
+    if (error instanceof SnapshotSchemaMismatchError) {
+      // The stored snapshot predates the aggregate's current
+      // snapshotSchemaVersion and no migrateSnapshotState override
+      // covers it: drop it and refold; the next save writes the new
+      // shape. (Prefer a migrateSnapshotState override when the old
+      // shape is still convertible; this branch is the opt-out.)
+      await this.snapshots.delete("Order", id);
+      return this.replayFromZero(id);
+    }
+    throw error;
+  }
+  return order;
+}
+```
+
+**Erasure order matters.** When an aggregate is erased, delete the snapshot
+BEFORE the stream: the reverse order has a crash window in which a stale
+snapshot survives an already-deleted stream, and the snapshot load path above
+would resurrect the erased aggregate from it (the tail read returns empty,
+the restore succeeds). Snapshot-first fails safe: a crash leaves a stream
+without a snapshot, which is just a full replay.
+
+The save side is policy, and the policy stays yours: the standard shape is
+"after the commit, snapshot when `version - lastSnapshotVersion >= N`". Write
+it OUT OF BAND, never inside the write transaction: a snapshot is derived
+data, the stream stays the source of truth, a lost snapshot save costs replay
+time and nothing else. That is also why `SnapshotStore` (unlike the outbox or
+the idempotency store) takes no transaction context.
+
+```ts
+// After withCommit resolved:
+if (order.version - lastSnapshotVersion >= 100) {
+  await snapshots.save("Order", order.id, order.createSnapshot());
+}
 ```
 
 **All-or-nothing**: if any event mid-replay throws a `DomainError`, the aggregate is rolled back to its pre-call state and version. Partial restoration is never observable to the caller.

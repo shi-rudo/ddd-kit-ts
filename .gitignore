@@ -176,3 +176,9 @@ skills-lock.json
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Local agent instructions
+CLAUDE.md
+
+# Temporary local documentation rewrite checklist
+.guide-rewrite-todo.md

@@ -1,109 +1,189 @@
 # Common Mistakes
 
-A working catalogue of footguns the kit has accumulated from real consumer reports. Grouped by failure mode: compile-time errors first (TypeScript catches you immediately), then silent runtime bugs (passes type-check, fails in production), then architectural / testing mistakes (the code "works" but the design is wrong).
+This page collects mistakes that have shown up in real kit usage.
 
-If you hit any of these and the fix below doesn't unblock you, the corresponding deep-dive guide page usually has the worked example.
+Use it as a troubleshooting guide. The first section covers mistakes TypeScript usually catches. The second section covers runtime bugs that are more dangerous because they can pass tests and fail later. The last section covers design and testing choices that work mechanically but point in the wrong direction.
 
-## Compile-time errors
+## Compile-Time Mistakes
 
-These fail to build. TypeScript points at them; the fix is mechanical.
+These fail during type-checking. The fix is usually mechanical.
 
-### Aggregate subclass without `protected readonly aggregateType = "..."`
+### Missing `aggregateType`
 
-Both `AggregateRoot` and `EventSourcedAggregate` declare `aggregateType` as `abstract readonly`. Every concrete subclass MUST declare it as a string literal:
+Every concrete `AggregateRoot` and `EventSourcedAggregate` subclass needs an aggregate type:
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
-  // ...
 }
 ```
 
-TS error if missing: *"Non-abstract class 'X' does not implement inherited abstract member aggregateType"*. The string is what downstream consumers (outbox dispatchers, projection handlers, audit logs) route by, so pick the canonical domain name. See [Aggregate Roots](./aggregates.md).
+If you omit it, TypeScript reports that the class does not implement the inherited abstract member `aggregateType`.
 
-### Forgetting the `TEvent` generic on an aggregate that emits events
+The value should be the canonical domain name for the aggregate. Outbox dispatchers, projection handlers, audit logs, and other event consumers use it for routing. See [Aggregate Roots](./aggregates.md).
+
+### Forgetting the Event Generic
+
+`AggregateRoot` defaults its event type to `never`. That is useful for aggregates that do not emit events, but it is noisy when you forgot the generic.
 
 ```ts
-// Wrong: TEvent defaults to `never`, every event-recording call errors
-class Order extends AggregateRoot<OrderState, OrderId> { /* ... */ }
+// Wrong: events are locked to `never`
+class Order extends AggregateRoot<OrderState, OrderId> {}
 
 // Right
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> { /* ... */ }
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {}
 ```
 
-Forgetting the third generic locks `TEvent` to `never`; every `addDomainEvent` / `commit(state, event)` / `apply(event)` call becomes *"argument not assignable to never"*. This is the most common compile-time footgun newcomers hit. See [Aggregate Roots → State + Version + Domain Events](./aggregates.md#state-version-domain-events).
+The symptom is an error on `addDomainEvent`, `commit(state, event)`, or `apply(event)` saying the event is not assignable to `never`.
 
-### Using `aggregate.domainEvents` / `clearDomainEvents()`
+If the aggregate records events, pass the event union as the third generic. See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
-Wrong names. Use `pendingEvents` / `clearPendingEvents()` on both aggregate flavours; they are part of the `IAggregateRoot` interface.
+### Using Old Domain Event Names
 
-### Calling `repo.save(tx, aggregate)`
+The aggregate event queue is called `pendingEvents`.
 
-Wrong shape. `IRepository.save` takes only the aggregate. The transaction is bound to the repository at construction (factory pattern: `const orderRepository = makeOrderRepository(tx)` inside the `withCommit` callback). See [Repository](./repository.md).
+Use `pendingEvents` and `clearPendingEvents()` on both aggregate base classes. Older names such as `domainEvents` and `clearDomainEvents()` are not part of the current interface.
 
-### Returning `{ result, events: aggregate.pendingEvents }` from the `withCommit` callback
+### Passing a Transaction to `repo.save`
 
-Wrong shape; type-rejected. Return `{ result, aggregates: [aggregate, ...] }` and let `withCommit` harvest the events itself. The callback's job is to declare *which aggregates participated*; harvesting their pending events is the framework's job, not yours. See [Outbox & Transactions](./outbox.md).
-
-## Silent runtime bugs (the dangerous ones)
-
-These compile, often pass tests, and fail in production, usually as silently dropped events, double-dispatched events, or false `ConcurrencyConflictError`s. Read all of these before going to production.
-
-### Calling `createDomainEvent(...)` directly inside an aggregate domain method
-
-Skips the auto-injection of `aggregateId` + `aggregateType`. The `withCommit` harvest boundary catches it at runtime with a guard (*"withCommit: event 'X' is missing aggregateId and aggregateType"*), but the right move is `this.recordEvent(type, payload)` inside aggregates, which auto-injects both fields from `this.id` and `this.aggregateType`. Downstream consumers (outbox dispatchers, projection handlers) route by these fields. See [Domain Events](./domain-events.md).
-
-### Overriding `markPersisted(version)` instead of `onPersisted(version)`
-
-Without `super.markPersisted(version)` the framework's `pendingEvents = []` cleanup never runs; the next `withCommit` re-dispatches the same events through the outbox. Override `protected onPersisted(version)` instead: it fires *after* the cleanup, and there is nothing in the parent implementation to call `super` on. See [Aggregate Roots → onPersisted hook](./aggregates.md).
-
-### Calling `aggregate.markPersisted(...)` from inside `Repository.save`
-
-`save` is pure persistence; `withCommit` calls `markPersisted` post-commit. Doing it from `save` clears `pendingEvents` *before* the harvest, and the outbox receives nothing.
-
-### Routing `Repository.save` INSERT vs UPDATE on `aggregate.version === 0`
-
-Broken in any flow where a fresh aggregate is mutated before its first save (factory + setup wizard, factory + profile editor). The version advances past zero in memory while the DB row still doesn't exist; the save tries an UPDATE that affects zero rows and throws a spurious `ConcurrencyConflictError`.
-
-Use `aggregate.persistedVersion === undefined` for the INSERT marker: that field tracks the DB state, not in-memory mutations. The OCC predicate's `WHERE version = ?` also uses `persistedVersion` (the load-time / last-save baseline), not `aggregate.version`. Reconstitute factories use `order.markRestored(version)`, not `order.setVersion(version)`. See [Repository → Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
-
-### Repository that returns a fresh aggregate instance for every `findById(id)` call within one `withCommit`
-
-Violates the Identity Map contract (Fowler PoEAA). `withCommit`'s aggregate-dedupe is by JS object identity; two distinct instances with the same logical id slip through the dedupe and double-dispatch events. Repositories must maintain an identity map per Unit of Work: the [`UnitOfWork` facade ships one as `session.identityMap`](./unit-of-work.md#identity-map), with a deletion-tombstone guard hand-rolled maps usually lack; hand-rolling remains for `withCommit`-only setups. See [Repository](./repository.md).
-
-### Setting `setEventIdFactory` / `setClockFactory` per-test without `withEventIdFactory` / `withClockFactory`
-
-Module globals leak across vitest's parallel test workers. Use the scoped helpers (try/finally restore + thenable-guard) for test isolation:
+`IRepository.save` takes the aggregate only:
 
 ```ts
-withEventIdFactory(() => "deterministic-id", () => {
-  // test body: global factory is restored on return / throw / await
+await orderRepository.save(order);
+```
+
+Do not call `repo.save(tx, aggregate)`. Repositories are already bound to a transaction when you create them inside `withCommit` or `UnitOfWork`.
+
+```ts
+await withCommit({ tx }, async (tx) => {
+  const orderRepository = makeOrderRepository(tx);
+  await orderRepository.save(order);
+
+  return { result: order.id, aggregates: [order] };
 });
 ```
 
-See [Domain Events → Factory bootstrap](./domain-events.md).
+See [Repository](./repository.md).
 
-### Storing aggregate instances at module top level on Cloudflare Workers / Vercel Edge
+### Returning Events from `withCommit`
 
-Worker isolates are shared across requests; a module-scoped aggregate instance leaks state cross-request. Aggregates are per-request, loaded from `Repository.findById(id)` inside the request handler. See [Edge Runtimes](./edge-runtimes.md).
-
-### Assuming the strict base-error helpers cannot see ddd-kit errors
-
-Outdated pre-v3 advice, inverted since the StructuredError migration: every kit error now carries `code` + `category` + `retryable`, so `isChainRetryable`, `isStructuredError`, `getRootCauseRetryable`, and `getFirstRetryableCause` all work on kit errors (a wrapped `ConcurrencyConflictError` IS found by `isChainRetryable`). `someChainRetryable(err)` remains the tolerant default (it also matches bare `retryable === true` markers from other libraries) and is what `RetryingTransactionScope` uses. See [Result vs Throw](./result-vs-throw.md).
-
-## Architectural / testing mistakes
-
-These compile *and* often pass review: the design is the bug.
-
-### Mocking `CommandBus` / `QueryBus` in unit tests
-
-The buses are already in-process dispatchers: register your real handler against a fresh `new CommandBus()` in the test, no mock needed. Mocking the bus tests the bus, not your handler.
+The `withCommit` callback should return participating aggregates, not manually harvested events.
 
 ```ts
+// Wrong
+return { result, events: order.pendingEvents };
+
 // Right
-const bus = new CommandBus<MyCommandMap>();
-bus.register("PlaceOrder", placeOrderHandler);
-const result = await bus.execute({ type: "PlaceOrder", payload: { /* ... */ } });
+return { result, aggregates: [order] };
 ```
 
-See [CQRS & Buses](./cqrs-and-buses.md).
+The callback declares which aggregates participated. `withCommit` harvests pending events itself after the save path has run. See [Outbox & Transactions](./outbox.md).
+
+## Runtime Mistakes
+
+These compile. Some even pass happy-path tests. They are more dangerous because they usually show up as missing events, duplicate events, or false concurrency conflicts.
+
+### Calling `createDomainEvent` Inside an Aggregate
+
+Inside aggregate methods, prefer `this.recordEvent(type, payload)`.
+
+`createDomainEvent(...)` is still the right primitive outside aggregates: process managers, tests, system events, and integration events can use it directly. But inside an aggregate it skips the automatic `aggregateId` and `aggregateType` metadata.
+
+`withCommit` catches missing aggregate metadata at the harvest boundary, but the better fix is to record aggregate events through the aggregate:
+
+```ts
+this.commit(
+  { ...this.state, status: "confirmed" },
+  this.recordEvent("OrderConfirmed", { orderId: this.id }),
+);
+```
+
+See [Domain Events](./domain-events.md).
+
+### Overriding `markPersisted`
+
+Do not override `markPersisted(version)` unless you are extending the framework lifecycle itself.
+
+`markPersisted` clears pending events after a successful commit. If an override forgets to call `super.markPersisted(version)`, the same events remain pending and can be dispatched again on the next commit.
+
+For domain-specific post-save behavior, override `onPersisted(version)` instead. It runs after the framework cleanup.
+
+### Calling `markPersisted` from `Repository.save`
+
+`Repository.save` should persist data. It should not change the aggregate lifecycle.
+
+`withCommit` calls `markPersisted` after the transaction commits. If `save` calls it earlier, pending events are cleared before `withCommit` can harvest them, and the outbox receives nothing.
+
+The lifecycle is:
+
+1. The domain method changes the aggregate and records pending events.
+2. The repository persists the aggregate.
+3. `withCommit` harvests events for the outbox.
+4. The transaction commits.
+5. The aggregate is marked persisted.
+
+See [Outbox & Transactions](./outbox.md).
+
+### Using `version === 0` for Insert vs Update
+
+Do not decide between insert and update with `aggregate.version === 0`.
+
+A new aggregate can be mutated before its first save. A factory may record a creation event and bump the version to 1; a setup method may bump it again. The database row still does not exist.
+
+Use `aggregate.persistedVersion === undefined` as the insert marker. That field tracks whether the aggregate has ever been loaded from or saved to persistence.
+
+The optimistic-concurrency predicate should also use `persistedVersion` as the expected database version. See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+
+### Returning Multiple Instances for the Same Aggregate
+
+Within one Unit of Work, repeated `findById(id)` calls should return the same in-memory aggregate instance.
+
+This is the Identity Map pattern from Fowler: one logical object, one in-memory object per unit of work. Without it, two separate `Order` instances with the same id can both collect events, and object-identity dedupe will not recognize that they are the same aggregate.
+
+Use the [`UnitOfWork` identity map](./unit-of-work.md#identity-map), or keep a per-operation identity map in repositories that use `withCommit` directly. See [Repository](./repository.md).
+
+### Setting Global Factories Directly in Tests
+
+`setEventIdFactory` and `setClockFactory` change module-level state. In parallel test runners, that state can leak between tests.
+
+Use the scoped helpers:
+
+```ts
+withEventIdFactory(() => "deterministic-id", () => {
+  // The factory is restored after this function returns, throws, or awaits.
+});
+```
+
+The same rule applies to `withClockFactory`. See [Domain Events -> Factory bootstrap](./domain-events.md).
+
+### Storing Aggregates in Edge Runtime Globals
+
+Do not keep aggregate instances in module scope on Cloudflare Workers, Vercel Edge, or similar runtimes.
+
+Those isolates can be reused across requests. A module-scoped aggregate can leak state from one request into another. Load aggregates per request through a repository instead. See [Edge Runtimes](./edge-runtimes.md).
+
+### Treating Kit Errors as Unstructured Errors
+
+Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
+
+Kit errors now carry `code`, `category`, and `retryable`. Helpers such as `isStructuredError`, `isChainRetryable`, and `getFirstRetryableCause` work with kit errors. `RetryingTransactionScope` uses the tolerant `someChainRetryable(err)` helper so wrapped retryable errors still count. See [Result vs Throw](./result-vs-throw.md).
+
+## Design and Testing Mistakes
+
+These choices can still produce working code, but they usually test the wrong thing or blur a boundary the kit is trying to keep explicit.
+
+### Mocking `CommandBus` or `QueryBus`
+
+The buses are already in-process dispatchers. In most unit tests, register the real handler on a fresh bus instead of mocking the bus itself.
+
+```ts
+const bus = new CommandBus<MyCommandMap>();
+bus.register("PlaceOrder", placeOrderHandler);
+
+const result = await bus.execute({
+  type: "PlaceOrder",
+  payload: { customerId },
+});
+```
+
+That test exercises your handler through the same dispatch path application code uses. A mocked bus mostly tests the mock. See [CQRS & Buses](./cqrs-and-buses.md).
