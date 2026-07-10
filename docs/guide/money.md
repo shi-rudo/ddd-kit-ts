@@ -139,20 +139,21 @@ twin: `tryParseMoneyInput`, `tryMoneyFromDto`, `tryMoneyFromSnapshot`.
 
 ```ts
 import { tryParseMoneyInput } from "@shirudo/ddd-kit/money";
+import { partition } from "@shirudo/result";
 
-const results = rows.map((row) =>
-  tryParseMoneyInput(row.amount, { currency: "EUR", scale: 2 }),
+const [parsed, rejects] = partition(
+  rows.map((row) => tryParseMoneyInput(row.amount, { currency: "EUR", scale: 2 })),
 );
-const parsed = results.filter((r) => r.isOk()).map((r) => r.value);
-const rejects = results.filter((r) => r.isErr()).map((r) => r.error);
 ```
 
 The wrappers keep the discipline a hand-rolled try/catch tends to lose:
 only the parser's documented domain rejections become `Err`
 (`InvalidMoneyError`, and for decimal-string parsing also
 `MoneyPrecisionLossError`); anything else keeps throwing, because a bug
-wrapped in `Err` is a bug silently counted as a bad input row. Same
-contract as `voValidated`, same `Result` from `@shirudo/result`.
+wrapped in `Err` is a bug silently counted as a bad input row. That
+includes the options: a broken scale resolver crashes the import
+instead of quietly marking ten thousand rows bad. Same contract as
+`voValidated`, same `Result` from `@shirudo/result`.
 
 ## Currency Scales
 

@@ -116,6 +116,19 @@ export function assertValidScale(scale: number): void {
 }
 
 /**
+ * Currency counterpart to {@link assertValidScale}, for call sites
+ * that must reject a wiring-provided currency before any input work.
+ * Module-internal export, not part of the package entry.
+ */
+export function assertValidCurrency(currency: unknown): void {
+	if (!isValidCurrency(currency)) {
+		throw new InvalidMoneyError(
+			`currency must be a non-empty string without whitespace, at most ${MAX_CURRENCY_LENGTH} characters; got ${describeValue(currency)}`,
+		);
+	}
+}
+
+/**
  * Validates an unknown plain shape and mints a FRESH, frozen
  * {@link Money} from it: the result shares no reference with the
  * input, so later mutation of the input cannot reach domain state.
@@ -158,16 +171,8 @@ export function moneyOfMinor(
 			"amountMinor must stay below 97 digits (uint256 fits with headroom)",
 		);
 	}
-	if (!isValidCurrency(currency)) {
-		throw new InvalidMoneyError(
-			`currency must be a non-empty string without whitespace, at most ${MAX_CURRENCY_LENGTH} characters; got ${describeValue(currency)}`,
-		);
-	}
-	if (!isValidScale(scale)) {
-		throw new InvalidMoneyError(
-			`scale must be an integer between 0 and ${MAX_MONEY_SCALE}; got ${describeValue(scale)}`,
-		);
-	}
+	assertValidCurrency(currency);
+	assertValidScale(scale);
 	return Object.freeze({ amountMinor, currency, scale }) as Money;
 }
 
