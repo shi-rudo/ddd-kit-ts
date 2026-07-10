@@ -340,6 +340,41 @@ That translation is the Anti-Corruption Layer. It can be a function, adapter, ma
 
 Small systems can host several bounded contexts in one TypeScript codebase. Larger systems can split them across packages or repositories. In both cases, the important rule is the same: do not let another context's model leak directly into your domain objects.
 
+## Ports speak the domain's language {#ports-speak-the-domains-language}
+
+A driven port belongs to the core that declares it, so its signature is
+written in the core's types. Whatever shape the outside world uses, the
+translation into the domain's language happens inside the adapter, on
+the far side of the port. The consequences differ by port, but the rule
+is the same one four times over:
+
+- A **repository** returns fully reconstituted aggregates, never rows,
+  ORM entities, or DTOs. Evans described the repository as the illusion
+  of an in-memory collection of aggregate roots, and that illusion only
+  holds when what comes out is the real domain object with its
+  invariants intact. The mapping from storage shape to aggregate lives
+  in the adapter; see [Repository](./repository.md).
+- A **gateway** to an external system (a payment provider, an exchange
+  rate source) returns value objects the core owns. The provider's
+  response DTO exists only inside the adapter, and folding it into the
+  core's type is exactly the Anti-Corruption Layer described above. A
+  port like `rateFor(pair): ExchangeRate` hands the caller a validated
+  value object, not the provider's JSON with a new name.
+- A **query port** serving a view may return flat read models. That is
+  the legitimate DTO case, and it works precisely because the result
+  never feeds domain logic. The shape is still a type the core defines
+  for its screens, not a persistence or wire format passed through; see
+  [CQRS and Buses](./cqrs-and-buses.md).
+- A **technical port** such as `OutboxStore` or `DeadlineStore` returns
+  records of its own mechanic. Those look like DTOs but are not:
+  delivery and dueness are the ubiquitous language of that port, and
+  there is no richer model behind them being flattened away.
+
+The litmus test: the moment a returned value is going to feed domain
+logic, it must already be a validated domain object when it crosses the
+port. If the caller has to map or re-validate first, the translation
+has leaked out of the adapter.
+
 ## The kit is small on purpose
 
 The kit is not trying to be a full application framework.

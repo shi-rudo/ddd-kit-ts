@@ -70,6 +70,16 @@ subdomain warrants a domain model at all.
   aggregate behavior or to smuggle infrastructure queries into the domain. As
   flexible repository lookup criteria, a Specification is also the alternative
   to leaking a query builder (`repository-design.md`, *Interface Shape*).
+- **Gateway**: use when the core needs something from an external system (a
+  payment provider, a rate source, another context's API). The port is a driven
+  port the core declares, and its signature speaks the core's types: it returns
+  value objects or domain outcomes the core owns, never the provider's response
+  DTO under a new name. The adapter is the Anticorruption Layer that folds the
+  provider shape into the core's type (`context-mapping.md` for the ACL
+  judgment, `value-object-design.md` for the returned type). The same
+  signature rule holds for every driven port: repositories return aggregate
+  roots (`repository-design.md`, *Public Interface Return Contract*), and only
+  read-side query services return DTOs (`read-model-design.md`).
 
 ## Output
 

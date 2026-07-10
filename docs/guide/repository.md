@@ -49,6 +49,13 @@ async getById(id: OrderId): Promise<Order> {
 `exists` can be cheaper than loading the aggregate when the storage backend has
 an `exists` query.
 
+The return type is the aggregate itself, never a row shape, an ORM
+entity, or a DTO: the port belongs to the domain side, so its signature
+speaks domain types, and the mapping from storage shape to aggregate is
+the adapter's job. See
+[Ports speak the domain's language](/guide/design-decisions#ports-speak-the-domains-language)
+for how this rule plays out across the other port kinds.
+
 `UnitOfWork` repositories use the same shape without `exists` and receive a
 `UnitOfWorkSession` for enrollment and identity-map access.
 

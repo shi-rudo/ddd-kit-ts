@@ -114,6 +114,10 @@ design uses that path; skip them otherwise.
 
 - Is domain logic independent of UI, HTTP, database, and messaging details?
 - Are infrastructure concerns adapted at the boundary?
+- Do driven-port signatures speak the core's types: aggregates from
+  repositories, core-owned value objects from gateways, with provider DTOs and
+  rows translated inside the adapter, and DTOs returned only by read-side query
+  services?
 - Is the downstream's ingestion a justified choice: an ACL where models
   mismatch or the upstream drifts, deliberate direct adoption where the
   language fits and the downstream has a voice or a stable Published Language,
