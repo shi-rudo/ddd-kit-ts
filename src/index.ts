@@ -91,6 +91,7 @@ export {
 	ErrorMapperFailedError,
 	type ErrorMapperFailedErrorOptions,
 	EventHarvestError,
+	ForeignEventError,
 	HostileStateKeyError,
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,

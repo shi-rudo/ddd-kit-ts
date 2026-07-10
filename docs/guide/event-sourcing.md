@@ -278,10 +278,18 @@ async function findById(id: OrderId): Promise<Order | null> {
 ```
 
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
-stream can be corrupt in ways the domain can name. For example, a historical
-`OrderConfirmed` event might violate `validateEvent(...)` when replayed against
-the previous events. The repository can catch that as data corruption and choose
-whether to fail the load, alert, or rebuild from another source.
+stream can be corrupt in ways the domain can name: a handler that rejects a
+payload it cannot map, or an event addressed to a different aggregate
+(`ForeignEventError`, thrown when a history event carries an `aggregateId` or
+`aggregateType` that does not match the target). The repository can catch that
+as data corruption and choose whether to fail the load, alert, or rebuild from
+another source.
+
+Replay does not run `validateEvent(...)`. History is already accepted fact,
+and decision rules change over time; a stream that was valid when written must
+stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
+`apply(...)` path only, and structural expectations that should hold during
+replay belong in the handlers.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code

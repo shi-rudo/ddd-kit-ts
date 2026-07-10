@@ -253,6 +253,37 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
+ * Returned (as `Err`) by the replay entry points (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) when a history event carries an
+ * `aggregateId` or `aggregateType` that does not match the aggregate
+ * being reconstituted: the row belongs to someone else. Typical causes
+ * are a miswired stream read, ids that collide across aggregate types
+ * (per-type sequences instead of globally unique ids), or a corrupted
+ * store. A `DomainError` on purpose: this is stream corruption at the
+ * infrastructure boundary, so the replay methods map it into their
+ * `Result` channel like every other corruption finding. Events that do
+ * not carry the optional address fields are not checked.
+ */
+export class ForeignEventError extends DomainError<"FOREIGN_EVENT"> {
+	constructor(
+		public readonly expectedAggregateId: string,
+		public readonly expectedAggregateType: string,
+		public readonly eventType: string,
+		public readonly actualAggregateId?: string,
+		public readonly actualAggregateType?: string,
+	) {
+		super({
+			code: "FOREIGN_EVENT",
+			message:
+				`Replayed event "${eventType}" belongs to ` +
+				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId}, ` +
+				`not to ${expectedAggregateType} ${expectedAggregateId}: ` +
+				"the stream row addresses a different aggregate.",
+		});
+	}
+}
+
+/**
  * Thrown by `withCommit` when an event harvested from an aggregate cannot
  * be safely committed: it is missing `aggregateId` / `aggregateType`
  * (downstream routing would break), or it carries a pre-set
@@ -752,6 +783,7 @@ export type KitErrorCode =
 	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
 	| "EVENT_HARVEST_FAILED"
+	| "FOREIGN_EVENT"
 	| "HOSTILE_STATE_KEY"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
 	| "IDEMPOTENCY_IN_FLIGHT"

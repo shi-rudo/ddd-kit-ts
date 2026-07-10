@@ -107,6 +107,12 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `save` for aggregates
 	 * without pending events anyway).
+	 *
+	 * The stream key is the aggregate id alone, which assumes ids are
+	 * unique across every aggregate type sharing one store. App-side
+	 * generated ids (the kit's default: UUIDs) are; per-type sequences
+	 * are not. Qualify such ids at the source, or give each aggregate
+	 * type its own store/table.
 	 */
 	append(
 		streamId: Id<string>,

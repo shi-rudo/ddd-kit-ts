@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
 	DomainError,
+	ForeignEventError,
 	MissingHandlerError,
 	UnreplayableAggregateError,
 } from "../core/errors";
@@ -41,10 +42,14 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
  * on invariant violations. Subclasses override `validateEvent()` to
  * throw their own concrete subclasses (e.g. `OrderAlreadyConfirmedError`).
- * Only the infrastructure-boundary methods (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) return `Result`: they catch
- * `DomainError` during replay so callers can react to corrupted event
- * streams without try/catch.
+ * Validation guards NEW facts only: replay (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) never runs `validateEvent`, because
+ * history is already accepted fact and decision rules change over time;
+ * a stream that was valid when written must stay loadable under
+ * tomorrow's rules. Only the infrastructure-boundary methods
+ * (`loadFromHistory`, `restoreFromSnapshotWithEvents`) return `Result`:
+ * they catch `DomainError` during replay so callers can react to
+ * corrupted event streams without try/catch.
  *
  * @template TState - The aggregate state (contains child entities and value objects)
  * @template TEvent - The union type of all domain events
@@ -90,9 +95,17 @@ export abstract class EventSourcedAggregate<
 	implements IEventSourcedAggregate<TId, TEvent>
 {
 	/**
-	 * Validates an event before it is applied. Default is no-op.
-	 * Subclasses override to throw a concrete `DomainError` subclass when
-	 * the event violates an invariant in the current state.
+	 * Validates a NEW event before `apply()` records it. Default is
+	 * no-op. Subclasses override to throw a concrete `DomainError`
+	 * subclass when the event violates an invariant in the current
+	 * state: the second net behind the command method's own guards.
+	 *
+	 * Replay never invokes this method. History is already accepted
+	 * fact, and decision rules evolve; re-checking yesterday's events
+	 * against today's rules would make legitimately persisted streams
+	 * unloadable after a rule change. Structural expectations a replay
+	 * should still enforce belong in the event handlers themselves
+	 * (a handler may throw a `DomainError` for a corrupt payload).
 	 */
 	protected validateEvent(_event: TEvent): void {}
 
@@ -121,6 +134,9 @@ export abstract class EventSourcedAggregate<
 	protected apply<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
 	): void {
+		// Validation lives HERE, not in dispatch: only new facts are
+		// checked against current rules; replay trusts history.
+		this.validateEvent(event);
 		this.dispatch(event);
 		this.addDomainEvent(event);
 		this.bumpVersion();
@@ -129,17 +145,44 @@ export abstract class EventSourcedAggregate<
 	/**
 	 * Internal state-transition path shared by `apply()` and the replay
 	 * methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`):
-	 * validate, locate the handler, commit the next state. It deliberately
-	 * does NOT record the event or bump the version; `apply()` layers that
-	 * on for new facts, while replay must not (the history is already
-	 * persisted). The replay loop iterates over `TEvent[]` and therefore
-	 * cannot supply a narrowed `K` generic, so this helper accepts `TEvent`
+	 * locate the handler, commit the next state. It deliberately does
+	 * NOT record the event, bump the version, or run `validateEvent`;
+	 * `apply()` layers all three on for new facts, while replay must not
+	 * (the history is already persisted, and validating it against
+	 * current rules would reject streams that were valid when written).
+	 * The replay loop iterates over `TEvent[]` and therefore cannot
+	 * supply a narrowed `K` generic, so this helper accepts `TEvent`
 	 * and the discriminator is resolved via the (statically-sound)
 	 * `handlers` map.
 	 */
-	private dispatch(event: TEvent): void {
-		this.validateEvent(event);
+	/**
+	 * Replay-only address check: a history event that names a DIFFERENT
+	 * aggregate id or type is a stream row that belongs to someone else
+	 * (miswired read, colliding ids across types, corrupted store).
+	 * Throws `ForeignEventError` (a `DomainError`), which the replay
+	 * entry points map into their `Result` channel with full rollback.
+	 * Events without the optional address fields pass unchecked; new
+	 * facts never come through here (`recordEvent` stamps them from
+	 * `this`).
+	 */
+	private assertReplayedEventBelongsHere(event: TEvent): void {
+		const idMismatch =
+			event.aggregateId !== undefined && event.aggregateId !== this.id;
+		const typeMismatch =
+			event.aggregateType !== undefined &&
+			event.aggregateType !== this.aggregateType;
+		if (idMismatch || typeMismatch) {
+			throw new ForeignEventError(
+				this.id,
+				this.aggregateType,
+				event.type,
+				event.aggregateId,
+				event.aggregateType,
+			);
+		}
+	}
 
+	private dispatch(event: TEvent): void {
 		// Own-key guard: the handlers map is an object literal, so a plain
 		// property get for event.type === "toString" / "constructor" /
 		// "__proto__" (a corrupt or adversarial stream row) would resolve
@@ -205,6 +248,7 @@ export abstract class EventSourcedAggregate<
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
+				this.assertReplayedEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
@@ -268,6 +312,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			try {
+				this.assertReplayedEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
