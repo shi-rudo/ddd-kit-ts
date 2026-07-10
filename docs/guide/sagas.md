@@ -139,7 +139,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
       const sagas = makeSagaRepository(tx);
       const deadlines = makeDeadlineStore(tx);
 
-      const saga = CheckoutSaga.start(event.aggregateId as OrderId, event.payload.totalCents);
+      const saga = CheckoutSaga.start(event.aggregateId as OrderId, event.payload.total);
       await sagas.save(saga);
 
       // The wait for the payment gets its wake-up call, in the same
@@ -207,7 +207,7 @@ bus.subscribe("CheckoutPaymentRequested", async (event) => {
     type: "RequestPayment",
     orderId: event.aggregateId as OrderId,
     paymentId: event.payload.paymentId,
-    amountCents: event.payload.amountCents,
+    amount: event.payload.amount,
   });
 });
 ```

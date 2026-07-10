@@ -10,6 +10,7 @@ import { InvalidDomainTransitionError } from "../../src/domain-state-machine/dom
 import { EventBusImpl } from "../../src/events/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import type { EventBus, OutboxWriter } from "../../src/events/ports";
+import { type Money, moneyOfMinor } from "../../src/money";
 import type { IRepository } from "../../src/repo/repository";
 import type { TransactionScope } from "../../src/repo/scope";
 
@@ -47,6 +48,8 @@ function inMemoryRepo<TAgg extends IAggregateRoot<TId>, TId extends Id<string>>(
 	};
 }
 
+const eur = (minor: bigint): Money => moneyOfMinor(minor, "EUR", 2);
+
 const noTxScope: TransactionScope<undefined> = {
 	transactional: (fn) => fn(undefined),
 };
@@ -61,13 +64,13 @@ type PlaceOrderCommand = Command & {
 	type: "PlaceOrder";
 	orderId: OrderId;
 	customerId: string;
-	totalCents: number;
+	total: Money;
 };
 type RequestPaymentCommand = Command & {
 	type: "RequestPayment";
 	orderId: OrderId;
 	paymentId: PaymentId;
-	amountCents: number;
+	amount: Money;
 };
 type RequestShippingCommand = Command & {
 	type: "RequestShipping";
@@ -114,7 +117,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 
 	const placeOrder: CommandHandler<PlaceOrderCommand, OrderId> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
-			const order = Order.place(cmd.orderId, cmd.customerId, cmd.totalCents);
+			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
 			await deps.orderRepository.save(order);
 			return { result: ok(order.id), aggregates: [order] };
 		});
@@ -124,11 +127,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		PaymentId
 	> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async () => {
-			const payment = Payment.request(
-				cmd.paymentId,
-				cmd.orderId,
-				cmd.amountCents,
-			);
+			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
 			await deps.paymentRepository.save(payment);
 			return { result: ok(payment.id), aggregates: [payment] };
 		});
@@ -200,13 +199,13 @@ function wireSaga(
 	eventBus.subscribe("OrderPlaced", async (event) => {
 		const orderId = (event.aggregateId as OrderId) ?? null;
 		if (!orderId) return;
-		const saga = CheckoutSaga.start(orderId, event.payload.totalCents);
+		const saga = CheckoutSaga.start(orderId, event.payload.total);
 		await sagaRepository.save(saga);
 		await commandBus.execute({
 			type: "RequestPayment",
 			orderId,
 			paymentId: paymentIdGen(),
-			amountCents: event.payload.totalCents,
+			amount: event.payload.total,
 		});
 	});
 
@@ -348,7 +347,7 @@ function bootstrap() {
 
 describe("Checkout saga (Process Manager)", () => {
 	it("enforces its lifecycle through the domain state machine", () => {
-		const saga = CheckoutSaga.start("ord-invalid" as OrderId, 1000);
+		const saga = CheckoutSaga.start("ord-invalid" as OrderId, eur(1000n));
 
 		expect(() => saga.complete()).toThrow(InvalidDomainTransitionError);
 	});
@@ -362,7 +361,7 @@ describe("Checkout saga (Process Manager)", () => {
 			type: "PlaceOrder",
 			orderId,
 			customerId: "cust-42",
-			totalCents: 9999,
+			total: eur(9999n),
 		});
 		expect(placed.isOk()).toBe(true);
 
@@ -414,7 +413,7 @@ describe("Checkout saga (Process Manager)", () => {
 			type: "PlaceOrder",
 			orderId,
 			customerId: "cust-42",
-			totalCents: 5000,
+			total: eur(5000n),
 		});
 
 		const saga = await deps.sagaRepository.getById(orderId);
@@ -448,7 +447,7 @@ describe("Checkout saga (Process Manager)", () => {
 			type: "PlaceOrder",
 			orderId,
 			customerId: "cust-42",
-			totalCents: 7500,
+			total: eur(7500n),
 		});
 
 		const sagaAfterPlace = await deps.sagaRepository.getById(orderId);

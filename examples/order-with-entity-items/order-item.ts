@@ -1,5 +1,6 @@
 import type { Id } from "../../src/core/id";
 import { Entity } from "../../src/entity/entity";
+import { isNegativeMoney, type Money } from "../../src/money";
 
 export type ItemId = Id<"ItemId">;
 
@@ -9,7 +10,7 @@ export type ItemId = Id<"ItemId">;
 export type OrderItemState = {
 	productId: string;
 	quantity: number;
-	price: number;
+	lineTotal: Money;
 };
 
 /**
@@ -24,32 +25,35 @@ export type OrderItemState = {
  * It does NOT have its own version - versioning is handled by the Aggregate Root (Order).
  */
 export class OrderItem extends Entity<OrderItemState, ItemId> {
-	constructor(id: ItemId, productId: string, quantity: number, price: number) {
+	constructor(
+		id: ItemId,
+		productId: string,
+		quantity: number,
+		lineTotal: Money,
+	) {
 		const initialState: OrderItemState = {
 			productId,
 			quantity,
-			price,
+			lineTotal,
 		};
 		super(id, initialState);
 	}
 
 	/**
-	 * Updates the quantity of this item.
-	 * This is local business logic within the entity.
+	 * Updates the quantity of this item. Changing the quantity reprices
+	 * the line, and pricing is the caller's policy (quantity times unit
+	 * price, discounts, whatever applies), so the new line total comes
+	 * in as Money alongside the new quantity.
 	 */
-	updateQuantity(newQuantity: number): void {
+	updateQuantity(newQuantity: number, repricedLineTotal: Money): void {
 		if (newQuantity <= 0) {
 			throw new Error("Quantity must be greater than 0");
 		}
-		this.setState({ ...this.state, quantity: newQuantity });
-	}
-
-	/**
-	 * Calculates the subtotal for this item.
-	 * This is domain logic that belongs to the entity.
-	 */
-	calculateSubtotal(): number {
-		return this.state.price * this.state.quantity;
+		this.setState({
+			...this.state,
+			quantity: newQuantity,
+			lineTotal: repricedLineTotal,
+		});
 	}
 
 	/**
@@ -66,8 +70,8 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 		if (state.quantity <= 0) {
 			throw new Error("Quantity must be greater than 0");
 		}
-		if (state.price < 0) {
-			throw new Error("Price cannot be negative");
+		if (isNegativeMoney(state.lineTotal)) {
+			throw new Error("Line total cannot be negative");
 		}
 		if (!state.productId) {
 			throw new Error("Product ID is required");
