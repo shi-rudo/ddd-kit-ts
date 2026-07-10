@@ -25,9 +25,12 @@ const currencyArb = fc.constantFrom("EUR", "USD", "JPY", "BHD", "CLF", "XAU");
 const scaleArb = fc.integer({ min: 0, max: 12 });
 const amountArb = fc.bigInt({ min: -(10n ** 28n), max: 10n ** 28n });
 
-const moneyArb: fc.Arbitrary<Money> = fc
-	.tuple(amountArb, currencyArb, scaleArb)
-	.map(([amount, currency, scale]) => moneyOfMinor(amount, currency, scale));
+const moneyArbOf = (amounts: fc.Arbitrary<bigint>): fc.Arbitrary<Money> =>
+	fc
+		.tuple(amounts, currencyArb, scaleArb)
+		.map(([amount, currency, scale]) => moneyOfMinor(amount, currency, scale));
+
+const moneyArb = moneyArbOf(amountArb);
 
 /** Two same-unit amounts, the shape the exact arithmetic operates on. */
 const sameUnitPairArb = fc
@@ -219,11 +222,7 @@ describe("money properties: wire round-trips", () => {
 			min: -BigInt(Number.MAX_SAFE_INTEGER),
 			max: BigInt(Number.MAX_SAFE_INTEGER),
 		});
-		const safeMoneyArb = fc
-			.tuple(safeAmountArb, currencyArb, scaleArb)
-			.map(([amount, currency, scale]) =>
-				moneyOfMinor(amount, currency, scale),
-			);
+		const safeMoneyArb = moneyArbOf(safeAmountArb);
 		fc.assert(
 			fc.property(safeMoneyArb, (money) => {
 				expectSameMoney(moneyFromSnapshot(moneyToSnapshot(money)), money);

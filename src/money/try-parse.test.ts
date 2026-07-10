@@ -1,3 +1,4 @@
+import { partition } from "@shirudo/result";
 import { describe, expect, it } from "vitest";
 import { InvalidMoneyError, MoneyPrecisionLossError } from "./errors";
 import { moneyOfMinor, moneyToDto } from "./money";
@@ -35,29 +36,62 @@ describe("tryParseMoneyInput", () => {
 		}
 	});
 
-	it("wraps even wiring misuse, because the parsers are total: every documented rejection is a domain error", () => {
-		// An invalid options scale is answered with InvalidMoneyError by
-		// the parser itself, so it lands in Err like any bad input.
-		const result = tryParseMoneyInput("10.99", {
+	it("throws on options misuse instead of counting every row as bad", () => {
+		// A broken scale resolver or currency lookup is a bug in the
+		// caller's WIRING, not a property of the row; wrapping it would
+		// report the whole batch as bad input.
+		expect(() =>
+			tryParseMoneyInput("10.99", {
+				currency: "EUR",
+				// biome-ignore lint/suspicious/noExplicitAny: deliberate misuse
+				scale: "2" as any,
+			}),
+		).toThrow(InvalidMoneyError);
+		expect(() =>
+			tryParseMoneyInput("10.99", { currency: "", scale: 2 }),
+		).toThrow(InvalidMoneyError);
+	});
+});
+
+describe("rethrow discipline: a bug is not a bad row", () => {
+	// The parsers answer every malformed VALUE with a domain error, so
+	// a foreign throw needs a hostile shape: a getter that explodes is
+	// a bug in the caller's data pipeline and must not become Err. One
+	// proof per wrapper, so no predicate can quietly broaden.
+	it("tryParseMoneyInput lets a hostile options object keep throwing", () => {
+		const options = {
 			currency: "EUR",
-			// biome-ignore lint/suspicious/noExplicitAny: deliberate misuse
-			scale: "2" as any,
-		});
-		expect(result.isErr() && result.error).toBeInstanceOf(InvalidMoneyError);
+			get scale(): number {
+				throw new Error("hostile options getter");
+			},
+		};
+		expect(() => tryParseMoneyInput("10.99", options)).toThrow(
+			"hostile options getter",
+		);
 	});
 
-	it("lets non-domain failures keep throwing: a bug is not a bad row", () => {
-		// The parsers themselves are total, so a foreign throw needs a
-		// hostile input shape: a getter that explodes is a bug in the
-		// CALLER's data pipeline and must not be laundered into Err.
+	it("tryMoneyFromDto lets a hostile DTO keep throwing", () => {
 		const hostile = {
 			amountMinor: "1099",
 			currency: "EUR",
 			get scale(): number {
-				throw new Error("hostile getter");
+				throw new Error("hostile dto getter");
 			},
 		};
-		expect(() => tryMoneyFromDto(hostile)).toThrow("hostile getter");
+		expect(() => tryMoneyFromDto(hostile)).toThrow("hostile dto getter");
+	});
+
+	it("tryMoneyFromSnapshot lets a hostile snapshot keep throwing", () => {
+		const hostile = {
+			amount: 100,
+			currency: "EUR",
+			get scale(): number {
+				throw new Error("hostile snapshot getter");
+			},
+		};
+		expect(() => tryMoneyFromSnapshot(hostile)).toThrow(
+			"hostile snapshot getter",
+		);
 	});
 });
 
@@ -108,8 +142,7 @@ describe("batch usage shape", () => {
 			tryParseMoneyInput(row, { currency: "EUR", scale: 2 }),
 		);
 
-		const parsed = results.filter((r) => r.isOk()).map((r) => r.value);
-		const rejected = results.filter((r) => r.isErr()).map((r) => r.error);
+		const [parsed, rejected] = partition(results);
 
 		expect(parsed.map((m) => m.amountMinor)).toEqual([1099n, 350n]);
 		expect(rejected).toHaveLength(2);
