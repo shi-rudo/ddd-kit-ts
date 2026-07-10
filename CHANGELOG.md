@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added: ports speak the domain's language
+
+- The design-decisions guide states the driven-port return rule in one
+  place: port signatures are written in the core's types, translation
+  lives in the adapter. Four cases spelled out (repositories return
+  aggregates, gateways return core-owned value objects behind an
+  Anti-Corruption Layer, query ports may return read models, technical
+  ports return records of their own mechanic), with the repository
+  guide linking to it and the domain-driven-design skill gaining a
+  gateway route and a boundary-review check.
+
 ### Added: Result-returning money parsers
 
 - `tryParseMoneyInput`, `tryMoneyFromDto`, and `tryMoneyFromSnapshot`
