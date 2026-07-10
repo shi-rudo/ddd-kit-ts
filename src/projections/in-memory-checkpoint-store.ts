@@ -1,16 +1,10 @@
 import {
 	type AggregateAddress,
+	addressKey,
 	isPositionAfter,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
-
-// Unambiguous tuple encoding: JSON escapes every character, so no
-// separator inside either half (both are arbitrary JS strings) can
-// make two different addresses collide.
-function addressKey(address: AggregateAddress): string {
-	return JSON.stringify([address.aggregateType, address.aggregateId]);
-}
 
 /**
  * In-memory reference implementation of

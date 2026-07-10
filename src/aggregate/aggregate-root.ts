@@ -309,7 +309,15 @@ export abstract class AggregateRoot<
 	/**
 	 * Restores the aggregate from a snapshot: loads state and aligns
 	 * `version` + `persistedVersion` to the snapshot version. Validates
-	 * the restored state.
+	 * the restored state with `validateState`, deliberately: for a
+	 * state-stored aggregate EVERY load validates (`reconstitute` runs
+	 * the constructor's `validateState`), because the stored state IS
+	 * the record, and a snapshot here is a backup of that record. This
+	 * differs from `EventSourcedAggregate.restoreFromSnapshotWithEvents`
+	 * on purpose: there the stream is the record, states derive from
+	 * accepted facts, and today's rules must not gate history. When a
+	 * `validateState` rule tightens on a state-stored aggregate, the
+	 * remedy is a data migration, the same as for its regular rows.
 	 *
 	 * **The restore target must not carry pending events**: such a target
 	 * throws `UnreplayableAggregateError` before anything moves (the

@@ -295,8 +295,9 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
  * as a 4xx. It therefore PROPAGATES as a throw through the replay
  * methods' `Result` contract (which reserves `Err` for `DomainError`),
  * after the usual all-or-nothing rollback. History events without the
- * optional address fields pass unchecked (legacy streams predate the
- * stamps); new events are covered by {@link MisaddressedEventError}.
+ * optional address fields pass unchecked (the fields are optional on
+ * the event shape); new events are covered by
+ * {@link MisaddressedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	constructor(

@@ -237,31 +237,6 @@ new `validateRestoredState(state)` to reject blobs no version of the
 model could have produced; its `DomainError` comes back as `Err` for
 the discard-and-refold recipe.
 
-#### 12. Projection checkpoints are keyed by `(projection, aggregateType, aggregateId)`
-
-Identities are type-scoped, so `Order 1` at version 10 must not make
-`Payment 1` at version 1 look stale. `ProjectionCheckpointStore`
-implementations and `hasProcessed` callers adapt mechanically:
-
-```ts
-// before
-load(ctx, projection, aggregateId)
-await projector.hasProcessed(orderId, position);
-
-// after: the address object carries both halves
-load(ctx, projection, { aggregateType, aggregateId })
-await projector.hasProcessed(
-  { aggregateType: "Order", aggregateId: orderId },
-  position,
-);
-```
-
-Checkpoint tables extend their primary key with the type column; the
-projector rejects events without an `aggregateType` stamp the same way
-it already rejected missing cursors (`withCommit` stamps both). The
-`aggregateType` string is thereby a durable contract: renaming an
-aggregate type means migrating its checkpoint rows.
-
 ### Changed (breaking): replay trusts history
 
 - `EventSourcedAggregate`: replay (`loadFromHistory`,
@@ -298,25 +273,6 @@ aggregate type means migrating its checkpoint rows.
   expected business rejection, so both propagate as throws instead of
   riding the replay `Result` channel. The result-vs-throw guide and
   the design-decisions page document the split channel.
-
-### Changed (breaking): projection checkpoints are keyed by aggregate type and id
-
-- `ProjectionCheckpointStore` keys watermarks by `(projection,
-  aggregateType, aggregateId)`, passed as an `AggregateAddress` object
-  (`load` / `save` / `hasReached`), and `Projector.hasProcessed` takes
-  the address instead of the bare id. Identities are type-scoped (the
-  kit's own `Id` brands say so), so the old id-only key let `Order 1`
-  at version 10 make `Payment 1` at version 1 look stale: a silent
-  skip. The projector now requires the `aggregateType` stamp on
-  projectable events (rejecting loudly like a missing cursor;
-  `withCommit` stamps both) and keys its batch watermarks by the full
-  address, encoded as a JSON tuple so a separator-like character
-  inside either half cannot collide two addresses. The in-memory
-  store, the contract suite (with cross-type isolation and
-  hostile-separator proofs), and the projections guide follow. The
-  `EventStore` stream key stays id-only with its documented
-  uniqueness assumption; qualifying streams is a store-layout
-  decision, not a checkpoint-correctness one.
 
 ### Added: ports speak the domain's language
 
@@ -444,6 +400,19 @@ aggregate type means migrating its checkpoint rows.
 
 ### Added: projection support (checkpoint port, projector runner, position query)
 
+- Checkpoints are keyed by `(projection, aggregateType, aggregateId)`,
+  passed to the `ProjectionCheckpointStore` port as an
+  `AggregateAddress` object, and `Projector.hasProcessed` takes the
+  address too: identities are type-scoped (the kit's own `Id` brands
+  say so), so `Order 1` and `Payment 1` keep separate watermarks even
+  when the raw id strings collide. The projector requires the
+  `aggregateType` stamp on projectable events, rejecting loudly like a
+  missing cursor (`withCommit` stamps both), and encodes its
+  batch-local keys as JSON tuples so a separator-like character inside
+  either half cannot collide two addresses. The contract suite proves
+  cross-type isolation and separator hostility; the `aggregateType`
+  string is thereby part of the checkpoint contract (renaming an
+  aggregate type means migrating its checkpoint rows).
 - `ProjectionCheckpointStore` port, `Projector` runner, and
   `InMemoryProjectionCheckpointStore` reference: the projection
   mechanics `read-model-design.md` demands, so a consumer's

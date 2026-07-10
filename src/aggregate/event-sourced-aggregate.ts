@@ -138,6 +138,9 @@ export abstract class EventSourcedAggregate<
 	 *
 	 * Throws `DomainError` (or a subclass) on validation failure.
 	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
+	 * Throws `MisaddressedEventError` (wiring) when the event carries an
+	 * `aggregateId` or `aggregateType` naming a different aggregate;
+	 * missing address fields are stamped from the aggregate instead.
 	 *
 	 * State is not mutated if any step throws: the handler is invoked into
 	 * a local and only assigned to `_state` once all checks pass.
@@ -235,9 +238,9 @@ export abstract class EventSourcedAggregate<
 	 * `InfrastructureError`, which PROPAGATES through the replay
 	 * methods (their `Result` channel is reserved for `DomainError`
 	 * stream corruption) after the all-or-nothing rollback. History
-	 * events without the optional address fields pass unchecked
-	 * (legacy streams predate the stamps); NEW events are covered by
-	 * the stricter `stampNewEventAddress` on the apply path.
+	 * events without the optional address fields pass unchecked (the
+	 * fields are optional on the event shape); NEW events are covered
+	 * by the stricter `stampNewEventAddress` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =

@@ -43,6 +43,18 @@ export interface AggregateAddress {
 }
 
 /**
+ * Canonical map-key encoding for an {@link AggregateAddress}: a JSON
+ * tuple, so no separator-like character inside either half (both are
+ * arbitrary JS strings) can make two different addresses collide.
+ * Module-internal export shared by the projector's batch-local maps
+ * and the in-memory checkpoint store; SQL adapters key on the columns
+ * themselves and never need it.
+ */
+export function addressKey(address: AggregateAddress): string {
+	return JSON.stringify([address.aggregateType, address.aggregateId]);
+}
+
+/**
  * Driven port for projection checkpoints: the per-`(projection,
  * aggregateType, aggregateId)` watermark that makes a projection
  * idempotent and rebuild-safe. The {@link ProjectionCheckpointStore.load} /

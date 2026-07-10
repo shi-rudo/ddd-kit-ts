@@ -126,9 +126,11 @@ is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
 
-1. The address guard rejects an event whose `aggregateId` or `aggregateType`
-   names a different aggregate (`ForeignEventError`); `this.recordEvent(...)`
-   stamps the right address and never trips it.
+1. The address discipline runs: missing `aggregateId` / `aggregateType`
+   fields are stamped from the aggregate (the `recordEvent` guarantee, by
+   construction), and a present-but-foreign address throws the wiring error
+   `MisaddressedEventError` before anything is recorded. `ForeignEventError`
+   is the replay-side counterpart for persisted rows.
 2. `validateEvent(event)` checks whether this event is allowed in the current
    state.
 3. The handler for `event.type` is found.

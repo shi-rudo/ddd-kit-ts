@@ -4,19 +4,12 @@ import type { OutboxSink } from "../events/outbox-dispatcher";
 import type { TransactionScope } from "../repo/scope";
 import {
 	type AggregateAddress,
+	addressKey,
 	isPositionAfter,
 	type Projection,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
-
-// Batch-local map key: an unambiguous tuple encoding. JSON escapes
-// every character, so no separator smuggled inside aggregateType or
-// aggregateId (both are plain JS strings and may contain anything,
-// including NUL) can make two different addresses collide.
-function addressKey(address: AggregateAddress): string {
-	return JSON.stringify([address.aggregateType, address.aggregateId]);
-}
 
 /** Construction options for {@link Projector}. */
 export interface ProjectorOptions<Evt extends AnyDomainEvent, TCtx> {
