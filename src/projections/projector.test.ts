@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import { UnprojectableEventError } from "../core/errors";
 import { InMemoryOutbox } from "../events/outbox";
 import { OutboxDispatcher } from "../events/outbox-dispatcher";
 import type { TransactionScope } from "../repo/scope";
@@ -208,16 +209,89 @@ describe("Projector", () => {
 		await projector.project([placed("o-1", 5, 0)]);
 
 		await expect(
-			projector.hasProcessed("o-1", { aggregateVersion: 5, commitSequence: 0 }),
+			projector.hasProcessed(
+				{ aggregateType: "Order", aggregateId: "o-1" },
+				{ aggregateVersion: 5, commitSequence: 0 },
+			),
 		).resolves.toBe(true);
 		// The commit emitted a second event that has not been applied yet:
 		// version-level "reached" would lie here, the pair does not.
 		await expect(
-			projector.hasProcessed("o-1", { aggregateVersion: 5, commitSequence: 1 }),
+			projector.hasProcessed(
+				{ aggregateType: "Order", aggregateId: "o-1" },
+				{ aggregateVersion: 5, commitSequence: 1 },
+			),
 		).resolves.toBe(false);
 		await expect(
-			projector.hasProcessed("o-2", { aggregateVersion: 1, commitSequence: 0 }),
+			projector.hasProcessed(
+				{ aggregateType: "Order", aggregateId: "o-2" },
+				{ aggregateVersion: 1, commitSequence: 0 },
+			),
 		).resolves.toBe(false);
+	});
+
+	it("keys watermarks per aggregate TYPE: colliding raw ids do not shadow each other", async () => {
+		// Identities are type-scoped; Order "1" at version 10 must not make
+		// Payment "1" version 1 look stale (the exact silent-skip the old
+		// (projection, aggregateId) key permitted).
+		const rows: string[] = [];
+		const projector = new Projector({
+			scope: passthroughScope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection(rows),
+		});
+
+		const orderAt10 = createDomainEvent(
+			"OrderPlaced",
+			{ total: 1 },
+			{
+				aggregateId: "1",
+				aggregateType: "Order",
+				eventId: "evt-order-1",
+				aggregateVersion: 10,
+				commitSequence: 0,
+			},
+		);
+		const paymentAt1 = createDomainEvent(
+			"OrderPlaced",
+			{ total: 1 },
+			{
+				aggregateId: "1",
+				aggregateType: "Payment",
+				eventId: "evt-payment-1",
+				aggregateVersion: 1,
+				commitSequence: 0,
+			},
+		);
+
+		const result = await projector.project([orderAt10, paymentAt1]);
+
+		expect(result).toEqual({ applied: 2, skipped: 0 });
+		expect(rows).toEqual(["evt-order-1", "evt-payment-1"]);
+	});
+
+	it("rejects an event without an aggregateType before applying anything", async () => {
+		const rows: string[] = [];
+		const projector = new Projector({
+			scope: passthroughScope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection(rows),
+		});
+		const untyped = createDomainEvent(
+			"OrderPlaced",
+			{ total: 1 },
+			{
+				aggregateId: "o-1",
+				eventId: "evt-untyped",
+				aggregateVersion: 1,
+				commitSequence: 0,
+			},
+		);
+
+		await expect(projector.project([untyped])).rejects.toThrow(
+			UnprojectableEventError,
+		);
+		expect(rows).toEqual([]);
 	});
 
 	it("reset truncates the read model and clears checkpoints in one transaction, enabling a rebuild", async () => {
@@ -252,12 +326,12 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionPosition>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			load: async (_ctx, _p, aggregateId) => committed.get(aggregateId),
-			save: async (ctx, _p, aggregateId, position) => {
-				ctx.staged.push(() => committed.set(aggregateId, position));
+			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
+			save: async (ctx, _p, address, position) => {
+				ctx.staged.push(() => committed.set(address.aggregateId, position));
 			},
-			hasReached: async (_p, aggregateId, position) => {
-				const stored = committed.get(aggregateId);
+			hasReached: async (_p, address, position) => {
+				const stored = committed.get(address.aggregateId);
 				if (!stored) return false;
 				return (
 					stored.aggregateVersion > position.aggregateVersion ||
@@ -315,9 +389,9 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionPosition>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			load: async (_ctx, _p, aggregateId) => committed.get(aggregateId),
-			save: async (ctx, _p, aggregateId, position) => {
-				ctx.staged.push(() => committed.set(aggregateId, position));
+			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
+			save: async (ctx, _p, address, position) => {
+				ctx.staged.push(() => committed.set(address.aggregateId, position));
 			},
 			hasReached: async () => false,
 			reset: async () => {},
@@ -365,9 +439,9 @@ describe("Projector", () => {
 		// open transaction. The projector's in-memory batch watermark must
 		// still catch the duplicate.
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
-			load: async (_ctx, _p, aggregateId) => committed.get(aggregateId),
-			save: async (ctx, _p, aggregateId, position) => {
-				ctx.staged.push(() => committed.set(aggregateId, position));
+			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
+			save: async (ctx, _p, address, position) => {
+				ctx.staged.push(() => committed.set(address.aggregateId, position));
 			},
 			hasReached: async () => false,
 			reset: async () => {},

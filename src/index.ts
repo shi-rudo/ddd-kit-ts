@@ -201,6 +201,7 @@ export type {
 // Projections: checkpoint port, runner, in-memory reference
 export { InMemoryProjectionCheckpointStore } from "./projections/in-memory-checkpoint-store";
 export {
+	type AggregateAddress,
 	isPositionAfter,
 	type Projection,
 	type ProjectionCheckpointStore,

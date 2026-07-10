@@ -3,11 +3,18 @@ import { UnprojectableEventError } from "../core/errors";
 import type { OutboxSink } from "../events/outbox-dispatcher";
 import type { TransactionScope } from "../repo/scope";
 import {
+	type AggregateAddress,
 	isPositionAfter,
 	type Projection,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
+
+// NUL-joined composite for the batch-local maps; NUL cannot appear in
+// either half of a real event's address.
+function addressKey(address: AggregateAddress): string {
+	return `${address.aggregateType}\u0000${address.aggregateId}`;
+}
 
 /** Construction options for {@link Projector}. */
 export interface ProjectorOptions<Evt extends AnyDomainEvent, TCtx> {
@@ -77,8 +84,8 @@ function defaultPosition(
  *   here, not in every handler.
  * - **Uncursored events reject loudly.** An event without stamps (and
  *   no custom `position` extractor covering it), or without an
- *   `aggregateId`, fails the batch BEFORE anything is applied; see
- *   {@link ProjectorOptions.position}.
+ *   `aggregateId` / `aggregateType`, fails the batch BEFORE anything
+ *   is applied; see {@link ProjectorOptions.position}.
  * - **One logical projector instance per projection.** The cursor
  *   check-then-apply is not concurrency-safe across competing
  *   instances unless the adapter serializes it (row lock on the
@@ -127,15 +134,18 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 						"or ordered.",
 				);
 			}
-			const aggregateId = event.aggregateId;
-			if (aggregateId === undefined) {
+			const { aggregateId, aggregateType } = event;
+			if (aggregateId === undefined || aggregateType === undefined) {
 				throw new UnprojectableEventError(
 					this.projection.name,
 					event.eventId,
-					"carries no aggregateId; the checkpoint watermark is per aggregate.",
+					"carries no aggregateId/aggregateType; the checkpoint watermark " +
+						"is keyed per (aggregateType, aggregateId), because ids are " +
+						"type-scoped. Events written by withCommit carry both stamps.",
 				);
 			}
-			return { event, position, aggregateId };
+			const address: AggregateAddress = { aggregateType, aggregateId };
+			return { event, position, address };
 		});
 
 		// Everything mutable lives INSIDE the transactional callback: a
@@ -150,35 +160,36 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// read-your-writes behavior inside the open transaction (an
 			// adapter that stages writes until commit is equally correct).
 			const watermarks = new Map<string, ProjectionPosition | undefined>();
-			const advanced = new Set<string>();
-			for (const { event, position, aggregateId } of cursored) {
+			const advanced = new Map<string, AggregateAddress>();
+			for (const { event, position, address } of cursored) {
+				const key = addressKey(address);
 				let watermark: ProjectionPosition | undefined;
-				if (watermarks.has(aggregateId)) {
-					watermark = watermarks.get(aggregateId);
+				if (watermarks.has(key)) {
+					watermark = watermarks.get(key);
 				} else {
 					watermark = await this.checkpoints.load(
 						ctx,
 						this.projection.name,
-						aggregateId,
+						address,
 					);
-					watermarks.set(aggregateId, watermark);
+					watermarks.set(key, watermark);
 				}
 				if (watermark !== undefined && !isPositionAfter(position, watermark)) {
 					skipped += 1;
 					continue;
 				}
 				await this.projection.apply(ctx, event);
-				watermarks.set(aggregateId, position);
-				advanced.add(aggregateId);
+				watermarks.set(key, position);
+				advanced.set(key, address);
 				applied += 1;
 			}
-			for (const aggregateId of advanced) {
-				const position = watermarks.get(aggregateId);
+			for (const [key, address] of advanced) {
+				const position = watermarks.get(key);
 				if (position !== undefined) {
 					await this.checkpoints.save(
 						ctx,
 						this.projection.name,
-						aggregateId,
+						address,
 						position,
 					);
 				}
@@ -189,20 +200,16 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 
 	/**
 	 * The wait-for-version query: `true` when this projection has
-	 * processed `aggregateId` at least up to `position`. Pass the
+	 * processed the addressed aggregate at least up to `position`. Pass the
 	 * position of the last event the awaited commit emitted (see
 	 * {@link ProjectionCheckpointStore.hasReached} for why the full
 	 * pair, not just the version).
 	 */
 	hasProcessed(
-		aggregateId: string,
+		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		return this.checkpoints.hasReached(
-			this.projection.name,
-			aggregateId,
-			position,
-		);
+		return this.checkpoints.hasReached(this.projection.name, address, position);
 	}
 
 	/**

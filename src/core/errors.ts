@@ -253,18 +253,22 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
- * Returned (as `Err`) by the replay entry points (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) when a history event carries an
- * `aggregateId` or `aggregateType` that does not match the aggregate
- * being reconstituted: the row belongs to someone else. Typical causes
- * are a miswired stream read, ids that collide across aggregate types
- * (per-type sequences instead of globally unique ids), or a corrupted
- * store. A `DomainError` on purpose: this is stream corruption at the
- * infrastructure boundary, so the replay methods map it into their
- * `Result` channel like every other corruption finding. Events that do
- * not carry the optional address fields are not checked.
+ * Thrown when an event's `aggregateId` or `aggregateType` names a
+ * different aggregate than the one handling it: by `apply()` for a new
+ * event (a hand-built event addressed elsewhere would poison the own
+ * stream) and by the replay entry points (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) for a history row that belongs to
+ * someone else (a miswired stream read, ids colliding across aggregate
+ * types, a corrupted store). An `InfrastructureError`, NOT a
+ * `DomainError` (same posture as {@link SnapshotSchemaMismatchError}):
+ * a wrong address is data corruption or wiring, never an expected
+ * business rejection, so it must not be absorbed by generic domain
+ * error handling or presented as a 4xx. It therefore PROPAGATES as a
+ * throw through the replay methods' `Result` contract (which reserves
+ * `Err` for `DomainError`), after the usual all-or-nothing rollback.
+ * Events without the optional address fields are not checked.
  */
-export class ForeignEventError extends DomainError<"FOREIGN_EVENT"> {
+export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	constructor(
 		public readonly expectedAggregateId: string,
 		public readonly expectedAggregateType: string,

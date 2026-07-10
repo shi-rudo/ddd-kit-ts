@@ -148,10 +148,13 @@ intend to replay from the beginning.
 
 ## Checkpoints
 
-The projector stores one watermark per `(projection, aggregateId)`. That key
-assumes aggregate ids are unique across the aggregate types feeding the
-projection, which app-side generated ids (the kit's default: UUIDs) are;
-per-type sequences need qualifying at the source.
+The projector stores one watermark per `(projection, aggregateType,
+aggregateId)`. The type is part of the key because identities are type-scoped
+(`Order 1` and `Payment 1` are different aggregates even when the raw id
+strings collide), and every event `withCommit` harvests carries both stamps.
+Two consequences for adapters: the checkpoint table's primary key is the full
+triple, and the `aggregateType` string becomes a durable contract, so renaming
+an aggregate type means migrating its checkpoint rows.
 
 ```ts
 interface ProjectionPosition {
@@ -159,23 +162,28 @@ interface ProjectionPosition {
   commitSequence: number;
 }
 
+interface AggregateAddress {
+  aggregateType: string;
+  aggregateId: string;
+}
+
 interface ProjectionCheckpointStore<TCtx> {
   load(
     ctx: TCtx,
     projection: string,
-    aggregateId: string,
+    address: AggregateAddress,
   ): Promise<ProjectionPosition | undefined>;
 
   save(
     ctx: TCtx,
     projection: string,
-    aggregateId: string,
+    address: AggregateAddress,
     position: ProjectionPosition,
   ): Promise<void>;
 
   hasReached(
     projection: string,
-    aggregateId: string,
+    address: AggregateAddress,
     position: ProjectionPosition,
   ): Promise<boolean>;
 
@@ -366,10 +374,10 @@ Handle that in the product flow:
 `Projector.hasProcessed(...)` is the primitive for bounded waits:
 
 ```ts
-const caughtUp = await projector.hasProcessed(orderId, {
-  aggregateVersion: 12,
-  commitSequence: 1,
-});
+const caughtUp = await projector.hasProcessed(
+  { aggregateType: "Order", aggregateId: orderId },
+  { aggregateVersion: 12, commitSequence: 1 },
+);
 ```
 
 Pass the position of the last event your command emitted. Version alone is not

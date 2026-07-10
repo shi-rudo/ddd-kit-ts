@@ -126,11 +126,14 @@ is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
 
-1. `validateEvent(event)` checks whether this event is allowed in the current
+1. The address guard rejects an event whose `aggregateId` or `aggregateType`
+   names a different aggregate (`ForeignEventError`); `this.recordEvent(...)`
+   stamps the right address and never trips it.
+2. `validateEvent(event)` checks whether this event is allowed in the current
    state.
-2. The handler for `event.type` is found.
-3. The handler computes the next state.
-4. The aggregate stores the new state, records the event in `pendingEvents`, and
+3. The handler for `event.type` is found.
+4. The handler computes the next state.
+5. The aggregate stores the new state, records the event in `pendingEvents`, and
    bumps the version.
 
 If validation, handler lookup, or state computation throws, the aggregate does
@@ -278,18 +281,25 @@ async function findById(id: OrderId): Promise<Order | null> {
 ```
 
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
-stream can be corrupt in ways the domain can name: a handler that rejects a
-payload it cannot map, or an event addressed to a different aggregate
-(`ForeignEventError`, thrown when a history event carries an `aggregateId` or
-`aggregateType` that does not match the target). The repository can catch that
-as data corruption and choose whether to fail the load, alert, or rebuild from
-another source.
+stream can be corrupt in ways the domain can name (a handler that rejects a
+payload it cannot map). One corruption class deliberately does NOT ride the
+`Result`: an event addressed to a different aggregate (`ForeignEventError`,
+when a history event carries an `aggregateId` or `aggregateType` that does not
+match the target) is an `InfrastructureError` and THROWS, because a wrong
+stream read is wiring or data corruption, never an expected business
+rejection a generic `Err` branch should absorb. The state rollback is the
+same on both paths.
 
 Replay does not run `validateEvent(...)`. History is already accepted fact,
 and decision rules change over time; a stream that was valid when written must
 stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
-`apply(...)` path only, and structural expectations that should hold during
-replay belong in the handlers.
+`apply(...)` path only. Old storage shapes are not a replay-validation concern
+either: decode and upcast persisted events at the read boundary (see
+[Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
+the current event shape. The same principle covers snapshots: restoring from
+a snapshot does not re-check the historical state against today's
+`validateState` rules, so a stream loads identically whether it is replayed
+from zero or restored from a snapshot plus tail.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code

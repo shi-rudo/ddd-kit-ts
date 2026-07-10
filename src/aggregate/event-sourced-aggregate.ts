@@ -103,9 +103,10 @@ export abstract class EventSourcedAggregate<
 	 * Replay never invokes this method. History is already accepted
 	 * fact, and decision rules evolve; re-checking yesterday's events
 	 * against today's rules would make legitimately persisted streams
-	 * unloadable after a rule change. Structural expectations a replay
-	 * should still enforce belong in the event handlers themselves
-	 * (a handler may throw a `DomainError` for a corrupt payload).
+	 * unloadable after a rule change. Old storage shapes are not a
+	 * validation concern either: decode and upcast persisted events at
+	 * the read boundary (see the event-upcasting guide) so handlers
+	 * and replay always receive the current event shape.
 	 */
 	protected validateEvent(_event: TEvent): void {}
 
@@ -134,6 +135,13 @@ export abstract class EventSourcedAggregate<
 	protected apply<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
 	): void {
+		// The address guard runs on NEW facts too, symmetrically with
+		// replay: a hand-built event addressed to another aggregate would
+		// otherwise be recorded, committed, and then rejected by the
+		// replay guard on the next load, poisoning the own stream.
+		// `this.recordEvent(...)` stamps the correct address and can
+		// never trip this.
+		this.assertEventBelongsHere(event);
 		// Validation lives HERE, not in dispatch: only new facts are
 		// checked against current rules; replay trusts history.
 		this.validateEvent(event);
@@ -156,16 +164,17 @@ export abstract class EventSourcedAggregate<
 	 * `handlers` map.
 	 */
 	/**
-	 * Replay-only address check: a history event that names a DIFFERENT
-	 * aggregate id or type is a stream row that belongs to someone else
-	 * (miswired read, colliding ids across types, corrupted store).
-	 * Throws `ForeignEventError` (a `DomainError`), which the replay
-	 * entry points map into their `Result` channel with full rollback.
-	 * Events without the optional address fields pass unchecked; new
-	 * facts never come through here (`recordEvent` stamps them from
-	 * `this`).
+	 * Address check shared by `apply()` and the replay loops: an event
+	 * that names a DIFFERENT aggregate id or type belongs to someone
+	 * else (a hand-built event on the apply path; a miswired stream
+	 * read, colliding ids across types, or a corrupted store on the
+	 * replay path). Throws `ForeignEventError`, an
+	 * `InfrastructureError`, which PROPAGATES through the replay
+	 * methods (their `Result` channel is reserved for `DomainError`
+	 * stream corruption) after the all-or-nothing rollback. Events
+	 * without the optional address fields pass unchecked.
 	 */
-	private assertReplayedEventBelongsHere(event: TEvent): void {
+	private assertEventBelongsHere(event: TEvent): void {
 		const idMismatch =
 			event.aggregateId !== undefined && event.aggregateId !== this.id;
 		const typeMismatch =
@@ -248,7 +257,7 @@ export abstract class EventSourcedAggregate<
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
-				this.assertReplayedEventBelongsHere(event);
+				this.assertEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
@@ -287,21 +296,22 @@ export abstract class EventSourcedAggregate<
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		// Same guard AggregateRoot.restoreFromSnapshot applies: a corrupt
-		// snapshot store must not reconstitute an invalid aggregate. Runs
-		// BEFORE anything is assigned, so there is nothing to roll back;
-		// a DomainError maps to Err (infrastructure boundary, same contract
-		// as the replay loop below), everything else propagates.
-		// Resolve, convert, and validate BEFORE anything is assigned, all
-		// under the method's documented Result contract: a DomainError from
-		// a migrateSnapshotState override, fromSnapshotState, or
-		// validateState maps to Err (the repository's discard-and-refold
-		// branch must see it), while SnapshotSchemaMismatchError (an
-		// InfrastructureError) and other non-domain throws propagate.
+		// Resolve and convert BEFORE anything is assigned, under the
+		// method's documented Result contract: a DomainError from a
+		// migrateSnapshotState override or fromSnapshotState maps to Err
+		// (the repository's discard-and-refold branch must see it), while
+		// SnapshotSchemaMismatchError (an InfrastructureError) and other
+		// non-domain throws propagate. Deliberately NOT validated with
+		// `validateState`: a snapshot is an optimization of the event
+		// stream, and full replay does not check handler-produced states
+		// against today's rules either. The same historical state must
+		// load identically on both paths ("replay from zero equals
+		// snapshot plus tail"); structural decode problems belong in
+		// `fromSnapshotState` / `migrateSnapshotState`, schema drift in
+		// `snapshotSchemaVersion`.
 		let restored: TState;
 		try {
 			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
-			this.validateState(restored);
 		} catch (e) {
 			if (e instanceof DomainError) return err(e);
 			throw e;
@@ -312,7 +322,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			try {
-				this.assertReplayedEventBelongsHere(event);
+				this.assertEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;

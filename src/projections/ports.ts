@@ -28,20 +28,28 @@ export function isPositionAfter(
 }
 
 /**
+ * The address of one aggregate instance as checkpoints key it: the
+ * kit's identities are type-scoped (`Id<"OrderId">` brands say so),
+ * so `Order 1` and `Payment 1` are different aggregates even when the
+ * raw id strings collide. Both fields come from the stamps every
+ * committed event carries. `aggregateType` is thereby part of the
+ * checkpoint contract: renaming an aggregate type orphans its
+ * checkpoints, so treat the string as a stable identifier and migrate
+ * checkpoint rows deliberately when it must change.
+ */
+export interface AggregateAddress {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}
+
+/**
  * Driven port for projection checkpoints: the per-`(projection,
- * aggregateId)` watermark that makes a projection idempotent and
- * rebuild-safe. The {@link ProjectionCheckpointStore.load} /
+ * aggregateType, aggregateId)` watermark that makes a projection
+ * idempotent and rebuild-safe. The {@link ProjectionCheckpointStore.load} /
  * {@link ProjectionCheckpointStore.save} half runs inside the SAME
  * transaction as the read-model update (the `Projector` guarantees
  * the pairing); the store itself is a dumb last-write-wins record,
  * monotonicity is the projector's job.
- *
- * The watermark key assumes aggregate ids are unique across every
- * aggregate TYPE feeding one projection. App-side generated ids (the
- * kit's default: UUIDs via `crypto.randomUUID()`) are; per-type
- * sequences ("order 1", "payment 1") are not. If your ids are only
- * unique per type, qualify them at the source (e.g. prefix the type)
- * before they reach events and checkpoints.
  *
  * Production adapters put the checkpoint table in the same database
  * as the read model, so update and checkpoint commit atomically: a
@@ -55,14 +63,14 @@ export function isPositionAfter(
  */
 export interface ProjectionCheckpointStore<TCtx = unknown> {
 	/**
-	 * The stored watermark for `(projection, aggregateId)`, or
-	 * `undefined` when this projection has never applied an event of
-	 * that aggregate. Called inside the projector's transaction.
+	 * The stored watermark for `(projection, address)`, or `undefined`
+	 * when this projection has never applied an event of that
+	 * aggregate. Called inside the projector's transaction.
 	 */
 	load(
 		ctx: TCtx,
 		projection: string,
-		aggregateId: string,
+		address: AggregateAddress,
 	): Promise<ProjectionPosition | undefined>;
 
 	/**
@@ -74,13 +82,13 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 	save(
 		ctx: TCtx,
 		projection: string,
-		aggregateId: string,
+		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<void>;
 
 	/**
 	 * The wait-for-version building block: `true` when the stored
-	 * watermark for `(projection, aggregateId)` is at or past
+	 * watermark for `(projection, address)` is at or past
 	 * `position`. Runs OUTSIDE any transaction (a query-side poll).
 	 *
 	 * Pass the position of the LAST event your commit emitted: all
@@ -90,7 +98,7 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 	 */
 	hasReached(
 		projection: string,
-		aggregateId: string,
+		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<boolean>;
 

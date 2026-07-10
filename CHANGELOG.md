@@ -197,13 +197,16 @@ Only relevant if tooling greps suite output: failure messages now start
 with "Contract violated:" / "Contract test skipped:" instead of the
 repository-specific prefixes. Behavior and test names are unchanged.
 
-#### 11. Replay trusts history: `validateEvent` no longer runs during replay (runtime change)
+#### 11. Replay trusts history: `validateEvent` and `validateState` no longer judge it (runtime change)
 
 `loadFromHistory` and `restoreFromSnapshotWithEvents` stop invoking
-`validateEvent`; it guards NEW facts on the `apply()` path only. History
-is already accepted fact, and decision rules change over time; before
-this change, tightening a rule could make legitimately persisted streams
-load as `Err` (today's rules rejecting yesterday's facts).
+`validateEvent`, and the snapshot path stops running `validateState` on
+the restored state; both guard NEW facts on the `apply()` path only.
+History is already accepted fact, and decision rules change over time;
+before this change, tightening a rule could make legitimately persisted
+streams (or snapshots derived from them) fail to load, and the two load
+paths disagreed about it. Now "replay from zero equals snapshot plus
+tail" holds by construction.
 
 ```ts
 // before (2.x): ran on apply AND on every replayed event
@@ -213,37 +216,83 @@ protected validateEvent(event: OrderEvent): void {
   }
 }
 
-// after: same override, apply-path only. Structural expectations that
-// should hold during replay move into the handlers (a handler may
-// throw a DomainError for a payload it cannot map).
+// after: same override, apply-path only. Old storage shapes are decoded
+// and upcast at the read boundary (event-upcasting guide); handlers and
+// replay always receive the current event shape.
 ```
 
-Replay gains an address guard in exchange: a history event whose
-`aggregateId` or `aggregateType` names a different aggregate is stream
-corruption and comes back as `Err(ForeignEventError)` (new code
-`FOREIGN_EVENT`), with the usual all-or-nothing rollback.
+Both `apply()` and replay gain an address guard in exchange: an event
+whose `aggregateId` or `aggregateType` names a different aggregate
+throws `ForeignEventError` (new code `FOREIGN_EVENT`, an
+`InfrastructureError`, so it never rides a `Result` channel or a 4xx
+mapping), with the usual all-or-nothing rollback on the replay paths.
+
+#### 12. Projection checkpoints are keyed by `(projection, aggregateType, aggregateId)`
+
+Identities are type-scoped, so `Order 1` at version 10 must not make
+`Payment 1` at version 1 look stale. `ProjectionCheckpointStore`
+implementations and `hasProcessed` callers adapt mechanically:
+
+```ts
+// before
+load(ctx, projection, aggregateId)
+await projector.hasProcessed(orderId, position);
+
+// after: the address object carries both halves
+load(ctx, projection, { aggregateType, aggregateId })
+await projector.hasProcessed(
+  { aggregateType: "Order", aggregateId: orderId },
+  position,
+);
+```
+
+Checkpoint tables extend their primary key with the type column; the
+projector rejects events without an `aggregateType` stamp the same way
+it already rejected missing cursors (`withCommit` stamps both). The
+`aggregateType` string is thereby a durable contract: renaming an
+aggregate type means migrating its checkpoint rows.
 
 ### Changed (breaking): replay trusts history
 
 - `EventSourcedAggregate`: replay (`loadFromHistory`,
-  `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`; the
-  override guards new facts on the `apply()` path only. Re-checking
+  `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`, and
+  the snapshot path no longer runs `validateState` on the restored
+  state; both guard new facts on the `apply()` path only. Re-checking
   history against current rules meant a rule change could make
-  legitimately persisted streams unloadable, the classic
-  event-sourcing failure the "validate commands, trust history"
-  discipline exists to prevent. Structural expectations that should
-  hold during replay belong in the event handlers, which may throw a
-  `DomainError` for a payload they cannot map.
-- New replay address guard: a history event whose `aggregateId` or
-  `aggregateType` names a different aggregate returns
-  `Err(ForeignEventError)` (code `FOREIGN_EVENT`, a `DomainError`,
-  exported from the main entry) with the usual all-or-nothing
-  rollback. Events without the optional address fields pass unchecked.
-- Documented assumption made explicit on `ProjectionCheckpointStore`
-  and `EventStore`: checkpoint and stream keys use the aggregate id
-  alone and therefore assume ids unique across aggregate types
-  (app-side UUIDs are; per-type sequences need qualifying at the
-  source).
+  legitimately persisted streams unloadable, and the snapshot path
+  disagreeing with full replay broke "a snapshot is only an
+  optimization": the same stream now loads identically on both paths,
+  pinned by an equivalence test. Old storage shapes are decoded and
+  upcast at the read boundary (event-upcasting guide), never validated
+  in handlers.
+- Address guard on BOTH paths: `apply()` and replay throw
+  `ForeignEventError` (code `FOREIGN_EVENT`, an `InfrastructureError`
+  exported from the main entry) for an event whose `aggregateId` or
+  `aggregateType` names a different aggregate. On the apply side this
+  keeps a hand-built, mis-addressed event from being recorded and
+  poisoning the own stream; on the replay side it rejects foreign
+  stream rows with the usual all-or-nothing rollback. Deliberately NOT
+  a `DomainError`: a wrong address is corruption or wiring, so it must
+  never be absorbed as an expected business rejection, and it
+  propagates as a throw instead of riding the replay `Result` channel.
+  Events without the optional address fields pass unchecked.
+
+### Changed (breaking): projection checkpoints are keyed by aggregate type and id
+
+- `ProjectionCheckpointStore` keys watermarks by `(projection,
+  aggregateType, aggregateId)`, passed as an `AggregateAddress` object
+  (`load` / `save` / `hasReached`), and `Projector.hasProcessed` takes
+  the address instead of the bare id. Identities are type-scoped (the
+  kit's own `Id` brands say so), so the old id-only key let `Order 1`
+  at version 10 make `Payment 1` at version 1 look stale: a silent
+  skip. The projector now requires the `aggregateType` stamp on
+  projectable events (rejecting loudly like a missing cursor;
+  `withCommit` stamps both) and keys its batch watermarks by the full
+  address. The in-memory store, the contract suite (with a new
+  cross-type isolation proof), and the projections guide follow. The
+  `EventStore` stream key stays id-only with its documented
+  uniqueness assumption; qualifying streams is a store-layout
+  decision, not a checkpoint-correctness one.
 
 ### Added: ports speak the domain's language
 
