@@ -1,7 +1,8 @@
-import type { Id } from "../../src/core/id";
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
+import type { Id } from "../../src/core/id";
 import { findEntityById } from "../../src/entity/entity";
-import { OrderItem, type ItemId } from "./order-item";
+import { addMoney, type Money } from "../../src/money";
+import { type ItemId, OrderItem } from "./order-item";
 
 export type OrderId = Id<"OrderId">;
 
@@ -41,15 +42,17 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 
 	/**
 	 * Adds an item to the order.
-	 * Creates a new OrderItem entity and adds it to the aggregate.
+	 * Creates a new OrderItem entity and adds it to the aggregate. The
+	 * line total arrives as Money, already computed: quantity times unit
+	 * price is a pricing policy that lives with the caller.
 	 */
-	addItem(productId: string, quantity: number, price: number): ItemId {
+	addItem(productId: string, quantity: number, lineTotal: Money): ItemId {
 		if (this.state.status !== "pending") {
 			throw new Error("Cannot add items to a non-pending order");
 		}
 
 		const itemId = `item-${++this.itemCounter}` as ItemId;
-		const item = new OrderItem(itemId, productId, quantity, price);
+		const item = new OrderItem(itemId, productId, quantity, lineTotal);
 
 		this.setState({
 			...this.state,
@@ -62,7 +65,11 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	 * Updates the quantity of an item.
 	 * Delegates to the OrderItem entity's business logic.
 	 */
-	updateItemQuantity(itemId: ItemId, newQuantity: number): void {
+	updateItemQuantity(
+		itemId: ItemId,
+		newQuantity: number,
+		repricedLineTotal: Money,
+	): void {
 		if (this.state.status !== "pending") {
 			throw new Error("Cannot modify items in a non-pending order");
 		}
@@ -73,7 +80,7 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 		}
 
 		// Delegate to the entity's logic
-		item.updateQuantity(newQuantity);
+		item.updateQuantity(newQuantity, repricedLineTotal);
 
 		// Update state with modified item (immutable update)
 		this.setState({
@@ -97,13 +104,17 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	}
 
 	/**
-	 * Calculates the total order amount.
-	 * Uses the OrderItem entities' calculateSubtotal() method.
+	 * Calculates the total order amount from the items' line totals.
+	 * addMoney keeps the sum exact and rejects mixed currencies. An
+	 * empty order has no total: Money carries its currency, and the
+	 * aggregate has none to offer without at least one line.
 	 */
-	calculateTotal(): number {
-		return this.state.items.reduce(
-			(total, item) => total + item.calculateSubtotal(),
-			0,
+	calculateTotal(): Money | undefined {
+		const [first, ...rest] = this.state.items;
+		if (!first) return undefined;
+		return rest.reduce(
+			(total, item) => addMoney(total, item.state.lineTotal),
+			first.state.lineTotal,
 		);
 	}
 

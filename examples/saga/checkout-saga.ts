@@ -5,6 +5,7 @@ import {
 	type DomainMachineSnapshot,
 	transitionDomainState,
 } from "../../src/domain-state-machine/domain-state-machine";
+import type { Money } from "../../src/money";
 import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";
 import type { ShipmentId } from "./shipping";
@@ -24,7 +25,7 @@ export type CheckoutSagaStep =
 
 export type CheckoutSagaState = {
 	orderId: OrderId;
-	totalCents: number;
+	total: Money;
 	step: CheckoutSagaStep;
 	paymentId?: PaymentId;
 	shipmentId?: ShipmentId;
@@ -120,8 +121,8 @@ function toSagaState(
 export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 	protected readonly aggregateType = "CheckoutSaga";
 
-	static start(orderId: OrderId, totalCents: number): CheckoutSaga {
-		const initialContext = { orderId, totalCents };
+	static start(orderId: OrderId, total: Money): CheckoutSaga {
+		const initialContext = { orderId, total };
 		const snapshot = createInitialDomainMachineSnapshot(
 			checkoutLifecycle(initialContext),
 		);

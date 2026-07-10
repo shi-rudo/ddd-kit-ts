@@ -2,6 +2,7 @@ import { AggregateRoot } from "../../src/aggregate/aggregate-root";
 import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
+import type { Money } from "../../src/money";
 import type { OrderId } from "./order";
 
 export type PaymentId = Id<"PaymentId">;
@@ -9,18 +10,18 @@ export type PaymentId = Id<"PaymentId">;
 export type PaymentState = {
 	id: PaymentId;
 	orderId: OrderId;
-	amountCents: number;
+	amount: Money;
 	status: "requested" | "received" | "failed" | "refunded";
 	failureReason?: string;
 };
 
 export type PaymentRequested = DomainEvent<
 	"PaymentRequested",
-	{ orderId: OrderId; amountCents: number }
+	{ orderId: OrderId; amount: Money }
 >;
 export type PaymentReceived = DomainEvent<
 	"PaymentReceived",
-	{ orderId: OrderId; amountCents: number }
+	{ orderId: OrderId; amount: Money }
 >;
 export type PaymentFailed = DomainEvent<
 	"PaymentFailed",
@@ -28,7 +29,7 @@ export type PaymentFailed = DomainEvent<
 >;
 export type PaymentRefunded = DomainEvent<
 	"PaymentRefunded",
-	{ orderId: OrderId; amountCents: number }
+	{ orderId: OrderId; amount: Money }
 >;
 
 export type PaymentEvent =
@@ -53,16 +54,16 @@ export class Payment extends AggregateRoot<
 > {
 	protected readonly aggregateType = "Payment";
 
-	static request(id: PaymentId, orderId: OrderId, amountCents: number): Payment {
+	static request(id: PaymentId, orderId: OrderId, amount: Money): Payment {
 		const payment = new Payment(id, {
 			id,
 			orderId,
-			amountCents,
+			amount,
 			status: "requested",
 		});
 		payment.commit(
-			{ id, orderId, amountCents, status: "requested" },
-			payment.recordEvent("PaymentRequested", { orderId, amountCents }),
+			{ id, orderId, amount, status: "requested" },
+			payment.recordEvent("PaymentRequested", { orderId, amount }),
 		);
 		return payment;
 	}
@@ -75,7 +76,7 @@ export class Payment extends AggregateRoot<
 			{ ...this.state, status: "received" },
 			this.recordEvent("PaymentReceived", {
 				orderId: this.state.orderId,
-				amountCents: this.state.amountCents,
+				amount: this.state.amount,
 			}),
 		);
 	}
@@ -101,7 +102,7 @@ export class Payment extends AggregateRoot<
 			{ ...this.state, status: "refunded" },
 			this.recordEvent("PaymentRefunded", {
 				orderId: this.state.orderId,
-				amountCents: this.state.amountCents,
+				amount: this.state.amount,
 			}),
 		);
 	}

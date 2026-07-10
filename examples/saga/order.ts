@@ -2,22 +2,26 @@ import { AggregateRoot } from "../../src/aggregate/aggregate-root";
 import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
+import type { Money } from "../../src/money";
 
 export type OrderId = Id<"OrderId">;
 
 export type OrderState = {
 	id: OrderId;
 	customerId: string;
-	totalCents: number;
+	total: Money;
 	status: "placed" | "confirmed" | "cancelled";
 	cancelReason?: string;
 };
 
 export type OrderPlaced = DomainEvent<
 	"OrderPlaced",
-	{ customerId: string; totalCents: number }
+	{ customerId: string; total: Money }
 >;
-export type OrderConfirmed = DomainEvent<"OrderConfirmed", { confirmedAt: string }>;
+export type OrderConfirmed = DomainEvent<
+	"OrderConfirmed",
+	{ confirmedAt: string }
+>;
 export type OrderCancelled = DomainEvent<"OrderCancelled", { reason: string }>;
 
 export type OrderEvent = OrderPlaced | OrderConfirmed | OrderCancelled;
@@ -34,21 +38,17 @@ export class OrderInWrongStateError extends DomainError<"ORDER_IN_WRONG_STATE"> 
 export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	protected readonly aggregateType = "Order";
 
-	static place(
-		id: OrderId,
-		customerId: string,
-		totalCents: number,
-	): Order {
+	static place(id: OrderId, customerId: string, total: Money): Order {
 		const order = new Order(id, {
 			id,
 			customerId,
-			totalCents,
+			total,
 			status: "placed",
 		});
 		// Bump version to 1 and record the placement event.
 		order.commit(
-			{ id, customerId, totalCents, status: "placed" },
-			order.recordEvent("OrderPlaced", { customerId, totalCents }),
+			{ id, customerId, total, status: "placed" },
+			order.recordEvent("OrderPlaced", { customerId, total }),
 		);
 		return order;
 	}

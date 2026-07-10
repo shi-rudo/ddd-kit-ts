@@ -1,5 +1,6 @@
-import type { Id } from "../../src/core/id";
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
+import type { Id } from "../../src/core/id";
+import { addMoney, type Money } from "../../src/money";
 
 export type OrderId = Id<"OrderId">;
 
@@ -9,9 +10,9 @@ export type OrderState = {
 	items: Array<{
 		productId: string;
 		quantity: number;
-		price: number;
+		lineTotal: Money;
 	}>;
-	total: number;
+	total: Money;
 	status: "pending" | "confirmed" | "shipped" | "cancelled";
 };
 
@@ -22,24 +23,30 @@ export type OrderState = {
 export class Order extends AggregateRoot<OrderState, OrderId> {
 	protected readonly aggregateType = "Order";
 
-	static create(id: OrderId, customerId: string): Order {
+	// The zero comes in from the caller, like every other Money: the
+	// kit ships no currency table, so the aggregate never invents one.
+	static create(id: OrderId, customerId: string, zero: Money): Order {
 		const initialState: OrderState = {
 			id,
 			customerId,
 			items: [],
-			total: 0,
+			total: zero,
 			status: "pending",
 		};
 		return new Order(id, initialState);
 	}
 
-	addItem(productId: string, quantity: number, price: number): void {
+	// The line total arrives as Money, already computed: quantity times
+	// unit price is a pricing policy that lives with the caller (and in
+	// a calculation library once it needs rounding). addMoney also
+	// rejects mixed currencies, so the invariant rides along for free.
+	addItem(productId: string, quantity: number, lineTotal: Money): void {
 		if (this.state.status !== "pending") {
 			throw new Error("Cannot add items to a non-pending order");
 		}
 
-		const newItem = { productId, quantity, price };
-		const newTotal = this.state.total + quantity * price;
+		const newItem = { productId, quantity, lineTotal };
+		const newTotal = addMoney(this.state.total, lineTotal);
 
 		this.setState({
 			...this.state,
