@@ -221,11 +221,21 @@ protected validateEvent(event: OrderEvent): void {
 // replay always receive the current event shape.
 ```
 
-Both `apply()` and replay gain an address guard in exchange: an event
-whose `aggregateId` or `aggregateType` names a different aggregate
-throws `ForeignEventError` (new code `FOREIGN_EVENT`, an
-`InfrastructureError`, so it never rides a `Result` channel or a 4xx
-mapping), with the usual all-or-nothing rollback on the replay paths.
+Both paths gain an address discipline in exchange, with distinct error
+families because the situations differ. On `apply()`, missing address
+fields are STAMPED from the aggregate (the `recordEvent` guarantee, now
+by construction), and a present-but-foreign address throws
+`MisaddressedEventError` (new code `MISADDRESSED_EVENT`, a wiring
+error: a bug in today's code) before anything is recorded. On replay, a
+history row naming a different aggregate throws `ForeignEventError`
+(new code `FOREIGN_EVENT`, an `InfrastructureError`: corrupted or
+miswired persistence, so it never rides a `Result` channel or a 4xx
+mapping), with the usual all-or-nothing rollback; history events
+without the optional stamps pass, since legacy streams predate them.
+Snapshots keep a STRUCTURAL gate separate from the rules: override the
+new `validateRestoredState(state)` to reject blobs no version of the
+model could have produced; its `DomainError` comes back as `Err` for
+the discard-and-refold recipe.
 
 #### 12. Projection checkpoints are keyed by `(projection, aggregateType, aggregateId)`
 
@@ -265,17 +275,29 @@ aggregate type means migrating its checkpoint rows.
   pinned by an equivalence test. Old storage shapes are decoded and
   upcast at the read boundary (event-upcasting guide), never validated
   in handlers.
-- Address guard on BOTH paths: `apply()` and replay throw
-  `ForeignEventError` (code `FOREIGN_EVENT`, an `InfrastructureError`
-  exported from the main entry) for an event whose `aggregateId` or
-  `aggregateType` names a different aggregate. On the apply side this
-  keeps a hand-built, mis-addressed event from being recorded and
-  poisoning the own stream; on the replay side it rejects foreign
-  stream rows with the usual all-or-nothing rollback. Deliberately NOT
-  a `DomainError`: a wrong address is corruption or wiring, so it must
-  never be absorbed as an expected business rejection, and it
-  propagates as a throw instead of riding the replay `Result` channel.
-  Events without the optional address fields pass unchecked.
+- Snapshots keep their own STRUCTURAL gate, separated from the rules:
+  the new overridable `validateRestoredState(state)` rejects restored
+  blobs no version of the model could have produced (missing fields,
+  impossible types); its `DomainError` returns as `Err` and feeds the
+  documented discard-and-refold recipe. Unlike replay, whose states
+  are built by the handlers from accepted facts, a snapshot is derived
+  data read back from storage and deserves an integrity check that is
+  not entangled with today's decision rules.
+- Address discipline on both paths, with distinct error families.
+  `apply()` STAMPS missing `aggregateId`/`aggregateType` from the
+  aggregate (the `recordEvent` guarantee by construction; an applied
+  event can no longer fail later at harvest) and throws
+  `MisaddressedEventError` (code `MISADDRESSED_EVENT`, a wiring error,
+  exported from the main entry) for a present-but-foreign address,
+  before anything is recorded. Replay throws `ForeignEventError` (code
+  `FOREIGN_EVENT`, an `InfrastructureError`, exported from the main
+  entry) for a history row naming a different aggregate, with the
+  all-or-nothing rollback; rows without the optional stamps pass,
+  since legacy streams predate them. Neither is a `DomainError`: a
+  wrong address is a code bug or corrupted persistence, never an
+  expected business rejection, so both propagate as throws instead of
+  riding the replay `Result` channel. The result-vs-throw guide and
+  the design-decisions page document the split channel.
 
 ### Changed (breaking): projection checkpoints are keyed by aggregate type and id
 
@@ -288,8 +310,10 @@ aggregate type means migrating its checkpoint rows.
   skip. The projector now requires the `aggregateType` stamp on
   projectable events (rejecting loudly like a missing cursor;
   `withCommit` stamps both) and keys its batch watermarks by the full
-  address. The in-memory store, the contract suite (with a new
-  cross-type isolation proof), and the projections guide follow. The
+  address, encoded as a JSON tuple so a separator-like character
+  inside either half cannot collide two addresses. The in-memory
+  store, the contract suite (with cross-type isolation and
+  hostile-separator proofs), and the projections guide follow. The
   `EventStore` stream key stays id-only with its documented
   uniqueness assumption; qualifying streams is a store-layout
   decision, not a checkpoint-correctness one.

@@ -10,10 +10,12 @@ import {
 	type ProjectionPosition,
 } from "./ports";
 
-// NUL-joined composite for the batch-local maps; NUL cannot appear in
-// either half of a real event's address.
+// Batch-local map key: an unambiguous tuple encoding. JSON escapes
+// every character, so no separator smuggled inside aggregateType or
+// aggregateId (both are plain JS strings and may contain anything,
+// including NUL) can make two different addresses collide.
 function addressKey(address: AggregateAddress): string {
-	return `${address.aggregateType}\u0000${address.aggregateId}`;
+	return JSON.stringify([address.aggregateType, address.aggregateId]);
 }
 
 /** Construction options for {@link Projector}. */

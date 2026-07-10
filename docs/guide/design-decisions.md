@@ -36,7 +36,7 @@ Be precise about the APIs:
 - `QueryBus.executeUnsafe(...)` returns `R` and lets handler failures throw.
 - `withCommit(...)` returns the committed result `R`; it is a transaction orchestrator, not a `Result` wrapper.
 
-Event-sourced replay is a third case. `loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a persisted stream or snapshot can be corrupt. The repository may need to inspect that error, rebuild from zero, discard a bad snapshot, or fail the load without treating it as a programmer bug.
+Event-sourced replay is a third case. `loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a persisted stream or snapshot can be corrupt in ways the domain can name. The repository may need to inspect that error, rebuild from zero, discard a bad snapshot, or fail the load without treating it as a programmer bug. Not everything rides that channel: corruption that no generic handler should absorb still throws, such as `ForeignEventError` (a stream row addressed to a different aggregate) and `SnapshotSchemaMismatchError`. The rule of thumb: `Err` is for corruption the load recipe can answer (discard, refold, rebuild), throws are for wiring and misrouted data that need a human.
 
 The design goal is not "never throw" or "always throw". The design goal is that each layer uses one failure style for the job it owns. See [Result vs Throw](./result-vs-throw.md).
 

@@ -5,10 +5,11 @@ import {
 	type ProjectionPosition,
 } from "./ports";
 
-// NUL cannot appear in an aggregate type or id string that came off a
-// real event, so the composite key cannot collide across the halves.
+// Unambiguous tuple encoding: JSON escapes every character, so no
+// separator inside either half (both are arbitrary JS strings) can
+// make two different addresses collide.
 function addressKey(address: AggregateAddress): string {
-	return `${address.aggregateType}\u0000${address.aggregateId}`;
+	return JSON.stringify([address.aggregateType, address.aggregateId]);
 }
 
 /**
@@ -28,7 +29,7 @@ function addressKey(address: AggregateAddress): string {
 export class InMemoryProjectionCheckpointStore
 	implements ProjectionCheckpointStore<unknown>
 {
-	/** projection name -> (aggregateType NUL aggregateId) -> watermark */
+	/** projection name -> JSON [aggregateType, aggregateId] -> watermark */
 	private readonly checkpoints = new Map<
 		string,
 		Map<string, ProjectionPosition>

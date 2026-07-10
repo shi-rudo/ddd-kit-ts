@@ -299,7 +299,12 @@ either: decode and upcast persisted events at the read boundary (see
 the current event shape. The same principle covers snapshots: restoring from
 a snapshot does not re-check the historical state against today's
 `validateState` rules, so a stream loads identically whether it is replayed
-from zero or restored from a snapshot plus tail.
+from zero or restored from a snapshot plus tail. Snapshots do get their own
+STRUCTURAL gate: override `validateRestoredState(state)` to reject blobs no
+version of the model could have produced (missing fields, wrong types); a
+`DomainError` from it comes back as `Err`, and the load recipe answers by
+discarding the snapshot and refolding from the stream. Rules and structure
+are different questions, and only the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code

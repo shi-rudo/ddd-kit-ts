@@ -213,6 +213,37 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			}),
 		},
 		{
+			name: "address encoding is collision-free even with separator-like characters in either half",
+			run: inEnv(async (env) => {
+				// The two classic composite-key collisions: a separator
+				// smuggled into the type vs. into the id. Whatever encoding
+				// the adapter uses (composite column, JSON tuple, nested
+				// key), these addresses must keep distinct watermarks.
+				const inType: AggregateAddress = {
+					aggregateType: "A\u0000B",
+					aggregateId: "C",
+				};
+				const inId: AggregateAddress = {
+					aggregateType: "A",
+					aggregateId: "B\u0000C",
+				};
+				await env.run(async (ctx) => {
+					await env.store.save(ctx, "order-list", inType, pos(10, 0));
+					await env.store.save(ctx, "order-list", inId, pos(1, 0));
+				});
+				const [first, second] = await env.run((ctx) =>
+					Promise.all([
+						env.store.load(ctx, "order-list", inType),
+						env.store.load(ctx, "order-list", inId),
+					]),
+				);
+				assert(
+					first?.aggregateVersion === 10 && second?.aggregateVersion === 1,
+					"two addresses that differ only in where a hostile separator sits must not share a watermark",
+				);
+			}),
+		},
+		{
 			name: "hasReached compares the full pair: unseen is false, behind is false, at and past are true",
 			run: inEnv(async (env) => {
 				await env.run((ctx) =>

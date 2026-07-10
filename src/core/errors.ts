@@ -253,20 +253,50 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
- * Thrown when an event's `aggregateId` or `aggregateType` names a
- * different aggregate than the one handling it: by `apply()` for a new
- * event (a hand-built event addressed elsewhere would poison the own
- * stream) and by the replay entry points (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) for a history row that belongs to
- * someone else (a miswired stream read, ids colliding across aggregate
- * types, a corrupted store). An `InfrastructureError`, NOT a
- * `DomainError` (same posture as {@link SnapshotSchemaMismatchError}):
- * a wrong address is data corruption or wiring, never an expected
- * business rejection, so it must not be absorbed by generic domain
- * error handling or presented as a 4xx. It therefore PROPAGATES as a
- * throw through the replay methods' `Result` contract (which reserves
- * `Err` for `DomainError`), after the usual all-or-nothing rollback.
- * Events without the optional address fields are not checked.
+ * Thrown by `EventSourcedAggregate.apply()` when a NEW event carries an
+ * `aggregateId` or `aggregateType` naming a different aggregate: a
+ * deterministic programming bug at the call site (a hand-built or
+ * copied event addressed elsewhere), caught before the event can be
+ * recorded and poison the own stream. Events with MISSING address
+ * fields do not trip this: `apply()` stamps them from the aggregate,
+ * the same guarantee `recordEvent` gives. A wiring error, distinct
+ * from {@link ForeignEventError} on purpose: a wrong new event is a
+ * bug in today's code, a wrong PERSISTED row is corrupted or miswired
+ * infrastructure, and handlers for one must not absorb the other.
+ */
+export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
+	constructor(
+		public readonly expectedAggregateId: string,
+		public readonly expectedAggregateType: string,
+		public readonly eventType: string,
+		public readonly actualAggregateId?: string,
+		public readonly actualAggregateType?: string,
+	) {
+		super(
+			"MISADDRESSED_EVENT",
+			`New event "${eventType}" is addressed to ` +
+				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
+				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
+				"fix the call site (recordEvent stamps the right address).",
+		);
+	}
+}
+
+/**
+ * Thrown by the replay entry points (`loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`) when a HISTORY event carries an
+ * `aggregateId` or `aggregateType` that names a different aggregate:
+ * the persisted row belongs to someone else (a miswired stream read,
+ * ids colliding across aggregate types, a corrupted store). An
+ * `InfrastructureError`, NOT a `DomainError` (same posture as
+ * {@link SnapshotSchemaMismatchError}): a wrong address is data
+ * corruption or wiring, never an expected business rejection, so it
+ * must not be absorbed by generic domain error handling or presented
+ * as a 4xx. It therefore PROPAGATES as a throw through the replay
+ * methods' `Result` contract (which reserves `Err` for `DomainError`),
+ * after the usual all-or-nothing rollback. History events without the
+ * optional address fields pass unchecked (legacy streams predate the
+ * stamps); new events are covered by {@link MisaddressedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	constructor(
@@ -800,6 +830,7 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
 	| "INVALID_MONEY"
+	| "MISADDRESSED_EVENT"
 	| "MISSING_HANDLER"
 	| "MONEY_CURRENCY_MISMATCH"
 	| "MONEY_PRECISION_LOSS"

@@ -2,6 +2,7 @@ import { err, ok, type Result } from "@shirudo/result";
 import {
 	DomainError,
 	ForeignEventError,
+	MisaddressedEventError,
 	MissingHandlerError,
 	UnreplayableAggregateError,
 } from "../core/errors";
@@ -111,6 +112,27 @@ export abstract class EventSourcedAggregate<
 	protected validateEvent(_event: TEvent): void {}
 
 	/**
+	 * Structural integrity check for a state restored from a SNAPSHOT.
+	 * Default is no-op. Override to reject states that no version of
+	 * the model could have produced (missing fields, impossible types,
+	 * truncated data): a snapshot is DERIVED data read back from
+	 * storage, so unlike replay (where every state is built by the
+	 * handlers from accepted facts) the restored blob deserves a
+	 * structural gate. Throw a `DomainError` and
+	 * `restoreFromSnapshotWithEvents` returns it as `Err`, which the
+	 * documented load recipe answers by discarding the snapshot and
+	 * refolding from the stream.
+	 *
+	 * Deliberately NOT today's decision rules: a snapshot persisted
+	 * under yesterday's rules must keep loading after a rule change
+	 * ("replay from zero equals snapshot plus tail"). Rules stay in
+	 * `validateState` / `validateEvent` on the live paths; schema
+	 * DRIFT belongs in `snapshotSchemaVersion`; decode belongs in
+	 * `fromSnapshotState` / `migrateSnapshotState`.
+	 */
+	protected validateRestoredState(_state: TState): void {}
+
+	/**
 	 * Applies an event: validates, locates the handler, computes the next
 	 * state, then commits state + pending event + version bump atomically.
 	 *
@@ -135,19 +157,61 @@ export abstract class EventSourcedAggregate<
 	protected apply<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
 	): void {
-		// The address guard runs on NEW facts too, symmetrically with
-		// replay: a hand-built event addressed to another aggregate would
-		// otherwise be recorded, committed, and then rejected by the
-		// replay guard on the next load, poisoning the own stream.
-		// `this.recordEvent(...)` stamps the correct address and can
-		// never trip this.
-		this.assertEventBelongsHere(event);
+		// New facts get their address here, by construction: missing
+		// fields are stamped from the aggregate (the recordEvent
+		// guarantee), a present-but-foreign address throws
+		// MisaddressedEventError before anything is recorded. Without
+		// this, a mis-addressed event would mutate state, version, and
+		// pendingEvents and only fail later at harvest or on the next
+		// load, poisoning the own stream.
+		const stamped = this.stampNewEventAddress(event);
 		// Validation lives HERE, not in dispatch: only new facts are
 		// checked against current rules; replay trusts history.
-		this.validateEvent(event);
-		this.dispatch(event);
-		this.addDomainEvent(event);
+		this.validateEvent(stamped);
+		this.dispatch(stamped);
+		this.addDomainEvent(stamped);
 		this.bumpVersion();
+	}
+
+	/**
+	 * Address discipline for NEW facts: a present-but-foreign
+	 * `aggregateId` / `aggregateType` is a wiring bug and throws
+	 * {@link MisaddressedEventError}; missing fields are filled in from
+	 * the aggregate, so an applied event is always fully addressed and
+	 * can never fail the harvest or the replay guard later. The
+	 * stamped copy is frozen like the original (payload and metadata
+	 * are shared, already deep-frozen by `createDomainEvent`).
+	 */
+	private stampNewEventAddress<K extends TEvent["type"]>(
+		event: Extract<TEvent, { type: K }>,
+	): Extract<TEvent, { type: K }> {
+		const { aggregateId, aggregateType } = event;
+		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
+		const typeForeign =
+			aggregateType !== undefined && aggregateType !== this.aggregateType;
+		if (idForeign || typeForeign) {
+			throw new MisaddressedEventError(
+				this.id,
+				this.aggregateType,
+				event.type,
+				aggregateId,
+				aggregateType,
+			);
+		}
+		if (aggregateId !== undefined && aggregateType !== undefined) {
+			return event;
+		}
+		// The spread preserves the event's structural shape; TS cannot
+		// prove it against the generic Extract, so the copy goes through
+		// the event's own wider type. `aggregateId`/`aggregateType` are
+		// `string | undefined` on DomainEvent; filling them in cannot
+		// leave the declared shape.
+		const stamped: AnyDomainEvent = Object.freeze({
+			...event,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		});
+		return stamped as Extract<TEvent, { type: K }>;
 	}
 
 	/**
@@ -164,17 +228,18 @@ export abstract class EventSourcedAggregate<
 	 * `handlers` map.
 	 */
 	/**
-	 * Address check shared by `apply()` and the replay loops: an event
-	 * that names a DIFFERENT aggregate id or type belongs to someone
-	 * else (a hand-built event on the apply path; a miswired stream
-	 * read, colliding ids across types, or a corrupted store on the
-	 * replay path). Throws `ForeignEventError`, an
+	 * Replay address check: a history event that names a DIFFERENT
+	 * aggregate id or type is a persisted row that belongs to someone
+	 * else (a miswired stream read, colliding ids across types, a
+	 * corrupted store). Throws `ForeignEventError`, an
 	 * `InfrastructureError`, which PROPAGATES through the replay
 	 * methods (their `Result` channel is reserved for `DomainError`
-	 * stream corruption) after the all-or-nothing rollback. Events
-	 * without the optional address fields pass unchecked.
+	 * stream corruption) after the all-or-nothing rollback. History
+	 * events without the optional address fields pass unchecked
+	 * (legacy streams predate the stamps); NEW events are covered by
+	 * the stricter `stampNewEventAddress` on the apply path.
 	 */
-	private assertEventBelongsHere(event: TEvent): void {
+	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =
 			event.aggregateId !== undefined && event.aggregateId !== this.id;
 		const typeMismatch =
@@ -257,7 +322,7 @@ export abstract class EventSourcedAggregate<
 		const startVersion = this.version;
 		for (const event of history) {
 			try {
-				this.assertEventBelongsHere(event);
+				this.assertReplayedEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;
@@ -296,22 +361,22 @@ export abstract class EventSourcedAggregate<
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		// Resolve and convert BEFORE anything is assigned, under the
-		// method's documented Result contract: a DomainError from a
-		// migrateSnapshotState override or fromSnapshotState maps to Err
-		// (the repository's discard-and-refold branch must see it), while
+		// Resolve, convert, and structurally check BEFORE anything is
+		// assigned, under the method's documented Result contract: a
+		// DomainError from migrateSnapshotState, fromSnapshotState, or
+		// validateRestoredState maps to Err (the repository's
+		// discard-and-refold branch must see it), while
 		// SnapshotSchemaMismatchError (an InfrastructureError) and other
 		// non-domain throws propagate. Deliberately NOT validated with
-		// `validateState`: a snapshot is an optimization of the event
-		// stream, and full replay does not check handler-produced states
-		// against today's rules either. The same historical state must
-		// load identically on both paths ("replay from zero equals
-		// snapshot plus tail"); structural decode problems belong in
-		// `fromSnapshotState` / `migrateSnapshotState`, schema drift in
-		// `snapshotSchemaVersion`.
+		// `validateState`: those are today's decision rules, and a
+		// snapshot persisted under yesterday's rules must keep loading
+		// ("replay from zero equals snapshot plus tail").
+		// `validateRestoredState` is the separate STRUCTURAL gate for the
+		// stored blob.
 		let restored: TState;
 		try {
 			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
+			this.validateRestoredState(restored);
 		} catch (e) {
 			if (e instanceof DomainError) return err(e);
 			throw e;
@@ -322,7 +387,7 @@ export abstract class EventSourcedAggregate<
 
 		for (const event of eventsAfterSnapshot) {
 			try {
-				this.assertEventBelongsHere(event);
+				this.assertReplayedEventBelongsHere(event);
 				this.dispatch(event);
 			} catch (e) {
 				this._state = previousState;

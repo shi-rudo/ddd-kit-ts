@@ -101,6 +101,7 @@ export {
 	InfrastructureError,
 	type KitErrorCode,
 	type KitErrorOptions,
+	MisaddressedEventError,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	DomainError,
 	ForeignEventError,
+	MisaddressedEventError,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,
 	UnreplayableAggregateError,
@@ -1678,10 +1679,12 @@ describe("replay trusts history", () => {
 		).toThrow(ForeignEventError);
 	});
 
-	it("throws from apply() when a new event is addressed to another aggregate", () => {
-		// Symmetric with the replay guard: without it, a hand-built event
-		// with a foreign address would be recorded and committed, and the
-		// NEXT load of this stream would reject it, poisoning the stream.
+	it("throws a wiring error from apply() when a new event is addressed to another aggregate", () => {
+		// Without the guard, a hand-built event with a foreign address
+		// would be recorded and committed, and the NEXT load of this
+		// stream would reject it, poisoning the stream. A wiring error
+		// (MisaddressedEventError), not ForeignEventError: a wrong new
+		// event is a bug in today's code, not corrupted infrastructure.
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1695,7 +1698,7 @@ describe("replay trusts history", () => {
 					{ aggregateId: "someone-else" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(ForeignEventError);
+		}).toThrow(MisaddressedEventError);
 		expect(() => {
 			agg.testApply(
 				createDomainEvent(
@@ -1704,11 +1707,103 @@ describe("replay trusts history", () => {
 					{ aggregateId: "test-1", aggregateType: "SomeoneElse" },
 				) as TestEventUpdated,
 			);
-		}).toThrow(ForeignEventError);
+		}).toThrow(MisaddressedEventError);
 		// Nothing recorded, nothing bumped: the stream stays clean.
 		expect(agg.pendingEvents).toHaveLength(0);
 		expect(agg.version).toBe(0);
 		expect(agg.state.value).toBe(10);
+	});
+
+	it("apply() stamps missing address fields, so recorded events are always fully addressed", () => {
+		// The recordEvent guarantee, now by construction on apply itself:
+		// an address-less event cannot mutate state and then fail later
+		// at harvest (withCommit) or on the next load (replay guard).
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+		agg.testApply(
+			createDomainEvent("TestEventUpdated", {
+				newValue: 42,
+			}) as TestEventUpdated,
+		);
+
+		expect(agg.state.value).toBe(42);
+		expect(agg.pendingEvents).toHaveLength(1);
+		const recorded = agg.pendingEvents[0];
+		expect(recorded?.aggregateId).toBe("test-1");
+		expect(recorded?.aggregateType).toBe("RuleTighteningAggregate");
+		expect(Object.isFrozen(recorded)).toBe(true);
+	});
+
+	it("rejects a tampered snapshot as Err through the structural validateRestoredState hook", () => {
+		// The structural gate the review demanded: a snapshot is derived
+		// data read back from storage, so a blob no version of the model
+		// could have produced must come back as Err (discard and refold),
+		// while a RULES-tightened validateState still does not run here.
+		class StructurallyGuardedAggregate extends EventSourcedAggregate<
+			TestState,
+			TestEvent,
+			TestId
+		> {
+			protected readonly aggregateType = "StructurallyGuardedAggregate";
+
+			constructor(id: TestId, initialState: TestState) {
+				super(id, initialState);
+			}
+
+			protected validateRestoredState(state: TestState): void {
+				if (
+					typeof state.value !== "number" ||
+					typeof state.status !== "string"
+				) {
+					throw new InvalidTestEventError("snapshot state is not a TestState");
+				}
+			}
+
+			protected readonly handlers = {
+				TestEventCreated: (
+					state: TestState,
+					event: TestEventCreated,
+				): TestState => ({ ...state, value: event.payload.value }),
+				TestEventUpdated: (
+					state: TestState,
+					event: TestEventUpdated,
+				): TestState => ({ ...state, value: event.payload.newValue }),
+				TestEventActivated: (state: TestState): TestState => ({
+					...state,
+					status: "active",
+				}),
+				TestEventDeactivated: (state: TestState): TestState => ({
+					...state,
+					status: "inactive",
+				}),
+				TestEventInvalid: (state: TestState): TestState => state,
+			};
+		}
+
+		const agg = new StructurallyGuardedAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+		const tampered = {
+			state: { tampered: true } as unknown as TestState,
+			version: 7 as Version,
+			snapshotAt: new Date(),
+		};
+
+		const result = agg.restoreFromSnapshotWithEvents(tampered, []);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toBeInstanceOf(InvalidTestEventError);
+		}
+		// Untouched: state, version, and the never-persisted sentinel.
+		expect(agg.state).toEqual({ value: 10, status: "inactive" });
+		expect(agg.version).toBe(0);
+		expect(agg.persistedVersion).toBeUndefined();
 	});
 
 	it("replay from zero equals snapshot plus tail", () => {

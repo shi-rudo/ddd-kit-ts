@@ -27,7 +27,7 @@ about boundaries:
 | `QueryBus.executeUnsafe` | `R` | throws |
 | `withCommit` | `R` | throws |
 | `UnitOfWork.run` | `R` | throws |
-| `loadFromHistory` / snapshot replay | `Result<void, DomainError>` | `Err<DomainError>` for recoverable replay failures |
+| `loadFromHistory` / snapshot replay | `Result<void, DomainError>` | `Err<DomainError>` for domain-nameable corruption; wiring and infrastructure corruption still throws (`ForeignEventError`, `SnapshotSchemaMismatchError`) |
 
 The old mental shortcut "app-service boundary returns Result" is too broad.
 The bus boundary returns `Result`; the transaction helper returns whatever you
