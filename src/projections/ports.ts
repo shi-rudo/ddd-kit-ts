@@ -36,6 +36,13 @@ export function isPositionAfter(
  * the pairing); the store itself is a dumb last-write-wins record,
  * monotonicity is the projector's job.
  *
+ * The watermark key assumes aggregate ids are unique across every
+ * aggregate TYPE feeding one projection. App-side generated ids (the
+ * kit's default: UUIDs via `crypto.randomUUID()`) are; per-type
+ * sequences ("order 1", "payment 1") are not. If your ids are only
+ * unique per type, qualify them at the source (e.g. prefix the type)
+ * before they reach events and checkpoints.
+ *
  * Production adapters put the checkpoint table in the same database
  * as the read model, so update and checkpoint commit atomically: a
  * checkpoint without its update loses events, an update without its

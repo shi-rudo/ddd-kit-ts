@@ -148,7 +148,10 @@ intend to replay from the beginning.
 
 ## Checkpoints
 
-The projector stores one watermark per `(projection, aggregateId)`.
+The projector stores one watermark per `(projection, aggregateId)`. That key
+assumes aggregate ids are unique across the aggregate types feeding the
+projection, which app-side generated ids (the kit's default: UUIDs) are;
+per-type sequences need qualifying at the source.
 
 ```ts
 interface ProjectionPosition {

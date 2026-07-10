@@ -34,6 +34,7 @@ const INDEX_SURFACE = [
 	"EventBusImpl",
 	"EventHarvestError",
 	"EventSourcedAggregate",
+	"ForeignEventError",
 	"HostileStateKeyError",
 	"IdempotencyCompletionWithoutClaimError",
 	"IdempotencyInFlightError",

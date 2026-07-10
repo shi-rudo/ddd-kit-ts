@@ -7,6 +7,244 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+3.0.0 carries everything since 2.2.0 in one breaking window. It has two
+halves. The first is a tightening pass over the core: structured errors
+with one identifier, a version bump on every `setState`, buses that
+throw on wiring bugs, one delete contract, and the get/find naming
+contract on repositories. The second is the event-driven periphery
+around that core: the outbox seam with a minimal dispatcher, command
+idempotency, projections, a snapshot store, durable deadlines, the
+specification primitive, adapter contract suites for all of it, and the
+opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
+in the sections below; every break is covered in the migration guide
+here, with a before and after.
+
+### Migration guide: 2.2.0 to 3.0.0
+
+Most of these surface at compile time. Three do not (steps 3, 5, and
+11) and deserve a deliberate pass over the call sites.
+
+#### 1. Errors carry one identifier: match on `code`
+
+Every kit error now carries a stable SCREAMING_SNAKE `code`, and
+`error.name === error.code`. The old PascalCase class names are gone
+from `error.name`.
+
+```ts
+// before (2.x)
+if (error.name === "ConcurrencyConflictError") retry();
+
+// after
+if (error.code === "CONCURRENCY_CONFLICT") retry();
+```
+
+Consumer subclasses switch to the options-object super call with an
+explicit code:
+
+```ts
+// before (2.x)
+class OrderAlreadyShippedError extends DomainError {
+  constructor(id: string) {
+    super(`Order ${id} is already shipped`);
+  }
+}
+
+// after
+class OrderAlreadyShippedError extends DomainError<"ORDER_ALREADY_SHIPPED"> {
+  constructor(id: string) {
+    super({
+      code: "ORDER_ALREADY_SHIPPED",
+      message: `Order ${id} is already shipped`,
+    });
+  }
+}
+```
+
+No base-error adoption is required: `switch (error.code)`, `instanceof
+DomainError`, and plain `retryable` / `cause` reads cover the consumer
+side; base-error's toolbox is an opt-in benefit on top.
+
+#### 2. `setState` always bumps the OCC version
+
+The implicit non-bumping default is gone (deprecated since 2.2.0). The
+one-argument call is unchanged and now safe; the rare lossy mutation is
+a word at the call site instead of a config flag.
+
+```ts
+// before (2.x): did NOT bump unless autoVersionBump was configured
+this.setState(next);
+
+// after: the same call bumps, which is what domain mutations want
+this.setState(next);
+
+// only for state that genuinely tolerates loss under a concurrent
+// write (cosmetic caches, denormalized display fields)
+this.setStateWithoutVersionBump(next);
+```
+
+Remove `autoVersionBump` from configs (`AggregateConfig` is now an
+alias of `EntityConfig`); aggregates that had it set to `true` change
+nothing else. On the event-sourced side, `apply(event)` lost its
+optional `isNew` flag the same way: replay goes through
+`loadFromHistory` / `restoreFromSnapshotWithEvents`, and `apply` is
+only for new facts.
+
+#### 3. Buses throw `UnregisteredHandlerError` (runtime change)
+
+`CommandBus.execute` and `QueryBus.execute` throw the wiring-bug error
+instead of returning it through the error channel. The type system does
+not flag old err-branches; they just become dead code.
+
+```ts
+// before (2.x): the err branch could carry a wiring bug
+const result = await commandBus.execute(command);
+if (result.isErr()) {
+  // domain failure OR "No handler registered for ..."
+}
+
+// after: the error channel only carries failures a REGISTERED
+// handler produced; catch the named type only at a deliberate seam
+const result = await commandBus.execute(command); // throws on wiring bugs
+```
+
+#### 4. `delete` takes the aggregate
+
+```ts
+// before (2.x)
+await orderRepository.delete(order.id);
+
+// after: the instance, which deletion events and the OCC predicate
+// need anyway; load first where only the id is at hand
+await orderRepository.delete(order);
+```
+
+Id-only bulk cleanup moves to repository-specific methods off the port
+(a `purgeExpired(before)` of your own naming).
+
+#### 5. Repository loads follow the get/find contract (not compile-checked)
+
+`getById` is renamed to `findById` (returns the aggregate or `null`),
+and `getByIdOrFail` is renamed to `getById` (returns the aggregate or
+throws `AggregateNotFoundError`).
+
+```ts
+// before (2.x)
+const maybe = await repo.getById(id);       // Order | null
+const order = await repo.getByIdOrFail(id); // Order, or it throws
+
+// after
+const maybe = await repo.findById(id);      // Order | null
+const order = await repo.getById(id);       // Order, or it throws
+```
+
+A missed old `getById` call site compiles cleanly against the new
+throwing method: the null check just becomes dead code and absence now
+throws. Migrate mechanically in three steps so no site is missed:
+rename `getByIdOrFail` to a placeholder, rename every `getById` to
+`findById`, rename the placeholder to `getById`.
+
+#### 6. `withCommit` / `UnitOfWork` deps carry `OutboxWriter` only
+
+The `outbox` dependency is narrowed to the write half (`add` only).
+Passing a full `Outbox` keeps working; reading it back off the deps
+object no longer typechecks.
+
+```ts
+// before (2.x): deps.outbox was the full Outbox
+await deps.outbox.getPending(10);
+
+// after: hold your own reference for the delivery side
+await withCommit({ outbox, bus, scope }, work); // full Outbox accepted
+await outbox.getPending(10);                    // your own reference
+```
+
+#### 7. Hand-rolled `EventBus` implementations add `subscribeAll`
+
+The port gained a required typed catch-all subscription. `EventBusImpl`
+users are unaffected.
+
+```ts
+class BrokerBackedBus implements EventBus<AppEvent> {
+  // new required member: deliver every event type to the handler,
+  // in the same batch as the event's typed handlers
+  subscribeAll(handler: (event: AppEvent) => Promise<void> | void): void {
+    // ...
+  }
+  // subscribe, publish, ... as before
+}
+```
+
+#### 8. Renamed and removed exports
+
+Find and replace: the `deepOmit` helper types `Key` and `PathSegment`
+are now `DeepOmitKey` and `DeepOmitPathSegment` (identical shapes).
+`computeBackoffDelay` is no longer exported (internal since 2.x); the
+retry behavior it implements is unchanged.
+
+#### 9. Node 22+ and `@shirudo/base-error` ^8
+
+`engines.node` moves to `>=22` (Node 20 reached end-of-life on
+2026-04-30). The base-error peer moves to `^8.0.0`: its
+`/presentation` and `/problem-details` subpaths merged into
+`/public-error`, `toPublicErrorView` returns the 8.x
+`LocalizedPublicError`, and `toProblemDetails` returns the 8.x
+`ProblemDetails` with the machine-readable public `code` member. The
+detailed section below has the catalog-mapping notes.
+
+#### 10. Contract-suite assertion prefixes
+
+Only relevant if tooling greps suite output: failure messages now start
+with "Contract violated:" / "Contract test skipped:" instead of the
+repository-specific prefixes. Behavior and test names are unchanged.
+
+#### 11. Replay trusts history: `validateEvent` no longer runs during replay (runtime change)
+
+`loadFromHistory` and `restoreFromSnapshotWithEvents` stop invoking
+`validateEvent`; it guards NEW facts on the `apply()` path only. History
+is already accepted fact, and decision rules change over time; before
+this change, tightening a rule could make legitimately persisted streams
+load as `Err` (today's rules rejecting yesterday's facts).
+
+```ts
+// before (2.x): ran on apply AND on every replayed event
+protected validateEvent(event: OrderEvent): void {
+  if (event.type === "OrderConfirmed" && this.state.status === "confirmed") {
+    throw new OrderAlreadyConfirmedError(this.id);
+  }
+}
+
+// after: same override, apply-path only. Structural expectations that
+// should hold during replay move into the handlers (a handler may
+// throw a DomainError for a payload it cannot map).
+```
+
+Replay gains an address guard in exchange: a history event whose
+`aggregateId` or `aggregateType` names a different aggregate is stream
+corruption and comes back as `Err(ForeignEventError)` (new code
+`FOREIGN_EVENT`), with the usual all-or-nothing rollback.
+
+### Changed (breaking): replay trusts history
+
+- `EventSourcedAggregate`: replay (`loadFromHistory`,
+  `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`; the
+  override guards new facts on the `apply()` path only. Re-checking
+  history against current rules meant a rule change could make
+  legitimately persisted streams unloadable, the classic
+  event-sourcing failure the "validate commands, trust history"
+  discipline exists to prevent. Structural expectations that should
+  hold during replay belong in the event handlers, which may throw a
+  `DomainError` for a payload they cannot map.
+- New replay address guard: a history event whose `aggregateId` or
+  `aggregateType` names a different aggregate returns
+  `Err(ForeignEventError)` (code `FOREIGN_EVENT`, a `DomainError`,
+  exported from the main entry) with the usual all-or-nothing
+  rollback. Events without the optional address fields pass unchecked.
+- Documented assumption made explicit on `ProjectionCheckpointStore`
+  and `EventStore`: checkpoint and stream keys use the aggregate id
+  alone and therefore assume ids unique across aggregate types
+  (app-side UUIDs are; per-type sequences need qualifying at the
+  source).
+
 ### Added: ports speak the domain's language
 
 - The design-decisions guide states the driven-port return rule in one
@@ -302,37 +540,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a placeholder, rename every `getById` to `findById`, rename the placeholder
   to `getById`. A plain two-step rename leaves old `getById` call sites
   compiling against the new throwing method.
-
-## [3.0.0] - 2026-07-05
-
-v3 is a deliberately small "tightening" major: every breaking change
-fails at COMPILE time instead of changing runtime semantics silently.
-Upgrade checklist (details and rationale in the sections below):
-
-0. Kit errors are structured now: every error carries a stable
-   SCREAMING_SNAKE `code`, and `error.name === error.code` (the old
-   PascalCase class names are gone from `error.name`). Re-key
-   `error.name` matching to the codes (e.g. "ConcurrencyConflictError"
-   becomes "CONCURRENCY_CONFLICT"); consumer subclasses of
-   `DomainError` / `InfrastructureError` switch to the options-object
-   super call with an explicit `code`.
-1. `AggregateRoot.setState(next)` now ALWAYS bumps the OCC version.
-   Call sites that relied on the implicit non-bumping default and
-   genuinely tolerate loss under a concurrent write switch to the new
-   `setStateWithoutVersionBump(next)`; everything else keeps its
-   one-argument call and gains the safe behavior. Remove
-   `autoVersionBump` from configs.
-2. Remove err-branches that matched the "No handler registered" message
-   or the `UnregisteredHandlerError` type on the bus error channel:
-   `execute` now throws it. Catch the named type where the case must be
-   handled at a specific seam.
-3. Change `repository.delete(id)` implementations and call sites to
-   `delete(aggregate)`; load first where only the id is at hand. Bulk
-   purges move to repository-specific methods off the port.
-4. Find-and-replace the `deepOmit` type names `Key` and `PathSegment`
-   with `DeepOmitKey` and `DeepOmitPathSegment`; stop importing
-   `computeBackoffDelay` (internal).
-5. Runtime and peers: Node 22+ and `@shirudo/base-error` ^8.
 
 ### Changed (breaking): kit errors are StructuredErrors with one identifier
 

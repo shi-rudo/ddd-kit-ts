@@ -2,6 +2,7 @@ import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vitest";
 import {
 	DomainError,
+	ForeignEventError,
 	MissingHandlerError,
 	SnapshotSchemaMismatchError,
 	UnreplayableAggregateError,
@@ -146,6 +147,10 @@ class ValidatingAggregate extends EventSourcedAggregate<
 		}
 	}
 
+	// The handler throws too: replay does not run validateEvent, so the
+	// replay-corruption tests get their mid-stream DomainError from the
+	// handler (a corrupt row a handler can name), while the apply-path
+	// tests still exercise validateEvent above.
 	protected readonly handlers = {
 		TestEventCreated: (
 			state: TestState,
@@ -169,7 +174,9 @@ class ValidatingAggregate extends EventSourcedAggregate<
 			...state,
 			status: "inactive",
 		}),
-		TestEventInvalid: (state: TestState): TestState => state,
+		TestEventInvalid: (): TestState => {
+			throw new InvalidTestEventError("forbidden event type");
+		},
 	};
 }
 
@@ -1561,5 +1568,173 @@ describe("EventSourcedAggregate", () => {
 			// Rolled back: persistedVersion is back to the pre-call baseline.
 			expect(agg.persistedVersion).toBe(baselineBeforeRestore);
 		});
+	});
+});
+
+describe("replay trusts history", () => {
+	// Today's decision rule forbids activating an already-active
+	// aggregate; the history below was recorded before that rule
+	// existed. Replay must load it anyway: history is accepted fact.
+	class RuleTighteningAggregate extends EventSourcedAggregate<
+		TestState,
+		TestEvent,
+		TestId
+	> {
+		protected readonly aggregateType = "RuleTighteningAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		protected validateEvent(event: TestEvent): void {
+			if (
+				event.type === "TestEventActivated" &&
+				this.state.status === "active"
+			) {
+				throw new AlreadyActiveError();
+			}
+		}
+
+		public testApply(event: TestEvent): void {
+			this.apply(event);
+		}
+
+		protected readonly handlers = {
+			TestEventCreated: (
+				state: TestState,
+				event: TestEventCreated,
+			): TestState => ({ ...state, value: event.payload.value }),
+			TestEventUpdated: (
+				state: TestState,
+				event: TestEventUpdated,
+			): TestState => ({ ...state, value: event.payload.newValue }),
+			TestEventActivated: (state: TestState): TestState => ({
+				...state,
+				status: "active",
+			}),
+			TestEventDeactivated: (state: TestState): TestState => ({
+				...state,
+				status: "inactive",
+			}),
+			TestEventInvalid: (state: TestState): TestState => state,
+		};
+	}
+
+	it("replays history that today's decision rules would reject", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+		]);
+
+		expect(result.isOk()).toBe(true);
+		expect(agg.state.status).toBe("active");
+		expect(agg.version).toBe(2);
+	});
+
+	it("still validates the same rule for NEW facts through apply()", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "active",
+		});
+
+		expect(() => {
+			agg.testApply(
+				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+			);
+		}).toThrow(AlreadyActiveError);
+	});
+
+	it("rejects a replayed event addressed to another aggregate id as corruption", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent(
+				"TestEventUpdated",
+				{ newValue: 99 },
+				{ aggregateId: "someone-else" },
+			) as TestEventUpdated,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toBeInstanceOf(ForeignEventError);
+			expect(result.error.code).toBe("FOREIGN_EVENT");
+		}
+		// Same all-or-nothing contract as every other replay corruption.
+		expect(agg.state).toEqual({ value: 10, status: "inactive" });
+		expect(agg.version).toBe(0);
+	});
+
+	it("rejects a replayed event of another aggregate type", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent(
+				"TestEventUpdated",
+				{ newValue: 99 },
+				{ aggregateId: "test-1", aggregateType: "SomeoneElse" },
+			) as TestEventUpdated,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toBeInstanceOf(ForeignEventError);
+		}
+	});
+
+	it("accepts replayed events that carry the matching address", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent(
+				"TestEventUpdated",
+				{ newValue: 99 },
+				{ aggregateId: "test-1", aggregateType: "RuleTighteningAggregate" },
+			) as TestEventUpdated,
+		]);
+
+		expect(result.isOk()).toBe(true);
+		expect(agg.state.value).toBe(99);
+	});
+
+	it("guards the snapshot catch-up path the same way", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+		const snapshot: AggregateSnapshot<TestState> = {
+			state: { value: 50, status: "active" },
+			version: 5 as Version,
+			snapshotAt: new Date(),
+		};
+
+		const result = agg.restoreFromSnapshotWithEvents(snapshot, [
+			createDomainEvent(
+				"TestEventUpdated",
+				{ newValue: 51 },
+				{ aggregateId: "someone-else" },
+			) as TestEventUpdated,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toBeInstanceOf(ForeignEventError);
+		}
+		expect(agg.state).toEqual({ value: 0, status: "inactive" });
+		expect(agg.version).toBe(0);
 	});
 });
