@@ -5,7 +5,9 @@ import {
 	ForeignEventError,
 	MisaddressedEventError,
 	MissingHandlerError,
+	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
+	UnfrozenEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -1758,7 +1760,7 @@ describe("replay trusts history", () => {
 					typeof state.value !== "number" ||
 					typeof state.status !== "string"
 				) {
-					throw new InvalidTestEventError("snapshot state is not a TestState");
+					throw new SnapshotCorruptedError("snapshot state is not a TestState");
 				}
 			}
 
@@ -1798,12 +1800,68 @@ describe("replay trusts history", () => {
 
 		expect(result.isErr()).toBe(true);
 		if (result.isErr()) {
-			expect(result.error).toBeInstanceOf(InvalidTestEventError);
+			// An InfrastructureError, deliberately recoverable through the
+			// Result channel: corrupted persistence is a storage problem,
+			// and the load recipe answers Err with discard-and-refold.
+			expect(result.error).toBeInstanceOf(SnapshotCorruptedError);
+			expect(result.error.code).toBe("SNAPSHOT_CORRUPTED");
 		}
 		// Untouched: state, version, and the never-persisted sentinel.
 		expect(agg.state).toEqual({ value: 10, status: "inactive" });
 		expect(agg.version).toBe(0);
 		expect(agg.persistedVersion).toBeUndefined();
+	});
+
+	it("rejects a hand-rolled mutable event before anything moves", () => {
+		// createDomainEvent deep-freezes and defensively copies; a bare
+		// literal bypasses that, and a mutable payload could diverge from
+		// the state change it records. Rejected BEFORE validate/dispatch,
+		// so state, version, and pendingEvents stay clean.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const minted = createDomainEvent("TestEventUpdated", {
+			newValue: 99,
+		}) as TestEventUpdated;
+		const literal = {
+			...minted,
+			payload: { newValue: 99 },
+		} as TestEventUpdated;
+
+		expect(() => agg.testApply(literal)).toThrow(UnfrozenEventError);
+		expect(agg.state.value).toBe(10);
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+
+		// A frozen event with a MUTABLE payload is equally rejected: the
+		// shallow probe covers the realistic literal shapes.
+		const frozenShellMutablePayload = Object.freeze({
+			...minted,
+			payload: { newValue: 99 },
+		}) as TestEventUpdated;
+		expect(() => agg.testApply(frozenShellMutablePayload)).toThrow(
+			UnfrozenEventError,
+		);
+	});
+
+	it("replay accepts plain unfrozen objects from storage adapters", () => {
+		// The immutability gate guards the RECORDING paths only: replay
+		// input comes from storage drivers as plain rows and never enters
+		// pendingEvents, so it is not required to be frozen.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+		const minted = createDomainEvent("TestEventUpdated", {
+			newValue: 7,
+		}) as TestEventUpdated;
+		const row = { ...minted, payload: { newValue: 7 } } as TestEventUpdated;
+
+		const result = agg.loadFromHistory([row]);
+
+		expect(result.isOk()).toBe(true);
+		expect(agg.state.value).toBe(7);
 	});
 
 	it("replay from zero equals snapshot plus tail", () => {

@@ -283,6 +283,46 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 }
 
 /**
+ * The structural-integrity rejection for a restored snapshot: thrown
+ * by a consumer's `validateRestoredState` override when the stored
+ * blob could not have been produced by any version of the model
+ * (missing fields, impossible types, truncated data). An
+ * `InfrastructureError`, because corrupted persistence is a storage
+ * problem, never a business rejection; it is nevertheless RECOVERABLE
+ * by design: `restoreFromSnapshotWithEvents` catches it into its
+ * `Result` channel, and the documented load recipe answers an `Err`
+ * by discarding the snapshot and refolding from the stream.
+ */
+export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUPTED"> {
+	constructor(message: string, cause?: unknown) {
+		super({ code: "SNAPSHOT_CORRUPTED", message, cause });
+	}
+}
+
+/**
+ * Thrown when an event reaches the aggregate's recording paths
+ * (`apply`, `commit`, `addDomainEvent`) without the immutability the
+ * kit's constructors guarantee: `createDomainEvent` / `recordEvent`
+ * deep-freeze the event and defensively copy the payload, so a
+ * non-frozen event (or one with a mutable object payload) is a
+ * hand-rolled literal that bypassed them. Rejecting it keeps recorded
+ * events and aggregate state from silently diverging through later
+ * mutation of a shared reference. A wiring error: deterministic bug
+ * at the call site, the remedy is minting through the constructors.
+ */
+export class UnfrozenEventError extends KitWiringError<"UNFROZEN_EVENT"> {
+	constructor(eventType: string) {
+		super(
+			"UNFROZEN_EVENT",
+			`Event "${eventType}" is not frozen. Recorded events must be minted ` +
+				"via createDomainEvent(...) or this.recordEvent(...), which " +
+				"deep-freeze the event and defensively copy the payload; a " +
+				"mutable event could diverge from the state change it records.",
+		);
+	}
+}
+
+/**
  * Thrown by the replay entry points (`loadFromHistory`,
  * `restoreFromSnapshotWithEvents`) when a HISTORY event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
@@ -839,9 +879,11 @@ export type KitErrorCode =
 	| "NESTED_UNIT_OF_WORK"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "ROLLBACK_FAILED"
+	| "SNAPSHOT_CORRUPTED"
 	| "SNAPSHOT_SCHEMA_MISMATCH"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
+	| "UNFROZEN_EVENT"
 	| "UNKNOWN_CURRENCY"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

@@ -178,36 +178,36 @@ export interface DomainEvent<T extends string, P = void> {
 	 * `metadata.causationId`. Defaults to `crypto.randomUUID()` if not
 	 * supplied.
 	 */
-	eventId: string;
+	readonly eventId: string;
 
 	/**
 	 * The type of the event, used for routing and handling.
 	 */
-	type: T;
+	readonly type: T;
 
 	/**
 	 * Identifier of the aggregate that produced the event. Optional at the
 	 * library level; set it whenever the producing aggregate is known so
 	 * downstream subscribers, outboxes, and projections can scope by entity.
 	 */
-	aggregateId?: string;
+	readonly aggregateId?: string;
 
 	/**
 	 * Name of the aggregate type that produced the event (e.g. "Order").
 	 * Pairs with `aggregateId` to fully qualify the source aggregate.
 	 */
-	aggregateType?: string;
+	readonly aggregateType?: string;
 
 	/**
 	 * The event payload containing the domain data. The field is always
 	 * present; its value is `undefined` when `P` is `void`.
 	 */
-	payload: P;
+	readonly payload: P;
 
 	/**
 	 * Timestamp when the event occurred.
 	 */
-	occurredAt: Date;
+	readonly occurredAt: Date;
 
 	/**
 	 * Event schema version for handling schema evolution.
@@ -220,7 +220,7 @@ export interface DomainEvent<T extends string, P = void> {
 	 * (upcasting), the other says "which state revision of the
 	 * aggregate emitted this".
 	 */
-	version: number;
+	readonly version: number;
 
 	/**
 	 * The version of the producing aggregate at COMMIT time: the same
@@ -240,7 +240,7 @@ export interface DomainEvent<T extends string, P = void> {
 	 * (system/integration events) and events from older kit versions
 	 * don't carry it.
 	 */
-	aggregateVersion?: number;
+	readonly aggregateVersion?: number;
 
 	/**
 	 * Zero-based index of the event within its aggregate's harvest batch,
@@ -253,13 +253,13 @@ export interface DomainEvent<T extends string, P = void> {
 	 * `aggregateVersion` (system events, older kit versions, hand-rolled
 	 * orchestrations).
 	 */
-	commitSequence?: number;
+	readonly commitSequence?: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
 	 * Includes correlationId, causationId, userId, source, and custom fields.
 	 */
-	metadata?: EventMetadata;
+	readonly metadata?: EventMetadata;
 }
 
 /**

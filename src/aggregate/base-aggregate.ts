@@ -1,5 +1,6 @@
 import {
 	SnapshotSchemaMismatchError,
+	UnfrozenEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -256,7 +257,27 @@ export abstract class BaseAggregate<
 	 * deletion event before a hard-delete; see `docs/guide/repository.md`).
 	 */
 	protected addDomainEvent(event: TEvent): void {
+		this.assertMintedEvent(event);
 		this._pendingEvents.push(event);
+	}
+
+	/**
+	 * Immutability gate for every recording path: the kit's event
+	 * constructors (`createDomainEvent`, `recordEvent`) deep-freeze the
+	 * event and defensively copy the payload, so anything non-frozen is
+	 * a hand-rolled literal whose later mutation could diverge from the
+	 * state change it records. O(1): two `Object.isFrozen` probes, no
+	 * deep walk (the constructors already guarantee the depth).
+	 */
+	protected assertMintedEvent(event: TEvent): void {
+		const payload = (event as AnyDomainEvent).payload;
+		const payloadMutable =
+			typeof payload === "object" &&
+			payload !== null &&
+			!Object.isFrozen(payload);
+		if (!Object.isFrozen(event) || payloadMutable) {
+			throw new UnfrozenEventError((event as AnyDomainEvent).type);
+		}
 	}
 
 	/**

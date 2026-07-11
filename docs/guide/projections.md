@@ -195,6 +195,21 @@ interface ProjectionCheckpointStore<TCtx> {
 `commitSequence`. Together they form a total order for one aggregate. The
 projector uses that pair to skip duplicates and stale events.
 
+One precondition carries the whole mechanism: events of one aggregate must
+reach the projector in order. The watermark absorbs redelivery; it does not
+create ordering, and it cannot tell a redelivered duplicate from an earlier
+event that never arrived. The kit's own dispatcher delivers sequentially, a
+broker feed needs partitioning or FIFO keyed by the aggregate address, and an
+event-store replay is ordered by construction. If your transport can reorder
+events of one aggregate (a standard SQS queue, competing consumers on one
+topic), put a resequencer in front of the projector or accept that the
+remediation for a dropped straggler is a rebuild.
+
+The `aggregateType` in the address is a technical stream category: unique
+across everything feeding one checkpoint store. Two bounded contexts may both
+have an `Order`; if their events share projection infrastructure, qualify the
+name at the source ("sales.order", "fulfillment.order").
+
 This means your `apply` handler does not need a per-row event-id column for
 the normal kit path. If the dispatcher redelivers the same event after a
 crash, the checkpoint sees that the event is at or behind the watermark and

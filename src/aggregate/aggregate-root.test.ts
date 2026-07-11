@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	SnapshotSchemaMismatchError,
+	UnfrozenEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -879,6 +880,23 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				return this.recordEvent("Updated", { value });
 			}
 		}
+
+		it("rejects a hand-rolled mutable event BEFORE the state moves", () => {
+			// The immutability gate runs over the event list before
+			// setState: a rejected event must not leave a mutated aggregate
+			// without its recorded fact.
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			const minted = agg.recordTestEvent(42);
+			const literal = { ...minted, payload: { value: 42 } } as Ev;
+
+			expect(() => agg.update(42, literal)).toThrow(UnfrozenEventError);
+			expect(agg.state.value).toBe(10);
+			expect(agg.version).toBe(0);
+			expect(agg.pendingEvents).toHaveLength(0);
+		});
 
 		it("mutates state, then records the event, in that order", () => {
 			const agg = new CommitAggregate("test-1" as TestId, {

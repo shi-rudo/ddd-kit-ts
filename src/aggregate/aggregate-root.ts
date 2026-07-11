@@ -256,10 +256,15 @@ export abstract class AggregateRoot<
 		newState: TState,
 		events: TEvent | readonly TEvent[] = [],
 	): void {
-		this.setState(newState);
 		const list: readonly TEvent[] = Array.isArray(events)
 			? events
 			: [events as TEvent];
+		// Events are checked BEFORE the state moves: a rejected event must
+		// not leave a mutated aggregate without its recorded fact.
+		for (const ev of list) {
+			this.assertMintedEvent(ev);
+		}
+		this.setState(newState);
 		for (const ev of list) {
 			this.addDomainEvent(ev);
 		}

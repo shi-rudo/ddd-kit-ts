@@ -72,11 +72,23 @@ function defaultPosition(
  *   watermark. It is never possible to checkpoint an unapplied event or
  *   apply an uncheckpointed one, and a retrying scope re-runs the
  *   callback from zero (counts included).
+ * - **In-order delivery per aggregate is a PRECONDITION, not something
+ *   the watermark creates.** The watermark only recognizes positions at
+ *   or behind itself; it cannot tell a redelivered duplicate from a
+ *   straggler that was never applied, so under a feed that reorders
+ *   events of ONE aggregate, a late-arriving earlier event is dropped
+ *   and the read model stays permanently wrong. Compliant feeds: the
+ *   kit's `OutboxDispatcher` (sequential, stop-on-failure), a broker
+ *   partitioned or FIFO-keyed by the aggregate address, or an
+ *   event-store replay in stream order via the `position` extractor.
+ *   A transport without per-aggregate ordering needs a resequencer in
+ *   front of the projector, or a rebuild as the remediation.
  * - **Duplicates and stale events are skipped via the cursor.** An
  *   event at or behind the stored `(aggregateVersion, commitSequence)`
  *   watermark of its aggregate is counted as skipped, not applied:
- *   at-least-once redelivery and out-of-order stragglers are absorbed
- *   here, not in every handler.
+ *   under the ordering precondition above, everything below the
+ *   watermark is at-least-once redelivery, absorbed here instead of in
+ *   every handler.
  * - **Uncursored events reject loudly.** An event without stamps (and
  *   no custom `position` extractor covering it), or without an
  *   `aggregateId` / `aggregateType`, fails the batch BEFORE anything

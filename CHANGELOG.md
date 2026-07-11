@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Three do not (steps 3, 5, and
-11) and deserve a deliberate pass over the call sites.
+Most of these surface at compile time. Four do not (steps 3, 5, 11,
+and 12) and deserve a deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -234,8 +234,48 @@ mapping), with the usual all-or-nothing rollback; history events
 without the optional stamps pass, since legacy streams predate them.
 Snapshots keep a STRUCTURAL gate separate from the rules: override the
 new `validateRestoredState(state)` to reject blobs no version of the
-model could have produced; its `DomainError` comes back as `Err` for
-the discard-and-refold recipe.
+model could have produced, throwing the new `SnapshotCorruptedError`
+(code `SNAPSHOT_CORRUPTED`, an `InfrastructureError`: corrupted
+persistence is a storage problem, not a business rejection). It comes
+back as `Err` alongside the `DomainError` decode failures, feeding the
+discard-and-refold recipe;
+`restoreFromSnapshotWithEvents` is now typed
+`Result<void, DomainError | SnapshotCorruptedError>`.
+
+#### 12. Events are `readonly` and must be minted (runtime component)
+
+Every field on `DomainEvent` is `readonly` now, and the recording paths
+(`apply`, `commit`, `addDomainEvent`) reject events that are not frozen
+the way the kit's constructors leave them, with the new wiring error
+`UnfrozenEventError` (code `UNFROZEN_EVENT`), before any state moves.
+Events minted via `createDomainEvent(...)` or `this.recordEvent(...)`
+are deeply frozen and pass unchanged; only hand-rolled object literals
+are affected, and those are the point: a mutable event recorded next to
+a state change can silently diverge from it afterwards.
+
+```ts
+// before (2.x): a literal was accepted and stayed mutable
+this.apply({ eventId, type: "OrderConfirmed", payload, occurredAt, version: 1 });
+
+// after: mint it, which also stamps the address
+this.apply(this.recordEvent("OrderConfirmed", payload));
+```
+
+The rejection is runtime-only for literal-passers (a literal satisfies
+the `readonly` interface at compile time), hence the deliberate pass.
+
+### Changed (breaking): events are readonly and minted
+
+- Every `DomainEvent` field is `readonly` at the type level, matching
+  the runtime deep-freeze the constructors have always applied. The
+  recording paths (`apply`, `commit`, `addDomainEvent`) now enforce
+  the mint: an event that is not frozen, or whose object payload is
+  mutable, throws the new wiring error `UnfrozenEventError` (code
+  `UNFROZEN_EVENT`, exported from the main entry) BEFORE any state
+  moves, so a rejected event can never leave a mutated aggregate
+  without its recorded fact. The probe is O(1) (two `Object.isFrozen`
+  calls); replay input from storage adapters is deliberately exempt,
+  since it never enters `pendingEvents`.
 
 ### Changed (breaking): replay trusts history
 
@@ -412,7 +452,17 @@ the discard-and-refold recipe.
   either half cannot collide two addresses. The contract suite proves
   cross-type isolation and separator hostility; the `aggregateType`
   string is thereby part of the checkpoint contract (renaming an
-  aggregate type means migrating its checkpoint rows).
+  aggregate type means migrating its checkpoint rows), and it is a
+  TECHNICAL stream category: unique across everything feeding one
+  checkpoint store, qualified at the source ("sales.order") when
+  bounded contexts sharing infrastructure reuse a name.
+- In-order delivery per aggregate is a documented PRECONDITION of the
+  projector, not something the watermark creates: the watermark
+  absorbs at-least-once redelivery but cannot tell a duplicate from a
+  straggler that never applied, so a reordering transport needs a
+  resequencer in front of the projector (or a rebuild as remediation).
+  The kit's dispatcher, partitioned/FIFO broker feeds, and stream-order
+  replays satisfy it by construction.
 - `ProjectionCheckpointStore` port, `Projector` runner, and
   `InMemoryProjectionCheckpointStore` reference: the projection
   mechanics `read-model-design.md` demands, so a consumer's

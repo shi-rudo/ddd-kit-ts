@@ -4,6 +4,7 @@ import {
 	ForeignEventError,
 	MisaddressedEventError,
 	MissingHandlerError,
+	SnapshotCorruptedError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -118,7 +119,9 @@ export abstract class EventSourcedAggregate<
 	 * truncated data): a snapshot is DERIVED data read back from
 	 * storage, so unlike replay (where every state is built by the
 	 * handlers from accepted facts) the restored blob deserves a
-	 * structural gate. Throw a `DomainError` and
+	 * structural gate. Throw {@link SnapshotCorruptedError} (an
+	 * `InfrastructureError`: corrupted persistence is a storage
+	 * problem, not a business rejection) and
 	 * `restoreFromSnapshotWithEvents` returns it as `Err`, which the
 	 * documented load recipe answers by discarding the snapshot and
 	 * refolding from the stream.
@@ -188,6 +191,10 @@ export abstract class EventSourcedAggregate<
 	private stampNewEventAddress<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
 	): Extract<TEvent, { type: K }> {
+		// Immutability first: runs before validate/dispatch so a rejected
+		// event cannot leave mutated state behind (addDomainEvent would
+		// catch it too, but only after the handler already committed).
+		this.assertMintedEvent(event);
 		const { aggregateId, aggregateType } = event;
 		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
 		const typeForeign =
@@ -358,7 +365,7 @@ export abstract class EventSourcedAggregate<
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
-	): Result<void, DomainError> {
+	): Result<void, DomainError | SnapshotCorruptedError> {
 		assertRestoreTargetHasNoPendingEvents(this);
 		const previousState = this._state;
 		const previousVersion = this.version;
@@ -366,11 +373,11 @@ export abstract class EventSourcedAggregate<
 
 		// Resolve, convert, and structurally check BEFORE anything is
 		// assigned, under the method's documented Result contract: a
-		// DomainError from migrateSnapshotState, fromSnapshotState, or
-		// validateRestoredState maps to Err (the repository's
-		// discard-and-refold branch must see it), while
-		// SnapshotSchemaMismatchError (an InfrastructureError) and other
-		// non-domain throws propagate. Deliberately NOT validated with
+		// DomainError from migrateSnapshotState / fromSnapshotState and a
+		// SnapshotCorruptedError from validateRestoredState map to Err
+		// (the repository's discard-and-refold branch must see both),
+		// while SnapshotSchemaMismatchError (a configuration gap, not
+		// corruption) and other throws propagate. Deliberately NOT validated with
 		// `validateState`: those are today's decision rules, and a
 		// snapshot persisted under yesterday's rules must keep loading
 		// ("replay from zero equals snapshot plus tail").
@@ -381,7 +388,9 @@ export abstract class EventSourcedAggregate<
 			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
 			this.validateRestoredState(restored);
 		} catch (e) {
-			if (e instanceof DomainError) return err(e);
+			if (e instanceof DomainError || e instanceof SnapshotCorruptedError) {
+				return err(e);
+			}
 			throw e;
 		}
 

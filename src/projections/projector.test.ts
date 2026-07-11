@@ -80,7 +80,13 @@ describe("Projector", () => {
 		expect(rows).toEqual(["evt-o-1-1-0", "evt-o-1-2-0", "evt-o-2-1-0"]);
 	});
 
-	it("skips a stale straggler that arrives after a later event was applied", async () => {
+	it("skips positions at or behind the watermark (duplicate absorption under the ordering precondition)", async () => {
+		// The watermark cannot distinguish a redelivered duplicate from a
+		// straggler that never applied; per-aggregate in-order delivery is
+		// a documented PRECONDITION of the projector, and this pin shows
+		// the consequence side: whatever arrives behind the watermark is
+		// dropped, which is correct for redelivery and permanently wrong
+		// for a reordering feed (which must resequence or rebuild).
 		const rows: string[] = [];
 		const projector = new Projector({
 			scope: passthroughScope,

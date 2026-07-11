@@ -36,6 +36,16 @@ export function isPositionAfter(
  * checkpoint contract: renaming an aggregate type orphans its
  * checkpoints, so treat the string as a stable identifier and migrate
  * checkpoint rows deliberately when it must change.
+ *
+ * `aggregateType` is a TECHNICAL stream category and must be unique
+ * across everything feeding one checkpoint store, not just within one
+ * bounded context. Contexts may reuse the same ubiquitous-language
+ * name (a Sales `Order` and a Fulfillment `Order` are different
+ * models); when their events share projection infrastructure, qualify
+ * the string at the source ("sales.order", "fulfillment.order"). The
+ * kit deliberately adds no `boundedContext` field: the address stays
+ * two fields, and the qualification is the consumer's naming decision
+ * (same field-accretion line as on `DomainEvent`).
  */
 export interface AggregateAddress {
 	readonly aggregateType: string;
