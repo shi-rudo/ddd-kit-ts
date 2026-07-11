@@ -107,7 +107,7 @@ export {
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
 	UnenrolledChangesError,
-	UnfrozenEventError,
+	UnmintedEventError,
 	UnprojectableEventError,
 	UnregisteredHandlerError,
 	type UnregisteredHandlerErrorOptions,

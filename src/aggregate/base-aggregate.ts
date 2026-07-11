@@ -1,6 +1,6 @@
 import {
 	SnapshotSchemaMismatchError,
-	UnfrozenEventError,
+	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -13,6 +13,7 @@ import {
 	type CreateDomainEventOptions,
 	createDomainEvent,
 	type DomainEvent,
+	isMintedEvent,
 } from "./domain-event";
 
 /**
@@ -262,21 +263,17 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Immutability gate for every recording path: the kit's event
-	 * constructors (`createDomainEvent`, `recordEvent`) deep-freeze the
-	 * event and defensively copy the payload, so anything non-frozen is
-	 * a hand-rolled literal whose later mutation could diverge from the
-	 * state change it records. O(1): two `Object.isFrozen` probes, no
-	 * deep walk (the constructors already guarantee the depth).
+	 * Immutability gate for every recording path: only events minted by
+	 * the kit's constructors (`createDomainEvent`, `recordEvent`) pass,
+	 * checked against the constructor's internal, unforgeable mint
+	 * marker. Minted implies deeply frozen with defensively copied
+	 * payload and metadata, a guarantee no frozen-ness probe can
+	 * establish (a shallow-frozen literal with mutable nested data
+	 * would fool it). O(1): one WeakSet lookup.
 	 */
 	protected assertMintedEvent(event: TEvent): void {
-		const payload = (event as AnyDomainEvent).payload;
-		const payloadMutable =
-			typeof payload === "object" &&
-			payload !== null &&
-			!Object.isFrozen(payload);
-		if (!Object.isFrozen(event) || payloadMutable) {
-			throw new UnfrozenEventError((event as AnyDomainEvent).type);
+		if (!isMintedEvent(event)) {
+			throw new UnmintedEventError((event as AnyDomainEvent).type);
 		}
 	}
 

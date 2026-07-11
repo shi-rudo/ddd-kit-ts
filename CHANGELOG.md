@@ -245,13 +245,16 @@ discard-and-refold recipe;
 #### 12. Events are `readonly` and must be minted (runtime component)
 
 Every field on `DomainEvent` is `readonly` now, and the recording paths
-(`apply`, `commit`, `addDomainEvent`) reject events that are not frozen
-the way the kit's constructors leave them, with the new wiring error
-`UnfrozenEventError` (code `UNFROZEN_EVENT`), before any state moves.
-Events minted via `createDomainEvent(...)` or `this.recordEvent(...)`
-are deeply frozen and pass unchanged; only hand-rolled object literals
-are affected, and those are the point: a mutable event recorded next to
-a state change can silently diverge from it afterwards.
+(`apply`, `commit`, `addDomainEvent`) accept only events minted by the
+kit's constructors, checked against an internal, unforgeable mint
+marker; anything else throws the new wiring error `UnmintedEventError`
+(code `UNMINTED_EVENT`) before any state moves. Events minted via
+`createDomainEvent(...)` or `this.recordEvent(...)` are deeply frozen
+with defensively copied payload and metadata and pass unchanged; only
+hand-rolled objects are affected, and those are the point: a mutable
+event recorded next to a state change can silently diverge from it
+afterwards, and no frozen-ness probe can rule that out (a
+shallow-frozen literal with mutable nested data would pass one).
 
 ```ts
 // before (2.x): a literal was accepted and stayed mutable
@@ -269,13 +272,16 @@ the `readonly` interface at compile time), hence the deliberate pass.
 - Every `DomainEvent` field is `readonly` at the type level, matching
   the runtime deep-freeze the constructors have always applied. The
   recording paths (`apply`, `commit`, `addDomainEvent`) now enforce
-  the mint: an event that is not frozen, or whose object payload is
-  mutable, throws the new wiring error `UnfrozenEventError` (code
-  `UNFROZEN_EVENT`, exported from the main entry) BEFORE any state
+  the mint through an internal, unforgeable marker (`WeakSet`, written
+  only by `createDomainEvent`): an event the constructors did not
+  produce throws the new wiring error `UnmintedEventError` (code
+  `UNMINTED_EVENT`, exported from the main entry) BEFORE any state
   moves, so a rejected event can never leave a mutated aggregate
-  without its recorded fact. The probe is O(1) (two `Object.isFrozen`
-  calls); replay input from storage adapters is deliberately exempt,
-  since it never enters `pendingEvents`.
+  without its recorded fact. Provenance instead of frozen-ness probes,
+  because probes cannot establish deep immutability (a shallow-frozen
+  literal with mutable nested payload or metadata would pass). O(1),
+  one `WeakSet` lookup; replay input from storage adapters is
+  deliberately exempt, since it never enters `pendingEvents`.
 
 ### Changed (breaking): replay trusts history
 

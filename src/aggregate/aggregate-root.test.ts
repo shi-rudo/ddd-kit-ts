@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	SnapshotSchemaMismatchError,
-	UnfrozenEventError,
+	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -892,7 +892,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const minted = agg.recordTestEvent(42);
 			const literal = { ...minted, payload: { value: 42 } } as Ev;
 
-			expect(() => agg.update(42, literal)).toThrow(UnfrozenEventError);
+			expect(() => agg.update(42, literal)).toThrow(UnmintedEventError);
 			expect(agg.state.value).toBe(10);
 			expect(agg.version).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(0);

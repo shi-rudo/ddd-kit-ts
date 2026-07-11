@@ -362,6 +362,36 @@ export interface CreateDomainEventOptions {
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
+// Every event createDomainEvent returns is registered here: an
+// unforgeable mint marker (nothing outside this module can add to the
+// set), so the aggregate recording paths can check "minted by the
+// constructor" directly instead of approximating it with frozen-ness
+// probes. Minted implies deeply frozen with owned payload/metadata.
+// WeakSet entries do not keep events alive.
+const MINTED_EVENTS = new WeakSet<object>();
+
+/**
+ * Whether `event` came out of {@link createDomainEvent} (or a helper
+ * built on it, such as `recordEvent`), i.e. is deeply frozen with
+ * defensively copied payload and metadata. Module-internal export for
+ * the aggregate recording paths; not part of the package entries.
+ */
+export function isMintedEvent(event: object): boolean {
+	return MINTED_EVENTS.has(event);
+}
+
+/**
+ * Registers a kit-derived frozen copy of a minted event (e.g. the
+ * address-stamped copy `apply()` creates) as minted itself: the copy
+ * shares the already-frozen payload/metadata of its source, so the
+ * mint guarantee carries over. Module-internal export; not part of
+ * the package entries.
+ */
+export function adoptMintedEvent<T extends object>(copy: T): T {
+	MINTED_EVENTS.add(copy);
+	return copy;
+}
+
 export function createDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
@@ -402,7 +432,9 @@ export function createDomainEvent<T extends string, P>(
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
-	return deepFreeze(event) as DomainEvent<T, P>;
+	const minted = deepFreeze(event) as DomainEvent<T, P>;
+	MINTED_EVENTS.add(minted);
+	return minted;
 }
 
 /**

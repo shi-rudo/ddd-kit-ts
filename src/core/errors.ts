@@ -301,23 +301,24 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 
 /**
  * Thrown when an event reaches the aggregate's recording paths
- * (`apply`, `commit`, `addDomainEvent`) without the immutability the
- * kit's constructors guarantee: `createDomainEvent` / `recordEvent`
- * deep-freeze the event and defensively copy the payload, so a
- * non-frozen event (or one with a mutable object payload) is a
- * hand-rolled literal that bypassed them. Rejecting it keeps recorded
- * events and aggregate state from silently diverging through later
- * mutation of a shared reference. A wiring error: deterministic bug
- * at the call site, the remedy is minting through the constructors.
+ * (`apply`, `commit`, `addDomainEvent`) without having been minted by
+ * the kit's constructors: `createDomainEvent` / `recordEvent`
+ * deep-freeze the event and defensively copy payload and metadata,
+ * and register the result in an internal, unforgeable mint marker.
+ * Anything else (a hand-rolled literal, a shallow-frozen copy with
+ * mutable nested data) is rejected: a mutable event recorded next to
+ * a state change can silently diverge from it afterwards. A wiring
+ * error: deterministic bug at the call site, the remedy is minting
+ * through the constructors.
  */
-export class UnfrozenEventError extends KitWiringError<"UNFROZEN_EVENT"> {
+export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 	constructor(eventType: string) {
 		super(
-			"UNFROZEN_EVENT",
-			`Event "${eventType}" is not frozen. Recorded events must be minted ` +
-				"via createDomainEvent(...) or this.recordEvent(...), which " +
-				"deep-freeze the event and defensively copy the payload; a " +
-				"mutable event could diverge from the state change it records.",
+			"UNMINTED_EVENT",
+			`Event "${eventType}" was not minted by createDomainEvent(...) or ` +
+				"this.recordEvent(...). Those constructors deep-freeze the event " +
+				"and defensively copy payload and metadata; a mutable event " +
+				"could diverge from the state change it records.",
 		);
 	}
 }
@@ -883,7 +884,7 @@ export type KitErrorCode =
 	| "SNAPSHOT_SCHEMA_MISMATCH"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
-	| "UNFROZEN_EVENT"
+	| "UNMINTED_EVENT"
 	| "UNKNOWN_CURRENCY"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

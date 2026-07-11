@@ -7,7 +7,7 @@ import {
 	MissingHandlerError,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
-	UnfrozenEventError,
+	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -1829,20 +1829,44 @@ describe("replay trusts history", () => {
 			payload: { newValue: 99 },
 		} as TestEventUpdated;
 
-		expect(() => agg.testApply(literal)).toThrow(UnfrozenEventError);
+		expect(() => agg.testApply(literal)).toThrow(UnmintedEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.version).toBe(0);
 		expect(agg.pendingEvents).toHaveLength(0);
 
-		// A frozen event with a MUTABLE payload is equally rejected: the
-		// shallow probe covers the realistic literal shapes.
+		// A frozen shell with mutable nested data is equally rejected:
+		// the mint marker checks provenance, not frozen-ness, so no
+		// shallow-freeze trick can smuggle a mutable graph past it.
 		const frozenShellMutablePayload = Object.freeze({
 			...minted,
 			payload: { newValue: 99 },
 		}) as TestEventUpdated;
 		expect(() => agg.testApply(frozenShellMutablePayload)).toThrow(
-			UnfrozenEventError,
+			UnmintedEventError,
 		);
+		const frozenShellMutableMetadata = Object.freeze({
+			...minted,
+			metadata: { correlationId: "mutable" },
+		}) as TestEventUpdated;
+		expect(() => agg.testApply(frozenShellMutableMetadata)).toThrow(
+			UnmintedEventError,
+		);
+	});
+
+	it("accepts the address-stamped copy apply() mints for address-less events", () => {
+		// The stamped copy is kit-derived from a minted event and adopted
+		// into the mint marker; the gate must not reject apply's own work.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+		agg.testApply(
+			createDomainEvent("TestEventUpdated", {
+				newValue: 5,
+			}) as TestEventUpdated,
+		);
+		expect(agg.pendingEvents).toHaveLength(1);
+		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {

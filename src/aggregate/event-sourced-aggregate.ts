@@ -17,7 +17,7 @@ import {
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import type { AnyDomainEvent } from "./domain-event";
+import { type AnyDomainEvent, adoptMintedEvent } from "./domain-event";
 
 // Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).
@@ -216,11 +216,13 @@ export abstract class EventSourcedAggregate<
 		// the event's own wider type. `aggregateId`/`aggregateType` are
 		// `string | undefined` on DomainEvent; filling them in cannot
 		// leave the declared shape.
-		const stamped: AnyDomainEvent = Object.freeze({
-			...event,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		});
+		const stamped: AnyDomainEvent = adoptMintedEvent(
+			Object.freeze({
+				...event,
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
+		);
 		return stamped as Extract<TEvent, { type: K }>;
 	}
 
