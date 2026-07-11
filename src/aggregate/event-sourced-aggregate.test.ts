@@ -1853,6 +1853,33 @@ describe("replay trusts history", () => {
 		);
 	});
 
+	it("recognizes events minted by another copy of the kit via the cooperative brand", () => {
+		// A duplicate npm dependency or a plugin bundle loads a second
+		// copy of the kit whose WeakSet this instance cannot see. Such an
+		// event carries the global-registry mint brand instead; the gate
+		// accepts it. The brand is cooperative by design (the gate catches
+		// accidental literals, it is not a security boundary).
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+		const minted = createDomainEvent("TestEventUpdated", {
+			newValue: 3,
+		}) as TestEventUpdated;
+		// Simulate instance B's output: same shape, same brand, foreign WeakSet.
+		const foreignInstanceEvent = { ...minted };
+		Object.defineProperty(
+			foreignInstanceEvent,
+			Symbol.for("@shirudo/ddd-kit.mintedEvent"),
+			{ value: true, enumerable: false },
+		);
+		Object.freeze(foreignInstanceEvent);
+
+		agg.testApply(foreignInstanceEvent as TestEventUpdated);
+
+		expect(agg.state.value).toBe(3);
+	});
+
 	it("accepts the address-stamped copy apply() mints for address-less events", () => {
 		// The stamped copy is kit-derived from a minted event and adopted
 		// into the mint marker; the gate must not reject apply's own work.

@@ -637,3 +637,59 @@ describe("commitSequence option", () => {
 		expect(createDomainEvent("Ticked", {}).commitSequence).toBeUndefined();
 	});
 });
+
+describe("binary payloads are rejected at the mint", () => {
+	// Freezing cannot make buffers immutable (the spec forbids freezing
+	// a view with elements, and a frozen view still shares its mutable
+	// buffer), so accepting them would falsify "minted implies deeply
+	// frozen". They do not survive JSON either.
+	it("rejects a top-level TypedArray payload", () => {
+		expect(() =>
+			createDomainEvent("BinaryEvent", new Uint8Array([1, 2, 3])),
+		).toThrow(/binary buffers/);
+	});
+
+	it("rejects buffers nested in payload objects, arrays, Maps, and Sets", () => {
+		expect(() =>
+			createDomainEvent("BinaryEvent", { blob: new Uint8Array(4) }),
+		).toThrow(/binary buffers/);
+		expect(() =>
+			createDomainEvent("BinaryEvent", {
+				rows: [{ raw: new DataView(new ArrayBuffer(4)) }],
+			}),
+		).toThrow(/binary buffers/);
+		expect(() =>
+			createDomainEvent("BinaryEvent", { buf: new ArrayBuffer(8) }),
+		).toThrow(/binary buffers/);
+		expect(() =>
+			createDomainEvent("BinaryEvent", {
+				m: new Map([["k", new Uint8Array(1)]]),
+			}),
+		).toThrow(/binary buffers/);
+		expect(() =>
+			createDomainEvent("BinaryEvent", { s: new Set([new Uint8Array(1)]) }),
+		).toThrow(/binary buffers/);
+	});
+
+	it("rejects buffers in metadata too", () => {
+		expect(() =>
+			createDomainEvent(
+				"BinaryEvent",
+				{ ok: true },
+				{ metadata: { raw: new Uint8Array(2) } },
+			),
+		).toThrow(/binary buffers/);
+	});
+
+	it("still accepts plain JSON-like data, Dates, Maps, and Sets", () => {
+		const event = createDomainEvent("PlainEvent", {
+			text: "a",
+			n: 1,
+			when: new Date(0),
+			tags: new Set(["x"]),
+			pairs: new Map([["k", "v"]]),
+			nested: [{ deep: true }],
+		});
+		expect(Object.isFrozen(event.payload)).toBe(true);
+	});
+});

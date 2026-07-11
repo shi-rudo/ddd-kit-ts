@@ -49,7 +49,7 @@
 		"lint": "biome lint .",
 		"format": "pnpm exec biome format --write . && pnpm exec biome lint --write . && pnpm exec biome check --write .",
 		"typecheck": "tsc --noEmit",
-		"prepublishOnly": "npm run clean && vitest run && npm run build",
+		"prepublishOnly": "npm run clean && npm run typecheck && npm run lint && vitest run && npm run build",
 		"docs:api": "typedoc",
 		"docs:dev": "typedoc && vitepress dev docs",
 		"docs:build": "typedoc && vitepress build docs",

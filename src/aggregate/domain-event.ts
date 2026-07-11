@@ -366,18 +366,38 @@ export interface CreateDomainEventOptions {
 // unforgeable mint marker (nothing outside this module can add to the
 // set), so the aggregate recording paths can check "minted by the
 // constructor" directly instead of approximating it with frozen-ness
-// probes. Minted implies deeply frozen with owned payload/metadata.
+// probes. Minted implies deeply frozen with owned payload/metadata
+// (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
 const MINTED_EVENTS = new WeakSet<object>();
+
+// Cooperative cross-instance tier of the mint check: a WeakSet is
+// bound to ONE loaded copy of this module, so an event legitimately
+// minted by a second copy of the kit (duplicate npm dependency, dual
+// CJS/ESM load, plugin bundle) would be rejected as unminted. Such
+// events are recognized by this global-registry brand instead, which
+// every copy's constructor stamps (non-enumerable, so it never leaks
+// into spreads, JSON, or equality). The brand is forgeable BY DESIGN:
+// the mint gate catches accidental hand-rolled literals, it is not a
+// security boundary against code that deliberately fakes the brand
+// inside the same process.
+const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 
 /**
  * Whether `event` came out of {@link createDomainEvent} (or a helper
  * built on it, such as `recordEvent`), i.e. is deeply frozen with
- * defensively copied payload and metadata. Module-internal export for
- * the aggregate recording paths; not part of the package entries.
+ * defensively copied payload and metadata. Two tiers: events of THIS
+ * loaded copy of the kit are verified unforgeably via the module's
+ * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
+ * CJS/ESM load) are recognized cooperatively via a global-registry
+ * brand. Module-internal export for the aggregate recording paths;
+ * not part of the package entries.
  */
 export function isMintedEvent(event: object): boolean {
-	return MINTED_EVENTS.has(event);
+	return (
+		MINTED_EVENTS.has(event) ||
+		(event as Record<symbol, unknown>)[MINT_BRAND] === true
+	);
 }
 
 /**
@@ -432,6 +452,14 @@ export function createDomainEvent<T extends string, P>(
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
+	// Brand BEFORE the freeze (a frozen object rejects new properties);
+	// non-enumerable, so spreads, JSON, and equality never see it.
+	Object.defineProperty(event, MINT_BRAND, {
+		value: true,
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
 	MINTED_EVENTS.add(minted);
 	return minted;
@@ -457,6 +485,14 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	if (value === null || typeof value !== "object") {
 		return value;
 	}
+	// Binary buffers are rejected BEFORE the clone: freezing cannot make
+	// them immutable (the spec forbids freezing a view with elements, and
+	// a frozen view still shares its mutable buffer), so accepting them
+	// would break the mint guarantee "minted implies deeply frozen". They
+	// do not survive JSON either, the wire discipline events already
+	// document; encode binary as a string (base64/hex) or store it
+	// outside the event and reference it.
+	assertNoBinaryData(value, field);
 	try {
 		return structuredClone(value);
 	} catch (cause) {
@@ -466,6 +502,58 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 				`are plain data`,
 			{ cause },
 		);
+	}
+}
+
+function isBinaryData(value: object): boolean {
+	return (
+		ArrayBuffer.isView(value) ||
+		value instanceof ArrayBuffer ||
+		(typeof SharedArrayBuffer !== "undefined" &&
+			value instanceof SharedArrayBuffer)
+	);
+}
+
+/**
+ * Walks caller-supplied event data and rejects binary buffers anywhere
+ * in the graph (TypedArray, DataView, ArrayBuffer, SharedArrayBuffer):
+ * they are mutable by construction, so the deep-freeze that backs the
+ * mint guarantee cannot cover them. Runs before the structured clone,
+ * on the small plain-data graphs events are documented to carry.
+ */
+function assertNoBinaryData(
+	value: unknown,
+	field: "payload" | "metadata",
+	visited = new WeakSet<object>(),
+): void {
+	if (value === null || typeof value !== "object") return;
+	if (isBinaryData(value)) {
+		throw new TypeError(
+			`createDomainEvent: ${field} must not contain binary buffers ` +
+				`(TypedArray, DataView, ArrayBuffer, SharedArrayBuffer): they stay ` +
+				`mutable under freezing and do not survive JSON. Encode binary as ` +
+				`a string (base64/hex) or store it outside the event.`,
+		);
+	}
+	if (visited.has(value)) return;
+	visited.add(value);
+	if (value instanceof Map) {
+		for (const [k, v] of value) {
+			assertNoBinaryData(k, field, visited);
+			assertNoBinaryData(v, field, visited);
+		}
+		return;
+	}
+	if (value instanceof Set) {
+		for (const v of value) assertNoBinaryData(v, field, visited);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const v of value) assertNoBinaryData(v, field, visited);
+		return;
+	}
+	for (const key of Object.keys(value)) {
+		assertNoBinaryData((value as Record<string, unknown>)[key], field, visited);
 	}
 }
 

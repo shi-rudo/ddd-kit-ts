@@ -254,7 +254,15 @@ with defensively copied payload and metadata and pass unchanged; only
 hand-rolled objects are affected, and those are the point: a mutable
 event recorded next to a state change can silently diverge from it
 afterwards, and no frozen-ness probe can rule that out (a
-shallow-frozen literal with mutable nested data would pass one).
+shallow-frozen literal with mutable nested data would pass one). To
+keep that guarantee true, `createDomainEvent` now rejects binary
+buffers anywhere in payload or metadata (TypedArray, DataView,
+ArrayBuffer, SharedArrayBuffer): they stay mutable under freezing and
+do not survive JSON; encode binary as a string or store it outside the
+event. Duplicate kit copies (a second npm instance, a plugin bundle)
+interoperate through a cooperative global-registry brand every copy's
+constructor stamps, so their legitimately minted events are not
+rejected; within one copy the check stays unforgeable.
 
 ```ts
 // before (2.x): a literal was accepted and stayed mutable
@@ -281,7 +289,14 @@ the `readonly` interface at compile time), hence the deliberate pass.
   because probes cannot establish deep immutability (a shallow-frozen
   literal with mutable nested payload or metadata would pass). O(1),
   one `WeakSet` lookup; replay input from storage adapters is
-  deliberately exempt, since it never enters `pendingEvents`.
+  deliberately exempt, since it never enters `pendingEvents`. Two
+  supporting decisions keep the guarantee honest: `createDomainEvent`
+  rejects binary buffers anywhere in payload or metadata (freezing
+  cannot cover them, and they do not survive JSON), and events minted
+  by a DIFFERENT loaded copy of the kit (duplicate dependency, plugin
+  bundle) are recognized through a cooperative, non-enumerable
+  global-registry brand, so multi-instance setups keep working while
+  the same-instance check stays unforgeable.
 
 ### Changed (breaking): replay trusts history
 

@@ -11,7 +11,8 @@ It is not an application framework. You keep your HTTP layer, database, queue,
 ORM, and runtime choices. The kit gives your domain model a strong center and
 clear boundaries around persistence and side effects.
 
-> **Stable: 3.0**
+> **Release candidate: 3.0** (`3.0.0-rc`, npm dist-tag `next`); latest stable
+> release is 2.2.
 >
 > The public API follows [Semantic Versioning](https://semver.org/). Breaking
 > changes bump the major version and are documented with migration notes in the
