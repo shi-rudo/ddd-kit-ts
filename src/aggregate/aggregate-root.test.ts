@@ -10,8 +10,23 @@ import {
 	type Version,
 	withClockFactory,
 } from "./aggregate";
-import { type AggregateConfig, AggregateRoot } from "./aggregate-root";
-import type { DomainEvent } from "./domain-event";
+import {
+	type AggregateConfig,
+	AggregateRoot as ProductionAggregateRoot,
+} from "./aggregate-root";
+import type { AnyDomainEvent, DomainEvent } from "./domain-event";
+
+/** White-box fixture only: production aggregate subclasses keep `state` protected. */
+abstract class AggregateRoot<
+	TState,
+	TId extends Id<string>,
+	TEvent extends AnyDomainEvent = never,
+	TSnapshotState = TState,
+> extends ProductionAggregateRoot<TState, TId, TEvent, TSnapshotState> {
+	public override get state(): TState {
+		return super.state;
+	}
+}
 
 type TestId = Id<"TestId">;
 

@@ -541,7 +541,8 @@ class PgInvoiceRepository {
   }
 
   async save(invoice: Invoice): Promise<void> {
-    const { total } = invoice.state;
+    const memento = invoice.createSnapshot();
+    const { status, total } = memento.state;
 
     await this.tx.query(
       `update invoice
@@ -554,7 +555,7 @@ class PgInvoiceRepository {
       [
         invoice.id,
         invoice.version,
-        invoice.state.status,
+        status,
         total.amountMinor.toString(),
         total.currency,
         total.scale,

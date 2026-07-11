@@ -67,9 +67,9 @@ import { deepFreeze } from "../value-object/value-object";
 export interface EntityConfig {
 	/**
 	 * Opt-in: freeze the WHOLE state graph (via `deepFreeze`) instead of
-	 * the default shallow freeze, so nested outside writes
-	 * (`entity.state.items.push(x)`) throw instead of silently bypassing
-	 * `validateState`, the version bump, and the `changedKeys` dirty diff.
+	 * the default shallow freeze. This protects against nested aliases
+	 * retained by constructor callers and against accidental in-place
+	 * writes inside the entity; live state itself is never public.
 	 *
 	 * Defaults to `false` (the documented shallow contract): deep freezing
 	 * costs a full state-graph walk on every state write, which is why it
@@ -110,19 +110,12 @@ export type Identifiable<TId extends Id<string>> = {
  * Entities are compared by identity and can have mutable state.
  *
  * @template TId - The type of the entity identifier
- * @template TState - The type of the entity state
  */
-export interface IEntity<TId extends Id<string>, TState>
-	extends Identifiable<TId> {
+export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
 	/**
 	 * Unique identifier of the entity.
 	 */
 	readonly id: TId;
-
-	/**
-	 * The current state of the entity.
-	 */
-	readonly state: TState;
 }
 
 /**
@@ -132,7 +125,7 @@ export interface IEntity<TId extends Id<string>, TState>
  * - Identity management (id)
  * - State management
  * - State validation hook
- * - Immutable state access through getter
+ * - Protected state access for domain behavior
  *
  * This is the foundation for all Entities in DDD:
  * - Child Entities within aggregates can extend this
@@ -158,25 +151,21 @@ export interface IEntity<TId extends Id<string>, TState>
  * ```
  */
 export abstract class Entity<TState, TId extends Id<string>>
-	implements IEntity<TId, TState>
+	implements IEntity<TId>
 {
 	public readonly id: TId;
 
 	/**
-	 * Returns the current state of the entity.
+	 * Returns the live state to subclass domain behavior.
 	 *
-	 * By default the state object is **shallowly frozen**: direct property
-	 * writes (`entity.state.foo = …`) throw in strict mode, but writes to
-	 * nested objects (`entity.state.address.zip = …`) bypass the freeze.
-	 * For deep immutability either enable the opt-in
-	 * {@link EntityConfig.deepFreezeState} (plain-data states only), model
-	 * nested data with `vo()` (which freezes deeply), or reach for a
-	 * structural-sharing library like Immer at the App layer. The shallow
-	 * default is intentional: deep freezing on every state write is too
-	 * expensive for hot paths, and DDD aggregates normally treat their own
-	 * state as private (`Tell, Don't Ask`).
+	 * This accessor is deliberately protected: returning the generic
+	 * `TState` publicly would expose the aggregate's live object graph and
+	 * let nested mutation bypass behavior, validation, versioning, and
+	 * dirty tracking. Concrete entities should expose fachliche queries or
+	 * detached immutable DTOs. Aggregate roots can use `createSnapshot()`
+	 * as their persistence memento.
 	 */
-	public get state(): TState {
+	protected get state(): TState {
 		return this._state;
 	}
 

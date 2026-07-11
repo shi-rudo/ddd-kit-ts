@@ -275,6 +275,45 @@ this.apply(this.recordEvent("OrderConfirmed", payload));
 The rejection is runtime-only for literal-passers (a literal satisfies
 the `readonly` interface at compile time), hence the deliberate pass.
 
+#### 13. Live entity state is protected
+
+`Entity.state` is now `protected`, and `IEntity<TId, TState>` becomes
+`IEntity<TId>`. The old public getter returned the live `TState` graph:
+its top level was frozen, but a consumer could mutate nested state and
+bypass aggregate behavior, invariant validation, versioning, and dirty
+tracking. A generic defensive clone is not a sound replacement because
+class-based child entities would lose their prototypes.
+
+```ts
+// before: public live state
+order.state.status;
+await rows.update({ state: order.state, version: order.version });
+
+// after: a domain query for application reads
+order.status;
+
+// and a detached memento for persistence
+const memento = order.createSnapshot();
+await rows.update({ state: memento.state, version: memento.version });
+```
+
+Concrete entities expose fachliche scalar queries or explicitly detached,
+immutable read DTOs. Aggregate repositories use `createSnapshot()` (and
+the existing `toSnapshotState` mapper for class-based children) instead of
+reaching into the live graph. This is compile-checked unless a consumer
+deliberately widens the protected accessor in its own subclass; do not do
+that.
+
+### Changed (breaking): live entity state is protected
+
+- `Entity.state` is protected so external code cannot obtain the live
+  state graph. Concrete models expose domain queries or detached read
+  DTOs; aggregate persistence uses `createSnapshot()` as its memento.
+- `IEntity` now models the public entity capability only and therefore
+  takes one generic (`IEntity<TId>`); state is an implementation detail.
+- Repository contract examples and all guides no longer serialize or
+  inspect aggregates through `aggregate.state`.
+
 ### Changed (breaking): events are readonly and minted
 
 - Every `DomainEvent` field is `readonly` at the type level, matching

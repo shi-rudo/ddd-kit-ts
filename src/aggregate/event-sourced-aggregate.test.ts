@@ -17,7 +17,20 @@ import {
 	type DomainEvent,
 	type Version,
 } from "./aggregate";
-import { EventSourcedAggregate } from "./event-sourced-aggregate";
+import type { AnyDomainEvent } from "./domain-event";
+import { EventSourcedAggregate as ProductionEventSourcedAggregate } from "./event-sourced-aggregate";
+
+/** White-box fixture only: production aggregate subclasses keep `state` protected. */
+abstract class EventSourcedAggregate<
+	TState,
+	TEvent extends AnyDomainEvent,
+	TId extends Id<string>,
+	TSnapshotState = TState,
+> extends ProductionEventSourcedAggregate<TState, TEvent, TId, TSnapshotState> {
+	public override get state(): TState {
+		return super.state;
+	}
+}
 
 type TestId = Id<"TestId">;
 

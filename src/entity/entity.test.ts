@@ -2,16 +2,26 @@ import { describe, expect, it } from "vitest";
 import { HostileStateKeyError } from "../core/errors";
 import type { Id } from "../core/id";
 import {
-	Entity,
 	entityIds,
 	findEntityById,
 	hasEntityId,
+	type Identifiable,
+	Entity as ProductionEntity,
 	removeEntityById,
 	replaceEntityById,
 	sameEntity,
-	type Identifiable,
 	updateEntityById,
 } from "./entity";
+
+/** White-box fixture only: production subclasses do not widen `state`. */
+abstract class Entity<TState, TId extends Id<string>> extends ProductionEntity<
+	TState,
+	TId
+> {
+	public override get state(): TState {
+		return super.state;
+	}
+}
 
 type ItemId = Id<"ItemId">;
 
@@ -52,6 +62,23 @@ describe("Identifiable<TId> brand-discipline constraint", () => {
 		// Smoke usage to prevent dead-code elimination of the type check
 		const ok: _Good = { id: "o-1" as Id<"OrderId"> };
 		expect(ok.id).toBe("o-1");
+	});
+});
+
+describe("Entity state encapsulation", () => {
+	it("keeps the live state graph inaccessible to consumers", () => {
+		class PrivateStateEntity extends ProductionEntity<OrderItemState, ItemId> {
+			constructor(id: ItemId) {
+				super(id, { productId: "prod-1", quantity: 2 });
+			}
+		}
+		const entity = new PrivateStateEntity("id-1" as ItemId);
+
+		// @ts-expect-error live entity state is an implementation detail;
+		// expose domain queries or an immutable DTO instead.
+		void entity.state;
+
+		expect(entity.id).toBe("id-1");
 	});
 });
 
@@ -168,10 +195,7 @@ describe("Entity", () => {
 			// so the doc warning stays accurate.
 			let seenMinQuantity: unknown = "untouched";
 
-			class TrappyEntity extends Entity<
-				{ quantity: number },
-				Id<"TrappyId">
-			> {
+			class TrappyEntity extends Entity<{ quantity: number }, Id<"TrappyId">> {
 				private readonly minQuantity = 1;
 				constructor(id: Id<"TrappyId">, state: { quantity: number }) {
 					super(id, state);

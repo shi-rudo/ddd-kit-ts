@@ -87,6 +87,14 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
     });
   }
 
+  get productId(): string {
+    return this.state.productId;
+  }
+
+  get quantity(): number {
+    return this.state.quantity;
+  }
+
   protected override validateState(state: OrderItemState): void {
     if (state.quantity < 1) {
       throw new InvalidOrderItemQuantityError(state.quantity);
@@ -98,7 +106,7 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
 The important details:
 
 - `id` is readonly and cannot be `null` or `undefined`
-- `state` is exposed as the current frozen state value
+- `state` is protected; consumers use explicit domain queries
 - `setState(...)` validates the next state and only then replaces the old one
 - if validation throws, the previous state remains in place
 - `validateState(state)` receives the state to check
@@ -267,7 +275,7 @@ changeItemQuantity(itemId: ItemId, quantity: number): void {
 
   const replacement = new OrderItem(
     item.id,
-    item.state.productId,
+    item.productId,
     quantity,
   );
 
@@ -290,18 +298,26 @@ in the same call.
 The stronger rule is still the DDD rule: outside application code should not
 hold and mutate child entity references. The aggregate root is the entry point.
 
-## State freezing and ownership
+## State encapsulation, freezing, and ownership
 
-`Entity` shallow-freezes state by default.
-
-That gives you a useful guard: direct writes to top-level state fail in strict
-mode.
+`Entity.state` is protected. External code cannot read or mutate the live state
+graph; a concrete entity exposes domain queries or a detached read DTO instead.
 
 ```ts
-item.state.quantity = 10; // throws
+class OrderItem extends Entity<OrderItemState, ItemId> {
+  get quantity(): number {
+    return this.state.quantity;
+  }
+
+  changeQuantity(quantity: number): void {
+    this.setState({ ...this.state, quantity });
+  }
+}
 ```
 
-It does not deeply freeze nested objects:
+The internal state is shallowly frozen by default, so direct top-level writes
+inside a subclass throw. Nested aliases retained by a constructor caller are not
+deeply frozen:
 
 ```ts
 type BoxState = {
@@ -315,9 +331,9 @@ class Box extends Entity<BoxState, ItemId> {
 }
 
 const meta = { label: "old" };
-const box = new Box("item-1" as ItemId, { meta });
+new Box("item-1" as ItemId, { meta });
 
-box.state.meta.label = "new"; // bypasses the shallow freeze
+meta.label = "new"; // mutates the nested object still owned by the caller
 ```
 
 For nested data, choose one of these:

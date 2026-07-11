@@ -47,7 +47,9 @@ class ContractEsOrder extends EventSourcedAggregate<
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
 		order.apply(
-			order.recordEvent("EsOrderCreated", { name: "initial" }) as EsOrderCreated,
+			order.recordEvent("EsOrderCreated", {
+				name: "initial",
+			}) as EsOrderCreated,
 		);
 		return order;
 	}
@@ -58,9 +60,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 	}
 
 	rename(name: string): void {
-		this.apply(
-			this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed,
-		);
+		this.apply(this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed);
 	}
 
 	addItem(item: string): void {
@@ -217,7 +217,7 @@ function createInMemoryEsHarness(
 			ContractEsOrder.create(`contract-es-order-${idCounter++}` as EsOrderId),
 		createAggregateWithId: (id) => ContractEsOrder.create(id),
 		mutate: (order) => order.rename(`renamed-${mutationCounter++}`),
-		snapshotState: (order) => structuredClone(order.state),
+		snapshotState: (order) => order.createSnapshot().state,
 	};
 }
 

@@ -199,12 +199,14 @@ Route insert vs update on `persistedVersion`, not on `version`.
 async save(order: Order): Promise<void> {
   if (!order.hasChanges) return;
 
+  const memento = order.createSnapshot();
+
   if (order.persistedVersion === undefined) {
     try {
       await this.tx.insert(orders).values({
         id: order.id,
-        state: order.state,
-        version: order.version,
+        state: memento.state,
+        version: memento.version,
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -223,8 +225,8 @@ async save(order: Order): Promise<void> {
   const result = await this.tx
     .update(orders)
     .set({
-      state: order.state,
-      version: order.version,
+      state: memento.state,
+      version: memento.version,
     })
     .where(and(eq(orders.id, order.id), eq(orders.version, expected)));
 

@@ -39,6 +39,18 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 		super(id, initialState);
 	}
 
+	get productId(): string {
+		return this.state.productId;
+	}
+
+	get quantity(): number {
+		return this.state.quantity;
+	}
+
+	get lineTotal(): Money {
+		return this.state.lineTotal;
+	}
+
 	/**
 	 * Updates the quantity of this item. Changing the quantity reprices
 	 * the line, and pricing is the caller's policy (quantity times unit

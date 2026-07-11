@@ -36,6 +36,22 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 		return new Order(id, initialState);
 	}
 
+	get customerId(): string {
+		return this.state.customerId;
+	}
+
+	get status(): OrderState["status"] {
+		return this.state.status;
+	}
+
+	get itemCount(): number {
+		return this.state.items.length;
+	}
+
+	get total(): Money {
+		return this.state.total;
+	}
+
 	// The line total arrives as Money, already computed: quantity times
 	// unit price is a pricing policy that lives with the caller (and in
 	// a calculation library once it needs rounding). addMoney also

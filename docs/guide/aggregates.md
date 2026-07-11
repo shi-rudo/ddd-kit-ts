@@ -406,10 +406,14 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 const fresh = Order.fromSnapshot(id, snapshot);
 
 // fresh.version === snapshot.version
-// fresh.state is a deep clone of snapshot.state
+// fresh.createSnapshot().state is detached from snapshot.state
 ```
 
 `createSnapshot` uses `structuredClone`, so later mutations do not alter the snapshot. `restoreFromSnapshot` validates the restored state before assigning it.
+
+Live aggregate state is `protected`. Use domain queries for application reads and
+`createSnapshot()` as the detached persistence memento; do not add a public getter
+that returns `this.state`.
 
 ::: warning Restore only into a clean aggregate
 `restoreFromSnapshot` throws `UnreplayableAggregateError` if the target aggregate has pending events.

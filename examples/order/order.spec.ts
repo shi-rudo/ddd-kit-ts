@@ -10,10 +10,10 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		const order = Order.create(orderId, "customer-456", eur(0n));
 
 		expect(order.id).toBe(orderId);
-		expect(order.state.customerId).toBe("customer-456");
-		expect(order.state.status).toBe("pending");
-		expect(order.state.items).toHaveLength(0);
-		expect(order.state.total).toEqual(eur(0n));
+		expect(order.customerId).toBe("customer-456");
+		expect(order.status).toBe("pending");
+		expect(order.itemCount).toBe(0);
+		expect(order.total).toEqual(eur(0n));
 		expect(order.version).toBe(0);
 	});
 
@@ -23,8 +23,8 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		order.addItem("product-1", 2, eur(2000n));
 		order.addItem("product-2", 1, eur(500n));
 
-		expect(order.state.items).toHaveLength(2);
-		expect(order.state.total).toEqual(eur(2500n));
+		expect(order.itemCount).toBe(2);
+		expect(order.total).toEqual(eur(2500n));
 		expect(order.version).toBe(2);
 	});
 
@@ -34,7 +34,7 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 
 		order.confirm();
 
-		expect(order.state.status).toBe("confirmed");
+		expect(order.status).toBe("confirmed");
 		expect(order.version).toBe(2); // 1 for addItem, 1 for confirm
 	});
 
@@ -53,7 +53,7 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 
 		order.ship();
 
-		expect(order.state.status).toBe("shipped");
+		expect(order.status).toBe("shipped");
 		expect(order.version).toBe(3);
 	});
 
@@ -70,7 +70,7 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 
 		order.cancel();
 
-		expect(order.state.status).toBe("cancelled");
+		expect(order.status).toBe("cancelled");
 	});
 
 	it("should not allow cancelling shipped order", () => {
@@ -113,8 +113,8 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		);
 		order2.restoreFromSnapshot(snapshot);
 
-		expect(order2.state.status).toBe("confirmed");
-		expect(order2.state.total).toEqual(eur(2000n));
+		expect(order2.status).toBe("confirmed");
+		expect(order2.total).toEqual(eur(2000n));
 		expect(order2.version).toBe(2);
 	});
 });

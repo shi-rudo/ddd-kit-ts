@@ -54,6 +54,10 @@ export class Payment extends AggregateRoot<
 > {
 	protected readonly aggregateType = "Payment";
 
+	get status(): PaymentState["status"] {
+		return this.state.status;
+	}
+
 	static request(id: PaymentId, orderId: OrderId, amount: Money): Payment {
 		const payment = new Payment(id, {
 			id,

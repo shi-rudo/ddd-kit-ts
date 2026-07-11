@@ -48,6 +48,14 @@ export class Shipment extends AggregateRoot<
 > {
 	protected readonly aggregateType = "Shipment";
 
+	get status(): ShipmentState["status"] {
+		return this.state.status;
+	}
+
+	get trackingId(): string | undefined {
+		return this.state.trackingId;
+	}
+
 	static request(id: ShipmentId, orderId: OrderId): Shipment {
 		const shipment = new Shipment(id, { id, orderId, status: "requested" });
 		shipment.commit(
@@ -59,7 +67,11 @@ export class Shipment extends AggregateRoot<
 
 	complete(trackingId: string): void {
 		if (this.state.status !== "requested") {
-			throw new ShipmentInWrongStateError(this.id, this.state.status, "complete");
+			throw new ShipmentInWrongStateError(
+				this.id,
+				this.state.status,
+				"complete",
+			);
 		}
 		this.commit(
 			{ ...this.state, status: "shipped", trackingId },

@@ -94,6 +94,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return new Order(id, { status: "draft" });
   }
 
+  get status(): OrderState["status"] {
+    return this.state.status;
+  }
+
   confirm(): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
@@ -110,7 +114,7 @@ const order = Order.draft("order-1" as OrderId);
 
 order.confirm();
 
-order.state.status; // "confirmed"
+order.status; // "confirmed"
 order.version; // 1
 order.pendingEvents[0]?.type; // "OrderConfirmed"
 ```

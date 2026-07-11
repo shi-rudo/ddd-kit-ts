@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
+import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { DomainEvent } from "../aggregate/domain-event";
+import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
@@ -9,7 +10,6 @@ import {
 import type { Id } from "../core/id";
 import type { Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
-import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,
@@ -146,10 +146,13 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			// The in-memory equivalent of a unique-violation (Postgres 23505,
 			// MySQL 1062): a row with this id already exists.
 			if (this.db.rows.has(order.id)) {
-				throw new DuplicateAggregateError({ aggregateType: "ContractOrder", aggregateId: order.id });
+				throw new DuplicateAggregateError({
+					aggregateType: "ContractOrder",
+					aggregateId: order.id,
+				});
 			}
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		} else {
@@ -165,7 +168,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 				});
 			}
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		}
@@ -257,7 +260,7 @@ function createInMemoryHarness(
 		mutateVersionOnly: (order) => order.touch(),
 		mutateChildCollection: (order) =>
 			order.addItem(`item-${mutationCounter++}`),
-		snapshotState: (order) => structuredClone(order.state),
+		snapshotState: (order) => order.createSnapshot().state,
 		deletesAreVersionChecked: true,
 		insertsAreDuplicateChecked: true, // explicit; true is also the default
 	};
@@ -359,7 +362,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			// ❌ no `WHERE version = persistedVersion` equivalent and no
 			// unique-violation mapping:
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		}

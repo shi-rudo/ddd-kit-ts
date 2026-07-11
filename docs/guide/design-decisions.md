@@ -238,15 +238,22 @@ if (nextItems === this.state.items) {
 
 The structural sharing gives the aggregate a cheap way to decide.
 
-## No deep clone on every state read
+## Live state is protected; reads are explicit
 
-`Entity.state` is shallowly frozen on assignment. Direct writes to top-level state fail in strict mode. Nested objects are not deeply frozen by the entity base.
+`Entity.state` is `protected`. A generic public getter cannot safely return a live
+graph, and a generic clone would silently destroy prototypes for class-based child
+entities. Concrete models expose fachliche queries or detached read DTOs instead;
+aggregate persistence uses `createSnapshot()` as its memento.
 
-That is intentional. Deep cloning or deep freezing on every read/write would make hot aggregate paths pay for a guarantee many models do not need.
+State is still shallowly frozen on assignment. Deep cloning or deep freezing on
+every internal read/write would make hot aggregate paths pay for a guarantee many
+models do not need.
 
 The contract is:
 
 - replace state through `setState`, `commit`, or event-sourced `apply`
+- never widen the protected `state` accessor in a concrete entity
+- expose scalar/domain queries or detached immutable read DTOs to consumers
 - model deeply immutable nested data as value objects with `vo()` or `ValueObject`
 - use an immutable-update library at the application layer if your state is deeply nested
 

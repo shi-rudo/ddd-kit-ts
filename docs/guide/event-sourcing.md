@@ -455,8 +455,8 @@ abstract class SnapshottingOrder extends EventSourcedAggregate<
     return {
       items: state.items.map((item) => ({
         id: item.id,
-        productId: item.state.productId,
-        quantity: item.state.quantity,
+        productId: item.productId,
+        quantity: item.quantity,
       })),
     };
   }

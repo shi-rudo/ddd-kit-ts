@@ -38,6 +38,14 @@ export class OrderInWrongStateError extends DomainError<"ORDER_IN_WRONG_STATE"> 
 export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	protected readonly aggregateType = "Order";
 
+	get status(): OrderState["status"] {
+		return this.state.status;
+	}
+
+	get cancelReason(): string | undefined {
+		return this.state.cancelReason;
+	}
+
 	static place(id: OrderId, customerId: string, total: Money): Order {
 		const order = new Order(id, {
 			id,

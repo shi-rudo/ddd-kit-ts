@@ -34,13 +34,13 @@ class OrderService {
   private cachedOrder: Order;
 
   async incrementQuantity(itemId: ItemId): Promise<void> {
-    const item = this.cachedOrder.getItem(itemId);
-    const oldQty = item.state.quantity; // reads 5
+    const oldQty = this.cachedOrder.itemQuantity(itemId); // reads 5
 
     await someAsyncOperation();
 
     // Another request may have changed the same order while we waited.
-    item.updateQuantity(oldQty + 1); // writes 6, even if the real value is 10
+    this.cachedOrder.changeItemQuantity(itemId, oldQty + 1); // writes 6,
+                                                             // even if DB is 10
   }
 }
 ```
@@ -89,11 +89,13 @@ Those values diverge as soon as a domain method changes the aggregate. That is w
 
 ```ts
 async function save(order: Order): Promise<void> {
+  const memento = order.createSnapshot();
+
   if (order.persistedVersion === undefined) {
     await db.insert(orders).values({
       id: order.id,
-      state: order.state,
-      version: order.version,
+      state: memento.state,
+      version: memento.version,
     });
     return;
   }
@@ -104,7 +106,7 @@ async function save(order: Order): Promise<void> {
   const result = await db
     .update(orders)
     .set({
-      state: order.state,
+      state: memento.state,
       version: nextVersion,
     })
     .where(and(eq(orders.id, order.id), eq(orders.version, expectedVersion)));
