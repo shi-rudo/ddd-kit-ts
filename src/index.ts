@@ -14,6 +14,7 @@ export {
 	sameVersion,
 	type Version,
 } from "./aggregate/aggregate";
+export type { AggregateAddress } from "./aggregate/aggregate-address";
 export {
 	type AggregateConfig,
 	AggregateRoot,
@@ -207,7 +208,6 @@ export {
 	type OutboxSink,
 } from "./events/outbox-dispatcher";
 export type {
-	AggregateEventSource,
 	CommitPosition,
 	CommittedDomainEvent,
 	DeadLetterRecord,
@@ -225,7 +225,6 @@ export type {
 // Projections: checkpoint port, runner, in-memory reference
 export { InMemoryProjectionCheckpointStore } from "./projections/in-memory-checkpoint-store";
 export {
-	type AggregateAddress,
 	isPositionAfter,
 	type Projection,
 	type ProjectionCheckpoint,

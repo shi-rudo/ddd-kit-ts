@@ -1,4 +1,5 @@
 import type { AggregateSnapshot, Version } from "../aggregate/aggregate";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { Id } from "../core/id";
 import type { SnapshotStore } from "../repo/snapshot-store";
 import { deepEqual } from "../utils/array/deep-equal";
@@ -65,6 +66,13 @@ function snapshot(
 }
 
 const id = (value: string): Id<string> => value as Id<string>;
+const address = (
+	aggregateType: string,
+	aggregateId: string,
+): AggregateAddress<Id<string>> => ({
+	aggregateType,
+	aggregateId: id(aggregateId),
+});
 
 /**
  * The snapshot-store contract test suite: the proof that an adapter
@@ -86,7 +94,7 @@ export function createSnapshotStoreContractTests(
 			name: "an aggregate without a snapshot loads undefined",
 			run: inEnv(async (env) => {
 				assertEqual(
-					await env.store.load("Order", id("o-1")),
+					await env.store.load(address("Order", "o-1")),
 					undefined,
 					"a fresh store must report no snapshot; the repository falls back to full replay",
 				);
@@ -100,8 +108,8 @@ export function createSnapshotStoreContractTests(
 					{ total: 7, items: [{ sku: "a", qty: 2 }], note: "hi" },
 					3,
 				);
-				await env.store.save("Order", id("o-1"), stored);
-				const loaded = await env.store.load("Order", id("o-1"));
+				await env.store.save(address("Order", "o-1"), stored);
+				const loaded = await env.store.load(address("Order", "o-1"));
 				assert(loaded !== undefined, "the saved snapshot must load");
 				assert(
 					deepEqual(loaded.state, stored.state),
@@ -132,11 +140,10 @@ export function createSnapshotStoreContractTests(
 			name: "an absent schemaVersion round-trips as absent",
 			run: inEnv(async (env) => {
 				await env.store.save(
-					"Order",
-					id("o-1"),
+					address("Order", "o-1"),
 					snapshot(1, { total: 0, items: [] }),
 				);
-				const loaded = await env.store.load("Order", id("o-1"));
+				const loaded = await env.store.load(address("Order", "o-1"));
 				assertEqual(
 					loaded?.schemaVersion,
 					undefined,
@@ -148,16 +155,14 @@ export function createSnapshotStoreContractTests(
 			name: "save replaces the previous snapshot: latest wins, no history",
 			run: inEnv(async (env) => {
 				await env.store.save(
-					"Order",
-					id("o-1"),
+					address("Order", "o-1"),
 					snapshot(10, { total: 1, items: [] }),
 				);
 				await env.store.save(
-					"Order",
-					id("o-1"),
+					address("Order", "o-1"),
 					snapshot(20, { total: 2, items: [] }),
 				);
-				const loaded = await env.store.load("Order", id("o-1"));
+				const loaded = await env.store.load(address("Order", "o-1"));
 				assert(
 					loaded?.version === 20 && loaded.state.total === 2,
 					"load must return the latest snapshot only",
@@ -168,24 +173,21 @@ export function createSnapshotStoreContractTests(
 			name: "snapshots are isolated per aggregate type AND per aggregate id",
 			run: inEnv(async (env) => {
 				await env.store.save(
-					"Order",
-					id("x-1"),
+					address("Order", "x-1"),
 					snapshot(1, { total: 1, items: [] }),
 				);
 				await env.store.save(
-					"Invoice",
-					id("x-1"),
+					address("Invoice", "x-1"),
 					snapshot(2, { total: 2, items: [] }),
 				);
 				await env.store.save(
-					"Order",
-					id("x-2"),
+					address("Order", "x-2"),
 					snapshot(3, { total: 3, items: [] }),
 				);
 				const [orderX1, invoiceX1, orderX2] = await Promise.all([
-					env.store.load("Order", id("x-1")),
-					env.store.load("Invoice", id("x-1")),
-					env.store.load("Order", id("x-2")),
+					env.store.load(address("Order", "x-1")),
+					env.store.load(address("Invoice", "x-1")),
+					env.store.load(address("Order", "x-2")),
 				]);
 				assert(
 					orderX1?.version === 1 &&
@@ -199,24 +201,22 @@ export function createSnapshotStoreContractTests(
 			name: "delete removes exactly the addressed snapshot and tolerates unknown keys",
 			run: inEnv(async (env) => {
 				await env.store.save(
-					"Order",
-					id("o-1"),
+					address("Order", "o-1"),
 					snapshot(1, { total: 1, items: [] }),
 				);
 				await env.store.save(
-					"Order",
-					id("o-2"),
+					address("Order", "o-2"),
 					snapshot(2, { total: 2, items: [] }),
 				);
-				await env.store.delete("Order", id("o-1"));
-				await env.store.delete("Order", id("never-saved"));
+				await env.store.delete(address("Order", "o-1"));
+				await env.store.delete(address("Order", "never-saved"));
 				assertEqual(
-					await env.store.load("Order", id("o-1")),
+					await env.store.load(address("Order", "o-1")),
 					undefined,
 					"the deleted snapshot must be gone (schema-migration fallback and erasure both rely on it)",
 				);
 				assertEqual(
-					(await env.store.load("Order", id("o-2")))?.version,
+					(await env.store.load(address("Order", "o-2")))?.version,
 					2,
 					"a sibling snapshot must survive the delete",
 				);
@@ -226,11 +226,11 @@ export function createSnapshotStoreContractTests(
 			name: "loads are detached copies and saves capture the input: later mutations touch nothing",
 			run: inEnv(async (env) => {
 				const input = snapshot(5, { total: 5, items: [{ sku: "a", qty: 1 }] });
-				await env.store.save("Order", id("o-1"), input);
+				await env.store.save(address("Order", "o-1"), input);
 				// Mutating the caller's input AFTER save must not reach the store.
 				input.state.items.push({ sku: "hacked", qty: 99 });
 
-				const loaded = await env.store.load("Order", id("o-1"));
+				const loaded = await env.store.load(address("Order", "o-1"));
 				assert(loaded !== undefined, "expected the saved snapshot");
 				assertEqual(
 					loaded.state.items.length,
@@ -239,7 +239,7 @@ export function createSnapshotStoreContractTests(
 				);
 				// Mutating the loaded copy must not corrupt the stored one.
 				loaded.state.total = 999;
-				const reloaded = await env.store.load("Order", id("o-1"));
+				const reloaded = await env.store.load(address("Order", "o-1"));
 				assertEqual(
 					reloaded?.state.total,
 					5,

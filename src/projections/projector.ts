@@ -1,3 +1,7 @@
+import {
+	type AggregateAddress,
+	encodeAggregateAddress,
+} from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
 	ForeignEventError,
@@ -10,8 +14,6 @@ import type { OutboxSink } from "../events/outbox-dispatcher";
 import type { CommittedDomainEvent } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {
-	type AggregateAddress,
-	addressKey,
 	isPositionAfter,
 	type Projection,
 	type ProjectionCheckpoint,
@@ -194,7 +196,9 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 		});
 		const lockAddresses = [
 			...new Map(
-				cursored.map(({ address }) => [addressKey(address), address] as const),
+				cursored.map(
+					({ address }) => [encodeAggregateAddress(address), address] as const,
+				),
 			).entries(),
 		]
 			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
@@ -217,7 +221,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			>();
 			const watermarks = new Map<string, ProjectionPosition | undefined>();
 			for (const { event, address } of cursored) {
-				const key = addressKey(address);
+				const key = encodeAggregateAddress(address);
 				if (watermarks.has(key)) continue;
 				const stored = await this.checkpoints.load(
 					ctx,
@@ -244,7 +248,9 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// an unbounded per-position ledger and continue to rely on the source
 			// contract that one position names one logical event.
 			for (const { event, position, address } of cursored) {
-				const stored = checkpointsAtBatchStart.get(addressKey(address));
+				const stored = checkpointsAtBatchStart.get(
+					encodeAggregateAddress(address),
+				);
 				if (
 					stored !== undefined &&
 					isSameOrderedPosition(position, stored.position) &&
@@ -283,7 +289,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			// redeliveries, not evidence about this batch's new-event ordering.
 			const newestUnprocessed = new Map<string, ProjectionPosition>();
 			for (const { event, position, address } of cursored) {
-				const key = addressKey(address);
+				const key = encodeAggregateAddress(address);
 				const stored = watermarks.get(key);
 				if (stored !== undefined && !isPositionAfter(position, stored))
 					continue;
@@ -310,7 +316,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			>();
 			const toApply: Array<{ event: Evt }> = [];
 			for (const { event, position, address } of cursored) {
-				const key = addressKey(address);
+				const key = encodeAggregateAddress(address);
 				const watermark = watermarks.get(key);
 				if (watermark !== undefined && !isPositionAfter(position, watermark)) {
 					skipped += 1;

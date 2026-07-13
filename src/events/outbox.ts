@@ -1,8 +1,11 @@
+import {
+	type AggregateAddress,
+	encodeAggregateAddress,
+} from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError } from "../core/errors";
 import { assertPositiveInteger } from "../utils/validate";
 import type {
-	AggregateEventSource,
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	EventCommitCandidate,
@@ -142,7 +145,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
 	/** Bounded insertion-ordered receipts for retries after acknowledgement. */
-	private readonly dispatchedEventIds = new Map<string, AggregateEventSource>();
+	private readonly dispatchedEventIds = new Map<string, AggregateAddress>();
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 
@@ -190,10 +193,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				continue;
 			}
 			const ownedSource = Object.freeze({ ...source });
-			const sourceKey = JSON.stringify([
-				source.aggregateType,
-				source.aggregateId,
-			]);
+			const sourceKey = encodeAggregateAddress(source);
 			const sourceCursor = this.sourceCursors.get(sourceKey);
 			let staleHeadVersion: number | undefined;
 			if (
@@ -319,10 +319,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	private rememberDispatched(
-		eventId: string,
-		source: AggregateEventSource,
-	): void {
+	private rememberDispatched(eventId: string, source: AggregateAddress): void {
 		this.dispatchedEventIds.delete(eventId);
 		this.dispatchedEventIds.set(eventId, source);
 		while (this.dispatchedEventIds.size > this.maxRetainedDispatchedEventIds) {
@@ -360,8 +357,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 function assertSameEventSource(
 	event: AnyDomainEvent,
-	received: AggregateEventSource,
-	recorded: AggregateEventSource,
+	received: AggregateAddress,
+	recorded: AggregateAddress,
 ): void {
 	if (
 		received.aggregateType === recorded.aggregateType &&

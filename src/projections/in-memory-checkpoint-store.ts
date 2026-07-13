@@ -1,6 +1,8 @@
 import {
 	type AggregateAddress,
-	addressKey,
+	encodeAggregateAddress,
+} from "../aggregate/aggregate-address";
+import {
 	isPositionAfter,
 	type ProjectionCheckpoint,
 	type ProjectionCheckpointStore,
@@ -84,7 +86,9 @@ export class InMemoryProjectionCheckpointStore
 		projection: string,
 		address: AggregateAddress,
 	): Promise<ProjectionCheckpoint | undefined> {
-		const stored = this.checkpoints.get(projection)?.get(addressKey(address));
+		const stored = this.checkpoints
+			.get(projection)
+			?.get(encodeAggregateAddress(address));
 		// Detached copy: a caller mutating the loaded receipt must not
 		// move the stored watermark.
 		return stored === undefined
@@ -103,7 +107,7 @@ export class InMemoryProjectionCheckpointStore
 			perAggregate = new Map();
 			this.checkpoints.set(projection, perAggregate);
 		}
-		perAggregate.set(addressKey(address), {
+		perAggregate.set(encodeAggregateAddress(address), {
 			...checkpoint,
 			position: { ...checkpoint.position },
 		});
@@ -114,7 +118,9 @@ export class InMemoryProjectionCheckpointStore
 		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		const stored = this.checkpoints.get(projection)?.get(addressKey(address));
+		const stored = this.checkpoints
+			.get(projection)
+			?.get(encodeAggregateAddress(address));
 		if (stored === undefined) return false;
 		return !isPositionAfter(position, stored.position);
 	}

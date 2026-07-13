@@ -154,6 +154,7 @@ transaction commits.
 
 ```ts
 import type {
+  AggregateAddress,
   EventStore,
   UnitOfWorkSession,
 } from "@shirudo/ddd-kit";
@@ -164,12 +165,16 @@ class OrderRepository {
     private readonly session: UnitOfWorkSession<OrderEvent>,
   ) {}
 
+  private stream(id: OrderId): AggregateAddress<OrderId> {
+    return { aggregateType: "Order", aggregateId: id };
+  }
+
   async save(order: Order): Promise<void> {
     if (order.pendingEvents.length === 0) return;
 
     this.session.enrollSaved(order);
 
-    await this.eventStore.append(order.id, order.pendingEvents, {
+    await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
       expectedVersion: order.persistedVersion ?? 0,
     });
   }
@@ -216,21 +221,27 @@ The kit defines a small driven port for stream persistence:
 ```ts
 interface EventStore<Evt extends AnyDomainEvent> {
   append(
-    streamId: Id<string>,
+    stream: AggregateAddress,
     events: readonly Evt[],
     options: { expectedVersion: number },
   ): Promise<void>;
 
   readStream(
-    streamId: Id<string>,
+    stream: AggregateAddress,
     options?: { fromVersion?: number },
   ): Promise<readonly Evt[]>;
 }
 ```
 
-Use one stream per aggregate. The stream id is the aggregate id. The stream
-version is the number of events in that stream, so it aligns with the aggregate
-version.
+Use one stream per aggregate. Its key is the tuple `(aggregateType,
+aggregateId)`, not the raw id alone: `SalesOrder 1` and `FulfillmentOrder 1`
+are independent streams. The stream version is the number of events in that
+qualified stream, so it aligns with the aggregate version.
+
+Persist both key fields in every primary/unique key, OCC predicate, and read
+predicate. Treat `aggregateType` as a stable technical category. When bounded
+contexts with the same domain name share storage, qualify it at the source
+(`sales.order`, `fulfillment.order`); renaming it requires a stream migration.
 
 `append(...)` must be atomic and guarded by optimistic concurrency:
 
@@ -240,19 +251,32 @@ version.
 - for a duplicate-create race on `expectedVersion: 0`, an adapter may throw
   `DuplicateAggregateError` when it can distinguish that case
 - rejected appends must leave the stream unchanged
+- equal raw ids under different aggregate types must remain isolated
 
-`readStream(id)` returns all events in append order. `readStream(id, { fromVersion })`
-returns only events after that 1-based stream version. That is the catch-up read
-used after loading a snapshot.
+`readStream(stream)` returns all events in append order.
+`readStream(stream, { fromVersion })` returns only events after that 1-based
+stream version. That is the catch-up read used after loading a snapshot. A
+database adapter should also reject duplicate or non-contiguous persisted
+positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for tests and demos. It is
 memory-only and does not participate in your database transaction. Production
 adapters must implement the same contract against durable storage.
 
-Run the event-sourced repository contract suite against your adapter:
+Run both the EventStore and event-sourced repository contract suites against
+your adapter:
 
 ```ts
-import { createEsRepositoryContractTests } from "@shirudo/ddd-kit/testing";
+import {
+  createEsRepositoryContractTests,
+  createEventStoreContractTests,
+} from "@shirudo/ddd-kit/testing";
+
+describe("PgEventStore", () => {
+  for (const test of createEventStoreContractTests(eventStoreHarness)) {
+    it(test.name, test.run);
+  }
+});
 
 describe("PgOrderEventRepository", () => {
   for (const test of createEsRepositoryContractTests(harness)) {
@@ -261,8 +285,9 @@ describe("PgOrderEventRepository", () => {
 });
 ```
 
-The suite covers append conflicts, duplicate creates, replay equality, rollback
-purity, commit lifecycle, and `fromVersion` slicing.
+The store suite proves qualified-key isolation. The repository suite covers
+append conflicts, duplicate creates, replay equality, rollback purity, commit
+lifecycle, and `fromVersion` slicing.
 
 ## Loading from history
 
@@ -270,7 +295,10 @@ Reconstitution starts with a blank aggregate and folds the stream into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const history = await eventStore.readStream(id);
+  const history = await eventStore.readStream({
+    aggregateType: "Order",
+    aggregateId: id,
+  });
   if (history.length === 0) return null;
 
   const order = Order.reconstitute(id);
@@ -346,14 +374,16 @@ latency. The snapshot path is:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const snapshot = await snapshots.load("Order", id);
+  const address = { aggregateType: "Order", aggregateId: id };
+  const snapshot = await snapshots.load(address);
   if (snapshot === undefined) {
     return replayFromZero(id);
   }
 
-  const tail = await eventStore.readStream(id, {
-    fromVersion: snapshot.version,
-  });
+  const tail = await eventStore.readStream(
+    address,
+    { fromVersion: snapshot.version },
+  );
 
   const order = Order.reconstitute(id);
 
@@ -362,12 +392,12 @@ async function findById(id: OrderId): Promise<Order | null> {
 
     if (result.isErr()) {
       const refolded = await replayFromZero(id);
-      await snapshots.delete("Order", id);
+      await snapshots.delete(address);
       return refolded;
     }
   } catch (error) {
     if (error instanceof SnapshotSchemaMismatchError) {
-      await snapshots.delete("Order", id);
+      await snapshots.delete(address);
       return replayFromZero(id);
     }
 
@@ -398,17 +428,15 @@ just replays from zero.
 ```ts
 interface SnapshotStore<TState = unknown> {
   load(
-    aggregateType: string,
-    aggregateId: Id<string>,
+    address: AggregateAddress,
   ): Promise<AggregateSnapshot<TState> | undefined>;
 
   save(
-    aggregateType: string,
-    aggregateId: Id<string>,
+    address: AggregateAddress,
     snapshot: AggregateSnapshot<TState>,
   ): Promise<void>;
 
-  delete(aggregateType: string, aggregateId: Id<string>): Promise<void>;
+  delete(address: AggregateAddress): Promise<void>;
 }
 ```
 
@@ -508,7 +536,10 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 
   if (order.version - lastSnapshotVersion < SNAPSHOT_EVERY) return;
 
-  await snapshots.save("Order", order.id, order.createSnapshot());
+  await snapshots.save(
+    { aggregateType: "Order", aggregateId: order.id },
+    order.createSnapshot(),
+  );
 }
 ```
 
@@ -526,7 +557,10 @@ async function snapshotSweep(): Promise<void> {
     const order = await orderRepository.getById(candidate.aggregateId);
     if (order === null) continue;
 
-    await snapshots.save("Order", order.id, order.createSnapshot());
+    await snapshots.save(
+      { aggregateType: "Order", aggregateId: order.id },
+      order.createSnapshot(),
+    );
   }
 }
 ```
@@ -548,9 +582,13 @@ For event-sourced aggregates, version means event count.
 That gives the repository its optimistic-concurrency baseline:
 
 ```ts
-await eventStore.append(order.id, order.pendingEvents, {
-  expectedVersion: order.persistedVersion ?? 0,
-});
+await eventStore.append(
+  { aggregateType: "Order", aggregateId: order.id },
+  order.pendingEvents,
+  {
+    expectedVersion: order.persistedVersion ?? 0,
+  },
+);
 ```
 
 Keep this separate from store-specific positions. EventStoreDB revisions,

@@ -1,5 +1,8 @@
 import type { AggregateSnapshot } from "../aggregate/aggregate";
-import type { Id } from "../core/id";
+import {
+	type AggregateAddress,
+	encodeAggregateAddress,
+} from "../aggregate/aggregate-address";
 import type { SnapshotStore } from "./snapshot-store";
 
 /**
@@ -15,30 +18,23 @@ export class InMemorySnapshotStore<TState = unknown>
 	private readonly snapshots = new Map<string, AggregateSnapshot<TState>>();
 
 	async load(
-		aggregateType: string,
-		aggregateId: Id<string>,
+		address: AggregateAddress,
 	): Promise<AggregateSnapshot<TState> | undefined> {
-		const stored = this.snapshots.get(key(aggregateType, aggregateId));
+		const stored = this.snapshots.get(encodeAggregateAddress(address));
 		return stored === undefined ? undefined : structuredClone(stored);
 	}
 
 	async save(
-		aggregateType: string,
-		aggregateId: Id<string>,
+		address: AggregateAddress,
 		snapshot: AggregateSnapshot<TState>,
 	): Promise<void> {
 		this.snapshots.set(
-			key(aggregateType, aggregateId),
+			encodeAggregateAddress(address),
 			structuredClone(snapshot),
 		);
 	}
 
-	async delete(aggregateType: string, aggregateId: Id<string>): Promise<void> {
-		this.snapshots.delete(key(aggregateType, aggregateId));
+	async delete(address: AggregateAddress): Promise<void> {
+		this.snapshots.delete(encodeAggregateAddress(address));
 	}
-}
-
-/** NUL-separated so no type/id concatenation can collide. */
-function key(aggregateType: string, aggregateId: Id<string>): string {
-	return `${aggregateType}\u0000${String(aggregateId)}`;
 }

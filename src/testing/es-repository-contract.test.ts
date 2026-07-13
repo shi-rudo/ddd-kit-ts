@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { DomainEvent } from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
@@ -35,6 +36,14 @@ type EsOrderCreated = DomainEvent<"EsOrderCreated", { name: string }>;
 type EsOrderRenamed = DomainEvent<"EsOrderRenamed", { name: string }>;
 type EsItemAdded = DomainEvent<"EsItemAdded", { item: string }>;
 type EsOrderEvent = EsOrderCreated | EsOrderRenamed | EsItemAdded;
+
+const orderStream = (id: EsOrderId): AggregateAddress<EsOrderId> => ({
+	aggregateType: "ContractEsOrder",
+	aggregateId: id,
+});
+
+const streamMapKey = (stream: AggregateAddress): string =>
+	JSON.stringify([stream.aggregateType, stream.aggregateId]);
 
 class ContractEsOrder extends EventSourcedAggregate<
 	EsOrderState,
@@ -114,7 +123,8 @@ class InMemoryEsDb {
 				previousEventfulAggregateVersion =
 					this.commitPredecessors.get(commitKey) ?? null;
 			} else {
-				previousEventfulAggregateVersion = this.sourceHeads.get(sourceKey) ?? null;
+				previousEventfulAggregateVersion =
+					this.sourceHeads.get(sourceKey) ?? null;
 				this.commitPredecessors.set(
 					commitKey,
 					previousEventfulAggregateVersion,
@@ -170,7 +180,7 @@ class InMemoryEsOrderRepository
 		if (cached) return cached;
 		if (this.session.identityMap.isDeleted(ContractEsOrder, id)) return null;
 
-		const history = this.db.streams.get(id);
+		const history = this.db.streams.get(streamMapKey(orderStream(id)));
 		if (!history || history.length === 0) return null;
 		const order = ContractEsOrder.bare(id);
 		const result = order.loadFromHistory(history);
@@ -189,7 +199,8 @@ class InMemoryEsOrderRepository
 		// The REAL expectedVersion guard: the in-memory equivalent of an
 		// append predicated on the current stream version.
 		const expectedVersion = order.persistedVersion ?? 0;
-		const stream = this.db.streams.get(order.id) ?? [];
+		const key = streamMapKey(orderStream(order.id));
+		const stream = this.db.streams.get(key) ?? [];
 		if (stream.length !== expectedVersion) {
 			throw new ConcurrencyConflictError({
 				aggregateType: "ContractEsOrder",
@@ -200,7 +211,7 @@ class InMemoryEsOrderRepository
 		}
 		// Appends the UNSTAMPED pendingEvents originals (the outbox gets
 		// committed envelopes from withCommit's harvest).
-		this.db.streams.set(order.id, [...stream, ...order.pendingEvents]);
+		this.db.streams.set(key, [...stream, ...order.pendingEvents]);
 	}
 }
 
@@ -259,10 +270,13 @@ function createInMemoryEsHarness(
 				committedOutboxEvents: async () => [...db.outbox],
 				// The suite's window into the store: same read-and-slice
 				// semantics as EventStore.readStream({ fromVersion }).
-				committedStreamEvents: async (id, fromVersion = 0) =>
-					(db.streams.get(id) ?? []).slice(Math.max(0, fromVersion)),
+				committedStreamEvents: async (stream, fromVersion = 0) =>
+					(db.streams.get(streamMapKey(stream)) ?? []).slice(
+						Math.max(0, fromVersion),
+					),
 			};
 		},
+		streamKeyFor: orderStream,
 		createAggregate: () =>
 			ContractEsOrder.create(`contract-es-order-${idCounter++}` as EsOrderId),
 		createAggregateWithId: (id) => ContractEsOrder.create(id),
@@ -318,8 +332,9 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			if (order.pendingEvents.length === 0) return;
 			this.session.enrollSaved(order);
 			// ❌ no expectedVersion check:
-			const stream = this.db.streams.get(order.id) ?? [];
-			this.db.streams.set(order.id, [...stream, ...order.pendingEvents]);
+			const key = streamMapKey(orderStream(order.id));
+			const stream = this.db.streams.get(key) ?? [];
+			this.db.streams.set(key, [...stream, ...order.pendingEvents]);
 		}
 	}
 
@@ -336,7 +351,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			override async findById(id: EsOrderId): Promise<ContractEsOrder | null> {
 				const cached = this.session.identityMap.get(ContractEsOrder, id);
 				if (cached) return cached;
-				const history = this.db.streams.get(id);
+				const history = this.db.streams.get(streamMapKey(orderStream(id)));
 				if (!history || history.length === 0) return null;
 				const order = ContractEsOrder.bare(id);
 				// ❌ folds newest-first (a SELECT without ORDER BY, unlucky):

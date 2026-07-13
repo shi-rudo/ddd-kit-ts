@@ -155,7 +155,7 @@ port:
 interface OutboxRecord<Evt extends AnyDomainEvent> {
   dispatchId: string;
   event: Evt;
-  source: AggregateEventSource;
+  source: AggregateAddress;
   position: CommitPosition;
   attempts?: number;
 }

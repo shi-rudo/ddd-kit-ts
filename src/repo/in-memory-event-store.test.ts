@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { ConcurrencyConflictError } from "../core/errors";
 import type { Id } from "../core/id";
@@ -7,18 +8,55 @@ import { InMemoryEventStore } from "./in-memory-event-store";
 type StreamId = Id<"EsOrderId">;
 type OrderEvent = DomainEvent<"OrderRenamed", { name: string }>;
 
-const streamA = "order-a" as StreamId;
-const streamB = "order-b" as StreamId;
+const streamA: AggregateAddress<StreamId> = {
+	aggregateType: "EsOrder",
+	aggregateId: "order-a" as StreamId,
+};
+const streamB: AggregateAddress<StreamId> = {
+	aggregateType: "EsOrder",
+	aggregateId: "order-b" as StreamId,
+};
 
-function renamed(name: string): OrderEvent {
-	return createDomainEvent(
-		"OrderRenamed",
-		{ name },
-		{ aggregateId: streamA, aggregateType: "EsOrder" },
-	);
+function renamed(name: string, stream: AggregateAddress = streamA): OrderEvent {
+	return createDomainEvent("OrderRenamed", { name }, stream);
 }
 
 describe("InMemoryEventStore", () => {
+	it("isolates equal aggregate ids by aggregate type", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const aggregateId = "shared-1" as StreamId;
+		const salesOrder: AggregateAddress = {
+			aggregateType: "SalesOrder",
+			aggregateId,
+		};
+		const fulfillmentOrder: AggregateAddress = {
+			aggregateType: "FulfillmentOrder",
+			aggregateId,
+		};
+		const salesEvent = createDomainEvent(
+			"OrderRenamed",
+			{ name: "sales" },
+			salesOrder,
+		);
+		const fulfillmentEvent = createDomainEvent(
+			"OrderRenamed",
+			{ name: "fulfillment" },
+			fulfillmentOrder,
+		);
+
+		await store.append(salesOrder, [salesEvent], { expectedVersion: 0 });
+		await store.append(fulfillmentOrder, [fulfillmentEvent], {
+			expectedVersion: 0,
+		});
+
+		await expect(store.readStream({ ...salesOrder })).resolves.toEqual([
+			salesEvent,
+		]);
+		await expect(store.readStream({ ...fulfillmentOrder })).resolves.toEqual([
+			fulfillmentEvent,
+		]);
+	});
+
 	it("appends to a new stream at expectedVersion 0 and reads back in order", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		const first = renamed("a");
@@ -83,7 +121,9 @@ describe("InMemoryEventStore", () => {
 		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });
 
 		// streamB is untouched by streamA's history: a fresh create works.
-		await store.append(streamB, [renamed("b")], { expectedVersion: 0 });
+		await store.append(streamB, [renamed("b", streamB)], {
+			expectedVersion: 0,
+		});
 
 		expect(await store.readStream(streamA)).toHaveLength(1);
 		expect(await store.readStream(streamB)).toHaveLength(1);
@@ -136,8 +176,8 @@ describe("store hygiene", () => {
 	it("readStream is side-effect free: an unknown id does not grow the store", async () => {
 		const store = new InMemoryEventStore();
 
-		await store.readStream("ghost-1" as never);
-		await store.readStream("ghost-2" as never);
+		await store.readStream({ aggregateType: "Ghost", aggregateId: "ghost-1" });
+		await store.readStream({ aggregateType: "Ghost", aggregateId: "ghost-2" });
 
 		expect(
 			(store as unknown as { streams: Map<string, unknown> }).streams.size,
@@ -149,7 +189,7 @@ describe("store hygiene", () => {
 
 		await expect(
 			store.append(
-				"ghost" as never,
+				{ aggregateType: "A", aggregateId: "ghost" },
 				[{ eventId: "e1", type: "T", aggregateType: "A" } as never],
 				{ expectedVersion: 5 },
 			),

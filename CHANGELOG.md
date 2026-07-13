@@ -406,6 +406,56 @@ the qualified source and complete commit cursor, but deliberately does not
 reconstruct the producer's private domain payload types. Invalid wire shapes
 and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
 
+#### 16. EventStore streams use a qualified key
+
+`EventStore.append` and `readStream` no longer accept the raw aggregate id.
+Pass the stable aggregate type and id together:
+
+```ts
+// before
+await eventStore.append(order.id, order.pendingEvents, options);
+const history = await eventStore.readStream(order.id);
+const snapshot = await snapshots.load("Order", order.id);
+
+// after
+const address = { aggregateType: "Order", aggregateId: order.id };
+await eventStore.append(address, order.pendingEvents, options);
+const history = await eventStore.readStream(address);
+const snapshot = await snapshots.load(address);
+```
+
+Production schemas must include both `aggregate_type` and `aggregate_id` in
+their stream key, OCC predicates, and `(aggregate_type, aggregate_id,
+position)` uniqueness constraint. Backfill the stable type before switching
+reads; renaming an aggregate type afterwards is a stream-key migration.
+
+Event-sourced repository contract harnesses add `streamKeyFor(id)`, and their
+`committedStreamEvents` callback now receives the qualified `AggregateAddress`.
+`SnapshotStore.load`, `save`, and `delete` now take that same value object
+instead of separate type/id parameters. Run the new
+`createEventStoreContractTests` suite against the low-level adapter to
+prove OCC, atomic rejection, ordering, read ownership, `fromVersion`, and that
+equal raw ids under different aggregate types remain isolated.
+
+### Changed (breaking): EventStore streams are qualified
+
+- `EventStore.append`, `readStream`, and `SnapshotStore` now use the existing
+  `AggregateAddress` value type instead of separate stream/source/address
+  shapes or positional type/id arguments.
+- All in-memory adapters share one collision-safe JSON-tuple encoder;
+  `InMemoryEventStore` reports OCC conflicts with the requested qualified
+  address.
+- Added `createEventStoreContractTests` to `@shirudo/ddd-kit/testing`; the
+  contract proves the complete observable port semantics, including equivalent
+  fresh address objects, colliding raw ids, qualified `fromVersion` reads,
+  append order, atomic OCC rejection, and detached read arrays. The
+  event-sourced repository suite now makes its qualified stream address
+  explicit through `streamKeyFor`.
+- Replay remains independently defensive: `loadFromHistory` rejects a
+  persisted event whose present aggregate type or id contradicts the target,
+  while storage adapters remain responsible for ordered, contiguous persisted
+  stream positions.
+
 ### Changed (breaking): live entity state is protected
 
 - `Entity.state` is protected so external code cannot obtain the live
