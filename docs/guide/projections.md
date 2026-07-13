@@ -210,6 +210,13 @@ interface AggregateAddress {
 }
 
 interface ProjectionCheckpointStore<TCtx> {
+  withCheckpointLocks<R>(
+    ctx: TCtx,
+    projection: string,
+    addresses: ReadonlyArray<AggregateAddress>,
+    work: () => Promise<R>,
+  ): Promise<R>;
+
   load(
     ctx: TCtx,
     projection: string,
@@ -290,6 +297,64 @@ without the row update loses events; a row update without the checkpoint
 replays work. The projector keeps those two writes together, but your adapter
 must participate in the same transaction.
 
+Competing projector instances also need exclusion around the complete
+`load -> apply -> save` path. `Projector` calls the required
+`withCheckpointLocks` port method inside that transaction with a unique,
+canonically sorted address set. The adapter must serialize every
+`(projection, aggregateType, aggregateId)` key even when no checkpoint exists
+yet. `SELECT ... FOR UPDATE` on the checkpoint table alone is wrong at
+genesis: an absent row locks nothing, so two consumers can both observe
+`undefined` and apply the first event.
+
+For PostgreSQL, one correct implementation acquires a transaction-scoped
+advisory lock for every sorted key before invoking `work`:
+
+```ts
+async function withCheckpointLocks<R>(
+  tx: DbTx,
+  projection: string,
+  addresses: ReadonlyArray<AggregateAddress>,
+  work: () => Promise<R>,
+): Promise<R> {
+  const keys = [...new Set(
+    addresses.map(({ aggregateType, aggregateId }) =>
+      JSON.stringify([projection, aggregateType, aggregateId]),
+    ),
+  )].sort();
+
+  for (const key of keys) {
+    await tx.query(
+      "select pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [key],
+    );
+  }
+  return work(); // the database retains xact locks through commit/rollback
+}
+```
+
+A collision in the database hash only over-serializes unrelated keys; it does
+not weaken correctness. Run this advisory-lock recipe at `READ COMMITTED`, so
+the checkpoint load after a wait receives a fresh statement snapshot containing
+the preceding holder's commit. At `REPEATABLE READ` or another transaction-wide
+snapshot level, a contender can retain the pre-wait snapshot; use a
+serialization-conflict retry/CAS protocol that the contract suite proves, or a
+different acquisition boundary.
+
+A database-neutral alternative is a permanent lock table keyed by the same
+triple: `INSERT ... ON CONFLICT DO NOTHING`, then lock those rows in canonical
+order with `SELECT ... FOR UPDATE` before `work`. Do not delete those lock rows
+while projectors are active. Whichever recipe you choose, the callback must
+observe the checkpoint committed by the previous holder, not merely run later
+in wall-clock time.
+
+An adapter that cannot provide missing-key exclusion supports only a hard
+single-projector topology for each projection. A no-op
+`withCheckpointLocks(..., work) { return work(); }` may express that local
+deployment restriction, but it is not safe for competing consumers and does
+not conform to the concurrency contract test. The in-memory reference provides
+process-local exclusion only across projectors sharing the same store instance;
+it is not a distributed lock and remains non-transactional.
+
 Checkpoint rows are correctness state, not a cache: never TTL or prune an
 active aggregate's row. Reclaim one only after the source guarantees that the
 stream is terminal and its complete redelivery/retention window has elapsed;
@@ -300,7 +365,11 @@ reset/rebuild the projection. A fabricated placeholder cannot prove which
 event established an existing watermark.
 
 Use `createProjectionCheckpointStoreContractTests` from
-`@shirudo/ddd-kit/testing` to verify a production adapter.
+`@shirudo/ddd-kit/testing` to verify a production adapter. Set the harness's
+`providesConcurrentRuns` capability to exercise exclusive access for both
+absent and existing checkpoint rows; a skipped capability leaves that guarantee
+explicitly unproven. Transactional adapters should also enable the rollback
+capability.
 
 `InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
 not transaction-aware, so it does not prove production rollback behavior.
@@ -390,9 +459,9 @@ outbox record stays pending. On retry, `orderListProjector` skips the event
 via its checkpoint, then `orderDetailProjector` gets another chance. The
 record is acknowledged only after every projector has processed it.
 
-Run one logical projector instance per projection unless your checkpoint
-adapter serializes the check-then-apply path, for example with a row lock on
-the checkpoint row.
+Competing projector instances are safe only when the checkpoint adapter meets
+the `withCheckpointLocks` missing-key contract described above. Otherwise,
+enforce one logical projector instance per projection at deployment level.
 
 ## QueryHandlers Read The Projection
 
@@ -508,6 +577,9 @@ enough because several events in one commit can share the same
 
 `projector.reset()` clears this projection's checkpoints and calls
 `projection.truncate(...)` in one transaction when `truncate` exists.
+Stop every live consumer for that projection before reset and keep them stopped
+until the replay has caught up; reset is an operational exclusivity boundary,
+not an address-scoped delivery operation.
 
 ```ts
 await projector.reset();

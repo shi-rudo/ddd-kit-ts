@@ -8,6 +8,7 @@ import {
 	assert,
 	assertEqual,
 	bindContractEnvironment,
+	captureRejection,
 	type ContractTest,
 	gatedContractTest,
 } from "./contract-assertions";
@@ -32,6 +33,17 @@ export interface ProjectionCheckpointStoreContractEnvironment<TCtx> {
 	run<R>(work: (ctx: TCtx) => Promise<R>): Promise<R>;
 
 	/**
+	 * Optional capability: starts every supplied transaction independently and
+	 * concurrently. Each callback must receive its own transaction context for
+	 * database adapters (normally a separate pooled connection). Enables the
+	 * missing-key/existing-key exclusion test; implementing this as sequential
+	 * calls would make that proof meaningless.
+	 */
+	runConcurrently?<R>(
+		works: ReadonlyArray<(ctx: TCtx) => Promise<R>>,
+	): Promise<R[]>;
+
+	/**
 	 * Optional capability: runs `work` inside a transaction that ROLLS
 	 * BACK. Enables the rollback test: a rolled-back save must leave no
 	 * checkpoint behind, the half of the atomic update+checkpoint
@@ -47,9 +59,9 @@ export interface ProjectionCheckpointStoreContractEnvironment<TCtx> {
 /**
  * What an adapter supplies to run the projection-checkpoint-store
  * contract suite. For SQL adapters, run against a real database
- * (testcontainers or equivalent): the rollback test proves YOUR
- * transaction wiring, and the checkpoint table must live in the same
- * database as the read models it accounts for.
+ * (testcontainers or equivalent): concurrent runs prove missing-key locking,
+ * the rollback test proves YOUR transaction wiring, and the checkpoint table
+ * must live in the same database as the read models it accounts for.
  */
 export interface ProjectionCheckpointStoreContractHarness<TCtx> {
 	createEnvironment(): Promise<
@@ -63,6 +75,14 @@ export interface ProjectionCheckpointStoreContractHarness<TCtx> {
 	 * of an in-memory fake, and a loud gap for a transactional adapter.
 	 */
 	providesRolledBackRuns?: boolean;
+
+	/**
+	 * Declare `true` when environments provide {@link
+	 * ProjectionCheckpointStoreContractEnvironment.runConcurrently}. Without
+	 * it, missing-key lock safety is marked skipped and remains an explicitly
+	 * unproven adapter guarantee.
+	 */
+	providesConcurrentRuns?: boolean;
 }
 
 const pos = (
@@ -91,7 +111,16 @@ const checkpoint = (
  * The projection-checkpoint-store contract test suite: the proof that
  * an adapter delivers the watermark semantics the `Projector`
  * documents. Checkpoint semantics are an **adapter contract, not a
- * kit guarantee**; this suite is how an adapter demonstrates them.
+ * kit guarantee**; this suite is how an adapter demonstrates them. Enable its
+ * concurrent-runs capability to prove genesis-safe exclusion rather than
+ * leaving that guarantee visibly skipped.
+ *
+ * The concurrent test exercises commit visibility, but cannot deterministically
+ * hold an adapter between return from `withCheckpointLocks` and its surrounding
+ * transaction commit. It can therefore expose an early lock release only when
+ * a waiter enters during that window; holding database locks through commit or
+ * rollback remains an explicit adapter responsibility, not a complete proof
+ * supplied by this suite.
  *
  * Framework-agnostic: bind with
  * `(test.skipped ? it.skip : it)(test.name, test.run)`.
@@ -112,6 +141,121 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					loaded,
 					undefined,
 					"a fresh store must report no watermark",
+				);
+			}),
+		},
+		gatedContractTest(
+			{
+				capability: "providesConcurrentRuns",
+				satisfiedBy: harness.providesConcurrentRuns === true,
+			},
+			{
+				name: "checkpoint locks serialize competing critical sections for absent and existing rows",
+				run: inEnv(async (env) => {
+					const runConcurrently = env.runConcurrently;
+					if (!runConcurrently) {
+						throw new Error(
+							"Contract violated: harness declared providesConcurrentRuns but the environment lacks runConcurrently",
+						);
+					}
+					const contenders = 8;
+					const address = order("o-locked");
+					const advanceOnce = async (
+						expectedVersion: number | undefined,
+						nextVersion: number,
+					): Promise<number> => {
+						const outcomes = await runConcurrently(
+							Array.from(
+								{ length: contenders },
+								() => (ctx) =>
+									env.store.withCheckpointLocks(
+										ctx,
+										"order-list",
+										[address],
+										async () => {
+											const stored = await env.store.load(
+												ctx,
+												"order-list",
+												address,
+											);
+											if (
+												expectedVersion === undefined
+													? stored !== undefined
+													: stored?.position.aggregateVersion !==
+														expectedVersion
+											) {
+												return false;
+											}
+											await Promise.resolve();
+											await env.store.save(
+												ctx,
+												"order-list",
+												address,
+												checkpoint(pos(nextVersion, 0), `evt-v${nextVersion}`),
+											);
+											return true;
+										},
+									),
+							),
+						);
+						return outcomes.filter((advanced) => advanced).length;
+					};
+
+					assertEqual(
+						await advanceOnce(undefined, 1),
+						1,
+						"exactly one competing callback may advance a missing checkpoint key; genesis has no row that SELECT FOR UPDATE could lock",
+					);
+					assertEqual(
+						await advanceOnce(1, 2),
+						1,
+						"exactly one competing callback may advance an existing checkpoint key from the observed watermark",
+					);
+					const stored = await env.run((ctx) =>
+						env.store.load(ctx, "order-list", address),
+					);
+					assert(
+						stored?.position.aggregateVersion === 2,
+						"serialized genesis and existing-row advances must leave the final watermark visible",
+					);
+				}),
+			},
+		),
+		{
+			name: "checkpoint locks release after a rejected critical section",
+			run: inEnv(async (env) => {
+				const address = order("o-rejected-lock");
+				const rejection = await captureRejection(
+					env.run((ctx) =>
+						env.store.withCheckpointLocks(
+							ctx,
+							"order-list",
+							[address],
+							async () => {
+								throw new Error("projection failed");
+							},
+						),
+					),
+				);
+				assert(
+					rejection !== undefined,
+					"the store must propagate a rejected critical section",
+				);
+
+				let retried = false;
+				await env.run((ctx) =>
+					env.store.withCheckpointLocks(
+						ctx,
+						"order-list",
+						[address],
+						async () => {
+							retried = true;
+						},
+					),
+				);
+				assert(
+					retried,
+					"a rejected callback must release its key so redelivery can enter",
 				);
 			}),
 		},

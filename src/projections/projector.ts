@@ -87,10 +87,12 @@ export interface ProjectionBatchResult {
  *   `source.aggregateType`, or an optional event address contradicting its
  *   authoritative envelope source fails the batch BEFORE anything is applied.
  *   The domain event remains persistence-agnostic.
- * - **One logical projector instance per projection.** The cursor
- *   check-then-apply is not concurrency-safe across competing
- *   instances unless the adapter serializes it (row lock on the
- *   checkpoint row); same rule as the outbox dispatcher.
+ * - **Competing instances serialize by checkpoint key.** The required
+ *   {@link ProjectionCheckpointStore.withCheckpointLocks} callback covers the
+ *   complete load / apply / save critical section for every addressed
+ *   aggregate. The adapter must lock a key even when its checkpoint row does
+ *   not exist yet; a plain row lock is insufficient at genesis. Without that
+ *   adapter guarantee, only a hard single-projector deployment is safe.
  *
  * Feeding: hand batches to {@link Projector.project} from any source
  * (an outbox poll, a queue consumer, a replay), or wire the projector
@@ -113,8 +115,9 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	}
 
 	/**
-	 * Applies one batch: one transaction, per envelope a cursor check and
-	 * `apply`, then one checkpoint save per advanced aggregate. Rejects
+	 * Applies one batch: one transaction and one exclusive checkpoint-key
+	 * section, per envelope a cursor check and `apply`, then one checkpoint save
+	 * per advanced aggregate. Rejects
 	 * (after rollback) when a handler throws or an envelope carries no
 	 * valid cursor; the caller's at-least-once redelivery retries the batch.
 	 * The input must be a complete, ordered feed per aggregate address; an
@@ -189,11 +192,20 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			const address: AggregateAddress = { aggregateType, aggregateId };
 			return { event, position, address };
 		});
+		const lockAddresses = [
+			...new Map(
+				cursored.map(({ address }) => [addressKey(address), address] as const),
+			).entries(),
+		]
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.map(([, address]) => address);
 
 		// Everything mutable lives INSIDE the transactional callback: a
 		// retrying scope re-runs it from zero, so a rolled-back attempt
 		// can never leak counts or watermarks into the next one.
-		return this.scope.transactional(async (ctx) => {
+		const projectWithLocks = async (
+			ctx: TCtx,
+		): Promise<ProjectionBatchResult> => {
 			let applied = 0;
 			let skipped = 0;
 			// Load and validate every addressed checkpoint before any handler
@@ -335,7 +347,15 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				);
 			}
 			return { applied, skipped };
-		});
+		};
+		return this.scope.transactional((ctx) =>
+			this.checkpoints.withCheckpointLocks(
+				ctx,
+				this.projection.name,
+				lockAddresses,
+				() => projectWithLocks(ctx),
+			),
+		);
 	}
 
 	/**
@@ -356,7 +376,9 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * Rebuild entry point: one transaction that clears this
 	 * projection's checkpoints and, when the projection provides
 	 * `truncate`, the read model with them. Replay the source through
-	 * {@link Projector.project} afterwards.
+	 * {@link Projector.project} afterwards. Stop all live consumers for this
+	 * projection before reset and keep them stopped through catch-up replay;
+	 * rebuild is not coordinated by the per-address delivery locks.
 	 */
 	async reset(): Promise<void> {
 		await this.scope.transactional(async (ctx) => {

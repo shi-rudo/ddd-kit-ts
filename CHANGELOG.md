@@ -659,6 +659,15 @@ and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
   `@shirudo/ddd-kit/testing` (rollback capability-gated, like the
   sibling suites). The projections guide is rewritten around the
   shipped runner.
+- `ProjectionCheckpointStore.withCheckpointLocks` is a required critical-section
+  boundary around checkpoint load, read-model apply, and checkpoint save. It
+  serializes competing projectors by the full checkpoint key even at genesis,
+  where no checkpoint row exists and ordinary `SELECT ... FOR UPDATE` locks
+  nothing. The contract suite now exercises absent and existing keys; the
+  in-memory reference provides process-local exclusion, and the guide gives
+  transaction-scoped advisory-lock and durable lock-row recipes for distributed
+  adapters. Adapters without missing-key exclusion are limited to an enforced
+  single-projector topology.
 
 ### Added: EventBus.subscribeAll
 
