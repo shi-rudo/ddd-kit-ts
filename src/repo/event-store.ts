@@ -26,6 +26,29 @@ export interface ReadStreamOptions {
 }
 
 /**
+ * State returned by {@link EventStore.readStream}.
+ *
+ * `lastVersion` is always the actual stream head (the event count), independent
+ * of the requested read window. `exists: true` implies `lastVersion >= 1`: an
+ * existing stream has at least one event, while metadata or tombstones without
+ * events must be reported as `exists: false`. A missing stream is therefore
+ * distinguishable from an existing stream whose `fromVersion` window is empty.
+ * Snapshot-backed repositories use that distinction to reject a snapshot whose
+ * version lies beyond the current authoritative stream head.
+ */
+export type StreamReadResult<Evt extends AnyDomainEvent> =
+	| {
+			readonly exists: false;
+			readonly lastVersion: 0;
+			readonly events: readonly [];
+	  }
+	| {
+			readonly exists: true;
+			readonly lastVersion: number;
+			readonly events: ReadonlyArray<Evt>;
+	  };
+
+/**
  * Driven port for event-sourced aggregate persistence: an append-only
  * store with one stream per aggregate. Each stream is addressed by the
  * qualified tuple `(aggregateType, aggregateId)`, because aggregate ids
@@ -50,10 +73,10 @@ export interface ReadStreamOptions {
  * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
- *   const history = await this.eventStore.readStream(this.stream(id));
- *   if (history.length === 0) return null;
+ *   const stream = await this.eventStore.readStream(this.stream(id));
+ *   if (!stream.exists) return null;
  *   const order = Order.reconstitute(id); // bare instance, no events
- *   const result = order.loadFromHistory(history);
+ *   const result = order.loadFromHistory(stream.events);
  *   if (result.isErr()) throw result.error; // corrupt stream
  *   this.session.identityMap.set(Order, id, order);
  *   return order;
@@ -138,14 +161,22 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Reads the qualified stream in append order. Returns an empty array for an
-	 * unknown stream (the repository maps that to `null`). With
-	 * `options.fromVersion`, returns only the events after that stream
-	 * position (snapshot catch-up). The returned array is owned by the
-	 * caller; implementations must not hand out live internal state.
+	 * Reads the qualified stream in append order. An unknown stream returns
+	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
+	 * `exists: true` even when its requested window is empty. An existing stream
+	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
+	 * metadata or tombstones without events must be reported as absent.
+	 * `lastVersion` is always the actual stream head, while
+	 * `options.fromVersion` filters only `events` to positions after that 1-based
+	 * event count. This distinction is load-bearing for snapshot catch-up: a
+	 * repository can detect a missing or truncated authoritative stream instead
+	 * of restoring a stale snapshot as a live aggregate. `exists`, `lastVersion`,
+	 * and `events` must describe one consistent view of the stream. The returned
+	 * event array is owned by the caller; implementations must not hand out
+	 * mutable live internal state.
 	 */
 	readStream(
 		stream: AggregateAddress,
 		options?: ReadStreamOptions,
-	): Promise<ReadonlyArray<Evt>>;
+	): Promise<StreamReadResult<Evt>>;
 }

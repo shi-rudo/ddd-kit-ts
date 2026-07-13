@@ -51,13 +51,15 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 
 	return [
 		{
-			name: "unknown stream: read returns an empty owned array",
+			name: "unknown stream: read reports explicit absence at version zero",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
 				const missing = await store.readStream({ ...firstKey });
 				assert(
-					missing.length === 0,
-					"an unknown qualified stream must read as an empty array",
+					!missing.exists &&
+						missing.lastVersion === 0 &&
+						missing.events.length === 0,
+					"an unknown qualified stream must return the explicit missing state",
 				);
 			}),
 		},
@@ -70,7 +72,10 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				await store.append({ ...firstKey }, [event], { expectedVersion: 0 });
 				const stored = await store.readStream(firstKey);
 				assert(
-					stored.length === 1 && stored[0]?.eventId === event.eventId,
+					stored.exists &&
+						stored.lastVersion === 1 &&
+						stored.events.length === 1 &&
+						stored.events[0]?.eventId === event.eventId,
 					"an empty append must not check OCC or create an empty stream",
 				);
 			}),
@@ -101,13 +106,15 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				const firstStream = await store.readStream({ ...firstKey });
 				const secondStream = await store.readStream({ ...secondKey });
 				assert(
-					firstStream.length === 1 &&
-						firstStream[0]?.eventId === firstEvent.eventId,
+					firstStream.exists &&
+						firstStream.events.length === 1 &&
+						firstStream.events[0]?.eventId === firstEvent.eventId,
 					"the first aggregate type must retain only its own event; key objects are value addresses, not identity tokens",
 				);
 				assert(
-					secondStream.length === 1 &&
-						secondStream[0]?.eventId === secondEvent.eventId,
+					secondStream.exists &&
+						secondStream.events.length === 1 &&
+						secondStream.events[0]?.eventId === secondEvent.eventId,
 					"the second aggregate type must retain only its own event when the raw id collides",
 				);
 			}),
@@ -128,13 +135,51 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					},
 				);
 				assert(
-					hasSameEventIds(whole, events),
+					whole.exists &&
+						whole.lastVersion === 3 &&
+						hasSameEventIds(whole.events, events),
 					"reads must preserve append order",
 				);
 				assert(
-					afterTwo.length === 1 && afterTwo[0]?.eventId === events[2]?.eventId,
+					afterTwo.exists &&
+						afterTwo.lastVersion === 3 &&
+						afterTwo.events.length === 1 &&
+						afterTwo.events[0]?.eventId === events[2]?.eventId,
 					"fromVersion 2 must return exactly the events after the first two positions",
 				);
+			}),
+		},
+		{
+			name: "read state: empty and beyond-head windows retain existence and the actual stream head",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				await store.append(
+					firstKey,
+					[harness.createEvent(firstKey, 4), harness.createEvent(firstKey, 5)],
+					{ expectedVersion: 0 },
+				);
+
+				const atHead = await store.readStream(
+					{ ...firstKey },
+					{
+						fromVersion: 2,
+					},
+				);
+				const beyondHead = await store.readStream(
+					{ ...firstKey },
+					{
+						fromVersion: 99,
+					},
+				);
+
+				for (const result of [atHead, beyondHead]) {
+					assert(
+						result.exists &&
+							result.lastVersion === 2 &&
+							result.events.length === 0,
+						"an empty read window must retain stream existence and report the actual head, even when fromVersion is beyond it",
+					);
+				}
 			}),
 		},
 		{
@@ -162,14 +207,18 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					},
 				);
 				assert(
-					firstTail.length === 2 &&
-						firstTail[0]?.eventId === firstEvents[1]?.eventId &&
-						firstTail[1]?.eventId === firstEvents[2]?.eventId,
+					firstTail.exists &&
+						firstTail.lastVersion === 3 &&
+						firstTail.events.length === 2 &&
+						firstTail.events[0]?.eventId === firstEvents[1]?.eventId &&
+						firstTail.events[1]?.eventId === firstEvents[2]?.eventId,
 					"fromVersion must slice only the requested aggregate type's stream",
 				);
 				assert(
-					secondTail.length === 1 &&
-						secondTail[0]?.eventId === secondEvents[1]?.eventId,
+					secondTail.exists &&
+						secondTail.lastVersion === 2 &&
+						secondTail.events.length === 1 &&
+						secondTail.events[0]?.eventId === secondEvents[1]?.eventId,
 					"a colliding raw id under another type must retain its independent version window",
 				);
 			}),
@@ -200,9 +249,11 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 				const stored = await store.readStream(firstKey);
 				assert(
-					stored.length === 2 &&
-						stored[0]?.eventId === seeded[0]?.eventId &&
-						stored[1]?.eventId === seeded[1]?.eventId,
+					stored.exists &&
+						stored.lastVersion === 2 &&
+						stored.events.length === 2 &&
+						stored.events[0]?.eventId === seeded[0]?.eventId &&
+						stored.events[1]?.eventId === seeded[1]?.eventId,
 					"a rejected multi-event append must leave the stream untouched",
 				);
 			}),
@@ -230,7 +281,10 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 				const stored = await store.readStream(firstKey);
 				assert(
-					stored.length === 1 && stored[0]?.eventId === seeded.eventId,
+					stored.exists &&
+						stored.lastVersion === 1 &&
+						stored.events.length === 1 &&
+						stored.events[0]?.eventId === seeded.eventId,
 					"a rejected duplicate-create batch must leave the existing stream untouched",
 				);
 			}),
@@ -253,7 +307,10 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				await store.append({ ...firstKey }, [first], { expectedVersion: 0 });
 				const stored = await store.readStream(firstKey);
 				assert(
-					stored.length === 1 && stored[0]?.eventId === first.eventId,
+					stored.exists &&
+						stored.lastVersion === 1 &&
+						stored.events.length === 1 &&
+						stored.events[0]?.eventId === first.eventId,
 					"the rejected append must not leave an empty stream or partial events behind",
 				);
 			}),
@@ -264,7 +321,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				const [firstKey] = harness.createCollidingStreamKeys();
 				const seeded = harness.createEvent(firstKey, 40);
 				await store.append(firstKey, [seeded], { expectedVersion: 0 });
-				const callerOwned = (await store.readStream(firstKey)) as Evt[];
+				const callerOwned = (await store.readStream(firstKey)).events as Evt[];
 				try {
 					callerOwned.push(harness.createEvent(firstKey, 41));
 				} catch {
@@ -273,7 +330,9 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				}
 				const stored = await store.readStream({ ...firstKey });
 				assert(
-					stored.length === 1 && stored[0]?.eventId === seeded.eventId,
+					stored.exists &&
+						stored.events.length === 1 &&
+						stored.events[0]?.eventId === seeded.eventId,
 					"readStream must return an owned array, never live internal state",
 				);
 			}),

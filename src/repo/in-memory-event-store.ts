@@ -8,6 +8,7 @@ import type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
+	StreamReadResult,
 } from "./event-store";
 
 /**
@@ -16,7 +17,8 @@ import type {
  * Intended for tests, single-process workers, and quick-start demos.
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
- * appends, append-order reads, and `fromVersion` slicing.
+ * appends, explicit missing/existing stream state with the actual head,
+ * append-order reads, and `fromVersion` slicing.
  *
  * For production, back the port with a durable store whose append and
  * the aggregate transaction share atomicity (a table with a
@@ -70,10 +72,17 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 	async readStream(
 		stream: AggregateAddress,
 		options?: ReadStreamOptions,
-	): Promise<ReadonlyArray<Evt>> {
-		const events = this.streams.get(encodeAggregateAddress(stream)) ?? [];
+	): Promise<StreamReadResult<Evt>> {
+		const events = this.streams.get(encodeAggregateAddress(stream));
+		if (events === undefined) {
+			return { exists: false, lastVersion: 0, events: [] };
+		}
 		const fromVersion = options?.fromVersion ?? 0;
 		// slice() always copies: callers never see the internal array.
-		return events.slice(Math.max(0, fromVersion));
+		return {
+			exists: true,
+			lastVersion: events.length,
+			events: events.slice(Math.max(0, fromVersion)),
+		};
 	}
 }

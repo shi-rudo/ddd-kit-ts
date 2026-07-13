@@ -420,7 +420,9 @@ const snapshot = await snapshots.load("Order", order.id);
 // after
 const address = { aggregateType: "Order", aggregateId: order.id };
 await eventStore.append(address, order.pendingEvents, options);
-const history = await eventStore.readStream(address);
+const stream = await eventStore.readStream(address);
+if (!stream.exists) return null;
+const history = stream.events;
 const snapshot = await snapshots.load(address);
 ```
 
@@ -437,20 +439,60 @@ instead of separate type/id parameters. Run the new
 prove OCC, atomic rejection, ordering, read ownership, `fromVersion`, and that
 equal raw ids under different aggregate types remain isolated.
 
-### Changed (breaking): EventStore streams are qualified
+#### 17. EventStore reads report stream state and the actual head
+
+`readStream` no longer returns a bare event array. Branch on `exists`, and pass
+the nested `events` array to replay:
+
+```ts
+// before
+const tail = await eventStore.readStream(address, {
+  fromVersion: snapshot.version,
+});
+if (tail.length === 0) {
+  // Ambiguous: missing stream, or an existing stream already at the snapshot?
+}
+
+// after
+const tail = await eventStore.readStream(address, {
+  fromVersion: snapshot.version,
+});
+if (!tail.exists || tail.lastVersion < snapshot.version) {
+  return discardSnapshotAndRefold();
+}
+order.restoreFromSnapshotWithEvents(snapshot, tail.events);
+```
+
+The result is the new type-only `StreamReadResult<Evt>`:
+
+- a missing stream is `{ exists: false, lastVersion: 0, events: [] }`
+- an existing stream always has `exists: true`
+- `lastVersion` is the actual stream head even when the requested window is
+  empty or `fromVersion` lies beyond it
+- `events` contains only the requested window
+
+Event-sourced repository contract harnesses keep `committedStreamEvents`, but
+that callback now returns `StreamReadResult<Evt>` instead of an array.
+
+### Changed (breaking): EventStore streams are qualified and report state
 
 - `EventStore.append`, `readStream`, and `SnapshotStore` now use the existing
   `AggregateAddress` value type instead of separate stream/source/address
   shapes or positional type/id arguments.
+- `readStream` returns `StreamReadResult<Evt>` so missing streams cannot alias
+  existing empty windows. `lastVersion` always reports the real head, allowing
+  snapshot repositories to reject a vanished or truncated authoritative
+  stream instead of resurrecting stale derived state.
 - All in-memory adapters share one collision-safe JSON-tuple encoder;
   `InMemoryEventStore` reports OCC conflicts with the requested qualified
   address.
 - Added `createEventStoreContractTests` to `@shirudo/ddd-kit/testing`; the
   contract proves the complete observable port semantics, including equivalent
   fresh address objects, colliding raw ids, qualified `fromVersion` reads,
-  append order, atomic OCC rejection, and detached read arrays. The
-  event-sourced repository suite now makes its qualified stream address
-  explicit through `streamKeyFor`.
+  append order, actual-head reporting for empty/beyond-head windows, atomic OCC
+  rejection, and detached read arrays. The event-sourced repository suite now
+  makes its qualified stream address explicit through `streamKeyFor` and proves
+  the same missing-vs-empty distinction through `committedStreamEvents`.
 - Replay remains independently defensive: `loadFromHistory` rejects a
   persisted event whose present aggregate type or id contradicts the target,
   while storage adapters remain responsible for ordered, contiguous persisted

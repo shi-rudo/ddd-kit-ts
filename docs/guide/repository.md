@@ -95,14 +95,14 @@ async findById(id: OrderId): Promise<Order | null> {
   const cached = this.identityMap.get(Order, id);
   if (cached) return cached;
 
-  const history = await this.eventStore.readStream({
+  const stream = await this.eventStore.readStream({
     aggregateType: "Order",
     aggregateId: id,
   });
-  if (history.length === 0) return null;
+  if (!stream.exists) return null;
 
   const order = Order.reconstitute(id);
-  const result = order.loadFromHistory(history);
+  const result = order.loadFromHistory(stream.events);
   if (result.isErr()) throw result.error;
 
   this.identityMap.set(Order, id, order);

@@ -3,6 +3,7 @@ import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
+import type { StreamReadResult } from "../repo/event-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -55,17 +56,17 @@ export interface EsRepositoryContractEnvironment<
 	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
 
 	/**
-	 * The COMMITTED stream for the qualified aggregate key, in stream order,
-	 * optionally only the events after `fromVersion` (the snapshot
-	 * catch-up read). Implement this through your adapter's
-	 * `EventStore.readStream` so the suite's ordering and slicing
-	 * assertions exercise your real read path. A rolled-back
-	 * transaction's events must not appear here.
+	 * The COMMITTED stream read result for the qualified aggregate key,
+	 * optionally only the events after `fromVersion` (the snapshot catch-up
+	 * read). Implement this through your adapter's `EventStore.readStream` so
+	 * the suite exercises the real missing/existing state, actual stream head,
+	 * ordering, and slicing. A rolled-back transaction's stream must remain
+	 * absent.
 	 */
 	committedStreamEvents(
 		stream: AggregateAddress<TAgg["id"]>,
 		fromVersion?: number,
-	): Promise<ReadonlyArray<Evt>>;
+	): Promise<StreamReadResult<Evt>>;
 
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
@@ -141,8 +142,8 @@ export type EsRepositoryContractTest = ContractTest;
  * - The replay/lifecycle tests prove your read path (fold order,
  *   identity map wiring) and the commit lifecycle (outbox harvest,
  *   `markPersisted`, rollback purity).
- * - The duplicate-create and fromVersion tests prove the create race
- *   and the snapshot catch-up read.
+ * - The duplicate-create and stream-read tests prove the create race,
+ *   missing-vs-empty distinction, actual head, and snapshot catch-up read.
  *
  * Error matching is by NAME along the `cause` chain, not `instanceof`
  * (same rationale as the state-stored suite). Binding:
@@ -214,7 +215,7 @@ export function createEsRepositoryContractTests<
 					streamKeyFor(seeded.id),
 				);
 				assert(
-					seedStream.length > 0,
+					seedStream.exists && seedStream.events.length > 0,
 					"seeding must have appended the creation event to the stream",
 				);
 
@@ -233,7 +234,8 @@ export function createEsRepositoryContractTests<
 					streamKeyFor(seeded.id),
 				);
 				assert(
-					streamAfterA.length === seedStream.length + 1,
+					streamAfterA.exists &&
+						streamAfterA.events.length === seedStream.events.length + 1,
 					"writer A's event must reach the stream on commit",
 				);
 
@@ -264,7 +266,11 @@ export function createEsRepositoryContractTests<
 					streamKeyFor(seeded.id),
 				);
 				assert(
-					deepEqual(orderedIds(finalStream), orderedIds(streamAfterA)),
+					finalStream.exists &&
+						deepEqual(
+							orderedIds(finalStream.events),
+							orderedIds(streamAfterA.events),
+						),
 					"the stream must contain exactly the winning writer's events in order: a rejected append must leave the stream untouched",
 				);
 
@@ -291,11 +297,13 @@ export function createEsRepositoryContractTests<
 				assert(
 					deepEqual(
 						outbox.map(({ event }) => event.eventId).sort(),
-						sortedIds(streamAfterA),
+						sortedIds(streamAfterA.events),
 					),
 					"the outbox must contain exactly the committed events (compared by eventId); nothing from the stale writer",
 				);
-				const seedEventIds = new Set(seedStream.map((event) => event.eventId));
+				const seedEventIds = new Set(
+					seedStream.events.map((event) => event.eventId),
+				);
 				const writerAOutbox = outbox.filter(
 					({ event }) => !seedEventIds.has(event.eventId),
 				);
@@ -335,7 +343,7 @@ export function createEsRepositoryContractTests<
 					streamKeyFor(aggregate.id),
 				);
 				assert(
-					deepEqual(orderedIds(stream), emittedIds),
+					stream.exists && deepEqual(orderedIds(stream.events), emittedIds),
 					"the committed stream must contain exactly the emitted events in emission order; reordering breaks every consumer's fold",
 				);
 
@@ -393,6 +401,37 @@ export function createEsRepositoryContractTests<
 			}),
 		},
 		{
+			name: "stream read state distinguishes absence from an empty snapshot catch-up window",
+			run: inEnv(async (env) => {
+				const neverPersisted = harness.createAggregate();
+				const missing = await env.committedStreamEvents(
+					streamKeyFor(neverPersisted.id),
+				);
+				assert(
+					missing.exists === false &&
+						missing.lastVersion === 0 &&
+						missing.events.length === 0,
+					"a missing stream must report exists=false, lastVersion=0, and no events",
+				);
+
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
+				await env.run(async ({ repository }) => {
+					await repository.save(aggregate);
+				});
+				const emptyTail = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+					aggregate.version,
+				);
+				assert(
+					emptyTail.exists === true &&
+						emptyTail.lastVersion === aggregate.version &&
+						emptyTail.events.length === 0,
+					"an empty catch-up window must retain exists=true and the actual stream head",
+				);
+			}),
+		},
+		{
 			name: "identity map: two findById calls in one unit of work return the same instance",
 			run: inEnv(async (env) => {
 				const seeded = await seed(env);
@@ -421,10 +460,12 @@ export function createEsRepositoryContractTests<
 					}),
 				);
 
-				assertEqual(
-					(await env.committedStreamEvents(streamKeyFor(aggregate.id))).length,
-					0,
-					"a rolled-back transaction must not leave events in the stream",
+				const rolledBackStream = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+				);
+				assert(
+					!rolledBackStream.exists && rolledBackStream.events.length === 0,
+					"a rolled-back first save must leave the stream absent",
 				);
 				assertEqual(
 					(await env.committedOutboxEvents()).length,
@@ -446,10 +487,14 @@ export function createEsRepositoryContractTests<
 				await env.run(async ({ repository }) => {
 					await repository.save(aggregate);
 				});
-				assertEqual(
-					(await env.committedStreamEvents(streamKeyFor(aggregate.id))).length,
-					pendingBefore,
-					"the retried first save must append the full pending history",
+				const retriedStream = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+				);
+				assert(
+					retriedStream.exists &&
+						retriedStream.lastVersion === pendingBefore &&
+						retriedStream.events.length === pendingBefore,
+					"the retried first save must create the stream with the full pending history",
 				);
 				assertEqual(
 					aggregate.persistedVersion,
@@ -471,25 +516,34 @@ export function createEsRepositoryContractTests<
 				const full = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
 				);
-				assertEqual(full.length, 3, "seeding must have committed 3 events");
+				assert(
+					full.exists && full.lastVersion === 3 && full.events.length === 3,
+					"seeding must have committed an existing stream of 3 events",
+				);
 
 				const afterOne = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
 					1,
 				);
 				assert(
-					deepEqual(orderedIds(afterOne), orderedIds(full.slice(1))),
+					afterOne.exists &&
+						afterOne.lastVersion === 3 &&
+						deepEqual(
+							orderedIds(afterOne.events),
+							orderedIds(full.events.slice(1)),
+						),
 					"fromVersion=1 must return exactly the events after stream position 1, in order; restoreFromSnapshotWithEvents replays exactly this window",
 				);
 
 				const afterAll = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
-					full.length,
+					full.lastVersion,
 				);
-				assertEqual(
-					afterAll.length,
-					0,
-					"fromVersion at the stream head must return no events",
+				assert(
+					afterAll.exists &&
+						afterAll.lastVersion === full.lastVersion &&
+						afterAll.events.length === 0,
+					"fromVersion at the stream head must return an existing empty window with the actual head",
 				);
 			}),
 		},
@@ -530,7 +584,11 @@ export function createEsRepositoryContractTests<
 						streamKeyFor(seeded.id),
 					);
 					assert(
-						deepEqual(orderedIds(finalStream), orderedIds(seedStream)),
+						finalStream.exists &&
+							deepEqual(
+								orderedIds(finalStream.events),
+								orderedIds(seedStream.events),
+							),
 						"the existing stream must be untouched by the rejected duplicate create",
 					);
 				}),
