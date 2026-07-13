@@ -28,6 +28,8 @@ describe("event-store adapter contract", () => {
 			"empty append: no version check and no stream creation",
 			"qualified stream key: equal aggregate ids remain isolated by aggregate type",
 			"append/read: event order and fromVersion slicing are preserved",
+			"bounded read: toVersion is inclusive while lastVersion remains the actual head",
+			"bounded read edges: zero, beyond-head, and inverted ranges are empty or clamped",
 			"read state: empty and beyond-head windows retain existence and the actual stream head",
 			"qualified fromVersion: slicing one type cannot observe a colliding raw id",
 			"OCC: a rejected multi-event append is atomic and maps to ConcurrencyConflictError",

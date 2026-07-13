@@ -187,6 +187,24 @@ describe("InMemoryEventStore", () => {
 		expect(fromZero.events).toHaveLength(3);
 	});
 
+	it("readStream honors an inclusive toVersion while reporting the actual head", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const first = renamed("a");
+		const second = renamed("b");
+		const third = renamed("c");
+		await store.append(streamA, [first, second, third], {
+			expectedVersion: 0,
+		});
+
+		const asOfTwo = await store.readStream(streamA, { toVersion: 2 });
+
+		expect(asOfTwo).toMatchObject({ exists: true, lastVersion: 3 });
+		expect(asOfTwo.events.map((event) => event.eventId)).toEqual([
+			first.eventId,
+			second.eventId,
+		]);
+	});
+
 	it("treats an empty append as a no-op", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 

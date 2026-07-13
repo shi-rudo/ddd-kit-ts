@@ -32,6 +32,13 @@ type OrderState = {
   status: "empty" | "pending" | "confirmed";
 };
 
+type OrderView = Readonly<{
+  id: OrderId;
+  version: number;
+  customerId?: string;
+  status: OrderState["status"];
+}>;
+
 type OrderCreated = DomainEvent<
   "OrderCreated",
   { customerId: string }
@@ -91,6 +98,15 @@ class Order extends EventSourcedAggregate<
         orderId: this.id,
       }),
     );
+  }
+
+  toView(): OrderView {
+    return Object.freeze({
+      id: this.id,
+      version: this.version,
+      customerId: this.state.customerId,
+      status: this.state.status,
+    });
   }
 
   protected override validateEvent(event: OrderEvent): void {
@@ -228,7 +244,7 @@ interface EventStore<Evt extends AnyDomainEvent> {
 
   readStream(
     stream: AggregateAddress,
-    options?: { fromVersion?: number },
+    options?: { fromVersion?: number; toVersion?: number },
   ): Promise<StreamReadResult<Evt>>;
 }
 
@@ -262,10 +278,15 @@ contexts with the same domain name share storage, qualify it at the source
 `exists: true` even when its requested window is empty. An existing stream has
 at least one event, so `exists: true` implies `lastVersion >= 1`; metadata or
 tombstones without events must be reported as absent. `lastVersion` always
-reports the actual head (the event count); `fromVersion` filters only `events`
-to positions after that 1-based count. This is how a snapshot-backed repository
-distinguishes "aggregate is gone" from "snapshot is already at the head" and
-detects a snapshot whose version lies beyond a truncated stream.
+reports the actual head (the event count); `fromVersion` is the exclusive lower
+bound and `toVersion` is the inclusive upper bound, both expressed as 1-based
+stream positions. Together they select `(fromVersion, toVersion]` without
+changing `lastVersion`. `toVersion: 0` returns an empty window, a value beyond
+the head clamps to the head, and `fromVersion >= toVersion` describes an empty
+interval rather than an error. This is how a snapshot-backed repository
+distinguishes "aggregate is gone" from "snapshot is already at the head", and
+how a point-in-time reader verifies the requested historical position against
+the actual head.
 Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
 view of the stream; do not assemble the result from racing reads.
 
@@ -299,9 +320,10 @@ describe("PgOrderEventRepository", () => {
 ```
 
 The store suite proves qualified-key isolation, OCC/atomicity, stream-state
-reporting, ordering, and windows. The repository suite covers append conflicts,
-duplicate creates, replay equality, rollback purity, commit lifecycle, and the
-same missing-vs-empty snapshot semantics through the repository adapter.
+reporting, ordering, and both read bounds. The repository suite covers append
+conflicts, duplicate creates, replay equality, rollback purity, commit
+lifecycle, snapshot catch-up, and point-in-time windows through the repository
+adapter.
 
 ## Loading from history
 
@@ -373,6 +395,46 @@ Replaying onto that object would mark unpersisted history as persisted and
 corrupt the next repository save.
 
 Use a fresh `Order.reconstitute(id)` target for normal loads.
+
+### Point-in-time reconstruction
+
+An audit or debugging query can fold only the history that existed at stream
+position `N`. Keep that query outside the aggregate's normal write repository:
+it creates a historical view, not a live aggregate that may be saved.
+
+```ts
+async function findOrderAsOfVersion(
+  id: OrderId,
+  toVersion: number,
+): Promise<OrderView | null> {
+  if (!Number.isInteger(toVersion) || toVersion < 0) {
+    throw new RangeError("toVersion must be a non-negative stream position");
+  }
+
+  const stream = await eventStore.readStream(
+    { aggregateType: "Order", aggregateId: id },
+    { toVersion },
+  );
+
+  if (!stream.exists || toVersion === 0) return null;
+  if (toVersion > stream.lastVersion) {
+    throw new RangeError(
+      `Order stream ends at ${stream.lastVersion}, before ${toVersion}`,
+    );
+  }
+
+  const historical = Order.reconstitute(id);
+  const result = historical.loadFromHistory(stream.events);
+  if (result.isErr()) throw result.error;
+  return historical.toView();
+}
+```
+
+The explicit head check prevents a request for version `10` from silently
+becoming "latest" when the stream currently ends at version `7`. For combined
+snapshot and point-in-time reads, use `{ fromVersion: snapshot.version,
+toVersion }` and restore only when the snapshot version is at or below the
+requested version.
 
 ## Snapshots
 

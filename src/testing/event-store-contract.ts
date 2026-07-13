@@ -150,6 +150,77 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "bounded read: toVersion is inclusive while lastVersion remains the actual head",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const bounded = await store.readStream(
+					{ ...firstKey },
+					{ fromVersion: 1, toVersion: 3 },
+				);
+
+				assert(
+					bounded.exists &&
+						bounded.lastVersion === 4 &&
+						hasSameEventIds(bounded.events, events.slice(1, 3)),
+					"(fromVersion, toVersion] must include positions 2 and 3 while lastVersion reports the actual head at 4",
+				);
+			}),
+		},
+		{
+			name: "bounded read edges: zero, beyond-head, and inverted ranges are empty or clamped",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const atZero = await store.readStream(
+					{ ...firstKey },
+					{ toVersion: 0 },
+				);
+				const beyondHead = await store.readStream(
+					{ ...firstKey },
+					{ toVersion: 99 },
+				);
+				const inverted = await store.readStream(
+					{ ...firstKey },
+					{ fromVersion: 2, toVersion: 1 },
+				);
+				const equalBounds = await store.readStream(
+					{ ...firstKey },
+					{ fromVersion: 2, toVersion: 2 },
+				);
+
+				assert(
+					atZero.exists &&
+						atZero.lastVersion === 3 &&
+						atZero.events.length === 0,
+					"toVersion=0 must return an existing empty window with the actual head",
+				);
+				assert(
+					beyondHead.exists &&
+						beyondHead.lastVersion === 3 &&
+						hasSameEventIds(beyondHead.events, events),
+					"toVersion beyond the head must clamp to the actual stream head",
+				);
+				assert(
+					inverted.exists &&
+						inverted.lastVersion === 3 &&
+						inverted.events.length === 0 &&
+						equalBounds.exists &&
+						equalBounds.lastVersion === 3 &&
+						equalBounds.events.length === 0,
+					"fromVersion >= toVersion describes an empty interval and must not throw",
+				);
+			}),
+		},
+		{
 			name: "read state: empty and beyond-head windows retain existence and the actual stream head",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
