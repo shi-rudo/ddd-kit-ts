@@ -1,5 +1,13 @@
 # Agent Instructions
 
+## Repository attribution policy
+
+- Never include an assistant, agent, model, automation, or tool identity in
+  branch names, commit messages, pull-request titles or descriptions, issues,
+  changelogs, release notes, or any other repository-visible artifact.
+- Use neutral, intent-based naming and write every artifact as ordinary project
+  work without generated-by attribution.
+
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
 ## Quick Reference
