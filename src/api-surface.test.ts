@@ -127,6 +127,7 @@ const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
 const TESTING_SURFACE = [
 	"createDeadlineStoreContractTests",
 	"createEsRepositoryContractTests",
+	"createEventStoreContractTests",
 	"createIdempotencyStoreContractTests",
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",

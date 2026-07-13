@@ -56,7 +56,10 @@ ambiguous and forces consumers to infer schema from fields. Do not do that.
 Upcast after reading from storage and before events reach the aggregate:
 
 ```ts
-const stored = await eventStore.readStream(orderId);
+const stored = await eventStore.readStream({
+  aggregateType: "Order",
+  aggregateId: orderId,
+});
 const history = stored.map(upcastOrderEvent) as OrderEvent[];
 
 const order = Order.reconstitute(orderId);

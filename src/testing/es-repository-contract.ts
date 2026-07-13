@@ -2,6 +2,7 @@ import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
+import type { StreamKey } from "../repo/event-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -54,7 +55,7 @@ export interface EsRepositoryContractEnvironment<
 	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
 
 	/**
-	 * The COMMITTED stream for the given aggregate id, in stream order,
+	 * The COMMITTED stream for the qualified aggregate key, in stream order,
 	 * optionally only the events after `fromVersion` (the snapshot
 	 * catch-up read). Implement this through your adapter's
 	 * `EventStore.readStream` so the suite's ordering and slicing
@@ -62,7 +63,7 @@ export interface EsRepositoryContractEnvironment<
 	 * transaction's events must not appear here.
 	 */
 	committedStreamEvents(
-		id: TAgg["id"],
+		stream: StreamKey<TAgg["id"]>,
 		fromVersion?: number,
 	): Promise<ReadonlyArray<Evt>>;
 
@@ -94,6 +95,13 @@ export interface EsRepositoryContractHarness<
 	 * id, version 1, `persistedVersion === undefined`.
 	 */
 	createAggregate(): TAgg;
+
+	/**
+	 * Qualified persistence key for this aggregate type. Repositories expose
+	 * id-only domain lookup, but their EventStore adapter must address the
+	 * underlying stream by both stable aggregate type and id.
+	 */
+	streamKeyFor(id: TAgg["id"]): StreamKey<TAgg["id"]>;
 
 	/** Apply exactly ONE domain event via `apply()` (+1 version). */
 	mutate(aggregate: TAgg): void;
@@ -194,13 +202,17 @@ export function createEsRepositoryContractTests<
 	// Capabilities are captured ONCE at suite creation.
 	const snapshotState = harness.snapshotState;
 	const createAggregateWithId = harness.createAggregateWithId;
+	const streamKeyFor = (id: TAgg["id"]): StreamKey<TAgg["id"]> =>
+		harness.streamKeyFor(id);
 
 	const tests: EsRepositoryContractTest[] = [
 		{
 			name: "MANDATORY two-writer conflict: the stale writer's append throws ConcurrencyConflictError and the stream is untouched",
 			run: inEnv(async (env) => {
 				const seeded = await seed(env);
-				const seedStream = await env.committedStreamEvents(seeded.id);
+				const seedStream = await env.committedStreamEvents(
+					streamKeyFor(seeded.id),
+				);
 				assert(
 					seedStream.length > 0,
 					"seeding must have appended the creation event to the stream",
@@ -217,7 +229,9 @@ export function createEsRepositoryContractTests<
 					await repository.save(a);
 					return a;
 				});
-				const streamAfterA = await env.committedStreamEvents(seeded.id);
+				const streamAfterA = await env.committedStreamEvents(
+					streamKeyFor(seeded.id),
+				);
 				assert(
 					streamAfterA.length === seedStream.length + 1,
 					"writer A's event must reach the stream on commit",
@@ -246,7 +260,9 @@ export function createEsRepositoryContractTests<
 
 				// The stream contains exactly writer A's history, in order:
 				// nothing from the stale writer, nothing reordered.
-				const finalStream = await env.committedStreamEvents(seeded.id);
+				const finalStream = await env.committedStreamEvents(
+					streamKeyFor(seeded.id),
+				);
 				assert(
 					deepEqual(orderedIds(finalStream), orderedIds(streamAfterA)),
 					"the stream must contain exactly the winning writer's events in order: a rejected append must leave the stream untouched",
@@ -315,7 +331,9 @@ export function createEsRepositoryContractTests<
 				});
 
 				// The stream holds the UNSTAMPED originals in emission order.
-				const stream = await env.committedStreamEvents(aggregate.id);
+				const stream = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+				);
 				assert(
 					deepEqual(orderedIds(stream), emittedIds),
 					"the committed stream must contain exactly the emitted events in emission order; reordering breaks every consumer's fold",
@@ -404,7 +422,7 @@ export function createEsRepositoryContractTests<
 				);
 
 				assertEqual(
-					(await env.committedStreamEvents(aggregate.id)).length,
+					(await env.committedStreamEvents(streamKeyFor(aggregate.id))).length,
 					0,
 					"a rolled-back transaction must not leave events in the stream",
 				);
@@ -429,7 +447,7 @@ export function createEsRepositoryContractTests<
 					await repository.save(aggregate);
 				});
 				assertEqual(
-					(await env.committedStreamEvents(aggregate.id)).length,
+					(await env.committedStreamEvents(streamKeyFor(aggregate.id))).length,
 					pendingBefore,
 					"the retried first save must append the full pending history",
 				);
@@ -450,17 +468,22 @@ export function createEsRepositoryContractTests<
 					await repository.save(aggregate);
 				});
 
-				const full = await env.committedStreamEvents(aggregate.id);
+				const full = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+				);
 				assertEqual(full.length, 3, "seeding must have committed 3 events");
 
-				const afterOne = await env.committedStreamEvents(aggregate.id, 1);
+				const afterOne = await env.committedStreamEvents(
+					streamKeyFor(aggregate.id),
+					1,
+				);
 				assert(
 					deepEqual(orderedIds(afterOne), orderedIds(full.slice(1))),
 					"fromVersion=1 must return exactly the events after stream position 1, in order; restoreFromSnapshotWithEvents replays exactly this window",
 				);
 
 				const afterAll = await env.committedStreamEvents(
-					aggregate.id,
+					streamKeyFor(aggregate.id),
 					full.length,
 				);
 				assertEqual(
@@ -487,7 +510,9 @@ export function createEsRepositoryContractTests<
 						"gate guarantees createAggregateWithId",
 					);
 					const seeded = await seed(env);
-					const seedStream = await env.committedStreamEvents(seeded.id);
+					const seedStream = await env.committedStreamEvents(
+						streamKeyFor(seeded.id),
+					);
 
 					const duplicate = createAggregateWithId.call(harness, seeded.id);
 					const rejection = await captureRejection(
@@ -501,7 +526,9 @@ export function createEsRepositoryContractTests<
 						`the duplicate creator's append (expectedVersion 0 on an existing stream) must reject with (or wrap) ConcurrencyConflictError or DuplicateAggregateError; got: ${describeError(rejection)}`,
 					);
 
-					const finalStream = await env.committedStreamEvents(seeded.id);
+					const finalStream = await env.committedStreamEvents(
+						streamKeyFor(seeded.id),
+					);
 					assert(
 						deepEqual(orderedIds(finalStream), orderedIds(seedStream)),
 						"the existing stream must be untouched by the rejected duplicate create",

@@ -95,7 +95,10 @@ async findById(id: OrderId): Promise<Order | null> {
   const cached = this.identityMap.get(Order, id);
   if (cached) return cached;
 
-  const history = await this.eventStore.readStream(id);
+  const history = await this.eventStore.readStream({
+    aggregateType: "Order",
+    aggregateId: id,
+  });
   if (history.length === 0) return null;
 
   const order = Order.reconstitute(id);
@@ -269,9 +272,11 @@ async save(order: Order): Promise<void> {
 
   this.session.enrollSaved(order);
 
-  await this.eventStore.append(order.id, order.pendingEvents, {
-    expectedVersion: order.persistedVersion ?? 0,
-  });
+  await this.eventStore.append(
+    { aggregateType: "Order", aggregateId: order.id },
+    order.pendingEvents,
+    { expectedVersion: order.persistedVersion ?? 0 },
+  );
 }
 ```
 

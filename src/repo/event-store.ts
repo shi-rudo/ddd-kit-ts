@@ -1,5 +1,16 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import type { Id } from "../core/id";
+
+/**
+ * Stable identity of one aggregate event stream.
+ *
+ * Aggregate ids are type-scoped, so the raw id alone is not a globally
+ * unique stream address. `aggregateType` is part of the persistence key:
+ * `SalesOrder 1` and `FulfillmentOrder 1` are independent streams.
+ */
+export interface StreamKey<TAggregateId extends string = string> {
+	readonly aggregateType: string;
+	readonly aggregateId: TAggregateId;
+}
 
 /** Options for {@link EventStore.append}. */
 export interface EventStoreAppendOptions {
@@ -17,7 +28,7 @@ export interface EventStoreAppendOptions {
 export interface ReadStreamOptions {
 	/**
 	 * Return only events AFTER this stream position (1-based event count),
-	 * the snapshot catch-up read: `readStream(id, { fromVersion:
+	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
 	 * snapshot.version })` yields exactly the events
 	 * `restoreFromSnapshotWithEvents` needs. Defaults to `0` (the whole
 	 * stream).
@@ -27,23 +38,30 @@ export interface ReadStreamOptions {
 
 /**
  * Driven port for event-sourced aggregate persistence: an append-only
- * store with one stream per aggregate (the stream id IS the aggregate
- * id, Greg Young's stream-per-aggregate default).
+ * store with one stream per aggregate. Each stream is addressed by the
+ * qualified tuple `(aggregateType, aggregateId)`, because aggregate ids
+ * are type-scoped rather than globally unique.
  *
  * The kit ships the port, the OCC error contract, `InMemoryEventStore`
  * as the reference implementation, and the event-sourced repository
- * contract suite (`@shirudo/ddd-kit/testing`). Your adapter implements
- * this port against a real store and must pass that suite: like the
- * state-stored `IRepository`, optimistic concurrency is a testable
- * adapter contract, not a kit guarantee.
+ * contract suites (`createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` from `@shirudo/ddd-kit/testing`).
+ * Your adapter implements this port against a real store and must pass
+ * those suites. Like the state-stored `IRepository`, its optimistic
+ * concurrency and key isolation are testable adapter contracts, not kit
+ * guarantees.
  *
  * Repository usage (see the event-sourcing guide):
  *
  * ```ts
+ * private stream(id: OrderId): StreamKey<OrderId> {
+ *   return { aggregateType: "Order", aggregateId: id };
+ * }
+ *
  * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
- *   const history = await this.eventStore.readStream(id);
+ *   const history = await this.eventStore.readStream(this.stream(id));
  *   if (history.length === 0) return null;
  *   const order = Order.reconstitute(id); // bare instance, no events
  *   const result = order.loadFromHistory(history);
@@ -55,7 +73,7 @@ export interface ReadStreamOptions {
  * async save(order: Order): Promise<void> {
  *   if (order.pendingEvents.length === 0) return;
  *   this.session.enrollSaved(order);
- *   await this.eventStore.append(order.id, order.pendingEvents, {
+ *   await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
  *     expectedVersion: order.persistedVersion ?? 0,
  *   });
  * }
@@ -98,36 +116,44 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     409). The contract suite accepts both errors for this race.
 	 *  2. **Atomicity:** all events land or none do; a rejected append
 	 *     leaves the stream untouched.
-	 *  3. **Order:** events are stored in the given array order, appended
+	 *  3. **Qualified identity:** `(aggregateType, aggregateId)` is the
+	 *     storage key. Equal raw ids under different aggregate types are
+	 *     independent streams. Use both columns in every primary/unique
+	 *     key, OCC predicate, and read predicate.
+	 *  4. **Order:** events are stored in the given array order, appended
 	 *     after the existing stream tail.
-	 *  4. **Append-only:** stored events are never edited or deleted;
+	 *  5. **Append-only:** stored events are never edited or deleted;
 	 *     corrections are new (compensating) events.
+	 *  6. **Replay integrity:** reads order by the persisted stream position
+	 *     and reject duplicate or non-contiguous positions where the backing
+	 *     store exposes them. The repository then calls `loadFromHistory`,
+	 *     whose replay guard rejects any event carrying an aggregate type or
+	 *     id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `save` for aggregates
 	 * without pending events anyway).
 	 *
-	 * The stream key is the aggregate id alone, which assumes ids are
-	 * unique across every aggregate type sharing one store. App-side
-	 * generated ids (the kit's default: UUIDs) are; per-type sequences
-	 * are not. Qualify such ids at the source, or give each aggregate
-	 * type its own store/table.
+	 * Treat `aggregateType` as a stable technical stream category. If two
+	 * bounded contexts share one physical store and reuse a domain name,
+	 * qualify it at the source (`sales.order`, `fulfillment.order`). Renaming
+	 * it changes the stream key and therefore requires a data migration.
 	 */
 	append(
-		streamId: Id<string>,
+		stream: StreamKey,
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void>;
 
 	/**
-	 * Reads the stream in append order. Returns an empty array for an
+	 * Reads the qualified stream in append order. Returns an empty array for an
 	 * unknown stream (the repository maps that to `null`). With
 	 * `options.fromVersion`, returns only the events after that stream
 	 * position (snapshot catch-up). The returned array is owned by the
 	 * caller; implementations must not hand out live internal state.
 	 */
 	readStream(
-		streamId: Id<string>,
+		stream: StreamKey,
 		options?: ReadStreamOptions,
 	): Promise<ReadonlyArray<Evt>>;
 }

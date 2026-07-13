@@ -2,8 +2,8 @@
  * Opt-in testing entry point (`@shirudo/ddd-kit/testing`).
  *
  * Ships the adapter contract test suites (state-stored and
- * event-sourced repositories, outbox, idempotency store): the kit is
- * ORM- and store-agnostic, so optimistic concurrency, outbox
+ * event-sourced repositories, event stores, outbox, idempotency store):
+ * the kit is ORM- and store-agnostic, so optimistic concurrency, outbox
  * semantics, and the idempotency lifecycle are adapter CONTRACTS the
  * consumer's implementation must prove; this entry provides the proof
  * harnesses. Kept out of the core barrel so test-only code never rides
@@ -23,6 +23,12 @@ export {
 	type EsRepositoryContractHarness,
 	type EsRepositoryContractTest,
 } from "./testing/es-repository-contract";
+export {
+	createEventStoreContractTests,
+	type EventStoreContractEnvironment,
+	type EventStoreContractHarness,
+	type EventStoreContractTest,
+} from "./testing/event-store-contract";
 export {
 	createIdempotencyStoreContractTests,
 	type IdempotencyStoreContractEnvironment,

@@ -243,6 +243,7 @@ export type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
+	StreamKey,
 } from "./repo/event-store";
 export { type AggregateClass, IdentityMap } from "./repo/identity-map";
 export { InMemoryEventStore } from "./repo/in-memory-event-store";
