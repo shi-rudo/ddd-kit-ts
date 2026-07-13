@@ -19,6 +19,11 @@ import {
  * disposable in-memory read models; production atomicity is the durable
  * adapter's contract, proved with `createProjectionCheckpointStoreContractTests`
  * and its rollback capability.
+ *
+ * Do not nest `withCheckpointLocks` calls whose key sets overlap. This
+ * reference has no async-context tracking for reentrancy: a nested call waits
+ * on the key its caller still holds and therefore neither enters nor fails
+ * loudly.
  */
 export class InMemoryProjectionCheckpointStore
 	implements ProjectionCheckpointStore<unknown>

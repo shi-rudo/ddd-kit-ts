@@ -115,6 +115,13 @@ const checkpoint = (
  * concurrent-runs capability to prove genesis-safe exclusion rather than
  * leaving that guarantee visibly skipped.
  *
+ * The concurrent test exercises commit visibility, but cannot deterministically
+ * hold an adapter between return from `withCheckpointLocks` and its surrounding
+ * transaction commit. It can therefore expose an early lock release only when
+ * a waiter enters during that window; holding database locks through commit or
+ * rollback remains an explicit adapter responsibility, not a complete proof
+ * supplied by this suite.
+ *
  * Framework-agnostic: bind with
  * `(test.skipped ? it.skip : it)(test.name, test.run)`.
  */
