@@ -60,7 +60,9 @@ const stored = await eventStore.readStream({
   aggregateType: "Order",
   aggregateId: orderId,
 });
-const history = stored.map(upcastOrderEvent) as OrderEvent[];
+if (!stored.exists) return null;
+
+const history = stored.events.map(upcastOrderEvent) as OrderEvent[];
 
 const order = Order.reconstitute(orderId);
 const result = order.loadFromHistory(history);

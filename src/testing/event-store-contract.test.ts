@@ -24,10 +24,11 @@ describe("event-store adapter contract", () => {
 
 	it("contains the qualified-stream isolation proof", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
-			"unknown stream: read returns an empty owned array",
+			"unknown stream: read reports explicit absence at version zero",
 			"empty append: no version check and no stream creation",
 			"qualified stream key: equal aggregate ids remain isolated by aggregate type",
 			"append/read: event order and fromVersion slicing are preserved",
+			"read state: empty and beyond-head windows retain existence and the actual stream head",
 			"qualified fromVersion: slicing one type cannot observe a colliding raw id",
 			"OCC: a rejected multi-event append is atomic and maps to ConcurrencyConflictError",
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",

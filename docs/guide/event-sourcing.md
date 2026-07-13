@@ -229,8 +229,12 @@ interface EventStore<Evt extends AnyDomainEvent> {
   readStream(
     stream: AggregateAddress,
     options?: { fromVersion?: number },
-  ): Promise<readonly Evt[]>;
+  ): Promise<StreamReadResult<Evt>>;
 }
+
+type StreamReadResult<Evt> =
+  | { exists: false; lastVersion: 0; events: readonly [] }
+  | { exists: true; lastVersion: number; events: readonly Evt[] };
 ```
 
 Use one stream per aggregate. Its key is the tuple `(aggregateType,
@@ -253,10 +257,17 @@ contexts with the same domain name share storage, qualify it at the source
 - rejected appends must leave the stream unchanged
 - equal raw ids under different aggregate types must remain isolated
 
-`readStream(stream)` returns all events in append order.
-`readStream(stream, { fromVersion })` returns only events after that 1-based
-stream version. That is the catch-up read used after loading a snapshot. A
-database adapter should also reject duplicate or non-contiguous persisted
+`readStream(stream)` reports both stream state and events. A missing stream is
+`{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
+`exists: true` even when its requested window is empty. `lastVersion` always
+reports the actual head (the event count); `fromVersion` filters only `events`
+to positions after that 1-based count. This is how a snapshot-backed repository
+distinguishes "aggregate is gone" from "snapshot is already at the head" and
+detects a snapshot whose version lies beyond a truncated stream.
+Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
+view of the stream; do not assemble the result from racing reads.
+
+A database adapter should also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for tests and demos. It is
@@ -285,9 +296,10 @@ describe("PgOrderEventRepository", () => {
 });
 ```
 
-The store suite proves qualified-key isolation. The repository suite covers
-append conflicts, duplicate creates, replay equality, rollback purity, commit
-lifecycle, and `fromVersion` slicing.
+The store suite proves qualified-key isolation, OCC/atomicity, stream-state
+reporting, ordering, and windows. The repository suite covers append conflicts,
+duplicate creates, replay equality, rollback purity, commit lifecycle, and the
+same missing-vs-empty snapshot semantics through the repository adapter.
 
 ## Loading from history
 
@@ -295,14 +307,14 @@ Reconstitution starts with a blank aggregate and folds the stream into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const history = await eventStore.readStream({
+  const stream = await eventStore.readStream({
     aggregateType: "Order",
     aggregateId: id,
   });
-  if (history.length === 0) return null;
+  if (!stream.exists) return null;
 
   const order = Order.reconstitute(id);
-  const result = order.loadFromHistory(history);
+  const result = order.loadFromHistory(stream.events);
 
   if (result.isErr()) {
     throw result.error;
@@ -375,6 +387,12 @@ latency. The snapshot path is:
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
+  const discardSnapshotAndRefold = async (): Promise<Order | null> => {
+    const refolded = await replayFromZero(id);
+    await snapshots.delete(address);
+    return refolded;
+  };
+
   const snapshot = await snapshots.load(address);
   if (snapshot === undefined) {
     return replayFromZero(id);
@@ -385,20 +403,25 @@ async function findById(id: OrderId): Promise<Order | null> {
     { fromVersion: snapshot.version },
   );
 
+  if (
+    !tail.exists ||
+    tail.lastVersion < snapshot.version ||
+    tail.events.length !== tail.lastVersion - snapshot.version
+  ) {
+    return discardSnapshotAndRefold();
+  }
+
   const order = Order.reconstitute(id);
 
   try {
-    const result = order.restoreFromSnapshotWithEvents(snapshot, tail);
+    const result = order.restoreFromSnapshotWithEvents(snapshot, tail.events);
 
     if (result.isErr()) {
-      const refolded = await replayFromZero(id);
-      await snapshots.delete(address);
-      return refolded;
+      return discardSnapshotAndRefold();
     }
   } catch (error) {
     if (error instanceof SnapshotSchemaMismatchError) {
-      await snapshots.delete(address);
-      return replayFromZero(id);
+      return discardSnapshotAndRefold();
     }
 
     throw error;
@@ -407,6 +430,13 @@ async function findById(id: OrderId): Promise<Order | null> {
   return order;
 }
 ```
+
+The three stream checks before restore are deliberate. A missing stream means
+the snapshot cannot establish aggregate existence. A head behind the snapshot
+means the authoritative stream was truncated or replaced. A tail length that
+does not bridge `snapshot.version` to `lastVersion` means the adapter omitted a
+position. All three discard the derived snapshot and refold from the stream;
+none may return the snapshot-backed aggregate.
 
 `restoreFromSnapshotWithEvents(...)` has the same `Result<void, DomainError>`
 boundary as `loadFromHistory(...)`. A `DomainError` from snapshot conversion,

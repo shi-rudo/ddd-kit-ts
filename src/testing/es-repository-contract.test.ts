@@ -270,10 +270,17 @@ function createInMemoryEsHarness(
 				committedOutboxEvents: async () => [...db.outbox],
 				// The suite's window into the store: same read-and-slice
 				// semantics as EventStore.readStream({ fromVersion }).
-				committedStreamEvents: async (stream, fromVersion = 0) =>
-					(db.streams.get(streamMapKey(stream)) ?? []).slice(
-						Math.max(0, fromVersion),
-					),
+				committedStreamEvents: async (stream, fromVersion = 0) => {
+					const events = db.streams.get(streamMapKey(stream));
+					if (events === undefined) {
+						return { exists: false, lastVersion: 0, events: [] };
+					}
+					return {
+						exists: true,
+						lastVersion: events.length,
+						events: events.slice(Math.max(0, fromVersion)),
+					};
+				},
 			};
 		},
 		streamKeyFor: orderStream,
