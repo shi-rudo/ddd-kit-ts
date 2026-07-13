@@ -29,10 +29,12 @@ export interface ReadStreamOptions {
  * State returned by {@link EventStore.readStream}.
  *
  * `lastVersion` is always the actual stream head (the event count), independent
- * of the requested read window. A missing stream is therefore distinguishable
- * from an existing stream whose `fromVersion` window is empty. Snapshot-backed
- * repositories use that distinction to reject a snapshot whose version lies
- * beyond the current authoritative stream head.
+ * of the requested read window. `exists: true` implies `lastVersion >= 1`: an
+ * existing stream has at least one event, while metadata or tombstones without
+ * events must be reported as `exists: false`. A missing stream is therefore
+ * distinguishable from an existing stream whose `fromVersion` window is empty.
+ * Snapshot-backed repositories use that distinction to reject a snapshot whose
+ * version lies beyond the current authoritative stream head.
  */
 export type StreamReadResult<Evt extends AnyDomainEvent> =
 	| {
@@ -161,14 +163,17 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	/**
 	 * Reads the qualified stream in append order. An unknown stream returns
 	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
-	 * `exists: true` even when its requested window is empty. `lastVersion` is
-	 * always the actual stream head, while `options.fromVersion` filters only
-	 * `events` to positions after that 1-based event count. This distinction is
-	 * load-bearing for snapshot catch-up: a repository can detect a missing or
-	 * truncated authoritative stream instead of restoring a stale snapshot as
-	 * a live aggregate. `exists`, `lastVersion`, and `events` must describe one
-	 * consistent view of the stream. The returned event array is owned by the
-	 * caller; implementations must not hand out mutable live internal state.
+	 * `exists: true` even when its requested window is empty. An existing stream
+	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
+	 * metadata or tombstones without events must be reported as absent.
+	 * `lastVersion` is always the actual stream head, while
+	 * `options.fromVersion` filters only `events` to positions after that 1-based
+	 * event count. This distinction is load-bearing for snapshot catch-up: a
+	 * repository can detect a missing or truncated authoritative stream instead
+	 * of restoring a stale snapshot as a live aggregate. `exists`, `lastVersion`,
+	 * and `events` must describe one consistent view of the stream. The returned
+	 * event array is owned by the caller; implementations must not hand out
+	 * mutable live internal state.
 	 */
 	readStream(
 		stream: AggregateAddress,

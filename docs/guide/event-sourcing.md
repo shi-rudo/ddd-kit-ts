@@ -259,7 +259,9 @@ contexts with the same domain name share storage, qualify it at the source
 
 `readStream(stream)` reports both stream state and events. A missing stream is
 `{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
-`exists: true` even when its requested window is empty. `lastVersion` always
+`exists: true` even when its requested window is empty. An existing stream has
+at least one event, so `exists: true` implies `lastVersion >= 1`; metadata or
+tombstones without events must be reported as absent. `lastVersion` always
 reports the actual head (the event count); `fromVersion` filters only `events`
 to positions after that 1-based count. This is how a snapshot-backed repository
 distinguishes "aggregate is gone" from "snapshot is already at the head" and
