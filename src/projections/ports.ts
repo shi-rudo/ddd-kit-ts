@@ -1,21 +1,39 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { AggregateEventSource, CommitPosition } from "../events/ports";
 
 /**
- * A projection's cursor into one aggregate's event sequence: the
- * `(aggregateVersion, commitSequence)` pair `withCommit` stamps on
- * every harvested event. Lexicographically ordered, it is a total
- * order per aggregate and a compact per-event watermark; see
- * `DomainEvent.aggregateVersion` / `DomainEvent.commitSequence`.
+ * A projection's gap-proof cursor into one aggregate's commit chain.
+ * `aggregateVersion` plus `commitSequence` orders events; `commitSize`
+ * proves the current commit is complete; `previousEventfulAggregateVersion`
+ * links the next commit to the eventful predecessor. `withCommit` supplies
+ * the current commit facts; the event source finalizes the predecessor on the
+ * surrounding `CommittedDomainEvent`.
+ *
+ * A source MUST map exactly one logical event to each position. Custom
+ * envelopes may translate another store's cursor into these fields, but
+ * mapping two different eventIds to one position destroys the proof and
+ * is a source-adapter bug.
  */
-export interface ProjectionPosition {
-	aggregateVersion: number;
-	commitSequence: number;
+export type ProjectionPosition = CommitPosition;
+
+/**
+ * Durable receipt for the last event one projection applied from an aggregate
+ * stream. The position answers "how far?"; `lastAppliedEventId` identifies the
+ * event at exactly that watermark. Together they let the projector distinguish
+ * a true watermark redelivery from a source mapping a different event to the
+ * same position. Older positions still rely on the source's one-event-per-
+ * position contract because a checkpoint deliberately retains no full history.
+ */
+export interface ProjectionCheckpoint {
+	readonly position: ProjectionPosition;
+	readonly lastAppliedEventId: string;
 }
 
 /**
  * `true` when `candidate` comes strictly after `reference` in the
- * per-aggregate total order (higher version, or same version and
- * higher commit sequence).
+ * per-aggregate tuple order (higher version, or same version and higher
+ * commit sequence). This comparison alone does not prove continuity;
+ * the projector checks the boundary fields before advancing.
  */
 export function isPositionAfter(
 	candidate: ProjectionPosition,
@@ -47,10 +65,7 @@ export function isPositionAfter(
  * two fields, and the qualification is the consumer's naming decision
  * (same field-accretion line as on `DomainEvent`).
  */
-export interface AggregateAddress {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
-}
+export type AggregateAddress = AggregateEventSource;
 
 /**
  * Canonical map-key encoding for an {@link AggregateAddress}: a JSON
@@ -66,7 +81,7 @@ export function addressKey(address: AggregateAddress): string {
 
 /**
  * Driven port for projection checkpoints: the per-`(projection,
- * aggregateType, aggregateId)` watermark that makes a projection
+ * aggregateType, aggregateId)` watermark receipt that makes a projection
  * idempotent and rebuild-safe. The {@link ProjectionCheckpointStore.load} /
  * {@link ProjectionCheckpointStore.save} half runs inside the SAME
  * transaction as the read-model update (the `Projector` guarantees
@@ -85,7 +100,7 @@ export function addressKey(address: AggregateAddress): string {
  */
 export interface ProjectionCheckpointStore<TCtx = unknown> {
 	/**
-	 * The stored watermark for `(projection, address)`, or `undefined`
+	 * The stored watermark receipt for `(projection, address)`, or `undefined`
 	 * when this projection has never applied an event of that
 	 * aggregate. Called inside the projector's transaction.
 	 */
@@ -93,11 +108,11 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 		ctx: TCtx,
 		projection: string,
 		address: AggregateAddress,
-	): Promise<ProjectionPosition | undefined>;
+	): Promise<ProjectionCheckpoint | undefined>;
 
 	/**
-	 * Persists the watermark, overwriting a previous one (last write
-	 * wins; the projector only calls this with advancing positions).
+	 * Persists the watermark receipt, overwriting a previous one (last write
+	 * wins; the projector only calls this with advancing checkpoints).
 	 * Called inside the projector's transaction, after the read-model
 	 * update it accounts for.
 	 */
@@ -105,7 +120,7 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
 		ctx: TCtx,
 		projection: string,
 		address: AggregateAddress,
-		position: ProjectionPosition,
+		checkpoint: ProjectionCheckpoint,
 	): Promise<void>;
 
 	/**
@@ -139,6 +154,12 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
  * several read shapes). The kit owns the mechanics around it
  * (cursor skip, atomic checkpointing, rebuild); the handler owns the
  * read-model writes.
+ *
+ * The projector feed MUST contain every committed envelope for each aggregate
+ * address it carries, including event types this read model does not use.
+ * Handle those events as explicit no-ops in `apply`: the projector still
+ * advances their cursor. Filtering a broker subscription by event type drops
+ * positions from the source chain and turns the next commit into a real gap.
  */
 export interface Projection<Evt extends AnyDomainEvent, TCtx = unknown> {
 	/**
@@ -153,7 +174,9 @@ export interface Projection<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * and stale events, so plain writes are safe; route on
 	 * `event.type` and handle creates, updates, deletes, corrections,
 	 * and tombstones explicitly (an upsert-only handler silently
-	 * retains stale rows).
+	 * retains stale rows). For a known event type this projection does not use,
+	 * return without writing; that explicit no-op still consumes and checkpoints
+	 * the envelope's source position.
 	 *
 	 * MUST be side-effect-free beyond the read model: no mails, no
 	 * external calls, no commands. A rebuild replays every event; side

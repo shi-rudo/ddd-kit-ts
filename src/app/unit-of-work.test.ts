@@ -10,7 +10,7 @@ import {
 	UnenrolledChangesError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type { EventBus, Outbox } from "../events/ports";
+import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {
 	CommitError,
@@ -68,8 +68,10 @@ function createMockScope(): TransactionScope<undefined> {
 	};
 }
 
-function createMockOutbox(): Outbox<TestEvent> & { added: TestEvent[][] } {
-	const added: TestEvent[][] = [];
+function createMockOutbox(): Outbox<TestEvent> & {
+	added: EventCommitCandidate<TestEvent>[][];
+} {
+	const added: EventCommitCandidate<TestEvent>[][] = [];
 	return {
 		added,
 		add: async (events) => {
@@ -129,13 +131,24 @@ function createUow(overrides?: {
 	return { uow, outbox, bus, scope };
 }
 
-/** Harvested events are stamped with the aggregate's commit version. */
+/** Expected persistence envelope for one harvested event. */
 function stamped(
 	event: TestEvent,
 	aggregateVersion = 1,
 	commitSequence = 0,
-): TestEvent {
-	return { ...event, aggregateVersion, commitSequence };
+): EventCommitCandidate<TestEvent> {
+	return {
+		event,
+		source: {
+			aggregateId: event.aggregateId ?? event.payload.orderId,
+			aggregateType: event.aggregateType ?? "MockOrder",
+		},
+		position: {
+			aggregateVersion,
+			commitSequence,
+			commitSize: 1,
+		},
+	};
 }
 
 describe("UnitOfWork", () => {
@@ -272,7 +285,9 @@ describe("UnitOfWork", () => {
 					return result;
 				},
 			};
-			const outbox: Outbox<TestEvent> & { added: TestEvent[][] } = {
+			const outbox: Outbox<TestEvent> & {
+				added: EventCommitCandidate<TestEvent>[][];
+			} = {
 				added: [],
 				add: async (events) => {
 					callOrder.push("outbox.add");
@@ -390,7 +405,11 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(
-				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+				(
+					outbox as Outbox<TestEvent> & {
+						added: EventCommitCandidate<TestEvent>[][];
+					}
+				).added,
 			).toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});
@@ -406,7 +425,11 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(
-				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+				(
+					outbox as Outbox<TestEvent> & {
+						added: EventCommitCandidate<TestEvent>[][];
+					}
+				).added,
 			).toEqual([[stamped(deletionEvent)]]);
 		});
 
@@ -438,7 +461,11 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(
-				(outbox as Outbox<TestEvent> & { added: TestEvent[][] }).added,
+				(
+					outbox as Outbox<TestEvent> & {
+						added: EventCommitCandidate<TestEvent>[][];
+					}
+				).added,
 			).toEqual([[stamped(event)]]);
 			expect(agg.markPersistedCalls).toBe(1);
 		});

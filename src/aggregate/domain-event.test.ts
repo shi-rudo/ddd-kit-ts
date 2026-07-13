@@ -627,14 +627,31 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 	});
 });
 
-describe("commitSequence option", () => {
-	it("passes a pre-set commitSequence through to the event", () => {
-		const event = createDomainEvent("Ticked", {}, { commitSequence: 3 });
-		expect(event.commitSequence).toBe(3);
+describe("commit cursor boundary", () => {
+	it("keeps persistence cursor fields off the domain event", () => {
+		const event = createDomainEvent("Ticked", {});
+
+		expect(Object.hasOwn(event, "aggregateVersion")).toBe(false);
+		expect(Object.hasOwn(event, "commitSequence")).toBe(false);
+		expect(Object.hasOwn(event, "commitSize")).toBe(false);
+		expect(Object.hasOwn(event, "previousEventfulAggregateVersion")).toBe(
+			false,
+		);
 	});
 
-	it("leaves commitSequence undefined by default (stamped at harvest)", () => {
-		expect(createDomainEvent("Ticked", {}).commitSequence).toBeUndefined();
+	it("does not accept persistence cursor fields as creation options", () => {
+		const invalidCreation = () => {
+			// @ts-expect-error commit positions belong to CommittedDomainEvent
+			createDomainEvent(
+				"Ticked",
+				{},
+				{
+					commitSize: 2,
+				},
+			);
+		};
+
+		expect(invalidCreation).toBeTypeOf("function");
 	});
 });
 

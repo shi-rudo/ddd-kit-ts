@@ -23,8 +23,8 @@ import {
  * Sinks must tolerate duplicate delivery: the dispatcher is
  * at-least-once by construction (a crash or ack failure between
  * `publish` and `markDispatched` redelivers). Dedupe on
- * `record.event.eventId` or the `(aggregateVersion, commitSequence)`
- * watermark.
+ * `record.event.eventId`; projection sinks use the event's full gap-proof
+ * commit cursor.
  *
  * **Resolve only after the transport acknowledged.** The dispatcher
  * calls `markDispatched` as soon as `publish` resolves, so the
@@ -183,7 +183,7 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  *   `sink.publish` calls (the delivered prefix of a batch is acked in
  *   one call); a crash or a failed ack between publish and ack
  *   redelivers. Sinks and subscribers dedupe on `eventId` or the
- *   `(aggregateVersion, commitSequence)` watermark
+ *   full gap-proof commit cursor
  *   (`domain-event-design.md`).
  * - **Sequential, stop-on-failure.** Records dispatch one at a time in
  *   commit order, and the first failure stops the batch: continuing

@@ -1,5 +1,6 @@
 import type {
 	AggregateAddress,
+	ProjectionCheckpoint,
 	ProjectionCheckpointStore,
 	ProjectionPosition,
 } from "../projections/ports";
@@ -67,12 +68,24 @@ export interface ProjectionCheckpointStoreContractHarness<TCtx> {
 const pos = (
 	aggregateVersion: number,
 	commitSequence: number,
-): ProjectionPosition => ({ aggregateVersion, commitSequence });
+	commitSize = commitSequence + 1,
+	previousEventfulAggregateVersion: number | null = null,
+): ProjectionPosition => ({
+	aggregateVersion,
+	commitSequence,
+	commitSize,
+	previousEventfulAggregateVersion,
+});
 
 const order = (aggregateId: string): AggregateAddress => ({
 	aggregateType: "Order",
 	aggregateId,
 });
+
+const checkpoint = (
+	position: ProjectionPosition,
+	lastAppliedEventId = "evt-at-watermark",
+): ProjectionCheckpoint => ({ position, lastAppliedEventId });
 
 /**
  * The projection-checkpoint-store contract test suite: the proof that
@@ -103,17 +116,26 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			}),
 		},
 		{
-			name: "save/load round-trips the exact (aggregateVersion, commitSequence) pair",
+			name: "save/load round-trips the complete checkpoint receipt",
 			run: inEnv(async (env) => {
 				await env.run((ctx) =>
-					env.store.save(ctx, "order-list", order("o-1"), pos(5, 2)),
+					env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(5, 2, 3, 3), "evt-o-1-5-2"),
+					),
 				);
 				const loaded = await env.run((ctx) =>
 					env.store.load(ctx, "order-list", order("o-1")),
 				);
 				assert(
-					loaded?.aggregateVersion === 5 && loaded?.commitSequence === 2,
-					"the stored watermark must round-trip both fields of the pair",
+					loaded?.position.aggregateVersion === 5 &&
+						loaded.position.commitSequence === 2 &&
+						loaded.position.commitSize === 3 &&
+						loaded.position.previousEventfulAggregateVersion === 3 &&
+						loaded.lastAppliedEventId === "evt-o-1-5-2",
+					"the stored checkpoint must round-trip every cursor field and the watermark event identity",
 				);
 			}),
 		},
@@ -121,14 +143,26 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			name: "save overwrites the previous watermark (last write wins; monotonicity is the projector's job)",
 			run: inEnv(async (env) => {
 				await env.run(async (ctx) => {
-					await env.store.save(ctx, "order-list", order("o-1"), pos(5, 0));
-					await env.store.save(ctx, "order-list", order("o-1"), pos(5, 1));
+					await env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(5, 0), "evt-first"),
+					);
+					await env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(5, 1), "evt-second"),
+					);
 				});
 				const loaded = await env.run((ctx) =>
 					env.store.load(ctx, "order-list", order("o-1")),
 				);
 				assert(
-					loaded?.aggregateVersion === 5 && loaded?.commitSequence === 1,
+					loaded?.position.aggregateVersion === 5 &&
+						loaded.position.commitSequence === 1 &&
+						loaded.lastAppliedEventId === "evt-second",
 					"a later save must replace the stored watermark verbatim",
 				);
 			}),
@@ -137,18 +171,23 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			name: "a loaded position is a detached copy; mutating it must not move the watermark",
 			run: inEnv(async (env) => {
 				await env.run((ctx) =>
-					env.store.save(ctx, "order-list", order("o-1"), pos(2, 0)),
+					env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(2, 0)),
+					),
 				);
 				const loaded = await env.run((ctx) =>
 					env.store.load(ctx, "order-list", order("o-1")),
 				);
 				assert(loaded !== undefined, "expected a stored watermark");
-				loaded.aggregateVersion = 99;
+				(loaded.position as { aggregateVersion: number }).aggregateVersion = 99;
 				const reloaded = await env.run((ctx) =>
 					env.store.load(ctx, "order-list", order("o-1")),
 				);
 				assert(
-					reloaded?.aggregateVersion === 2,
+					reloaded?.position.aggregateVersion === 2,
 					"the stored watermark must be immune to mutation of a previously loaded copy",
 				);
 			}),
@@ -157,9 +196,24 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			name: "watermarks are isolated per projection and per aggregate",
 			run: inEnv(async (env) => {
 				await env.run(async (ctx) => {
-					await env.store.save(ctx, "order-list", order("o-1"), pos(3, 0));
-					await env.store.save(ctx, "order-detail", order("o-1"), pos(1, 0));
-					await env.store.save(ctx, "order-list", order("o-2"), pos(7, 0));
+					await env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(3, 0)),
+					);
+					await env.store.save(
+						ctx,
+						"order-detail",
+						order("o-1"),
+						checkpoint(pos(1, 0)),
+					);
+					await env.store.save(
+						ctx,
+						"order-list",
+						order("o-2"),
+						checkpoint(pos(7, 0)),
+					);
 				});
 				const [listO1, detailO1, listO2] = await env.run((ctx) =>
 					Promise.all([
@@ -169,9 +223,9 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					]),
 				);
 				assert(
-					listO1?.aggregateVersion === 3 &&
-						detailO1?.aggregateVersion === 1 &&
-						listO2?.aggregateVersion === 7,
+					listO1?.position.aggregateVersion === 3 &&
+						detailO1?.position.aggregateVersion === 1 &&
+						listO2?.position.aggregateVersion === 7,
 					"the watermark key is the (projection, aggregateType, aggregateId) triple; no part may bleed into another",
 				);
 			}),
@@ -184,13 +238,13 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 						ctx,
 						"order-list",
 						{ aggregateType: "Order", aggregateId: "1" },
-						pos(10, 0),
+						checkpoint(pos(10, 0)),
 					);
 					await env.store.save(
 						ctx,
 						"order-list",
 						{ aggregateType: "Payment", aggregateId: "1" },
-						pos(1, 0),
+						checkpoint(pos(1, 0)),
 					);
 				});
 				const [orderMark, paymentMark] = await env.run((ctx) =>
@@ -206,8 +260,8 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					]),
 				);
 				assert(
-					orderMark?.aggregateVersion === 10 &&
-						paymentMark?.aggregateVersion === 1,
+					orderMark?.position.aggregateVersion === 10 &&
+						paymentMark?.position.aggregateVersion === 1,
 					"identities are type-scoped: Order 1 at version 10 must not make Payment 1 look processed",
 				);
 			}),
@@ -228,8 +282,13 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					aggregateId: "B\u0000C",
 				};
 				await env.run(async (ctx) => {
-					await env.store.save(ctx, "order-list", inType, pos(10, 0));
-					await env.store.save(ctx, "order-list", inId, pos(1, 0));
+					await env.store.save(
+						ctx,
+						"order-list",
+						inType,
+						checkpoint(pos(10, 0)),
+					);
+					await env.store.save(ctx, "order-list", inId, checkpoint(pos(1, 0)));
 				});
 				const [first, second] = await env.run((ctx) =>
 					Promise.all([
@@ -238,7 +297,8 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					]),
 				);
 				assert(
-					first?.aggregateVersion === 10 && second?.aggregateVersion === 1,
+					first?.position.aggregateVersion === 10 &&
+						second?.position.aggregateVersion === 1,
 					"two addresses that differ only in where a hostile separator sits must not share a watermark",
 				);
 			}),
@@ -247,7 +307,12 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			name: "hasReached compares the full pair: unseen is false, behind is false, at and past are true",
 			run: inEnv(async (env) => {
 				await env.run((ctx) =>
-					env.store.save(ctx, "order-list", order("o-1"), pos(5, 0)),
+					env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(5, 0)),
+					),
 				);
 				assertEqual(
 					await env.store.hasReached("order-list", order("o-2"), pos(1, 0)),
@@ -280,8 +345,18 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 			name: "reset clears only the named projection's checkpoints",
 			run: inEnv(async (env) => {
 				await env.run(async (ctx) => {
-					await env.store.save(ctx, "order-list", order("o-1"), pos(3, 0));
-					await env.store.save(ctx, "order-detail", order("o-1"), pos(2, 0));
+					await env.store.save(
+						ctx,
+						"order-list",
+						order("o-1"),
+						checkpoint(pos(3, 0)),
+					);
+					await env.store.save(
+						ctx,
+						"order-detail",
+						order("o-1"),
+						checkpoint(pos(2, 0)),
+					);
 				});
 				await env.run((ctx) => env.store.reset(ctx, "order-list"));
 				const [cleared, untouched] = await env.run((ctx) =>
@@ -296,7 +371,7 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					"the reset projection must start from zero (rebuild entry point)",
 				);
 				assert(
-					untouched?.aggregateVersion === 2,
+					untouched?.position.aggregateVersion === 2,
 					"a sibling projection's checkpoints must survive the reset",
 				);
 				assertEqual(
@@ -321,7 +396,12 @@ export function createProjectionCheckpointStoreContractTests<TCtx>(
 					}
 					await env
 						.runRolledBack((ctx) =>
-							env.store.save(ctx, "order-list", order("o-1"), pos(1, 0)),
+							env.store.save(
+								ctx,
+								"order-list",
+								order("o-1"),
+								checkpoint(pos(1, 0)),
+							),
 						)
 						.catch(() => {
 							// The rollback mechanism may surface as a rejection; the

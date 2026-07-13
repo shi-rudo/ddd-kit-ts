@@ -146,12 +146,47 @@ replays events; side effects would run again.
 The projection name is part of the checkpoint key. Rename it only when you
 intend to replay from the beginning.
 
+## Projectors Need A Complete Source Feed
+
+For every `(aggregateType, aggregateId)` address a projector consumes, its
+input must contain every committed envelope in that address's source chain.
+Do not subscribe a projector to an event-type-filtered topic such as only
+`OrderPlaced`: another event from the same commit still owns a cursor position,
+and dropping it would make the next commit correctly fail with
+`ProjectionGapError`.
+
+Route the complete, ordered per-address feed to the projector and explicitly
+ignore known facts that do not affect this read model:
+
+```ts
+const placedOrders: Projection<OrderEvent, DbTransaction> = {
+  name: "placed-orders",
+  apply: async (tx, event) => {
+    switch (event.type) {
+      case "OrderPlaced":
+        await tx.placedOrders.insert({ id: event.payload.orderId });
+        return;
+      case "OrderShipped":
+        // Explicit no-op: still consumed and checkpointed by the projector.
+        return;
+    }
+  },
+};
+```
+
+Here `result.applied` counts envelopes whose `apply` callback ran and whose
+cursor was checkpointed; it does not promise that every callback changed a
+row. Event-type filtering remains fine for consumers that do not use this
+source cursor contract. If infrastructure can only provide filtered feeds, it
+must assign a separate, contiguous projection-specific cursor after routing;
+the aggregate commit cursor cannot be reused for that feed.
+
 ## Checkpoints
 
 The projector stores one watermark per `(projection, aggregateType,
 aggregateId)`. The type is part of the key because identities are type-scoped
 (`Order 1` and `Payment 1` are different aggregates even when the raw id
-strings collide), and every event `withCommit` harvests carries both stamps.
+strings collide), and every envelope `withCommit` creates carries the source.
 Two consequences for adapters: the checkpoint table's primary key is the full
 triple, and the `aggregateType` string becomes a durable contract, so renaming
 an aggregate type means migrating its checkpoint rows.
@@ -160,6 +195,13 @@ an aggregate type means migrating its checkpoint rows.
 interface ProjectionPosition {
   aggregateVersion: number;
   commitSequence: number;
+  commitSize: number;
+  previousEventfulAggregateVersion: number | null;
+}
+
+interface ProjectionCheckpoint {
+  position: ProjectionPosition;
+  lastAppliedEventId: string;
 }
 
 interface AggregateAddress {
@@ -172,13 +214,13 @@ interface ProjectionCheckpointStore<TCtx> {
     ctx: TCtx,
     projection: string,
     address: AggregateAddress,
-  ): Promise<ProjectionPosition | undefined>;
+  ): Promise<ProjectionCheckpoint | undefined>;
 
   save(
     ctx: TCtx,
     projection: string,
     address: AggregateAddress,
-    position: ProjectionPosition,
+    checkpoint: ProjectionCheckpoint,
   ): Promise<void>;
 
   hasReached(
@@ -191,35 +233,71 @@ interface ProjectionCheckpointStore<TCtx> {
 }
 ```
 
-`withCommit` stamps harvested events with `aggregateVersion` and
-`commitSequence`. Together they form a total order for one aggregate. The
-projector uses that pair to skip duplicates and stale events.
+`withCommit` supplies the source plus current commit facts; the outbox/event
+source finalizes all four cursor fields on `CommittedDomainEvent.position`.
+The envelope's `source` is authoritative. Optional `aggregateId` and
+`aggregateType` values repeated on the bare event must match it; a contradiction
+throws `ForeignEventError` before the transaction starts. Missing optional
+event stamps are allowed because the committed envelope already supplies the
+address.
+`commitSize` proves that every event of the current commit was consumed;
+`previousEventfulAggregateVersion` links the next eventful commit to the
+checkpoint. State-only aggregate saves are intentionally absent from that
+chain. The projector rejects a missing
+sequence, an incomplete commit, a missing aggregate commit, and a first event
+that claims a predecessor. It never advances past an unknown hole.
 
-One precondition carries the whole mechanism: events of one aggregate must
-reach the projector in order. The watermark absorbs redelivery; it does not
-create ordering, and it cannot tell a redelivered duplicate from an earlier
-event that never arrived. The kit's own dispatcher delivers sequentially, a
-broker feed needs partitioning or FIFO keyed by the aggregate address, and an
-event-store replay is ordered by construction. If your transport can reorder
-events of one aggregate (a standard SQS queue, competing consumers on one
-topic), put a resequencer in front of the projector or accept that the
-remediation for a dropped straggler is a rebuild.
+Only after that chain has been verified does a position at or behind the
+watermark count as already traversed under the source contract. A reordering
+transport therefore fails loudly at the first gap instead of silently dropping
+the late event. Repair/replay the missing event (or reset and rebuild) before
+the chain can advance.
+
+The checkpoint also stores the `eventId` at exactly its watermark. If the
+source later supplies another ID at that position, the projector throws
+`ProjectionIdentityViolationError` before `apply`. The same check covers two
+different IDs mapped to one position inside the current batch. Exact duplicate
+IDs remain ordinary redeliveries.
+
+This is deliberately a bounded receipt, not an unbounded processed-event
+ledger. A position older than the watermark cannot be identity-compared with
+`lastAppliedEventId`; skipping it relies on the source invariant that one
+qualified aggregate position maps immutably to one logical event. Enforce that
+at the persistence boundary with a unique key such as `(aggregate_type,
+aggregate_id, aggregate_version, commit_sequence)`. `eventId` is a consistency
+check, not a security proof for messages from an untrusted producer.
+
+The projector also scans each batch before `apply`: when two positions that
+were both still unseen at batch start descend for the same aggregate, it throws
+`ProjectionOrderViolationError`. Positions already covered by the batch-start
+checkpoint remain valid late redeliveries, so diagnostics do not weaken normal
+at-least-once idempotency.
 
 The `aggregateType` in the address is a technical stream category: unique
 across everything feeding one checkpoint store. Two bounded contexts may both
 have an `Order`; if their events share projection infrastructure, qualify the
 name at the source ("sales.order", "fulfillment.order").
 
-This means your `apply` handler does not need a per-row event-id column for
-the normal kit path. If the dispatcher redelivers the same event after a
-crash, the checkpoint sees that the event is at or behind the watermark and
-skips it before `apply` runs.
+This means your read-model rows do not need their own event-id column for the
+normal kit path. The checkpoint table does need `lastAppliedEventId`. If the
+dispatcher redelivers the same event after a crash, the checkpoint verifies an
+exact watermark match or recognizes an older traversed position and skips it
+before `apply` runs.
 
 The checkpoint table must live in the same database as the read model. The
 read-model update and checkpoint save are one transaction. A checkpoint
 without the row update loses events; a row update without the checkpoint
 replays work. The projector keeps those two writes together, but your adapter
 must participate in the same transaction.
+
+Checkpoint rows are correctness state, not a cache: never TTL or prune an
+active aggregate's row. Reclaim one only after the source guarantees that the
+stream is terminal and its complete redelivery/retention window has elapsed;
+otherwise a later event rejects as a gap and the projection must be rebuilt.
+
+When migrating a pre-identity checkpoint table, add the event-id column and
+reset/rebuild the projection. A fabricated placeholder cannot prove which
+event established an existing watermark.
 
 Use `createProjectionCheckpointStoreContractTests` from
 `@shirudo/ddd-kit/testing` to verify a production adapter.
@@ -250,7 +328,7 @@ poll retries it.
 You can also feed batches directly:
 
 ```ts
-const result = await projector.project(events);
+const result = await projector.project(committedEvents);
 
 log.info({
   applied: result.applied,
@@ -260,22 +338,38 @@ log.info({
 
 That is useful for queue consumers, tests, and replay jobs.
 
-Events must have a cursor. The default cursor is
-`(event.aggregateVersion, event.commitSequence)`, which `withCommit` supplies.
-For another source, pass a custom extractor:
+The projector accepts committed envelopes, not bare domain events. `withCommit`
+creates those envelopes automatically. For another source, compose the event
+with that source's gap-proof predecessor chain:
 
 ```ts
-const projector = new Projector({
-  scope,
-  checkpoints,
-  projection,
-  position: (event) => event.storePosition,
-});
+const committed = storedEvents.map(({ event, streamId }) => ({
+  event,
+  source: {
+    aggregateType: streamId.type,
+    aggregateId: streamId.id,
+  },
+  position: {
+    aggregateVersion: event.storePosition,
+    commitSequence: 0,
+    commitSize: 1,
+    previousEventfulAggregateVersion: event.previousStorePosition,
+  },
+}));
+
+await projector.project(committed);
 ```
 
-Use this when replaying from an event store whose own stream position is the
-authority. An event with no cursor rejects with `UnprojectableEventError`
-because it cannot be safely deduped.
+Use this when an event store's stream position and predecessor link are the
+authority. A missing or malformed envelope cursor rejects with
+`UnprojectableEventError` because it cannot be safely deduped. A valid cursor
+that does not continue the stored chain rejects with `ProjectionGapError`
+(`INFRASTRUCTURE`) so retry/reconciliation can distinguish a delivery gap from
+bad projector wiring. Descending unseen positions inside one input batch reject
+with `ProjectionOrderViolationError`, identifying a per-aggregate transport
+ordering violation directly. A different `eventId` at one batch position or at
+the stored watermark rejects with `ProjectionIdentityViolationError`, exposing
+a broken source-position mapping.
 
 ## Several Projections From One Outbox
 
@@ -285,8 +379,8 @@ models, fan out in the sink:
 ```ts
 const sink: OutboxSink<OrderEvent> = {
   publish: async (record) => {
-    await orderListProjector.project([record.event]);
-    await orderDetailProjector.project([record.event]);
+    await orderListProjector.project([record]);
+    await orderDetailProjector.project([record]);
   },
 };
 ```
@@ -376,6 +470,12 @@ kit's `Result` type; the handler itself does not return `ok(...)`.
 Projection lag is normal. In a healthy local setup it is often tiny, but it is
 still real: write, outbox, dispatcher, projector, query.
 
+Measure lag at the transport/source boundary — for example oldest pending
+outbox age and depth, broker partition lag, or subscription distance — not by
+counting per-aggregate checkpoint rows. Per-address watermarks prove local
+progress and power bounded waits; without a global source position they cannot
+produce one meaningful global lag number.
+
 Handle that in the product flow:
 
 - Optimistic UI: update the local screen after the command succeeds, then let
@@ -391,7 +491,12 @@ Handle that in the product flow:
 ```ts
 const caughtUp = await projector.hasProcessed(
   { aggregateType: "Order", aggregateId: orderId },
-  { aggregateVersion: 12, commitSequence: 1 },
+  {
+    aggregateVersion: 12,
+    commitSequence: 1,
+    commitSize: 2,
+    previousEventfulAggregateVersion: 10,
+  },
 );
 ```
 
@@ -436,15 +541,15 @@ There are two real strategies:
 - Plain `Outbox`: the poison event retries forever with backoff. The read
   model stalls, but it does not skip the bad event.
 - `DispatchTrackingOutbox`: after the attempt ceiling, the event is
-  dead-lettered and later events can flow.
+  dead-lettered. Unrelated aggregates can flow; the affected aggregate's
+  next event is rejected by the cursor gap.
 
-Dead-lettering projection events is not free. If a later event from the same
-aggregate advances the checkpoint, redelivering the old dead letter later will
-look stale and be skipped. Applying it out of order would be wrong anyway.
+Dead-lettering projection events is not free, but it no longer permits silent
+loss: a later event from the same aggregate cannot advance the checkpoint past
+the missing sequence/commit.
 
-The normal remediation is a code/data fix followed by a projection rebuild, or
-a manual read-model correction when a rebuild is not appropriate. Wire
-`deadLetters()` to alerting.
+The normal remediation is a code/data fix followed by redelivery of the missing
+event, or a projection rebuild. Wire `deadLetters()` to alerting.
 
 ## Projection vs Process Manager
 

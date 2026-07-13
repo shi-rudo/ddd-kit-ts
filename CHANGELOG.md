@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Four do not (steps 3, 5, 11,
-and 12) and deserve a deliberate pass over the call sites.
+Most of these surface at compile time. Six do not (steps 3, 5, 11,
+12, 14, and 15) and deserve a deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -304,6 +304,101 @@ reaching into the live graph. This is compile-checked unless a consumer
 deliberately widens the protected accessor in its own subclass; do not do
 that.
 
+#### 14. Projection cursors prove gaps (runtime change)
+
+The old `(aggregateVersion, commitSequence)` watermark could order events but
+could not prove continuity. A previously unseen late event at or behind the
+watermark was silently counted as a duplicate. Projection cursors now also
+carry `commitSize` and `previousEventfulAggregateVersion`:
+
+```ts
+type ProjectionPosition = {
+  aggregateVersion: number;
+  commitSequence: number;
+  commitSize: number;
+  previousEventfulAggregateVersion: number | null;
+};
+
+type ProjectionCheckpoint = {
+  position: ProjectionPosition;
+  lastAppliedEventId: string;
+};
+```
+
+`withCommit` leaves the domain event untouched and supplies an
+`EventCommitCandidate` containing the source and current commit facts. The
+outbox/event source atomically reads its last eventful aggregate version,
+finalizes `previousEventfulAggregateVersion`, persists the
+`CommittedDomainEvent`, and advances the source head. The projector rejects
+missing sequences, incomplete commits, missing aggregate commits, malformed
+cursors, and a non-genesis first event. Positions behind a fully verified chain
+are skipped as already traversed under the source's one-event-per-position
+contract. At the exact watermark, the checkpoint's `lastAppliedEventId`
+distinguishes a true redelivery from a different event mapped to the same
+position; the latter throws
+`ProjectionIdentityViolationError`. The same collision check runs within each
+batch. A dead-lettered event therefore stalls its aggregate's chain until
+repaired/replayed or until the projection is rebuilt; later events cannot
+silently advance past it.
+Malformed or absent cursor data throws `UnprojectableEventError` (wiring);
+a well-formed discontinuity throws `ProjectionGapError` (infrastructure), so
+delivery retries and reconciliation can classify the failure honestly.
+
+Custom sources compose their bare event with `source` plus all four `position`
+fields from a source-owned, gap-proof chain. Existing checkpoint tables add the
+two cursor columns plus `lastAppliedEventId` and should be reset/rebuilt because
+old rows cannot prove their predecessor or watermark identity. State-only saves
+do not advance this chain: `previousEventfulAggregateVersion` names the
+preceding EVENTFUL commit, not the aggregate's OCC baseline.
+
+Genesis uses an explicit JSON-safe `null`, not `undefined`, so serializing a
+committed envelope cannot silently remove the predecessor field. Durable
+adapters must normalize a nullable database column to JavaScript `null`.
+
+`InMemoryOutbox` no longer lets a stale post-dispatch retry rewind its
+per-source predecessor head. It keeps a configurable bounded cache of recently
+dispatched event IDs (default 10,000) for idempotent no-ops; after eviction, a
+candidate behind the source head throws `EventHarvestError` while leaving the
+head untouched. Durable adapters still provide unbounded idempotency with a
+transactional `eventId` unique key.
+
+`DomainEvent` and `CreateDomainEventOptions` no longer expose commit cursor
+fields. `OutboxWriter.add` accepts `EventCommitCandidate` values and finalizes
+the predecessor in durable source state; `OutboxRecord` exposes the committed
+envelope with dispatch state; the in-process `EventBus` still receives the bare
+event. An already-persisted aggregate with pending events must also advance its
+version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
+events) with `commit({ ...this.state }, event)` so the envelope has a unique
+cursor.
+
+#### 15. Map domain events to JSON integration messages (runtime change)
+
+Do not publish a `DomainEvent` or `CommittedDomainEvent` with raw
+`JSON.stringify`. Domain payloads and metadata may contain valid immutable
+`Date`, `Map`, and `Set` values that JSON changes or drops. Map at the outbox
+boundary instead:
+
+```ts
+const message = createIntegrationMessage(record, (event) => ({
+  type: "sales.order-placed.v1",
+  version: 1,
+  payload: {
+    placedAt: event.payload.placedAt.toISOString(),
+    amounts: [...event.payload.amounts],
+    tags: [...event.payload.tags],
+  },
+}));
+
+await broker.publish(encodeIntegrationMessage(message));
+```
+
+Receivers call `decodeIntegrationMessage` before dispatch. A receiving
+`Projector` can use `integrationMessageToCommittedEvent` to compose the
+validated public message into its local event input. The conversion retains
+the qualified source and complete commit cursor, but deliberately does not
+reconstruct the producer's private domain payload types. Invalid wire shapes
+and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
+
 ### Changed (breaking): live entity state is protected
 
 - `Entity.state` is protected so external code cannot obtain the live
@@ -516,27 +611,38 @@ that.
   TECHNICAL stream category: unique across everything feeding one
   checkpoint store, qualified at the source ("sales.order") when
   bounded contexts sharing infrastructure reuse a name.
-- In-order delivery per aggregate is a documented PRECONDITION of the
-  projector, not something the watermark creates: the watermark
-  absorbs at-least-once redelivery but cannot tell a duplicate from a
-  straggler that never applied, so a reordering transport needs a
-  resequencer in front of the projector (or a rebuild as remediation).
-  The kit's dispatcher, partitioned/FIFO broker feeds, and stream-order
-  replays satisfy it by construction.
+- Projection positions include `commitSize` and
+  `previousEventfulAggregateVersion`, so the projector proves continuity within
+  and across aggregate commits. Missing sequences/commits and malformed
+  cursors reject; a late unseen event is never silently counted as a
+  duplicate. Custom sources must compose an equivalent source-owned
+  predecessor chain around the bare event.
+- Projector feeds are now explicitly complete per aggregate address. Broker
+  subscriptions must not drop cursor positions by filtering on event type;
+  projection-irrelevant facts run through `apply` as explicit no-ops and are
+  checkpointed. Broker examples route projector feeds by context / aggregate
+  type rather than event type.
+- `CommittedDomainEvent.source` is the authoritative persistence address.
+  `Projector` now rejects a bare event whose present optional `aggregateId` or
+  `aggregateType` contradicts that source, using `ForeignEventError` before any
+  read-model write or checkpoint mutation. Absent optional event stamps remain
+  valid.
 - `ProjectionCheckpointStore` port, `Projector` runner, and
   `InMemoryProjectionCheckpointStore` reference: the projection
   mechanics `read-model-design.md` demands, so a consumer's
   `Projection.apply` is a plain event-to-row mapping. One
   `project(batch)` call is one `TransactionScope` transaction, the
   read-model update and checkpoint commit atomically and roll back
-  together; duplicates and stale events are skipped via the
-  `(aggregateVersion, commitSequence)` watermark `withCommit` already
-  stamps (per-aggregate total order), with a `position` extractor
-  option for sources that carry their own cursor (event-store
-  replays); uncursored events reject loudly, with the structured
-  `UnprojectableEventError`, before anything applies.
+  together; already-traversed positions are skipped via the four-field cursor
+  the event source finalizes on `CommittedDomainEvent`, while the checkpoint retains the
+  `eventId` at its exact watermark and rejects an identity collision with
+  `ProjectionIdentityViolationError`; event-store replays compose their own
+  envelope from the store cursor; missing or
+  malformed cursors reject loudly with the structured
+  `UnprojectableEventError`, while a well-formed discontinuity throws the
+  structured infrastructure `ProjectionGapError`, before anything applies.
   `hasProcessed(aggregateId, position)` is the wait-for-version
-  building block (full-pair comparison: version-only would report
+  building block (full-cursor comparison: version-only would report
   "reached" mid-commit); `reset()` truncates the read model (via the
   projection's optional `truncate`) and clears checkpoints in one
   transaction as the rebuild entry point; `toOutboxSink()` plugs the
@@ -822,19 +928,40 @@ that.
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
-### Added: `commitSequence` on harvested events
+### Added: gap-proof committed-event envelopes
 
-- `withCommit` stamps every harvested event with `commitSequence`, the
-  zero-based index of the event within its aggregate's harvest batch,
-  next to `aggregateVersion` (same pre-set-wins rule). All events of
-  one commit share the version, so the pair
-  `(aggregateVersion, commitSequence)` is a total order per aggregate
-  and a compact idempotency watermark: consumers sort and advance by
-  the tuple instead of keeping an `eventId` set (which remains the
-  general fallback for events stamped outside `withCommit`). Additive
-  and optional at the type level; `createDomainEvent` accepts a
-  pre-set value; the repository contract suite enforces a gapless
-  sequence on committed outbox events.
+- `withCommit` composes every harvested domain event into an immutable
+  `EventCommitCandidate` with `source`, `commitSequence`, `commitSize`, and
+  `aggregateVersion`. The outbox/event source atomically supplies
+  `previousEventfulAggregateVersion` from its last eventful source head and
+  persists the resulting `CommittedDomainEvent`.
+  The index and size prove completeness inside a commit; the predecessor
+  links commits without assuming versions increase by one (several domain
+  mutations or state-only saves may occur between eventful commits). Cursor
+  fields are absent from `DomainEvent`; `ProjectionPosition` requires all four.
+  The outbox and projector consume finalized envelopes, while the domain bus
+  receives the original event. `eventId` remains the general dedupe key outside
+  verified chains.
+- `Projector.project` rejects descending positions that were still unseen at
+  batch start with `ProjectionOrderViolationError`, exposing a mis-partitioned
+  or reordering transport before it can become silent read-model drift. Late
+  redeliveries already covered by the stored checkpoint remain ordinary skips.
+- `ProjectionCheckpoint` composes the gap-proof `position` with
+  `lastAppliedEventId`. `Projector.project` rejects different event identities
+  mapped to one position inside a batch or at the stored watermark with
+  `ProjectionIdentityViolationError`, before `apply`. Older positions remain
+  bounded cursor skips under the documented source-uniqueness invariant; the
+  checkpoint does not pretend to retain a full processed-event ledger.
+- `IntegrationMessage` is the explicit JSON-safe broker contract separate from
+  internal `DomainEvent` and `CommittedDomainEvent` values.
+  `createIntegrationMessage` requires an application-owned mapping;
+  `encodeIntegrationMessage` and `decodeIntegrationMessage` validate the full
+  graph and cursor; `integrationMessageToCommittedEvent` adapts a validated
+  public message to a projector input. Raw `Date`, `Map`, `Set`, cycles,
+  non-finite numbers, sparse arrays, and properties JSON would discard reject
+  as `InvalidIntegrationMessageError` instead of being silently corrupted;
+  hostile own `__proto__` keys reject before downstream copy operations can
+  activate them.
 
 ### Added: `@shirudo/ddd-kit/money`, the money contract and its boundaries
 

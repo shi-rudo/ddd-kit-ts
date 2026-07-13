@@ -61,10 +61,9 @@ export interface ReadStreamOptions {
  * }
  * ```
  *
- * `save` appends the UNSTAMPED `pendingEvents` originals; `withCommit`
- * separately hands the outbox stamped copies. The store's own position
- * is the ordering authority for replay (see the event-sourcing guide's
- * note on `aggregateVersion`).
+ * `save` appends the bare `pendingEvents` originals; `withCommit`
+ * separately composes them into outbox envelopes. The event store's own
+ * stream position remains the ordering authority for replay.
  *
  * **One save per aggregate per unit of work, after all mutations.**
  * `pendingEvents` are cleared and `persistedVersion` advances only AFTER

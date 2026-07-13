@@ -426,10 +426,14 @@ Take undo snapshots when the aggregate is clean, usually right after load or sav
 `commit()` is the default for aggregate changes. Reach for lower-level methods only when you need behavior `commit` deliberately does not provide:
 
 - state changes that should not bump the version, such as cosmetic cache fields
-- audit-only events that do not change state, such as `OrderViewed`
+- audit-only events that do not change state still use
+  `commit({ ...this.state }, event)` so their persisted commit gets a unique
+  version/cursor
 - a multi-step operation where you want exactly one version bump at the end
 
-When you do this, mutate state first and record events second. That keeps events aligned with facts that actually happened.
+When you do this, mutate state first and record events second. An
+already-persisted aggregate may not harvest events without advancing its
+version: `withCommit` rejects that cursor collision.
 
 ::: warning Un-bumped mutations can lose concurrent writes
 A mutation that does not bump the version is invisible to optimistic concurrency. Another writer can load the same version, save successfully, and overwrite your change without a `ConcurrencyConflictError`.

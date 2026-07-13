@@ -1,6 +1,7 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
+import type { CommittedDomainEvent } from "../events/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -50,7 +51,7 @@ export interface EsRepositoryContractEnvironment<
 	 * All events currently persisted in the outbox (committed writes
 	 * only; a rolled-back transaction's events must not appear here).
 	 */
-	committedOutboxEvents(): Promise<ReadonlyArray<Evt>>;
+	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
 
 	/**
 	 * The COMMITTED stream for the given aggregate id, in stream order,
@@ -272,8 +273,27 @@ export function createEsRepositoryContractTests<
 				// copies with identical eventIds); nothing from B.
 				const outbox = await env.committedOutboxEvents();
 				assert(
-					deepEqual(sortedIds(outbox), sortedIds(streamAfterA)),
+					deepEqual(
+						outbox.map(({ event }) => event.eventId).sort(),
+						sortedIds(streamAfterA),
+					),
 					"the outbox must contain exactly the committed events (compared by eventId); nothing from the stale writer",
+				);
+				const seedEventIds = new Set(seedStream.map((event) => event.eventId));
+				const writerAOutbox = outbox.filter(
+					({ event }) => !seedEventIds.has(event.eventId),
+				);
+				assert(
+					writerAOutbox.length > 0 &&
+						writerAOutbox.every(
+							(message) =>
+								message.position.aggregateVersion === committedA.version &&
+								message.position.previousEventfulAggregateVersion ===
+									seeded.version,
+						),
+					`the event-sourced outbox must finalize writer A's eventful commit at aggregateVersion ${String(
+						committedA.version,
+					)} with previousEventfulAggregateVersion ${String(seeded.version)}`,
 				);
 			}),
 		},

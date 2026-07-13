@@ -137,13 +137,16 @@ The write side depends only on `OutboxWriter`:
 
 ```ts
 interface OutboxWriter<Evt extends AnyDomainEvent> {
-  add(events: ReadonlyArray<Evt>): Promise<void>;
+  add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
 }
 ```
 
 `withCommit` calls `add()` inside the same transaction as the aggregate
-write. That is the delivery guarantee. The actual delivery mechanism is a
-separate decision.
+write. The candidate contains the aggregate source, current aggregate version,
+commit sequence, and commit size. The writer owns the durable event-source
+head: it links the candidate to the preceding eventful commit and persists the
+resulting `CommittedDomainEvent`. That is the delivery and continuity
+guarantee. The actual delivery mechanism is a separate decision.
 
 If the kit's dispatcher will poll the outbox, implement the full `Outbox`
 port:
@@ -152,6 +155,8 @@ port:
 interface OutboxRecord<Evt extends AnyDomainEvent> {
   dispatchId: string;
   event: Evt;
+  source: AggregateEventSource;
+  position: CommitPosition;
   attempts?: number;
 }
 
@@ -178,35 +183,75 @@ create table outbox (
   event_id text not null unique,
   aggregate_id text not null,
   aggregate_type text not null,
-  aggregate_version integer,
-  commit_sequence integer,
+  aggregate_version integer not null,
+  commit_sequence integer not null,
+  commit_size integer not null,
+  previous_eventful_aggregate_version integer,
   event_type text not null,
   payload jsonb not null,
-  dispatched_at timestamptz
+  dispatched_at timestamptz,
+  unique (aggregate_type, aggregate_id, aggregate_version, commit_sequence)
+);
+
+create table event_source_head (
+  aggregate_type text not null,
+  aggregate_id text not null,
+  last_eventful_aggregate_version integer not null,
+  primary key (aggregate_type, aggregate_id)
 );
 ```
 
-Persist routing columns, not only the JSON payload. `withCommit` harvests
-events that carry `aggregateId` and `aggregateType`, and it stamps harvested
-events with `aggregateVersion` and `commitSequence`.
+Persist routing columns, not only the JSON payload. `withCommit` composes every
+bare domain event into an `EventCommitCandidate`; the outbox source finalizes
+it as a `CommittedDomainEvent` whose `source` identifies the aggregate and
+whose `position` carries the full projection cursor.
 
-Those stamps have a specific meaning:
+The envelope fields have a specific meaning:
 
-- `event.version` is the event payload schema version used for upcasting.
-- `event.aggregateVersion` is the producing aggregate's state version at
+- `envelope.event.version` is the event payload schema version used for upcasting.
+- `envelope.position.aggregateVersion` is the producing aggregate's state version at
   commit time.
-- `event.commitSequence` is the zero-based order of that event within the
+- `envelope.position.commitSequence` is the zero-based order of that event within the
   aggregate's commit batch.
+- `envelope.position.commitSize` is the total number of events in that commit.
+- `envelope.position.previousEventfulAggregateVersion` links to the aggregate
+  version of the immediately preceding eventful commit (`null` for the
+  source's first eventful commit). State-only saves do not appear in this
+  chain.
 
-For a projection of one aggregate stream, `(aggregateVersion, commitSequence)`
-is a compact watermark. For general deduplication across all event sources,
-use `eventId`.
+Genesis is deliberately represented by an explicit `null`, not `undefined`:
+the full cursor therefore survives JSON serialization. SQL adapters must map
+the nullable predecessor column to JavaScript `null` when hydrating an
+envelope; omitting the property produces an invalid legacy cursor.
+
+The predecessor cannot be inferred from `aggregate.persistedVersion`: that is
+the OCC baseline and advances on state-only saves. A durable adapter needs a
+source-head record keyed by `(aggregate_type, aggregate_id)`. Lock that record,
+read its `last_eventful_aggregate_version`, insert every event in the commit
+with that predecessor, and advance the head to the candidate's
+`aggregateVersion` in the same transaction. A unique commit-position key such
+as `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` keeps
+the mapping stable under retries. Creation of the first source-head row also
+needs race-safe insert-or-lock semantics: rely on the primary key and retry the
+losing transaction; do not let two concurrent "genesis" writers proceed from
+separate missing-row reads.
+
+For a projection, the four fields form a gap-proof cursor: the consumer can
+reject missing sequences and commits. For general deduplication across all
+event sources, use `eventId`.
 
 ## InMemoryOutbox
 
 `InMemoryOutbox` is the reference implementation. Use it for tests, examples,
 single-process demos, and small workers where process restart losing pending
-events is acceptable.
+events is acceptable. It retains one event-source cursor per qualified
+aggregate even after dispatch so later eventful commits can be linked. Its
+memory therefore grows with distinct aggregate sources, not only with pending
+messages. It also retains a bounded, insertion-ordered cache of recently
+dispatched event IDs (10,000 by default) so a normal post-ack retry remains an
+idempotent no-op without touching the source head. Unbounded production
+workloads need a durable adapter with an explicit source-head retention policy
+and a transactional unique key on `eventId`.
 
 ```ts
 import { InMemoryOutbox, type DomainEvent } from "@shirudo/ddd-kit";
@@ -215,11 +260,16 @@ type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
 const outbox = new InMemoryOutbox<OrderCreated>({
   maxDeliveryAttempts: 5,
+  maxRetainedDispatchedEventIds: 10_000,
 });
 ```
 
-It uses `event.eventId` as `dispatchId`, preserves insertion order, dedupes
-re-adds by `eventId`, and implements dispatch tracking.
+It uses `envelope.event.eventId` as `dispatchId`, preserves insertion order,
+dedupes pending, dead-lettered, and recently dispatched re-adds by `eventId`,
+and implements dispatch tracking. Once a dispatched receipt is evicted, a
+candidate behind the current source head fails with `EventHarvestError` rather
+than rewinding the head. This is intentionally fail-safe, not an unbounded
+idempotency promise; durable outboxes keep the event-ID receipt in storage.
 
 It is not a production outbox for a database-backed app. It is not part of
 your database transaction, and it does not roll back when the database rolls
@@ -350,39 +400,109 @@ the broker may never store it.
 
 Broker mapping is usually straightforward:
 
+For a `Projector`, all mappings below mean a complete feed per aggregate
+address. Partition or group by the aggregate source, but do not filter its
+subscription by `event.type`: even a projection-irrelevant envelope occupies a
+commit cursor position and must reach `Projection.apply` as an explicit no-op.
+Type-filtered topics are suitable only for consumers that do not use the
+aggregate commit cursor, unless the router assigns a new projection-specific
+contiguous cursor after filtering.
+
 | Broker | Mapping |
 | --- | --- |
 | Kafka | partition key = `aggregateId`, consumer dedup = `eventId` |
-| RabbitMQ | publisher confirms, routing key from `aggregateType` or `type` |
+| RabbitMQ | publisher confirms, projector routing key from context / `aggregateType` (not event `type`) |
 | SQS FIFO | `MessageGroupId` = `aggregateId`, `MessageDeduplicationId` = `eventId` |
 | SNS FIFO | same group and dedup mapping as SQS FIFO |
 | Google Pub/Sub | `orderingKey` = `aggregateId`, consumer dedup = `eventId` |
-| NATS JetStream | `Nats-Msg-Id` = `eventId`, subject from `aggregateType` or `type` |
+| NATS JetStream | `Nats-Msg-Id` = `eventId`; projector subject from context / `aggregateType` (not event `type`) |
 | Redis Streams | stream per context or topic, consumer dedup = `eventId` |
 
 Example SQS FIFO sink:
 
 ```ts
-import type { AnyDomainEvent, OutboxSink } from "@shirudo/ddd-kit";
+import {
+  createIntegrationMessage,
+  encodeIntegrationMessage,
+  type DomainEvent,
+  type IntegrationMessageMapper,
+  type OutboxSink,
+} from "@shirudo/ddd-kit";
 
-const sqsSink: OutboxSink<AnyDomainEvent> = {
-  publish: async ({ event }) => {
+type OrderPlaced = DomainEvent<"OrderPlaced", {
+  orderId: string;
+  placedAt: Date;
+  amounts: ReadonlyMap<string, number>;
+  tags: ReadonlySet<string>;
+}>;
+
+const publishOrderPlaced: IntegrationMessageMapper<
+  OrderPlaced,
+  "sales.order-placed.v1",
+  {
+    orderId: string;
+    placedAt: string;
+    amounts: ReadonlyArray<readonly [string, number]>;
+    tags: ReadonlyArray<string>;
+  }
+> = (event) => ({
+  type: "sales.order-placed.v1",
+  version: 1,
+  payload: {
+    orderId: event.payload.orderId,
+    placedAt: event.payload.placedAt.toISOString(),
+    amounts: [...event.payload.amounts],
+    tags: [...event.payload.tags],
+  },
+});
+
+const sqsSink: OutboxSink<OrderPlaced> = {
+  publish: async (record) => {
+    const message = createIntegrationMessage(record, publishOrderPlaced);
     await sqs.send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
-        MessageBody: JSON.stringify(event),
-        MessageGroupId: event.aggregateId ?? event.type,
-        MessageDeduplicationId: event.eventId,
+        MessageBody: encodeIntegrationMessage(message),
+        MessageGroupId: message.source.aggregateId,
+        MessageDeduplicationId: message.messageId,
       }),
     );
   },
 };
 ```
 
+`CommittedDomainEvent` is an in-process persistence envelope, not a JSON wire
+contract: its domain payload and metadata may legally contain `Date`, `Map`, or
+`Set`. `createIntegrationMessage` therefore requires an explicit
+domain-to-integration mapping. The mapper above chooses the public message
+name/schema and converts those values to strings and arrays. The codec rejects
+an unmapped special value instead of letting `JSON.stringify` silently turn a
+`Map` or `Set` into `{}`. It also preserves and validates the complete source
+cursor, including the explicit `null` at genesis.
+
+Decode and validate before handing a broker body to a projector:
+
+```ts
+import {
+  decodeIntegrationMessage,
+  integrationMessageToCommittedEvent,
+} from "@shirudo/ddd-kit";
+
+const message = decodeIntegrationMessage(sqsRecord.body);
+await publishedOrderProjector.project([
+  integrationMessageToCommittedEvent(message),
+]);
+```
+
+The converted event represents the published integration schema; it does not
+reconstruct the producer's private domain event or turn ISO strings back into
+domain `Date` objects. A receiving bounded context owns any further mapping to
+its own commands or model.
+
 The dispatcher preserves order up to the sink. After that, broker
 configuration decides what consumers observe. If the broker cannot preserve
-per-aggregate order, consumers must reject stale events using
-`(aggregateVersion, commitSequence)` or dedupe with `eventId`.
+per-aggregate order, projection consumers reject discontinuities through the
+full commit cursor; general consumers dedupe with `eventId`.
 
 ## EventBus And Outbox
 
@@ -453,16 +573,30 @@ import type { AnyDomainEvent, OutboxWriter } from "@shirudo/ddd-kit";
 
 function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
   return {
-    add: async (events) => {
-      for (const event of events) {
-        await insertIntoDeliveryOutbox(tx, {
-          id: event.eventId,
-          aggregateId: event.aggregateId,
-          aggregateType: event.aggregateType,
-          aggregateVersion: event.aggregateVersion,
-          commitSequence: event.commitSequence,
-          type: event.type,
-          payload: event,
+    add: async (candidates) => {
+      for (const commit of groupByAggregateCommit(candidates)) {
+        // SELECT ... FOR UPDATE, keyed by aggregateType + aggregateId.
+        const head = await lockEventSourceHead(tx, commit.source);
+
+        for (const candidate of commit.events) {
+          await insertIntoDeliveryOutbox(tx, {
+            id: candidate.event.eventId,
+            aggregateId: candidate.source.aggregateId,
+            aggregateType: candidate.source.aggregateType,
+            aggregateVersion: candidate.position.aggregateVersion,
+            commitSequence: candidate.position.commitSequence,
+            commitSize: candidate.position.commitSize,
+            previousEventfulAggregateVersion:
+              head.lastEventfulAggregateVersion,
+            type: candidate.event.type,
+            payload: candidate.event,
+          });
+        }
+
+        await advanceEventSourceHead(
+          tx,
+          commit.source,
+          commit.aggregateVersion,
         });
       }
     },
@@ -470,9 +604,11 @@ function makeOutboxWriter(tx: YourTxHandle): OutboxWriter<AnyDomainEvent> {
 }
 ```
 
-The hard requirement is transaction participation. The enqueue must join the
-same transaction as the aggregate write. If the external API cannot do that,
-you are back to a dual write.
+The helper names above are application-specific pseudocode. The hard
+requirements are transaction participation and serialized source-head
+advancement. The enqueue and head update must join the same transaction as the
+aggregate write. If the external API cannot do that, you are back to a dual
+write and cannot promise gap-proof projection continuity.
 
 Common variants:
 

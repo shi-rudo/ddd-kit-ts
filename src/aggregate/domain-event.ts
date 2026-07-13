@@ -157,16 +157,11 @@ export interface EventMetadata {
  * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
  * (or the aggregate's `recordEvent` helper) and deeply frozen. Class-based
  * event objects that satisfy this shape structurally via prototype
- * members are unsupported: the `withCommit` harvest copies events with a
- * shallow spread (to stamp `aggregateVersion`), which only carries own
- * enumerable properties.
+ * members are unsupported.
  *
- * **Field-accretion boundary.** This type already carries the write-side
- * transport concerns the outbox needs (`aggregateId`, `aggregateType`,
- * `aggregateVersion`, `metadata`). That is the line: further transport
- * fields (partition keys, tenancy, schema URNs, …) belong in an outbox
- * envelope / `metadata`, not on the domain event: the next first-class
- * transport field forces an `OutboxMessage` envelope port instead.
+ * **Field-accretion boundary.** Persistence positions, commit boundaries,
+ * broker offsets, and other delivery concerns belong in an event envelope,
+ * not on the domain event itself.
  *
  * @template T - The event type name (e.g., "OrderCreated")
  * @template P - The event payload type
@@ -214,46 +209,10 @@ export interface DomainEvent<T extends string, P = void> {
 	 * Required for safe schema migration in event-sourced systems.
 	 * Use 1 for the initial schema version.
 	 *
-	 * **NOT the aggregate's version**: that is
-	 * {@link aggregateVersion}. The two are deliberately distinct
-	 * fields: this one says "which shape does the payload have"
-	 * (upcasting), the other says "which state revision of the
-	 * aggregate emitted this".
+	 * This is the event PAYLOAD schema version, not a persisted aggregate
+	 * position. Commit positions live on `CommittedDomainEvent`.
 	 */
 	readonly version: number;
-
-	/**
-	 * The version of the producing aggregate at COMMIT time: the same
-	 * value the OCC row write carries. Stamped automatically by
-	 * `withCommit` at the harvest boundary (all events of one aggregate
-	 * in one commit share it; their relative order within the commit is
-	 * the harvest order), or set manually via
-	 * `CreateDomainEventOptions.aggregateVersion`; a pre-set value is
-	 * never overwritten.
-	 *
-	 * Consumers use it for cross-commit ordering and debugging. It is NOT
-	 * a per-event idempotency key on its own: all events of one commit
-	 * share the stamp. Pair it with {@link commitSequence} for a total
-	 * order per aggregate and a compact per-event watermark; `eventId`
-	 * dedup remains the fully general fallback (see the outbox guide).
-	 * Optional at the type level: events created outside an aggregate
-	 * (system/integration events) and events from older kit versions
-	 * don't carry it.
-	 */
-	readonly aggregateVersion?: number;
-
-	/**
-	 * Zero-based index of the event within its aggregate's harvest batch,
-	 * stamped by `withCommit` next to {@link aggregateVersion} (a pre-set
-	 * value is never overwritten). All events of one commit share the
-	 * `aggregateVersion`, so the PAIR `(aggregateVersion, commitSequence)`
-	 * is a total order per aggregate and a compact idempotency watermark:
-	 * consumers sort and advance by the tuple instead of keeping an
-	 * `eventId` set. Optional at the type level for the same reasons as
-	 * `aggregateVersion` (system events, older kit versions, hand-rolled
-	 * orchestrations).
-	 */
-	readonly commitSequence?: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -300,23 +259,6 @@ export interface CreateDomainEventOptions {
 	 * Override for the default schema version (1).
 	 */
 	version?: number;
-
-	/**
-	 * Pre-set the producing aggregate's version (see
-	 * `DomainEvent.aggregateVersion`). Normally left unset (`withCommit`
-	 * stamps it at the harvest boundary with the commit version), but
-	 * useful for replay fixtures and events constructed outside an
-	 * aggregate. A pre-set value is never overwritten by the harvest.
-	 */
-	aggregateVersion?: number;
-
-	/**
-	 * Pre-set the event's position within its commit batch (see
-	 * `DomainEvent.commitSequence`). Normally left unset (`withCommit`
-	 * stamps the zero-based harvest index); a pre-set value is never
-	 * overwritten by the harvest.
-	 */
-	commitSequence?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -445,8 +387,6 @@ export function createDomainEvent<T extends string, P>(
 			? new Date(options.occurredAt.getTime())
 			: now(),
 		version: options?.version ?? 1,
-		aggregateVersion: options?.aggregateVersion,
-		commitSequence: options?.commitSequence,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent

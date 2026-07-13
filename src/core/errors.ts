@@ -153,14 +153,13 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
- * Thrown by `Projector.project` when an event cannot be watermarked:
- * it carries no `(aggregateVersion, commitSequence)` cursor (and no
- * custom `position` extractor covered it) or no `aggregateId`. An
- * unwatermarkable event cannot be deduped or ordered, so applying it
- * would silently break projection idempotency on redelivery; the
- * batch fails BEFORE anything is applied. Events written by
- * `withCommit` are stamped automatically; for other sources supply
- * the `position` extractor.
+ * Thrown by `Projector.project` when an event cannot be projected
+ * safely because its cursor is missing or malformed, or its aggregate
+ * address is absent. Applying such an event would break idempotency, so
+ * the batch fails. Events written by `withCommit` carry the complete
+ * cursor automatically; other sources compose a gap-proof committed-event
+ * envelope. A well-formed cursor that does not continue the stored chain
+ * instead throws {@link ProjectionGapError}.
  *
  * A wiring error, not a `DomainError`: see {@link MissingHandlerError}
  * for the rationale of crashing loud at the App layer.
@@ -177,6 +176,96 @@ export class UnprojectableEventError extends KitWiringError<"UNPROJECTABLE_EVENT
 			`Projector(${projection}): event ${eventId} ${reason}`,
 			cause,
 		);
+	}
+}
+
+/**
+ * Thrown when a valid projection cursor does not continue the stored
+ * per-aggregate chain. This is an infrastructure/delivery failure: an
+ * event or commit is missing, commonly because a partition reordered or
+ * dead-lettered it. The projector does not apply the later event and the
+ * checkpoint stays put until the missing history is replayed or the
+ * projection is rebuilt.
+ */
+export class ProjectionGapError extends InfrastructureError<"PROJECTION_GAP"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly previousPosition: string,
+		public readonly receivedPosition: string,
+	) {
+		super({
+			code: "PROJECTION_GAP",
+			message:
+				`Projector(${projection}): event ${eventId} creates a projection ` +
+				`gap after ${previousPosition}; received ${receivedPosition}. ` +
+				"Replay the missing commit before advancing the checkpoint.",
+		});
+	}
+}
+
+/**
+ * Thrown when one batch delivers previously unseen positions of the same
+ * aggregate in descending order. Unlike {@link ProjectionGapError}, this is
+ * direct proof that the feed violated its per-aggregate ordering contract;
+ * no missing-history inference is needed. Positions already covered by the
+ * checkpoint at batch start remain valid late redeliveries and do not trip
+ * this diagnostic guard.
+ */
+export class ProjectionOrderViolationError extends InfrastructureError<"PROJECTION_ORDER_VIOLATION"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly previousReceivedPosition: string,
+		public readonly receivedPosition: string,
+	) {
+		super({
+			code: "PROJECTION_ORDER_VIOLATION",
+			message:
+				`Projector(${projection}): event ${eventId} at ${receivedPosition} ` +
+				`arrived after the later unprocessed position ${previousReceivedPosition} ` +
+				"in the same batch. Partition or serialize the feed by aggregate source.",
+		});
+	}
+}
+
+/**
+ * Thrown when a source maps different event identities to one position, either
+ * inside the current batch or at the position stored as the projection's
+ * watermark. The checkpoint retains the identity of that one last-applied
+ * event, so the durable collision is provable without keeping an unbounded
+ * processed-event ledger. Positions behind the watermark remain governed by
+ * the source's one-logical-event-per-position contract.
+ */
+export class ProjectionIdentityViolationError extends InfrastructureError<"PROJECTION_IDENTITY_VIOLATION"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly recordedEventId: string,
+		public readonly position: string,
+	) {
+		super({
+			code: "PROJECTION_IDENTITY_VIOLATION",
+			message:
+				`Projector(${projection}): position ${position} was already associated ` +
+				`with event ${recordedEventId}, but the source supplied event ${eventId} ` +
+				"at the same position. A source must map exactly one logical event to each position.",
+		});
+	}
+}
+
+/** A malformed or non-JSON-safe message at an integration boundary. */
+export class InvalidIntegrationMessageError extends InfrastructureError<"INVALID_INTEGRATION_MESSAGE"> {
+	constructor(
+		public readonly path: string,
+		public readonly reason: string,
+		cause?: unknown,
+	) {
+		super({
+			code: "INVALID_INTEGRATION_MESSAGE",
+			message: `Invalid integration message at ${path}: ${reason}`,
+			cause,
+		});
 	}
 }
 
@@ -324,8 +413,8 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 }
 
 /**
- * Thrown by the replay entry points (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) when a HISTORY event carries an
+ * Thrown by persisted-event consumers (including `loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`, and `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
@@ -351,7 +440,7 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 		super({
 			code: "FOREIGN_EVENT",
 			message:
-				`Replayed event "${eventType}" belongs to ` +
+				`Persisted event "${eventType}" belongs to ` +
 				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId}, ` +
 				`not to ${expectedAggregateType} ${expectedAggregateId}: ` +
 				"the stream row addresses a different aggregate.",
@@ -361,12 +450,11 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 
 /**
  * Thrown by `withCommit` when an event harvested from an aggregate cannot
- * be safely committed: it is missing `aggregateId` / `aggregateType`
- * (downstream routing would break), or it carries a pre-set
- * `aggregateVersion` AHEAD of the aggregate's commit version (a leaked or
- * copied fixture that would advance consumer idempotency watermarks past
- * real history). Both are programming bugs in how the aggregate recorded
- * the event, deterministic, and fail identically on every retry.
+ * be safely composed into a commit envelope: it is missing
+ * `aggregateId` / `aggregateType` (downstream routing would break), or an
+ * eventful persisted aggregate did not advance its version (two commits
+ * would receive the same source position). These programming bugs are
+ * deterministic and fail identically on every retry.
  *
  * Deliberately **not** an {@link InfrastructureError} (same reasoning as
  * {@link MissingHandlerError}): the failure happens after the work
@@ -871,6 +959,7 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION"
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_INTEGRATION_MESSAGE"
 	| "INVALID_MONEY"
 	| "MISADDRESSED_EVENT"
 	| "MISSING_HANDLER"
@@ -878,6 +967,9 @@ export type KitErrorCode =
 	| "MONEY_PRECISION_LOSS"
 	| "MONEY_SCALE_MISMATCH"
 	| "NESTED_UNIT_OF_WORK"
+	| "PROJECTION_GAP"
+	| "PROJECTION_IDENTITY_VIOLATION"
+	| "PROJECTION_ORDER_VIOLATION"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"
@@ -885,6 +977,7 @@ export type KitErrorCode =
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
 	| "UNMINTED_EVENT"
+	| "UNPROJECTABLE_EVENT"
 	| "UNKNOWN_CURRENCY"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

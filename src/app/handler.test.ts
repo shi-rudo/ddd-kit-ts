@@ -4,7 +4,7 @@ import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { EventBus, Outbox } from "../events/ports";
+import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { withCommit } from "./handler";
 
@@ -15,13 +15,17 @@ type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
 	markPersistedCalls: number;
 };
 
-function createMockAggregate(events: TestEvent[], version = 1): MockAggregate {
+function createMockAggregate(
+	events: TestEvent[],
+	version = 1,
+	persistedVersion?: number,
+): MockAggregate {
 	let pending: TestEvent[] = [...events];
 	let calls = 0;
 	return {
 		id: "agg-1" as TestId,
 		version: version as Version,
-		persistedVersion: undefined,
+		persistedVersion: persistedVersion as Version | undefined,
 		get pendingEvents(): ReadonlyArray<TestEvent> {
 			return pending;
 		},
@@ -44,8 +48,10 @@ function createMockScope(): TransactionScope<undefined> {
 	};
 }
 
-function createMockOutbox(): Outbox<TestEvent> & { added: TestEvent[][] } {
-	const added: TestEvent[][] = [];
+function createMockOutbox(): Outbox<TestEvent> & {
+	added: EventCommitCandidate<TestEvent>[][];
+} {
+	const added: EventCommitCandidate<TestEvent>[][] = [];
 	return {
 		added,
 		add: async (events) => {
@@ -69,13 +75,25 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 	};
 }
 
-/** Harvested events carry the commit version and the harvest index. */
+/** Expected persistence envelope for one harvested event. */
 function stamped(
 	event: TestEvent,
 	aggregateVersion = 1,
 	commitSequence = 0,
-): TestEvent {
-	return { ...event, aggregateVersion, commitSequence };
+	commitSize = 1,
+): EventCommitCandidate<TestEvent> {
+	return {
+		event,
+		source: {
+			aggregateId: event.aggregateId ?? "agg-1",
+			aggregateType: event.aggregateType ?? "MockOrder",
+		},
+		position: {
+			aggregateVersion,
+			commitSequence,
+			commitSize,
+		},
+	};
 }
 
 describe("withCommit", () => {
@@ -106,6 +124,56 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("writes a committed envelope to the outbox but publishes the bare domain event", async () => {
+		const outbox = createMockOutbox();
+		const bus = createMockBus();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+		);
+		const agg = createMockAggregate([event], 7, 5);
+
+		await withCommit({ outbox, bus, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg],
+		}));
+
+		expect(outbox.added[0]?.[0]).toEqual({
+			event,
+			source: { aggregateId: "order-1", aggregateType: "MockOrder" },
+			position: {
+				aggregateVersion: 7,
+				commitSequence: 0,
+				commitSize: 1,
+			},
+		});
+		expect(bus.published).toEqual([[event]]);
+	});
+
+	it("leaves the previous eventful commit to the outbox source", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "order-1" },
+			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+		);
+		const agg = createMockAggregate([event], 7, 5);
+
+		await withCommit({ outbox, scope: createMockScope() }, async () => ({
+			result: "ok",
+			aggregates: [agg],
+		}));
+
+		const candidate = outbox.added[0]?.[0];
+		expect(
+			Object.hasOwn(
+				candidate?.position ?? {},
+				"previousEventfulAggregateVersion",
+			),
+		).toBe(false);
+	});
+
 	it("publishes harvested events to the bus when provided", async () => {
 		const outbox = createMockOutbox();
 		const bus = createMockBus();
@@ -122,7 +190,7 @@ describe("withCommit", () => {
 		}));
 
 		expect(bus.published).toHaveLength(1);
-		expect(bus.published[0]).toEqual([stamped(event)]);
+		expect(bus.published[0]).toEqual([event]);
 	});
 
 	it("works without a bus", async () => {
@@ -343,8 +411,8 @@ describe("withCommit", () => {
 		expect(b.pendingEvents).toHaveLength(0);
 	});
 
-	describe("aggregateVersion stamping at harvest", () => {
-		it("stamps each harvested event with its aggregate's commit version (outbox AND bus)", async () => {
+	describe("committed event envelopes", () => {
+		it("puts the aggregate commit version on the outbox envelope only", async () => {
 			const outbox = createMockOutbox();
 			const bus = createMockBus();
 			const event = createDomainEvent(
@@ -359,10 +427,9 @@ describe("withCommit", () => {
 				aggregates: [agg],
 			}));
 
-			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(7);
-			expect(bus.published[0]?.[0]?.aggregateVersion).toBe(7);
-			// The stamped copy keeps everything else intact.
-			expect(outbox.added[0]?.[0]?.eventId).toBe(event.eventId);
+			expect(outbox.added[0]?.[0]?.position.aggregateVersion).toBe(7);
+			expect(outbox.added[0]?.[0]?.event).toBe(event);
+			expect(bus.published).toEqual([[event]]);
 		});
 
 		it("stamps per aggregate: two aggregates carry their own versions", async () => {
@@ -386,88 +453,17 @@ describe("withCommit", () => {
 			}));
 
 			expect(
-				outbox.added[0]?.map((e) => [e.aggregateId, e.aggregateVersion]),
+				outbox.added[0]?.map((message) => [
+					message.source.aggregateId,
+					message.position.aggregateVersion,
+				]),
 			).toEqual([
 				["a", 3],
 				["b", 11],
 			]);
 		});
 
-		it("never overwrites a pre-set aggregateVersion (when it is ≤ the commit version)", async () => {
-			const outbox = createMockOutbox();
-			const preStamped = createDomainEvent(
-				"OrderCreated",
-				{ orderId: "o-1" },
-				{
-					aggregateId: "o-1",
-					aggregateType: "MockOrder",
-					aggregateVersion: 5,
-				},
-			);
-			const agg = createMockAggregate([preStamped], 7);
-
-			await withCommit({ outbox, scope: createMockScope() }, async () => ({
-				result: "ok",
-				aggregates: [agg],
-			}));
-
-			expect(outbox.added[0]?.[0]?.aggregateVersion).toBe(5);
-			// The version survives, but the harvest still stamps the
-			// commitSequence onto a frozen copy.
-			expect(outbox.added[0]?.[0]?.commitSequence).toBe(0);
-		});
-
-		it("an event with BOTH stamps pre-set passes through as the SAME object (no copy)", async () => {
-			const outbox = createMockOutbox();
-			const fullyStamped = createDomainEvent(
-				"OrderCreated",
-				{ orderId: "o-1" },
-				{
-					aggregateId: "o-1",
-					aggregateType: "MockOrder",
-					aggregateVersion: 5,
-					commitSequence: 0,
-				},
-			);
-			const agg = createMockAggregate([fullyStamped], 7);
-
-			await withCommit({ outbox, scope: createMockScope() }, async () => ({
-				result: "ok",
-				aggregates: [agg],
-			}));
-
-			expect(outbox.added[0]?.[0]).toBe(fullyStamped);
-		});
-
-		it("rejects a pre-set aggregateVersion AHEAD of the commit version (leaked fixture guard)", async () => {
-			// A pre-set ahead of the commit version is always a leaked
-			// replay fixture or a copied options object - and consumers key
-			// idempotency watermarks on this number, so it must fail fast
-			// (same posture as the aggregateId/aggregateType guard).
-			const leaked = createDomainEvent(
-				"OrderCreated",
-				{ orderId: "o-1" },
-				{
-					aggregateId: "o-1",
-					aggregateType: "MockOrder",
-					aggregateVersion: 42,
-				},
-			);
-			const agg = createMockAggregate([leaked], 7);
-
-			await expect(
-				withCommit(
-					{ outbox: createMockOutbox(), scope: createMockScope() },
-					async () => ({ result: "ok", aggregates: [agg] }),
-				),
-			).rejects.toThrow(
-				/aggregateVersion \(42\) AHEAD of its aggregate's commit version \(7\)/,
-			);
-			// Rolled back: pending events survive for a corrected retry.
-			expect(agg.pendingEvents).toHaveLength(1);
-		});
-
-		it("stamps onto a frozen copy; the aggregate's own pending events stay untouched", async () => {
+		it("freezes the envelope while retaining the original domain event", async () => {
 			const outbox = createMockOutbox();
 			const event = createDomainEvent(
 				"OrderCreated",
@@ -481,12 +477,12 @@ describe("withCommit", () => {
 				aggregates: [agg],
 			}));
 
-			// The original event object was never mutated...
-			expect(event.aggregateVersion).toBeUndefined();
-			// ...and the stamped copy is frozen like the original.
-			const stamped = outbox.added[0]?.[0];
-			expect(Object.isFrozen(stamped)).toBe(true);
-			expect(stamped).not.toBe(event);
+			const message = outbox.added[0]?.[0];
+			expect(message?.event).toBe(event);
+			expect(Object.isFrozen(message)).toBe(true);
+			expect(Object.isFrozen(message?.source)).toBe(true);
+			expect(Object.isFrozen(message?.position)).toBe(true);
+			expect(Object.hasOwn(event, "aggregateVersion")).toBe(false);
 		});
 	});
 
@@ -565,13 +561,13 @@ describe("withCommit", () => {
 
 		// Sequences restart per aggregate: [e1, e2] on A, [e3] on B, [e4] on C.
 		const expected = [
-			stamped(e1, 1, 0),
-			stamped(e2, 1, 1),
+			stamped(e1, 1, 0, 2),
+			stamped(e2, 1, 1, 2),
 			stamped(e3, 1, 0),
 			stamped(e4, 1, 0),
 		];
 		expect(outbox.added).toEqual([expected]);
-		expect(bus.published).toEqual([expected]);
+		expect(bus.published).toEqual([[e1, e2, e3, e4]]);
 	});
 
 	it("dedupes aggregates by reference: same instance twice harvests events once and markPersists once", async () => {
@@ -597,7 +593,7 @@ describe("withCommit", () => {
 
 		// Event harvested exactly once.
 		expect(outbox.added).toEqual([[stamped(event)]]);
-		expect(bus.published).toEqual([[stamped(event)]]);
+		expect(bus.published).toEqual([[event]]);
 		// markPersisted called exactly once on the deduped aggregate.
 		expect(agg.markPersistedCalls).toBe(1);
 	});
@@ -692,6 +688,24 @@ describe("withCommit", () => {
 		// markPersisted still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
 		expect(agg.markPersistedCalls).toBe(1);
+	});
+
+	it("rejects an eventful persisted commit that did not advance aggregate version", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 5, 5);
+
+		await expect(
+			withCommit({ outbox, scope: createMockScope() }, async () => ({
+				result: "r",
+				aggregates: [aggregate],
+			})),
+		).rejects.toThrow(/did not advance/i);
+		expect(outbox.added).toHaveLength(0);
 	});
 
 	describe("post-commit markPersisted isolation", () => {
@@ -1060,15 +1074,15 @@ describe("deleted must be a subset of aggregates", () => {
 	});
 });
 
-describe("commitSequence stamping", () => {
-	const eventFor = (orderId: string, options?: object) =>
+describe("commit envelope positioning", () => {
+	const eventFor = (orderId: string) =>
 		createDomainEvent(
 			"OrderCreated",
 			{ orderId },
-			{ aggregateId: "agg-1", aggregateType: "MockOrder", ...options },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 
-	it("stamps a zero-based per-aggregate sequence onto the harvested copies", async () => {
+	it("assigns a zero-based per-aggregate sequence", async () => {
 		const outbox = createMockOutbox();
 		const agg = createMockAggregate([eventFor("a"), eventFor("b")], 7);
 
@@ -1078,8 +1092,12 @@ describe("commitSequence stamping", () => {
 		}));
 
 		const [batch] = outbox.added;
-		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);
-		expect(batch?.map((e) => e.aggregateVersion)).toEqual([7, 7]);
+		expect(batch?.map((message) => message.position.commitSequence)).toEqual([
+			0, 1,
+		]);
+		expect(batch?.map((message) => message.position.aggregateVersion)).toEqual([
+			7, 7,
+		]);
 	});
 
 	it("sequences each aggregate independently", async () => {
@@ -1093,15 +1111,14 @@ describe("commitSequence stamping", () => {
 		}));
 
 		const [batch] = outbox.added;
-		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1, 0]);
+		expect(batch?.map((message) => message.position.commitSequence)).toEqual([
+			0, 1, 0,
+		]);
 	});
 
-	it("a pre-set commitSequence is never overwritten (same rule as aggregateVersion)", async () => {
+	it("puts commit size on every candidate and leaves the predecessor to the outbox", async () => {
 		const outbox = createMockOutbox();
-		const agg = createMockAggregate(
-			[eventFor("a", { commitSequence: 7 }), eventFor("b")],
-			2,
-		);
+		const agg = createMockAggregate([eventFor("a"), eventFor("b")], 7, 5);
 
 		await withCommit({ outbox, scope: createMockScope() }, async () => ({
 			result: "r",
@@ -1109,23 +1126,13 @@ describe("commitSequence stamping", () => {
 		}));
 
 		const [batch] = outbox.added;
-		expect(batch?.map((e) => e.commitSequence)).toEqual([7, 1]);
-	});
-
-	it("an event with a pre-set aggregateVersion still receives its commitSequence", async () => {
-		const outbox = createMockOutbox();
-		const agg = createMockAggregate(
-			[eventFor("a", { aggregateVersion: 1 }), eventFor("b")],
-			2,
-		);
-
-		await withCommit({ outbox, scope: createMockScope() }, async () => ({
-			result: "r",
-			aggregates: [agg],
-		}));
-
-		const [batch] = outbox.added;
-		expect(batch?.map((e) => e.commitSequence)).toEqual([0, 1]);
-		expect(batch?.map((e) => e.aggregateVersion)).toEqual([1, 2]);
+		expect(batch?.map((message) => message.position.commitSize)).toEqual([
+			2, 2,
+		]);
+		expect(
+			batch?.map((message) =>
+				Object.hasOwn(message.position, "previousEventfulAggregateVersion"),
+			),
+		).toEqual([false, false]);
 	});
 });

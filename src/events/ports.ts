@@ -150,6 +150,68 @@ export interface OnceOptions {
 	 */
 	timeoutMs?: number;
 }
+
+/** Stable identity of the aggregate stream that produced an event. */
+export interface AggregateEventSource {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+}
+
+/**
+ * Gap-proof position finalized by the event source at the persistence
+ * boundary. It is deliberately separate from `DomainEvent`: these values
+ * describe a stored commit, not the business fact itself.
+ */
+export interface CommitPosition {
+	/** Aggregate OCC version reached by this eventful commit. */
+	readonly aggregateVersion: number;
+	/** Zero-based event index inside this aggregate commit. */
+	readonly commitSequence: number;
+	/** Total number of events emitted by this aggregate commit. */
+	readonly commitSize: number;
+	/**
+	 * Aggregate version of the immediately preceding EVENTFUL commit for this
+	 * qualified aggregate source, or `null` when this is its first eventful
+	 * commit. State-only persistence is intentionally absent from this chain.
+	 *
+	 * The outbox/event-store adapter owns this value. It must read and advance
+	 * the source head atomically with inserting the committed event envelope;
+	 * application orchestration cannot derive it from `persistedVersion`.
+	 */
+	readonly previousEventfulAggregateVersion: number | null;
+}
+
+/**
+ * Commit information known by the application transaction before the outbox
+ * source has linked this eventful commit to its predecessor.
+ */
+export type EventCommitCandidatePosition = Omit<
+	CommitPosition,
+	"previousEventfulAggregateVersion"
+>;
+
+/**
+ * A bare domain event prepared for the transactional outbox. The outbox source
+ * owns the predecessor link and turns this candidate into a
+ * {@link CommittedDomainEvent} when it persists the record.
+ */
+export interface EventCommitCandidate<Evt extends AnyDomainEvent> {
+	readonly event: Evt;
+	readonly source: AggregateEventSource;
+	readonly position: EventCommitCandidatePosition;
+}
+
+/**
+ * A domain event enriched after persistence has established its source and
+ * commit position. Outboxes and projectors consume this envelope; in-process
+ * domain handlers continue to consume the bare {@link DomainEvent} value.
+ */
+export interface CommittedDomainEvent<Evt extends AnyDomainEvent> {
+	readonly event: Evt;
+	readonly source: AggregateEventSource;
+	readonly position: CommitPosition;
+}
+
 /**
  * One pending event in the outbox plus the opaque id the implementation
  * needs to ack it via `markDispatched`. The library does not prescribe
@@ -157,9 +219,9 @@ export interface OnceOptions {
  * own `eventId`, generate its own UUID, use the row's auto-increment
  * primary key, or whatever the storage layer prefers.
  */
-export interface OutboxRecord<Evt extends AnyDomainEvent> {
+export interface OutboxRecord<Evt extends AnyDomainEvent>
+	extends CommittedDomainEvent<Evt> {
 	dispatchId: string;
-	event: Evt;
 
 	/**
 	 * Failed delivery attempts so far. Populated by implementations that
@@ -170,9 +232,9 @@ export interface OutboxRecord<Evt extends AnyDomainEvent> {
 }
 
 /** A record that exhausted its delivery attempts; see {@link DispatchTrackingOutbox.deadLetters}. */
-export interface DeadLetterRecord<Evt extends AnyDomainEvent> {
+export interface DeadLetterRecord<Evt extends AnyDomainEvent>
+	extends CommittedDomainEvent<Evt> {
 	dispatchId: string;
-	event: Evt;
 	/** Failed delivery attempts when the record was dead-lettered. */
 	attempts: number;
 	/** Human-readable rendering of the last delivery error, if recorded. */
@@ -195,17 +257,26 @@ export interface DeadLetterRecord<Evt extends AnyDomainEvent> {
  */
 export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	/**
-	 * Persists events. Called from inside `withCommit`'s transactional
-	 * callback, atomically with the aggregate write.
+	 * Finalizes and persists event commit candidates. Called from inside
+	 * `withCommit`'s transactional callback, atomically with the aggregate
+	 * write.
 	 *
-	 * **Idempotency:** implementations should dedupe on the event's
-	 * `eventId`. `withCommit` itself does not retry, but the surrounding
-	 * use case (a queue consumer, an HTTP retry, a transactional
-	 * outbox-dispatcher loop) may legitimately invoke the same write more
-	 * than once. A unique-key constraint on `(eventId)` in the outbox
-	 * table is the standard implementation.
+	 * For every qualified aggregate source, the adapter must serialize source
+	 * advancement, read its last eventful aggregate version, write that value as
+	 * `previousEventfulAggregateVersion` on every event in the candidate's
+	 * commit, and advance the source head to `aggregateVersion` in the SAME
+	 * transaction. A state-only aggregate save does not call `add()` and must
+	 * therefore not advance this event-source head.
+	 *
+	 * **Idempotency:** implementations should dedupe on
+	 * `candidate.event.eventId`. `withCommit` itself does not retry, but the
+	 * surrounding use case (a queue consumer, an HTTP retry, a transactional
+	 * outbox-dispatcher loop) may legitimately invoke the same write more than
+	 * once. A unique-key constraint on `(eventId)` in the outbox table is the
+	 * standard implementation; the source-head update and dedupe decision must
+	 * share the transaction.
 	 */
-	add: (events: ReadonlyArray<Evt>) => Promise<void>;
+	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
 }
 
 /**

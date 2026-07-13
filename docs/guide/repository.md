@@ -275,8 +275,8 @@ async save(order: Order): Promise<void> {
 }
 ```
 
-The event store saves the unstamped domain events. `withCommit` harvests the
-same pending events into the outbox as stamped copies. Do not clear
+The event store saves the bare domain events. `withCommit` composes the same
+pending events into committed outbox envelopes. Do not clear
 `pendingEvents` in the repository.
 
 Save once per aggregate per unit of work, after all mutations. A second save
@@ -404,7 +404,8 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   recordDeletion(reason: string, deletedAt: Date): void {
-    this.addDomainEvent(
+	this.commit(
+	  { ...this.state },
       this.recordEvent("OrderDeleted", { reason, deletedAt }),
     );
   }

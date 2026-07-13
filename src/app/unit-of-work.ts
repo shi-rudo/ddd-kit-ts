@@ -86,8 +86,8 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
  * failure (a commit-time serialization failure is the classic case), so
  * it is the one a retrying caller should consider re-running. The
  * deterministic post-completion failure, a harvest-guard violation (an
- * event missing `aggregateId` / `aggregateType`, or an `aggregateVersion`
- * ahead of the commit version), is a programming bug and surfaces as
+ * event missing `aggregateId` / `aggregateType`, or an eventful persisted
+ * aggregate that did not advance its version), is a programming bug and surfaces as
  * {@link EventHarvestError} instead, which does NOT extend
  * `InfrastructureError`, so it stays out of retry paths by construction.
  */
@@ -612,7 +612,7 @@ function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
  *   {@link RollbackError}.
  * - `workCompleted`: the callback finished; the failure is post-completion.
  *   A harvest-guard violation (an event missing aggregateId / aggregateType,
- *   or an aggregateVersion ahead of the commit version) is a deterministic
+ *   or an eventful persisted aggregate that did not advance its version) is a deterministic
  *   programming bug, surfaced as its {@link EventHarvestError} (which does
  *   NOT extend `InfrastructureError`, so a retry-on-Infrastructure handler
  *   skips it). It is thrown inside `scope.transactional()`, so a wrapping

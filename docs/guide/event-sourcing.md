@@ -196,16 +196,18 @@ That last step clears `pendingEvents` and aligns `persistedVersion`.
 ### Stream events and outbox events
 
 The event store receives the original pending events. The outbox receives
-copies harvested by `withCommit`.
+envelopes that reference those same immutable events.
 
-Those outbox copies may be stamped with `aggregateVersion` and
-`commitSequence`. The stream originals usually are not. That means a projection
-rebuilt from the event stream may see `aggregateVersion === undefined`, while a
-live projection fed from the outbox may see it populated.
+The outbox source finalizes those envelopes with the full cursor under `position`:
+`aggregateVersion`, `commitSequence`, `commitSize`, and
+`previousEventfulAggregateVersion`. The stream originals do not. State-only
+saves (where applicable outside the event stream) do not advance that eventful
+predecessor. A projection rebuilt from the event stream therefore composes each
+event with the store's own gap-proof stream source and position before calling
+`projector.project(...)`.
 
-Do not make projection logic depend on outbox-only stamps if the rebuild path
-reads from the event stream. In event-sourced systems, the event store's own
-stream position is the replay ordering authority.
+Projection handlers remain independent of cursor provenance. In event-sourced
+systems, the event store's own stream position is the replay ordering authority.
 
 ## The EventStore port
 

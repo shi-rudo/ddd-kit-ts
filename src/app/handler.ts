@@ -2,7 +2,11 @@ import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { EventBus, OutboxWriter } from "../events/ports";
+import type {
+	EventCommitCandidate,
+	EventBus,
+	OutboxWriter,
+} from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import { reportToObserver } from "../utils/observer";
@@ -92,20 +96,20 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
  *  2. **Still inside the transaction**, `withCommit` harvests every
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
- *     events were recorded. Each harvested event is stamped with
- *     `aggregateVersion` = the aggregate's commit version (onto a frozen
- *     copy; a pre-set value wins) - consumers get the OCC version the
- *     row was written with, for cross-commit ordering and debugging.
- *     All events of one commit share the stamp, so per-event dedup
- *     belongs on `eventId`, not on this value (see the outbox guide).
+	 *     events were recorded. Each bare domain event is composed into an
+	 *     `EventCommitCandidate` carrying its aggregate source and the commit
+	 *     facts known by the application. The outbox source atomically links
+	 *     that candidate to the preceding eventful commit and persists the
+	 *     resulting `CommittedDomainEvent`. The domain event itself is never
+	 *     stamped or copied.
  *
  *     **Harvest order.** Events are concatenated in the order
  *     aggregates appear in the returned `aggregates` array, then in
  *     each aggregate's `pendingEvents` order (insertion order via
  *     `apply` / `commit` / `addDomainEvent`). So `aggregates: [a, b]`
  *     with `a` emitting `[e1, e2]` and `b` emitting `[e3]` produces
- *     `outbox.add([e1, e2, e3])` and `bus.publish([e1, e2, e3])` in
- *     that exact order.
+ *     `outbox.add([envelope(e1), envelope(e2), envelope(e3)])` and
+ *     `bus.publish([e1, e2, e3])` in that exact order.
  *
  *     **Two ordering guarantees, not one.** Within a single aggregate
  *     the order is *causal*: events are recorded in the order the
@@ -158,11 +162,10 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
  * therefore desyncs OCC (next save throws a false
  * `ConcurrencyConflictError`); and under a partial-write repository
  * using `changedKeys`, an un-bumped mutation is silently marked clean
- * and never written. The `aggregateVersion` stamp widens the blast
- * radius further: harvested events would publicly claim a version the
- * committed row does not carry, poisoning every consumer's ordering
- * and idempotency watermarks: a cross-service inconsistency, not just
- * a local one. Mutate first, save last.
+ * and never written. The commit envelope widens the blast radius further:
+ * it would claim a position the committed row does not carry, poisoning
+ * every consumer's ordering and idempotency watermarks. Mutate first,
+ * save last.
  *
  * **Duplicate aggregates are deduped by reference.** If the returned
  * `aggregates` array contains the same instance twice (e.g. a use
@@ -230,86 +233,61 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						);
 					}
 				}
-				// Stamp each harvested event with its aggregate's COMMIT version
-				// (the value the OCC row write carries for saved aggregates).
-				// Events are deeply frozen at creation, so the stamp goes onto a
-				// frozen shallow copy - the aggregate's own pendingEvents stay
-				// untouched, and a manually pre-set aggregateVersion is never
-				// overwritten. The outbox and the bus receive the stamped copies.
-				// NOTE: the shallow copy assumes events are PLAIN DATA objects
-				// (the createDomainEvent / recordEvent contract); class-based
-				// event objects with prototype members are unsupported.
-				const harvested = uniqueAggregates.flatMap((agg) =>
-					agg.pendingEvents.map((event, index) => {
-						// Pre-set values win (replay fixtures, backfills) - but a
-						// pre-set aggregateVersion AHEAD of the commit version is
-						// always a leaked fixture or copied options object, and
-						// consumers key idempotency watermarks on this number:
-						// fail fast, same posture as the aggregateId/aggregateType
-						// guard below.
-						if (
-							event.aggregateVersion !== undefined &&
-							event.aggregateVersion > (agg.version as number)
-						) {
+				// Prepare each bare domain event for source finalization in the outbox.
+				// The aggregate's event remains untouched and is what the in-process
+				// domain bus receives.
+				const candidates = uniqueAggregates.flatMap((agg) => {
+					if (
+						agg.pendingEvents.length > 0 &&
+						agg.persistedVersion !== undefined &&
+						(agg.version as number) <= (agg.persistedVersion as number)
+					) {
+						throw new EventHarvestError(
+							`withCommit: aggregate ${String(agg.id)} recorded events but ` +
+								`did not advance its version beyond persistedVersion ` +
+								`(${agg.persistedVersion}). An eventful commit needs a unique ` +
+								`cursor; use AggregateRoot.commit(currentState, event) instead ` +
+								`of addDomainEvent(event) alone.`,
+						);
+					}
+					return agg.pendingEvents.map((event, index) => {
+						const commitSize = agg.pendingEvents.length;
+						const aggregateId = event.aggregateId;
+						const aggregateType = event.aggregateType;
+						const missing: string[] = [];
+						if (!aggregateId) missing.push("aggregateId");
+						if (!aggregateType) missing.push("aggregateType");
+						if (!aggregateId || !aggregateType) {
 							throw new EventHarvestError(
-								`withCommit: event "${event.type}" carries a pre-set ` +
-									`aggregateVersion (${event.aggregateVersion}) AHEAD of its ` +
-									`aggregate's commit version (${agg.version}). A stale-or-` +
-									`copied pre-set would advance consumer idempotency ` +
-									`watermarks past real history; remove the manual ` +
-									`aggregateVersion or correct it.`,
+								`withCommit: event "${event.type}" is missing ${missing.join(
+									" and ",
+								)}. ` +
+									`Use this.recordEvent(type, payload) inside aggregate methods ` +
+									`instead of createDomainEvent(...); recordEvent auto-injects ` +
+									`aggregateId and aggregateType. Outbox dispatchers and ` +
+									`projection handlers rely on the envelope source.`,
 								event.type,
 							);
 						}
-						// Stamp the commit version AND the zero-based harvest
-						// index: the pair (aggregateVersion, commitSequence) is a
-						// total order per aggregate and a compact consumer
-						// watermark (all events of one commit share the version).
-						const needsVersion = event.aggregateVersion === undefined;
-						const needsSequence = event.commitSequence === undefined;
-						if (!needsVersion && !needsSequence) return event;
 						return Object.freeze({
-							...event,
-							aggregateVersion: needsVersion
-								? (agg.version as number)
-								: event.aggregateVersion,
-							commitSequence: needsSequence ? index : event.commitSequence,
-						}) as Evt;
-					}),
-				);
-				// Guard: every event harvested from an aggregate MUST carry
-				// aggregateId + aggregateType. Downstream consumers (outbox
-				// dispatchers, projection handlers, audit logs) route by these
-				// fields; missing them silently breaks routing. The
-				// `this.recordEvent(...)` helper on AggregateRoot /
-				// EventSourcedAggregate injects them automatically; this guard
-				// catches the case where someone called `createDomainEvent(...)`
-				// directly inside an aggregate method and forgot the options.
-				for (const event of harvested) {
-					const missing: string[] = [];
-					if (!event.aggregateId) missing.push("aggregateId");
-					if (!event.aggregateType) missing.push("aggregateType");
-					if (missing.length > 0) {
-						throw new EventHarvestError(
-							`withCommit: event "${event.type}" is missing ${missing.join(
-								" and ",
-							)}. ` +
-								`Use this.recordEvent(type, payload) inside aggregate methods ` +
-								`instead of createDomainEvent(...); recordEvent auto-injects ` +
-								`aggregateId and aggregateType. Outbox dispatchers and ` +
-								`projection handlers rely on these fields for routing.`,
-							event.type,
-						);
-					}
-				}
-				if (harvested.length > 0) {
-					await deps.outbox.add(harvested);
+							event,
+							source: Object.freeze({ aggregateId, aggregateType }),
+							position: Object.freeze({
+								aggregateVersion: agg.version as number,
+								commitSequence: index,
+								commitSize,
+							}),
+						}) as EventCommitCandidate<Evt>;
+					});
+				});
+				if (candidates.length > 0) {
+					await deps.outbox.add(candidates);
 				}
 				return {
 					...fnResult,
 					aggregates: uniqueAggregates,
 					deleted: new Set(fnResult.deleted ?? []),
-					events: harvested,
+					events: candidates.map(({ event }) => event),
 				};
 			},
 			{ signal: deps.signal },

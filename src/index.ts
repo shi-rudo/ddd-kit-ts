@@ -99,10 +99,14 @@ export {
 	IdempotencyKeyReuseError,
 	type IdempotencyKeyReuseErrorOptions,
 	InfrastructureError,
+	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	type KitErrorOptions,
 	MisaddressedEventError,
 	MissingHandlerError,
+	ProjectionGapError,
+	ProjectionIdentityViolationError,
+	ProjectionOrderViolationError,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
@@ -180,6 +184,18 @@ export {
 // Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./events/event-bus";
 export {
+	createIntegrationMessage,
+	decodeIntegrationMessage,
+	encodeIntegrationMessage,
+	type IntegrationMessage,
+	type IntegrationMessageContent,
+	type IntegrationMessageMapper,
+	integrationMessageToCommittedEvent,
+	type JsonObject,
+	type JsonPrimitive,
+	type JsonValue,
+} from "./events/integration-message";
+export {
 	InMemoryOutbox,
 	type InMemoryOutboxOptions,
 	outboxWriterAcceptingEventLoss,
@@ -191,9 +207,14 @@ export {
 	type OutboxSink,
 } from "./events/outbox-dispatcher";
 export type {
+	AggregateEventSource,
+	CommitPosition,
+	CommittedDomainEvent,
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	EventBus,
+	EventCommitCandidate,
+	EventCommitCandidatePosition,
 	EventHandler,
 	OnceOptions,
 	Outbox,
@@ -207,6 +228,7 @@ export {
 	type AggregateAddress,
 	isPositionAfter,
 	type Projection,
+	type ProjectionCheckpoint,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./projections/ports";

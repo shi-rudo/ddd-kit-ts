@@ -187,12 +187,12 @@ export abstract class AggregateRoot<
 	 * commit, desyncing `persistedVersion` from the DB row; and the next
 	 * uncontended save would throw a false `ConcurrencyConflictError`.
 	 *
-	 * The pending-events clause covers the sanctioned decoupled
-	 * `addDomainEvent` path (an event recorded without a state change,
-	 * e.g. a deletion event before a hard delete): the aggregate still
-	 * needs its trip through `withCommit` so the event reaches the
-	 * outbox. With all clauses included, `hasChanges === false` genuinely
-	 * means "skipping save is safe".
+	 * The pending-events clause also catches direct `addDomainEvent`
+	 * usage. `withCommit` rejects an eventful, already-persisted aggregate
+	 * whose version did not advance (the commit cursor would collide), but
+	 * `hasChanges` must still route that misuse through the harvest guard
+	 * instead of silently skipping it. With all clauses included,
+	 * `hasChanges === false` genuinely means "skipping save is safe".
 	 */
 	public get hasChanges(): boolean {
 		if (!this._hasBaseline) return true;
