@@ -2,6 +2,7 @@ import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError } from "../core/errors";
 import { assertPositiveInteger } from "../utils/validate";
 import type {
+	AggregateEventSource,
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	EventCommitCandidate,
@@ -50,9 +51,10 @@ export interface InMemoryOutboxOptions {
 	maxDeliveryAttempts?: number;
 
 	/**
-	 * Maximum recently dispatched event ids retained for idempotent `add`
-	 * retries. Older receipts are evicted in dispatch order; a later candidate
-	 * behind its source head then rejects instead of rewinding the cursor.
+	 * Maximum recently dispatched event identities (id plus source) retained for
+	 * idempotent `add` retries and cross-source collision detection. Older
+	 * receipts are evicted in dispatch order; a later candidate behind its source
+	 * head then rejects instead of rewinding the cursor.
 	 * Default `10_000`.
 	 */
 	maxRetainedDispatchedEventIds?: number;
@@ -81,7 +83,10 @@ type EventSourceCursor = {
  * choice. Active storage is a `Map` keyed by `eventId`, and a bounded
  * recent-dispatch receipt cache keeps retries idempotent after acknowledgement.
  * Re-adding a pending event refreshes the stored commit envelope while the
- * delivery attempt count survives. Insertion order is preserved:
+ * delivery attempt count survives. A retry is only idempotent when its
+ * qualified aggregate source matches: reusing an `eventId` for another source
+ * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
+ * dispatched receipt still proves the collision. Insertion order is preserved:
  * `getPending` returns records in commit order, as the port contract
  * requires.
  *
@@ -137,7 +142,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
 	/** Bounded insertion-ordered receipts for retries after acknowledgement. */
-	private readonly dispatchedEventIds = new Map<string, true>();
+	private readonly dispatchedEventIds = new Map<string, AggregateEventSource>();
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 
@@ -157,15 +162,21 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
 		for (const message of events) {
 			const { event, source, position } = message;
-			if (this.dispatchedEventIds.has(event.eventId)) {
+			const dispatchedSource = this.dispatchedEventIds.get(event.eventId);
+			if (dispatchedSource !== undefined) {
+				assertSameEventSource(event, source, dispatchedSource);
 				// eventId is the outbox idempotency key. Refresh its LRU position
 				// without recreating a pending record or touching the source head.
-				this.rememberDispatched(event.eventId);
+				this.rememberDispatched(event.eventId, dispatchedSource);
 				continue;
 			}
 			const existing = this.pending.get(event.eventId);
 			const deadLetter = this.dead.get(event.eventId);
+			if (existing !== undefined) {
+				assertSameEventSource(event, source, existing.source);
+			}
 			if (deadLetter) {
+				assertSameEventSource(event, source, deadLetter.source);
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
@@ -184,19 +195,19 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				source.aggregateId,
 			]);
 			const sourceCursor = this.sourceCursors.get(sourceKey);
-			const existingMatchesSource =
+			let staleHeadVersion: number | undefined;
+			if (
 				existing !== undefined &&
-				existing.source.aggregateType === source.aggregateType &&
-				existing.source.aggregateId === source.aggregateId;
-			const staleHeadVersion =
-				existingMatchesSource &&
 				position.aggregateVersion < existing.position.aggregateVersion
-					? existing.position.aggregateVersion
-					: existing === undefined &&
-						sourceCursor !== undefined &&
-						position.aggregateVersion < sourceCursor.aggregateVersion
-						? sourceCursor.aggregateVersion
-						: undefined;
+			) {
+				staleHeadVersion = existing.position.aggregateVersion;
+			} else if (
+				existing === undefined &&
+				sourceCursor !== undefined &&
+				position.aggregateVersion < sourceCursor.aggregateVersion
+			) {
+				staleHeadVersion = sourceCursor.aggregateVersion;
+			}
 			if (staleHeadVersion !== undefined) {
 				throw new EventHarvestError(
 					`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
@@ -210,7 +221,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			}
 			let previousEventfulAggregateVersion: number | null;
 			const refreshesLeakedCommit =
-				existingMatchesSource &&
+				existing !== undefined &&
 				existing.position.aggregateVersion !== position.aggregateVersion;
 			if (refreshesLeakedCommit) {
 				// InMemoryOutbox cannot observe transaction rollback. A pending
@@ -227,16 +238,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 						previousEventfulAggregateVersion,
 					});
 				}
-			} else if (
-				existingMatchesSource
-			) {
+			} else if (existing !== undefined) {
 				previousEventfulAggregateVersion =
 					existing.position.previousEventfulAggregateVersion;
 			} else if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
 				previousEventfulAggregateVersion =
 					sourceCursor.previousEventfulAggregateVersion;
 			} else {
-				previousEventfulAggregateVersion = sourceCursor?.aggregateVersion ?? null;
+				previousEventfulAggregateVersion =
+					sourceCursor?.aggregateVersion ?? null;
 				this.sourceCursors.set(sourceKey, {
 					aggregateVersion: position.aggregateVersion,
 					previousEventfulAggregateVersion,
@@ -298,8 +308,9 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 
 	async markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void> {
 		for (const id of dispatchIds) {
-			if (this.pending.has(id) || this.dead.has(id)) {
-				this.rememberDispatched(id);
+			const record = this.pending.get(id) ?? this.dead.get(id);
+			if (record !== undefined) {
+				this.rememberDispatched(id, record.source);
 			}
 			this.pending.delete(id);
 			// Manual redelivery then ack: dispatching a dead-lettered record
@@ -308,12 +319,13 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	private rememberDispatched(eventId: string): void {
+	private rememberDispatched(
+		eventId: string,
+		source: AggregateEventSource,
+	): void {
 		this.dispatchedEventIds.delete(eventId);
-		this.dispatchedEventIds.set(eventId, true);
-		while (
-			this.dispatchedEventIds.size > this.maxRetainedDispatchedEventIds
-		) {
+		this.dispatchedEventIds.set(eventId, source);
+		while (this.dispatchedEventIds.size > this.maxRetainedDispatchedEventIds) {
 			const oldest = this.dispatchedEventIds.keys().next();
 			if (oldest.done) break;
 			this.dispatchedEventIds.delete(oldest.value);
@@ -344,4 +356,24 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	async deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>> {
 		return [...this.dead.values()].map((record) => ({ ...record }));
 	}
+}
+
+function assertSameEventSource(
+	event: AnyDomainEvent,
+	received: AggregateEventSource,
+	recorded: AggregateEventSource,
+): void {
+	if (
+		received.aggregateType === recorded.aggregateType &&
+		received.aggregateId === recorded.aggregateId
+	) {
+		return;
+	}
+	throw new EventHarvestError(
+		`InMemoryOutbox rejected eventId collision for "${event.eventId}": ` +
+			`it already belongs to ${recorded.aggregateType} ${recorded.aggregateId}, ` +
+			`but was received for ${received.aggregateType} ${received.aggregateId}. ` +
+			"An eventId must identify one immutable event across all aggregate sources.",
+		event.type,
+	);
 }

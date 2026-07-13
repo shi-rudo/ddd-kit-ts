@@ -175,7 +175,9 @@ id should be a no-op. This lets the dispatcher recover from partial failures
 without turning duplicates into crashes.
 
 `add()` should dedupe on `eventId`. The usual implementation is a unique
-constraint plus an idempotent insert, not a unique-constraint exception:
+constraint plus an idempotent insert, not a unique-constraint exception. The
+table therefore needs the event identity and qualified source as routing
+columns:
 
 ```sql
 create table outbox (
@@ -200,6 +202,13 @@ create table event_source_head (
   primary key (aggregate_type, aggregate_id)
 );
 ```
+
+That idempotency rule assumes the ID still addresses the same qualified
+aggregate source. The same `eventId` arriving for another `aggregateType` or
+`aggregateId` is a caller bug, not a redelivery. Do not overwrite the existing
+row. Where the retained row makes the mismatch provable, compare its source and
+reject loudly; a bare `ON CONFLICT DO NOTHING` prevents duplicate rows but
+cannot diagnose this collision without reading the conflicting row.
 
 Persist routing columns, not only the JSON payload. `withCommit` composes every
 bare domain event into an `EventCommitCandidate`; the outbox source finalizes

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent } from "../aggregate/domain-event";
 import { InvalidIntegrationMessageError } from "../core/errors";
-import type { CommittedDomainEvent } from "./ports";
 import {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
 	encodeIntegrationMessage,
 	integrationMessageToCommittedEvent,
 } from "./integration-message";
+import type { CommittedDomainEvent } from "./ports";
 
 describe("integration message codec", () => {
 	const validWireMessage = () => ({
@@ -62,9 +62,7 @@ describe("integration message codec", () => {
 			},
 			metadata: { correlationId: "corr-1" },
 		}));
-		const decoded = decodeIntegrationMessage(
-			encodeIntegrationMessage(message),
-		);
+		const decoded = decodeIntegrationMessage(encodeIntegrationMessage(message));
 		const projected = integrationMessageToCommittedEvent(decoded);
 
 		expect(decoded).toEqual({
@@ -105,6 +103,53 @@ describe("integration message codec", () => {
 		expect(committed.position.aggregateVersion).toBe(1);
 		expect(Object.isFrozen(committed.source)).toBe(true);
 		expect(Object.isFrozen(committed.position)).toBe(true);
+	});
+
+	it.each([
+		[
+			"UTC without fractional seconds",
+			"2026-07-13T09:00:00Z",
+			"2026-07-13T09:00:00.000Z",
+		],
+		[
+			"one fractional digit",
+			"2026-07-13T09:00:00.1Z",
+			"2026-07-13T09:00:00.100Z",
+		],
+		[
+			"a numeric UTC offset",
+			"2026-07-13T09:00:00+00:00",
+			"2026-07-13T09:00:00.000Z",
+		],
+		[
+			"a positive offset",
+			"2026-07-13T11:30:00+02:30",
+			"2026-07-13T09:00:00.000Z",
+		],
+		[
+			"a negative offset",
+			"2026-07-13T04:00:00-05:00",
+			"2026-07-13T09:00:00.000Z",
+		],
+	] as const)(
+		"accepts %s from the wire and normalizes it to canonical UTC",
+		(_label, occurredAt, canonical) => {
+			const decoded = decodeIntegrationMessage(
+				JSON.stringify({ ...validWireMessage(), occurredAt }),
+			);
+
+			expect(decoded.occurredAt).toBe(canonical);
+			expect(Object.isFrozen(decoded)).toBe(true);
+		},
+	);
+
+	it("keeps encoder output restricted to canonical UTC timestamps", () => {
+		expect(() =>
+			encodeIntegrationMessage({
+				...validWireMessage(),
+				occurredAt: "2026-07-13T09:00:00Z",
+			}),
+		).toThrow(InvalidIntegrationMessageError);
 	});
 
 	it.each([
@@ -186,8 +231,29 @@ describe("integration message codec", () => {
 			},
 		],
 		[
-			"a non-canonical timestamp",
+			"a locale timestamp",
 			() => ({ ...validWireMessage(), occurredAt: "13.07.2026" }),
+		],
+		[
+			"a local timestamp without an offset",
+			() => ({
+				...validWireMessage(),
+				occurredAt: "2026-07-13T09:00:00",
+			}),
+		],
+		[
+			"an impossible calendar date",
+			() => ({
+				...validWireMessage(),
+				occurredAt: "2026-02-29T09:00:00Z",
+			}),
+		],
+		[
+			"precision finer than milliseconds",
+			() => ({
+				...validWireMessage(),
+				occurredAt: "2026-07-13T09:00:00.0001Z",
+			}),
 		],
 		["an empty message id", () => ({ ...validWireMessage(), messageId: "" })],
 		[
@@ -212,8 +278,8 @@ describe("integration message codec", () => {
 			}),
 		],
 	] as const)("rejects %s from an untrusted wire body", (_label, message) => {
-		expect(() =>
-			decodeIntegrationMessage(JSON.stringify(message())),
-		).toThrow(InvalidIntegrationMessageError);
+		expect(() => decodeIntegrationMessage(JSON.stringify(message()))).toThrow(
+			InvalidIntegrationMessageError,
+		);
 	});
 });

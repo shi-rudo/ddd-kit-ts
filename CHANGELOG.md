@@ -362,6 +362,13 @@ candidate behind the source head throws `EventHarvestError` while leaving the
 head untouched. Durable adapters still provide unbounded idempotency with a
 transactional `eventId` unique key.
 
+An `eventId` retry is now idempotent only for the same qualified aggregate
+source. `InMemoryOutbox` rejects a different `aggregateType` / `aggregateId`
+with `EventHarvestError` before changing pending, dead-letter, receipt, or
+source-cursor state. Its bounded dispatched receipts retain the original source
+so the same check remains available after acknowledgement until receipt
+eviction.
+
 `DomainEvent` and `CreateDomainEventOptions` no longer expose commit cursor
 fields. `OutboxWriter.add` accepts `EventCommitCandidate` values and finalizes
 the predecessor in durable source state; `OutboxRecord` exposes the committed
@@ -957,8 +964,11 @@ and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
   internal `DomainEvent` and `CommittedDomainEvent` values.
   `createIntegrationMessage` requires an application-owned mapping;
   `encodeIntegrationMessage` and `decodeIntegrationMessage` validate the full
-  graph and cursor; `integrationMessageToCommittedEvent` adapts a validated
-  public message to a projector input. Raw `Date`, `Map`, `Set`, cycles,
+  graph and cursor. The decoder accepts explicit-offset RFC 3339 timestamps up
+  to millisecond precision and normalizes them to canonical UTC `.sssZ`, while
+  the producer-side codec remains canonical-only;
+  `integrationMessageToCommittedEvent` adapts a validated public message to a
+  projector input. Raw `Date`, `Map`, `Set`, cycles,
   non-finite numbers, sparse arrays, and properties JSON would discard reject
   as `InvalidIntegrationMessageError` instead of being silently corrupted;
   hostile own `__proto__` keys reject before downstream copy operations can

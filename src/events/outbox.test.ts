@@ -60,6 +60,80 @@ describe("InMemoryOutbox", () => {
 		expect(record?.position.aggregateVersion).toBe(4);
 	});
 
+	describe("eventId collisions across aggregate sources", () => {
+		const eventFor = (
+			eventId: string,
+			aggregateType: string,
+			aggregateId: string,
+		) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: aggregateId },
+				{ eventId, aggregateType, aggregateId },
+			);
+
+		it("rejects a pending collision without replacing the record or advancing the foreign source", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const original = eventFor("evt-collision", "Order", "o-1");
+			const collision = eventFor("evt-collision", "Invoice", "i-1");
+			await outbox.add([candidate(original, 1)]);
+
+			await expect(
+				outbox.add([candidate(collision, 1)]),
+			).rejects.toBeInstanceOf(EventHarvestError);
+
+			const foreignNext = eventFor("evt-invoice-next", "Invoice", "i-1");
+			await outbox.add([candidate(foreignNext, 2)]);
+			const pending = await outbox.getPending();
+			expect(pending).toHaveLength(2);
+			expect(pending[0]).toMatchObject({
+				event: original,
+				source: { aggregateType: "Order", aggregateId: "o-1" },
+			});
+			expect(pending[1]).toMatchObject({
+				event: foreignNext,
+				source: { aggregateType: "Invoice", aggregateId: "i-1" },
+				position: { previousEventfulAggregateVersion: null },
+			});
+		});
+
+		it("rejects a dead-letter collision without requeueing the recorded event", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const original = eventFor("evt-collision", "Order", "o-1");
+			const collision = eventFor("evt-collision", "Invoice", "i-1");
+			await outbox.add([candidate(original)]);
+			await outbox.markFailed(original.eventId, new Error("poison"));
+
+			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
+				EventHarvestError,
+			);
+
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toMatchObject([
+				{
+					event: original,
+					source: { aggregateType: "Order", aggregateId: "o-1" },
+				},
+			]);
+		});
+
+		it("rejects a collision covered by a retained dispatched receipt", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const original = eventFor("evt-collision", "Order", "o-1");
+			const collision = eventFor("evt-collision", "Invoice", "i-1");
+			await outbox.add([candidate(original)]);
+			await outbox.markDispatched([original.eventId]);
+
+			await expect(outbox.add([candidate(collision)])).rejects.toBeInstanceOf(
+				EventHarvestError,
+			);
+
+			expect(await outbox.getPending()).toEqual([]);
+		});
+	});
+
 	it("derives the predecessor from the last eventful source commit, not the aggregate OCC baseline", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const first = createDomainEvent(
@@ -395,9 +469,7 @@ describe("InMemoryOutbox", () => {
 			// The v3 envelope leaked from a transaction that rolled back. A
 			// refresh of that same eventId replaces the uncommitted position;
 			// it must not turn the leaked v3 into a durable predecessor.
-			expect(
-				pending[0]?.position.previousEventfulAggregateVersion,
-			).toBeNull();
+			expect(pending[0]?.position.previousEventfulAggregateVersion).toBeNull();
 			expect(pending[0]?.attempts).toBe(1);
 		});
 

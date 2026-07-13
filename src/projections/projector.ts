@@ -304,10 +304,7 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 					skipped += 1;
 					continue;
 				}
-				if (
-					isGapAwarePosition(position) &&
-					!isContiguousPosition(position, watermark)
-				) {
+				if (!isContiguousPosition(position, watermark)) {
 					throw new ProjectionGapError(
 						this.projection.name,
 						event.eventId,

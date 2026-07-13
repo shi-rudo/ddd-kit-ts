@@ -89,10 +89,15 @@ export function encodeIntegrationMessage(message: IntegrationMessage): string {
 	return JSON.stringify(message);
 }
 
-/** Parses, validates, defensively copies, and deeply freezes a broker body. */
-export function decodeIntegrationMessage(serialized: string): IntegrationMessage {
+/**
+ * Parses and validates a broker body, normalizes supported RFC 3339 timestamps
+ * to canonical UTC milliseconds, then defensively copies and deeply freezes it.
+ */
+export function decodeIntegrationMessage(
+	serialized: string,
+): IntegrationMessage {
 	try {
-		return stabilizeIntegrationMessage(JSON.parse(serialized));
+		return stabilizeIntegrationMessage(JSON.parse(serialized), "wire");
 	} catch (error) {
 		if (error instanceof InvalidIntegrationMessageError) throw error;
 		throw new InvalidIntegrationMessageError(
@@ -130,13 +135,21 @@ export function integrationMessageToCommittedEvent<
 	};
 }
 
-function stabilizeIntegrationMessage<T>(value: T): T {
-	assertIntegrationMessage(value);
-	return deepFreeze(JSON.parse(JSON.stringify(value))) as T;
+function stabilizeIntegrationMessage<T>(
+	value: T,
+	timestampFormat: "canonical" | "wire" = "canonical",
+): T {
+	assertIntegrationMessage(value, timestampFormat);
+	const copy = JSON.parse(JSON.stringify(value));
+	if (timestampFormat === "wire") {
+		copy.occurredAt = normalizeWireTimestamp(copy.occurredAt);
+	}
+	return deepFreeze(copy) as T;
 }
 
 function assertIntegrationMessage(
 	value: unknown,
+	timestampFormat: "canonical" | "wire" = "canonical",
 ): asserts value is IntegrationMessage {
 	assertJsonValue(value, "$");
 	if (!isJsonObject(value)) {
@@ -149,16 +162,24 @@ function assertIntegrationMessage(
 		invalid("$.type", "must be a non-empty string");
 	}
 	const version = value.version;
-	if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+	if (
+		typeof version !== "number" ||
+		!Number.isInteger(version) ||
+		version < 1
+	) {
 		invalid("$.version", "must be an integer >= 1");
 	}
 	if (
 		typeof value.occurredAt !== "string" ||
-		!isCanonicalIsoTimestamp(value.occurredAt)
+		(timestampFormat === "canonical"
+			? !isCanonicalIsoTimestamp(value.occurredAt)
+			: normalizeWireTimestamp(value.occurredAt) === undefined)
 	) {
 		invalid(
 			"$.occurredAt",
-			"must be a canonical UTC ISO-8601 timestamp",
+			timestampFormat === "canonical"
+				? "must be a canonical UTC ISO-8601 timestamp"
+				: "must be an RFC 3339 timestamp with an explicit offset and at most millisecond precision",
 		);
 	}
 	if (!Object.hasOwn(value, "payload")) {
@@ -244,7 +265,59 @@ function isJsonObject(value: unknown): value is JsonObject {
 
 function isCanonicalIsoTimestamp(value: string): boolean {
 	const timestamp = new Date(value);
-	return !Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value;
+	return (
+		!Number.isNaN(timestamp.getTime()) && timestamp.toISOString() === value
+	);
+}
+
+const WIRE_TIMESTAMP =
+	/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-](\d{2}):(\d{2}))$/;
+
+function normalizeWireTimestamp(value: string): string | undefined {
+	const match = WIRE_TIMESTAMP.exec(value);
+	if (match === null) return undefined;
+
+	const [
+		,
+		year,
+		month,
+		day,
+		hour,
+		minute,
+		second,
+		,
+		,
+		offsetHour,
+		offsetMinute,
+	] = match;
+	const numericYear = Number(year);
+	const numericMonth = Number(month);
+	const numericDay = Number(day);
+	if (
+		numericMonth < 1 ||
+		numericMonth > 12 ||
+		numericDay < 1 ||
+		numericDay > daysInMonth(numericYear, numericMonth) ||
+		Number(hour) > 23 ||
+		Number(minute) > 59 ||
+		Number(second) > 59 ||
+		(offsetHour !== undefined && Number(offsetHour) > 23) ||
+		(offsetMinute !== undefined && Number(offsetMinute) > 59)
+	) {
+		return undefined;
+	}
+
+	const timestamp = new Date(value);
+	return Number.isNaN(timestamp.getTime())
+		? undefined
+		: timestamp.toISOString();
+}
+
+function daysInMonth(year: number, month: number): number {
+	if (month === 2) {
+		return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28;
+	}
+	return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
 }
 
 function invalid(path: string, reason: string): never {

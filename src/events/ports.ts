@@ -274,7 +274,11 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * outbox-dispatcher loop) may legitimately invoke the same write more than
 	 * once. A unique-key constraint on `(eventId)` in the outbox table is the
 	 * standard implementation; the source-head update and dedupe decision must
-	 * share the transaction.
+	 * share the transaction. Idempotency applies only when that id still names
+	 * the same qualified aggregate source. Reusing an `eventId` for another
+	 * `aggregateType` / `aggregateId` is a caller bug: adapters that retain the
+	 * conflicting record should reject it rather than replace or silently
+	 * reinterpret it as a retry.
 	 */
 	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
 }

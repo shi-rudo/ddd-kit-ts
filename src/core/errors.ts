@@ -449,21 +449,23 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 }
 
 /**
- * Thrown by `withCommit` when an event harvested from an aggregate cannot
- * be safely composed into a commit envelope: it is missing
- * `aggregateId` / `aggregateType` (downstream routing would break), or an
+ * Thrown when an event harvested from an aggregate cannot be safely composed
+ * into a commit envelope, or when an outbox can prove that accepting a
+ * candidate would violate its event identity/source chain. Harvest failures
+ * include missing `aggregateId` / `aggregateType` (downstream routing would
+ * break), or an
  * eventful persisted aggregate did not advance its version (two commits
  * would receive the same source position). These programming bugs are
  * deterministic and fail identically on every retry.
  *
  * Deliberately **not** an {@link InfrastructureError} (same reasoning as
- * {@link MissingHandlerError}): the failure happens after the work
- * callback completed, but it is NOT transient. A `catch (e instanceof
- * InfrastructureError)` retry handler, or a retrying `TransactionScope`,
- * must NOT mask it or loop on it forever; it should crash loud so the
- * recordEvent / createDomainEvent misuse surfaces in development. This is
- * why `withCommit` throws it directly and `UnitOfWork.run` passes it
- * through unchanged instead of wrapping it in `CommitError`.
+ * {@link MissingHandlerError}): this is a deterministic programming error,
+ * not a transient storage failure. A `catch (e instanceof InfrastructureError)`
+ * retry handler, or a retrying `TransactionScope`, must NOT mask it or loop on
+ * it forever; it should crash loud so the caller misuse surfaces in
+ * development. This is why `withCommit` throws it directly and
+ * `UnitOfWork.run` passes it through unchanged instead of wrapping it in
+ * `CommitError`.
  */
 export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 	constructor(
@@ -976,8 +978,8 @@ export type KitErrorCode =
 	| "SNAPSHOT_SCHEMA_MISMATCH"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
+	| "UNKNOWN_CURRENCY"
 	| "UNMINTED_EVENT"
 	| "UNPROJECTABLE_EVENT"
-	| "UNKNOWN_CURRENCY"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

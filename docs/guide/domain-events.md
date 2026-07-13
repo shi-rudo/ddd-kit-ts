@@ -318,8 +318,10 @@ metadata. `encodeIntegrationMessage` validates the whole graph and rejects
 special values, cycles, sparse arrays, non-finite numbers, and properties JSON
 would discard. It also rejects hostile own `__proto__` keys before downstream
 copy operations can activate them. `decodeIntegrationMessage` performs the
-same validation on an untrusted broker body and returns a deeply frozen
-message.
+same validation on an untrusted broker body. It accepts RFC 3339 timestamps
+with an explicit offset and up to millisecond precision, normalizes them to
+canonical UTC `.sssZ`, and returns a deeply frozen message. The producer-side
+codec continues to emit and require that canonical representation.
 
 The wire envelope retains `messageId`, an ISO `occurredAt`, the qualified
 aggregate source, and the complete commit position. Consumers that feed the
