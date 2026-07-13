@@ -1,15 +1,14 @@
+import {
+	type AggregateAddress,
+	encodeAggregateAddress,
+} from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { ConcurrencyConflictError } from "../core/errors";
 import type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
-	StreamKey,
 } from "./event-store";
-
-function encodeStreamKey(stream: StreamKey): string {
-	return JSON.stringify([stream.aggregateType, stream.aggregateId]);
-}
 
 /**
  * In-memory reference implementation of `EventStore<Evt>`.
@@ -36,12 +35,12 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 	private readonly streams = new Map<string, Evt[]>();
 
 	async append(
-		stream: StreamKey,
+		stream: AggregateAddress,
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void> {
 		if (events.length === 0) return;
-		const key = encodeStreamKey(stream);
+		const key = encodeAggregateAddress(stream);
 		const existing = this.streams.get(key);
 		if ((existing?.length ?? 0) !== options.expectedVersion) {
 			throw new ConcurrencyConflictError({
@@ -69,10 +68,10 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 	}
 
 	async readStream(
-		stream: StreamKey,
+		stream: AggregateAddress,
 		options?: ReadStreamOptions,
 	): Promise<ReadonlyArray<Evt>> {
-		const events = this.streams.get(encodeStreamKey(stream)) ?? [];
+		const events = this.streams.get(encodeAggregateAddress(stream)) ?? [];
 		const fromVersion = options?.fromVersion ?? 0;
 		// slice() always copies: callers never see the internal array.
 		return events.slice(Math.max(0, fromVersion));

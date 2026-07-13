@@ -154,8 +154,8 @@ transaction commits.
 
 ```ts
 import type {
+  AggregateAddress,
   EventStore,
-  StreamKey,
   UnitOfWorkSession,
 } from "@shirudo/ddd-kit";
 
@@ -165,7 +165,7 @@ class OrderRepository {
     private readonly session: UnitOfWorkSession<OrderEvent>,
   ) {}
 
-  private stream(id: OrderId): StreamKey<OrderId> {
+  private stream(id: OrderId): AggregateAddress<OrderId> {
     return { aggregateType: "Order", aggregateId: id };
   }
 
@@ -221,13 +221,13 @@ The kit defines a small driven port for stream persistence:
 ```ts
 interface EventStore<Evt extends AnyDomainEvent> {
   append(
-    stream: StreamKey,
+    stream: AggregateAddress,
     events: readonly Evt[],
     options: { expectedVersion: number },
   ): Promise<void>;
 
   readStream(
-    stream: StreamKey,
+    stream: AggregateAddress,
     options?: { fromVersion?: number },
   ): Promise<readonly Evt[]>;
 }
@@ -374,13 +374,14 @@ latency. The snapshot path is:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const snapshot = await snapshots.load("Order", id);
+  const address = { aggregateType: "Order", aggregateId: id };
+  const snapshot = await snapshots.load(address);
   if (snapshot === undefined) {
     return replayFromZero(id);
   }
 
   const tail = await eventStore.readStream(
-    { aggregateType: "Order", aggregateId: id },
+    address,
     { fromVersion: snapshot.version },
   );
 
@@ -391,12 +392,12 @@ async function findById(id: OrderId): Promise<Order | null> {
 
     if (result.isErr()) {
       const refolded = await replayFromZero(id);
-      await snapshots.delete("Order", id);
+      await snapshots.delete(address);
       return refolded;
     }
   } catch (error) {
     if (error instanceof SnapshotSchemaMismatchError) {
-      await snapshots.delete("Order", id);
+      await snapshots.delete(address);
       return replayFromZero(id);
     }
 
@@ -427,17 +428,15 @@ just replays from zero.
 ```ts
 interface SnapshotStore<TState = unknown> {
   load(
-    aggregateType: string,
-    aggregateId: Id<string>,
+    address: AggregateAddress,
   ): Promise<AggregateSnapshot<TState> | undefined>;
 
   save(
-    aggregateType: string,
-    aggregateId: Id<string>,
+    address: AggregateAddress,
     snapshot: AggregateSnapshot<TState>,
   ): Promise<void>;
 
-  delete(aggregateType: string, aggregateId: Id<string>): Promise<void>;
+  delete(address: AggregateAddress): Promise<void>;
 }
 ```
 
@@ -537,7 +536,10 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 
   if (order.version - lastSnapshotVersion < SNAPSHOT_EVERY) return;
 
-  await snapshots.save("Order", order.id, order.createSnapshot());
+  await snapshots.save(
+    { aggregateType: "Order", aggregateId: order.id },
+    order.createSnapshot(),
+  );
 }
 ```
 
@@ -555,7 +557,10 @@ async function snapshotSweep(): Promise<void> {
     const order = await orderRepository.getById(candidate.aggregateId);
     if (order === null) continue;
 
-    await snapshots.save("Order", order.id, order.createSnapshot());
+    await snapshots.save(
+      { aggregateType: "Order", aggregateId: order.id },
+      order.createSnapshot(),
+    );
   }
 }
 ```

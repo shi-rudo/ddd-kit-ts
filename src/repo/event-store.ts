@@ -1,16 +1,5 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-
-/**
- * Stable identity of one aggregate event stream.
- *
- * Aggregate ids are type-scoped, so the raw id alone is not a globally
- * unique stream address. `aggregateType` is part of the persistence key:
- * `SalesOrder 1` and `FulfillmentOrder 1` are independent streams.
- */
-export interface StreamKey<TAggregateId extends string = string> {
-	readonly aggregateType: string;
-	readonly aggregateId: TAggregateId;
-}
 
 /** Options for {@link EventStore.append}. */
 export interface EventStoreAppendOptions {
@@ -54,7 +43,7 @@ export interface ReadStreamOptions {
  * Repository usage (see the event-sourcing guide):
  *
  * ```ts
- * private stream(id: OrderId): StreamKey<OrderId> {
+ * private stream(id: OrderId): AggregateAddress<OrderId> {
  *   return { aggregateType: "Order", aggregateId: id };
  * }
  *
@@ -126,9 +115,12 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     corrections are new (compensating) events.
 	 *  6. **Replay integrity:** reads order by the persisted stream position
 	 *     and reject duplicate or non-contiguous positions where the backing
-	 *     store exposes them. The repository then calls `loadFromHistory`,
-	 *     whose replay guard rejects any event carrying an aggregate type or
-	 *     id that contradicts this stream key.
+	 *     store exposes them. The portable contract suite proves observable
+	 *     append order and slicing; because the port cannot inject malformed
+	 *     physical rows, adapters add a store-specific corruption fixture that
+	 *     proves the duplicate/gap rejection. The repository then calls
+	 *     `loadFromHistory`, whose replay guard rejects any event carrying an
+	 *     aggregate type or id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `save` for aggregates
@@ -140,7 +132,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 * it changes the stream key and therefore requires a data migration.
 	 */
 	append(
-		stream: StreamKey,
+		stream: AggregateAddress,
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void>;
@@ -153,7 +145,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 * caller; implementations must not hand out live internal state.
 	 */
 	readStream(
-		stream: StreamKey,
+		stream: AggregateAddress,
 		options?: ReadStreamOptions,
 	): Promise<ReadonlyArray<Evt>>;
 }

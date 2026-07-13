@@ -1,5 +1,6 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import type { AggregateEventSource, CommitPosition } from "../events/ports";
+import type { CommitPosition } from "../events/ports";
 
 /**
  * A projection's gap-proof cursor into one aggregate's commit chain.
@@ -43,40 +44,6 @@ export function isPositionAfter(
 		return candidate.aggregateVersion > reference.aggregateVersion;
 	}
 	return candidate.commitSequence > reference.commitSequence;
-}
-
-/**
- * The address of one aggregate instance as checkpoints key it: the
- * kit's identities are type-scoped (`Id<"OrderId">` brands say so),
- * so `Order 1` and `Payment 1` are different aggregates even when the
- * raw id strings collide. Both fields come from the stamps every
- * committed event carries. `aggregateType` is thereby part of the
- * checkpoint contract: renaming an aggregate type orphans its
- * checkpoints, so treat the string as a stable identifier and migrate
- * checkpoint rows deliberately when it must change.
- *
- * `aggregateType` is a TECHNICAL stream category and must be unique
- * across everything feeding one checkpoint store, not just within one
- * bounded context. Contexts may reuse the same ubiquitous-language
- * name (a Sales `Order` and a Fulfillment `Order` are different
- * models); when their events share projection infrastructure, qualify
- * the string at the source ("sales.order", "fulfillment.order"). The
- * kit deliberately adds no `boundedContext` field: the address stays
- * two fields, and the qualification is the consumer's naming decision
- * (same field-accretion line as on `DomainEvent`).
- */
-export type AggregateAddress = AggregateEventSource;
-
-/**
- * Canonical map-key encoding for an {@link AggregateAddress}: a JSON
- * tuple, so no separator-like character inside either half (both are
- * arbitrary JS strings) can make two different addresses collide.
- * Module-internal export shared by the projector's batch-local maps
- * and the in-memory checkpoint store; SQL adapters key on the columns
- * themselves and never need it.
- */
-export function addressKey(address: AggregateAddress): string {
-	return JSON.stringify([address.aggregateType, address.aggregateId]);
 }
 
 /**

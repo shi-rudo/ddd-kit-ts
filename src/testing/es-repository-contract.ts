@@ -1,8 +1,8 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
-import type { StreamKey } from "../repo/event-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -63,7 +63,7 @@ export interface EsRepositoryContractEnvironment<
 	 * transaction's events must not appear here.
 	 */
 	committedStreamEvents(
-		stream: StreamKey<TAgg["id"]>,
+		stream: AggregateAddress<TAgg["id"]>,
 		fromVersion?: number,
 	): Promise<ReadonlyArray<Evt>>;
 
@@ -101,7 +101,7 @@ export interface EsRepositoryContractHarness<
 	 * id-only domain lookup, but their EventStore adapter must address the
 	 * underlying stream by both stable aggregate type and id.
 	 */
-	streamKeyFor(id: TAgg["id"]): StreamKey<TAgg["id"]>;
+	streamKeyFor(id: TAgg["id"]): AggregateAddress<TAgg["id"]>;
 
 	/** Apply exactly ONE domain event via `apply()` (+1 version). */
 	mutate(aggregate: TAgg): void;
@@ -202,7 +202,7 @@ export function createEsRepositoryContractTests<
 	// Capabilities are captured ONCE at suite creation.
 	const snapshotState = harness.snapshotState;
 	const createAggregateWithId = harness.createAggregateWithId;
-	const streamKeyFor = (id: TAgg["id"]): StreamKey<TAgg["id"]> =>
+	const streamKeyFor = (id: TAgg["id"]): AggregateAddress<TAgg["id"]> =>
 		harness.streamKeyFor(id);
 
 	const tests: EsRepositoryContractTest[] = [

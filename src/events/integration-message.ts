@@ -1,3 +1,4 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -5,11 +6,7 @@ import {
 } from "../aggregate/domain-event";
 import { InvalidIntegrationMessageError } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
-import type {
-	AggregateEventSource,
-	CommitPosition,
-	CommittedDomainEvent,
-} from "./ports";
+import type { CommitPosition, CommittedDomainEvent } from "./ports";
 
 /** A primitive value represented without loss by JSON. */
 export type JsonPrimitive = boolean | null | number | string;
@@ -44,7 +41,7 @@ export interface IntegrationMessage<
 > extends IntegrationMessageContent<TType, TPayload, TMetadata> {
 	readonly messageId: string;
 	readonly occurredAt: string;
-	readonly source: AggregateEventSource;
+	readonly source: AggregateAddress;
 	readonly position: CommitPosition;
 }
 

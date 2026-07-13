@@ -1,3 +1,4 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 
 /**
@@ -151,12 +152,6 @@ export interface OnceOptions {
 	timeoutMs?: number;
 }
 
-/** Stable identity of the aggregate stream that produced an event. */
-export interface AggregateEventSource {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
-}
-
 /**
  * Gap-proof position finalized by the event source at the persistence
  * boundary. It is deliberately separate from `DomainEvent`: these values
@@ -197,7 +192,7 @@ export type EventCommitCandidatePosition = Omit<
  */
 export interface EventCommitCandidate<Evt extends AnyDomainEvent> {
 	readonly event: Evt;
-	readonly source: AggregateEventSource;
+	readonly source: AggregateAddress;
 	readonly position: EventCommitCandidatePosition;
 }
 
@@ -208,7 +203,7 @@ export interface EventCommitCandidate<Evt extends AnyDomainEvent> {
  */
 export interface CommittedDomainEvent<Evt extends AnyDomainEvent> {
 	readonly event: Evt;
-	readonly source: AggregateEventSource;
+	readonly source: AggregateAddress;
 	readonly position: CommitPosition;
 }
 

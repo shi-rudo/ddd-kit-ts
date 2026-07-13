@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { ConcurrencyConflictError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { StreamKey } from "./event-store";
 import { InMemoryEventStore } from "./in-memory-event-store";
 
 type StreamId = Id<"EsOrderId">;
 type OrderEvent = DomainEvent<"OrderRenamed", { name: string }>;
 
-const streamA: StreamKey<StreamId> = {
+const streamA: AggregateAddress<StreamId> = {
 	aggregateType: "EsOrder",
 	aggregateId: "order-a" as StreamId,
 };
-const streamB: StreamKey<StreamId> = {
+const streamB: AggregateAddress<StreamId> = {
 	aggregateType: "EsOrder",
 	aggregateId: "order-b" as StreamId,
 };
 
-function renamed(name: string, stream: StreamKey = streamA): OrderEvent {
+function renamed(name: string, stream: AggregateAddress = streamA): OrderEvent {
 	return createDomainEvent("OrderRenamed", { name }, stream);
 }
 
@@ -25,11 +25,11 @@ describe("InMemoryEventStore", () => {
 	it("isolates equal aggregate ids by aggregate type", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		const aggregateId = "shared-1" as StreamId;
-		const salesOrder: StreamKey = {
+		const salesOrder: AggregateAddress = {
 			aggregateType: "SalesOrder",
 			aggregateId,
 		};
-		const fulfillmentOrder: StreamKey = {
+		const fulfillmentOrder: AggregateAddress = {
 			aggregateType: "FulfillmentOrder",
 			aggregateId,
 		};

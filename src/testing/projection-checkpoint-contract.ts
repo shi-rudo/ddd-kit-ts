@@ -1,5 +1,5 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type {
-	AggregateAddress,
 	ProjectionCheckpoint,
 	ProjectionCheckpointStore,
 	ProjectionPosition,
@@ -8,8 +8,8 @@ import {
 	assert,
 	assertEqual,
 	bindContractEnvironment,
-	captureRejection,
 	type ContractTest,
+	captureRejection,
 	gatedContractTest,
 } from "./contract-assertions";
 

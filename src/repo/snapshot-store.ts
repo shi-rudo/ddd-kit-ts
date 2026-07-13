@@ -1,5 +1,5 @@
 import type { AggregateSnapshot } from "../aggregate/aggregate";
-import type { Id } from "../core/id";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 
 /**
  * Driven port for aggregate snapshot persistence: the storage half of
@@ -42,8 +42,7 @@ export interface SnapshotStore<TState = unknown> {
 	 * exists. The repository falls back to a full replay then.
 	 */
 	load(
-		aggregateType: string,
-		aggregateId: Id<string>,
+		address: AggregateAddress,
 	): Promise<AggregateSnapshot<TState> | undefined>;
 
 	/**
@@ -53,8 +52,7 @@ export interface SnapshotStore<TState = unknown> {
 	 * standard implementation.
 	 */
 	save(
-		aggregateType: string,
-		aggregateId: Id<string>,
+		address: AggregateAddress,
 		snapshot: AggregateSnapshot<TState>,
 	): Promise<void>;
 
@@ -69,5 +67,5 @@ export interface SnapshotStore<TState = unknown> {
 	 * which a stale snapshot resurrects the erased aggregate on the
 	 * snapshot load path; snapshot-first degrades to a full replay.
 	 */
-	delete(aggregateType: string, aggregateId: Id<string>): Promise<void>;
+	delete(address: AggregateAddress): Promise<void>;
 }

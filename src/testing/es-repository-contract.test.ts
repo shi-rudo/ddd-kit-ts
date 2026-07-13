@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { DomainEvent } from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
@@ -9,7 +10,6 @@ import type {
 	EventCommitCandidate,
 	Outbox,
 } from "../events/ports";
-import type { StreamKey } from "../repo/event-store";
 import type { TransactionScope } from "../repo/scope";
 import {
 	createEsRepositoryContractTests,
@@ -37,12 +37,12 @@ type EsOrderRenamed = DomainEvent<"EsOrderRenamed", { name: string }>;
 type EsItemAdded = DomainEvent<"EsItemAdded", { item: string }>;
 type EsOrderEvent = EsOrderCreated | EsOrderRenamed | EsItemAdded;
 
-const orderStream = (id: EsOrderId): StreamKey<EsOrderId> => ({
+const orderStream = (id: EsOrderId): AggregateAddress<EsOrderId> => ({
 	aggregateType: "ContractEsOrder",
 	aggregateId: id,
 });
 
-const streamMapKey = (stream: StreamKey): string =>
+const streamMapKey = (stream: AggregateAddress): string =>
 	JSON.stringify([stream.aggregateType, stream.aggregateId]);
 
 class ContractEsOrder extends EventSourcedAggregate<

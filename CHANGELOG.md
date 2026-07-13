@@ -415,11 +415,13 @@ Pass the stable aggregate type and id together:
 // before
 await eventStore.append(order.id, order.pendingEvents, options);
 const history = await eventStore.readStream(order.id);
+const snapshot = await snapshots.load("Order", order.id);
 
 // after
-const stream = { aggregateType: "Order", aggregateId: order.id };
-await eventStore.append(stream, order.pendingEvents, options);
-const history = await eventStore.readStream(stream);
+const address = { aggregateType: "Order", aggregateId: order.id };
+await eventStore.append(address, order.pendingEvents, options);
+const history = await eventStore.readStream(address);
+const snapshot = await snapshots.load(address);
 ```
 
 Production schemas must include both `aggregate_type` and `aggregate_id` in
@@ -428,21 +430,27 @@ position)` uniqueness constraint. Backfill the stable type before switching
 reads; renaming an aggregate type afterwards is a stream-key migration.
 
 Event-sourced repository contract harnesses add `streamKeyFor(id)`, and their
-`committedStreamEvents` callback now receives the qualified `StreamKey`. Run
-the new `createEventStoreContractTests` suite against the low-level adapter to
-prove that equal raw ids under different aggregate types remain isolated.
+`committedStreamEvents` callback now receives the qualified `AggregateAddress`.
+`SnapshotStore.load`, `save`, and `delete` now take that same value object
+instead of separate type/id parameters. Run the new
+`createEventStoreContractTests` suite against the low-level adapter to
+prove OCC, atomic rejection, ordering, read ownership, `fromVersion`, and that
+equal raw ids under different aggregate types remain isolated.
 
 ### Changed (breaking): EventStore streams are qualified
 
-- Added the type-only `StreamKey` main-entry export. `EventStore.append` and
-  `readStream` now address streams by `(aggregateType, aggregateId)` instead of
-  assuming raw ids are globally unique across every aggregate type.
-- `InMemoryEventStore` uses a collision-safe JSON tuple encoding and reports
-  OCC conflicts with the requested qualified address.
+- `EventStore.append`, `readStream`, and `SnapshotStore` now use the existing
+  `AggregateAddress` value type instead of separate stream/source/address
+  shapes or positional type/id arguments.
+- All in-memory adapters share one collision-safe JSON-tuple encoder;
+  `InMemoryEventStore` reports OCC conflicts with the requested qualified
+  address.
 - Added `createEventStoreContractTests` to `@shirudo/ddd-kit/testing`; the
-  contract uses equivalent fresh key objects and colliding raw ids to prove
-  value semantics plus aggregate-type isolation. The event-sourced repository
-  suite now makes its qualified stream key explicit through `streamKeyFor`.
+  contract proves the complete observable port semantics, including equivalent
+  fresh address objects, colliding raw ids, qualified `fromVersion` reads,
+  append order, atomic OCC rejection, and detached read arrays. The
+  event-sourced repository suite now makes its qualified stream address
+  explicit through `streamKeyFor`.
 - Replay remains independently defensive: `loadFromHistory` rejects a
   persisted event whose present aggregate type or id contradicts the target,
   while storage adapters remain responsible for ordered, contiguous persisted
@@ -1372,11 +1380,11 @@ prove that equal raw ids under different aggregate types remain isolated.
 
 - New `EventStore<Evt>` driven port (`append` with an `expectedVersion`
   guard, `readStream` with `fromVersion` for snapshot catch-up), following
-  Greg Young's stream-per-aggregate model: `StreamKey` qualifies the aggregate
-  id with its stable aggregate type, and the stream version is the event count,
-  aligned with the aggregate version. Adapters map their store's conflict
-  signal to `ConcurrencyConflictError` (for the duplicate-create race
-  specifically, an adapter that can distinguish it may throw the non-retryable
+  Greg Young's stream-per-aggregate model: the stream id is the aggregate
+  id and the stream version is the event count, aligned with the aggregate
+  version. Adapters map their store's conflict signal to
+  `ConcurrencyConflictError` (for the duplicate-create race specifically,
+  an adapter that can distinguish it may throw the non-retryable
   `DuplicateAggregateError` instead, matching the state-stored insert
   path); rejected appends must be atomic, which the contract suite's
   mandatory test now exercises with a two-event stale batch. The port
