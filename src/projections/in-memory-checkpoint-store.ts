@@ -12,14 +12,13 @@ import {
  * {@link ProjectionCheckpointStore}: defines the port's semantics and
  * serves tests and in-memory read models.
  *
- * **Not transaction-aware** (the `ctx` parameter is ignored), the same
- * documented limitation as the other in-memory references: a
- * rolled-back projector batch does NOT roll back its checkpoints. That
- * is harmless when the read model is in-memory too (both survive or
- * neither matters), but the atomic update+checkpoint guarantee that
- * production needs is the SQL adapter's contract; prove it with
- * `createProjectionCheckpointStoreContractTests` and its rollback
- * capability.
+ * Its checkpoint-key locks serialize competing projectors only inside one
+ * process and only when they share this store instance. It is **not
+ * transaction-aware** (the `ctx` parameter is ignored): a rolled-back
+ * projector batch does not roll back its checkpoints. Use it for tests and
+ * disposable in-memory read models; production atomicity is the durable
+ * adapter's contract, proved with `createProjectionCheckpointStoreContractTests`
+ * and its rollback capability.
  */
 export class InMemoryProjectionCheckpointStore
 	implements ProjectionCheckpointStore<unknown>
@@ -29,6 +28,51 @@ export class InMemoryProjectionCheckpointStore
 		string,
 		Map<string, ProjectionCheckpoint>
 	>();
+	/** Full checkpoint key -> tail of the process-local exclusive-access queue. */
+	private readonly lockTails = new Map<string, Promise<void>>();
+
+	async withCheckpointLocks<R>(
+		_ctx: unknown,
+		projection: string,
+		addresses: ReadonlyArray<AggregateAddress>,
+		work: () => Promise<R>,
+	): Promise<R> {
+		const keys = [
+			...new Set(
+				addresses.map((address) =>
+					JSON.stringify([
+						projection,
+						address.aggregateType,
+						address.aggregateId,
+					]),
+				),
+			),
+		].sort();
+		const releases: Array<() => void> = [];
+
+		for (const key of keys) {
+			const previous = this.lockTails.get(key) ?? Promise.resolve();
+			let releaseCurrent!: () => void;
+			const current = new Promise<void>((resolve) => {
+				releaseCurrent = resolve;
+			});
+			const tail = previous.then(() => current);
+			this.lockTails.set(key, tail);
+			await previous;
+			releases.push(() => {
+				releaseCurrent();
+				if (this.lockTails.get(key) === tail) this.lockTails.delete(key);
+			});
+		}
+
+		try {
+			return await work();
+		} finally {
+			for (let index = releases.length - 1; index >= 0; index -= 1) {
+				releases[index]?.();
+			}
+		}
+	}
 
 	async load(
 		_ctx: unknown,

@@ -10,10 +10,13 @@ function createInMemoryHarness(): ProjectionCheckpointStoreContractHarness<unkno
 		createEnvironment: async () => ({
 			store: new InMemoryProjectionCheckpointStore(),
 			run: (work) => work(undefined),
+			runConcurrently: (works) =>
+				Promise.all(works.map((work) => work(undefined))),
 			// No runRolledBack: the in-memory store is not transaction-aware
 			// (documented limitation); the rollback test stays visible as
 			// skipped.
 		}),
+		providesConcurrentRuns: true,
 	};
 }
 

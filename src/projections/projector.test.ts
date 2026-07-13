@@ -224,6 +224,41 @@ describe("Projector", () => {
 		expect(rows).toEqual(["evt-o-1-1-0", "evt-o-1-2-0", "evt-o-2-1-0"]);
 	});
 
+	it("serializes competing projectors at genesis and keeps later redelivery idempotent", async () => {
+		const rows: string[] = [];
+		const checkpoints = new InMemoryProjectionCheckpointStore();
+		const projection = arrayProjection(rows);
+		const first = new Projector({
+			scope: passthroughScope,
+			checkpoints,
+			projection,
+		});
+		const second = new Projector({
+			scope: passthroughScope,
+			checkpoints,
+			projection,
+		});
+		const genesis = placed("o-genesis-race", 1, 0);
+
+		const results = await Promise.all([
+			first.project([genesis]),
+			second.project([genesis]),
+		]);
+
+		expect(results.reduce((total, result) => total + result.applied, 0)).toBe(
+			1,
+		);
+		expect(results.reduce((total, result) => total + result.skipped, 0)).toBe(
+			1,
+		);
+		expect(rows).toEqual([genesis.event.eventId]);
+		await expect(first.project([genesis])).resolves.toEqual({
+			applied: 0,
+			skipped: 1,
+		});
+		expect(rows).toEqual([genesis.event.eventId]);
+	});
+
 	it("checkpoints projection-irrelevant events when apply explicitly ignores them", async () => {
 		const rows: string[] = [];
 		const projector = new Projector<OrderEvent, undefined>({
@@ -451,6 +486,8 @@ describe("Projector", () => {
 	it("rejects a legacy checkpoint that cannot prove its commit boundary", async () => {
 		const rows: string[] = [];
 		const legacy: ProjectionCheckpointStore<undefined> = {
+			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+				work(),
 			load: async () =>
 				({
 					aggregateVersion: 5,
@@ -936,6 +973,8 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionCheckpoint>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
+			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+				work(),
 			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
 			save: async (ctx, _p, address, checkpoint) => {
 				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));
@@ -999,6 +1038,8 @@ describe("Projector", () => {
 		};
 		const committed = new Map<string, ProjectionCheckpoint>();
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
+			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+				work(),
 			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
 			save: async (ctx, _p, address, checkpoint) => {
 				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));
@@ -1049,6 +1090,8 @@ describe("Projector", () => {
 		// open transaction. The projector's in-memory batch watermark must
 		// still catch the duplicate.
 		const checkpoints: ProjectionCheckpointStore<Ctx> = {
+			withCheckpointLocks: async (_ctx, _projection, _addresses, work) =>
+				work(),
 			load: async (_ctx, _p, address) => committed.get(address.aggregateId),
 			save: async (ctx, _p, address, checkpoint) => {
 				ctx.staged.push(() => committed.set(address.aggregateId, checkpoint));

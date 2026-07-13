@@ -82,11 +82,12 @@ export function addressKey(address: AggregateAddress): string {
 /**
  * Driven port for projection checkpoints: the per-`(projection,
  * aggregateType, aggregateId)` watermark receipt that makes a projection
- * idempotent and rebuild-safe. The {@link ProjectionCheckpointStore.load} /
- * {@link ProjectionCheckpointStore.save} half runs inside the SAME
- * transaction as the read-model update (the `Projector` guarantees
- * the pairing); the store itself is a dumb last-write-wins record,
- * monotonicity is the projector's job.
+ * idempotent and rebuild-safe. The {@link
+ * ProjectionCheckpointStore.withCheckpointLocks} callback and every
+ * {@link ProjectionCheckpointStore.load} / {@link
+ * ProjectionCheckpointStore.save} it contains run inside the SAME transaction
+ * as the read-model update (the `Projector` guarantees the pairing); the store
+ * itself is a dumb last-write-wins record, monotonicity is the projector's job.
  *
  * Production adapters put the checkpoint table in the same database
  * as the read model, so update and checkpoint commit atomically: a
@@ -99,6 +100,31 @@ export function addressKey(address: AggregateAddress): string {
  * `TransactionScope` (a knex trx, a drizzle tx, a pg client)
  */
 export interface ProjectionCheckpointStore<TCtx = unknown> {
+	/**
+	 * Runs the complete checkpoint read / read-model update / checkpoint save
+	 * critical section with exclusive access to every supplied
+	 * `(projection, aggregateType, aggregateId)` key.
+	 *
+	 * Exclusivity MUST cover keys for which no checkpoint row exists yet. A
+	 * plain `SELECT ... FOR UPDATE` against the checkpoint table is therefore
+	 * insufficient at genesis: use transaction-scoped advisory/key locks, or
+	 * first materialize durable lock rows and lock those. Acquire multiple keys
+	 * in a deterministic order to avoid deadlocks, and keep database locks until
+	 * the surrounding transaction commits or rolls back. On entry, `work` must
+	 * observe checkpoint commits made by the preceding lock holder; choose the
+	 * transaction isolation level accordingly, or surface and retry a
+	 * serialization conflict instead of applying against a stale snapshot.
+	 *
+	 * Implementations may serialize more than the requested keys, but never
+	 * less. The callback is non-reentrant for an overlapping key set.
+	 */
+	withCheckpointLocks<R>(
+		ctx: TCtx,
+		projection: string,
+		addresses: ReadonlyArray<AggregateAddress>,
+		work: () => Promise<R>,
+	): Promise<R>;
+
 	/**
 	 * The stored watermark receipt for `(projection, address)`, or `undefined`
 	 * when this projection has never applied an event of that
