@@ -695,6 +695,15 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
 
 ### Added: projection support (checkpoint port, projector runner, position query)
 
+- Added the opt-in `projectionFromHandlers` helper for correctness-critical
+  read models. Its mapped handler type requires one discriminator-narrowed
+  handler or the explicit `ignoreProjectionEvent` token for every member of the
+  declared event union, so adding an event forces a per-projection compile-time
+  decision. Runtime types outside that map throw `MissingHandlerError` through
+  an own-key lookup (including `constructor` / `__proto__`), rejecting the
+  batch without advancing its checkpoint. Direct `Projection.apply` remains
+  the intentionally partial escape hatch; the guide explains when each policy
+  fits and warns that exhaustiveness is only as complete as the supplied union.
 - Checkpoints are keyed by `(projection, aggregateType, aggregateId)`,
   passed to the `ProjectionCheckpointStore` port as an
   `AggregateAddress` object, and `Projector.hasProcessed` takes the

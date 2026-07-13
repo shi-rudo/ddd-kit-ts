@@ -232,6 +232,13 @@ export {
 	type ProjectionPosition,
 } from "./projections/ports";
 export {
+	ignoreProjectionEvent,
+	type ProjectionEventHandler,
+	type ProjectionFromHandlersOptions,
+	type ProjectionHandlers,
+	projectionFromHandlers,
+} from "./projections/projection-from-handlers";
+export {
 	type ProjectionBatchResult,
 	Projector,
 	type ProjectorOptions,

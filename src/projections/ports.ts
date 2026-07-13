@@ -153,6 +153,10 @@ export interface ProjectionCheckpointStore<TCtx = unknown> {
  * Handle those events as explicit no-ops in `apply`: the projector still
  * advances their cursor. Filtering a broker subscription by event type drops
  * positions from the source chain and turns the next commit into a real gap.
+ * For correctness-critical read models, use `projectionFromHandlers` to make
+ * every event in the declared union a compile-time handler-or-ignore decision;
+ * implement this interface directly when intentionally partial routing is the
+ * better fit.
  */
 export interface Projection<Evt extends AnyDomainEvent, TCtx = unknown> {
 	/**

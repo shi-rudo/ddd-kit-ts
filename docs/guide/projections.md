@@ -77,60 +77,57 @@ wait-for-version.
 ```ts
 import {
   Projector,
-  type Projection,
+  projectionFromHandlers,
   type ProjectionCheckpointStore,
 } from "@shirudo/ddd-kit";
 
-const orderListProjection: Projection<OrderEvent, DbTx> = {
+const orderListProjection = projectionFromHandlers<OrderEvent, DbTx>({
   name: "order-list",
+  handlers: {
+    OrderCreated: async (tx, event) => {
+      await tx("order_list_views").insert({
+        id: event.aggregateId,
+        customer_id: event.payload.customerId,
+        customer_name: event.payload.customerName,
+        total_minor: "0",
+        total_currency: event.payload.currency,
+        total_scale: event.payload.scale,
+        item_count: 0,
+        status: "pending",
+        updated_at: event.occurredAt,
+      });
+    },
 
-  apply: async (tx, event) => {
-    switch (event.type) {
-      case "OrderCreated":
-        await tx("order_list_views").insert({
-          id: event.aggregateId,
-          customer_id: event.payload.customerId,
-          customer_name: event.payload.customerName,
-          total_minor: "0",
-          total_currency: event.payload.currency,
-          total_scale: event.payload.scale,
-          item_count: 0,
-          status: "pending",
+    OrderLineAdded: async (tx, event) => {
+      await tx("order_list_views")
+        .where({ id: event.aggregateId })
+        .update({
+          total_minor: tx.raw("total_minor + ?", [
+            event.payload.lineTotal.amountMinor.toString(),
+          ]),
+          item_count: tx.raw("item_count + 1"),
           updated_at: event.occurredAt,
         });
-        return;
+    },
 
-      case "OrderLineAdded":
-        await tx("order_list_views")
-          .where({ id: event.aggregateId })
-          .update({
-            total_minor: tx.raw("total_minor + ?", [
-              event.payload.lineTotal.amountMinor.toString(),
-            ]),
-            item_count: tx.raw("item_count + 1"),
-            updated_at: event.occurredAt,
-          });
-        return;
+    OrderConfirmed: async (tx, event) => {
+      await tx("order_list_views")
+        .where({ id: event.aggregateId })
+        .update({
+          status: "confirmed",
+          updated_at: event.occurredAt,
+        });
+    },
 
-      case "OrderConfirmed":
-        await tx("order_list_views")
-          .where({ id: event.aggregateId })
-          .update({
-            status: "confirmed",
-            updated_at: event.occurredAt,
-          });
-        return;
-
-      case "OrderCancelled":
-        await tx("order_list_views").where({ id: event.aggregateId }).delete();
-        return;
-    }
+    OrderCancelled: async (tx, event) => {
+      await tx("order_list_views").where({ id: event.aggregateId }).delete();
+    },
   },
 
   truncate: async (tx) => {
     await tx("order_list_views").truncate();
   },
-};
+});
 
 const projector = new Projector({
   scope,
@@ -146,6 +143,45 @@ replays events; side effects would run again.
 The projection name is part of the checkpoint key. Rename it only when you
 intend to replay from the beginning.
 
+## Exhaustive vs Intentionally Partial Handling
+
+Use `projectionFromHandlers` for correctness-critical read models: financial
+totals, audit trails, entitlements, operational state, and anything else where
+silently missing a newly introduced event would leave a plausibly wrong row.
+Its handler map is exhaustive over the declared event union. Adding a member to
+`OrderEvent` is a compile error in every such projection until that member has
+either a handler or the explicit `ignoreProjectionEvent` token.
+
+The runtime check is independent of the type proof. An undeclared event type,
+including object-prototype names such as `constructor` or `__proto__`, throws
+`MissingHandlerError`. The batch rejects and its checkpoint does not advance.
+
+Implement `Projection` directly when partial routing is genuinely the desired
+contract. For example, an optional search-hint index may intentionally react to
+only one fact and remain valid when unrelated event types appear:
+
+```ts
+import type { Projection } from "@shirudo/ddd-kit";
+
+const searchHints: Projection<OrderEvent, DbTx> = {
+  name: "order-search-hints",
+  apply: async (tx, event) => {
+    // Intentionally partial: every other current or future OrderEvent is a no-op.
+    if (event.type !== "OrderCreated") return;
+    await tx("order_search_hints").insert({
+      id: event.aggregateId,
+      customer_name: event.payload.customerName,
+    });
+  },
+};
+```
+
+That escape hatch is deliberately free-form rather than a second partial
+handler-map helper, so the silent policy remains visible in review. In either
+style, exhaustiveness is only as honest as the event union you supply. Do not
+narrow `OrderEvent` to the subset a projection happens to use; give the helper
+and its `Projector` the complete union delivered by the source.
+
 ## Projectors Need A Complete Source Feed
 
 For every `(aggregateType, aggregateId)` address a projector consumes, its
@@ -159,19 +195,21 @@ Route the complete, ordered per-address feed to the projector and explicitly
 ignore known facts that do not affect this read model:
 
 ```ts
-const placedOrders: Projection<OrderEvent, DbTransaction> = {
+import {
+  ignoreProjectionEvent,
+  projectionFromHandlers,
+} from "@shirudo/ddd-kit";
+
+const placedOrders = projectionFromHandlers<OrderEvent, DbTransaction>({
   name: "placed-orders",
-  apply: async (tx, event) => {
-    switch (event.type) {
-      case "OrderPlaced":
-        await tx.placedOrders.insert({ id: event.payload.orderId });
-        return;
-      case "OrderShipped":
-        // Explicit no-op: still consumed and checkpointed by the projector.
-        return;
-    }
+  handlers: {
+    OrderPlaced: async (tx, event) => {
+      await tx.placedOrders.insert({ id: event.payload.orderId });
+    },
+    // Explicit no-op: still consumed and checkpointed by the projector.
+    OrderShipped: ignoreProjectionEvent,
   },
-};
+});
 ```
 
 Here `result.applied` counts envelopes whose `apply` callback ran and whose
