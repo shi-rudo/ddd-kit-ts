@@ -123,10 +123,11 @@ export abstract class InfrastructureError<
 }
 
 /**
- * Thrown by `EventSourcedAggregate.apply()` when no handler is
- * registered for the event's type. This means the aggregate's subclass
- * forgot to add an entry to its `handlers` map: a programming /
- * configuration bug, not a domain or infrastructure failure.
+ * Thrown when event dispatch reaches a type with no own handler registration.
+ * This covers `EventSourcedAggregate.apply()` and the exhaustive
+ * `projectionFromHandlers` helper: the declared event union and its handler map
+ * disagree at runtime, which is a programming / configuration bug rather than
+ * a domain or infrastructure failure.
  *
  * Deliberately **not** on `DomainError` or `InfrastructureError`:
  * a generic `catch (e instanceof DomainError)` handler at the App
