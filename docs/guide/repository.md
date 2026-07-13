@@ -199,12 +199,14 @@ Route insert vs update on `persistedVersion`, not on `version`.
 async save(order: Order): Promise<void> {
   if (!order.hasChanges) return;
 
+  const memento = order.createSnapshot();
+
   if (order.persistedVersion === undefined) {
     try {
       await this.tx.insert(orders).values({
         id: order.id,
-        state: order.state,
-        version: order.version,
+        state: memento.state,
+        version: memento.version,
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -223,8 +225,8 @@ async save(order: Order): Promise<void> {
   const result = await this.tx
     .update(orders)
     .set({
-      state: order.state,
-      version: order.version,
+      state: memento.state,
+      version: memento.version,
     })
     .where(and(eq(orders.id, order.id), eq(orders.version, expected)));
 
@@ -273,8 +275,8 @@ async save(order: Order): Promise<void> {
 }
 ```
 
-The event store saves the unstamped domain events. `withCommit` harvests the
-same pending events into the outbox as stamped copies. Do not clear
+The event store saves the bare domain events. `withCommit` composes the same
+pending events into committed outbox envelopes. Do not clear
 `pendingEvents` in the repository.
 
 Save once per aggregate per unit of work, after all mutations. A second save
@@ -402,7 +404,8 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   recordDeletion(reason: string, deletedAt: Date): void {
-    this.addDomainEvent(
+	this.commit(
+	  { ...this.state },
       this.recordEvent("OrderDeleted", { reason, deletedAt }),
     );
   }

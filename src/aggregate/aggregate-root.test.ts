@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	SnapshotSchemaMismatchError,
+	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -9,8 +10,23 @@ import {
 	type Version,
 	withClockFactory,
 } from "./aggregate";
-import { type AggregateConfig, AggregateRoot } from "./aggregate-root";
-import type { DomainEvent } from "./domain-event";
+import {
+	type AggregateConfig,
+	AggregateRoot as ProductionAggregateRoot,
+} from "./aggregate-root";
+import type { AnyDomainEvent, DomainEvent } from "./domain-event";
+
+/** White-box fixture only: production aggregate subclasses keep `state` protected. */
+abstract class AggregateRoot<
+	TState,
+	TId extends Id<string>,
+	TEvent extends AnyDomainEvent = never,
+	TSnapshotState = TState,
+> extends ProductionAggregateRoot<TState, TId, TEvent, TSnapshotState> {
+	public override get state(): TState {
+		return super.state;
+	}
+}
 
 type TestId = Id<"TestId">;
 
@@ -879,6 +895,23 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				return this.recordEvent("Updated", { value });
 			}
 		}
+
+		it("rejects a hand-rolled mutable event BEFORE the state moves", () => {
+			// The immutability gate runs over the event list before
+			// setState: a rejected event must not leave a mutated aggregate
+			// without its recorded fact.
+			const agg = new CommitAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			const minted = agg.recordTestEvent(42);
+			const literal = { ...minted, payload: { value: 42 } } as Ev;
+
+			expect(() => agg.update(42, literal)).toThrow(UnmintedEventError);
+			expect(agg.state.value).toBe(10);
+			expect(agg.version).toBe(0);
+			expect(agg.pendingEvents).toHaveLength(0);
+		});
 
 		it("mutates state, then records the event, in that order", () => {
 			const agg = new CommitAggregate("test-1" as TestId, {

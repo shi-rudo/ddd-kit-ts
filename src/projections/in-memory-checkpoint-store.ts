@@ -1,5 +1,8 @@
 import {
+	type AggregateAddress,
+	addressKey,
 	isPositionAfter,
+	type ProjectionCheckpoint,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
@@ -21,45 +24,50 @@ import {
 export class InMemoryProjectionCheckpointStore
 	implements ProjectionCheckpointStore<unknown>
 {
-	/** projection name -> aggregateId -> watermark */
+	/** projection name -> JSON [aggregateType, aggregateId] -> receipt */
 	private readonly checkpoints = new Map<
 		string,
-		Map<string, ProjectionPosition>
+		Map<string, ProjectionCheckpoint>
 	>();
 
 	async load(
 		_ctx: unknown,
 		projection: string,
-		aggregateId: string,
-	): Promise<ProjectionPosition | undefined> {
-		const stored = this.checkpoints.get(projection)?.get(aggregateId);
-		// Detached copy: a caller mutating the loaded position must not
+		address: AggregateAddress,
+	): Promise<ProjectionCheckpoint | undefined> {
+		const stored = this.checkpoints.get(projection)?.get(addressKey(address));
+		// Detached copy: a caller mutating the loaded receipt must not
 		// move the stored watermark.
-		return stored === undefined ? undefined : { ...stored };
+		return stored === undefined
+			? undefined
+			: { ...stored, position: { ...stored.position } };
 	}
 
 	async save(
 		_ctx: unknown,
 		projection: string,
-		aggregateId: string,
-		position: ProjectionPosition,
+		address: AggregateAddress,
+		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
 		let perAggregate = this.checkpoints.get(projection);
 		if (perAggregate === undefined) {
 			perAggregate = new Map();
 			this.checkpoints.set(projection, perAggregate);
 		}
-		perAggregate.set(aggregateId, { ...position });
+		perAggregate.set(addressKey(address), {
+			...checkpoint,
+			position: { ...checkpoint.position },
+		});
 	}
 
 	async hasReached(
 		projection: string,
-		aggregateId: string,
+		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		const stored = this.checkpoints.get(projection)?.get(aggregateId);
+		const stored = this.checkpoints.get(projection)?.get(addressKey(address));
 		if (stored === undefined) return false;
-		return !isPositionAfter(position, stored);
+		return !isPositionAfter(position, stored.position);
 	}
 
 	async reset(_ctx: unknown, projection: string): Promise<void> {

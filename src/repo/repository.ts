@@ -146,9 +146,10 @@ export interface IRepository<
 	 * 2. **Hard-delete with event harvest.** The row genuinely must
 	 *    vanish (regulatory purge, retention-window expiry, true
 	 *    termination) *and* the disappearance is a domain fact
-	 *    subscribers care about. Record the deletion event on the
+	 *    subscribers care about. Commit the deletion event on the
 	 *    aggregate, then call `delete(aggregate)` inside the same
-	 *    transactional callback.
+	 *    transactional callback. The commit must advance the version so
+	 *    the event has a unique projection cursor.
 	 *
 	 * 3. **Hard-delete without event.** Deletion is invisible to the
 	 *    domain (a single abandoned cart, an expired session row). No

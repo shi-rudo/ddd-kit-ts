@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { Version } from "../aggregate/aggregate";
+import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { DomainEvent } from "../aggregate/domain-event";
+import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type { Outbox } from "../events/ports";
+import type {
+	CommittedDomainEvent,
+	EventCommitCandidate,
+	Outbox,
+} from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
-import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,
@@ -91,9 +95,46 @@ type Row = { state: OrderState; version: number };
  */
 class InMemoryDb {
 	rows = new Map<string, Row>();
-	outbox: OrderEvent[] = [];
+	outbox: CommittedDomainEvent<OrderEvent>[] = [];
+	sourceHeads = new Map<string, number>();
+	commitPredecessors = new Map<string, number | null>();
 
-	snapshot(): { rows: Map<string, Row>; outbox: OrderEvent[] } {
+	addToOutbox(events: ReadonlyArray<EventCommitCandidate<OrderEvent>>): void {
+		for (const message of events) {
+			const sourceKey = JSON.stringify([
+				message.source.aggregateType,
+				message.source.aggregateId,
+			]);
+			const commitKey = JSON.stringify([
+				message.source.aggregateType,
+				message.source.aggregateId,
+				message.position.aggregateVersion,
+			]);
+			let previousEventfulAggregateVersion: number | null;
+			if (this.commitPredecessors.has(commitKey)) {
+				previousEventfulAggregateVersion =
+					this.commitPredecessors.get(commitKey) ?? null;
+			} else {
+				previousEventfulAggregateVersion = this.sourceHeads.get(sourceKey) ?? null;
+				this.commitPredecessors.set(
+					commitKey,
+					previousEventfulAggregateVersion,
+				);
+				this.sourceHeads.set(sourceKey, message.position.aggregateVersion);
+			}
+			this.outbox.push({
+				...message,
+				position: { ...message.position, previousEventfulAggregateVersion },
+			});
+		}
+	}
+
+	snapshot(): {
+		rows: Map<string, Row>;
+		outbox: CommittedDomainEvent<OrderEvent>[];
+		sourceHeads: Map<string, number>;
+		commitPredecessors: Map<string, number | null>;
+	} {
 		return {
 			rows: new Map(
 				[...this.rows].map(([id, row]) => [
@@ -102,12 +143,21 @@ class InMemoryDb {
 				]),
 			),
 			outbox: [...this.outbox],
+			sourceHeads: new Map(this.sourceHeads),
+			commitPredecessors: new Map(this.commitPredecessors),
 		};
 	}
 
-	restore(snapshot: { rows: Map<string, Row>; outbox: OrderEvent[] }): void {
+	restore(snapshot: {
+		rows: Map<string, Row>;
+		outbox: CommittedDomainEvent<OrderEvent>[];
+		sourceHeads: Map<string, number>;
+		commitPredecessors: Map<string, number | null>;
+	}): void {
 		this.rows = snapshot.rows;
 		this.outbox = snapshot.outbox;
+		this.sourceHeads = snapshot.sourceHeads;
+		this.commitPredecessors = snapshot.commitPredecessors;
 	}
 }
 
@@ -146,10 +196,13 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			// The in-memory equivalent of a unique-violation (Postgres 23505,
 			// MySQL 1062): a row with this id already exists.
 			if (this.db.rows.has(order.id)) {
-				throw new DuplicateAggregateError({ aggregateType: "ContractOrder", aggregateId: order.id });
+				throw new DuplicateAggregateError({
+					aggregateType: "ContractOrder",
+					aggregateId: order.id,
+				});
 			}
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		} else {
@@ -165,7 +218,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 				});
 			}
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		}
@@ -227,10 +280,13 @@ function createInMemoryHarness(
 			};
 			const outbox: Outbox<OrderEvent> = {
 				add: async (events) => {
-					db.outbox.push(...events);
+					db.addToOutbox(events);
 				},
 				getPending: async () =>
-					db.outbox.map((event, i) => ({ dispatchId: String(i), event })),
+					db.outbox.map((message, i) => ({
+						...message,
+						dispatchId: String(i),
+					})),
 				markDispatched: async () => {},
 			};
 			return {
@@ -257,7 +313,7 @@ function createInMemoryHarness(
 		mutateVersionOnly: (order) => order.touch(),
 		mutateChildCollection: (order) =>
 			order.addItem(`item-${mutationCounter++}`),
-		snapshotState: (order) => structuredClone(order.state),
+		snapshotState: (order) => order.createSnapshot().state,
 		deletesAreVersionChecked: true,
 		insertsAreDuplicateChecked: true, // explicit; true is also the default
 	};
@@ -293,6 +349,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			"createAggregateWithId", // deletion-finality AND duplicate-insert
 			"deletesAreVersionChecked",
 			"mutateChildCollection",
+			"mutateVersionOnly",
 			"mutateVersionOnly",
 		]);
 		// snapshotState widens the MANDATORY test, it does not gate one.
@@ -359,7 +416,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			// ❌ no `WHERE version = persistedVersion` equivalent and no
 			// unique-violation mapping:
 			this.db.rows.set(order.id, {
-				state: structuredClone(order.state),
+				state: order.createSnapshot().state,
 				version: order.version,
 			});
 		}

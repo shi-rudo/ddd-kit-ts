@@ -11,7 +11,7 @@ The kit treats domain events as plain, immutable data:
 - they are deeply frozen
 - they can carry correlation metadata
 - aggregate events can be routed by `aggregateId` and `aggregateType`
-- `withCommit` can stamp commit-position metadata for outbox and projection consumers
+- persistence metadata is composed around them instead of written onto them
 
 ## Shape
 
@@ -24,8 +24,6 @@ interface DomainEvent<T extends string, P = void> {
   payload: P;
   occurredAt: Date;
   version: number;
-  aggregateVersion?: number;
-  commitSequence?: number;
   metadata?: EventMetadata;
 }
 ```
@@ -40,11 +38,10 @@ The fields have different jobs:
 | `payload` | Domain data for the fact that happened. |
 | `occurredAt` | Time the event was created. |
 | `version` | Event schema version, used for payload evolution and upcasting. |
-| `aggregateVersion` | Producing aggregate's version at commit time. |
-| `commitSequence` | Event position within one aggregate's commit batch. |
 | `metadata` | Correlation, causation, user, source, and custom tracing fields. |
 
-Do not confuse `version` with `aggregateVersion`. `version` says which shape the event payload has. `aggregateVersion` says which aggregate state revision emitted the event.
+`version` says which shape the event payload has. It is not an aggregate or
+stream position; those values live in `CommittedDomainEvent.position`.
 
 ## Creating Events
 
@@ -111,8 +108,6 @@ See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-
 | `occurredAt` | current clock time | `options.occurredAt` or `setClockFactory(fn)` |
 | `version` | `1` | `options.version` |
 | `metadata` | `undefined` | `options.metadata` |
-| `aggregateVersion` | stamped by `withCommit` when unset | `options.aggregateVersion` |
-| `commitSequence` | stamped by `withCommit` when unset | `options.commitSequence` |
 
 The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
 
@@ -262,20 +257,80 @@ Later objects override earlier ones for the same key.
 
 Both helpers reject hostile own `__proto__` metadata keys. That matters for events that were hand-built or deserialized from a message envelope, where metadata did not necessarily come through `createDomainEvent`.
 
-## Commit Stamps
+## Commit Envelopes
 
-`withCommit` can stamp aggregate events with:
+`withCommit` leaves the domain event untouched and composes an
+`EventCommitCandidate` for the outbox. The outbox source atomically links that
+candidate to its preceding eventful commit and persists this finalized
+envelope:
 
-- `aggregateVersion`
-- `commitSequence`
+```ts
+interface CommittedDomainEvent<Evt extends AnyDomainEvent> {
+  event: Evt;
+  source: {
+    aggregateType: string;
+    aggregateId: string;
+  };
+  position: {
+    aggregateVersion: number;
+    commitSequence: number;
+    commitSize: number;
+    previousEventfulAggregateVersion: number | null;
+  };
+}
+```
 
-All events produced by one aggregate in one commit share the same `aggregateVersion`. `commitSequence` is the zero-based position of the event inside that aggregate's harvest batch.
+All finalized envelopes produced by one aggregate in one commit share
+`position.aggregateVersion`, `position.commitSize`, and
+`position.previousEventfulAggregateVersion`. `position.commitSequence` is the
+zero-based position inside that harvest batch. The predecessor is the aggregate
+version of the immediately preceding EVENTFUL commit; state-only saves do not
+advance it. Only the event source at the persistence boundary can construct the
+complete cursor; neither `createDomainEvent` nor `withCommit` can infer it from
+the aggregate's OCC baseline.
 
-Together, `(aggregateVersion, commitSequence)` is a compact per-aggregate ordering key. Projection handlers can use it as a watermark when they process kit-harvested events in order.
+Inside a committed envelope, `source` is the authoritative persistence address.
+If the bare event also carries optional `aggregateId` or `aggregateType`
+stamps, each present value must match `source`; a projector rejects a
+contradiction as `ForeignEventError` before applying or checkpointing anything.
+An event whose optional address stamps are absent is addressed by the envelope.
 
-`eventId` is still the general-purpose deduplication key. Use it when events come from mixed sources, older versions, or hand-rolled orchestration that may not provide commit stamps.
+Together the four fields form a gap-proof per-aggregate cursor. A projector can
+prove that a commit is complete and that the following commit names the
+checkpointed version as its predecessor; missing history rejects loudly.
+
+`envelope.event.eventId` is still the general-purpose deduplication key.
 
 See [Outbox & Transactions](./outbox.md) and [Read-Side Projections](./projections.md).
+
+## Integration Messages
+
+Neither `DomainEvent` nor `CommittedDomainEvent` is a public broker schema.
+Domain payloads and metadata may contain immutable `Date`, `Map`, and `Set`
+values, while JSON cannot represent those types faithfully. Publishing either
+shape with a raw `JSON.stringify` can therefore corrupt an otherwise valid
+domain event.
+
+At the outbox sink, map the committed event to a separate
+`IntegrationMessage` with `createIntegrationMessage(record, mapper)`. The
+mapper chooses the public type, schema version, JSON payload, and optional JSON
+metadata. `encodeIntegrationMessage` validates the whole graph and rejects
+special values, cycles, sparse arrays, non-finite numbers, and properties JSON
+would discard. It also rejects hostile own `__proto__` keys before downstream
+copy operations can activate them. `decodeIntegrationMessage` performs the
+same validation on an untrusted broker body. It accepts RFC 3339 timestamps
+with an explicit offset and up to millisecond precision, normalizes them to
+canonical UTC `.sssZ`, and returns a deeply frozen message. The producer-side
+codec continues to emit and require that canonical representation.
+
+The wire envelope retains `messageId`, an ISO `occurredAt`, the qualified
+aggregate source, and the complete commit position. Consumers that feed the
+kit's `Projector` can compose the validated message into a minted local event
+with `integrationMessageToCommittedEvent`. That event uses the published type
+and JSON payload; restoring the producer's private domain types is deliberately
+not attempted.
+
+See the complete [SQS FIFO mapping](./outbox.md#sinks-and-brokers).
 
 ## Record After Mutation
 
@@ -294,6 +349,9 @@ this.addDomainEvent(this.recordEvent("OrderConfirmed", { orderId: this.id }));
 ```
 
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.
+The mutation must also advance the version before an already-persisted
+aggregate is harvested; otherwise two commits would share one projection
+position and `withCommit` rejects with `EventHarvestError`.
 
 ## Naming Events
 

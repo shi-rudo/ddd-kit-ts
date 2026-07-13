@@ -121,6 +121,18 @@ function toSagaState(
 export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 	protected readonly aggregateType = "CheckoutSaga";
 
+	get step(): CheckoutSagaStep {
+		return this.state.step;
+	}
+
+	get paymentId(): PaymentId | undefined {
+		return this.state.paymentId;
+	}
+
+	get shipmentId(): ShipmentId | undefined {
+		return this.state.shipmentId;
+	}
+
 	static start(orderId: OrderId, total: Money): CheckoutSaga {
 		const initialContext = { orderId, total };
 		const snapshot = createInitialDomainMachineSnapshot(

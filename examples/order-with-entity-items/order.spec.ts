@@ -10,10 +10,12 @@ describe("Order with Entity Items", () => {
 
 		const itemId = order.addItem("product-1", 2, eur(2000n));
 
-		expect(order.state.items).toHaveLength(1);
-		expect(order.state.items[0].id).toBe(itemId);
-		expect(order.state.items[0].state.productId).toBe("product-1");
-		expect(order.state.items[0].state.quantity).toBe(2);
+		expect(order.itemCount).toBe(1);
+		expect(order.getItem(itemId)).toMatchObject({
+			id: itemId,
+			productId: "product-1",
+			quantity: 2,
+		});
 		expect(order.version).toBe(1);
 	});
 
@@ -24,8 +26,8 @@ describe("Order with Entity Items", () => {
 		order.updateItemQuantity(itemId, 5, eur(5000n));
 
 		const item = order.getItem(itemId);
-		expect(item?.state.quantity).toBe(5);
-		expect(item?.state.lineTotal).toEqual(eur(5000n));
+		expect(item?.quantity).toBe(5);
+		expect(item?.lineTotal).toEqual(eur(5000n));
 		expect(order.version).toBe(2); // One for add, one for update
 	});
 
@@ -64,8 +66,8 @@ describe("Order with Entity Items", () => {
 
 		order.removeItem(itemId1);
 
-		expect(order.state.items).toHaveLength(1);
-		expect(order.state.items[0].id).toBe(itemId2);
+		expect(order.itemCount).toBe(1);
+		expect(order.getItem(itemId2)?.id).toBe(itemId2);
 	});
 
 	it("should enforce aggregate invariants on confirm", () => {
@@ -78,7 +80,7 @@ describe("Order with Entity Items", () => {
 		order.addItem("product-1", 2, eur(2000n));
 		order.confirm();
 
-		expect(order.state.status).toBe("confirmed");
+		expect(order.status).toBe("confirmed");
 	});
 
 	it("should prevent modifications after confirmation", () => {
@@ -103,9 +105,9 @@ describe("Order with Entity Items", () => {
 
 		const item = order.getItem(itemId);
 		expect(item).toBeDefined();
-		expect(item?.state.lineTotal).toEqual(eur(2000n));
-		expect(item?.isForProduct("product-1")).toBe(true);
-		expect(item?.isForProduct("product-2")).toBe(false);
+		expect(item?.lineTotal).toEqual(eur(2000n));
+		expect(order.hasProduct(itemId, "product-1")).toBe(true);
+		expect(order.hasProduct(itemId, "product-2")).toBe(false);
 	});
 
 	it("should version the aggregate on each change", () => {

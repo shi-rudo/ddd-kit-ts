@@ -126,11 +126,16 @@ is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
 
-1. `validateEvent(event)` checks whether this event is allowed in the current
+1. The address discipline runs: missing `aggregateId` / `aggregateType`
+   fields are stamped from the aggregate (the `recordEvent` guarantee, by
+   construction), and a present-but-foreign address throws the wiring error
+   `MisaddressedEventError` before anything is recorded. `ForeignEventError`
+   is the replay-side counterpart for persisted rows.
+2. `validateEvent(event)` checks whether this event is allowed in the current
    state.
-2. The handler for `event.type` is found.
-3. The handler computes the next state.
-4. The aggregate stores the new state, records the event in `pendingEvents`, and
+3. The handler for `event.type` is found.
+4. The handler computes the next state.
+5. The aggregate stores the new state, records the event in `pendingEvents`, and
    bumps the version.
 
 If validation, handler lookup, or state computation throws, the aggregate does
@@ -191,16 +196,18 @@ That last step clears `pendingEvents` and aligns `persistedVersion`.
 ### Stream events and outbox events
 
 The event store receives the original pending events. The outbox receives
-copies harvested by `withCommit`.
+envelopes that reference those same immutable events.
 
-Those outbox copies may be stamped with `aggregateVersion` and
-`commitSequence`. The stream originals usually are not. That means a projection
-rebuilt from the event stream may see `aggregateVersion === undefined`, while a
-live projection fed from the outbox may see it populated.
+The outbox source finalizes those envelopes with the full cursor under `position`:
+`aggregateVersion`, `commitSequence`, `commitSize`, and
+`previousEventfulAggregateVersion`. The stream originals do not. State-only
+saves (where applicable outside the event stream) do not advance that eventful
+predecessor. A projection rebuilt from the event stream therefore composes each
+event with the store's own gap-proof stream source and position before calling
+`projector.project(...)`.
 
-Do not make projection logic depend on outbox-only stamps if the rebuild path
-reads from the event stream. In event-sourced systems, the event store's own
-stream position is the replay ordering authority.
+Projection handlers remain independent of cursor provenance. In event-sourced
+systems, the event store's own stream position is the replay ordering authority.
 
 ## The EventStore port
 
@@ -278,18 +285,30 @@ async function findById(id: OrderId): Promise<Order | null> {
 ```
 
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
-stream can be corrupt in ways the domain can name: a handler that rejects a
-payload it cannot map, or an event addressed to a different aggregate
-(`ForeignEventError`, thrown when a history event carries an `aggregateId` or
-`aggregateType` that does not match the target). The repository can catch that
-as data corruption and choose whether to fail the load, alert, or rebuild from
-another source.
+stream can be corrupt in ways the domain can name (a handler that rejects a
+payload it cannot map). One corruption class deliberately does NOT ride the
+`Result`: an event addressed to a different aggregate (`ForeignEventError`,
+when a history event carries an `aggregateId` or `aggregateType` that does not
+match the target) is an `InfrastructureError` and THROWS, because a wrong
+stream read is wiring or data corruption, never an expected business
+rejection a generic `Err` branch should absorb. The state rollback is the
+same on both paths.
 
 Replay does not run `validateEvent(...)`. History is already accepted fact,
 and decision rules change over time; a stream that was valid when written must
 stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
-`apply(...)` path only, and structural expectations that should hold during
-replay belong in the handlers.
+`apply(...)` path only. Old storage shapes are not a replay-validation concern
+either: decode and upcast persisted events at the read boundary (see
+[Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
+the current event shape. The same principle covers snapshots: restoring from
+a snapshot does not re-check the historical state against today's
+`validateState` rules, so a stream loads identically whether it is replayed
+from zero or restored from a snapshot plus tail. Snapshots do get their own
+STRUCTURAL gate: override `validateRestoredState(state)` to reject blobs no
+version of the model could have produced (missing fields, wrong types); a
+`DomainError` from it comes back as `Err`, and the load recipe answers by
+discarding the snapshot and refolding from the stream. Rules and structure
+are different questions, and only the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code
@@ -438,8 +457,8 @@ abstract class SnapshottingOrder extends EventSourcedAggregate<
     return {
       items: state.items.map((item) => ({
         id: item.id,
-        productId: item.state.productId,
-        quantity: item.state.quantity,
+        productId: item.productId,
+        quantity: item.quantity,
       })),
     };
   }

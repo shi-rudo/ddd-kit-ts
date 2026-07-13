@@ -1,10 +1,20 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { UnprojectableEventError } from "../core/errors";
+import {
+	ForeignEventError,
+	ProjectionGapError,
+	ProjectionIdentityViolationError,
+	ProjectionOrderViolationError,
+	UnprojectableEventError,
+} from "../core/errors";
 import type { OutboxSink } from "../events/outbox-dispatcher";
+import type { CommittedDomainEvent } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {
+	type AggregateAddress,
+	addressKey,
 	isPositionAfter,
 	type Projection,
+	type ProjectionCheckpoint,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
@@ -23,36 +33,14 @@ export interface ProjectorOptions<Evt extends AnyDomainEvent, TCtx> {
 
 	/** The consumer-owned event-to-read-model mapping. */
 	projection: Projection<Evt, TCtx>;
-
-	/**
-	 * Cursor extractor for sources with their own ordering. The default
-	 * reads the `(aggregateVersion, commitSequence)` stamps `withCommit`
-	 * puts on every harvested event; an event-sourced stream replayed
-	 * from a store supplies its own extractor (the store's position is
-	 * the authority there, see the outbox guide). Returning `undefined`
-	 * means "this event has no cursor" and makes `project` reject
-	 * loudly: an uncursored event cannot be deduped or ordered, and
-	 * silently applying it would break idempotency on redelivery.
-	 */
-	position?: (event: Evt) => ProjectionPosition | undefined;
 }
 
 /** Outcome of one {@link Projector.project} batch. */
 export interface ProjectionBatchResult {
 	/** Events applied and checkpointed in this batch. */
 	applied: number;
-	/** Events skipped as duplicates or stale (at or behind the watermark). */
+	/** Events skipped at positions already traversed under the source contract. */
 	skipped: number;
-}
-
-function defaultPosition(
-	event: AnyDomainEvent,
-): ProjectionPosition | undefined {
-	const { aggregateVersion, commitSequence } = event;
-	if (aggregateVersion === undefined || commitSequence === undefined) {
-		return undefined;
-	}
-	return { aggregateVersion, commitSequence };
 }
 
 /**
@@ -70,15 +58,35 @@ function defaultPosition(
  *   watermark. It is never possible to checkpoint an unapplied event or
  *   apply an uncheckpointed one, and a retrying scope re-runs the
  *   callback from zero (counts included).
- * - **Duplicates and stale events are skipped via the cursor.** An
- *   event at or behind the stored `(aggregateVersion, commitSequence)`
- *   watermark of its aggregate is counted as skipped, not applied:
- *   at-least-once redelivery and out-of-order stragglers are absorbed
- *   here, not in every handler.
- * - **Uncursored events reject loudly.** An event without stamps (and
- *   no custom `position` extractor covering it), or without an
- *   `aggregateId`, fails the batch BEFORE anything is applied; see
- *   {@link ProjectorOptions.position}.
+ * - **Gaps reject instead of becoming silent skips.** `commitSize`
+ *   proves every event in a commit was consumed, while
+ *   `previousEventfulAggregateVersion` links the next eventful commit to the
+ *   checkpoint. A missing sequence, incomplete commit, missing aggregate
+ *   commit, or non-genesis first event throws before its event is applied.
+ *   Because checkpoints advance only across a verified chain, a position
+ *   at or behind the watermark is already traversed and can be skipped under
+ *   the source's one-logical-event-per-position contract.
+ * - **Feeds are complete per aggregate address.** Once a feed supplies one
+ *   address, it must supply every committed envelope in that address's cursor
+ *   chain. Do not event-type-filter a projector subscription. Irrelevant event
+ *   types are explicit no-ops in `Projection.apply`; invoking the handler and
+ *   checkpointing their positions preserves continuity.
+ * - **The watermark carries event identity.** A different `eventId` at the
+ *   exact stored watermark, or at one position inside the current batch,
+ *   throws {@link ProjectionIdentityViolationError} before `apply`. The
+ *   checkpoint deliberately keeps no full position history, so older skips
+ *   continue to rely on the source contract rather than claiming an identity
+ *   proof the receipt cannot provide.
+ * - **Batch inversions reject as transport violations.** Before applying,
+ *   the projector scans positions that were still unseen at batch start.
+ *   A descending pair for one aggregate throws
+ *   {@link ProjectionOrderViolationError}; positions the stored checkpoint
+ *   had already covered remain valid late redeliveries.
+ * - **Malformed envelopes reject loudly.** A missing/empty `eventId`, a
+ *   missing/invalid `position`, missing `source.aggregateId` /
+ *   `source.aggregateType`, or an optional event address contradicting its
+ *   authoritative envelope source fails the batch BEFORE anything is applied.
+ *   The domain event remains persistence-agnostic.
  * - **One logical projector instance per projection.** The cursor
  *   check-then-apply is not concurrency-safe across competing
  *   instances unless the adapter serializes it (row lock on the
@@ -97,45 +105,89 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	private readonly scope: TransactionScope<TCtx>;
 	private readonly checkpoints: ProjectionCheckpointStore<TCtx>;
 	private readonly projection: Projection<Evt, TCtx>;
-	private readonly position: (event: Evt) => ProjectionPosition | undefined;
 
 	constructor(options: ProjectorOptions<Evt, TCtx>) {
 		this.scope = options.scope;
 		this.checkpoints = options.checkpoints;
 		this.projection = options.projection;
-		this.position = options.position ?? defaultPosition;
 	}
 
 	/**
-	 * Applies one batch: one transaction, per event a cursor check and
+	 * Applies one batch: one transaction, per envelope a cursor check and
 	 * `apply`, then one checkpoint save per advanced aggregate. Rejects
-	 * (after rollback) when a handler throws or an event carries no
-	 * cursor; the caller's at-least-once redelivery retries the batch.
+	 * (after rollback) when a handler throws or an envelope carries no
+	 * valid cursor; the caller's at-least-once redelivery retries the batch.
+	 * The input must be a complete, ordered feed per aggregate address; an
+	 * event-type-filtered subscription cannot satisfy the cursor contract.
 	 */
-	async project(events: ReadonlyArray<Evt>): Promise<ProjectionBatchResult> {
+	async project(
+		events: ReadonlyArray<CommittedDomainEvent<Evt>>,
+	): Promise<ProjectionBatchResult> {
 		// Validate cursors BEFORE opening the transaction: a malformed
 		// batch must not burn a transaction or apply a prefix.
-		const cursored = events.map((event) => {
-			const position = this.position(event);
+		const cursored = events.map(({ event, source, position }) => {
+			if (typeof event.eventId !== "string" || event.eventId.length === 0) {
+				throw new UnprojectableEventError(
+					this.projection.name,
+					typeof event.eventId === "string" ? event.eventId : "<missing>",
+					"carries no non-empty eventId. Projection checkpoints retain the " +
+						"event identity at their watermark, so every projectable event must " +
+						"have a stable identifier.",
+				);
+			}
 			if (position === undefined) {
 				throw new UnprojectableEventError(
 					this.projection.name,
 					event.eventId,
-					"carries no (aggregateVersion, commitSequence) cursor. Events written " +
-						"by withCommit are stamped automatically; for other sources supply " +
-						"the 'position' extractor. An uncursored event cannot be deduped " +
-						"or ordered.",
+					"carries no complete projection cursor envelope. Events written " +
+						"by withCommit are wrapped automatically; other sources must " +
+						"provide source and position explicitly.",
 				);
 			}
-			const aggregateId = event.aggregateId;
-			if (aggregateId === undefined) {
+			if (!isValidPosition(position)) {
 				throw new UnprojectableEventError(
 					this.projection.name,
 					event.eventId,
-					"carries no aggregateId; the checkpoint watermark is per aggregate.",
+					"carries an invalid projection cursor: aggregateVersion and " +
+						"commitSequence must be non-negative integers, commitSize must " +
+						"be a positive integer greater than commitSequence, and " +
+						"previousEventfulAggregateVersion must be an earlier non-negative " +
+						"version or null at genesis.",
 				);
 			}
-			return { event, position, aggregateId };
+			if (source === undefined) {
+				throw new UnprojectableEventError(
+					this.projection.name,
+					event.eventId,
+					"carries no aggregateId/aggregateType in its commit envelope source.",
+				);
+			}
+			const { aggregateId, aggregateType } = source;
+			if (!aggregateId || !aggregateType) {
+				throw new UnprojectableEventError(
+					this.projection.name,
+					event.eventId,
+					"carries no aggregateId/aggregateType; the checkpoint watermark " +
+						"is keyed per (aggregateType, aggregateId), because ids are " +
+						"type-scoped. Events written by withCommit carry both stamps.",
+				);
+			}
+			const idContradictsSource =
+				event.aggregateId !== undefined && event.aggregateId !== aggregateId;
+			const typeContradictsSource =
+				event.aggregateType !== undefined &&
+				event.aggregateType !== aggregateType;
+			if (idContradictsSource || typeContradictsSource) {
+				throw new ForeignEventError(
+					aggregateId,
+					aggregateType,
+					event.type,
+					event.aggregateId,
+					event.aggregateType,
+				);
+			}
+			const address: AggregateAddress = { aggregateType, aggregateId };
+			return { event, position, address };
 		});
 
 		// Everything mutable lives INSIDE the transactional callback: a
@@ -144,44 +196,143 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 		return this.scope.transactional(async (ctx) => {
 			let applied = 0;
 			let skipped = 0;
-			// The batch watermark is tracked here, not re-read from the
-			// store per event: one load per aggregate, one save per
-			// advanced aggregate, and no dependence on the store's
-			// read-your-writes behavior inside the open transaction (an
-			// adapter that stages writes until commit is equally correct).
+			// Load and validate every addressed checkpoint before any handler
+			// runs. Legacy/partial rows therefore cannot turn a batch prefix
+			// into visible work even under the in-memory passthrough scope.
+			const checkpointsAtBatchStart = new Map<
+				string,
+				ProjectionCheckpoint | undefined
+			>();
 			const watermarks = new Map<string, ProjectionPosition | undefined>();
-			const advanced = new Set<string>();
-			for (const { event, position, aggregateId } of cursored) {
-				let watermark: ProjectionPosition | undefined;
-				if (watermarks.has(aggregateId)) {
-					watermark = watermarks.get(aggregateId);
-				} else {
-					watermark = await this.checkpoints.load(
-						ctx,
+			for (const { event, address } of cursored) {
+				const key = addressKey(address);
+				if (watermarks.has(key)) continue;
+				const stored = await this.checkpoints.load(
+					ctx,
+					this.projection.name,
+					address,
+				);
+				if (stored !== undefined && !isValidCheckpoint(stored)) {
+					throw new UnprojectableEventError(
 						this.projection.name,
-						aggregateId,
+						event.eventId,
+						"found a stored checkpoint with an invalid or legacy cursor. " +
+							"Migrate the commitSize/previousEventfulAggregateVersion/" +
+							"lastAppliedEventId columns or " +
+							"reset and rebuild this projection.",
 					);
-					watermarks.set(aggregateId, watermark);
 				}
+				checkpointsAtBatchStart.set(key, stored);
+				watermarks.set(key, stored?.position);
+			}
+
+			// A checkpoint remembers the identity at exactly its watermark. A
+			// different eventId at that same position is therefore a provable source
+			// collision. Older positions cannot be identity-checked without retaining
+			// an unbounded per-position ledger and continue to rely on the source
+			// contract that one position names one logical event.
+			for (const { event, position, address } of cursored) {
+				const stored = checkpointsAtBatchStart.get(addressKey(address));
+				if (
+					stored !== undefined &&
+					isSameOrderedPosition(position, stored.position) &&
+					event.eventId !== stored.lastAppliedEventId
+				) {
+					throw new ProjectionIdentityViolationError(
+						this.projection.name,
+						event.eventId,
+						stored.lastAppliedEventId,
+						formatPosition(position),
+					);
+				}
+			}
+
+			const batchEventIdsByPosition = new Map<string, string>();
+			for (const { event, position, address } of cursored) {
+				const key = addressedPositionKey(address, position);
+				const recordedEventId = batchEventIdsByPosition.get(key);
+				if (
+					recordedEventId !== undefined &&
+					recordedEventId !== event.eventId
+				) {
+					throw new ProjectionIdentityViolationError(
+						this.projection.name,
+						event.eventId,
+						recordedEventId,
+						formatPosition(position),
+					);
+				}
+				batchEventIdsByPosition.set(key, event.eventId);
+			}
+
+			// A descending pair among positions that were still unseen at batch
+			// start is direct evidence of transport reordering. Ignore positions
+			// the stored checkpoint had already covered: those are harmless late
+			// redeliveries, not evidence about this batch's new-event ordering.
+			const newestUnprocessed = new Map<string, ProjectionPosition>();
+			for (const { event, position, address } of cursored) {
+				const key = addressKey(address);
+				const stored = watermarks.get(key);
+				if (stored !== undefined && !isPositionAfter(position, stored))
+					continue;
+				const newest = newestUnprocessed.get(key);
+				if (newest !== undefined && isPositionAfter(newest, position)) {
+					throw new ProjectionOrderViolationError(
+						this.projection.name,
+						event.eventId,
+						formatPosition(newest),
+						formatPosition(position),
+					);
+				}
+				if (newest === undefined || isPositionAfter(position, newest)) {
+					newestUnprocessed.set(key, position);
+				}
+			}
+
+			// Prove the whole batch's cursor chain before mutating the read
+			// model. The simulated watermark also provides intra-batch dedupe
+			// without relying on checkpoint-store read-your-writes behavior.
+			const advanced = new Map<
+				string,
+				{ address: AggregateAddress; checkpoint: ProjectionCheckpoint }
+			>();
+			const toApply: Array<{ event: Evt }> = [];
+			for (const { event, position, address } of cursored) {
+				const key = addressKey(address);
+				const watermark = watermarks.get(key);
 				if (watermark !== undefined && !isPositionAfter(position, watermark)) {
 					skipped += 1;
 					continue;
 				}
-				await this.projection.apply(ctx, event);
-				watermarks.set(aggregateId, position);
-				advanced.add(aggregateId);
-				applied += 1;
-			}
-			for (const aggregateId of advanced) {
-				const position = watermarks.get(aggregateId);
-				if (position !== undefined) {
-					await this.checkpoints.save(
-						ctx,
+				if (!isContiguousPosition(position, watermark)) {
+					throw new ProjectionGapError(
 						this.projection.name,
-						aggregateId,
-						position,
+						event.eventId,
+						formatPosition(watermark),
+						formatPosition(position),
 					);
 				}
+				watermarks.set(key, position);
+				advanced.set(key, {
+					address,
+					checkpoint: {
+						position,
+						lastAppliedEventId: event.eventId,
+					},
+				});
+				toApply.push({ event });
+				applied += 1;
+			}
+			for (const { event } of toApply) {
+				await this.projection.apply(ctx, event);
+			}
+			for (const { address, checkpoint } of advanced.values()) {
+				await this.checkpoints.save(
+					ctx,
+					this.projection.name,
+					address,
+					checkpoint,
+				);
 			}
 			return { applied, skipped };
 		});
@@ -189,20 +340,16 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 
 	/**
 	 * The wait-for-version query: `true` when this projection has
-	 * processed `aggregateId` at least up to `position`. Pass the
+	 * processed the addressed aggregate at least up to `position`. Pass the
 	 * position of the last event the awaited commit emitted (see
 	 * {@link ProjectionCheckpointStore.hasReached} for why the full
-	 * pair, not just the version).
+	 * cursor, not just the version).
 	 */
 	hasProcessed(
-		aggregateId: string,
+		address: AggregateAddress,
 		position: ProjectionPosition,
 	): Promise<boolean> {
-		return this.checkpoints.hasReached(
-			this.projection.name,
-			aggregateId,
-			position,
-		);
+		return this.checkpoints.hasReached(this.projection.name, address, position);
 	}
 
 	/**
@@ -225,24 +372,122 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * record pending for the dispatcher's retry/dead-letter mechanics.
 	 * Duplicates the dispatcher redelivers are absorbed by the cursor.
 	 *
-	 * **Dead-lettering a projection event leaves a permanent hole.**
-	 * With a `DispatchTrackingOutbox`, a poison event dead-letters and
-	 * LATER events of the same aggregate advance the watermark past it.
-	 * The cursor cannot distinguish "already applied" from "never
-	 * applied", so redelivering the dead letter afterwards is a silent
-	 * skip, and applying it out of order would be wrong anyway. The
-	 * remediation for a dead-lettered projection event is a rebuild
-	 * (`reset()` + replay) or a manual read-model correction, which is
-	 * why `deadLetters()` alerting matters doubly for projections. With
-	 * a plain `Outbox`, the poison event instead blocks the queue: the
-	 * read model stalls but stays consistent. Pick the trade-off
-	 * deliberately.
+	 * **Dead-lettering a projection event stalls that aggregate chain.**
+	 * A later event cannot advance past the missing commit/sequence: it
+	 * fails with `ProjectionGapError` until the dead letter is repaired
+	 * and replayed (or the projection is reset and rebuilt). No unseen
+	 * event is silently classified as a duplicate.
 	 */
 	toOutboxSink(): OutboxSink<Evt> {
 		return {
 			publish: async (record) => {
-				await this.project([record.event]);
+				await this.project([record]);
 			},
 		};
 	}
+}
+
+type GapAwareProjectionPosition = ProjectionPosition & {
+	commitSize: number;
+	previousEventfulAggregateVersion: number | null;
+};
+
+function isGapAwarePosition(
+	position: ProjectionPosition,
+): position is GapAwareProjectionPosition {
+	return (
+		Number.isInteger(position.commitSize) &&
+		Object.hasOwn(position, "previousEventfulAggregateVersion")
+	);
+}
+
+function isValidPosition(
+	position: ProjectionPosition,
+): position is GapAwareProjectionPosition {
+	if (!isGapAwarePosition(position)) return false;
+	const previous = position.previousEventfulAggregateVersion;
+	return (
+		Number.isInteger(position.aggregateVersion) &&
+		position.aggregateVersion >= 0 &&
+		Number.isInteger(position.commitSequence) &&
+		position.commitSequence >= 0 &&
+		position.commitSize > position.commitSequence &&
+		(previous === null ||
+			(Number.isInteger(previous) &&
+				previous >= 0 &&
+				previous < position.aggregateVersion))
+	);
+}
+
+function isValidCheckpoint(
+	checkpoint: unknown,
+): checkpoint is ProjectionCheckpoint {
+	if (typeof checkpoint !== "object" || checkpoint === null) return false;
+	const candidate = checkpoint as Partial<ProjectionCheckpoint>;
+	return (
+		typeof candidate.lastAppliedEventId === "string" &&
+		candidate.lastAppliedEventId.length > 0 &&
+		candidate.position !== undefined &&
+		isValidPosition(candidate.position)
+	);
+}
+
+function isSameOrderedPosition(
+	left: ProjectionPosition,
+	right: ProjectionPosition,
+): boolean {
+	return (
+		left.aggregateVersion === right.aggregateVersion &&
+		left.commitSequence === right.commitSequence
+	);
+}
+
+function addressedPositionKey(
+	address: AggregateAddress,
+	position: ProjectionPosition,
+): string {
+	return JSON.stringify([
+		address.aggregateType,
+		address.aggregateId,
+		position.aggregateVersion,
+		position.commitSequence,
+	]);
+}
+
+function isContiguousPosition(
+	candidate: GapAwareProjectionPosition,
+	watermark: ProjectionPosition | undefined,
+): boolean {
+	if (
+		candidate.commitSize < 1 ||
+		candidate.commitSequence < 0 ||
+		candidate.commitSequence >= candidate.commitSize
+	) {
+		return false;
+	}
+	if (watermark === undefined) {
+		return (
+			candidate.commitSequence === 0 &&
+			candidate.previousEventfulAggregateVersion === null
+		);
+	}
+	if (!isGapAwarePosition(watermark)) return false;
+	if (candidate.aggregateVersion === watermark.aggregateVersion) {
+		return (
+			candidate.previousEventfulAggregateVersion ===
+				watermark.previousEventfulAggregateVersion &&
+			candidate.commitSize === watermark.commitSize &&
+			candidate.commitSequence === watermark.commitSequence + 1
+		);
+	}
+	return (
+		watermark.commitSequence === watermark.commitSize - 1 &&
+		candidate.commitSequence === 0 &&
+		candidate.previousEventfulAggregateVersion === watermark.aggregateVersion
+	);
+}
+
+function formatPosition(position: ProjectionPosition | undefined): string {
+	if (position === undefined) return "genesis";
+	return `(${position.aggregateVersion}, ${position.commitSequence})`;
 }

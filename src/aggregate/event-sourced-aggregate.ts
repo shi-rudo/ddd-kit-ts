@@ -2,7 +2,9 @@ import { err, ok, type Result } from "@shirudo/result";
 import {
 	DomainError,
 	ForeignEventError,
+	MisaddressedEventError,
 	MissingHandlerError,
+	SnapshotCorruptedError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -15,7 +17,7 @@ import {
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import type { AnyDomainEvent } from "./domain-event";
+import { type AnyDomainEvent, adoptMintedEvent } from "./domain-event";
 
 // Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).
@@ -103,11 +105,35 @@ export abstract class EventSourcedAggregate<
 	 * Replay never invokes this method. History is already accepted
 	 * fact, and decision rules evolve; re-checking yesterday's events
 	 * against today's rules would make legitimately persisted streams
-	 * unloadable after a rule change. Structural expectations a replay
-	 * should still enforce belong in the event handlers themselves
-	 * (a handler may throw a `DomainError` for a corrupt payload).
+	 * unloadable after a rule change. Old storage shapes are not a
+	 * validation concern either: decode and upcast persisted events at
+	 * the read boundary (see the event-upcasting guide) so handlers
+	 * and replay always receive the current event shape.
 	 */
 	protected validateEvent(_event: TEvent): void {}
+
+	/**
+	 * Structural integrity check for a state restored from a SNAPSHOT.
+	 * Default is no-op. Override to reject states that no version of
+	 * the model could have produced (missing fields, impossible types,
+	 * truncated data): a snapshot is DERIVED data read back from
+	 * storage, so unlike replay (where every state is built by the
+	 * handlers from accepted facts) the restored blob deserves a
+	 * structural gate. Throw {@link SnapshotCorruptedError} (an
+	 * `InfrastructureError`: corrupted persistence is a storage
+	 * problem, not a business rejection) and
+	 * `restoreFromSnapshotWithEvents` returns it as `Err`, which the
+	 * documented load recipe answers by discarding the snapshot and
+	 * refolding from the stream.
+	 *
+	 * Deliberately NOT today's decision rules: a snapshot persisted
+	 * under yesterday's rules must keep loading after a rule change
+	 * ("replay from zero equals snapshot plus tail"). Rules stay in
+	 * `validateState` / `validateEvent` on the live paths; schema
+	 * DRIFT belongs in `snapshotSchemaVersion`; decode belongs in
+	 * `fromSnapshotState` / `migrateSnapshotState`.
+	 */
+	protected validateRestoredState(_state: TState): void {}
 
 	/**
 	 * Applies an event: validates, locates the handler, computes the next
@@ -115,6 +141,9 @@ export abstract class EventSourcedAggregate<
 	 *
 	 * Throws `DomainError` (or a subclass) on validation failure.
 	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
+	 * Throws `MisaddressedEventError` (wiring) when the event carries an
+	 * `aggregateId` or `aggregateType` naming a different aggregate;
+	 * missing address fields are stamped from the aggregate instead.
 	 *
 	 * State is not mutated if any step throws: the handler is invoked into
 	 * a local and only assigned to `_state` once all checks pass.
@@ -134,12 +163,67 @@ export abstract class EventSourcedAggregate<
 	protected apply<K extends TEvent["type"]>(
 		event: Extract<TEvent, { type: K }>,
 	): void {
+		// New facts get their address here, by construction: missing
+		// fields are stamped from the aggregate (the recordEvent
+		// guarantee), a present-but-foreign address throws
+		// MisaddressedEventError before anything is recorded. Without
+		// this, a mis-addressed event would mutate state, version, and
+		// pendingEvents and only fail later at harvest or on the next
+		// load, poisoning the own stream.
+		const stamped = this.stampNewEventAddress(event);
 		// Validation lives HERE, not in dispatch: only new facts are
 		// checked against current rules; replay trusts history.
-		this.validateEvent(event);
-		this.dispatch(event);
-		this.addDomainEvent(event);
+		this.validateEvent(stamped);
+		this.dispatch(stamped);
+		this.addDomainEvent(stamped);
 		this.bumpVersion();
+	}
+
+	/**
+	 * Address discipline for NEW facts: a present-but-foreign
+	 * `aggregateId` / `aggregateType` is a wiring bug and throws
+	 * {@link MisaddressedEventError}; missing fields are filled in from
+	 * the aggregate, so an applied event is always fully addressed and
+	 * can never fail the harvest or the replay guard later. The
+	 * stamped copy is frozen like the original (payload and metadata
+	 * are shared, already deep-frozen by `createDomainEvent`).
+	 */
+	private stampNewEventAddress<K extends TEvent["type"]>(
+		event: Extract<TEvent, { type: K }>,
+	): Extract<TEvent, { type: K }> {
+		// Immutability first: runs before validate/dispatch so a rejected
+		// event cannot leave mutated state behind (addDomainEvent would
+		// catch it too, but only after the handler already committed).
+		this.assertMintedEvent(event);
+		const { aggregateId, aggregateType } = event;
+		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
+		const typeForeign =
+			aggregateType !== undefined && aggregateType !== this.aggregateType;
+		if (idForeign || typeForeign) {
+			throw new MisaddressedEventError(
+				this.id,
+				this.aggregateType,
+				event.type,
+				aggregateId,
+				aggregateType,
+			);
+		}
+		if (aggregateId !== undefined && aggregateType !== undefined) {
+			return event;
+		}
+		// The spread preserves the event's structural shape; TS cannot
+		// prove it against the generic Extract, so the copy goes through
+		// the event's own wider type. `aggregateId`/`aggregateType` are
+		// `string | undefined` on DomainEvent; filling them in cannot
+		// leave the declared shape.
+		const stamped: AnyDomainEvent = adoptMintedEvent(
+			{
+				...event,
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			},
+		);
+		return stamped as Extract<TEvent, { type: K }>;
 	}
 
 	/**
@@ -156,14 +240,16 @@ export abstract class EventSourcedAggregate<
 	 * `handlers` map.
 	 */
 	/**
-	 * Replay-only address check: a history event that names a DIFFERENT
-	 * aggregate id or type is a stream row that belongs to someone else
-	 * (miswired read, colliding ids across types, corrupted store).
-	 * Throws `ForeignEventError` (a `DomainError`), which the replay
-	 * entry points map into their `Result` channel with full rollback.
-	 * Events without the optional address fields pass unchecked; new
-	 * facts never come through here (`recordEvent` stamps them from
-	 * `this`).
+	 * Replay address check: a history event that names a DIFFERENT
+	 * aggregate id or type is a persisted row that belongs to someone
+	 * else (a miswired stream read, colliding ids across types, a
+	 * corrupted store). Throws `ForeignEventError`, an
+	 * `InfrastructureError`, which PROPAGATES through the replay
+	 * methods (their `Result` channel is reserved for `DomainError`
+	 * stream corruption) after the all-or-nothing rollback. History
+	 * events without the optional address fields pass unchecked (the
+	 * fields are optional on the event shape); NEW events are covered
+	 * by the stricter `stampNewEventAddress` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =
@@ -281,29 +367,32 @@ export abstract class EventSourcedAggregate<
 	public restoreFromSnapshotWithEvents(
 		snapshot: AggregateSnapshot<TSnapshotState>,
 		eventsAfterSnapshot: ReadonlyArray<TEvent>,
-	): Result<void, DomainError> {
+	): Result<void, DomainError | SnapshotCorruptedError> {
 		assertRestoreTargetHasNoPendingEvents(this);
 		const previousState = this._state;
 		const previousVersion = this.version;
 		// `persistedVersion` is invariant during the loop; no rollback needed.
 
-		// Same guard AggregateRoot.restoreFromSnapshot applies: a corrupt
-		// snapshot store must not reconstitute an invalid aggregate. Runs
-		// BEFORE anything is assigned, so there is nothing to roll back;
-		// a DomainError maps to Err (infrastructure boundary, same contract
-		// as the replay loop below), everything else propagates.
-		// Resolve, convert, and validate BEFORE anything is assigned, all
-		// under the method's documented Result contract: a DomainError from
-		// a migrateSnapshotState override, fromSnapshotState, or
-		// validateState maps to Err (the repository's discard-and-refold
-		// branch must see it), while SnapshotSchemaMismatchError (an
-		// InfrastructureError) and other non-domain throws propagate.
+		// Resolve, convert, and structurally check BEFORE anything is
+		// assigned, under the method's documented Result contract: a
+		// DomainError from migrateSnapshotState / fromSnapshotState and a
+		// SnapshotCorruptedError from validateRestoredState map to Err
+		// (the repository's discard-and-refold branch must see both),
+		// while SnapshotSchemaMismatchError (a configuration gap, not
+		// corruption) and other throws propagate. Deliberately NOT validated with
+		// `validateState`: those are today's decision rules, and a
+		// snapshot persisted under yesterday's rules must keep loading
+		// ("replay from zero equals snapshot plus tail").
+		// `validateRestoredState` is the separate STRUCTURAL gate for the
+		// stored blob.
 		let restored: TState;
 		try {
 			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
-			this.validateState(restored);
+			this.validateRestoredState(restored);
 		} catch (e) {
-			if (e instanceof DomainError) return err(e);
+			if (e instanceof DomainError || e instanceof SnapshotCorruptedError) {
+				return err(e);
+			}
 			throw e;
 		}
 

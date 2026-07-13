@@ -11,7 +11,8 @@ It is not an application framework. You keep your HTTP layer, database, queue,
 ORM, and runtime choices. The kit gives your domain model a strong center and
 clear boundaries around persistence and side effects.
 
-> **Stable: 3.0**
+> **Release candidate: 3.0** (`3.0.0-rc`, npm dist-tag `next`); latest stable
+> release is 2.2.
 >
 > The public API follows [Semantic Versioning](https://semver.org/). Breaking
 > changes bump the major version and are documented with migration notes in the
@@ -93,6 +94,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return new Order(id, { status: "draft" });
   }
 
+  get status(): OrderState["status"] {
+    return this.state.status;
+  }
+
   confirm(): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
@@ -109,7 +114,7 @@ const order = Order.draft("order-1" as OrderId);
 
 order.confirm();
 
-order.state.status; // "confirmed"
+order.status; // "confirmed"
 order.version; // 1
 order.pendingEvents[0]?.type; // "OrderConfirmed"
 ```

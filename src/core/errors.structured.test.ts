@@ -10,10 +10,15 @@ import {
 	EventHarvestError,
 	HostileStateKeyError,
 	InfrastructureError,
+	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	MissingHandlerError,
+	ProjectionGapError,
+	ProjectionIdentityViolationError,
+	ProjectionOrderViolationError,
 	SnapshotSchemaMismatchError,
 	UnenrolledChangesError,
+	UnprojectableEventError,
 	UnregisteredHandlerError,
 	UnreplayableAggregateError,
 } from "./errors";
@@ -77,6 +82,48 @@ const concreteCases: ReadonlyArray<{
 		error: () => new MissingHandlerError("OrderConfirmed"),
 		code: "MISSING_HANDLER",
 		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new UnprojectableEventError("orders", "evt-1", "is invalid"),
+		code: "UNPROJECTABLE_EVENT",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new ProjectionGapError("orders", "evt-2", "1:0/1", "3:0/1"),
+		code: "PROJECTION_GAP",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ProjectionOrderViolationError(
+				"orders",
+				"evt-1",
+				"3:0/1",
+				"2:0/1",
+			),
+		code: "PROJECTION_ORDER_VIOLATION",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ProjectionIdentityViolationError(
+				"orders",
+				"evt-new",
+				"evt-old",
+				"1:0/1",
+			),
+		code: "PROJECTION_IDENTITY_VIOLATION",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () => new InvalidIntegrationMessageError("$.payload", "is invalid"),
+		code: "INVALID_INTEGRATION_MESSAGE",
+		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
 	{
@@ -245,7 +292,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		// Type-level completeness check: a class code missing from the
 		// hand-maintained KitErrorCode union fails compilation here.
 		type AssertKitCode<T extends KitErrorCode> = T;
-		type _Checks = [
+			type _Checks = [
 			AssertKitCode<AggregateDeletedError["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
 			AssertKitCode<ConcurrencyConflictError["code"]>,
@@ -253,9 +300,14 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ErrorMapperFailedError["code"]>,
 			AssertKitCode<EventHarvestError["code"]>,
 			AssertKitCode<HostileStateKeyError["code"]>,
+			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
+			AssertKitCode<ProjectionGapError["code"]>,
+			AssertKitCode<ProjectionIdentityViolationError["code"]>,
+			AssertKitCode<ProjectionOrderViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
 			AssertKitCode<UnenrolledChangesError["code"]>,
+			AssertKitCode<UnprojectableEventError["code"]>,
 			AssertKitCode<UnregisteredHandlerError["code"]>,
 			AssertKitCode<UnreplayableAggregateError["code"]>,
 		];

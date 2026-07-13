@@ -18,7 +18,21 @@ function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 			});
 			return {
 				outbox,
-				addCommitted: (events) => outbox.add(events),
+				addCommitted: (events) =>
+					outbox.add(
+						events.map((event, commitSequence) => ({
+							event,
+							source: {
+								aggregateId: "contract-aggregate",
+								aggregateType: "ContractAggregate",
+							},
+							position: {
+								aggregateVersion: 1,
+								commitSequence,
+								commitSize: events.length,
+							},
+						})),
+					),
 				// No addRolledBack: the in-memory outbox cannot keep rollback
 				// purity (documented limitation); the test stays visible as
 				// skipped.

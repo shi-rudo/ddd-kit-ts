@@ -7,12 +7,25 @@ import {
 	OutboxDispatcher,
 	type OutboxSink,
 } from "./outbox-dispatcher";
-import type { Outbox, OutboxRecord } from "./ports";
+import type { CommittedDomainEvent, Outbox, OutboxRecord } from "./ports";
 
 type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 
 function makeEvent(n: number): TestEvent {
 	return createDomainEvent("ThingHappened", { n }, { eventId: `evt-${n}` });
+}
+
+function makeCommitted(n: number): CommittedDomainEvent<TestEvent> {
+	return {
+		event: makeEvent(n),
+		source: { aggregateId: `thing-${n}`, aggregateType: "Thing" },
+		position: {
+			aggregateVersion: 1,
+			commitSequence: 0,
+			commitSize: 1,
+			previousEventfulAggregateVersion: null,
+		},
+	};
 }
 
 function fastDispatcher<Evt extends TestEvent>(
@@ -66,7 +79,7 @@ function interceptOutbox(
 describe("OutboxDispatcher", () => {
 	it("delivers in commit order and acks the delivered batch in one call, only after publish", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
-		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		await inner.add([makeCommitted(1), makeCommitted(2), makeCommitted(3)]);
 		const ackCalls: ReadonlyArray<string>[] = [];
 		const outbox = interceptOutbox(inner, {
 			markDispatched: async (ids) => {
@@ -92,7 +105,7 @@ describe("OutboxDispatcher", () => {
 
 	it("stops the batch on the first failure, acks the delivered prefix, and preserves order across retries", async () => {
 		const inner = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
-		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		await inner.add([makeCommitted(1), makeCommitted(2), makeCommitted(3)]);
 		const ackCalls: ReadonlyArray<string>[] = [];
 		const outbox = interceptOutbox(inner, {
 			markDispatched: async (ids) => {
@@ -123,7 +136,7 @@ describe("OutboxDispatcher", () => {
 
 	it("survives transient getPending failures and reports them to onPollError", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
-		await inner.add([makeEvent(1)]);
+		await inner.add([makeCommitted(1)]);
 		let pollFailures = 2;
 		const outbox = interceptOutbox(inner, {
 			getPending: async (limit) => {
@@ -157,7 +170,7 @@ describe("OutboxDispatcher", () => {
 
 	it("reports failures to the tracking outbox so poison messages dead-letter and unblock the queue", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 2 });
-		await outbox.add([makeEvent(1), makeEvent(2)]);
+		await outbox.add([makeCommitted(1), makeCommitted(2)]);
 		const delivered: number[] = [];
 		const errors: unknown[] = [];
 		const sink: OutboxSink<TestEvent> = {
@@ -186,7 +199,7 @@ describe("OutboxDispatcher", () => {
 
 	it("does not count a failed ack toward the poison ceiling and redelivers instead", async () => {
 		const inner = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
-		await inner.add([makeEvent(1)]);
+		await inner.add([makeCommitted(1)]);
 		let failAcks = 1;
 		const outbox = interceptOutbox(inner, {
 			markDispatched: async (ids) => {
@@ -216,7 +229,7 @@ describe("OutboxDispatcher", () => {
 
 	it("a drainOnce call during an in-flight pass joins it instead of double-delivering", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>();
-		await outbox.add([makeEvent(1), makeEvent(2)]);
+		await outbox.add([makeCommitted(1), makeCommitted(2)]);
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
@@ -244,7 +257,7 @@ describe("OutboxDispatcher", () => {
 
 	it("run(signal) shuts down gracefully even while a joined signal-less pass is mid-flight", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>();
-		await outbox.add([makeEvent(1)]);
+		await outbox.add([makeCommitted(1)]);
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
@@ -274,7 +287,7 @@ describe("OutboxDispatcher", () => {
 		// dead-letter the record; the transient classifier keeps it alive
 		// through a simulated outage until delivery succeeds.
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
-		await outbox.add([makeEvent(1)]);
+		await outbox.add([makeCommitted(1)]);
 		let outage = 3;
 		const delivered: number[] = [];
 		const sink: OutboxSink<TestEvent> = {
@@ -300,7 +313,7 @@ describe("OutboxDispatcher", () => {
 
 	it("a throwing countsTowardCeiling classifier counts the failure and cannot break the loop", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
-		await outbox.add([makeEvent(1), makeEvent(2)]);
+		await outbox.add([makeCommitted(1), makeCommitted(2)]);
 		const delivered: number[] = [];
 		const sink: OutboxSink<TestEvent> = {
 			publish: async (record) => {
@@ -326,7 +339,7 @@ describe("OutboxDispatcher", () => {
 
 	it("reports a failed ack once per record of the delivered prefix", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
-		await inner.add([makeEvent(1), makeEvent(2), makeEvent(3)]);
+		await inner.add([makeCommitted(1), makeCommitted(2), makeCommitted(3)]);
 		let failAcks = 1;
 		const outbox = interceptOutbox(inner, {
 			markDispatched: async (ids) => {
@@ -359,7 +372,7 @@ describe("OutboxDispatcher", () => {
 
 	it("does not mistake a plain outbox with an unrelated markFailed helper for a tracking outbox", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
-		await inner.add([makeEvent(1), makeEvent(2)]);
+		await inner.add([makeCommitted(1), makeCommitted(2)]);
 		const helperCalls: unknown[] = [];
 		// Structurally an Outbox, plus a markFailed that is NOT the tracking
 		// protocol (no deadLetters); the dispatcher must never call it.
@@ -412,7 +425,7 @@ describe("OutboxDispatcher", () => {
 
 	it("a throwing onDispatchError observer cannot break the loop", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
-		await outbox.add([makeEvent(1), makeEvent(2)]);
+		await outbox.add([makeCommitted(1), makeCommitted(2)]);
 		const delivered: number[] = [];
 		const sink: OutboxSink<TestEvent> = {
 			publish: async (record) => {
@@ -435,7 +448,7 @@ describe("OutboxDispatcher", () => {
 
 	it("drains a backlog larger than the batch size", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>();
-		await outbox.add(Array.from({ length: 10 }, (_, i) => makeEvent(i)));
+		await outbox.add(Array.from({ length: 10 }, (_, i) => makeCommitted(i)));
 		const delivered: number[] = [];
 		const sink: OutboxSink<TestEvent> = {
 			publish: async (record) => {
@@ -482,7 +495,7 @@ describe("OutboxDispatcher", () => {
 	describe("drainOnce", () => {
 		it("dispatches the whole backlog in one pass and reports drained", async () => {
 			const outbox = new InMemoryOutbox<TestEvent>();
-			await outbox.add(Array.from({ length: 7 }, (_, i) => makeEvent(i)));
+			await outbox.add(Array.from({ length: 7 }, (_, i) => makeCommitted(i)));
 			const delivered: number[] = [];
 			const sink: OutboxSink<TestEvent> = {
 				publish: async (record) => {
@@ -501,7 +514,7 @@ describe("OutboxDispatcher", () => {
 			const outbox = new InMemoryOutbox<TestEvent>({
 				maxDeliveryAttempts: 99,
 			});
-			await outbox.add([makeEvent(1), makeEvent(2)]);
+			await outbox.add([makeCommitted(1), makeCommitted(2)]);
 			let fail = true;
 			const sink: OutboxSink<TestEvent> = {
 				publish: async (record) => {
@@ -556,16 +569,25 @@ describe("eventBusSink", () => {
 		const sink = eventBusSink<TestEvent>(bus);
 
 		const ok = makeEvent(7);
+		const okMessage = makeCommitted(7);
 		const okRecord: OutboxRecord<TestEvent> = {
 			dispatchId: ok.eventId,
 			event: ok,
+			source: okMessage.source,
+			position: okMessage.position,
 		};
 		await sink.publish(okRecord);
 		expect(seen).toEqual([7]);
 
 		const bad = makeEvent(99);
+		const badMessage = makeCommitted(99);
 		await expect(
-			sink.publish({ dispatchId: bad.eventId, event: bad }),
+			sink.publish({
+				dispatchId: bad.eventId,
+				event: bad,
+				source: badMessage.source,
+				position: badMessage.position,
+			}),
 		).rejects.toThrow("handler failed");
 	});
 });

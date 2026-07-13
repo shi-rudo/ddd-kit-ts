@@ -17,6 +17,13 @@ export type OrderState = {
 	status: "pending" | "confirmed" | "shipped" | "cancelled";
 };
 
+export type OrderItemView = Readonly<{
+	id: ItemId;
+	productId: string;
+	quantity: number;
+	lineTotal: Money;
+}>;
+
 /**
  * Order is an Aggregate Root (an Entity with version).
  *
@@ -38,6 +45,14 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 			status: "pending",
 		};
 		return new Order(id, initialState);
+	}
+
+	get status(): OrderState["status"] {
+		return this.state.status;
+	}
+
+	get itemCount(): number {
+		return this.state.items.length;
 	}
 
 	/**
@@ -113,8 +128,8 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 		const [first, ...rest] = this.state.items;
 		if (!first) return undefined;
 		return rest.reduce(
-			(total, item) => addMoney(total, item.state.lineTotal),
-			first.state.lineTotal,
+			(total, item) => addMoney(total, item.lineTotal),
+			first.lineTotal,
 		);
 	}
 
@@ -148,10 +163,23 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	}
 
 	/**
-	 * Gets a specific item by ID.
+	 * Returns a detached, immutable read DTO rather than a live child entity.
 	 */
-	getItem(itemId: ItemId): OrderItem | undefined {
-		return findEntityById(this.state.items, itemId);
+	getItem(itemId: ItemId): OrderItemView | undefined {
+		const item = findEntityById(this.state.items, itemId);
+		if (!item) return undefined;
+		return Object.freeze({
+			id: item.id,
+			productId: item.productId,
+			quantity: item.quantity,
+			lineTotal: item.lineTotal,
+		});
+	}
+
+	hasProduct(itemId: ItemId, productId: string): boolean {
+		return (
+			findEntityById(this.state.items, itemId)?.isForProduct(productId) ?? false
+		);
 	}
 
 	/**

@@ -1,6 +1,7 @@
-import type { Id } from "../../src/core/id";
-import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
 import { createDomainEvent } from "../../src/aggregate/aggregate";
+import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
+import type { Id } from "../../src/core/id";
+import { deepFreeze } from "../../src/value-object/value-object";
 import type {
 	ConversionScored,
 	MatchFinished,
@@ -33,6 +34,15 @@ export type MatchState = {
 	date: Date;
 	scoringPlays: ScoringPlay[];
 };
+export type MatchView = Readonly<{
+	homeTeam: Readonly<Team>;
+	awayTeam: Readonly<Team>;
+	homeScore: number;
+	awayScore: number;
+	status: MatchStatus;
+	date: Date;
+	scoringPlays: ReadonlyArray<Readonly<ScoringPlay>>;
+}>;
 
 export class RugbyMatch extends EventSourcedAggregate<
 	MatchState,
@@ -40,6 +50,10 @@ export class RugbyMatch extends EventSourcedAggregate<
 	MatchId
 > {
 	protected readonly aggregateType = "RugbyMatch";
+
+	get view(): MatchView {
+		return deepFreeze(structuredClone(this.state)) as MatchView;
+	}
 
 	static schedule(
 		id: MatchId,
@@ -98,9 +112,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 	}
 
 	finish(): void {
-		this.apply(
-			createDomainEvent("MatchFinished", {}) as MatchFinished,
-		);
+		this.apply(createDomainEvent("MatchFinished", {}) as MatchFinished);
 	}
 
 	protected readonly handlers = {

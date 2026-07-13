@@ -187,12 +187,12 @@ export abstract class AggregateRoot<
 	 * commit, desyncing `persistedVersion` from the DB row; and the next
 	 * uncontended save would throw a false `ConcurrencyConflictError`.
 	 *
-	 * The pending-events clause covers the sanctioned decoupled
-	 * `addDomainEvent` path (an event recorded without a state change,
-	 * e.g. a deletion event before a hard delete): the aggregate still
-	 * needs its trip through `withCommit` so the event reaches the
-	 * outbox. With all clauses included, `hasChanges === false` genuinely
-	 * means "skipping save is safe".
+	 * The pending-events clause also catches direct `addDomainEvent`
+	 * usage. `withCommit` rejects an eventful, already-persisted aggregate
+	 * whose version did not advance (the commit cursor would collide), but
+	 * `hasChanges` must still route that misuse through the harvest guard
+	 * instead of silently skipping it. With all clauses included,
+	 * `hasChanges === false` genuinely means "skipping save is safe".
 	 */
 	public get hasChanges(): boolean {
 		if (!this._hasBaseline) return true;
@@ -256,10 +256,15 @@ export abstract class AggregateRoot<
 		newState: TState,
 		events: TEvent | readonly TEvent[] = [],
 	): void {
-		this.setState(newState);
 		const list: readonly TEvent[] = Array.isArray(events)
 			? events
 			: [events as TEvent];
+		// Events are checked BEFORE the state moves: a rejected event must
+		// not leave a mutated aggregate without its recorded fact.
+		for (const ev of list) {
+			this.assertMintedEvent(ev);
+		}
+		this.setState(newState);
 		for (const ev of list) {
 			this.addDomainEvent(ev);
 		}
@@ -309,7 +314,15 @@ export abstract class AggregateRoot<
 	/**
 	 * Restores the aggregate from a snapshot: loads state and aligns
 	 * `version` + `persistedVersion` to the snapshot version. Validates
-	 * the restored state.
+	 * the restored state with `validateState`, deliberately: for a
+	 * state-stored aggregate EVERY load validates (`reconstitute` runs
+	 * the constructor's `validateState`), because the stored state IS
+	 * the record, and a snapshot here is a backup of that record. This
+	 * differs from `EventSourcedAggregate.restoreFromSnapshotWithEvents`
+	 * on purpose: there the stream is the record, states derive from
+	 * accepted facts, and today's rules must not gate history. When a
+	 * `validateState` rule tightens on a state-stored aggregate, the
+	 * remedy is a data migration, the same as for its regular rows.
 	 *
 	 * **The restore target must not carry pending events**: such a target
 	 * throws `UnreplayableAggregateError` before anything moves (the

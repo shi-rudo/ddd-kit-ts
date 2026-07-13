@@ -1,5 +1,6 @@
 import {
 	SnapshotSchemaMismatchError,
+	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
@@ -12,6 +13,7 @@ import {
 	type CreateDomainEventOptions,
 	createDomainEvent,
 	type DomainEvent,
+	isMintedEvent,
 } from "./domain-event";
 
 /**
@@ -251,12 +253,29 @@ export abstract class BaseAggregate<
 	 * `AggregateRoot.commit()` (state-stored) or `EventSourcedAggregate.apply()`
 	 * (event-sourced) call sites, both of which wrap `addDomainEvent` in the
 	 * canonical record-AFTER-mutation order (Vernon §8). Calling
-	 * `addDomainEvent` directly is appropriate only when state and event
-	 * recording have already been decoupled deliberately (e.g. a
-	 * deletion event before a hard-delete; see `docs/guide/repository.md`).
+	 * `addDomainEvent` directly is appropriate only after a version-advancing
+	 * state mutation, or while constructing a never-persisted aggregate.
+	 * An event-only commit on an already-persisted aggregate has no unique
+	 * cursor and `withCommit` rejects it; use `commit(currentState, event)`.
 	 */
 	protected addDomainEvent(event: TEvent): void {
+		this.assertMintedEvent(event);
 		this._pendingEvents.push(event);
+	}
+
+	/**
+	 * Immutability gate for every recording path: only events minted by
+	 * the kit's constructors (`createDomainEvent`, `recordEvent`) pass,
+	 * checked against the constructor's internal, unforgeable mint
+	 * marker. Minted implies deeply frozen with defensively copied
+	 * payload and metadata, a guarantee no frozen-ness probe can
+	 * establish (a shallow-frozen literal with mutable nested data
+	 * would fool it). O(1): one WeakSet lookup.
+	 */
+	protected assertMintedEvent(event: TEvent): void {
+		if (!isMintedEvent(event)) {
+			throw new UnmintedEventError((event as AnyDomainEvent).type);
+		}
 	}
 
 	/**

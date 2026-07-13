@@ -258,10 +258,10 @@ function wireSaga(
 		saga.cancelOnShippingFailure();
 		await sagaRepository.save(saga);
 		// Compensating sequence: refund payment first, then cancel order.
-		if (saga.state.paymentId) {
+		if (saga.paymentId) {
 			await commandBus.execute({
 				type: "RefundPayment",
-				paymentId: saga.state.paymentId,
+				paymentId: saga.paymentId,
 			});
 		}
 		await commandBus.execute({
@@ -368,24 +368,24 @@ describe("Checkout saga (Process Manager)", () => {
 		// At this point the saga has dispatched RequestPayment and the
 		// Payment aggregate has been created with status "requested".
 		const saga = await deps.sagaRepository.getById(orderId);
-		expect(saga.state.step).toBe("awaiting-payment");
-		const paymentId = saga.state.paymentId!;
+		expect(saga.step).toBe("awaiting-payment");
+		const paymentId = saga.paymentId!;
 		expect(paymentId).toBeDefined();
 
 		const payment = await deps.paymentRepository.getById(paymentId);
-		expect(payment.state.status).toBe("requested");
+		expect(payment.status).toBe("requested");
 
 		// 2. Payment gateway calls back successfully
 		await simulatePaymentResult(deps, paymentId, { kind: "received" });
 
 		// Saga transitions to awaiting-shipping; RequestShipping dispatched.
 		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
-		expect(sagaAfterPayment.state.step).toBe("awaiting-shipping");
-		const shipmentId = sagaAfterPayment.state.shipmentId!;
+		expect(sagaAfterPayment.step).toBe("awaiting-shipping");
+		const shipmentId = sagaAfterPayment.shipmentId!;
 		expect(shipmentId).toBeDefined();
 
 		const shipment = await deps.shipmentRepository.getById(shipmentId);
-		expect(shipment.state.status).toBe("requested");
+		expect(shipment.status).toBe("requested");
 
 		// 3. Shipping carrier reports completion
 		await simulateShippingResult(deps, shipmentId, {
@@ -395,14 +395,14 @@ describe("Checkout saga (Process Manager)", () => {
 
 		// Final state: saga completed, order confirmed.
 		const finalSaga = await deps.sagaRepository.getById(orderId);
-		expect(finalSaga.state.step).toBe("completed");
+		expect(finalSaga.step).toBe("completed");
 
 		const finalOrder = await deps.orderRepository.getById(orderId);
-		expect(finalOrder.state.status).toBe("confirmed");
+		expect(finalOrder.status).toBe("confirmed");
 
 		const finalShipment = await deps.shipmentRepository.getById(shipmentId);
-		expect(finalShipment.state.status).toBe("shipped");
-		expect(finalShipment.state.trackingId).toBe("TRACK-001");
+		expect(finalShipment.status).toBe("shipped");
+		expect(finalShipment.trackingId).toBe("TRACK-001");
 	});
 
 	it("payment failure compensates: order is cancelled, no shipment created", async () => {
@@ -417,7 +417,7 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		const saga = await deps.sagaRepository.getById(orderId);
-		const paymentId = saga.state.paymentId!;
+		const paymentId = saga.paymentId!;
 
 		// Payment gateway rejects the charge
 		await simulatePaymentResult(deps, paymentId, {
@@ -427,16 +427,16 @@ describe("Checkout saga (Process Manager)", () => {
 
 		// Compensation: saga cancelled, order cancelled, no shipment touched.
 		const finalSaga = await deps.sagaRepository.getById(orderId);
-		expect(finalSaga.state.step).toBe("cancelled-payment-failed");
-		expect(finalSaga.state.shipmentId).toBeUndefined();
+		expect(finalSaga.step).toBe("cancelled-payment-failed");
+		expect(finalSaga.shipmentId).toBeUndefined();
 
 		const finalOrder = await deps.orderRepository.getById(orderId);
-		expect(finalOrder.state.status).toBe("cancelled");
-		expect(finalOrder.state.cancelReason).toContain("payment-failed");
-		expect(finalOrder.state.cancelReason).toContain("insufficient-funds");
+		expect(finalOrder.status).toBe("cancelled");
+		expect(finalOrder.cancelReason).toContain("payment-failed");
+		expect(finalOrder.cancelReason).toContain("insufficient-funds");
 
 		const finalPayment = await deps.paymentRepository.getById(paymentId);
-		expect(finalPayment.state.status).toBe("failed");
+		expect(finalPayment.status).toBe("failed");
 	});
 
 	it("shipping failure compensates: payment refunded, order cancelled", async () => {
@@ -451,13 +451,13 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		const sagaAfterPlace = await deps.sagaRepository.getById(orderId);
-		const paymentId = sagaAfterPlace.state.paymentId!;
+		const paymentId = sagaAfterPlace.paymentId!;
 
 		// Payment succeeds
 		await simulatePaymentResult(deps, paymentId, { kind: "received" });
 
 		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
-		const shipmentId = sagaAfterPayment.state.shipmentId!;
+		const shipmentId = sagaAfterPayment.shipmentId!;
 
 		// Shipping carrier reports failure (warehouse on fire, etc.)
 		await simulateShippingResult(deps, shipmentId, {
@@ -467,17 +467,17 @@ describe("Checkout saga (Process Manager)", () => {
 
 		// Compensation sequence: payment refunded, then order cancelled.
 		const finalSaga = await deps.sagaRepository.getById(orderId);
-		expect(finalSaga.state.step).toBe("cancelled-shipping-failed");
+		expect(finalSaga.step).toBe("cancelled-shipping-failed");
 
 		const finalPayment = await deps.paymentRepository.getById(paymentId);
-		expect(finalPayment.state.status).toBe("refunded");
+		expect(finalPayment.status).toBe("refunded");
 
 		const finalOrder = await deps.orderRepository.getById(orderId);
-		expect(finalOrder.state.status).toBe("cancelled");
-		expect(finalOrder.state.cancelReason).toContain("shipping-failed");
-		expect(finalOrder.state.cancelReason).toContain("warehouse-unavailable");
+		expect(finalOrder.status).toBe("cancelled");
+		expect(finalOrder.cancelReason).toContain("shipping-failed");
+		expect(finalOrder.cancelReason).toContain("warehouse-unavailable");
 
 		const finalShipment = await deps.shipmentRepository.getById(shipmentId);
-		expect(finalShipment.state.status).toBe("failed");
+		expect(finalShipment.status).toBe("failed");
 	});
 });

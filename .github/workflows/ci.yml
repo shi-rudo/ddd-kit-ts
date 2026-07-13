@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm vitest run
+
+      - name: Build
+        run: pnpm build
+
+      - name: Package smoke (pack + import from the tarball)
+        run: |
+          base_error_version=$(node -p "require('./node_modules/@shirudo/base-error/package.json').version")
+          result_version=$(node -p "require('./node_modules/@shirudo/result/package.json').version")
+          rm -rf /tmp/pack-smoke /tmp/pack-consumer
+          mkdir -p /tmp/pack-smoke /tmp/pack-consumer
+          pnpm pack --pack-destination /tmp/pack-smoke
+          tarball=$(printf '%s\n' /tmp/pack-smoke/shirudo-ddd-kit-*.tgz)
+          cd /tmp/pack-consumer
+          npm init -y
+          npm install --ignore-scripts --no-audit --no-fund "$tarball" "@shirudo/base-error@$base_error_version" "@shirudo/result@$result_version"
+          node --input-type=module -e "const m = await import('@shirudo/ddd-kit'); if (typeof m.AggregateRoot !== 'function') throw new Error('import smoke failed');"
+          node --input-type=module -e "const m = await import('@shirudo/ddd-kit/money'); if (typeof m.parseMoneyInput !== 'function') throw new Error('money entry smoke failed');"

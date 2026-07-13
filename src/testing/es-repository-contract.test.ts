@@ -4,7 +4,11 @@ import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import { ConcurrencyConflictError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { Outbox } from "../events/ports";
+import type {
+	CommittedDomainEvent,
+	EventCommitCandidate,
+	Outbox,
+} from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {
 	createEsRepositoryContractTests,
@@ -47,7 +51,9 @@ class ContractEsOrder extends EventSourcedAggregate<
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
 		order.apply(
-			order.recordEvent("EsOrderCreated", { name: "initial" }) as EsOrderCreated,
+			order.recordEvent("EsOrderCreated", {
+				name: "initial",
+			}) as EsOrderCreated,
 		);
 		return order;
 	}
@@ -58,9 +64,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 	}
 
 	rename(name: string): void {
-		this.apply(
-			this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed,
-		);
+		this.apply(this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed);
 	}
 
 	addItem(item: string): void {
@@ -90,23 +94,66 @@ class ContractEsOrder extends EventSourcedAggregate<
  */
 class InMemoryEsDb {
 	streams = new Map<string, EsOrderEvent[]>();
-	outbox: EsOrderEvent[] = [];
+	outbox: CommittedDomainEvent<EsOrderEvent>[] = [];
+	sourceHeads = new Map<string, number>();
+	commitPredecessors = new Map<string, number | null>();
 
-	snapshot(): { streams: Map<string, EsOrderEvent[]>; outbox: EsOrderEvent[] } {
+	addToOutbox(events: ReadonlyArray<EventCommitCandidate<EsOrderEvent>>): void {
+		for (const message of events) {
+			const sourceKey = JSON.stringify([
+				message.source.aggregateType,
+				message.source.aggregateId,
+			]);
+			const commitKey = JSON.stringify([
+				message.source.aggregateType,
+				message.source.aggregateId,
+				message.position.aggregateVersion,
+			]);
+			let previousEventfulAggregateVersion: number | null;
+			if (this.commitPredecessors.has(commitKey)) {
+				previousEventfulAggregateVersion =
+					this.commitPredecessors.get(commitKey) ?? null;
+			} else {
+				previousEventfulAggregateVersion = this.sourceHeads.get(sourceKey) ?? null;
+				this.commitPredecessors.set(
+					commitKey,
+					previousEventfulAggregateVersion,
+				);
+				this.sourceHeads.set(sourceKey, message.position.aggregateVersion);
+			}
+			this.outbox.push({
+				...message,
+				position: { ...message.position, previousEventfulAggregateVersion },
+			});
+		}
+	}
+
+	snapshot(): {
+		streams: Map<string, EsOrderEvent[]>;
+		outbox: CommittedDomainEvent<EsOrderEvent>[];
+		sourceHeads: Map<string, number>;
+		commitPredecessors: Map<string, number | null>;
+	} {
 		return {
 			streams: new Map(
 				[...this.streams].map(([id, events]) => [id, [...events]]),
 			),
 			outbox: [...this.outbox],
+			sourceHeads: new Map(this.sourceHeads),
+			commitPredecessors: new Map(this.commitPredecessors),
 		};
 	}
 
 	restore(snapshot: {
 		streams: Map<string, EsOrderEvent[]>;
-		outbox: EsOrderEvent[];
+		outbox: CommittedDomainEvent<EsOrderEvent>[];
+		sourceHeads: Map<string, number>;
+		commitPredecessors: Map<string, number | null>;
 	}): void {
 		this.streams = snapshot.streams;
 		this.outbox = snapshot.outbox;
+		this.sourceHeads = snapshot.sourceHeads;
+		this.commitPredecessors = snapshot.commitPredecessors;
 	}
 }
 
@@ -152,7 +199,7 @@ class InMemoryEsOrderRepository
 			});
 		}
 		// Appends the UNSTAMPED pendingEvents originals (the outbox gets
-		// stamped copies from withCommit's harvest).
+		// committed envelopes from withCommit's harvest).
 		this.db.streams.set(order.id, [...stream, ...order.pendingEvents]);
 	}
 }
@@ -186,10 +233,13 @@ function createInMemoryEsHarness(
 			};
 			const outbox: Outbox<EsOrderEvent> = {
 				add: async (events) => {
-					db.outbox.push(...events);
+					db.addToOutbox(events);
 				},
 				getPending: async () =>
-					db.outbox.map((event, i) => ({ dispatchId: String(i), event })),
+					db.outbox.map((message, i) => ({
+						...message,
+						dispatchId: String(i),
+					})),
 				markDispatched: async () => {},
 			};
 			return {
@@ -217,7 +267,7 @@ function createInMemoryEsHarness(
 			ContractEsOrder.create(`contract-es-order-${idCounter++}` as EsOrderId),
 		createAggregateWithId: (id) => ContractEsOrder.create(id),
 		mutate: (order) => order.rename(`renamed-${mutationCounter++}`),
-		snapshotState: (order) => structuredClone(order.state),
+		snapshotState: (order) => order.createSnapshot().state,
 	};
 }
 

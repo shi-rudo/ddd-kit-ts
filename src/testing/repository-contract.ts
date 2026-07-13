@@ -1,6 +1,7 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
+import type { CommittedDomainEvent } from "../events/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -56,7 +57,7 @@ export interface RepositoryContractEnvironment<
 	 * All events currently persisted in the outbox (committed writes
 	 * only; a rolled-back transaction's events must not appear here).
 	 */
-	committedOutboxEvents(): Promise<ReadonlyArray<Evt>>;
+	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
 
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
@@ -222,7 +223,7 @@ export type RepositoryContractTest = ContractTest;
  *   mutate: (order) => order.changeNote(`note-${counter++}`), // ONE bump + event
  *   // provide every optional capability your adapter supports:
  *   createAggregateWithId: (id) => Order.draft(id),
- *   snapshotState: (order) => normalizeForRoundtrip(order.state),
+ *   snapshotState: (order) => order.createSnapshot().state,
  *   deletesAreVersionChecked: true,
  * };
  *
@@ -311,8 +312,9 @@ export function createRepositoryContractTests<
 	// Sorted: eventIds are unique, so this is a multiset comparison. The
 	// environment contract guarantees WHICH events are persisted, not the
 	// order a `SELECT` without `ORDER BY` happens to return them in.
-	const eventIds = (events: ReadonlyArray<Evt>): string[] =>
-		events.map((event) => event.eventId).sort();
+	const eventIds = (
+		events: ReadonlyArray<CommittedDomainEvent<Evt>>,
+	): string[] => events.map(({ event }) => event.eventId).sort();
 
 	// Capabilities are captured ONCE at suite creation: a harness mutated
 	// between createRepositoryContractTests() and the run must not flip a
@@ -332,7 +334,9 @@ export function createRepositoryContractTests<
 			run: inEnv(async (env) => {
 				const seeded = await seed(env);
 				const seedEvents = await env.committedOutboxEvents();
-				const seedEventIds = new Set(seedEvents.map((e) => e.eventId));
+				const seedEventIds = new Set(
+					seedEvents.map(({ event }) => event.eventId),
+				);
 
 				// Writer B loads first - its persistedVersion baseline is
 				// now fixed at the pre-conflict version.
@@ -355,29 +359,47 @@ export function createRepositoryContractTests<
 				// (hardcoded, schema version, persistedVersion) would
 				// poison every consumer's ordering/idempotency watermark.
 				const newSinceSeed = outboxAfterA.filter(
-					(event) => !seedEventIds.has(event.eventId),
+					({ event }) => !seedEventIds.has(event.eventId),
 				);
 				assert(
 					newSinceSeed.length > 0 &&
 						newSinceSeed.every(
-							(event) => event.aggregateVersion === committedA.version,
+							(message) =>
+								message.position.aggregateVersion === committedA.version,
 						),
 					`writer A's committed outbox events must carry aggregateVersion === ${committedA.version} (A's commit version). ` +
 						`Suspect #1: your outbox read-back (committedOutboxEvents) reconstructs events from an explicit column list ` +
 						`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
 						`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
 				);
-				// ...and a gapless zero-based commitSequence: the pair
-				// (aggregateVersion, commitSequence) is the consumer's
-				// total order and compact idempotency watermark.
+				// ...and the complete gap-proof commit cursor. An adapter
+				// dropping any one column turns a missing event back into a
+				// silent watermark advance.
 				const sequences = newSinceSeed
-					.map((event) => event.commitSequence)
+					.map((message) => message.position.commitSequence)
 					.sort((a, b) => (a ?? -1) - (b ?? -1));
 				assert(
 					sequences.every((sequence, index) => sequence === index),
 					`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
 						`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
 						`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
+				);
+				assert(
+					newSinceSeed.every(
+						(message) => message.position.commitSize === newSinceSeed.length,
+					),
+					`writer A's committed outbox events must carry commitSize === ${newSinceSeed.length}. ` +
+						"Suspect an outbox column list that drops/string-types commitSize, or orchestration outside withCommit.",
+				);
+				assert(
+					newSinceSeed.every(
+						(message) =>
+							message.position.previousEventfulAggregateVersion ===
+							staleB.persistedVersion,
+					),
+					`writer A's committed outbox events must link previousEventfulAggregateVersion to ${String(
+						staleB.persistedVersion,
+					)}. Suspect an outbox column list that drops/string-types the predecessor, or orchestration outside withCommit.`,
 				);
 
 				// Writer B mutates its stale instance and tries to commit.
@@ -668,6 +690,64 @@ export function createRepositoryContractTests<
 						final.version,
 						baseline + 1,
 						"a version-only change (empty changedKeys, bumped version) must still be persisted - skipping it desyncs persistedVersion and produces false ConcurrencyConflictErrors later",
+					);
+				}),
+			},
+		),
+	);
+	tests.push(
+		gatedContractTest(
+			{
+				capability: "mutateVersionOnly",
+				satisfiedBy: Boolean(mutateVersionOnly),
+			},
+			{
+				name: "state-only saves do not advance the outbox event-source cursor",
+				run: inEnv(async (env) => {
+					assert(
+						mutateVersionOnly !== undefined,
+						"gate guarantees mutateVersionOnly",
+					);
+					const seeded = await seed(env);
+					const lastEventfulVersion = seeded.version;
+					const beforeStateOnly = await env.committedOutboxEvents();
+					const existingIds = new Set(
+						beforeStateOnly.map(({ event }) => event.eventId),
+					);
+
+					await env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						mutateVersionOnly.call(harness, loaded);
+						await repository.save(loaded);
+					});
+
+					const afterStateOnly = await env.committedOutboxEvents();
+					assertEqual(
+						afterStateOnly.length,
+						beforeStateOnly.length,
+						"a state-only save must not create an outbox event or advance the event-source head",
+					);
+
+					await env.run(async ({ repository }) => {
+						const loaded = await loadOrFail(repository, seeded.id);
+						harness.mutate(loaded);
+						await repository.save(loaded);
+					});
+
+					const afterEventful = await env.committedOutboxEvents();
+					const newlyEventful = afterEventful.filter(
+						({ event }) => !existingIds.has(event.eventId),
+					);
+					assert(
+						newlyEventful.length > 0 &&
+							newlyEventful.every(
+								(message) =>
+									message.position.previousEventfulAggregateVersion ===
+									lastEventfulVersion,
+							),
+						`the next eventful commit must link to eventful aggregate version ${String(
+							lastEventfulVersion,
+						)}, not to the intervening state-only OCC version`,
 					);
 				}),
 			},

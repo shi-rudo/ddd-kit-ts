@@ -10,7 +10,7 @@ function main() {
 	const awayTeam: Team = { id: "team-bel", name: "Belgium" };
 	const match = RugbyMatch.schedule(matchId, homeTeam, awayTeam, new Date());
 
-	console.log("Initial state:", match.state);
+	console.log("Initial state:", match.view);
 	console.log(
 		"Pending events:",
 		match.pendingEvents.map((e) => e.type),
@@ -20,8 +20,8 @@ function main() {
 
 	console.log("\n--- Scoring a try for Germany ---");
 	match.scoreTry(homeTeam.id, "Hans Tebroke");
-	console.log("Current state:", match.state);
-	console.log("Scoring plays:", match.state.scoringPlays);
+	console.log("Current state:", match.view);
+	console.log("Scoring plays:", match.view.scoringPlays);
 	console.log(
 		"Pending events:",
 		match.pendingEvents.map((e) => e.type),
@@ -31,8 +31,8 @@ function main() {
 
 	console.log("\n--- Scoring a conversion for Germany ---");
 	match.scoreConversion(homeTeam.id, "Hans Tebroke");
-	console.log("Current state:", match.state);
-	console.log("Scoring plays:", match.state.scoringPlays);
+	console.log("Current state:", match.view);
+	console.log("Scoring plays:", match.view.scoringPlays);
 	console.log(
 		"Pending events:",
 		match.pendingEvents.map((e) => e.type),
@@ -42,8 +42,8 @@ function main() {
 
 	console.log("\n--- Scoring a penalty for Belgium ---");
 	match.scorePenaltyGoal(awayTeam.id, "Alan Williams");
-	console.log("Current state:", match.state);
-	console.log("Scoring plays:", match.state.scoringPlays);
+	console.log("Current state:", match.view);
+	console.log("Scoring plays:", match.view.scoringPlays);
 	console.log(
 		"Pending events:",
 		match.pendingEvents.map((e) => e.type),
@@ -53,7 +53,7 @@ function main() {
 
 	console.log("\n--- Finishing the match ---");
 	match.finish();
-	console.log("Final state:", match.state);
+	console.log("Final state:", match.view);
 	console.log(
 		"Pending events:",
 		match.pendingEvents.map((e) => e.type),

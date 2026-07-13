@@ -157,16 +157,11 @@ export interface EventMetadata {
  * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
  * (or the aggregate's `recordEvent` helper) and deeply frozen. Class-based
  * event objects that satisfy this shape structurally via prototype
- * members are unsupported: the `withCommit` harvest copies events with a
- * shallow spread (to stamp `aggregateVersion`), which only carries own
- * enumerable properties.
+ * members are unsupported.
  *
- * **Field-accretion boundary.** This type already carries the write-side
- * transport concerns the outbox needs (`aggregateId`, `aggregateType`,
- * `aggregateVersion`, `metadata`). That is the line: further transport
- * fields (partition keys, tenancy, schema URNs, …) belong in an outbox
- * envelope / `metadata`, not on the domain event: the next first-class
- * transport field forces an `OutboxMessage` envelope port instead.
+ * **Field-accretion boundary.** Persistence positions, commit boundaries,
+ * broker offsets, and other delivery concerns belong in an event envelope,
+ * not on the domain event itself.
  *
  * @template T - The event type name (e.g., "OrderCreated")
  * @template P - The event payload type
@@ -178,88 +173,52 @@ export interface DomainEvent<T extends string, P = void> {
 	 * `metadata.causationId`. Defaults to `crypto.randomUUID()` if not
 	 * supplied.
 	 */
-	eventId: string;
+	readonly eventId: string;
 
 	/**
 	 * The type of the event, used for routing and handling.
 	 */
-	type: T;
+	readonly type: T;
 
 	/**
 	 * Identifier of the aggregate that produced the event. Optional at the
 	 * library level; set it whenever the producing aggregate is known so
 	 * downstream subscribers, outboxes, and projections can scope by entity.
 	 */
-	aggregateId?: string;
+	readonly aggregateId?: string;
 
 	/**
 	 * Name of the aggregate type that produced the event (e.g. "Order").
 	 * Pairs with `aggregateId` to fully qualify the source aggregate.
 	 */
-	aggregateType?: string;
+	readonly aggregateType?: string;
 
 	/**
 	 * The event payload containing the domain data. The field is always
 	 * present; its value is `undefined` when `P` is `void`.
 	 */
-	payload: P;
+	readonly payload: P;
 
 	/**
 	 * Timestamp when the event occurred.
 	 */
-	occurredAt: Date;
+	readonly occurredAt: Date;
 
 	/**
 	 * Event schema version for handling schema evolution.
 	 * Required for safe schema migration in event-sourced systems.
 	 * Use 1 for the initial schema version.
 	 *
-	 * **NOT the aggregate's version**: that is
-	 * {@link aggregateVersion}. The two are deliberately distinct
-	 * fields: this one says "which shape does the payload have"
-	 * (upcasting), the other says "which state revision of the
-	 * aggregate emitted this".
+	 * This is the event PAYLOAD schema version, not a persisted aggregate
+	 * position. Commit positions live on `CommittedDomainEvent`.
 	 */
-	version: number;
-
-	/**
-	 * The version of the producing aggregate at COMMIT time: the same
-	 * value the OCC row write carries. Stamped automatically by
-	 * `withCommit` at the harvest boundary (all events of one aggregate
-	 * in one commit share it; their relative order within the commit is
-	 * the harvest order), or set manually via
-	 * `CreateDomainEventOptions.aggregateVersion`; a pre-set value is
-	 * never overwritten.
-	 *
-	 * Consumers use it for cross-commit ordering and debugging. It is NOT
-	 * a per-event idempotency key on its own: all events of one commit
-	 * share the stamp. Pair it with {@link commitSequence} for a total
-	 * order per aggregate and a compact per-event watermark; `eventId`
-	 * dedup remains the fully general fallback (see the outbox guide).
-	 * Optional at the type level: events created outside an aggregate
-	 * (system/integration events) and events from older kit versions
-	 * don't carry it.
-	 */
-	aggregateVersion?: number;
-
-	/**
-	 * Zero-based index of the event within its aggregate's harvest batch,
-	 * stamped by `withCommit` next to {@link aggregateVersion} (a pre-set
-	 * value is never overwritten). All events of one commit share the
-	 * `aggregateVersion`, so the PAIR `(aggregateVersion, commitSequence)`
-	 * is a total order per aggregate and a compact idempotency watermark:
-	 * consumers sort and advance by the tuple instead of keeping an
-	 * `eventId` set. Optional at the type level for the same reasons as
-	 * `aggregateVersion` (system events, older kit versions, hand-rolled
-	 * orchestrations).
-	 */
-	commitSequence?: number;
+	readonly version: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
 	 * Includes correlationId, causationId, userId, source, and custom fields.
 	 */
-	metadata?: EventMetadata;
+	readonly metadata?: EventMetadata;
 }
 
 /**
@@ -300,23 +259,6 @@ export interface CreateDomainEventOptions {
 	 * Override for the default schema version (1).
 	 */
 	version?: number;
-
-	/**
-	 * Pre-set the producing aggregate's version (see
-	 * `DomainEvent.aggregateVersion`). Normally left unset (`withCommit`
-	 * stamps it at the harvest boundary with the commit version), but
-	 * useful for replay fixtures and events constructed outside an
-	 * aggregate. A pre-set value is never overwritten by the harvest.
-	 */
-	aggregateVersion?: number;
-
-	/**
-	 * Pre-set the event's position within its commit batch (see
-	 * `DomainEvent.commitSequence`). Normally left unset (`withCommit`
-	 * stamps the zero-based harvest index); a pre-set value is never
-	 * overwritten by the harvest.
-	 */
-	commitSequence?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -362,6 +304,69 @@ export interface CreateDomainEventOptions {
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
+// Every event createDomainEvent returns is registered here: an
+// unforgeable mint marker (nothing outside this module can add to the
+// set), so the aggregate recording paths can check "minted by the
+// constructor" directly instead of approximating it with frozen-ness
+// probes. Minted implies deeply frozen with owned payload/metadata
+// (binary buffers, which cannot be frozen, are rejected at the door).
+// WeakSet entries do not keep events alive.
+const MINTED_EVENTS = new WeakSet<object>();
+
+// Cooperative cross-instance tier of the mint check: a WeakSet is
+// bound to ONE loaded copy of this module, so an event legitimately
+// minted by a second copy of the kit (duplicate npm dependency, dual
+// CJS/ESM load, plugin bundle) would be rejected as unminted. Such
+// events are recognized by this global-registry brand instead, which
+// every constructor and kit-derived copy stamps (non-enumerable, so it
+// never leaks into spreads, JSON, or equality). The brand is forgeable
+// BY DESIGN: the mint gate catches accidental hand-rolled literals, it
+// is not a security boundary against code that deliberately fakes the
+// brand inside the same process.
+const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
+
+function stampMintBrand(event: object): void {
+	Object.defineProperty(event, MINT_BRAND, {
+		value: true,
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+}
+
+/**
+ * Whether `event` came out of {@link createDomainEvent} (or a helper
+ * built on it, such as `recordEvent`), i.e. is deeply frozen with
+ * defensively copied payload and metadata. Two tiers: events of THIS
+ * loaded copy of the kit are verified unforgeably via the module's
+ * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
+ * CJS/ESM load) are recognized cooperatively via a global-registry
+ * brand. Module-internal export for the aggregate recording paths;
+ * not part of the package entries.
+ */
+export function isMintedEvent(event: object): boolean {
+	return (
+		MINTED_EVENTS.has(event) ||
+		(event as Record<symbol, unknown>)[MINT_BRAND] === true
+	);
+}
+
+/**
+ * Brands, freezes, and registers a kit-derived copy of a minted event
+ * (e.g. the address-stamped copy `apply()` creates) as minted itself.
+ * The copy shares the already-frozen payload/metadata of its source,
+ * so the mint guarantee carries over. Stamping the cooperative brand
+ * before freezing keeps the copy recognizable by another loaded kit
+ * instance as well as by this instance's WeakSet. Module-internal
+ * export; not part of the package entries.
+ */
+export function adoptMintedEvent<T extends object>(copy: T): T {
+	stampMintBrand(copy);
+	Object.freeze(copy);
+	MINTED_EVENTS.add(copy);
+	return copy;
+}
+
 export function createDomainEvent<T extends string>(
 	type: T,
 	payload?: undefined,
@@ -395,14 +400,17 @@ export function createDomainEvent<T extends string, P>(
 			? new Date(options.occurredAt.getTime())
 			: now(),
 		version: options?.version ?? 1,
-		aggregateVersion: options?.aggregateVersion,
-		commitSequence: options?.commitSequence,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
 	// (Vernon, IDDD §8).
-	return deepFreeze(event) as DomainEvent<T, P>;
+	// Brand BEFORE the freeze (a frozen object rejects new properties);
+	// non-enumerable, so spreads, JSON, and equality never see it.
+	stampMintBrand(event);
+	const minted = deepFreeze(event) as DomainEvent<T, P>;
+	MINTED_EVENTS.add(minted);
+	return minted;
 }
 
 /**
@@ -425,6 +433,14 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	if (value === null || typeof value !== "object") {
 		return value;
 	}
+	// Binary buffers are rejected BEFORE the clone: freezing cannot make
+	// them immutable (the spec forbids freezing a view with elements, and
+	// a frozen view still shares its mutable buffer), so accepting them
+	// would break the mint guarantee "minted implies deeply frozen". They
+	// do not survive JSON either, the wire discipline events already
+	// document; encode binary as a string (base64/hex) or store it
+	// outside the event and reference it.
+	assertNoBinaryData(value, field);
 	try {
 		return structuredClone(value);
 	} catch (cause) {
@@ -434,6 +450,58 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 				`are plain data`,
 			{ cause },
 		);
+	}
+}
+
+function isBinaryData(value: object): boolean {
+	return (
+		ArrayBuffer.isView(value) ||
+		value instanceof ArrayBuffer ||
+		(typeof SharedArrayBuffer !== "undefined" &&
+			value instanceof SharedArrayBuffer)
+	);
+}
+
+/**
+ * Walks caller-supplied event data and rejects binary buffers anywhere
+ * in the graph (TypedArray, DataView, ArrayBuffer, SharedArrayBuffer):
+ * they are mutable by construction, so the deep-freeze that backs the
+ * mint guarantee cannot cover them. Runs before the structured clone,
+ * on the small plain-data graphs events are documented to carry.
+ */
+function assertNoBinaryData(
+	value: unknown,
+	field: "payload" | "metadata",
+	visited = new WeakSet<object>(),
+): void {
+	if (value === null || typeof value !== "object") return;
+	if (isBinaryData(value)) {
+		throw new TypeError(
+			`createDomainEvent: ${field} must not contain binary buffers ` +
+				`(TypedArray, DataView, ArrayBuffer, SharedArrayBuffer): they stay ` +
+				`mutable under freezing and do not survive JSON. Encode binary as ` +
+				`a string (base64/hex) or store it outside the event.`,
+		);
+	}
+	if (visited.has(value)) return;
+	visited.add(value);
+	if (value instanceof Map) {
+		for (const [k, v] of value) {
+			assertNoBinaryData(k, field, visited);
+			assertNoBinaryData(v, field, visited);
+		}
+		return;
+	}
+	if (value instanceof Set) {
+		for (const v of value) assertNoBinaryData(v, field, visited);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const v of value) assertNoBinaryData(v, field, visited);
+		return;
+	}
+	for (const key of Object.keys(value)) {
+		assertNoBinaryData((value as Record<string, unknown>)[key], field, visited);
 	}
 }
 

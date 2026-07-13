@@ -153,14 +153,13 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
- * Thrown by `Projector.project` when an event cannot be watermarked:
- * it carries no `(aggregateVersion, commitSequence)` cursor (and no
- * custom `position` extractor covered it) or no `aggregateId`. An
- * unwatermarkable event cannot be deduped or ordered, so applying it
- * would silently break projection idempotency on redelivery; the
- * batch fails BEFORE anything is applied. Events written by
- * `withCommit` are stamped automatically; for other sources supply
- * the `position` extractor.
+ * Thrown by `Projector.project` when an event cannot be projected
+ * safely because its cursor is missing or malformed, or its aggregate
+ * address is absent. Applying such an event would break idempotency, so
+ * the batch fails. Events written by `withCommit` carry the complete
+ * cursor automatically; other sources compose a gap-proof committed-event
+ * envelope. A well-formed cursor that does not continue the stored chain
+ * instead throws {@link ProjectionGapError}.
  *
  * A wiring error, not a `DomainError`: see {@link MissingHandlerError}
  * for the rationale of crashing loud at the App layer.
@@ -177,6 +176,96 @@ export class UnprojectableEventError extends KitWiringError<"UNPROJECTABLE_EVENT
 			`Projector(${projection}): event ${eventId} ${reason}`,
 			cause,
 		);
+	}
+}
+
+/**
+ * Thrown when a valid projection cursor does not continue the stored
+ * per-aggregate chain. This is an infrastructure/delivery failure: an
+ * event or commit is missing, commonly because a partition reordered or
+ * dead-lettered it. The projector does not apply the later event and the
+ * checkpoint stays put until the missing history is replayed or the
+ * projection is rebuilt.
+ */
+export class ProjectionGapError extends InfrastructureError<"PROJECTION_GAP"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly previousPosition: string,
+		public readonly receivedPosition: string,
+	) {
+		super({
+			code: "PROJECTION_GAP",
+			message:
+				`Projector(${projection}): event ${eventId} creates a projection ` +
+				`gap after ${previousPosition}; received ${receivedPosition}. ` +
+				"Replay the missing commit before advancing the checkpoint.",
+		});
+	}
+}
+
+/**
+ * Thrown when one batch delivers previously unseen positions of the same
+ * aggregate in descending order. Unlike {@link ProjectionGapError}, this is
+ * direct proof that the feed violated its per-aggregate ordering contract;
+ * no missing-history inference is needed. Positions already covered by the
+ * checkpoint at batch start remain valid late redeliveries and do not trip
+ * this diagnostic guard.
+ */
+export class ProjectionOrderViolationError extends InfrastructureError<"PROJECTION_ORDER_VIOLATION"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly previousReceivedPosition: string,
+		public readonly receivedPosition: string,
+	) {
+		super({
+			code: "PROJECTION_ORDER_VIOLATION",
+			message:
+				`Projector(${projection}): event ${eventId} at ${receivedPosition} ` +
+				`arrived after the later unprocessed position ${previousReceivedPosition} ` +
+				"in the same batch. Partition or serialize the feed by aggregate source.",
+		});
+	}
+}
+
+/**
+ * Thrown when a source maps different event identities to one position, either
+ * inside the current batch or at the position stored as the projection's
+ * watermark. The checkpoint retains the identity of that one last-applied
+ * event, so the durable collision is provable without keeping an unbounded
+ * processed-event ledger. Positions behind the watermark remain governed by
+ * the source's one-logical-event-per-position contract.
+ */
+export class ProjectionIdentityViolationError extends InfrastructureError<"PROJECTION_IDENTITY_VIOLATION"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly recordedEventId: string,
+		public readonly position: string,
+	) {
+		super({
+			code: "PROJECTION_IDENTITY_VIOLATION",
+			message:
+				`Projector(${projection}): position ${position} was already associated ` +
+				`with event ${recordedEventId}, but the source supplied event ${eventId} ` +
+				"at the same position. A source must map exactly one logical event to each position.",
+		});
+	}
+}
+
+/** A malformed or non-JSON-safe message at an integration boundary. */
+export class InvalidIntegrationMessageError extends InfrastructureError<"INVALID_INTEGRATION_MESSAGE"> {
+	constructor(
+		public readonly path: string,
+		public readonly reason: string,
+		cause?: unknown,
+	) {
+		super({
+			code: "INVALID_INTEGRATION_MESSAGE",
+			message: `Invalid integration message at ${path}: ${reason}`,
+			cause,
+		});
 	}
 }
 
@@ -253,18 +342,94 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
- * Returned (as `Err`) by the replay entry points (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) when a history event carries an
- * `aggregateId` or `aggregateType` that does not match the aggregate
- * being reconstituted: the row belongs to someone else. Typical causes
- * are a miswired stream read, ids that collide across aggregate types
- * (per-type sequences instead of globally unique ids), or a corrupted
- * store. A `DomainError` on purpose: this is stream corruption at the
- * infrastructure boundary, so the replay methods map it into their
- * `Result` channel like every other corruption finding. Events that do
- * not carry the optional address fields are not checked.
+ * Thrown by `EventSourcedAggregate.apply()` when a NEW event carries an
+ * `aggregateId` or `aggregateType` naming a different aggregate: a
+ * deterministic programming bug at the call site (a hand-built or
+ * copied event addressed elsewhere), caught before the event can be
+ * recorded and poison the own stream. Events with MISSING address
+ * fields do not trip this: `apply()` stamps them from the aggregate,
+ * the same guarantee `recordEvent` gives. A wiring error, distinct
+ * from {@link ForeignEventError} on purpose: a wrong new event is a
+ * bug in today's code, a wrong PERSISTED row is corrupted or miswired
+ * infrastructure, and handlers for one must not absorb the other.
  */
-export class ForeignEventError extends DomainError<"FOREIGN_EVENT"> {
+export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
+	constructor(
+		public readonly expectedAggregateId: string,
+		public readonly expectedAggregateType: string,
+		public readonly eventType: string,
+		public readonly actualAggregateId?: string,
+		public readonly actualAggregateType?: string,
+	) {
+		super(
+			"MISADDRESSED_EVENT",
+			`New event "${eventType}" is addressed to ` +
+				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
+				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
+				"fix the call site (recordEvent stamps the right address).",
+		);
+	}
+}
+
+/**
+ * The structural-integrity rejection for a restored snapshot: thrown
+ * by a consumer's `validateRestoredState` override when the stored
+ * blob could not have been produced by any version of the model
+ * (missing fields, impossible types, truncated data). An
+ * `InfrastructureError`, because corrupted persistence is a storage
+ * problem, never a business rejection; it is nevertheless RECOVERABLE
+ * by design: `restoreFromSnapshotWithEvents` catches it into its
+ * `Result` channel, and the documented load recipe answers an `Err`
+ * by discarding the snapshot and refolding from the stream.
+ */
+export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUPTED"> {
+	constructor(message: string, cause?: unknown) {
+		super({ code: "SNAPSHOT_CORRUPTED", message, cause });
+	}
+}
+
+/**
+ * Thrown when an event reaches the aggregate's recording paths
+ * (`apply`, `commit`, `addDomainEvent`) without having been minted by
+ * the kit's constructors: `createDomainEvent` / `recordEvent`
+ * deep-freeze the event and defensively copy payload and metadata,
+ * and register the result in an internal, unforgeable mint marker.
+ * Anything else (a hand-rolled literal, a shallow-frozen copy with
+ * mutable nested data) is rejected: a mutable event recorded next to
+ * a state change can silently diverge from it afterwards. A wiring
+ * error: deterministic bug at the call site, the remedy is minting
+ * through the constructors.
+ */
+export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
+	constructor(eventType: string) {
+		super(
+			"UNMINTED_EVENT",
+			`Event "${eventType}" was not minted by createDomainEvent(...) or ` +
+				"this.recordEvent(...). Those constructors deep-freeze the event " +
+				"and defensively copy payload and metadata; a mutable event " +
+				"could diverge from the state change it records.",
+		);
+	}
+}
+
+/**
+ * Thrown by persisted-event consumers (including `loadFromHistory`,
+ * `restoreFromSnapshotWithEvents`, and `Projector`) when an event carries an
+ * `aggregateId` or `aggregateType` that names a different aggregate:
+ * the persisted row belongs to someone else (a miswired stream read,
+ * ids colliding across aggregate types, a corrupted store). An
+ * `InfrastructureError`, NOT a `DomainError` (same posture as
+ * {@link SnapshotSchemaMismatchError}): a wrong address is data
+ * corruption or wiring, never an expected business rejection, so it
+ * must not be absorbed by generic domain error handling or presented
+ * as a 4xx. It therefore PROPAGATES as a throw through the replay
+ * methods' `Result` contract (which reserves `Err` for `DomainError`),
+ * after the usual all-or-nothing rollback. History events without the
+ * optional address fields pass unchecked (the fields are optional on
+ * the event shape); new events are covered by
+ * {@link MisaddressedEventError}.
+ */
+export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	constructor(
 		public readonly expectedAggregateId: string,
 		public readonly expectedAggregateType: string,
@@ -275,7 +440,7 @@ export class ForeignEventError extends DomainError<"FOREIGN_EVENT"> {
 		super({
 			code: "FOREIGN_EVENT",
 			message:
-				`Replayed event "${eventType}" belongs to ` +
+				`Persisted event "${eventType}" belongs to ` +
 				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId}, ` +
 				`not to ${expectedAggregateType} ${expectedAggregateId}: ` +
 				"the stream row addresses a different aggregate.",
@@ -284,22 +449,23 @@ export class ForeignEventError extends DomainError<"FOREIGN_EVENT"> {
 }
 
 /**
- * Thrown by `withCommit` when an event harvested from an aggregate cannot
- * be safely committed: it is missing `aggregateId` / `aggregateType`
- * (downstream routing would break), or it carries a pre-set
- * `aggregateVersion` AHEAD of the aggregate's commit version (a leaked or
- * copied fixture that would advance consumer idempotency watermarks past
- * real history). Both are programming bugs in how the aggregate recorded
- * the event, deterministic, and fail identically on every retry.
+ * Thrown when an event harvested from an aggregate cannot be safely composed
+ * into a commit envelope, or when an outbox can prove that accepting a
+ * candidate would violate its event identity/source chain. Harvest failures
+ * include missing `aggregateId` / `aggregateType` (downstream routing would
+ * break), or an
+ * eventful persisted aggregate did not advance its version (two commits
+ * would receive the same source position). These programming bugs are
+ * deterministic and fail identically on every retry.
  *
  * Deliberately **not** an {@link InfrastructureError} (same reasoning as
- * {@link MissingHandlerError}): the failure happens after the work
- * callback completed, but it is NOT transient. A `catch (e instanceof
- * InfrastructureError)` retry handler, or a retrying `TransactionScope`,
- * must NOT mask it or loop on it forever; it should crash loud so the
- * recordEvent / createDomainEvent misuse surfaces in development. This is
- * why `withCommit` throws it directly and `UnitOfWork.run` passes it
- * through unchanged instead of wrapping it in `CommitError`.
+ * {@link MissingHandlerError}): this is a deterministic programming error,
+ * not a transient storage failure. A `catch (e instanceof InfrastructureError)`
+ * retry handler, or a retrying `TransactionScope`, must NOT mask it or loop on
+ * it forever; it should crash loud so the caller misuse surfaces in
+ * development. This is why `withCommit` throws it directly and
+ * `UnitOfWork.run` passes it through unchanged instead of wrapping it in
+ * `CommitError`.
  */
 export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 	constructor(
@@ -795,17 +961,25 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION"
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_INTEGRATION_MESSAGE"
 	| "INVALID_MONEY"
+	| "MISADDRESSED_EVENT"
 	| "MISSING_HANDLER"
 	| "MONEY_CURRENCY_MISMATCH"
 	| "MONEY_PRECISION_LOSS"
 	| "MONEY_SCALE_MISMATCH"
 	| "NESTED_UNIT_OF_WORK"
+	| "PROJECTION_GAP"
+	| "PROJECTION_IDENTITY_VIOLATION"
+	| "PROJECTION_ORDER_VIOLATION"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "ROLLBACK_FAILED"
+	| "SNAPSHOT_CORRUPTED"
 	| "SNAPSHOT_SCHEMA_MISMATCH"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
 	| "UNKNOWN_CURRENCY"
+	| "UNMINTED_EVENT"
+	| "UNPROJECTABLE_EVENT"
 	| "UNREGISTERED_HANDLER"
 	| "UNREPLAYABLE_AGGREGATE";

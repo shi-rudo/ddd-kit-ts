@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Three do not (steps 3, 5, and
-11) and deserve a deliberate pass over the call sites.
+Most of these surface at compile time. Six do not (steps 3, 5, 11,
+12, 14, and 15) and deserve a deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -197,13 +197,16 @@ Only relevant if tooling greps suite output: failure messages now start
 with "Contract violated:" / "Contract test skipped:" instead of the
 repository-specific prefixes. Behavior and test names are unchanged.
 
-#### 11. Replay trusts history: `validateEvent` no longer runs during replay (runtime change)
+#### 11. Replay trusts history: `validateEvent` and `validateState` no longer judge it (runtime change)
 
 `loadFromHistory` and `restoreFromSnapshotWithEvents` stop invoking
-`validateEvent`; it guards NEW facts on the `apply()` path only. History
-is already accepted fact, and decision rules change over time; before
-this change, tightening a rule could make legitimately persisted streams
-load as `Err` (today's rules rejecting yesterday's facts).
+`validateEvent`, and the snapshot path stops running `validateState` on
+the restored state; both guard NEW facts on the `apply()` path only.
+History is already accepted fact, and decision rules change over time;
+before this change, tightening a rule could make legitimately persisted
+streams (or snapshots derived from them) fail to load, and the two load
+paths disagreed about it. Now "replay from zero equals snapshot plus
+tail" holds by construction.
 
 ```ts
 // before (2.x): ran on apply AND on every replayed event
@@ -213,37 +216,266 @@ protected validateEvent(event: OrderEvent): void {
   }
 }
 
-// after: same override, apply-path only. Structural expectations that
-// should hold during replay move into the handlers (a handler may
-// throw a DomainError for a payload it cannot map).
+// after: same override, apply-path only. Old storage shapes are decoded
+// and upcast at the read boundary (event-upcasting guide); handlers and
+// replay always receive the current event shape.
 ```
 
-Replay gains an address guard in exchange: a history event whose
-`aggregateId` or `aggregateType` names a different aggregate is stream
-corruption and comes back as `Err(ForeignEventError)` (new code
-`FOREIGN_EVENT`), with the usual all-or-nothing rollback.
+Both paths gain an address discipline in exchange, with distinct error
+families because the situations differ. On `apply()`, missing address
+fields are STAMPED from the aggregate (the `recordEvent` guarantee, now
+by construction), and a present-but-foreign address throws
+`MisaddressedEventError` (new code `MISADDRESSED_EVENT`, a wiring
+error: a bug in today's code) before anything is recorded. On replay, a
+history row naming a different aggregate throws `ForeignEventError`
+(new code `FOREIGN_EVENT`, an `InfrastructureError`: corrupted or
+miswired persistence, so it never rides a `Result` channel or a 4xx
+mapping), with the usual all-or-nothing rollback; history events
+without the optional stamps pass, since legacy streams predate them.
+Snapshots keep a STRUCTURAL gate separate from the rules: override the
+new `validateRestoredState(state)` to reject blobs no version of the
+model could have produced, throwing the new `SnapshotCorruptedError`
+(code `SNAPSHOT_CORRUPTED`, an `InfrastructureError`: corrupted
+persistence is a storage problem, not a business rejection). It comes
+back as `Err` alongside the `DomainError` decode failures, feeding the
+discard-and-refold recipe;
+`restoreFromSnapshotWithEvents` is now typed
+`Result<void, DomainError | SnapshotCorruptedError>`.
+
+#### 12. Events are `readonly` and must be minted (runtime component)
+
+Every field on `DomainEvent` is `readonly` now, and the recording paths
+(`apply`, `commit`, `addDomainEvent`) accept only events minted by the
+kit's constructors, checked against an internal, unforgeable mint
+marker; anything else throws the new wiring error `UnmintedEventError`
+(code `UNMINTED_EVENT`) before any state moves. Events minted via
+`createDomainEvent(...)` or `this.recordEvent(...)` are deeply frozen
+with defensively copied payload and metadata and pass unchanged; only
+hand-rolled objects are affected, and those are the point: a mutable
+event recorded next to a state change can silently diverge from it
+afterwards, and no frozen-ness probe can rule that out (a
+shallow-frozen literal with mutable nested data would pass one). To
+keep that guarantee true, `createDomainEvent` now rejects binary
+buffers anywhere in payload or metadata (TypedArray, DataView,
+ArrayBuffer, SharedArrayBuffer): they stay mutable under freezing and
+do not survive JSON; encode binary as a string or store it outside the
+event. Duplicate kit copies (a second npm instance, a plugin bundle)
+interoperate through a cooperative global-registry brand every constructor
+and kit-derived address-stamped copy carries, so their legitimately minted
+events are not rejected; within one copy the check stays unforgeable.
+
+```ts
+// before (2.x): a literal was accepted and stayed mutable
+this.apply({ eventId, type: "OrderConfirmed", payload, occurredAt, version: 1 });
+
+// after: mint it, which also stamps the address
+this.apply(this.recordEvent("OrderConfirmed", payload));
+```
+
+The rejection is runtime-only for literal-passers (a literal satisfies
+the `readonly` interface at compile time), hence the deliberate pass.
+
+#### 13. Live entity state is protected
+
+`Entity.state` is now `protected`, and `IEntity<TId, TState>` becomes
+`IEntity<TId>`. The old public getter returned the live `TState` graph:
+its top level was frozen, but a consumer could mutate nested state and
+bypass aggregate behavior, invariant validation, versioning, and dirty
+tracking. A generic defensive clone is not a sound replacement because
+class-based child entities would lose their prototypes.
+
+```ts
+// before: public live state
+order.state.status;
+await rows.update({ state: order.state, version: order.version });
+
+// after: a domain query for application reads
+order.status;
+
+// and a detached memento for persistence
+const memento = order.createSnapshot();
+await rows.update({ state: memento.state, version: memento.version });
+```
+
+Concrete entities expose fachliche scalar queries or explicitly detached,
+immutable read DTOs. Aggregate repositories use `createSnapshot()` (and
+the existing `toSnapshotState` mapper for class-based children) instead of
+reaching into the live graph. This is compile-checked unless a consumer
+deliberately widens the protected accessor in its own subclass; do not do
+that.
+
+#### 14. Projection cursors prove gaps (runtime change)
+
+The old `(aggregateVersion, commitSequence)` watermark could order events but
+could not prove continuity. A previously unseen late event at or behind the
+watermark was silently counted as a duplicate. Projection cursors now also
+carry `commitSize` and `previousEventfulAggregateVersion`:
+
+```ts
+type ProjectionPosition = {
+  aggregateVersion: number;
+  commitSequence: number;
+  commitSize: number;
+  previousEventfulAggregateVersion: number | null;
+};
+
+type ProjectionCheckpoint = {
+  position: ProjectionPosition;
+  lastAppliedEventId: string;
+};
+```
+
+`withCommit` leaves the domain event untouched and supplies an
+`EventCommitCandidate` containing the source and current commit facts. The
+outbox/event source atomically reads its last eventful aggregate version,
+finalizes `previousEventfulAggregateVersion`, persists the
+`CommittedDomainEvent`, and advances the source head. The projector rejects
+missing sequences, incomplete commits, missing aggregate commits, malformed
+cursors, and a non-genesis first event. Positions behind a fully verified chain
+are skipped as already traversed under the source's one-event-per-position
+contract. At the exact watermark, the checkpoint's `lastAppliedEventId`
+distinguishes a true redelivery from a different event mapped to the same
+position; the latter throws
+`ProjectionIdentityViolationError`. The same collision check runs within each
+batch. A dead-lettered event therefore stalls its aggregate's chain until
+repaired/replayed or until the projection is rebuilt; later events cannot
+silently advance past it.
+Malformed or absent cursor data throws `UnprojectableEventError` (wiring);
+a well-formed discontinuity throws `ProjectionGapError` (infrastructure), so
+delivery retries and reconciliation can classify the failure honestly.
+
+Custom sources compose their bare event with `source` plus all four `position`
+fields from a source-owned, gap-proof chain. Existing checkpoint tables add the
+two cursor columns plus `lastAppliedEventId` and should be reset/rebuilt because
+old rows cannot prove their predecessor or watermark identity. State-only saves
+do not advance this chain: `previousEventfulAggregateVersion` names the
+preceding EVENTFUL commit, not the aggregate's OCC baseline.
+
+Genesis uses an explicit JSON-safe `null`, not `undefined`, so serializing a
+committed envelope cannot silently remove the predecessor field. Durable
+adapters must normalize a nullable database column to JavaScript `null`.
+
+`InMemoryOutbox` no longer lets a stale post-dispatch retry rewind its
+per-source predecessor head. It keeps a configurable bounded cache of recently
+dispatched event IDs (default 10,000) for idempotent no-ops; after eviction, a
+candidate behind the source head throws `EventHarvestError` while leaving the
+head untouched. Durable adapters still provide unbounded idempotency with a
+transactional `eventId` unique key.
+
+An `eventId` retry is now idempotent only for the same qualified aggregate
+source. `InMemoryOutbox` rejects a different `aggregateType` / `aggregateId`
+with `EventHarvestError` before changing pending, dead-letter, receipt, or
+source-cursor state. Its bounded dispatched receipts retain the original source
+so the same check remains available after acknowledgement until receipt
+eviction.
+
+`DomainEvent` and `CreateDomainEventOptions` no longer expose commit cursor
+fields. `OutboxWriter.add` accepts `EventCommitCandidate` values and finalizes
+the predecessor in durable source state; `OutboxRecord` exposes the committed
+envelope with dispatch state; the in-process `EventBus` still receives the bare
+event. An already-persisted aggregate with pending events must also advance its
+version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
+events) with `commit({ ...this.state }, event)` so the envelope has a unique
+cursor.
+
+#### 15. Map domain events to JSON integration messages (runtime change)
+
+Do not publish a `DomainEvent` or `CommittedDomainEvent` with raw
+`JSON.stringify`. Domain payloads and metadata may contain valid immutable
+`Date`, `Map`, and `Set` values that JSON changes or drops. Map at the outbox
+boundary instead:
+
+```ts
+const message = createIntegrationMessage(record, (event) => ({
+  type: "sales.order-placed.v1",
+  version: 1,
+  payload: {
+    placedAt: event.payload.placedAt.toISOString(),
+    amounts: [...event.payload.amounts],
+    tags: [...event.payload.tags],
+  },
+}));
+
+await broker.publish(encodeIntegrationMessage(message));
+```
+
+Receivers call `decodeIntegrationMessage` before dispatch. A receiving
+`Projector` can use `integrationMessageToCommittedEvent` to compose the
+validated public message into its local event input. The conversion retains
+the qualified source and complete commit cursor, but deliberately does not
+reconstruct the producer's private domain payload types. Invalid wire shapes
+and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
+
+### Changed (breaking): live entity state is protected
+
+- `Entity.state` is protected so external code cannot obtain the live
+  state graph. Concrete models expose domain queries or detached read
+  DTOs; aggregate persistence uses `createSnapshot()` as its memento.
+- `IEntity` now models the public entity capability only and therefore
+  takes one generic (`IEntity<TId>`); state is an implementation detail.
+- Repository contract examples and all guides no longer serialize or
+  inspect aggregates through `aggregate.state`.
+
+### Changed (breaking): events are readonly and minted
+
+- Every `DomainEvent` field is `readonly` at the type level, matching
+  the runtime deep-freeze the constructors have always applied. The
+  recording paths (`apply`, `commit`, `addDomainEvent`) now enforce
+  the mint through an internal, unforgeable marker (`WeakSet`, written
+  only by `createDomainEvent`): an event the constructors did not
+  produce throws the new wiring error `UnmintedEventError` (code
+  `UNMINTED_EVENT`, exported from the main entry) BEFORE any state
+  moves, so a rejected event can never leave a mutated aggregate
+  without its recorded fact. Provenance instead of frozen-ness probes,
+  because probes cannot establish deep immutability (a shallow-frozen
+  literal with mutable nested payload or metadata would pass). O(1),
+  one `WeakSet` lookup; replay input from storage adapters is
+  deliberately exempt, since it never enters `pendingEvents`. Two
+  supporting decisions keep the guarantee honest: `createDomainEvent`
+  rejects binary buffers anywhere in payload or metadata (freezing
+  cannot cover them, and they do not survive JSON), and events minted
+  by a DIFFERENT loaded copy of the kit (duplicate dependency, plugin
+  bundle) are recognized through a cooperative, non-enumerable
+  global-registry brand. Constructors and kit-derived address-stamped
+  copies both carry it, so multi-instance setups keep working while the
+  same-instance check stays unforgeable.
 
 ### Changed (breaking): replay trusts history
 
 - `EventSourcedAggregate`: replay (`loadFromHistory`,
-  `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`; the
-  override guards new facts on the `apply()` path only. Re-checking
+  `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`, and
+  the snapshot path no longer runs `validateState` on the restored
+  state; both guard new facts on the `apply()` path only. Re-checking
   history against current rules meant a rule change could make
-  legitimately persisted streams unloadable, the classic
-  event-sourcing failure the "validate commands, trust history"
-  discipline exists to prevent. Structural expectations that should
-  hold during replay belong in the event handlers, which may throw a
-  `DomainError` for a payload they cannot map.
-- New replay address guard: a history event whose `aggregateId` or
-  `aggregateType` names a different aggregate returns
-  `Err(ForeignEventError)` (code `FOREIGN_EVENT`, a `DomainError`,
-  exported from the main entry) with the usual all-or-nothing
-  rollback. Events without the optional address fields pass unchecked.
-- Documented assumption made explicit on `ProjectionCheckpointStore`
-  and `EventStore`: checkpoint and stream keys use the aggregate id
-  alone and therefore assume ids unique across aggregate types
-  (app-side UUIDs are; per-type sequences need qualifying at the
-  source).
+  legitimately persisted streams unloadable, and the snapshot path
+  disagreeing with full replay broke "a snapshot is only an
+  optimization": the same stream now loads identically on both paths,
+  pinned by an equivalence test. Old storage shapes are decoded and
+  upcast at the read boundary (event-upcasting guide), never validated
+  in handlers.
+- Snapshots keep their own STRUCTURAL gate, separated from the rules:
+  the new overridable `validateRestoredState(state)` rejects restored
+  blobs no version of the model could have produced (missing fields,
+  impossible types); its `DomainError` returns as `Err` and feeds the
+  documented discard-and-refold recipe. Unlike replay, whose states
+  are built by the handlers from accepted facts, a snapshot is derived
+  data read back from storage and deserves an integrity check that is
+  not entangled with today's decision rules.
+- Address discipline on both paths, with distinct error families.
+  `apply()` STAMPS missing `aggregateId`/`aggregateType` from the
+  aggregate (the `recordEvent` guarantee by construction; an applied
+  event can no longer fail later at harvest) and throws
+  `MisaddressedEventError` (code `MISADDRESSED_EVENT`, a wiring error,
+  exported from the main entry) for a present-but-foreign address,
+  before anything is recorded. Replay throws `ForeignEventError` (code
+  `FOREIGN_EVENT`, an `InfrastructureError`, exported from the main
+  entry) for a history row naming a different aggregate, with the
+  all-or-nothing rollback; rows without the optional stamps pass,
+  since legacy streams predate them. Neither is a `DomainError`: a
+  wrong address is a code bug or corrupted persistence, never an
+  expected business rejection, so both propagate as throws instead of
+  riding the replay `Result` channel. The result-vs-throw guide and
+  the design-decisions page document the split channel.
 
 ### Added: ports speak the domain's language
 
@@ -371,20 +603,54 @@ corruption and comes back as `Err(ForeignEventError)` (new code
 
 ### Added: projection support (checkpoint port, projector runner, position query)
 
+- Checkpoints are keyed by `(projection, aggregateType, aggregateId)`,
+  passed to the `ProjectionCheckpointStore` port as an
+  `AggregateAddress` object, and `Projector.hasProcessed` takes the
+  address too: identities are type-scoped (the kit's own `Id` brands
+  say so), so `Order 1` and `Payment 1` keep separate watermarks even
+  when the raw id strings collide. The projector requires the
+  `aggregateType` stamp on projectable events, rejecting loudly like a
+  missing cursor (`withCommit` stamps both), and encodes its
+  batch-local keys as JSON tuples so a separator-like character inside
+  either half cannot collide two addresses. The contract suite proves
+  cross-type isolation and separator hostility; the `aggregateType`
+  string is thereby part of the checkpoint contract (renaming an
+  aggregate type means migrating its checkpoint rows), and it is a
+  TECHNICAL stream category: unique across everything feeding one
+  checkpoint store, qualified at the source ("sales.order") when
+  bounded contexts sharing infrastructure reuse a name.
+- Projection positions include `commitSize` and
+  `previousEventfulAggregateVersion`, so the projector proves continuity within
+  and across aggregate commits. Missing sequences/commits and malformed
+  cursors reject; a late unseen event is never silently counted as a
+  duplicate. Custom sources must compose an equivalent source-owned
+  predecessor chain around the bare event.
+- Projector feeds are now explicitly complete per aggregate address. Broker
+  subscriptions must not drop cursor positions by filtering on event type;
+  projection-irrelevant facts run through `apply` as explicit no-ops and are
+  checkpointed. Broker examples route projector feeds by context / aggregate
+  type rather than event type.
+- `CommittedDomainEvent.source` is the authoritative persistence address.
+  `Projector` now rejects a bare event whose present optional `aggregateId` or
+  `aggregateType` contradicts that source, using `ForeignEventError` before any
+  read-model write or checkpoint mutation. Absent optional event stamps remain
+  valid.
 - `ProjectionCheckpointStore` port, `Projector` runner, and
   `InMemoryProjectionCheckpointStore` reference: the projection
   mechanics `read-model-design.md` demands, so a consumer's
   `Projection.apply` is a plain event-to-row mapping. One
   `project(batch)` call is one `TransactionScope` transaction, the
   read-model update and checkpoint commit atomically and roll back
-  together; duplicates and stale events are skipped via the
-  `(aggregateVersion, commitSequence)` watermark `withCommit` already
-  stamps (per-aggregate total order), with a `position` extractor
-  option for sources that carry their own cursor (event-store
-  replays); uncursored events reject loudly, with the structured
-  `UnprojectableEventError`, before anything applies.
+  together; already-traversed positions are skipped via the four-field cursor
+  the event source finalizes on `CommittedDomainEvent`, while the checkpoint retains the
+  `eventId` at its exact watermark and rejects an identity collision with
+  `ProjectionIdentityViolationError`; event-store replays compose their own
+  envelope from the store cursor; missing or
+  malformed cursors reject loudly with the structured
+  `UnprojectableEventError`, while a well-formed discontinuity throws the
+  structured infrastructure `ProjectionGapError`, before anything applies.
   `hasProcessed(aggregateId, position)` is the wait-for-version
-  building block (full-pair comparison: version-only would report
+  building block (full-cursor comparison: version-only would report
   "reached" mid-commit); `reset()` truncates the read model (via the
   projection's optional `truncate`) and clears checkpoints in one
   transaction as the rebuild entry point; `toOutboxSink()` plugs the
@@ -670,19 +936,43 @@ corruption and comes back as `Err(ForeignEventError)` (new code
   `UnregisteredHandlerError` type (typed channels); where the case must
   be handled at a specific seam, catch the named type around `execute`.
 
-### Added: `commitSequence` on harvested events
+### Added: gap-proof committed-event envelopes
 
-- `withCommit` stamps every harvested event with `commitSequence`, the
-  zero-based index of the event within its aggregate's harvest batch,
-  next to `aggregateVersion` (same pre-set-wins rule). All events of
-  one commit share the version, so the pair
-  `(aggregateVersion, commitSequence)` is a total order per aggregate
-  and a compact idempotency watermark: consumers sort and advance by
-  the tuple instead of keeping an `eventId` set (which remains the
-  general fallback for events stamped outside `withCommit`). Additive
-  and optional at the type level; `createDomainEvent` accepts a
-  pre-set value; the repository contract suite enforces a gapless
-  sequence on committed outbox events.
+- `withCommit` composes every harvested domain event into an immutable
+  `EventCommitCandidate` with `source`, `commitSequence`, `commitSize`, and
+  `aggregateVersion`. The outbox/event source atomically supplies
+  `previousEventfulAggregateVersion` from its last eventful source head and
+  persists the resulting `CommittedDomainEvent`.
+  The index and size prove completeness inside a commit; the predecessor
+  links commits without assuming versions increase by one (several domain
+  mutations or state-only saves may occur between eventful commits). Cursor
+  fields are absent from `DomainEvent`; `ProjectionPosition` requires all four.
+  The outbox and projector consume finalized envelopes, while the domain bus
+  receives the original event. `eventId` remains the general dedupe key outside
+  verified chains.
+- `Projector.project` rejects descending positions that were still unseen at
+  batch start with `ProjectionOrderViolationError`, exposing a mis-partitioned
+  or reordering transport before it can become silent read-model drift. Late
+  redeliveries already covered by the stored checkpoint remain ordinary skips.
+- `ProjectionCheckpoint` composes the gap-proof `position` with
+  `lastAppliedEventId`. `Projector.project` rejects different event identities
+  mapped to one position inside a batch or at the stored watermark with
+  `ProjectionIdentityViolationError`, before `apply`. Older positions remain
+  bounded cursor skips under the documented source-uniqueness invariant; the
+  checkpoint does not pretend to retain a full processed-event ledger.
+- `IntegrationMessage` is the explicit JSON-safe broker contract separate from
+  internal `DomainEvent` and `CommittedDomainEvent` values.
+  `createIntegrationMessage` requires an application-owned mapping;
+  `encodeIntegrationMessage` and `decodeIntegrationMessage` validate the full
+  graph and cursor. The decoder accepts explicit-offset RFC 3339 timestamps up
+  to millisecond precision and normalizes them to canonical UTC `.sssZ`, while
+  the producer-side codec remains canonical-only;
+  `integrationMessageToCommittedEvent` adapts a validated public message to a
+  projector input. Raw `Date`, `Map`, `Set`, cycles,
+  non-finite numbers, sparse arrays, and properties JSON would discard reject
+  as `InvalidIntegrationMessageError` instead of being silently corrupted;
+  hostile own `__proto__` keys reject before downstream copy operations can
+  activate them.
 
 ### Added: `@shirudo/ddd-kit/money`, the money contract and its boundaries
 

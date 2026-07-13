@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { AggregateRoot } from "../aggregate/aggregate-root";
-import type { DomainEvent } from "../aggregate/domain-event";
+import type { AnyDomainEvent, DomainEvent } from "../aggregate/domain-event";
 import {
 	ConcurrencyConflictError,
 	IdempotencyCompletionWithoutClaimError,
@@ -10,6 +9,7 @@ import {
 } from "../core/errors";
 import type { Id } from "../core/id";
 import { InMemoryOutbox } from "../events/outbox";
+import type { EventCommitCandidate } from "../events/ports";
 import { RetryingTransactionScope } from "../repo/retrying-scope";
 import type { TransactionScope } from "../repo/scope";
 import { withIdempotentCommit } from "./idempotency";
@@ -163,7 +163,7 @@ describe("withIdempotentCommit", () => {
 		class FlakyOutbox extends InMemoryOutbox<AnyDomainEvent> {
 			failNext = true;
 			override async add(
-				events: ReadonlyArray<AnyDomainEvent>,
+				events: ReadonlyArray<EventCommitCandidate<AnyDomainEvent>>,
 			): Promise<void> {
 				if (this.failNext) {
 					this.failNext = false;
