@@ -23,6 +23,16 @@ export interface ReadStreamOptions {
 	 * stream).
 	 */
 	readonly fromVersion?: number;
+
+	/**
+	 * Return events only THROUGH this stream position (inclusive, 1-based
+	 * event count). Together with `fromVersion`, this describes the interval
+	 * `(fromVersion, toVersion]`. Defaults to the actual stream head.
+	 * `0` therefore returns an empty window; a value beyond the head clamps
+	 * to the head; and `fromVersion >= toVersion` is an empty interval, not
+	 * an error.
+	 */
+	readonly toVersion?: number;
 }
 
 /**
@@ -32,7 +42,7 @@ export interface ReadStreamOptions {
  * of the requested read window. `exists: true` implies `lastVersion >= 1`: an
  * existing stream has at least one event, while metadata or tombstones without
  * events must be reported as `exists: false`. A missing stream is therefore
- * distinguishable from an existing stream whose `fromVersion` window is empty.
+ * distinguishable from an existing stream whose requested window is empty.
  * Snapshot-backed repositories use that distinction to reject a snapshot whose
  * version lies beyond the current authoritative stream head.
  */
@@ -166,11 +176,14 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 * `exists: true` even when its requested window is empty. An existing stream
 	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
 	 * metadata or tombstones without events must be reported as absent.
-	 * `lastVersion` is always the actual stream head, while
-	 * `options.fromVersion` filters only `events` to positions after that 1-based
-	 * event count. This distinction is load-bearing for snapshot catch-up: a
-	 * repository can detect a missing or truncated authoritative stream instead
-	 * of restoring a stale snapshot as a live aggregate. `exists`, `lastVersion`,
+	 * `lastVersion` is always the actual stream head. `options.fromVersion`
+	 * excludes positions at or below its 1-based event count;
+	 * `options.toVersion` includes positions through its count, so both bounds
+	 * describe `(fromVersion, toVersion]`. `toVersion: 0` and inverted ranges
+	 * return an empty existing window, while a bound beyond the head clamps to
+	 * the head. This distinction is load-bearing for snapshot catch-up and
+	 * point-in-time reconstruction: a repository can verify the requested
+	 * historical window against the authoritative head. `exists`, `lastVersion`,
 	 * and `events` must describe one consistent view of the stream. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.

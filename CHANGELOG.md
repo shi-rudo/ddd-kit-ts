@@ -498,6 +498,23 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   while storage adapters remain responsible for ordered, contiguous persisted
   stream positions.
 
+### Added: point-in-time EventStore reads
+
+- `ReadStreamOptions.toVersion` adds an inclusive upper stream-position bound;
+  with the existing exclusive `fromVersion`, reads select
+  `(fromVersion, toVersion]` while `lastVersion` continues to report the actual
+  stream head.
+- The edge semantics are explicit: `toVersion: 0` is empty, values beyond the
+  head clamp to it, and `fromVersion >= toVersion` returns an empty existing
+  window instead of throwing.
+- Both EventStore contract suites prove bounded reads. The event-sourced
+  repository harness callback `committedStreamEvents` now accepts the same
+  `ReadStreamOptions` object as `EventStore.readStream` instead of a positional
+  `fromVersion` number.
+- The event-sourcing guide includes a strict point-in-time reconstruction
+  recipe that checks the requested version against the separately reported
+  stream head before folding history.
+
 ### Changed (breaking): live entity state is protected
 
 - `Entity.state` is protected so external code cannot obtain the live

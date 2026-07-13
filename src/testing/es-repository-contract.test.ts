@@ -269,16 +269,21 @@ function createInMemoryEsHarness(
 					),
 				committedOutboxEvents: async () => [...db.outbox],
 				// The suite's window into the store: same read-and-slice
-				// semantics as EventStore.readStream({ fromVersion }).
-				committedStreamEvents: async (stream, fromVersion = 0) => {
+				// semantics as EventStore.readStream(options).
+				committedStreamEvents: async (stream, options) => {
 					const events = db.streams.get(streamMapKey(stream));
 					if (events === undefined) {
 						return { exists: false, lastVersion: 0, events: [] };
 					}
+					const fromVersion = Math.max(0, options?.fromVersion ?? 0);
+					const toVersion =
+						options?.toVersion === undefined
+							? undefined
+							: Math.max(0, options.toVersion);
 					return {
 						exists: true,
 						lastVersion: events.length,
-						events: events.slice(Math.max(0, fromVersion)),
+						events: events.slice(fromVersion, toVersion),
 					};
 				},
 			};
@@ -297,6 +302,12 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 
 	it("the full-capability reference harness has no skipped tests", () => {
 		expect(tests.filter((t) => t.skipped)).toHaveLength(0);
+	});
+
+	it("contains the point-in-time stream-window proof", () => {
+		expect(tests.map(({ name }) => name)).toContain(
+			"readStream honors toVersion: point-in-time reads stop at the inclusive upper position",
+		);
 	});
 
 	for (const test of tests) {

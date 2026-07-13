@@ -18,7 +18,7 @@ import type {
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
  * appends, explicit missing/existing stream state with the actual head,
- * append-order reads, and `fromVersion` slicing.
+ * append-order reads, and `(fromVersion, toVersion]` slicing.
  *
  * For production, back the port with a durable store whose append and
  * the aggregate transaction share atomicity (a table with a
@@ -77,12 +77,16 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		if (events === undefined) {
 			return { exists: false, lastVersion: 0, events: [] };
 		}
-		const fromVersion = options?.fromVersion ?? 0;
+		const fromVersion = Math.max(0, options?.fromVersion ?? 0);
+		const toVersion =
+			options?.toVersion === undefined
+				? undefined
+				: Math.max(0, options.toVersion);
 		// slice() always copies: callers never see the internal array.
 		return {
 			exists: true,
 			lastVersion: events.length,
-			events: events.slice(Math.max(0, fromVersion)),
+			events: events.slice(fromVersion, toVersion),
 		};
 	}
 }
