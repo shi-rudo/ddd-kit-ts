@@ -318,12 +318,21 @@ const MINTED_EVENTS = new WeakSet<object>();
 // minted by a second copy of the kit (duplicate npm dependency, dual
 // CJS/ESM load, plugin bundle) would be rejected as unminted. Such
 // events are recognized by this global-registry brand instead, which
-// every copy's constructor stamps (non-enumerable, so it never leaks
-// into spreads, JSON, or equality). The brand is forgeable BY DESIGN:
-// the mint gate catches accidental hand-rolled literals, it is not a
-// security boundary against code that deliberately fakes the brand
-// inside the same process.
+// every constructor and kit-derived copy stamps (non-enumerable, so it
+// never leaks into spreads, JSON, or equality). The brand is forgeable
+// BY DESIGN: the mint gate catches accidental hand-rolled literals, it
+// is not a security boundary against code that deliberately fakes the
+// brand inside the same process.
 const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
+
+function stampMintBrand(event: object): void {
+	Object.defineProperty(event, MINT_BRAND, {
+		value: true,
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+}
 
 /**
  * Whether `event` came out of {@link createDomainEvent} (or a helper
@@ -343,13 +352,17 @@ export function isMintedEvent(event: object): boolean {
 }
 
 /**
- * Registers a kit-derived frozen copy of a minted event (e.g. the
- * address-stamped copy `apply()` creates) as minted itself: the copy
- * shares the already-frozen payload/metadata of its source, so the
- * mint guarantee carries over. Module-internal export; not part of
- * the package entries.
+ * Brands, freezes, and registers a kit-derived copy of a minted event
+ * (e.g. the address-stamped copy `apply()` creates) as minted itself.
+ * The copy shares the already-frozen payload/metadata of its source,
+ * so the mint guarantee carries over. Stamping the cooperative brand
+ * before freezing keeps the copy recognizable by another loaded kit
+ * instance as well as by this instance's WeakSet. Module-internal
+ * export; not part of the package entries.
  */
 export function adoptMintedEvent<T extends object>(copy: T): T {
+	stampMintBrand(copy);
+	Object.freeze(copy);
 	MINTED_EVENTS.add(copy);
 	return copy;
 }
@@ -394,12 +407,7 @@ export function createDomainEvent<T extends string, P>(
 	// (Vernon, IDDD §8).
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
-	Object.defineProperty(event, MINT_BRAND, {
-		value: true,
-		enumerable: false,
-		writable: false,
-		configurable: false,
-	});
+	stampMintBrand(event);
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
 	MINTED_EVENTS.add(minted);
 	return minted;

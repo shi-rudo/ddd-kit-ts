@@ -1,5 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	DomainError,
 	ForeignEventError,
@@ -1907,6 +1907,30 @@ describe("replay trusts history", () => {
 		);
 		expect(agg.pendingEvents).toHaveLength(1);
 		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
+	});
+
+	it("preserves the cooperative mint brand on address-stamped copies", async () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+		agg.testApply(
+			createDomainEvent("TestEventUpdated", {
+				newValue: 5,
+			}) as TestEventUpdated,
+		);
+		const stamped = agg.pendingEvents[0];
+		expect(stamped).toBeDefined();
+
+		// Re-evaluate domain-event.ts with a fresh module-private WeakSet,
+		// as a duplicate package installation or plugin bundle would. Only
+		// the shared Symbol.for brand can establish provenance there.
+		vi.resetModules();
+		const foreignDomainEventModule = await import("./domain-event");
+
+		expect(foreignDomainEventModule.isMintedEvent(stamped as TestEvent)).toBe(
+			true,
+		);
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {

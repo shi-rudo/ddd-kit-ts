@@ -260,9 +260,9 @@ buffers anywhere in payload or metadata (TypedArray, DataView,
 ArrayBuffer, SharedArrayBuffer): they stay mutable under freezing and
 do not survive JSON; encode binary as a string or store it outside the
 event. Duplicate kit copies (a second npm instance, a plugin bundle)
-interoperate through a cooperative global-registry brand every copy's
-constructor stamps, so their legitimately minted events are not
-rejected; within one copy the check stays unforgeable.
+interoperate through a cooperative global-registry brand every constructor
+and kit-derived address-stamped copy carries, so their legitimately minted
+events are not rejected; within one copy the check stays unforgeable.
 
 ```ts
 // before (2.x): a literal was accepted and stayed mutable
@@ -429,8 +429,9 @@ and values JSON cannot preserve throw `InvalidIntegrationMessageError`.
   cannot cover them, and they do not survive JSON), and events minted
   by a DIFFERENT loaded copy of the kit (duplicate dependency, plugin
   bundle) are recognized through a cooperative, non-enumerable
-  global-registry brand, so multi-instance setups keep working while
-  the same-instance check stays unforgeable.
+  global-registry brand. Constructors and kit-derived address-stamped
+  copies both carry it, so multi-instance setups keep working while the
+  same-instance check stays unforgeable.
 
 ### Changed (breaking): replay trusts history
 

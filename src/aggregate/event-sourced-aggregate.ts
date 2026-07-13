@@ -217,11 +217,11 @@ export abstract class EventSourcedAggregate<
 		// `string | undefined` on DomainEvent; filling them in cannot
 		// leave the declared shape.
 		const stamped: AnyDomainEvent = adoptMintedEvent(
-			Object.freeze({
+			{
 				...event,
 				aggregateId: this.id,
 				aggregateType: this.aggregateType,
-			}),
+			},
 		);
 		return stamped as Extract<TEvent, { type: K }>;
 	}
