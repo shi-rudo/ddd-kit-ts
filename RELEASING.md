@@ -57,7 +57,10 @@ and rejects a tag whose commit is not reachable from `main`.
    ```
 
 4. Wait for the `Release package` workflow. It runs typecheck, lint, tests,
-   build, and a tarball import smoke on Node 22 and 24 before the publish job.
+   build, and a tarball import smoke on Node 22 and 24. The Node 24 job uploads
+   the exact smoke-tested tarball; the OIDC-enabled publish job downloads only
+   that immutable artifact and neither checks out source, installs project
+   dependencies, nor runs project lifecycle scripts.
 5. Verify the published package and its provenance on npm, then create the
    matching GitHub release from the existing tag.
 

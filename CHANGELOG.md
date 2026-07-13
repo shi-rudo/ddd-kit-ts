@@ -25,7 +25,9 @@ here, with a before and after.
   smoke before publishing through npm Trusted Publishing with OIDC provenance.
   The publish job carries no long-lived registry token, uses pinned tooling,
   validates the tag against `package.json`, and only accepts commits reachable
-  from `main`.
+  from `main`. It publishes the exact smoke-tested tarball without checking out
+  source, installing project dependencies, or running project lifecycle scripts
+  while OIDC permission is present.
 - Prereleases publish under `next`; stable versions publish under `latest`.
   `RELEASING.md` documents the one-time trust/environment setup and the release
   procedure.
