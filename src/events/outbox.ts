@@ -368,7 +368,26 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	private assertBatchEventReceiptIntegrity(
 		events: ReadonlyArray<EventCommitCandidate<Evt>>,
 	): void {
+		const receiptsInBatch = new Map<
+			string,
+			{
+				readonly source: AggregateAddress;
+				readonly position: EventCommitCandidatePosition;
+			}
+		>();
 		for (const { event, source, position } of events) {
+			const batchReceipt = receiptsInBatch.get(event.eventId);
+			if (batchReceipt !== undefined) {
+				assertSameEventSource(event, source, batchReceipt.source);
+				assertSameCandidateReceipt(
+					event,
+					position,
+					batchReceipt.position,
+					false,
+				);
+			} else {
+				receiptsInBatch.set(event.eventId, { source, position });
+			}
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
 			if (dispatchedReceipt !== undefined) {
 				assertSameEventSource(event, source, dispatchedReceipt.source);

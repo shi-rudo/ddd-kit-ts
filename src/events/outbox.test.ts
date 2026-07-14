@@ -343,6 +343,77 @@ describe("InMemoryOutbox", () => {
 		expect(record?.position.previousEventfulAggregateVersion).toBe(1);
 	});
 
+	it("rejects a batch-local eventId reassignment before mutating pending records or the source head", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = (eventId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-batch-self-collision" },
+				{
+					eventId,
+					aggregateId: "o-batch-self-collision",
+					aggregateType: "Order",
+				},
+			);
+		const repeated = event("evt-batch-self-collision");
+		const first = {
+			...candidate(repeated, 1),
+			position: {
+				aggregateVersion: 1,
+				commitSequence: 0,
+				commitSize: 2,
+			},
+		};
+		const reassigned = {
+			...first,
+			position: { ...first.position, commitSequence: 1 },
+		};
+
+		await expect(outbox.add([first, reassigned])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		expect(await outbox.getPending()).toEqual([]);
+
+		await outbox.add([candidate(event("evt-after-self-collision"), 2)]);
+		const [record] = await outbox.getPending();
+		expect(record?.position.previousEventfulAggregateVersion).toBeNull();
+	});
+
+	it("keeps an exact batch-local eventId repetition idempotent", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-exact-batch-retry" },
+			{
+				eventId: "evt-exact-batch-retry",
+				aggregateId: "o-exact-batch-retry",
+				aggregateType: "Order",
+			},
+		);
+		const exact = candidate(event, 1);
+
+		await outbox.add([
+			exact,
+			{
+				...exact,
+				source: { ...exact.source },
+				position: { ...exact.position },
+			},
+		]);
+
+		expect(await outbox.getPending()).toMatchObject([
+			{
+				event,
+				position: {
+					aggregateVersion: 1,
+					commitSequence: 0,
+					commitSize: 1,
+					previousEventfulAggregateVersion: null,
+				},
+			},
+		]);
+	});
+
 	it("rejects an evicted stale candidate without changing the source head", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>({
 			maxRetainedDispatchedEventIds: 1,
