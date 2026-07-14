@@ -55,16 +55,13 @@ That split keeps handlers portable. `CommandHandler<C, R>` and `QueryHandler<Q, 
 
 The kit also avoids middleware pipeline machinery. Logging, authorization, metrics, tracing, and correlation can be added with handler decorators. A library-level pipeline would quickly become an application framework, and this kit intentionally stops before that point.
 
-## The Specification primitive ships without translation machinery
+## Query ports belong to the consumer; Specification has no translator
 
-The repository query extension is `IQueryableRepository<TAgg, TId, TFilter>`, and the filter type is owned by the adapter:
+The kit's repository contract stops at aggregate identity and lifecycle. It deliberately ships no generic filter repository. SQL fragments, Prisma `WhereInput`, Mongo filter documents, and similar adapter-native filters would make application code depend on an outbound adapter's language. A generic `find` would also leave the important use-case laws unstated: whether a single result is unique, how a result set is bounded and ordered, and what a continuation cursor means.
 
-- a Drizzle repository can use SQL fragments
-- a Prisma repository can use `WhereInput`
-- a Mongo repository can use filter documents
-- an in-memory repository can use predicates
+Consumer applications declare intent-revealing repository or query ports instead. A unique lookup can be `findByEmail(email)`. A multi-result aggregate selection can be `findDunningCandidates(criteria, { after, limit })`, with a validated maximum page size, stable ordering, and cursor semantics in that port's contract. UI lists, search, reporting, and other read-heavy access normally use projection ports rather than hydrating aggregates. The use case depends on the consumer-owned interface, never on the concrete database adapter.
 
-For criteria that belong to the domain language rather than to a storage language, the kit ships `Specification<T>`: a named, executable criterion with `isSatisfiedBy`, combinators for `and`/`or`/`not`, and an introspectable composite structure, usable as the `TFilter`.
+For criteria that belong to the domain language rather than to a storage language, the kit still ships `Specification<T>`: a named, executable criterion with `isSatisfiedBy`, combinators for `and`/`or`/`not`, and an introspectable composite structure. A consumer-owned port may accept such a specification alongside its explicit bounds and ordering contract.
 
 What the kit still does not ship is translation machinery. A `Specification<T>` powerful enough to translate itself across Drizzle, Prisma, Mongo, and SQL builders would have to become an expression-tree system, and an expression-tree system is a query framework. So predicates stay opaque, evaluation stays in memory, and a storage adapter translates the named leaves explicitly, recursing through the composite structure. The repository guide's Specifications section walks through this, including the drift risk when one rule lives as both a predicate and a query, and the shared-fixture test that contains it.
 

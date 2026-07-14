@@ -457,56 +457,97 @@ await scope.transactional(async (tx) => {
 });
 ```
 
-For bulk cleanup, do not load aggregates one by one. Add a concrete
-repository method such as `purgeExpired(before: Date)` and implement one
-predicated statement.
+For bulk cleanup, do not load aggregates one by one. Infrastructure-owned
+cleanup belongs in an adapter-side maintenance component. If an application
+use case invokes it, define a separate consumer-owned port such as
+`ExpiredOrderPurger.purgeExpired(before)` and implement one predicated
+statement. The use case should not depend on the concrete repository class.
 
 In pure event-sourced systems, hard delete is rarely the aggregate lifecycle.
 End-of-life is usually an event in the stream; the identity remains in the
 log.
 
-## Filtered Repositories
+## Consumer-Owned Query Ports
 
-If an aggregate really needs write-side lookup by criteria, opt in with
-`IQueryableRepository`:
+`IRepository` deliberately stops at aggregate identity and lifecycle. When a
+command-side use case needs another lookup, define a port in the consumer's
+domain or application layer with a method named after that intent. Do not leak
+SQL, Prisma `WhereInput`, Mongo filters, or another adapter's query language
+through the port.
+
+A single-result method needs a real uniqueness law:
 
 ```ts
-interface IQueryableRepository<TAgg, TId, TFilter>
-  extends IRepository<TAgg, TId> {
-  findOne(filter: TFilter): Promise<TAgg | null>;
-  find(filter: TFilter): Promise<TAgg[]>;
+interface OrderRepository extends IRepository<Order, OrderId> {
+  /** Customer email is unique among active orders. */
+  findActiveByCustomerEmail(email: EmailAddress): Promise<Order | null>;
 }
 ```
 
-`TFilter` is your persistence layer's native filter shape:
+State that uniqueness as a domain rule and enforce it with an authoritative
+consistency mechanism, typically a database uniqueness constraint. If several
+rows may match, a `findOne` method without an explicit stable order is not a
+valid substitute.
+
+Multi-result aggregate selection must be bounded and ordered by contract. The
+page vocabulary belongs to the consumer too:
 
 ```ts
-type Predicate<T> = (value: T) => boolean;
+declare const dunningCursorBrand: unique symbol;
+declare const dunningPageSizeBrand: unique symbol;
 
-class InMemoryOrders
-  implements IQueryableRepository<Order, OrderId, Predicate<Order>> {}
+type DunningCursor = string & { readonly [dunningCursorBrand]: true };
+type DunningPageSize = number & { readonly [dunningPageSizeBrand]: true };
 
-class DrizzleOrders
-  implements IQueryableRepository<Order, OrderId, SQL> {}
+function dunningPageSize(value: number): DunningPageSize {
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new RangeError("Dunning page size must be an integer from 1 to 100");
+  }
+  return value as DunningPageSize;
+}
 
-class PrismaOrders
-  implements IQueryableRepository<Order, OrderId, Prisma.OrderWhereInput> {}
+interface DunningCriteria {
+  readonly dueBefore: DueDate;
+  readonly maximumReminders: number;
+}
+
+interface DunningPageRequest {
+  readonly after?: DunningCursor;
+  readonly limit: DunningPageSize;
+}
+
+interface DunningCandidatePage {
+  readonly items: ReadonlyArray<Invoice>;
+  readonly nextCursor: DunningCursor | null;
+}
+
+interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
+  findDunningCandidates(
+    criteria: DunningCriteria,
+    page: DunningPageRequest,
+  ): Promise<DunningCandidatePage>;
+}
 ```
 
-`find(filter)` returns every match. There is no generic pagination contract
-because cursor, offset, and keyset pagination are storage-specific. If you
-need a paged write-side query, add a concrete method such as
-`findRecent(limit)` or `findPage(filter, cursor)`.
+This port must define one stable total order, for example `dueDate ASC,
+invoiceId ASC`. Its cursor is tied to that order, and `nextCursor` continues
+strictly after the last returned item. For an unchanged source dataset,
+traversal returns each match exactly once. The validated page-size constructor
+makes the hard upper bound unavoidable at call sites. An adapter contract can
+then exercise empty, single-page, multi-page, and equal-sort-key fixtures
+through a consumer-supplied harness.
 
-If the query is for a UI list, search page, dashboard, or report, build a
-projection instead.
+For high-volume command processing, consider selecting bounded IDs first and
+loading each aggregate in its own operation. If the query serves a UI list,
+search page, dashboard, or report, build a projection and a read-model query
+port instead of hydrating aggregates.
 
 ## Specifications
 
 Sometimes the lookup criteria belong to the domain, not to the storage
 layer. "Which invoices qualify for dunning?" is a business question, and the
 answer changes when the business changes. For criteria like that, write a
-`Specification` and use it as the `TFilter`:
+`Specification` and accept it through a consumer-owned, bounded port:
 
 ```ts
 import { Specification, type SpecificationComposite, specification } from "@shirudo/ddd-kit";
@@ -523,19 +564,23 @@ const dunningCandidates = new OverdueInvoice(today).and(
   specification("in dunning grace period", (i: Invoice) => i.remindersSent < 3),
 );
 
-class InvoiceRepository
-  implements IQueryableRepository<Invoice, InvoiceId, Specification<Invoice>> {}
+interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
+  findSatisfying(
+    specification: Specification<Invoice>,
+    page: DunningPageRequest,
+  ): Promise<DunningCandidatePage>;
+}
 ```
 
 What does this buy over an inline predicate? Three things.
 
 First, it runs in memory as-is. Domain logic can ask
 `spec.isSatisfiedBy(candidate)` directly, and an in-memory repository or
-test fake implements its lookup as a plain filter:
+test fake implements the criterion as a plain filter before applying the
+port's stable ordering and page bound:
 `rows.filter((r) => spec.isSatisfiedBy(r))`. Your tests never need a
-translation layer. (Call the lookup method whatever fits; `findSatisfying`
-is a common name, and `IQueryableRepository.find` works as-is with
-`Specification` as the `TFilter`.)
+translation layer. `findSatisfying` is only an example name; prefer a more
+specific use-case name when the ubiquitous language provides one.
 
 Second, it composes. `and`, `or`, and `not` build rules that still read
 like the business rule, and the derived names, for example
