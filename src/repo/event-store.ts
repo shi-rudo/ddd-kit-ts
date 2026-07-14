@@ -107,7 +107,13 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *     if (!page.exists) return null;
  *     targetVersion ??= page.lastVersion; // pin the first observed head
  *     if (fromVersion === targetVersion) break;
- *     if (page.events.length === 0) throw new Error("non-progressing stream page");
+ *     if (page.events.length === 0) {
+ *       throw new NonProgressingEventStreamPageError({
+ *         ...address,
+ *         fromVersion,
+ *         targetVersion,
+ *       });
+ *     }
  *     const result = order.loadFromHistory(page.events);
  *     if (result.isErr()) throw result.error; // corrupt stream
  *     fromVersion += page.events.length;

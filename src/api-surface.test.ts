@@ -60,6 +60,7 @@ const INDEX_SURFACE = [
 	"MisaddressedEventError",
 	"MissingHandlerError",
 	"NestedUnitOfWorkError",
+	"NonProgressingEventStreamPageError",
 	"OutboxDispatcher",
 	"ProjectionGapError",
 	"ProjectionIdentityViolationError",

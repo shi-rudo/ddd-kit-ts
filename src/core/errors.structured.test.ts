@@ -13,6 +13,7 @@ import {
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	MissingHandlerError,
+	NonProgressingEventStreamPageError,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
@@ -86,6 +87,18 @@ const concreteCases: ReadonlyArray<{
 		error: () => new MissingHandlerError("OrderConfirmed"),
 		code: "MISSING_HANDLER",
 		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new NonProgressingEventStreamPageError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				fromVersion: 10,
+				targetVersion: 12,
+			}),
+		code: "NON_PROGRESSING_EVENT_STREAM_PAGE",
+		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
 	{
@@ -307,6 +320,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<HostileStateKeyError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
+			AssertKitCode<NonProgressingEventStreamPageError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
 			AssertKitCode<ProjectionIdentityViolationError["code"]>,
 			AssertKitCode<ProjectionOrderViolationError["code"]>,

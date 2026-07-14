@@ -368,7 +368,11 @@ async function findById(id: OrderId): Promise<Order | null> {
     targetVersion ??= page.lastVersion;
     if (fromVersion === targetVersion) break;
     if (page.events.length === 0) {
-      throw new Error("EventStore returned a non-progressing stream page");
+      throw new NonProgressingEventStreamPageError({
+        ...address,
+        fromVersion,
+        targetVersion,
+      });
     }
 
     const result = order.loadFromHistory(page.events);
@@ -466,7 +470,11 @@ async function findOrderAsOfVersion(
   let fromVersion = 0;
   while (fromVersion < toVersion) {
     if (!page.exists || page.events.length === 0) {
-      throw new Error("EventStore returned a non-progressing stream page");
+      throw new NonProgressingEventStreamPageError({
+        ...address,
+        fromVersion,
+        targetVersion: toVersion,
+      });
     }
     const result = historical.loadFromHistory(page.events);
     if (result.isErr()) throw result.error;

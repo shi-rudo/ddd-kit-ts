@@ -300,7 +300,9 @@ value as `toVersion` on every later page. Advance `fromVersion` by the number of
 events actually returned, because adapters may return fewer than requested.
 Replay each page into the same fresh aggregate, and add it to the identity map
 only after the cursor reaches the pinned head. A zero-length page before that
-point is a violated adapter contract, not end-of-stream.
+point is a violated adapter contract, not end-of-stream; throw
+`NonProgressingEventStreamPageError` so the stream address and both cursors
+survive into logs and telemetry.
 
 Pinning the head matters. Without it, events appended during a slow load keep
 moving the target, so one request can observe an open-ended mixture of stream

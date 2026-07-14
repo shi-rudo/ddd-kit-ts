@@ -13,9 +13,34 @@ import {
 	EventHarvestError,
 	InfrastructureError,
 	MissingHandlerError,
+	NonProgressingEventStreamPageError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
 } from "./errors";
+
+describe("NonProgressingEventStreamPageError", () => {
+	it("names an EventStore page that cannot advance to its pinned target", () => {
+		const error = new NonProgressingEventStreamPageError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			fromVersion: 256,
+			targetVersion: 300,
+		});
+
+		expect(error.code).toBe("NON_PROGRESSING_EVENT_STREAM_PAGE");
+		expect(error.name).toBe("NON_PROGRESSING_EVENT_STREAM_PAGE");
+		expect(error).toBeInstanceOf(InfrastructureError);
+		expect(error.category).toBe("INFRASTRUCTURE");
+		expect(error.retryable).toBe(false);
+		expect(error.aggregateType).toBe("Order");
+		expect(error.aggregateId).toBe("order-1");
+		expect(error.fromVersion).toBe(256);
+		expect(error.targetVersion).toBe(300);
+		expect(error.message).toContain("Order(order-1)");
+		expect(error.message).toContain("after version 256");
+		expect(error.message).toContain("target version 300");
+	});
+});
 
 describe("DomainError", () => {
 	it("is abstract; only consumer subclasses are constructible", () => {

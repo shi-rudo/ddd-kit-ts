@@ -71,7 +71,11 @@ for (;;) {
   targetVersion ??= page.lastVersion;
   if (fromVersion === targetVersion) break;
   if (page.events.length === 0) {
-    throw new Error("EventStore returned a non-progressing stream page");
+    throw new NonProgressingEventStreamPageError({
+      ...address,
+      fromVersion,
+      targetVersion,
+    });
   }
 
   const current = page.events.map(upcastOrderEvent) as OrderEvent[];

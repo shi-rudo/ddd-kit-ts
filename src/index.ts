@@ -121,6 +121,8 @@ export {
 	type KitErrorOptions,
 	MisaddressedEventError,
 	MissingHandlerError,
+	NonProgressingEventStreamPageError,
+	type NonProgressingEventStreamPageErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,

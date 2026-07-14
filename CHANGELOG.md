@@ -696,7 +696,13 @@ for (;;) {
   if (!page.exists) return null;
   targetVersion ??= page.lastVersion;
   if (fromVersion === targetVersion) break;
-  if (page.events.length === 0) throw new Error("non-progressing page");
+  if (page.events.length === 0) {
+    throw new NonProgressingEventStreamPageError({
+      ...address,
+      fromVersion,
+      targetVersion,
+    });
+  }
   const replay = order.loadFromHistory(page.events);
   if (replay.isErr()) throw replay.error;
   fromVersion += page.events.length;
@@ -707,7 +713,10 @@ Adapters return no more than `limit` events and may return fewer, but must make
 progress while unread events remain in the requested window. Invalid options
 reject with `RangeError` before storage access. The first page's `lastVersion`
 is passed as `toVersion` on continuations so concurrent appends cannot move the
-replay target. The event-store contract suite now proves the bound, progress,
+replay target. A zero-progress page before that target throws the structured,
+non-retryable `NonProgressingEventStreamPageError` with the stream address and
+both cursors, instead of losing the adapter-contract diagnosis in a generic
+`Error`. The event-store contract suite now proves the bound, progress,
 and gapless, duplicate-free continuation. Event-sourced repository harnesses
 also pass a mandatory `ReadStreamOptions` object to `committedStreamEvents`.
 
@@ -822,7 +831,8 @@ also pass a mandatory `ReadStreamOptions` object to `committedStreamEvents`.
   event-sourced repository harness now requires the same options object.
 - Loading, point-in-time, snapshot, repository, and upcasting recipes replay
   one page at a time instead of collecting a complete stream or tail in one
-  array.
+  array. A page that cannot advance to the pinned target throws
+  `NonProgressingEventStreamPageError` (`NON_PROGRESSING_EVENT_STREAM_PAGE`).
 
 ### Changed (breaking): live entity state is protected
 
