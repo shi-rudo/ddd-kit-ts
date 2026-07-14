@@ -15,8 +15,10 @@ import type { Id } from "../core/id";
  * witness accepts those classes while still inferring `TAgg`.
  */
 export type AggregateClass<TAgg> =
-	// biome-ignore lint/suspicious/noExplicitAny: variance; a class reference is only used as a map key and instance witness here.
-	| (abstract new (...args: any[]) => TAgg)
+	| (abstract new (
+			// biome-ignore lint/suspicious/noExplicitAny: variance; a class reference is only used as a map key and instance witness here.
+			...args: any[]
+	  ) => TAgg)
 	// biome-ignore lint/complexity/noBannedTypes: Function is deliberate; a construct signature cannot accept protected-constructor classes (the kit's aggregate convention); the prototype witness keeps TAgg inference.
 	| (Function & { prototype: TAgg });
 
@@ -27,9 +29,10 @@ export type AggregateClass<TAgg> =
  * This is the shipped implementation of the contract the
  * [Repository guide](../../docs/guide/repository.md) places on
  * `IRepository` implementations: two `findById(id)` calls in the same
- * unit of work MUST return the same instance, because `withCommit`'s
- * aggregate dedupe (and therefore exactly-once event harvest and
- * `markPersisted`) is keyed on JavaScript object identity.
+ * unit of work MUST return the same instance, because commit-token
+ * enrollment dedupes by JavaScript object identity. Two instances for
+ * one logical aggregate can otherwise produce two tokens, two harvests,
+ * and two post-commit lifecycle calls.
  *
  * Storage is two-level (per-type stores created lazily), so
  * `Restaurant:123` and `Booking:123` can never collide: the type key

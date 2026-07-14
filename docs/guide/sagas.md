@@ -135,7 +135,7 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
     // consumer of the same event keeps its own inbox entry. The
     // fingerprint is a tripwire (see below); any stable content hash works.
     { key: `checkout-saga:${event.eventId}`, fingerprint: stableHash(event.payload) },
-    async (tx) => {
+    async (tx, enrollment) => {
       const sagas = makeSagaRepository(tx);
       const deadlines = makeDeadlineStore(tx);
 
@@ -151,7 +151,10 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
         payload: { kind: "payment-timeout" },
       });
 
-      return { result: saga.id, aggregates: [saga] };
+      return {
+        result: saga.id,
+        commits: [enrollment.enrollSaved(saga)],
+      };
     },
   );
 }

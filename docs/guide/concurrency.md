@@ -67,7 +67,7 @@ async function updateQuantity(
     order.updateItemQuantity(itemId, quantity);
     await orders.save(order);
 
-    return { result: undefined, aggregates: [order] };
+    return undefined;
   });
 }
 ```

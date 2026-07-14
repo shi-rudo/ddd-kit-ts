@@ -10,8 +10,8 @@ read a table shaped for the query.
 The normal flow is:
 
 1. A use case mutates an aggregate.
-2. `withCommit` saves the aggregate and writes its domain events to the
-   outbox in the same transaction.
+2. The repository saves the aggregate; `withCommit` validates its commit
+   token and writes the domain events to the outbox in the same transaction.
 3. A dispatcher delivers those events to a `Projector`.
 4. The `Projector` updates one read-model table and advances its checkpoint
    in the same transaction.
@@ -717,7 +717,7 @@ const stop = new AbortController();
 void dispatcher.run(stop.signal);
 
 commands.register("CreateOrder", async (command) => {
-  return withCommit({ scope, outbox, bus }, async (tx) => {
+  return withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
     const orders = makeOrderRepository(tx);
     const order = Order.create(orderIds.next(), command.customerId);
 
@@ -727,7 +727,10 @@ commands.register("CreateOrder", async (command) => {
 
     await orders.save(order);
 
-    return { result: ok(order.id), aggregates: [order] };
+    return {
+      result: ok(order.id),
+      commits: [enrollment.enrollSaved(order)],
+    };
   });
 });
 

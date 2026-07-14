@@ -21,21 +21,26 @@ import { InMemoryOutbox, withCommit } from "@shirudo/ddd-kit";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
-const orderId = await withCommit({ scope, outbox }, async (tx) => {
+const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(id);
 
   order.confirm();
   await orders.save(order);
 
-  return { result: order.id, aggregates: [order] };
+  return {
+    result: order.id,
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 
-The important line is the return value. The use case returns the aggregates
-it touched, not `order.pendingEvents`. `withCommit` owns event harvesting and
-persistence cleanup. Repositories save state; they do not clear events and
-they do not call `markPersisted`.
+The important line is the return value. The use case returns opaque tokens for
+the repository writes it enrolled, not naked aggregates and not
+`order.pendingEvents`. A fresh but unsaved aggregate therefore cannot be
+harvested or acknowledged accidentally. `withCommit` owns event harvesting
+and persistence cleanup. Repositories save state; they do not clear events or
+call `markPersisted`.
 
 ## What Happens On Commit
 
@@ -44,8 +49,9 @@ they do not call `markPersisted`.
 1. It calls `scope.transactional(...)`.
 2. Your callback loads aggregates, mutates them, and saves them through
    repositories bound to the transaction handle.
-3. Still inside the transaction, `withCommit` harvests `pendingEvents` from
-   the returned aggregates and calls `outbox.add(events)`.
+3. Still inside the transaction, `withCommit` validates the invocation-bound
+   commit tokens, harvests `pendingEvents` from their aggregates, and calls
+   `outbox.add(events)`.
 4. The transaction commits.
 5. After commit, `withCommit` marks the aggregates as persisted and clears
    their pending events.
@@ -102,14 +108,17 @@ Repositories are usually created inside the callback from that transaction
 handle:
 
 ```ts
-await withCommit({ scope, outbox }, async (tx) => {
+await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
   order.confirm();
   await orders.save(order);
 
-  return { result: order.id, aggregates: [order] };
+  return {
+    result: order.id,
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 
@@ -122,7 +131,7 @@ const scope: TransactionScope<undefined> = {
 
 await withCommit({ scope, outbox }, async () => ({
   result: "ok",
-  aggregates: [],
+  commits: [],
 }));
 ```
 
@@ -540,6 +549,7 @@ You may use both channels for different audiences:
 await withCommit({ scope, outbox, bus }, async (tx) => {
   // bus: in-process fast path after commit
   // outbox: durable handoff for dispatchers
+  return { result: undefined, commits: [] };
 });
 ```
 
@@ -568,9 +578,10 @@ Within one aggregate, event order is causal. If an aggregate emits
 that order. `withCommit` harvests events in the order the aggregate recorded
 them, and a sequential outbox dispatcher preserves that order.
 
-Across aggregates, order is not a domain guarantee. `aggregates: [a, b]`
-creates a deterministic harvest order, but brokers, parallel dispatchers, and
-separate processes may reorder events from `a` against events from `b`.
+Across aggregates, order is not a domain guarantee. Returning commit tokens
+for `[a, b]` creates a deterministic harvest order, but brokers, parallel
+dispatchers, and separate processes may reorder events from `a` against events
+from `b`.
 
 If a consumer depends on the order of events from different aggregates, model
 the dependency explicitly. Use `metadata.causationId`, a process manager, or a

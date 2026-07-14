@@ -14,9 +14,10 @@ applies:
 5. Publish to the optional in-process bus last.
 
 What `UnitOfWork` adds is repository wiring, enrollment, and an identity map.
-Use plain `withCommit` when you are comfortable returning the aggregate list
-from each use case. Use `UnitOfWork` when you want repositories to enroll the
-aggregates they write.
+Use plain `withCommit` when the application service can return explicit,
+invocation-scoped commit tokens. Use `UnitOfWork` when you want repositories to
+enroll the aggregates they write and the session to retain those tokens
+automatically.
 
 ## Wiring
 

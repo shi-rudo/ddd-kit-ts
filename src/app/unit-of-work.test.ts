@@ -275,6 +275,30 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("enrollment + post-commit lifecycle", () => {
+		it("does not harvest or acknowledge a fresh aggregate that was never saved", async () => {
+			const { uow, outbox } = createUow();
+			const event = testEvent("o-unsaved");
+			const aggregate = createMockAggregate("o-unsaved", [event]);
+
+			await expect(
+				uow.run(async () => {
+					// Constructing and mutating an aggregate is not persistence proof.
+					// No repository save means no session enrollment token.
+					return aggregate.id;
+				}),
+			).resolves.toBe("o-unsaved");
+
+			expect(
+				(
+					outbox as Outbox<TestEvent> & {
+						added: EventCommitCandidate<TestEvent>[][];
+					}
+				).added,
+			).toEqual([]);
+			expect(aggregate.pendingEvents).toEqual([event]);
+			expect(aggregate.markPersistedCalls).toBe(0);
+		});
+
 		it("saved aggregates: events harvested into the outbox, markPersisted after commit, publish last", async () => {
 			const callOrder: string[] = [];
 			const scope: TransactionScope<undefined> = {

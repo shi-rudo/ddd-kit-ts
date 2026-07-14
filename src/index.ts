@@ -47,6 +47,8 @@ export {
 } from "./app/command-bus";
 // App orchestration: withCommit + Unit of Work
 export {
+	type AggregateCommitToken,
+	type CommitEnrollment,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,

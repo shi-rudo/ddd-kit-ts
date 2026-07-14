@@ -572,15 +572,21 @@ The HTTP entry point parses raw input once and emits DTOs once:
 app.post("/invoices/:id/lines", async (req, res) => {
   const amount = money.parse(req.body.amount, "EUR");
 
-  const total = await withCommit({ scope, outbox, bus }, async (tx) => {
-    const invoices = new PgInvoiceRepository(tx);
-    const invoice = await invoices.getById(asInvoiceId(req.params.id));
+  const total = await withCommit(
+    { scope, outbox, bus },
+    async (tx, enrollment) => {
+      const invoices = new PgInvoiceRepository(tx);
+      const invoice = await invoices.getById(asInvoiceId(req.params.id));
 
-    invoice.addLine(String(req.body.sku), amount);
-    await invoices.save(invoice);
+      invoice.addLine(String(req.body.sku), amount);
+      await invoices.save(invoice);
 
-    return { result: invoice.total, aggregates: [invoice] };
-  });
+      return {
+        result: invoice.total,
+        commits: [enrollment.enrollSaved(invoice)],
+      };
+    },
+  );
 
   res.status(200).json({ total: moneyToDto(total) });
 });

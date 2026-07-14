@@ -208,7 +208,9 @@ The normal lifecycle is:
 1. Load or create the aggregate.
 2. Run domain methods.
 3. Save the aggregate once.
-4. Return `{ result, aggregates: [aggregate] }` from `withCommit`.
+4. Return the token from `enrollment.enrollSaved(aggregate)` in
+   `withCommit`'s `commits` array. `UnitOfWork` does this from repository
+   enrollment automatically.
 5. `withCommit` writes outbox rows, commits the transaction, then calls
    `markPersisted(version)`.
 

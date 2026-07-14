@@ -519,6 +519,71 @@ available as executable domain criteria, but it is accepted through a
 consumer-owned method with explicit result semantics rather than a kit-wide
 generic repository.
 
+#### 19. `withCommit` requires invocation-scoped commit tokens
+
+`withCommit` no longer accepts naked aggregate arrays. A touched aggregate is
+not proof that a repository write participated in the transaction; the old
+shape could harvest a fresh, unsaved aggregate into the outbox and mark it
+persisted after the transaction committed.
+
+```ts
+// before
+await withCommit({ scope, outbox, bus }, async (tx) => {
+  const orders = makeOrderRepository(tx);
+  const order = await orders.getById(orderId);
+  order.confirm();
+  await orders.save(order);
+  return { result: order.id, aggregates: [order] };
+});
+
+// after
+await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
+  const orders = makeOrderRepository(tx);
+  const order = await orders.getById(orderId);
+  order.confirm();
+  await orders.save(order);
+  const commit = enrollment.enrollSaved(order);
+  return { result: order.id, commits: [commit] };
+});
+```
+
+For hard deletion, return `enrollment.enrollDeleted(aggregate)` instead. The
+token keeps deletion-event harvest while suppressing the post-save
+`markPersisted` hook. `withIdempotentCommit` receives the same second callback
+argument and uses the same work-result shape.
+
+Tokens are opaque and bound to one transactional callback attempt. Forged
+tokens and tokens retained from an earlier invocation throw
+`EventHarvestError` before the outbox write. Repeated enrollment of the same
+aggregate instance returns one token, and repeated tokens are harvested once.
+The callback capability is sealed as soon as the callback settles so delayed,
+unawaited enrollment fails loudly.
+
+This is provenance for explicit enrollment, not database attestation: the kit
+cannot introspect an arbitrary adapter. Repository code remains responsible
+for enrolling only a write that participates in the transaction. The scoped
+capability removes accidental naked-aggregate smuggling; it is not a security
+boundary against application code that deliberately lies to its own adapter.
+
+`UnitOfWork.run` use cases keep returning their result directly. Repository
+implementations continue calling `session.enrollSaved` or
+`session.enrollDeleted`; the session now retains the underlying scoped tokens
+and passes them to `withCommit` automatically.
+
+### Changed (breaking): commit enrollment is provenance-bound
+
+- `WithCommitWorkResult` now carries `commits` with opaque
+  `AggregateCommitToken` values instead of `aggregates` and `deleted`.
+- `withCommit` and `withIdempotentCommit` pass a scoped `CommitEnrollment` as
+  the callback's second argument. Only tokens minted by that exact callback
+  attempt are accepted. The idempotent wrapper seals the user capability and
+  snapshots its token array before `IdempotencyStore.complete` can yield.
+- `UnitOfWorkSession` extends the same enrollment contract. Repositories remain
+  responsible for enrollment, while `UnitOfWork` retains and forwards tokens
+  without exposing a second use-case return protocol.
+- Legacy naked aggregate results, forged tokens, stale tokens, and enrollment
+  after callback settlement fail inside the transaction before event harvest.
+
 ### Fixed: projection receipt integrity and executable source-position laws
 
 - A watermark or in-batch position is now an exact receipt, not merely an
