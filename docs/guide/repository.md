@@ -95,20 +95,42 @@ async findById(id: OrderId): Promise<Order | null> {
   const cached = this.identityMap.get(Order, id);
   if (cached) return cached;
 
-  const stream = await this.eventStore.readStream({
-    aggregateType: "Order",
-    aggregateId: id,
-  });
-  if (!stream.exists) return null;
-
+  const address = { aggregateType: "Order", aggregateId: id };
   const order = Order.reconstitute(id);
-  const result = order.loadFromHistory(stream.events);
-  if (result.isErr()) throw result.error;
+  let fromVersion = 0;
+  let targetVersion: number | undefined;
+
+  for (;;) {
+    const page = await this.eventStore.readStream(address, {
+      fromVersion,
+      toVersion: targetVersion,
+      limit: 256,
+    });
+    if (!page.exists) return null;
+    targetVersion ??= page.lastVersion;
+    if (fromVersion === targetVersion) break;
+    if (page.events.length === 0) {
+      throw new NonProgressingEventStreamPageError({
+        ...address,
+        fromVersion,
+        targetVersion,
+      });
+    }
+    const result = order.loadFromHistory(page.events);
+    if (result.isErr()) throw result.error;
+    fromVersion += page.events.length;
+  }
 
   this.identityMap.set(Order, id, order);
   return order;
 }
 ```
+
+The mandatory `limit` keeps each store allocation bounded. Pin the first
+page's `lastVersion` as `toVersion`, then advance `fromVersion` by the number of
+events actually returned. That gives the repository a stable append-only
+prefix even if a concurrent writer appends while replay is running. Never put
+the aggregate in the identity map until every page has replayed successfully.
 
 A correctly reconstituted aggregate has no pending events from the load path.
 If loading an aggregate records an event, the repository is using the wrong

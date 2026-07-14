@@ -21,8 +21,9 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Seven do not (steps 3, 5, 11,
-12, 14, 15, and 20) and deserve a deliberate pass over the call sites.
+Most of these surface at compile time. Eight do not (steps 3, 5, 11,
+12, 14, 15, 20, and the option-validation part of 22) and deserve a
+deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -437,7 +438,7 @@ const snapshot = await snapshots.load("Order", order.id);
 // after
 const address = { aggregateType: "Order", aggregateId: order.id };
 await eventStore.append(address, order.pendingEvents, options);
-const stream = await eventStore.readStream(address);
+const stream = await eventStore.readStream(address, { limit: 256 });
 if (!stream.exists) return null;
 const history = stream.events;
 const snapshot = await snapshots.load(address);
@@ -473,6 +474,7 @@ if (tail.length === 0) {
 // after
 const tail = await eventStore.readStream(address, {
   fromVersion: snapshot.version,
+  limit: 256,
 });
 if (!tail.exists || tail.lastVersion < snapshot.version) {
   return discardSnapshotAndRefold();
@@ -671,6 +673,53 @@ non-transactional contract harness now requires deterministic `expireLease`
 and `advanceTimeTo` controls and proves renewal, takeover, stale-owner fencing,
 and staged reconciliation.
 
+#### 22. EventStore reads are page-bounded (runtime validation component)
+
+`EventStore.readStream` no longer has an optional, potentially unbounded read.
+Every call supplies a positive safe-integer `limit`; `fromVersion` and
+`toVersion`, when present, must be non-negative safe integers.
+
+```ts
+// before: one allocation can grow with the complete stream
+const stream = await eventStore.readStream(address);
+order.loadFromHistory(stream.events);
+
+// after: pin the first observed head and replay bounded pages
+let fromVersion = 0;
+let targetVersion: number | undefined;
+for (;;) {
+  const page = await eventStore.readStream(address, {
+    fromVersion,
+    toVersion: targetVersion,
+    limit: 256,
+  });
+  if (!page.exists) return null;
+  targetVersion ??= page.lastVersion;
+  if (fromVersion === targetVersion) break;
+  if (page.events.length === 0) {
+    throw new NonProgressingEventStreamPageError({
+      ...address,
+      fromVersion,
+      targetVersion,
+    });
+  }
+  const replay = order.loadFromHistory(page.events);
+  if (replay.isErr()) throw replay.error;
+  fromVersion += page.events.length;
+}
+```
+
+Adapters return no more than `limit` events and may return fewer, but must make
+progress while unread events remain in the requested window. Invalid options
+reject with `RangeError` before storage access. The first page's `lastVersion`
+is passed as `toVersion` on continuations so concurrent appends cannot move the
+replay target. A zero-progress page before that target throws the structured,
+non-retryable `NonProgressingEventStreamPageError` with the stream address and
+both cursors, instead of losing the adapter-contract diagnosis in a generic
+`Error`. The event-store contract suite now proves the bound, progress,
+and gapless, duplicate-free continuation. Event-sourced repository harnesses
+also pass a mandatory `ReadStreamOptions` object to `committedStreamEvents`.
+
 ### Changed (breaking): leased idempotency claims and reconciliation
 
 - `IdempotencyClaim` adds the `reconciliation-required` state and returns an
@@ -763,6 +812,27 @@ and staged reconciliation.
 - The event-sourcing guide includes a strict point-in-time reconstruction
   recipe that checks the requested version against the separately reported
   stream head before folding history.
+
+### Changed (breaking): EventStore reads require bounded pages
+
+- `ReadStreamOptions.limit` is mandatory, and the `readStream` options object
+  is no longer optional. A read returns no more than the requested number of
+  events; adapters may return fewer but must return a non-empty contiguous page
+  whenever the selected window still contains unread events.
+- `limit` must be a positive safe integer. `fromVersion` and `toVersion`, when
+  present, must be non-negative safe integers. Invalid options reject with
+  `RangeError` before storage is queried.
+- Gapless continuation uses the existing exclusive `fromVersion`: advance it
+  by the number of events actually returned. Pin the first page's
+  `lastVersion` as `toVersion` for later pages so concurrent appends do not
+  create a moving replay target.
+- `createEventStoreContractTests` proves page bounds, progress, and complete
+  continuation without gaps or duplicates. `committedStreamEvents` in the
+  event-sourced repository harness now requires the same options object.
+- Loading, point-in-time, snapshot, repository, and upcasting recipes replay
+  one page at a time instead of collecting a complete stream or tail in one
+  array. A page that cannot advance to the pinned target throws
+  `NonProgressingEventStreamPageError` (`NON_PROGRESSING_EVENT_STREAM_PAGE`).
 
 ### Changed (breaking): live entity state is protected
 

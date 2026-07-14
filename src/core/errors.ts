@@ -473,6 +473,49 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	}
 }
 
+/** Constructor options for {@link NonProgressingEventStreamPageError}. */
+export interface NonProgressingEventStreamPageErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** Exclusive continuation cursor supplied to `EventStore.readStream`. */
+	readonly fromVersion: number;
+	/** Pinned inclusive stream version the replay still has to reach. */
+	readonly targetVersion: number;
+}
+
+/**
+ * Thrown by a paged EventStore consumer when `readStream` returns no events
+ * even though its continuation cursor has not reached the pinned target.
+ * Such a page cannot advance and violates the EventStore port contract; a
+ * replay loop that merely continued would spin forever.
+ *
+ * This is a non-retryable infrastructure error: the persistence adapter
+ * deterministically contradicted its port contract, so retrying the same read
+ * is not a recovery policy. Run `createEventStoreContractTests` against the
+ * adapter and fix its windowing/continuation implementation.
+ */
+export class NonProgressingEventStreamPageError extends InfrastructureError<"NON_PROGRESSING_EVENT_STREAM_PAGE"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly fromVersion: number;
+	readonly targetVersion: number;
+
+	constructor(options: NonProgressingEventStreamPageErrorOptions) {
+		super({
+			code: "NON_PROGRESSING_EVENT_STREAM_PAGE",
+			message:
+				`EventStore returned no events for ${options.aggregateType}(${options.aggregateId}) ` +
+				`after version ${options.fromVersion}, before pinned target version ` +
+				`${options.targetVersion}. The page cannot advance; run the EventStore ` +
+				"contract suite and fix the adapter's continuation window.",
+		});
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.fromVersion = options.fromVersion;
+		this.targetVersion = options.targetVersion;
+	}
+}
+
 /**
  * Thrown when an event harvested from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
@@ -1065,6 +1108,7 @@ export type KitErrorCode =
 	| "MONEY_PRECISION_LOSS"
 	| "MONEY_SCALE_MISMATCH"
 	| "NESTED_UNIT_OF_WORK"
+	| "NON_PROGRESSING_EVENT_STREAM_PAGE"
 	| "PROJECTION_GAP"
 	| "PROJECTION_IDENTITY_VIOLATION"
 	| "PROJECTION_ORDER_VIOLATION"

@@ -42,6 +42,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 	harness: EventStoreContractHarness<Evt>,
 ): EventStoreContractTest[] {
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
+	const fixtureRead = { limit: 100 } as const;
 	const hasSameEventIds = (
 		actual: ReadonlyArray<Evt>,
 		expected: ReadonlyArray<Evt>,
@@ -54,7 +55,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			name: "unknown stream: read reports explicit absence at version zero",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
-				const missing = await store.readStream({ ...firstKey });
+				const missing = await store.readStream({ ...firstKey }, fixtureRead);
 				assert(
 					!missing.exists &&
 						missing.lastVersion === 0 &&
@@ -70,7 +71,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				await store.append(firstKey, [], { expectedVersion: 999 });
 				const event = harness.createEvent(firstKey, 1);
 				await store.append({ ...firstKey }, [event], { expectedVersion: 0 });
-				const stored = await store.readStream(firstKey);
+				const stored = await store.readStream(firstKey, fixtureRead);
 				assert(
 					stored.exists &&
 						stored.lastVersion === 1 &&
@@ -103,8 +104,14 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				await store.append(firstKey, [firstEvent], { expectedVersion: 0 });
 				await store.append(secondKey, [secondEvent], { expectedVersion: 0 });
 
-				const firstStream = await store.readStream({ ...firstKey });
-				const secondStream = await store.readStream({ ...secondKey });
+				const firstStream = await store.readStream(
+					{ ...firstKey },
+					fixtureRead,
+				);
+				const secondStream = await store.readStream(
+					{ ...secondKey },
+					fixtureRead,
+				);
 				assert(
 					firstStream.exists &&
 						firstStream.events.length === 1 &&
@@ -127,10 +134,11 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					harness.createEvent(firstKey, sequence),
 				);
 				await store.append(firstKey, events, { expectedVersion: 0 });
-				const whole = await store.readStream({ ...firstKey });
+				const whole = await store.readStream({ ...firstKey }, fixtureRead);
 				const afterTwo = await store.readStream(
 					{ ...firstKey },
 					{
+						...fixtureRead,
 						fromVersion: 2,
 					},
 				);
@@ -150,6 +158,91 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "paged read: limit bounds every page and fromVersion continues without gaps or duplicates",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const collected: Evt[] = [];
+				let cursor = 0;
+				let targetHead: number | undefined;
+				for (let attempt = 0; attempt < events.length; attempt += 1) {
+					const page = await store.readStream(
+						{ ...firstKey },
+						{
+							fromVersion: cursor,
+							limit: 2,
+							...(targetHead === undefined ? {} : { toVersion: targetHead }),
+						},
+					);
+					assert(
+						page.exists,
+						"a paged read of an existing stream must retain existence",
+					);
+					targetHead ??= page.lastVersion;
+					assert(
+						page.lastVersion >= targetHead,
+						"lastVersion must keep reporting at least the head pinned by the first page",
+					);
+					assert(
+						page.events.length > 0 && page.events.length <= 2,
+						"an unread page must make progress without exceeding the requested limit",
+					);
+					collected.push(...page.events);
+					cursor += page.events.length;
+					if (cursor >= targetHead) break;
+				}
+
+				assert(
+					targetHead === events.length && cursor === targetHead,
+					"following fromVersion by each actual page length must reach the pinned head",
+				);
+				assert(
+					hasSameEventIds(collected, events),
+					"paged continuation must reproduce append order without gaps or duplicates",
+				);
+				const atEnd = await store.readStream(
+					{ ...firstKey },
+					{ fromVersion: cursor, toVersion: targetHead, limit: 2 },
+				);
+				assert(
+					atEnd.exists && atEnd.events.length === 0,
+					"continuing at the pinned head must return an existing empty page",
+				);
+			}),
+		},
+		{
+			name: "read options: invalid limits and stream positions fail loudly",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const invalidOptions: unknown[] = [
+					{},
+					{ limit: 0 },
+					{ limit: 1.5 },
+					{ limit: Number.MAX_SAFE_INTEGER + 1 },
+					{ limit: 1, fromVersion: -1 },
+					{ limit: 1, fromVersion: 1.5 },
+					{ limit: 1, fromVersion: Number.MAX_SAFE_INTEGER + 1 },
+					{ limit: 1, toVersion: -1 },
+					{ limit: 1, toVersion: 1.5 },
+					{ limit: 1, toVersion: Number.MAX_SAFE_INTEGER + 1 },
+				];
+
+				for (const options of invalidOptions) {
+					const rejection = await captureRejection(
+						store.readStream(firstKey, options as never),
+					);
+					assert(
+						rejection instanceof RangeError,
+						"invalid read bounds must reject with RangeError before querying the stream",
+					);
+				}
+			}),
+		},
+		{
 			name: "bounded read: toVersion is inclusive while lastVersion remains the actual head",
 			run: inEnv(async ({ store }) => {
 				const [firstKey] = harness.createCollidingStreamKeys();
@@ -160,7 +253,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 
 				const bounded = await store.readStream(
 					{ ...firstKey },
-					{ fromVersion: 1, toVersion: 3 },
+					{ ...fixtureRead, fromVersion: 1, toVersion: 3 },
 				);
 
 				assert(
@@ -182,19 +275,19 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 
 				const atZero = await store.readStream(
 					{ ...firstKey },
-					{ toVersion: 0 },
+					{ ...fixtureRead, toVersion: 0 },
 				);
 				const beyondHead = await store.readStream(
 					{ ...firstKey },
-					{ toVersion: 99 },
+					{ ...fixtureRead, toVersion: 99 },
 				);
 				const inverted = await store.readStream(
 					{ ...firstKey },
-					{ fromVersion: 2, toVersion: 1 },
+					{ ...fixtureRead, fromVersion: 2, toVersion: 1 },
 				);
 				const equalBounds = await store.readStream(
 					{ ...firstKey },
-					{ fromVersion: 2, toVersion: 2 },
+					{ ...fixtureRead, fromVersion: 2, toVersion: 2 },
 				);
 
 				assert(
@@ -233,12 +326,14 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				const atHead = await store.readStream(
 					{ ...firstKey },
 					{
+						...fixtureRead,
 						fromVersion: 2,
 					},
 				);
 				const beyondHead = await store.readStream(
 					{ ...firstKey },
 					{
+						...fixtureRead,
 						fromVersion: 99,
 					},
 				);
@@ -268,12 +363,14 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				const firstTail = await store.readStream(
 					{ ...firstKey },
 					{
+						...fixtureRead,
 						fromVersion: 1,
 					},
 				);
 				const secondTail = await store.readStream(
 					{ ...secondKey },
 					{
+						...fixtureRead,
 						fromVersion: 1,
 					},
 				);
@@ -318,7 +415,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					["CONCURRENCY_CONFLICT"],
 					"a stale append must map the adapter conflict to ConcurrencyConflictError",
 				);
-				const stored = await store.readStream(firstKey);
+				const stored = await store.readStream(firstKey, fixtureRead);
 				assert(
 					stored.exists &&
 						stored.lastVersion === 2 &&
@@ -350,7 +447,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					["CONCURRENCY_CONFLICT", "DUPLICATE_AGGREGATE"],
 					"a duplicate create must map to ConcurrencyConflictError or the sanctioned DuplicateAggregateError",
 				);
-				const stored = await store.readStream(firstKey);
+				const stored = await store.readStream(firstKey, fixtureRead);
 				assert(
 					stored.exists &&
 						stored.lastVersion === 1 &&
@@ -376,7 +473,7 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				);
 				const first = harness.createEvent(firstKey, 61);
 				await store.append({ ...firstKey }, [first], { expectedVersion: 0 });
-				const stored = await store.readStream(firstKey);
+				const stored = await store.readStream(firstKey, fixtureRead);
 				assert(
 					stored.exists &&
 						stored.lastVersion === 1 &&
@@ -392,14 +489,15 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				const [firstKey] = harness.createCollidingStreamKeys();
 				const seeded = harness.createEvent(firstKey, 40);
 				await store.append(firstKey, [seeded], { expectedVersion: 0 });
-				const callerOwned = (await store.readStream(firstKey)).events as Evt[];
+				const callerOwned = (await store.readStream(firstKey, fixtureRead))
+					.events as Evt[];
 				try {
 					callerOwned.push(harness.createEvent(firstKey, 41));
 				} catch {
 					// A detached frozen array is also valid: the contract forbids exposing
 					// mutable live state, not defensive immutability.
 				}
-				const stored = await store.readStream({ ...firstKey });
+				const stored = await store.readStream({ ...firstKey }, fixtureRead);
 				assert(
 					stored.exists &&
 						stored.events.length === 1 &&

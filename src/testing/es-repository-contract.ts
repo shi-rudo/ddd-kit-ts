@@ -3,10 +3,7 @@ import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
-import type {
-	ReadStreamOptions,
-	StreamReadResult,
-} from "../repo/event-store";
+import type { ReadStreamOptions, StreamReadResult } from "../repo/event-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -59,8 +56,8 @@ export interface EsRepositoryContractEnvironment<
 	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
 
 	/**
-	 * The COMMITTED stream read result for the qualified aggregate key and
-	 * optional `(fromVersion, toVersion]` window. Implement this through your
+	 * The COMMITTED stream page for the qualified aggregate key and required
+	 * bounded `(fromVersion, toVersion]` window. Implement this through your
 	 * adapter's `EventStore.readStream` so the suite exercises the real
 	 * missing/existing state, actual stream head, ordering, snapshot catch-up,
 	 * and point-in-time slicing. A rolled-back transaction's stream must remain
@@ -68,7 +65,7 @@ export interface EsRepositoryContractEnvironment<
 	 */
 	committedStreamEvents(
 		stream: AggregateAddress<TAgg["id"]>,
-		options?: ReadStreamOptions,
+		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>>;
 
 	/** Release connections, drop schemas, etc. Called in a finally. */
@@ -172,6 +169,7 @@ export function createEsRepositoryContractTests<
 	// Runner plumbing shared with the state-stored suite; see
 	// ./contract-assertions for the teardown-never-masks rule.
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
+	const fixtureRead = { limit: 100 } as const;
 
 	const loadOrFail = (
 		repository: EsContractRepository<TAgg>,
@@ -217,6 +215,7 @@ export function createEsRepositoryContractTests<
 				const seeded = await seed(env);
 				const seedStream = await env.committedStreamEvents(
 					streamKeyFor(seeded.id),
+					fixtureRead,
 				);
 				assert(
 					seedStream.exists && seedStream.events.length > 0,
@@ -236,6 +235,7 @@ export function createEsRepositoryContractTests<
 				});
 				const streamAfterA = await env.committedStreamEvents(
 					streamKeyFor(seeded.id),
+					fixtureRead,
 				);
 				assert(
 					streamAfterA.exists &&
@@ -268,6 +268,7 @@ export function createEsRepositoryContractTests<
 				// nothing from the stale writer, nothing reordered.
 				const finalStream = await env.committedStreamEvents(
 					streamKeyFor(seeded.id),
+					fixtureRead,
 				);
 				assert(
 					finalStream.exists &&
@@ -345,6 +346,7 @@ export function createEsRepositoryContractTests<
 				// The stream holds the UNSTAMPED originals in emission order.
 				const stream = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
+					fixtureRead,
 				);
 				assert(
 					stream.exists && deepEqual(orderedIds(stream.events), emittedIds),
@@ -410,6 +412,7 @@ export function createEsRepositoryContractTests<
 				const neverPersisted = harness.createAggregate();
 				const missing = await env.committedStreamEvents(
 					streamKeyFor(neverPersisted.id),
+					fixtureRead,
 				);
 				assert(
 					missing.exists === false &&
@@ -425,7 +428,7 @@ export function createEsRepositoryContractTests<
 				});
 				const emptyTail = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
-					{ fromVersion: aggregate.version },
+					{ ...fixtureRead, fromVersion: aggregate.version },
 				);
 				assert(
 					emptyTail.exists === true &&
@@ -466,6 +469,7 @@ export function createEsRepositoryContractTests<
 
 				const rolledBackStream = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
+					fixtureRead,
 				);
 				assert(
 					!rolledBackStream.exists && rolledBackStream.events.length === 0,
@@ -493,6 +497,7 @@ export function createEsRepositoryContractTests<
 				});
 				const retriedStream = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
+					fixtureRead,
 				);
 				assert(
 					retriedStream.exists &&
@@ -519,6 +524,7 @@ export function createEsRepositoryContractTests<
 
 				const full = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
+					fixtureRead,
 				);
 				assert(
 					full.exists && full.lastVersion === 3 && full.events.length === 3,
@@ -527,7 +533,7 @@ export function createEsRepositoryContractTests<
 
 				const afterOne = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
-					{ fromVersion: 1 },
+					{ ...fixtureRead, fromVersion: 1 },
 				);
 				assert(
 					afterOne.exists &&
@@ -541,7 +547,7 @@ export function createEsRepositoryContractTests<
 
 				const afterAll = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
-					{ fromVersion: full.lastVersion },
+					{ ...fixtureRead, fromVersion: full.lastVersion },
 				);
 				assert(
 					afterAll.exists &&
@@ -563,10 +569,11 @@ export function createEsRepositoryContractTests<
 
 				const full = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
+					fixtureRead,
 				);
 				const asOfTwo = await env.committedStreamEvents(
 					streamKeyFor(aggregate.id),
-					{ toVersion: 2 },
+					{ ...fixtureRead, toVersion: 2 },
 				);
 
 				assert(
@@ -600,6 +607,7 @@ export function createEsRepositoryContractTests<
 					const seeded = await seed(env);
 					const seedStream = await env.committedStreamEvents(
 						streamKeyFor(seeded.id),
+						fixtureRead,
 					);
 
 					const duplicate = createAggregateWithId.call(harness, seeded.id);
@@ -616,6 +624,7 @@ export function createEsRepositoryContractTests<
 
 					const finalStream = await env.committedStreamEvents(
 						streamKeyFor(seeded.id),
+						fixtureRead,
 					);
 					assert(
 						finalStream.exists &&

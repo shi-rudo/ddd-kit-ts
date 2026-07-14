@@ -16,6 +16,7 @@ const streamB: AggregateAddress<StreamId> = {
 	aggregateType: "EsOrder",
 	aggregateId: "order-b" as StreamId,
 };
+const allEvents = { limit: 100 } as const;
 
 function renamed(name: string, stream: AggregateAddress = streamA): OrderEvent {
 	return createDomainEvent("OrderRenamed", { name }, stream);
@@ -49,12 +50,16 @@ describe("InMemoryEventStore", () => {
 			expectedVersion: 0,
 		});
 
-		await expect(store.readStream({ ...salesOrder })).resolves.toEqual({
+		await expect(
+			store.readStream({ ...salesOrder }, allEvents),
+		).resolves.toEqual({
 			exists: true,
 			lastVersion: 1,
 			events: [salesEvent],
 		});
-		await expect(store.readStream({ ...fulfillmentOrder })).resolves.toEqual({
+		await expect(
+			store.readStream({ ...fulfillmentOrder }, allEvents),
+		).resolves.toEqual({
 			exists: true,
 			lastVersion: 1,
 			events: [fulfillmentEvent],
@@ -68,7 +73,7 @@ describe("InMemoryEventStore", () => {
 
 		await store.append(streamA, [first, second], { expectedVersion: 0 });
 
-		const result = await store.readStream(streamA);
+		const result = await store.readStream(streamA, allEvents);
 		expect(result.lastVersion).toBe(2);
 		expect(result.events.map((e) => e.eventId)).toEqual([
 			first.eventId,
@@ -84,7 +89,7 @@ describe("InMemoryEventStore", () => {
 
 		await store.append(streamA, [second], { expectedVersion: 1 });
 
-		const result = await store.readStream(streamA);
+		const result = await store.readStream(streamA, allEvents);
 		expect(result.lastVersion).toBe(2);
 		expect(result.events.map((e) => e.eventId)).toEqual([
 			first.eventId,
@@ -109,7 +114,7 @@ describe("InMemoryEventStore", () => {
 		expect(conflict.expectedVersion).toBe(0);
 		expect(conflict.actualVersion).toBe(1);
 		// Rejected appends are atomic: neither of the two events landed.
-		const result = await store.readStream(streamA);
+		const result = await store.readStream(streamA, allEvents);
 		expect(result.events.map((e) => e.eventId)).toEqual([seeded.eventId]);
 	});
 
@@ -119,7 +124,7 @@ describe("InMemoryEventStore", () => {
 		await expect(
 			store.append(streamA, [renamed("a")], { expectedVersion: 3 }),
 		).rejects.toBeInstanceOf(ConcurrencyConflictError);
-		await expect(store.readStream(streamA)).resolves.toEqual({
+		await expect(store.readStream(streamA, allEvents)).resolves.toEqual({
 			exists: false,
 			lastVersion: 0,
 			events: [],
@@ -135,13 +140,13 @@ describe("InMemoryEventStore", () => {
 			expectedVersion: 0,
 		});
 
-		expect((await store.readStream(streamA)).events).toHaveLength(1);
-		expect((await store.readStream(streamB)).events).toHaveLength(1);
+		expect((await store.readStream(streamA, allEvents)).events).toHaveLength(1);
+		expect((await store.readStream(streamB, allEvents)).events).toHaveLength(1);
 	});
 
 	it("returns an explicit missing-stream result for an unknown stream", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
-		await expect(store.readStream(streamA)).resolves.toEqual({
+		await expect(store.readStream(streamA, allEvents)).resolves.toEqual({
 			exists: false,
 			lastVersion: 0,
 			events: [],
@@ -155,7 +160,7 @@ describe("InMemoryEventStore", () => {
 		});
 
 		await expect(
-			store.readStream(streamA, { fromVersion: 3 }),
+			store.readStream(streamA, { ...allEvents, fromVersion: 3 }),
 		).resolves.toEqual({
 			exists: true,
 			lastVersion: 3,
@@ -172,19 +177,77 @@ describe("InMemoryEventStore", () => {
 			expectedVersion: 0,
 		});
 
-		const afterTwo = await store.readStream(streamA, { fromVersion: 2 });
+		const afterTwo = await store.readStream(streamA, {
+			...allEvents,
+			fromVersion: 2,
+		});
 		expect(afterTwo).toMatchObject({ exists: true, lastVersion: 3 });
 		expect(afterTwo.events.map((e) => e.eventId)).toEqual([third.eventId]);
 
-		const afterAll = await store.readStream(streamA, { fromVersion: 3 });
+		const afterAll = await store.readStream(streamA, {
+			...allEvents,
+			fromVersion: 3,
+		});
 		expect(afterAll).toEqual({
 			exists: true,
 			lastVersion: 3,
 			events: [],
 		});
 
-		const fromZero = await store.readStream(streamA, { fromVersion: 0 });
+		const fromZero = await store.readStream(streamA, {
+			...allEvents,
+			fromVersion: 0,
+		});
 		expect(fromZero.events).toHaveLength(3);
+	});
+
+	it("bounds each read to the requested page size", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const events = ["a", "b", "c", "d"].map((name) => renamed(name));
+		await store.append(streamA, events, { expectedVersion: 0 });
+
+		const firstPage = await store.readStream(streamA, { limit: 2 });
+
+		expect(firstPage).toMatchObject({ exists: true, lastVersion: 4 });
+		expect(firstPage.events.map((event) => event.eventId)).toEqual(
+			events.slice(0, 2).map((event) => event.eventId),
+		);
+	});
+
+	it.each([
+		["missing", undefined],
+		["zero", 0],
+		["negative", -1],
+		["fractional", 1.5],
+		["unsafe", Number.MAX_SAFE_INTEGER + 1],
+	])("rejects a %s page limit", async (_case, limit) => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });
+
+		await expect(
+			store.readStream(
+				streamA,
+				(limit === undefined ? {} : { limit }) as never,
+			),
+		).rejects.toBeInstanceOf(RangeError);
+	});
+
+	it.each([
+		["negative fromVersion", { fromVersion: -1 }],
+		["fractional fromVersion", { fromVersion: 1.5 }],
+		["unsafe fromVersion", { fromVersion: Number.MAX_SAFE_INTEGER + 1 }],
+		["negative toVersion", { toVersion: -1 }],
+		["fractional toVersion", { toVersion: 1.5 }],
+		["unsafe toVersion", { toVersion: Number.MAX_SAFE_INTEGER + 1 }],
+	])("rejects a %s", async (_case, invalidBound) => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		await store.append(streamA, [renamed("a"), renamed("b")], {
+			expectedVersion: 0,
+		});
+
+		await expect(
+			store.readStream(streamA, { limit: 1, ...invalidBound }),
+		).rejects.toBeInstanceOf(RangeError);
 	});
 
 	it("readStream honors an inclusive toVersion while reporting the actual head", async () => {
@@ -196,7 +259,10 @@ describe("InMemoryEventStore", () => {
 			expectedVersion: 0,
 		});
 
-		const asOfTwo = await store.readStream(streamA, { toVersion: 2 });
+		const asOfTwo = await store.readStream(streamA, {
+			...allEvents,
+			toVersion: 2,
+		});
 
 		expect(asOfTwo).toMatchObject({ exists: true, lastVersion: 3 });
 		expect(asOfTwo.events.map((event) => event.eventId)).toEqual([
@@ -210,7 +276,7 @@ describe("InMemoryEventStore", () => {
 
 		await store.append(streamA, [], { expectedVersion: 0 });
 
-		await expect(store.readStream(streamA)).resolves.toEqual({
+		await expect(store.readStream(streamA, allEvents)).resolves.toEqual({
 			exists: false,
 			lastVersion: 0,
 			events: [],
@@ -221,10 +287,11 @@ describe("InMemoryEventStore", () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });
 
-		const events = (await store.readStream(streamA)).events as OrderEvent[];
+		const events = (await store.readStream(streamA, allEvents))
+			.events as OrderEvent[];
 		events.push(renamed("smuggled"));
 
-		expect((await store.readStream(streamA)).events).toHaveLength(1);
+		expect((await store.readStream(streamA, allEvents)).events).toHaveLength(1);
 	});
 });
 
@@ -232,8 +299,14 @@ describe("store hygiene", () => {
 	it("readStream is side-effect free: an unknown id does not grow the store", async () => {
 		const store = new InMemoryEventStore();
 
-		await store.readStream({ aggregateType: "Ghost", aggregateId: "ghost-1" });
-		await store.readStream({ aggregateType: "Ghost", aggregateId: "ghost-2" });
+		await store.readStream(
+			{ aggregateType: "Ghost", aggregateId: "ghost-1" },
+			allEvents,
+		);
+		await store.readStream(
+			{ aggregateType: "Ghost", aggregateId: "ghost-2" },
+			allEvents,
+		);
 
 		expect(
 			(store as unknown as { streams: Map<string, unknown> }).streams.size,
