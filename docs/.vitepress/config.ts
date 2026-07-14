@@ -96,6 +96,7 @@ export default defineConfig({
 						{ text: "CQRS & Buses", link: "/guide/cqrs-and-buses" },
 						{ text: "Repository", link: "/guide/repository" },
 						{ text: "Unit of Work", link: "/guide/unit-of-work" },
+						{ text: "Command Idempotency", link: "/guide/idempotency" },
 						{ text: "Outbox & Transactions", link: "/guide/outbox" },
 						{ text: "Read-Side Projections", link: "/guide/projections" },
 						{ text: "Deadlines", link: "/guide/deadlines" },

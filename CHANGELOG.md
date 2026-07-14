@@ -609,6 +609,82 @@ catch-all behavior explicitly. `ErrorMapperFailedError` remains the crash-loud
 wiring error when the configured decision itself throws and preserves both the
 handler failure and mapper failure.
 
+#### 21. Idempotency mutations use claim receipts; non-transactional stores use leases
+
+`IdempotencyStore.claim()` now returns a store-minted claim receipt. Pass that
+receipt to every lifecycle operation instead of addressing a mutable claim by
+key alone:
+
+```ts
+// before
+const claim = await store.claim(tx, key, fingerprint);
+if (claim.status === "claimed") {
+  await store.complete(tx, key, outcome);
+  await store.confirm(key);
+}
+
+// after
+const claim = await store.claim(tx, key, fingerprint);
+if (claim.status === "claimed") {
+  await store.complete(tx, claim.claim, outcome);
+  await store.confirm(claim.claim);
+}
+```
+
+Adapter implementations add `renew(claim)` and
+`reconcile(receipt, decision)`. Transactional adapters return a claim without
+`lease`; their commit remains the finalize boundary, and `renew`, `confirm`,
+`abandon`, and `reconcile` are no-ops. They remain the recommended production
+family.
+
+Non-transactional adapters return a unique token plus `expiresAt` and
+`renewAfterMs`. `withIdempotentCommit` renews the lease while the source
+transaction runs. `complete` and `renew` compare key + token and throw
+`IdempotencyClaimLostError` for a stale owner; `confirm`, `abandon`, and
+`reconcile` must never mutate a successor claim.
+
+An expired pending claim may be taken over. An expired staged outcome now
+returns `reconciliation-required` instead of remaining permanently in-flight.
+Wire `reconcileIdempotency` to consult the authoritative write model and return
+`committed`, `not-committed`, or `unknown`. `unknown` preserves the record and
+throws `IdempotencyReconciliationRequiredError`. The callback's new third
+`execution` argument exposes `claimToken` for a source-side marker:
+
+```ts
+await withIdempotentCommit(
+  { scope, outbox, idempotency, reconcileIdempotency },
+  request,
+  async (tx, enrollment, execution) => {
+    await saveCommandMarker(tx, {
+      key: execution.key,
+      claimToken: execution.claimToken,
+    });
+    return { result, commits };
+  },
+);
+```
+
+Leases do not create an exactly-once transaction across two stores. Return
+`not-committed` only when durable evidence proves the old attempt cannot still
+commit; otherwise return `unknown`. See the Command Idempotency guide. The
+non-transactional contract harness now requires deterministic `expireLease`
+and `advanceTimeTo` controls and proves renewal, takeover, stale-owner fencing,
+and staged reconciliation.
+
+### Changed (breaking): leased idempotency claims and reconciliation
+
+- `IdempotencyClaim` adds the `reconciliation-required` state and returns an
+  `IdempotencyClaimHandle` for fresh ownership.
+- `IdempotencyStore.complete`, `confirm`, and `abandon` take that handle;
+  adapters add token-bound `renew` and `reconcile` operations.
+- `withIdempotentCommit` heartbeats leased claims, exposes
+  `IdempotentExecution` to work, accepts a three-way source-of-truth resolver,
+  and reports best-effort lifecycle failures through `onIdempotencyError`.
+- `InMemoryIdempotencyStore` has injectable per-instance clock, token factory,
+  lease duration, and renewal interval options. It remains non-durable.
+- New structured errors: `IdempotencyClaimLostError` and
+  `IdempotencyReconciliationRequiredError`.
+
 ### Changed (breaking): commit enrollment is provenance-bound
 
 - `WithCommitWorkResult` now carries `commits` with opaque
@@ -1011,8 +1087,10 @@ handler failure and mapper failure.
   The idempotency suite follows the adapter's declared `family`:
   shared lifecycle proofs (claim, replay, fingerprint reuse rejection
   on a completed record, the one same-key state both families reach)
-  for both; retryable in-flight claims, staged-never-replays, and
-  abandon-releases for the `non-transactional` two-phase-hooks family
+  for both; retryable in-flight claims, lease renewal, expired pending
+  takeover with stale-owner fencing, staged-never-replays, source-of-truth
+  reconciliation, and abandon-releases for the `non-transactional` leased
+  family
   (a committed-yet-pending claim is unreachable in the
   single-transaction pattern, so the in-flight proof cannot be forced
   onto it); rollback-releases-the-claim and commit-is-the-finalize for

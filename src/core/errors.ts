@@ -907,6 +907,39 @@ export class IdempotencyKeyReuseError extends InfrastructureError<"IDEMPOTENCY_K
 	}
 }
 
+/** Options bag for {@link IdempotencyClaimLostError}. */
+export interface IdempotencyClaimLostErrorOptions {
+	readonly key: string;
+	readonly token: string;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+}
+
+/**
+ * Thrown when a leased idempotency owner tries to renew, complete, or
+ * reconcile through a claim token that no longer owns the key. The usual
+ * cause is lease expiry followed by a successful takeover. The stale
+ * execution must abort before its transaction commits; retrying starts from
+ * a fresh claim or replays the winner.
+ */
+export class IdempotencyClaimLostError extends InfrastructureError<"IDEMPOTENCY_CLAIM_LOST"> {
+	readonly key: string;
+	readonly token: string;
+
+	constructor(options: IdempotencyClaimLostErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_CLAIM_LOST",
+			message:
+				`Idempotency claim for key "${options.key}" no longer belongs to ` +
+				`token "${options.token}"`,
+			cause: options.cause,
+			retryable: true,
+		});
+		this.key = options.key;
+		this.token = options.token;
+	}
+}
+
 /**
  * Options bag for {@link IdempotencyInFlightError}.
  */
@@ -938,6 +971,40 @@ export class IdempotencyInFlightError extends InfrastructureError<"IDEMPOTENCY_I
 			retryable: true,
 		});
 		this.key = options.key;
+	}
+}
+
+/** Options bag for {@link IdempotencyReconciliationRequiredError}. */
+export interface IdempotencyReconciliationRequiredErrorOptions {
+	readonly key: string;
+	readonly fingerprint: string;
+	readonly token: string;
+	readonly expiredAt: string;
+}
+
+/**
+ * An expired staged outcome cannot be replayed or discarded until the
+ * application checks the authoritative write model. Immediate retry without
+ * that evidence cannot make progress, so this error is deliberately not
+ * marked retryable.
+ */
+export class IdempotencyReconciliationRequiredError extends InfrastructureError<"IDEMPOTENCY_RECONCILIATION_REQUIRED"> {
+	readonly key: string;
+	readonly fingerprint: string;
+	readonly token: string;
+	readonly expiredAt: string;
+
+	constructor(options: IdempotencyReconciliationRequiredErrorOptions) {
+		super({
+			code: "IDEMPOTENCY_RECONCILIATION_REQUIRED",
+			message:
+				`Idempotency key "${options.key}" has an expired staged outcome; ` +
+				"consult the authoritative write model before confirming or releasing it",
+		});
+		this.key = options.key;
+		this.fingerprint = options.fingerprint;
+		this.token = options.token;
+		this.expiredAt = options.expiredAt;
 	}
 }
 
@@ -978,9 +1045,11 @@ export type KitErrorCode =
 	| "EVENT_HARVEST_FAILED"
 	| "FOREIGN_EVENT"
 	| "HOSTILE_STATE_KEY"
+	| "IDEMPOTENCY_CLAIM_LOST"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
 	| "IDEMPOTENCY_IN_FLIGHT"
 	| "IDEMPOTENCY_KEY_REUSE"
+	| "IDEMPOTENCY_RECONCILIATION_REQUIRED"
 	| "INVALID_DOMAIN_MACHINE_CONTEXT"
 	| "INVALID_DOMAIN_MACHINE_DEFINITION"
 	| "INVALID_DOMAIN_MACHINE_INPUT"

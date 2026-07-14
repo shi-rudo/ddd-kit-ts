@@ -1,4 +1,8 @@
-import type { IdempotencyStore } from "../app/idempotency";
+import type {
+	IdempotencyClaim,
+	IdempotencyClaimHandle,
+	IdempotencyStore,
+} from "../app/idempotency";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -39,6 +43,19 @@ export interface IdempotencyStoreContractEnvironment<TCtx> {
 	 */
 	runRolledBack?<R>(work: (ctx: TCtx) => Promise<R>): Promise<R>;
 
+	/**
+	 * For the `"non-transactional"` family: advances or edits adapter test
+	 * state so this exact claim's CURRENT lease is expired. Required there;
+	 * a fake clock or test-only row update keeps the suite deterministic.
+	 */
+	expireLease?(claim: IdempotencyClaimHandle): Promise<void>;
+
+	/**
+	 * Moves the adapter's test clock to an exact instant. Required by the
+	 * non-transactional family so renewal is proved without wall-clock sleeps.
+	 */
+	advanceTimeTo?(instant: Date): Promise<void>;
+
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
 }
@@ -53,14 +70,15 @@ export interface IdempotencyStoreContractEnvironment<TCtx> {
  * - `"transactional"` (the single-transaction pattern): the record
  *   lives in the same database as the aggregates; a committed
  *   `complete` is final and replayable, a rollback releases everything,
- *   and `confirm`/`abandon` are no-ops. The family's core proof is the
+ *   and `renew`/`confirm`/`abandon`/`reconcile` are no-ops. The family's core proof is the
  *   rollback test, so environments MUST provide `runRolledBack`, and
  *   run against a real database for SQL adapters.
- * - `"non-transactional"` (the two-phase-hooks pattern, e.g. the
- *   in-memory reference): the store cannot see commits, so `complete`
- *   only STAGES the outcome, `confirm` finalizes it post-commit, and
- *   `abandon` compensates failed attempts. The family's core proofs are
- *   the staged/abandon tests; the rollback test is skipped.
+ * - `"non-transactional"` (the leased two-phase pattern, e.g. the
+ *   in-memory reference): the store cannot see commits, so `complete` only
+ *   STAGES the outcome, `confirm` finalizes it post-commit, `abandon`
+ *   compensates failed attempts, and expired staged records require
+ *   reconciliation. Environments MUST provide deterministic `expireLease` and
+ *   `advanceTimeTo` controls. The rollback test is skipped.
  */
 export interface IdempotencyStoreContractHarness<TCtx> {
 	createEnvironment(): Promise<IdempotencyStoreContractEnvironment<TCtx>>;
@@ -69,9 +87,41 @@ export interface IdempotencyStoreContractHarness<TCtx> {
 	family: "transactional" | "non-transactional";
 }
 
+function claimedHandle(
+	claim: IdempotencyClaim,
+	message: string,
+): IdempotencyClaimHandle {
+	assert(claim.status === "claimed", message);
+	return claim.claim;
+}
+
+async function expireLease<TCtx>(
+	env: IdempotencyStoreContractEnvironment<TCtx>,
+	claim: IdempotencyClaimHandle,
+): Promise<void> {
+	if (!env.expireLease) {
+		throw new Error(
+			"Contract violated: the non-transactional family requires expireLease on the environment",
+		);
+	}
+	await env.expireLease(claim);
+}
+
+async function advanceTimeTo<TCtx>(
+	env: IdempotencyStoreContractEnvironment<TCtx>,
+	instant: Date,
+): Promise<void> {
+	if (!env.advanceTimeTo) {
+		throw new Error(
+			"Contract violated: the non-transactional family requires advanceTimeTo on the environment",
+		);
+	}
+	await env.advanceTimeTo(instant);
+}
+
 /**
  * The idempotency-store contract test suite: the proof that an adapter
- * delivers the claim/complete/confirm/abandon lifecycle
+ * delivers the claim/renew/complete/confirm/abandon/reconcile lifecycle
  * `withIdempotentCommit` documents, for its declared family. Store
  * semantics are an **adapter contract, not a kit guarantee**; this
  * suite is how an adapter demonstrates them.
@@ -90,16 +140,12 @@ export function createIdempotencyStoreContractTests<TCtx>(
 		{
 			name: "a fresh key is claimed; the full lifecycle replays the outcome",
 			run: inEnv(async (env) => {
-				const claim = await env.run((ctx) =>
-					env.store.claim(ctx, "key-1", "fp-1"),
-				);
-				assertEqual(
-					claim.status,
-					"claimed",
+				const claim = claimedHandle(
+					await env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1")),
 					"a fresh key must be claimed by this execution",
 				);
-				await env.run((ctx) => env.store.complete(ctx, "key-1", { total: 42 }));
-				await env.store.confirm("key-1");
+				await env.run((ctx) => env.store.complete(ctx, claim, { total: 42 }));
+				await env.store.confirm(claim);
 				const replay = await env.run((ctx) =>
 					env.store.claim(ctx, "key-1", "fp-1"),
 				);
@@ -119,11 +165,15 @@ export function createIdempotencyStoreContractTests<TCtx>(
 				// Built on a COMPLETED record: the one same-key/other-command
 				// state both families can actually reach in production (a
 				// transactional store never commits a bare pending claim).
-				await env.run(async (ctx) => {
-					await env.store.claim(ctx, "key-1", "fp-1");
-					await env.store.complete(ctx, "key-1", "done");
+				const first = await env.run(async (ctx) => {
+					const claim = claimedHandle(
+						await env.store.claim(ctx, "key-1", "fp-1"),
+						"a fresh key must be claimed",
+					);
+					await env.store.complete(ctx, claim, "done");
+					return claim;
 				});
-				await env.store.confirm("key-1");
+				await env.store.confirm(first);
 				const rejection = await captureRejection(
 					env.run((ctx) => env.store.claim(ctx, "key-1", "fp-OTHER")),
 				);
@@ -137,12 +187,16 @@ export function createIdempotencyStoreContractTests<TCtx>(
 		{
 			name: "abandon never destroys a completed, confirmed outcome",
 			run: inEnv(async (env) => {
-				await env.run(async (ctx) => {
-					await env.store.claim(ctx, "key-1", "fp-1");
-					await env.store.complete(ctx, "key-1", "done");
+				const first = await env.run(async (ctx) => {
+					const claim = claimedHandle(
+						await env.store.claim(ctx, "key-1", "fp-1"),
+						"a fresh key must be claimed",
+					);
+					await env.store.complete(ctx, claim, "done");
+					return claim;
 				});
-				await env.store.confirm("key-1");
-				await env.store.abandon("key-1");
+				await env.store.confirm(first);
+				await env.store.abandon(first);
 				const claim = await env.run((ctx) =>
 					env.store.claim(ctx, "key-1", "fp-1"),
 				);
@@ -156,13 +210,17 @@ export function createIdempotencyStoreContractTests<TCtx>(
 		{
 			name: "confirm is idempotent, and confirming a missing key is a no-op",
 			run: inEnv(async (env) => {
-				await env.run(async (ctx) => {
-					await env.store.claim(ctx, "key-1", "fp-1");
-					await env.store.complete(ctx, "key-1", "done");
+				const first = await env.run(async (ctx) => {
+					const claim = claimedHandle(
+						await env.store.claim(ctx, "key-1", "fp-1"),
+						"a fresh key must be claimed",
+					);
+					await env.store.complete(ctx, claim, "done");
+					return claim;
 				});
-				await env.store.confirm("key-1");
-				await env.store.confirm("key-1");
-				await env.store.confirm("never-claimed");
+				await env.store.confirm(first);
+				await env.store.confirm(first);
+				await env.store.confirm({ key: "never-claimed", token: "missing" });
 				const claim = await env.run((ctx) =>
 					env.store.claim(ctx, "key-1", "fp-1"),
 				);
@@ -176,7 +234,9 @@ export function createIdempotencyStoreContractTests<TCtx>(
 			name: "complete without a pending claim throws the wiring error",
 			run: inEnv(async (env) => {
 				const rejection = await captureRejection(
-					env.run((ctx) => env.store.complete(ctx, "key-1", "x")),
+					env.run((ctx) =>
+						env.store.complete(ctx, { key: "key-1", token: "missing" }, "x"),
+					),
 				);
 				assertChainContainsKitError(
 					rejection,
@@ -197,8 +257,11 @@ export function createIdempotencyStoreContractTests<TCtx>(
 			name: "a committed complete replays even without confirm (commit is the finalize)",
 			run: inEnv(async (env) => {
 				await env.run(async (ctx) => {
-					await env.store.claim(ctx, "key-1", "fp-1");
-					await env.store.complete(ctx, "key-1", "done");
+					const claim = claimedHandle(
+						await env.store.claim(ctx, "key-1", "fp-1"),
+						"a fresh key must be claimed",
+					);
+					await env.store.complete(ctx, claim, "done");
 				});
 				// No confirm: for a transactional store the commit already
 				// finalized the record.
@@ -247,6 +310,179 @@ export function createIdempotencyStoreContractTests<TCtx>(
 				}),
 			},
 		),
+		gatedContractTest(
+			{
+				capability: "family: non-transactional",
+				satisfiedBy: nonTransactional,
+			},
+			{
+				name: "renew extends ownership beyond the original lease expiry",
+				run: inEnv(async (env) => {
+					const claim = claimedHandle(
+						await env.run((ctx) => env.store.claim(ctx, "key-renew", "fp")),
+						"a fresh key must be claimed",
+					);
+					assert(
+						claim.lease !== undefined,
+						"a non-transactional claim must carry lease timing",
+					);
+					const originalExpiry = new Date(claim.lease.expiresAt).getTime();
+					assert(
+						Number.isFinite(originalExpiry) &&
+							new Date(originalExpiry).toISOString() ===
+								claim.lease.expiresAt &&
+							Number.isSafeInteger(claim.lease.renewAfterMs) &&
+							claim.lease.renewAfterMs > 0,
+						"lease timing must carry a valid expiry and positive safe renewal delay",
+					);
+					await advanceTimeTo(env, new Date(originalExpiry - 1));
+					const renewed = await env.store.renew(claim);
+					assert(
+						renewed !== undefined &&
+							new Date(renewed.expiresAt).getTime() > originalExpiry,
+						"renew must extend the lease beyond its previous expiry",
+					);
+					await advanceTimeTo(env, new Date(originalExpiry + 1));
+					const rejection = await captureRejection(
+						env.run((ctx) => env.store.claim(ctx, "key-renew", "fp")),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["IDEMPOTENCY_IN_FLIGHT"],
+						"the renewed owner must still hold the key after the original expiry",
+					);
+				}),
+			},
+		),
+		gatedContractTest(
+			{
+				capability: "family: non-transactional",
+				satisfiedBy: nonTransactional,
+			},
+			{
+				name: "an expired pending lease is reclaimed under a new token and fences its stale owner",
+				run: inEnv(async (env) => {
+					const first = claimedHandle(
+						await env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1")),
+						"a fresh key must be claimed",
+					);
+					assert(
+						first.lease !== undefined,
+						"a non-transactional claim must carry lease timing",
+					);
+					await expireLease(env, first);
+					const successor = claimedHandle(
+						await env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1")),
+						"an expired pending claim must be reclaimed",
+					);
+					assert(
+						successor.token !== first.token,
+						"each ownership generation must have a different token",
+					);
+					const rejection = await captureRejection(
+						env.run((ctx) => env.store.complete(ctx, first, "stale")),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["IDEMPOTENCY_CLAIM_LOST"],
+						"a stale owner must fail before it can complete after takeover",
+					);
+				}),
+			},
+		),
+		gatedContractTest(
+			{
+				capability: "family: non-transactional",
+				satisfiedBy: nonTransactional,
+			},
+			{
+				name: "an expired staged outcome requires reconciliation and never auto-replays",
+				run: inEnv(async (env) => {
+					const first = await env.run(async (ctx) => {
+						const claim = claimedHandle(
+							await env.store.claim(ctx, "key-1", "fp-1"),
+							"a fresh key must be claimed",
+						);
+						await env.store.complete(ctx, claim, "uncertain");
+						return claim;
+					});
+					await expireLease(env, first);
+					const claim = await env.run((ctx) =>
+						env.store.claim(ctx, "key-1", "fp-1"),
+					);
+					assert(
+						claim.status === "reconciliation-required",
+						"an expired staged outcome must require authoritative reconciliation",
+					);
+					assertEqual(
+						claim.reconciliation.token,
+						first.token,
+						"the reconciliation receipt identifies the staged owner",
+					);
+				}),
+			},
+		),
+		gatedContractTest(
+			{
+				capability: "family: non-transactional",
+				satisfiedBy: nonTransactional,
+			},
+			{
+				name: "reconciliation confirms committed work or releases proven rollback",
+				run: inEnv(async (env) => {
+					const committedHandle = await env.run(async (ctx) => {
+						const claim = claimedHandle(
+							await env.store.claim(ctx, "committed", "fp"),
+							"a fresh key must be claimed",
+						);
+						await env.store.complete(ctx, claim, "winner");
+						return claim;
+					});
+					await expireLease(env, committedHandle);
+					const committed = await env.run((ctx) =>
+						env.store.claim(ctx, "committed", "fp"),
+					);
+					assert(
+						committed.status === "reconciliation-required",
+						"the staged outcome must expose its reconciliation receipt",
+					);
+					await env.store.reconcile(committed.reconciliation, "committed");
+					const replay = await env.run((ctx) =>
+						env.store.claim(ctx, "committed", "fp"),
+					);
+					assert(
+						replay.status === "completed" && replay.outcome === "winner",
+						"committed evidence must make the staged outcome replayable",
+					);
+
+					const rolledBackHandle = await env.run(async (ctx) => {
+						const claim = claimedHandle(
+							await env.store.claim(ctx, "rolled-back", "fp"),
+							"a fresh key must be claimed",
+						);
+						await env.store.complete(ctx, claim, "must disappear");
+						return claim;
+					});
+					await expireLease(env, rolledBackHandle);
+					const rolledBack = await env.run((ctx) =>
+						env.store.claim(ctx, "rolled-back", "fp"),
+					);
+					assert(
+						rolledBack.status === "reconciliation-required",
+						"the staged outcome must expose its reconciliation receipt",
+					);
+					await env.store.reconcile(rolledBack.reconciliation, "not-committed");
+					const fresh = await env.run((ctx) =>
+						env.store.claim(ctx, "rolled-back", "fp"),
+					);
+					assertEqual(
+						fresh.status,
+						"claimed",
+						"not-committed evidence must release the staged outcome",
+					);
+				}),
+			},
+		),
 		// Two-phase-hooks family: staged semantics and real abandon are the
 		// core proofs; the transactional family's hooks are no-ops instead.
 		gatedContractTest(
@@ -258,8 +494,11 @@ export function createIdempotencyStoreContractTests<TCtx>(
 				name: "a staged, unconfirmed outcome is in-flight, never replayed",
 				run: inEnv(async (env) => {
 					await env.run(async (ctx) => {
-						await env.store.claim(ctx, "key-1", "fp-1");
-						await env.store.complete(ctx, "key-1", "uncommitted");
+						const claim = claimedHandle(
+							await env.store.claim(ctx, "key-1", "fp-1"),
+							"a fresh key must be claimed",
+						);
+						await env.store.complete(ctx, claim, "uncommitted");
 					});
 					const rejection = await captureRejection(
 						env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1")),
@@ -280,8 +519,11 @@ export function createIdempotencyStoreContractTests<TCtx>(
 			{
 				name: "abandon releases a pending claim so the next attempt claims fresh",
 				run: inEnv(async (env) => {
-					await env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1"));
-					await env.store.abandon("key-1");
+					const first = claimedHandle(
+						await env.run((ctx) => env.store.claim(ctx, "key-1", "fp-1")),
+						"a fresh key must be claimed",
+					);
+					await env.store.abandon(first);
 					const claim = await env.run((ctx) =>
 						env.store.claim(ctx, "key-1", "fp-1"),
 					);
@@ -301,11 +543,15 @@ export function createIdempotencyStoreContractTests<TCtx>(
 			{
 				name: "abandon releases a staged outcome so the next attempt claims fresh",
 				run: inEnv(async (env) => {
-					await env.run(async (ctx) => {
-						await env.store.claim(ctx, "key-1", "fp-1");
-						await env.store.complete(ctx, "key-1", "uncommitted");
+					const first = await env.run(async (ctx) => {
+						const claim = claimedHandle(
+							await env.store.claim(ctx, "key-1", "fp-1"),
+							"a fresh key must be claimed",
+						);
+						await env.store.complete(ctx, claim, "uncommitted");
+						return claim;
 					});
-					await env.store.abandon("key-1");
+					await env.store.abandon(first);
 					const claim = await env.run((ctx) =>
 						env.store.claim(ctx, "key-1", "fp-1"),
 					);
@@ -331,8 +577,11 @@ export function createIdempotencyStoreContractTests<TCtx>(
 					}
 					await env
 						.runRolledBack(async (ctx) => {
-							await env.store.claim(ctx, "key-1", "fp-1");
-							await env.store.complete(ctx, "key-1", "rolled back");
+							const claim = claimedHandle(
+								await env.store.claim(ctx, "key-1", "fp-1"),
+								"a fresh key must be claimed",
+							);
+							await env.store.complete(ctx, claim, "rolled back");
 						})
 						.catch(() => {
 							// The rollback mechanism may surface as a rejection; the

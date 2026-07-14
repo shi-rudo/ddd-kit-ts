@@ -197,6 +197,7 @@ first adapter or aggregate.
 | Commands, queries, and in-process buses | [CQRS & Buses](./docs/guide/cqrs-and-buses.md) |
 | Repository contracts and Identity Map | [Repository](./docs/guide/repository.md) |
 | Transaction-scoped repositories | [Unit of Work](./docs/guide/unit-of-work.md) |
+| Duplicate-safe commands and inbox handling | [Command Idempotency](./docs/guide/idempotency.md) |
 | Reliable event harvest and delivery | [Outbox & Transactions](./docs/guide/outbox.md) |
 | Read models and projectors | [Projections](./docs/guide/projections.md) |
 | Event schema changes | [Event Upcasting](./docs/guide/event-upcasting.md) |

@@ -55,12 +55,22 @@ export {
 } from "./app/handler";
 export {
 	type IdempotencyClaim,
+	type IdempotencyClaimHandle,
+	type IdempotencyLease,
+	type IdempotencyOperationErrorContext,
+	type IdempotencyReconciliation,
+	type IdempotencyReconciliationDecision,
 	type IdempotencyStore,
 	type IdempotentCommitRequest,
 	type IdempotentCommitResult,
+	type IdempotentExecution,
+	type WithIdempotentCommitDeps,
 	withIdempotentCommit,
 } from "./app/idempotency";
-export { InMemoryIdempotencyStore } from "./app/in-memory-idempotency-store";
+export {
+	InMemoryIdempotencyStore,
+	type InMemoryIdempotencyStoreOptions,
+} from "./app/in-memory-idempotency-store";
 export type { Query, QueryHandler } from "./app/query";
 export {
 	type IQueryBus,
@@ -96,11 +106,15 @@ export {
 	EventHarvestError,
 	ForeignEventError,
 	HostileStateKeyError,
+	IdempotencyClaimLostError,
+	type IdempotencyClaimLostErrorOptions,
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	type IdempotencyInFlightErrorOptions,
 	IdempotencyKeyReuseError,
 	type IdempotencyKeyReuseErrorOptions,
+	IdempotencyReconciliationRequiredError,
+	type IdempotencyReconciliationRequiredErrorOptions,
 	InfrastructureError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
