@@ -124,89 +124,58 @@ Id generation belongs in the application, not in the repository. The repository 
 
 The kit provides event id and clock factories because events need ids and timestamps even when the consumer does not care about custom generation. Aggregate ids stay app-side.
 
-## `EventIdFactory` / `ClockFactory`: globals by default, DI on top when you need it
+## `EventIdFactory` / `ClockFactory`: immutable defaults and explicit scope
 
-The kit offers three levels of control:
+The top-level `createDomainEvent(...)` uses one immutable
+`defaultDomainEventFactory`: Web Crypto UUID v4 plus the platform clock. It is
+not replaceable. Consumers that need another policy call
+`createDomainEventFactory({ eventIdFactory, clock })` and receive a frozen
+factory object that permanently captures those dependencies.
 
-- module-level defaults through `setEventIdFactory` and `setClockFactory`
-- scoped test helpers through `withEventIdFactory` and `withClockFactory`
-- per-event overrides on `createDomainEvent` and `recordEvent`
+This draws a deliberate boundary:
 
-This is a pragmatic default, not the purest possible dependency-injection design.
+- the zero-configuration path is convenient and deterministic in its policy
+- custom policy is an ordinary value owned by the application composition
+- request and test isolation follow object identity, not restore discipline
+- per-event options remain available for one exceptional id or timestamp
 
-Vernon-style DI would inject a clock and id generator into every aggregate that emits events. That is structurally race-free and very explicit. It also widens every constructor and every reconstitution path, even for aggregates that only need a timestamp and UUID once in a while.
+Mutable module factories were rejected because their effective owner is the
+last caller. A synchronous scoped helper can restore a global with
+`try/finally`, but it cannot make that global request-local across overlapping
+async work. The correct fix is to remove the shared write location.
 
-The kit optimizes for the common path: production aggregates can record events without carrying factories through every constructor. Tests and specialized domains still get deterministic control through scoped helpers or per-call overrides.
+### Aggregate injection
 
-### Trade-off
-
-| Concern | Globals + scoped helpers | Constructor DI |
-| --- | --- | --- |
-| Aggregate constructor surface | small | wider |
-| Reconstitution signature | simple | must thread factories |
-| Test isolation | use scoped helpers or per-call options | inject mocks |
-| Edge-runtime setup | no extra wiring | wire factories per invocation |
-| Race-free by construction | no, use scopes carefully | yes |
-| DDD strictness | pragmatic | stricter Vernon-style DI |
-
-Use constructor DI when time and id generation are part of the domain's explicit test surface, or when concurrent tests cannot tolerate module-level overrides. Use the kit defaults when the aggregate should not care how event ids and timestamps are made.
-
-### Vernon-DI works on top of the existing API, no library change needed
-
-Per-call event options let consumers avoid the globals entirely:
+`AggregateConfig.domainEventFactory` lets each aggregate instance capture the
+factory used by `recordEvent(...)`. The same factory supplies
+`createSnapshot().snapshotAt`, so one aggregate cannot mint events with a
+request clock and snapshots with a process clock.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
-
-  protected constructor(
-    id: OrderId,
-    state: OrderState,
-    private readonly clock: () => Date,
-    private readonly idGen: () => string,
-  ) {
-    super(id, state);
-  }
-
-  static place(
-    id: OrderId,
-    customerId: string,
-    clock: () => Date,
-    idGen: () => string,
-  ): Order {
-    const order = new Order(id, { customerId, status: "draft" }, clock, idGen);
-
-    order.addDomainEvent(
-      order.recordEvent(
-        "OrderPlaced",
-        { customerId },
-        {
-          eventId: idGen(),
-          occurredAt: clock(),
-        },
-      ),
-    );
-
-    return order;
-  }
-}
-```
-
-`recordEvent` still injects `aggregateId` and `aggregateType`; the per-call options supply the event id and timestamp.
-
-### When the scoped helpers still win
-
-Scoped helpers are useful when you want deterministic tests without widening the domain API:
-
-```ts
-withEventIdFactory(() => "event-1", () => {
-  withClockFactory(() => fixedDate, () => {
-    order.processBatch(input);
-  });
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: requestClock,
 });
+
+const order = new Order(orderId, state, { domainEventFactory: domainEvents });
 ```
 
-Use them around one synchronous operation, not around an entire test file. They deliberately reject async callbacks, because restoring a global factory before awaited code resumes would make the test nondeterministic. For async flows, use per-call event options, constructor-injected factories, or an application-level async context. Module-level factories are global state; scoped helpers keep that state contained.
+The concrete aggregate decides how that dependency appears in its own factory
+or constructor. Repositories and reconstitution factories must forward it just
+like any other operation-scoped dependency. An aggregate that does not care
+uses the default by omitting the config, so the common constructor stays small.
+
+### Why one object owns both dependencies
+
+Event ids and timestamps are both minting policy. Carrying them as one immutable
+object prevents partial wiring: a consumer cannot inject a deterministic event
+clock while accidentally leaving snapshots on wall-clock time. It also gives
+system-event producers and aggregate factories the same composition primitive.
+
+The object exposes `create(...)` for events and a defensive `now()` reading for
+snapshot infrastructure. Domain behavior should still receive a domain-specific
+time concept when time participates in a business rule; the event clock records
+when a fact was minted and is not a universal replacement for domain time.
 
 ## Collection helpers practice structural sharing
 

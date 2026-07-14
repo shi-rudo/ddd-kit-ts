@@ -83,9 +83,10 @@ this.setState(next);
 this.setStateWithoutVersionBump(next);
 ```
 
-Remove `autoVersionBump` from configs (`AggregateConfig` is now an
-alias of `EntityConfig`); aggregates that had it set to `true` change
-nothing else. On the event-sourced side, `apply(event)` lost its
+Remove `autoVersionBump` from configs. `AggregateConfig` retains
+`deepFreezeState` and now also accepts the optional instance-bound
+`domainEventFactory`; aggregates that had `autoVersionBump` set to `true`
+change nothing else. On the event-sourced side, `apply(event)` lost its
 optional `isNew` flag the same way: replay goes through
 `loadFromHistory` / `restoreFromSnapshotWithEvents`, and `apply` is
 only for new facts.
@@ -719,6 +720,46 @@ both cursors, instead of losing the adapter-contract diagnosis in a generic
 `Error`. The event-store contract suite now proves the bound, progress,
 and gapless, duplicate-free continuation. Event-sourced repository harnesses
 also pass a mandatory `ReadStreamOptions` object to `committedStreamEvents`.
+
+#### 23. Event-id and clock customization is instance-bound
+
+The six module-mutating exports are removed: `setEventIdFactory`,
+`resetEventIdFactory`, `withEventIdFactory`, `setClockFactory`,
+`resetClockFactory`, and `withClockFactory`. A scoped restore could contain one
+synchronous call, but it could not make shared module state safe across
+overlapping async requests or tests.
+
+The top-level `createDomainEvent(...)` now permanently uses the frozen
+`defaultDomainEventFactory`. Custom policy is an immutable value:
+
+```ts
+// before: shared process state, last setter wins
+setEventIdFactory(() => uuidv7());
+setClockFactory(requestClock);
+const event = createDomainEvent("OrderConfirmed", payload);
+
+// after: one value owned by the application, request, tenant, or test
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: requestClock,
+});
+const event = domainEvents.create("OrderConfirmed", payload);
+```
+
+Aggregate constructors pass that value through
+`super(id, state, { domainEventFactory })`. `recordEvent(...)` and
+`createSnapshot()` then use the same captured factory and clock. Omitting the
+config preserves the zero-configuration default. Per-event `eventId` and
+`occurredAt` options continue to override factory defaults.
+
+### Changed (breaking): domain-event factories are immutable and instance-bound
+
+- Added `DomainEventFactory`, `DomainEventFactoryOptions`,
+  `createDomainEventFactory`, and the frozen `defaultDomainEventFactory`.
+- `AggregateConfig.domainEventFactory` scopes event ids and the shared event /
+  snapshot clock to one aggregate instance.
+- Removed all module setters, resetters, and synchronous scoped helpers for
+  event-id and clock factories. There is no mutable module factory left.
 
 ### Changed (breaking): leased idempotency claims and reconciliation
 

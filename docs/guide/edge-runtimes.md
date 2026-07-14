@@ -31,41 +31,42 @@ Those are Web-platform APIs in the runtimes this package targets. If your
 deployment target lacks one, patch that at the application boundary. Do not
 hide a runtime polyfill inside an aggregate or value object.
 
-## Bootstrap ids and clocks once
+## Scope ids and clocks explicitly
 
 The default event id is UUID v4 from `crypto.randomUUID()`. It is unique and
 portable, but it is not time-ordered. For larger event stores, prefer UUID v7,
 ULID, or another sortable id format so indexes stay clustered and ids roughly
 sort by creation time.
 
-Configure the default event id factory at module top level:
+Create an immutable factory for the scope that owns the policy:
 
 ```ts
-// worker.ts, server.ts, or your test setup file
-import { setEventIdFactory } from "@shirudo/ddd-kit";
+import { createDomainEventFactory } from "@shirudo/ddd-kit";
 import { v7 as uuidv7 } from "uuid";
 
-setEventIdFactory(() => uuidv7());
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: () => new Date(),
+});
 ```
+
+The factory is frozen and has no setter. It may live at module scope when the
+policy is genuinely process-wide, or be created inside `fetch()` when the
+policy is request- or tenant-specific. In either case, pass that value into the
+aggregate or application factory that owns event creation.
 
 ULID is the same shape:
 
 ```ts
-import { setEventIdFactory } from "@shirudo/ddd-kit";
+import { createDomainEventFactory } from "@shirudo/ddd-kit";
 import { ulid } from "ulid";
 
-setEventIdFactory(() => ulid());
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => ulid(),
+});
 ```
 
-In Workers and similar runtimes, module top-level code runs when an isolate is
-created or reused, not once per request. That is the right scope for a
-process-wide default.
-
-Do not call `setEventIdFactory` or `setClockFactory` from request code to model
-tenant or user-specific behavior. They are module-level singletons: last setter
-wins. In concurrent request handling, one request can affect another.
-
-Use per-event options for request-specific values:
+Per-event options remain useful for a single exceptional value:
 
 ```ts
 const event = createDomainEvent(
@@ -78,36 +79,22 @@ const event = createDomainEvent(
 );
 ```
 
-For tests, reset factories in `afterEach` or use the synchronous scoped helpers:
+Tests construct their own factory and need no global cleanup:
 
 ```ts
-import {
-  resetClockFactory,
-  resetEventIdFactory,
-  setClockFactory,
-  withEventIdFactory,
-} from "@shirudo/ddd-kit";
-
-afterEach(() => {
-  resetEventIdFactory();
-  resetClockFactory();
-});
-
 it("emits deterministic event ids", () => {
-  setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
-
-  withEventIdFactory(() => "evt-1", () => {
-    order.confirm();
+  const domainEvents = createDomainEventFactory({
+    eventIdFactory: () => "evt-1",
+    clock: () => new Date("2026-01-01T00:00:00.000Z"),
   });
+  const order = makeOrder({ domainEventFactory: domainEvents });
+
+  order.confirm();
 });
 ```
 
-`withEventIdFactory` and `withClockFactory` are synchronous-only. They restore
-the previous factory in a `finally` block and reject async callbacks. For async
-request scoping, use per-call event options, dependency injection, or an
-application-level async context.
-
-See [Domain Events: Where to bootstrap the factory](./domain-events.md#where-to-bootstrap-the-factory).
+The same instance works across `await` boundaries because no module state is
+changed. See [Domain Events: Instance-bound factories](./domain-events.md#instance-bound-factories).
 
 ## In-process buses stay in-process
 
@@ -233,7 +220,7 @@ not.
 
 Good module-scope values:
 
-- `setEventIdFactory(...)` and `setClockFactory(...)` bootstrap
+- immutable `DomainEventFactory` instances with process-wide policy
 - immutable lookup tables
 - prepared machine definitions that do not capture request state
 - shared clients whose SDK is safe to reuse
@@ -265,15 +252,15 @@ Use them to test behavior and contracts. Do not read their existence as a
 production durability story for serverless or edge deployments.
 
 For request deadlines, pass an `AbortSignal` through APIs that accept it. In
-tests, prefer deterministic clocks through `setClockFactory` or per-event
-`occurredAt` options. Avoid request-wide factory mutation in async tests; it has
-the same leakage problem as production request code.
+tests, use an instance-bound factory or a per-event `occurredAt` option for
+deterministic time.
 
 ## Practical checklist
 
-- Configure event id and clock defaults once during bootstrap.
-- Use per-event options or dependency injection for request-specific ids and
-  timestamps.
+- Keep the immutable default or create a factory for the scope that owns the
+  event-id and clock policy.
+- Pass request-specific factories into aggregate creation and reconstitution.
+- Use per-event options for one exceptional id or timestamp.
 - Build edge handlers from invocation dependencies such as `env`.
 - Keep aggregates and unit-of-work state inside the operation.
 - Use in-process buses only inside one invocation.

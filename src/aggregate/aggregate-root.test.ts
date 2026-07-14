@@ -8,7 +8,7 @@ import type { Id } from "../core/id";
 import {
 	type AggregateSnapshot,
 	type Version,
-	withClockFactory,
+	createDomainEventFactory,
 } from "./aggregate";
 import {
 	type AggregateConfig,
@@ -280,19 +280,45 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("Snapshots", () => {
-		it("does not alias a shared clock Date into snapshotAt", () => {
-			const fixed = new Date("2026-01-01T00:00:00Z");
-			const snapshot = withClockFactory(
-				() => fixed,
-				() => TestAggregate.create("test-1" as TestId, 10).createSnapshot(),
-			);
+		it("uses one instance-bound factory for recorded events and snapshots", () => {
+			type Updated = DomainEvent<"Updated", { value: number }>;
+			class FactoryBoundAggregate extends AggregateRoot<
+				TestState,
+				TestId,
+				Updated
+			> {
+				protected readonly aggregateType = "FactoryBoundAggregate";
+				constructor(config: AggregateConfig) {
+					super(
+						"factory-bound" as TestId,
+						{ value: 0, status: "inactive" },
+						config,
+					);
+				}
 
-			expect(snapshot.snapshotAt.getTime()).toBe(
-				new Date("2026-01-01T00:00:00Z").getTime(),
-			);
-			expect(snapshot.snapshotAt).not.toBe(fixed);
-			fixed.setFullYear(2030);
-			expect(snapshot.snapshotAt.getFullYear()).toBe(2026);
+				update(value: number): Updated {
+					const event = this.recordEvent("Updated", { value });
+					this.commit({ ...this.state, value }, event);
+					return event;
+				}
+			}
+
+			const shared = new Date("2027-04-05T06:07:08.000Z");
+			const domainEventFactory = createDomainEventFactory({
+				eventIdFactory: () => "request-event-id",
+				clock: () => shared,
+			});
+			const aggregate = new FactoryBoundAggregate({ domainEventFactory });
+
+			const event = aggregate.update(42);
+			const snapshot = aggregate.createSnapshot();
+
+			expect(event.eventId).toBe("request-event-id");
+			expect(event.occurredAt.getTime()).toBe(shared.getTime());
+			expect(snapshot.snapshotAt.getTime()).toBe(shared.getTime());
+			expect(event.occurredAt).not.toBe(shared);
+			expect(snapshot.snapshotAt).not.toBe(shared);
+			expect(snapshot.snapshotAt).not.toBe(event.occurredAt);
 		});
 
 		it("should create snapshot with current state and version", () => {
@@ -439,20 +465,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.state).toEqual({ value: 42, status: "inactive" });
 			expect(aggregate.version).toBe(5);
 			expect(aggregate.persistedVersion).toBe(5);
-		});
-
-		it("stamps snapshotAt via the installed clock factory", () => {
-			// Deterministic tests pin occurredAt through withClockFactory;
-			// snapshotAt must honor the same clock instead of a hard new Date().
-			const fixed = new Date("2026-01-01T00:00:00Z");
-			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-
-			const snapshot = withClockFactory(
-				() => new Date(fixed.getTime()),
-				() => aggregate.createSnapshot(),
-			);
-
-			expect(snapshot.snapshotAt.getTime()).toBe(fixed.getTime());
 		});
 
 		it("should restore from snapshot", () => {

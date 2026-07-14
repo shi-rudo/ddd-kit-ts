@@ -4,17 +4,27 @@ import {
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import { Entity } from "../entity/entity";
+import { Entity, type EntityConfig } from "../entity/entity";
 import { isBuiltInObject } from "../utils/array/is-built-in";
 import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
-import { now } from "./clock";
 import {
 	type AnyDomainEvent,
 	type CreateDomainEventOptions,
-	createDomainEvent,
+	defaultDomainEventFactory,
+	type DomainEventFactory,
 	type DomainEvent,
 	isMintedEvent,
 } from "./domain-event";
+
+/** Construction options shared by state-stored and event-sourced aggregates. */
+export interface AggregateConfig extends EntityConfig {
+	/**
+	 * Immutable event factory captured by this aggregate instance. Its clock
+	 * also stamps snapshots, keeping request-local event and snapshot time
+	 * consistent without module-level mutation.
+	 */
+	readonly domainEventFactory?: DomainEventFactory;
+}
 
 /**
  * Shared base for both `AggregateRoot` (state-stored) and
@@ -89,6 +99,18 @@ export abstract class BaseAggregate<
 	private _persistedVersion: Version | undefined = undefined;
 
 	private _pendingEvents: TEvent[] = [];
+
+	private readonly domainEventFactory: DomainEventFactory;
+
+	protected constructor(
+		id: TId,
+		initialState: TState,
+		config?: AggregateConfig,
+	) {
+		super(id, initialState, config);
+		this.domainEventFactory =
+			config?.domainEventFactory ?? defaultDomainEventFactory;
+	}
 
 	public get version(): Version {
 		return this._version;
@@ -286,10 +308,11 @@ export abstract class BaseAggregate<
 	 * The state is converted via {@link toSnapshotState}; the default
 	 * requires plain, serialisable data and fails fast otherwise.
 	 *
-	 * `snapshotAt` is read from the kit's swappable clock, the same one
-	 * `createDomainEvent` stamps `occurredAt` from, so
-	 * `setClockFactory` / `withClockFactory` pin snapshot timestamps in
-	 * deterministic tests too. `schemaVersion` is stamped from
+	 * `snapshotAt` is read from this aggregate instance's immutable
+	 * `DomainEventFactory`, the same clock `recordEvent` stamps
+	 * `occurredAt` from. Injecting a factory through `AggregateConfig`
+	 * therefore pins both timestamps in deterministic tests.
+	 * `schemaVersion` is stamped from
 	 * {@link snapshotSchemaVersion} so a later restore can detect
 	 * snapshots written against an older `TSnapshotState` shape.
 	 */
@@ -297,8 +320,7 @@ export abstract class BaseAggregate<
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
-			// now() returns a defensive copy at the source (see clock.ts).
-			snapshotAt: now(),
+			snapshotAt: this.domainEventFactory.now(),
 			schemaVersion: this.snapshotSchemaVersion,
 		};
 	}
@@ -387,7 +409,7 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Sugar for `createDomainEvent` that auto-injects `aggregateId`
+	 * Sugar for this aggregate's `DomainEventFactory` that auto-injects `aggregateId`
 	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
 	 * into the event's metadata fields. This is the canonical path for
 	 * recording events from inside aggregate domain methods.
@@ -425,7 +447,7 @@ export abstract class BaseAggregate<
 		payload: E["payload"],
 		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
 	): E {
-		return createDomainEvent(type, payload, {
+		return this.domainEventFactory.create(type, payload, {
 			...options,
 			aggregateId: this.id,
 			aggregateType: this.aggregateType,

@@ -1,17 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { HostileStateKeyError } from "../core/errors";
 import {
 	copyMetadata,
 	createDomainEvent,
+	createDomainEventFactory,
+	defaultDomainEventFactory,
 	type DomainEvent,
 	type EventMetadata,
 	mergeMetadata,
-	resetClockFactory,
-	resetEventIdFactory,
-	setClockFactory,
-	setEventIdFactory,
-	withClockFactory,
-	withEventIdFactory,
 } from "./domain-event";
 
 describe("DomainEvent", () => {
@@ -187,280 +183,96 @@ describe("DomainEvent", () => {
 		});
 	});
 
-	describe("EventIdFactory hook", () => {
-		afterEach(() => {
-			resetEventIdFactory();
-		});
+	describe("immutable factory instances", () => {
+		it("keeps event-id and clock dependencies isolated across overlapping async work", async () => {
+			let firstSequence = 0;
+			let secondSequence = 0;
+			const first = createDomainEventFactory({
+				eventIdFactory: () => `first-${++firstSequence}`,
+				clock: () => new Date("2026-01-01T00:00:00.000Z"),
+			});
+			const second = createDomainEventFactory({
+				eventIdFactory: () => `second-${++secondSequence}`,
+				clock: () => new Date("2030-06-15T12:30:00.000Z"),
+			});
 
-		it("uses a custom global factory when set via setEventIdFactory", () => {
-			let counter = 0;
-			setEventIdFactory(() => `seq-${++counter}`);
+			const firstWork = async () => {
+				const firstEvent = first.create("FirstEvent", { value: 1 });
+				await Promise.resolve();
+				return [firstEvent, first.create("FirstEvent", { value: 3 })] as const;
+			};
+			const secondWork = async () => {
+				await Promise.resolve();
+				return second.create("SecondEvent", { value: 2 });
+			};
 
-			const a = createDomainEvent("Demo", { x: 1 });
-			const b = createDomainEvent("Demo", { x: 2 });
-
-			expect(a.eventId).toBe("seq-1");
-			expect(b.eventId).toBe("seq-2");
-		});
-
-		it("per-call eventId override takes precedence over the global factory", () => {
-			setEventIdFactory(() => "factory-id");
-
-			const event = createDomainEvent(
-				"Demo",
-				{ x: 1 },
-				{
-					eventId: "explicit-id",
-				},
-			);
-			expect(event.eventId).toBe("explicit-id");
-		});
-
-		it("resetEventIdFactory restores the default", () => {
-			setEventIdFactory(() => "custom");
-			expect(createDomainEvent("Demo").eventId).toBe("custom");
-
-			resetEventIdFactory();
-			const reset = createDomainEvent("Demo");
-			expect(reset.eventId).not.toBe("custom");
-			expect(reset.eventId.length).toBeGreaterThan(0);
-		});
-
-		it("supports ULID/KSUID/etc. by accepting any string-producing factory", () => {
-			const fakeUlid = "01HZ4Y3Y6T7M8X9YDE0FGH1234";
-			setEventIdFactory(() => fakeUlid);
-
-			const event = createDomainEvent("Demo", { x: 1 });
-			expect(event.eventId).toBe(fakeUlid);
-		});
-
-		it("invokes the factory afresh on every event (no caching)", () => {
-			let calls = 0;
-			setEventIdFactory(() => `call-${++calls}`);
-
-			createDomainEvent("Demo", { x: 1 });
-			createDomainEvent("Demo", { x: 2 });
-			createDomainEvent("Demo", { x: 3 });
-			expect(calls).toBe(3);
-		});
-	});
-
-	describe("ClockFactory hook", () => {
-		afterEach(() => {
-			resetClockFactory();
-		});
-
-		it("uses a custom global clock when set via setClockFactory", () => {
-			const fixed = new Date("2026-01-01T00:00:00Z");
-			setClockFactory(() => fixed);
-
-			const event = createDomainEvent("Demo", { x: 1 });
-			expect(event.occurredAt.getTime()).toBe(fixed.getTime());
-		});
-
-		it("per-call occurredAt override takes precedence over the global factory", () => {
-			setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
-
-			const explicit = new Date("2030-12-31T00:00:00Z");
-			const event = createDomainEvent(
-				"Demo",
-				{ x: 1 },
-				{
-					occurredAt: explicit,
-				},
-			);
-
-			expect(event.occurredAt.getTime()).toBe(explicit.getTime());
-		});
-
-		it("resetClockFactory restores the default", () => {
-			setClockFactory(() => new Date(0));
-			expect(createDomainEvent("Demo").occurredAt.getTime()).toBe(0);
-
-			resetClockFactory();
-
-			const before = Date.now();
-			const reset = createDomainEvent("Demo");
-			const after = Date.now();
-			expect(reset.occurredAt.getTime()).toBeGreaterThanOrEqual(before);
-			expect(reset.occurredAt.getTime()).toBeLessThanOrEqual(after);
-		});
-
-		it("invokes the factory afresh on every event (no caching)", () => {
-			let n = 0;
-			setClockFactory(() => new Date(++n));
-
-			createDomainEvent("Demo");
-			createDomainEvent("Demo");
-			createDomainEvent("Demo");
-			expect(n).toBe(3);
-		});
-	});
-
-	describe("Scoped factory helpers: withEventIdFactory / withClockFactory", () => {
-		afterEach(() => {
-			// Defence in depth: every test in this block should leave
-			// state clean via the scoped helper's try/finally, but reset
-			// anyway in case a future addition mutates the global directly.
-			resetEventIdFactory();
-			resetClockFactory();
-		});
-
-		it("withEventIdFactory installs the factory during fn and restores after", () => {
-			const captured = withEventIdFactory(
-				() => "scoped-evt",
-				() => createDomainEvent("Demo", { x: 1 }).eventId,
-			);
-			expect(captured).toBe("scoped-evt");
-
-			// After the scoped block, the default is back.
-			const after = createDomainEvent("Demo", { x: 1 }).eventId;
-			expect(after).not.toBe("scoped-evt");
-		});
-
-		it("withEventIdFactory restores even when fn throws", () => {
-			expect(() => {
-				withEventIdFactory(
-					() => "scoped-evt",
-					() => {
-						throw new Error("boom");
-					},
-				);
-			}).toThrow("boom");
-
-			// Factory was restored despite the throw.
-			const after = createDomainEvent("Demo", { x: 1 }).eventId;
-			expect(after).not.toBe("scoped-evt");
-		});
-
-		it("withEventIdFactory composes via nesting (inner restores to outer)", () => {
-			const trail: string[] = [];
-
-			withEventIdFactory(
-				() => "outer",
-				() => {
-					trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
-
-					withEventIdFactory(
-						() => "inner",
-						() => {
-							trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
-						},
-					);
-
-					// Inner restored to outer.
-					trail.push(createDomainEvent("Demo", { x: 1 }).eventId);
-				},
-			);
-
-			expect(trail).toEqual(["outer", "inner", "outer"]);
-
-			// Outer restored to default.
-			expect(createDomainEvent("Demo", { x: 1 }).eventId).not.toBe("outer");
-		});
-
-		it("withEventIdFactory returns the value produced by fn", () => {
-			const out = withEventIdFactory(
-				() => "scoped",
-				() => ({ ok: true, count: 42 }),
-			);
-			expect(out).toEqual({ ok: true, count: 42 });
-		});
-
-		it("withClockFactory installs the factory during fn and restores after", () => {
-			const fixed = new Date("2026-01-01T00:00:00Z");
-			const capturedTime = withClockFactory(
-				() => fixed,
-				() => createDomainEvent("Demo", { x: 1 }).occurredAt.getTime(),
-			);
-			expect(capturedTime).toBe(fixed.getTime());
-
-			// Default Date factory restored.
-			const before = Date.now();
-			const after = createDomainEvent("Demo", { x: 1 }).occurredAt.getTime();
-			const stop = Date.now();
-			expect(after).toBeGreaterThanOrEqual(before);
-			expect(after).toBeLessThanOrEqual(stop);
-		});
-
-		it("withClockFactory restores even when fn throws", () => {
-			const fixed = new Date("1999-12-31T23:59:59Z");
-			expect(() => {
-				withClockFactory(
-					() => fixed,
-					() => {
-						throw new Error("clock-boom");
-					},
-				);
-			}).toThrow("clock-boom");
-
-			const after = createDomainEvent("Demo", { x: 1 }).occurredAt;
-			expect(after.getTime()).not.toBe(fixed.getTime());
-		});
-
-		it("withClockFactory composes via nesting (inner restores to outer)", () => {
-			const outerDate = new Date("2026-01-01T00:00:00Z");
-			const innerDate = new Date("2026-06-15T12:00:00Z");
-			const times: number[] = [];
-
-			withClockFactory(
-				() => outerDate,
-				() => {
-					times.push(createDomainEvent("Demo").occurredAt.getTime());
-
-					withClockFactory(
-						() => innerDate,
-						() => {
-							times.push(createDomainEvent("Demo").occurredAt.getTime());
-						},
-					);
-
-					times.push(createDomainEvent("Demo").occurredAt.getTime());
-				},
-			);
-
-			expect(times).toEqual([
-				outerDate.getTime(),
-				innerDate.getTime(),
-				outerDate.getTime(),
+			const [[firstEvent, firstAgain], secondEvent] = await Promise.all([
+				firstWork(),
+				secondWork(),
 			]);
+
+			expect(firstEvent.eventId).toBe("first-1");
+			expect(firstAgain.eventId).toBe("first-2");
+			expect(secondEvent.eventId).toBe("second-1");
+			expect(firstEvent.occurredAt.toISOString()).toBe(
+				"2026-01-01T00:00:00.000Z",
+			);
+			expect(secondEvent.occurredAt.toISOString()).toBe(
+				"2030-06-15T12:30:00.000Z",
+			);
 		});
 
-		it("withEventIdFactory throws if fn returns a thenable (async-misuse guard)", () => {
-			// JS spec: try { return fn() } finally { restore } runs the
-			// finally BEFORE the Promise resolves. So an async fn would
-			// see the restored (previous) factory in its awaited body:
-			// silent corruption. The guard catches this at write time.
-			expect(() =>
-				withEventIdFactory(() => "scoped", (async () =>
-					createDomainEvent("X", {})) as unknown as () => void),
-			).toThrow(/withEventIdFactory.*thenable/);
+		it("returns frozen factories without changing the immutable default", () => {
+			const custom = createDomainEventFactory({
+				eventIdFactory: () => "custom-id",
+				clock: () => new Date(0),
+			});
+			const replacingMethodsMustNotCompile = (): void => {
+				// @ts-expect-error immutable factory methods cannot be replaced
+				custom.create = createDomainEvent;
+				// @ts-expect-error immutable factory methods cannot be replaced
+				custom.now = () => new Date();
+			};
 
-			// And the factory was restored despite the throw.
-			const after = createDomainEvent("Demo", { x: 1 }).eventId;
-			expect(after).not.toBe("scoped");
+			expect(replacingMethodsMustNotCompile).toBeTypeOf("function");
+			expect(Object.isFrozen(custom)).toBe(true);
+			expect(Object.isFrozen(defaultDomainEventFactory)).toBe(true);
+			expect(custom.create("Custom").eventId).toBe("custom-id");
+			expect(createDomainEvent("Default").eventId).not.toBe("custom-id");
 		});
 
-		it("withClockFactory throws if fn returns a thenable (async-misuse guard)", () => {
-			const fixed = new Date("1999-12-31T23:59:59Z");
-			expect(() =>
-				withClockFactory(() => fixed, (async () =>
-					createDomainEvent("X", {})) as unknown as () => void),
-			).toThrow(/withClockFactory.*thenable/);
+		it("lets per-event options override an instance's defaults", () => {
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => "factory-id",
+				clock: () => new Date("2026-01-01T00:00:00.000Z"),
+			});
+			const occurredAt = new Date("2040-12-31T23:59:59.000Z");
 
-			const after = createDomainEvent("Demo", { x: 1 }).occurredAt;
-			expect(after.getTime()).not.toBe(fixed.getTime());
+			const event = factory.create(
+				"Overridden",
+				{ value: 1 },
+				{ eventId: "explicit-id", occurredAt },
+			);
+
+			expect(event.eventId).toBe("explicit-id");
+			expect(event.occurredAt.getTime()).toBe(occurredAt.getTime());
+			expect(event.occurredAt).not.toBe(occurredAt);
 		});
 
-		it("guards also catch raw thenables (object with a then method), not just real Promises", () => {
-			// biome-ignore lint/suspicious/noThenProperty: this test intentionally builds a raw thenable.
-			const fakeThenable = { then: () => {} };
-			expect(() =>
-				withEventIdFactory(
-					() => "scoped",
-					() => fakeThenable as unknown as void,
-				),
-			).toThrow(/thenable/);
+		it("defensively copies a shared Date for events and direct clock reads", () => {
+			const shared = new Date("2026-01-01T00:00:00.000Z");
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => "event-id",
+				clock: () => shared,
+			});
+
+			const event = factory.create("Ticked");
+			const reading = factory.now();
+
+			expect(event.occurredAt).not.toBe(shared);
+			expect(reading).not.toBe(shared);
+			expect(reading).not.toBe(event.occurredAt);
+			expect(reading.getTime()).toBe(shared.getTime());
 		});
 	});
 
@@ -569,21 +381,21 @@ describe("DomainEvent", () => {
 });
 
 describe("clock ownership: a shared Date from the factory is never frozen or aliased", () => {
-	it("createDomainEvent copies the now() result before the deep freeze", () => {
+	it("an instance factory copies its clock result before the deep freeze", () => {
 		const fixed = new Date("2026-01-01T00:00:00Z");
-		withClockFactory(
-			() => fixed,
-			() => {
-				const event = createDomainEvent("Ticked", {});
-				expect(event.occurredAt.getTime()).toBe(fixed.getTime());
-				expect(event.occurredAt).not.toBe(fixed);
-				expect(Object.isFrozen(fixed)).toBe(false);
-				// The caller's later mutation must neither throw nor bleed
-				// into the already-created event.
-				fixed.setFullYear(2030);
-				expect(event.occurredAt.getFullYear()).toBe(2026);
-			},
-		);
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => "event-id",
+			clock: () => fixed,
+		});
+		const event = factory.create("Ticked", {});
+
+		expect(event.occurredAt.getTime()).toBe(fixed.getTime());
+		expect(event.occurredAt).not.toBe(fixed);
+		expect(Object.isFrozen(fixed)).toBe(false);
+		// The caller's later mutation must neither throw nor bleed
+		// into the already-created event.
+		fixed.setFullYear(2030);
+		expect(event.occurredAt.getFullYear()).toBe(2026);
 	});
 });
 
