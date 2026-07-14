@@ -134,6 +134,83 @@ describe("InMemoryOutbox", () => {
 		});
 	});
 
+	describe("event identity at one qualified source position", () => {
+		const eventAt = (eventId: string, aggregateVersion: number) =>
+			candidate(
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId: "o-position" },
+					{
+						eventId,
+						aggregateId: "o-position",
+						aggregateType: "Order",
+					},
+				),
+				aggregateVersion,
+			);
+
+		it("rejects a different eventId at an occupied position without changing records or the source head", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const original = eventAt("evt-position-original", 1);
+			const collision = eventAt("evt-position-collision", 1);
+
+			await outbox.add([original]);
+			await expect(outbox.add([collision])).rejects.toBeInstanceOf(
+				EventHarvestError,
+			);
+
+			const next = eventAt("evt-position-next", 2);
+			await outbox.add([next]);
+			const pending = await outbox.getPending();
+			expect(pending.map(({ event }) => event.eventId)).toEqual([
+				original.event.eventId,
+				next.event.eventId,
+			]);
+			expect(pending[1]?.position.previousEventfulAggregateVersion).toBe(1);
+		});
+
+		it("rejects an intra-add position collision atomically", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const original = eventAt("evt-intra-add-original", 1);
+			const collision = eventAt("evt-intra-add-collision", 1);
+
+			await expect(outbox.add([original, collision])).rejects.toBeInstanceOf(
+				EventHarvestError,
+			);
+			expect(await outbox.getPending()).toEqual([]);
+
+			const afterRejectedBatch = eventAt("evt-after-rejected-batch", 2);
+			await outbox.add([afterRejectedBatch]);
+			const [record] = await outbox.getPending();
+			expect(record?.position.previousEventfulAggregateVersion).toBeNull();
+		});
+
+		it("rejects moving a pending eventId to another sequence of the same commit", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const original = {
+				...eventAt("evt-pending-position", 1),
+				position: {
+					aggregateVersion: 1,
+					commitSequence: 0,
+					commitSize: 2,
+				},
+			};
+			await outbox.add([original]);
+
+			await expect(
+				outbox.add([
+					{
+						...original,
+						position: { ...original.position, commitSequence: 1 },
+					},
+				]),
+			).rejects.toBeInstanceOf(EventHarvestError);
+
+			const [record] = await outbox.getPending();
+			expect(record?.position.commitSequence).toBe(0);
+		});
+	});
+
 	it("derives the predecessor from the last eventful source commit, not the aggregate OCC baseline", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const first = createDomainEvent(
@@ -202,6 +279,68 @@ describe("InMemoryOutbox", () => {
 		const [record] = await outbox.getPending();
 		expect(record?.event.eventId).toBe("evt-v3");
 		expect(record?.position.previousEventfulAggregateVersion).toBe(2);
+	});
+
+	it("rejects a retained dispatched eventId with a different commit position", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-dispatched-receipt" },
+			{
+				eventId: "evt-dispatched-receipt",
+				aggregateId: "o-dispatched-receipt",
+				aggregateType: "Order",
+			},
+		);
+		await outbox.add([candidate(event, 1)]);
+		await outbox.markDispatched([event.eventId]);
+
+		await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
+			EventHarvestError,
+		);
+		expect(await outbox.getPending()).toEqual([]);
+	});
+
+	it("preflights a late contradictory retry before mutating earlier batch entries", async () => {
+		const outbox = new InMemoryOutbox<OrderCreated>();
+		const event = (eventId: string) =>
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-atomic-receipt" },
+				{
+					eventId,
+					aggregateId: "o-atomic-receipt",
+					aggregateType: "Order",
+				},
+			);
+		const retained = event("evt-retained-receipt");
+		await outbox.add([candidate(retained, 1)]);
+		await outbox.markDispatched([retained.eventId]);
+
+		const fresh = candidate(event("evt-fresh-prefix"), 2);
+		const contradictoryRetry = candidate(retained, 2);
+		await expect(
+			outbox.add([
+				{
+					...fresh,
+					position: { ...fresh.position, commitSequence: 0, commitSize: 2 },
+				},
+				{
+					...contradictoryRetry,
+					position: {
+						...contradictoryRetry.position,
+						commitSequence: 1,
+						commitSize: 2,
+					},
+				},
+			]),
+		).rejects.toBeInstanceOf(EventHarvestError);
+
+		expect(await outbox.getPending()).toEqual([]);
+		const successor = event("evt-successor-after-rejection");
+		await outbox.add([candidate(successor, 2)]);
+		const [record] = await outbox.getPending();
+		expect(record?.position.previousEventfulAggregateVersion).toBe(1);
 	});
 
 	it("rejects an evicted stale candidate without changing the source head", async () => {
@@ -492,6 +631,29 @@ describe("InMemoryOutbox", () => {
 			const pending = await outbox.getPending();
 			expect(pending).toHaveLength(1);
 			expect(pending[0]?.attempts).toBe(0);
+		});
+
+		it("rejects requeueing a dead-lettered eventId at a different commit position", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxDeliveryAttempts: 1,
+			});
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-dead-receipt" },
+				{
+					eventId: "evt-dead-receipt",
+					aggregateId: "o-dead-receipt",
+					aggregateType: "Order",
+				},
+			);
+			await outbox.add([candidate(event, 1)]);
+			await outbox.markFailed(event.eventId, new Error("poison"));
+
+			await expect(outbox.add([candidate(event, 2)])).rejects.toBeInstanceOf(
+				EventHarvestError,
+			);
+			expect(await outbox.getPending()).toEqual([]);
+			expect(await outbox.deadLetters()).toHaveLength(1);
 		});
 
 		it("markDispatched clears a dead-lettered record (manual redelivery then ack)", async () => {

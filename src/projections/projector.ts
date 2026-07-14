@@ -8,6 +8,7 @@ import {
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
+	ProjectionReceiptViolationError,
 	UnprojectableEventError,
 } from "../core/errors";
 import type { OutboxSink } from "../events/outbox-dispatcher";
@@ -73,17 +74,19 @@ export interface ProjectionBatchResult {
  *   chain. Do not event-type-filter a projector subscription. Irrelevant event
  *   types are explicit no-ops in `Projection.apply`; invoking the handler and
  *   checkpointing their positions preserves continuity.
- * - **The watermark carries event identity.** A different `eventId` at the
+ * - **The watermark carries an exact receipt.** A different `eventId` at the
  *   exact stored watermark, or at one position inside the current batch,
- *   throws {@link ProjectionIdentityViolationError} before `apply`. The
- *   checkpoint deliberately keeps no full position history, so older skips
- *   continue to rely on the source contract rather than claiming an identity
- *   proof the receipt cannot provide.
- * - **Batch inversions reject as transport violations.** Before applying,
- *   the projector scans positions that were still unseen at batch start.
+ *   throws {@link ProjectionIdentityViolationError} before `apply`. The same
+ *   ID with a changed commit size or predecessor throws
+ *   {@link ProjectionReceiptViolationError}. The checkpoint deliberately keeps
+ *   no full position history, so older skips continue to rely on the source
+ *   contract rather than claiming a receipt proof it cannot provide.
+ * - **Batch inversions reject as transport violations.** Before applying, the
+ *   projector scans distinct positions that were still unseen at batch start.
  *   A descending pair for one aggregate throws
- *   {@link ProjectionOrderViolationError}; positions the stored checkpoint
- *   had already covered remain valid late redeliveries.
+ *   {@link ProjectionOrderViolationError}; positions the stored checkpoint had
+ *   already covered and exact receipts repeated inside the batch remain valid
+ *   redeliveries.
  * - **Malformed envelopes reject loudly.** A missing/empty `eventId`, a
  *   missing/invalid `position`, missing `source.aggregateId` /
  *   `source.aggregateType`, or an optional event address contradicting its
@@ -242,57 +245,87 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				watermarks.set(key, stored?.position);
 			}
 
-			// A checkpoint remembers the identity at exactly its watermark. A
-			// different eventId at that same position is therefore a provable source
-			// collision. Older positions cannot be identity-checked without retaining
-			// an unbounded per-position ledger and continue to rely on the source
-			// contract that one position names one logical event.
+			// A checkpoint remembers the complete receipt at exactly its watermark. A
+			// different eventId or different commit-boundary metadata at that same
+			// ordered position is therefore a provable source collision. Older
+			// positions cannot be identity-checked without retaining an unbounded
+			// per-position ledger and continue to rely on the source contract that one
+			// position names one immutable logical event receipt.
 			for (const { event, position, address } of cursored) {
 				const stored = checkpointsAtBatchStart.get(
 					encodeAggregateAddress(address),
 				);
 				if (
 					stored !== undefined &&
-					isSameOrderedPosition(position, stored.position) &&
-					event.eventId !== stored.lastAppliedEventId
+					isSameOrderedPosition(position, stored.position)
 				) {
-					throw new ProjectionIdentityViolationError(
-						this.projection.name,
-						event.eventId,
-						stored.lastAppliedEventId,
-						formatPosition(position),
-					);
+					if (event.eventId !== stored.lastAppliedEventId) {
+						throw new ProjectionIdentityViolationError(
+							this.projection.name,
+							event.eventId,
+							stored.lastAppliedEventId,
+							formatPosition(position),
+						);
+					}
+					if (!isSamePositionReceipt(position, stored.position)) {
+						throw new ProjectionReceiptViolationError(
+							this.projection.name,
+							event.eventId,
+							formatReceipt(stored.position),
+							formatReceipt(position),
+						);
+					}
 				}
 			}
 
-			const batchEventIdsByPosition = new Map<string, string>();
+			const batchReceiptsByPosition = new Map<
+				string,
+				{ eventId: string; position: ProjectionPosition }
+			>();
 			for (const { event, position, address } of cursored) {
 				const key = addressedPositionKey(address, position);
-				const recordedEventId = batchEventIdsByPosition.get(key);
-				if (
-					recordedEventId !== undefined &&
-					recordedEventId !== event.eventId
-				) {
+				const recorded = batchReceiptsByPosition.get(key);
+				if (recorded !== undefined && recorded.eventId !== event.eventId) {
 					throw new ProjectionIdentityViolationError(
 						this.projection.name,
 						event.eventId,
-						recordedEventId,
+						recorded.eventId,
 						formatPosition(position),
 					);
 				}
-				batchEventIdsByPosition.set(key, event.eventId);
+				if (
+					recorded !== undefined &&
+					!isSamePositionReceipt(position, recorded.position)
+				) {
+					throw new ProjectionReceiptViolationError(
+						this.projection.name,
+						event.eventId,
+						formatReceipt(recorded.position),
+						formatReceipt(position),
+					);
+				}
+				batchReceiptsByPosition.set(key, {
+					eventId: event.eventId,
+					position,
+				});
 			}
 
-			// A descending pair among positions that were still unseen at batch
-			// start is direct evidence of transport reordering. Ignore positions
-			// the stored checkpoint had already covered: those are harmless late
-			// redeliveries, not evidence about this batch's new-event ordering.
+			// A descending pair among DISTINCT positions that were still unseen at
+			// batch start is direct evidence of transport reordering. Ignore positions
+			// the stored checkpoint had already covered and exact receipts already seen
+			// in this batch: those are harmless redeliveries. The preceding collision
+			// pass proved that a repeated ordered position has the same eventId and full
+			// receipt, so this skip cannot hide conflicting source data.
 			const newestUnprocessed = new Map<string, ProjectionPosition>();
+			const positionsSeenInBatch = new Set<string>();
 			for (const { event, position, address } of cursored) {
 				const key = encodeAggregateAddress(address);
 				const stored = watermarks.get(key);
 				if (stored !== undefined && !isPositionAfter(position, stored))
 					continue;
+				const positionKey = addressedPositionKey(address, position);
+				if (positionsSeenInBatch.has(positionKey)) continue;
+				positionsSeenInBatch.add(positionKey);
 				const newest = newestUnprocessed.get(key);
 				if (newest !== undefined && isPositionAfter(newest, position)) {
 					throw new ProjectionOrderViolationError(
@@ -470,6 +503,18 @@ function isSameOrderedPosition(
 	);
 }
 
+function isSamePositionReceipt(
+	left: ProjectionPosition,
+	right: ProjectionPosition,
+): boolean {
+	return (
+		isSameOrderedPosition(left, right) &&
+		left.commitSize === right.commitSize &&
+		left.previousEventfulAggregateVersion ===
+			right.previousEventfulAggregateVersion
+	);
+}
+
 function addressedPositionKey(
 	address: AggregateAddress,
 	position: ProjectionPosition,
@@ -518,4 +563,14 @@ function isContiguousPosition(
 function formatPosition(position: ProjectionPosition | undefined): string {
 	if (position === undefined) return "genesis";
 	return `(${position.aggregateVersion}, ${position.commitSequence})`;
+}
+
+function formatReceipt(position: ProjectionPosition): string {
+	return (
+		`(${position.aggregateVersion}, ${position.commitSequence}; ` +
+		`commitSize=${position.commitSize}, ` +
+		`previousEventfulAggregateVersion=${String(
+			position.previousEventfulAggregateVersion,
+		)})`
+	);
 }

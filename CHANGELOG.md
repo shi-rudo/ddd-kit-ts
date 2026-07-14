@@ -336,10 +336,14 @@ are skipped as already traversed under the source's one-event-per-position
 contract. At the exact watermark, the checkpoint's `lastAppliedEventId`
 distinguishes a true redelivery from a different event mapped to the same
 position; the latter throws
-`ProjectionIdentityViolationError`. The same collision check runs within each
-batch. A dead-lettered event therefore stalls its aggregate's chain until
-repaired/replayed or until the projection is rebuilt; later events cannot
-silently advance past it.
+`ProjectionIdentityViolationError`. If the ID matches but `commitSize` or
+`previousEventfulAggregateVersion` changes, the new
+`ProjectionReceiptViolationError` rejects the contradictory receipt. Both
+checks run within each batch. An exact receipt repeated after a later position
+in the same batch remains a legal redelivery instead of being misclassified as
+an order inversion. A dead-lettered event therefore stalls its aggregate's
+chain until repaired/replayed or until the projection is rebuilt; later events
+cannot silently advance past it.
 Malformed or absent cursor data throws `UnprojectableEventError` (wiring);
 a well-formed discontinuity throws `ProjectionGapError` (infrastructure), so
 delivery retries and reconciliation can classify the failure honestly.
@@ -357,17 +361,20 @@ adapters must normalize a nullable database column to JavaScript `null`.
 
 `InMemoryOutbox` no longer lets a stale post-dispatch retry rewind its
 per-source predecessor head. It keeps a configurable bounded cache of recently
-dispatched event IDs (default 10,000) for idempotent no-ops; after eviction, a
-candidate behind the source head throws `EventHarvestError` while leaving the
-head untouched. Durable adapters still provide unbounded idempotency with a
-transactional `eventId` unique key.
+dispatched receipts (event ID, qualified source, and candidate position;
+default 10,000) for exact idempotent no-ops; after eviction, a candidate behind
+the source head throws `EventHarvestError` while leaving the head untouched.
+Durable adapters still provide unbounded idempotency with a transactional
+`eventId` unique key.
 
 An `eventId` retry is now idempotent only for the same qualified aggregate
-source. `InMemoryOutbox` rejects a different `aggregateType` / `aggregateId`
-with `EventHarvestError` before changing pending, dead-letter, receipt, or
-source-cursor state. Its bounded dispatched receipts retain the original source
-so the same check remains available after acknowledgement until receipt
-eviction.
+source and candidate commit position. `InMemoryOutbox` rejects a different
+source, sequence, size, or post-finalization aggregate version with
+`EventHarvestError` before changing pending, dead-letter, receipt, or
+source-cursor state. It also rejects a different ID assigned to an occupied
+qualified source position. Its bounded dispatched receipts retain the original
+source and candidate position so the same checks remain available after
+acknowledgement until receipt eviction.
 
 `DomainEvent` and `CreateDomainEventOptions` no longer expose commit cursor
 fields. `OutboxWriter.add` accepts `EventCommitCandidate` values and finalizes
@@ -377,6 +384,14 @@ event. An already-persisted aggregate with pending events must also advance its
 version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
 events) with `commit({ ...this.state }, event)` so the envelope has a unique
 cursor.
+
+`OutboxContractEnvironment.addCommitted` and `addRolledBack` now receive the
+same `EventCommitCandidate[]` values as `OutboxWriter.add`; adapter harnesses
+must stop inventing cursor data and pass those candidates through their real
+transaction. The portable suite proves commit sequence/size, eventful
+predecessor linkage, qualified source-head isolation, immutable source-position
+identity, and (when enabled) that rollback advances neither rows nor the source
+head.
 
 #### 15. Map domain events to JSON integration messages (runtime change)
 
@@ -473,6 +488,27 @@ The result is the new type-only `StreamReadResult<Evt>`:
 
 Event-sourced repository contract harnesses keep `committedStreamEvents`, but
 that callback now returns `StreamReadResult<Evt>` instead of an array.
+
+### Fixed: projection receipt integrity and executable source-position laws
+
+- A watermark or in-batch position is now an exact receipt, not merely an
+  `eventId` lookup. Reusing the ID while changing `commitSize` or
+  `previousEventfulAggregateVersion` throws the new structured
+  `ProjectionReceiptViolationError`; a different ID at the position continues
+  to throw `ProjectionIdentityViolationError`. Both fail before `apply`.
+- Exact in-batch redelivery remains legal even after a later position. The
+  inversion tripwire ignores only a position whose event ID and complete cursor
+  already matched earlier in the batch; a distinct descending position still
+  throws `ProjectionOrderViolationError`.
+- `InMemoryOutbox` enforces immutable qualified source positions and commit
+  sizes, including pending, dead-lettered, and bounded post-ack retries. A
+  conflicting add rejects without replacing the stored event or advancing the
+  source head.
+- `createOutboxContractTests` now composes explicit `EventCommitCandidate`
+  values and proves commit completeness, eventful-predecessor linkage,
+  source-head isolation by aggregate type and id, position identity, and
+  rollback head purity. This changes the harness callbacks `addCommitted` and
+  `addRolledBack` from bare events to candidates.
 
 ### Changed (breaking): EventStore streams are qualified and report state
 
@@ -760,10 +796,11 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   `project(batch)` call is one `TransactionScope` transaction, the
   read-model update and checkpoint commit atomically and roll back
   together; already-traversed positions are skipped via the four-field cursor
-  the event source finalizes on `CommittedDomainEvent`, while the checkpoint retains the
-  `eventId` at its exact watermark and rejects an identity collision with
-  `ProjectionIdentityViolationError`; event-store replays compose their own
-  envelope from the store cursor; missing or
+  the event source finalizes on `CommittedDomainEvent`, while the checkpoint
+  retains the `eventId` and complete cursor at its exact watermark. It rejects
+  an identity collision with `ProjectionIdentityViolationError` and changed
+  receipt metadata with `ProjectionReceiptViolationError`; event-store replays
+  compose their own envelope from the store cursor; missing or
   malformed cursors reject loudly with the structured
   `UnprojectableEventError`, while a well-formed discontinuity throws the
   structured infrastructure `ProjectionGapError`, before anything applies.
@@ -815,7 +852,9 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   unproven guarantee it is. The outbox suite proves commit-order reads,
   explicit-limit paging, idempotent acks, the dispatch-tracking
   lifecycle (attempts, dead-lettering, no resurrection, manual
-  redelivery ack), and, capability-gated, eventId dedupe
+  redelivery ack), commit sequence/size finalization, eventful-predecessor
+  linkage, immutable qualified source positions, source-head isolation, and,
+  capability-gated, eventId dedupe
   (`dedupesOnEventId`), head stability for non-claiming reads
   (`claimsOnGetPending`), and rollback purity (`providesRolledBackAdds`).
   The idempotency suite follows the adapter's declared `family`:
@@ -1077,16 +1116,19 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   The outbox and projector consume finalized envelopes, while the domain bus
   receives the original event. `eventId` remains the general dedupe key outside
   verified chains.
-- `Projector.project` rejects descending positions that were still unseen at
-  batch start with `ProjectionOrderViolationError`, exposing a mis-partitioned
-  or reordering transport before it can become silent read-model drift. Late
-  redeliveries already covered by the stored checkpoint remain ordinary skips.
+- `Projector.project` rejects descending distinct positions that were still
+  unseen at batch start with `ProjectionOrderViolationError`, exposing a
+  mis-partitioned or reordering transport before it can become silent read-model
+  drift. Late redeliveries already covered by the stored checkpoint and exact
+  receipts repeated inside the current batch remain ordinary skips.
 - `ProjectionCheckpoint` composes the gap-proof `position` with
   `lastAppliedEventId`. `Projector.project` rejects different event identities
   mapped to one position inside a batch or at the stored watermark with
-  `ProjectionIdentityViolationError`, before `apply`. Older positions remain
-  bounded cursor skips under the documented source-uniqueness invariant; the
-  checkpoint does not pretend to retain a full processed-event ledger.
+  `ProjectionIdentityViolationError`, before `apply`. The same ID with changed
+  commit cardinality or predecessor throws `ProjectionReceiptViolationError`.
+  Older positions remain bounded cursor skips under the documented
+  source-uniqueness invariant; the checkpoint does not pretend to retain a full
+  processed-event ledger.
 - `IntegrationMessage` is the explicit JSON-safe broker contract separate from
   internal `DomainEvent` and `CommittedDomainEvent` values.
   `createIntegrationMessage` requires an application-owned mapping;

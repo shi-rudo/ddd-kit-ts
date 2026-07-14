@@ -1,11 +1,18 @@
+import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import type { DispatchTrackingOutbox, Outbox } from "../events/ports";
+import type {
+	DispatchTrackingOutbox,
+	EventCommitCandidate,
+	Outbox,
+	OutboxRecord,
+} from "../events/ports";
 import { isDispatchTrackingOutbox } from "../events/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
 	assertEqual,
 	bindContractEnvironment,
+	captureRejection,
 	type ContractTest,
 	describeError,
 	gatedContractTest,
@@ -23,20 +30,24 @@ export interface OutboxContractEnvironment<Evt extends AnyDomainEvent> {
 	outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
 
 	/**
-	 * Runs `outbox.add(events)` inside a transaction that COMMITS, the
-	 * way `withCommit` calls it in production. For a non-transactional
-	 * store this is simply `outbox.add(events)`.
+	 * Runs `outbox.add(candidates)` inside a transaction that COMMITS, the
+	 * way `withCommit` calls it in production. The suite supplies complete
+	 * candidates with explicit source, aggregate version, zero-based commit
+	 * sequence, and commit size. For a non-transactional store this is simply
+	 * `outbox.add(candidates)`.
 	 */
-	addCommitted(events: ReadonlyArray<Evt>): Promise<void>;
+	addCommitted(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void>;
 
 	/**
-	 * Optional capability: runs `outbox.add(events)` inside a
+	 * Optional capability: runs `outbox.add(candidates)` inside a
 	 * transaction that ROLLS BACK. Enables the rollback-purity test: a
 	 * rolled-back add must leave nothing behind. Transactional adapters
 	 * should always provide this; it is the half of the outbox promise
 	 * that in-memory fakes cannot keep.
 	 */
-	addRolledBack?(events: ReadonlyArray<Evt>): Promise<void>;
+	addRolledBack?(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): Promise<void>;
 
 	/** Release connections, drop schemas, etc. Called in a finally. */
 	teardown?(): Promise<void>;
@@ -108,9 +119,11 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 /**
  * The outbox contract test suite: the proof that an adapter delivers
  * the guarantees `withCommit` and `OutboxDispatcher` document. The kit
- * is store-agnostic, so commit-order reads, idempotent acks, and
- * rollback purity are an **adapter contract, not a kit guarantee**;
- * this suite is how an adapter demonstrates them.
+ * is store-agnostic, so commit-order reads, qualified source-position
+ * identity, eventful-predecessor linkage, idempotent acks, and rollback
+ * purity are an **adapter contract, not a kit guarantee**; this suite is how
+ * an adapter demonstrates them. Its source-law tests also prove that colliding
+ * raw ids stay isolated by aggregate type and aggregate id.
  *
  * Framework-agnostic: bind with
  * `(test.skipped ? it.skip : it)(test.name, test.run)`.
@@ -118,17 +131,142 @@ export interface OutboxContractHarness<Evt extends AnyDomainEvent> {
 export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 	harness: OutboxContractHarness<Evt>,
 ): OutboxContractTest[] {
+	type Env = OutboxContractEnvironment<Evt>;
 	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
+	const defaultSource: AggregateAddress = {
+		aggregateType: "ContractAggregate",
+		aggregateId: "contract-aggregate",
+	};
+	const commit = (
+		events: ReadonlyArray<Evt>,
+		aggregateVersion = 1,
+		source: AggregateAddress = defaultSource,
+	): ReadonlyArray<EventCommitCandidate<Evt>> =>
+		events.map((event, commitSequence) => ({
+			event,
+			source,
+			position: {
+				aggregateVersion,
+				commitSequence,
+				commitSize: events.length,
+			},
+		}));
+	const takeAndAck = async (
+		env: Env,
+		count: number,
+	): Promise<ReadonlyArray<OutboxRecord<Evt>>> => {
+		const records: Array<OutboxRecord<Evt>> = [];
+		for (let index = 0; index < count; index += 1) {
+			const [record] = await env.outbox.getPending(1);
+			assert(
+				record !== undefined,
+				`expected committed outbox record ${index + 1} of ${count}`,
+			);
+			records.push(record);
+			await env.outbox.markDispatched([record.dispatchId]);
+		}
+		return records;
+	};
 
 	const tests: OutboxContractTest[] = [
 		{
+			name: "finalizes complete commit receipts and links the next eventful commit",
+			run: inEnv(async (env) => {
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)], 1),
+				);
+				// Version 2 may have been a state-only save; the event-source
+				// predecessor is still the previous EVENTFUL version 1.
+				await env.addCommitted(commit([harness.createEvent(3)], 3));
+				const records = await takeAndAck(env, 3);
+
+				assert(
+					deepEqual(
+						records.map(({ position }) => position),
+						[
+							{
+								aggregateVersion: 1,
+								commitSequence: 0,
+								commitSize: 2,
+								previousEventfulAggregateVersion: null,
+							},
+							{
+								aggregateVersion: 1,
+								commitSequence: 1,
+								commitSize: 2,
+								previousEventfulAggregateVersion: null,
+							},
+							{
+								aggregateVersion: 3,
+								commitSequence: 0,
+								commitSize: 1,
+								previousEventfulAggregateVersion: 1,
+							},
+						],
+					),
+					"the source must preserve zero-based commit completeness and link the next eventful commit to version 1",
+				);
+			}),
+		},
+		{
+			name: "rejects different event identities at one qualified source position",
+			run: inEnv(async (env) => {
+				const original = commit([harness.createEvent(1)], 1);
+				const collision = commit([harness.createEvent(2)], 1);
+				await env.addCommitted(original);
+				const rejection = await captureRejection(env.addCommitted(collision));
+				assert(
+					rejection !== undefined,
+					"a different eventId at one qualified source position must reject",
+				);
+
+				const [record] = await takeAndAck(env, 1);
+				assertEqual(
+					record?.event.eventId,
+					original[0]?.event.eventId,
+					"the rejected collision must not replace the original record",
+				);
+				await env.addCommitted(commit([harness.createEvent(3)], 2));
+				const [next] = await takeAndAck(env, 1);
+				assertEqual(
+					next?.position.previousEventfulAggregateVersion,
+					1,
+					"the rejected collision must not change the source head",
+				);
+			}),
+		},
+		{
+			name: "keeps event-source heads isolated by aggregate type and id",
+			run: inEnv(async (env) => {
+				const sources: ReadonlyArray<AggregateAddress> = [
+					{ aggregateType: "Order", aggregateId: "1" },
+					{ aggregateType: "Payment", aggregateId: "1" },
+					{ aggregateType: "Order", aggregateId: "2" },
+				];
+				for (const [index, source] of sources.entries()) {
+					await env.addCommitted(
+						commit([harness.createEvent(index + 1)], 1, source),
+					);
+				}
+				const records = await takeAndAck(env, sources.length);
+				assert(
+					records.every(
+						(record, index) =>
+							record.source.aggregateType === sources[index]?.aggregateType &&
+							record.source.aggregateId === sources[index]?.aggregateId &&
+							record.position.previousEventfulAggregateVersion === null,
+					),
+					"colliding raw ids or aggregate types must each retain an independent genesis head",
+				);
+			}),
+		},
+		{
 			name: "getPending returns records in commit order, across separate committed adds",
 			run: inEnv(async (env) => {
-				await env.addCommitted([
-					harness.createEvent(1),
-					harness.createEvent(2),
-				]);
-				await env.addCommitted([harness.createEvent(3)]);
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)], 1),
+				);
+				await env.addCommitted(commit([harness.createEvent(3)], 2));
 				// Explicit limit: the port leaves the no-argument page size to
 				// the implementation, so the suite never relies on it.
 				const pending = await env.outbox.getPending(10);
@@ -153,7 +291,9 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "getPending respects the limit",
 			run: inEnv(async (env) => {
-				await env.addCommitted([1, 2, 3, 4].map((s) => harness.createEvent(s)));
+				await env.addCommitted(
+					commit([1, 2, 3, 4].map((s) => harness.createEvent(s))),
+				);
 				const firstPage = await env.outbox.getPending(2);
 				// The port promises UP TO `limit` records; a shorter page is
 				// legal, an empty one against a non-empty backlog is not (the
@@ -177,7 +317,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				name: "an un-acked head comes back on the next poll (no silent skipping)",
 				run: inEnv(async (env) => {
 					await env.addCommitted(
-						[1, 2, 3, 4].map((s) => harness.createEvent(s)),
+						commit([1, 2, 3, 4].map((s) => harness.createEvent(s))),
 					);
 					const firstPage = await env.outbox.getPending(2);
 					const again = await env.outbox.getPending(2);
@@ -202,10 +342,9 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "markDispatched removes records; re-acks and unknown acks are accepted",
 			run: inEnv(async (env) => {
-				await env.addCommitted([
-					harness.createEvent(1),
-					harness.createEvent(2),
-				]);
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)]),
+				);
 				const [first] = await env.outbox.getPending(1);
 				assert(first !== undefined, "expected a pending record");
 				await env.outbox.markDispatched([first.dispatchId]);
@@ -233,10 +372,9 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			{
 				name: "idempotent re-acks do not disturb other pending records",
 				run: inEnv(async (env) => {
-					await env.addCommitted([
-						harness.createEvent(1),
-						harness.createEvent(2),
-					]);
+					await env.addCommitted(
+						commit([harness.createEvent(1), harness.createEvent(2)]),
+					);
 					const [first] = await env.outbox.getPending(1);
 					assert(first !== undefined, "expected a pending record");
 					await env.outbox.markDispatched([first.dispatchId]);
@@ -261,9 +399,10 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 			{
 				name: "re-adding an event with the same eventId is deduped, not duplicated",
 				run: inEnv(async (env) => {
-					await env.addCommitted([harness.createEvent(1)]);
+					const original = commit([harness.createEvent(1)]);
+					await env.addCommitted(original);
 					try {
-						await env.addCommitted([harness.createEvent(1)]);
+						await env.addCommitted(original);
 					} catch (error) {
 						// A bare UNIQUE(eventId) constraint makes the duplicate
 						// INSERT throw; the contract wants an idempotent add.
@@ -299,11 +438,18 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 							"Contract violated: harness declared providesRolledBackAdds but the environment lacks addRolledBack",
 						);
 					}
-					await env.addRolledBack([harness.createEvent(1)]);
+					await env.addRolledBack(commit([harness.createEvent(1)], 1));
 					assertEqual(
 						(await env.outbox.getPending(10)).length,
 						0,
 						"events added in a rolled-back transaction must not appear",
+					);
+					await env.addCommitted(commit([harness.createEvent(2)], 2));
+					const [afterRollback] = await takeAndAck(env, 1);
+					assertEqual(
+						afterRollback?.position.previousEventfulAggregateVersion,
+						null,
+						"a rolled-back add must not advance the event-source head",
 					);
 				}),
 			},
@@ -348,7 +494,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 								isDispatchTrackingOutbox(outbox),
 								"harness declared a tracking outbox",
 							);
-							await env.addCommitted([harness.createEvent(1)]);
+							await env.addCommitted(commit([harness.createEvent(1)]));
 							const [record] = await outbox.getPending(1);
 							assert(record !== undefined, "expected a pending record");
 							await outbox.markFailed(record.dispatchId, new Error("boom"));
@@ -371,10 +517,9 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					isDispatchTrackingOutbox(outbox),
 					"harness declared a tracking outbox",
 				);
-				await env.addCommitted([
-					harness.createEvent(1),
-					harness.createEvent(2),
-				]);
+				await env.addCommitted(
+					commit([harness.createEvent(1), harness.createEvent(2)]),
+				);
 				const [poison] = await outbox.getPending(1);
 				assert(poison !== undefined, "expected a pending record");
 				for (let i = 0; i < attemptCeiling; i++) {
@@ -407,7 +552,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					isDispatchTrackingOutbox(outbox),
 					"harness declared a tracking outbox",
 				);
-				await env.addCommitted([harness.createEvent(1)]);
+				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
 				await outbox.markDispatched([record.dispatchId]);
@@ -433,7 +578,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 					isDispatchTrackingOutbox(outbox),
 					"harness declared a tracking outbox",
 				);
-				await env.addCommitted([harness.createEvent(1)]);
+				await env.addCommitted(commit([harness.createEvent(1)]));
 				const [record] = await outbox.getPending(1);
 				assert(record !== undefined, "expected a pending record");
 				for (let i = 0; i < attemptCeiling; i++) {

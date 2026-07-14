@@ -203,12 +203,13 @@ create table event_source_head (
 );
 ```
 
-That idempotency rule assumes the ID still addresses the same qualified
-aggregate source. The same `eventId` arriving for another `aggregateType` or
-`aggregateId` is a caller bug, not a redelivery. Do not overwrite the existing
-row. Where the retained row makes the mismatch provable, compare its source and
-reject loudly; a bare `ON CONFLICT DO NOTHING` prevents duplicate rows but
-cannot diagnose this collision without reading the conflicting row.
+That idempotency rule assumes the ID still addresses the same qualified source
+and candidate commit position. The same `eventId` arriving for another
+`aggregateType`, `aggregateId`, aggregate version, commit sequence, or commit
+size is a caller bug, not a redelivery. Do not overwrite the existing row.
+Where the retained row makes the mismatch provable, compare the full candidate
+receipt and reject loudly; a bare `ON CONFLICT DO NOTHING` prevents duplicate
+rows but cannot diagnose this collision without reading the conflicting row.
 
 Persist routing columns, not only the JSON payload. `withCommit` composes every
 bare domain event into an `EventCommitCandidate`; the outbox source finalizes
@@ -240,7 +241,9 @@ read its `last_eventful_aggregate_version`, insert every event in the commit
 with that predecessor, and advance the head to the candidate's
 `aggregateVersion` in the same transaction. A unique commit-position key such
 as `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` keeps
-the mapping stable under retries. Creation of the first source-head row also
+the event identity stable under retries; all rows of that aggregate version
+must also agree on `commit_size`. Validate those invariants before advancing
+the source head. Creation of the first source-head row also
 needs race-safe insert-or-lock semantics: rely on the primary key and retry the
 losing transaction; do not let two concurrent "genesis" writers proceed from
 separate missing-row reads.
@@ -257,8 +260,9 @@ events is acceptable. It retains one event-source cursor per qualified
 aggregate even after dispatch so later eventful commits can be linked. Its
 memory therefore grows with distinct aggregate sources, not only with pending
 messages. It also retains a bounded, insertion-ordered cache of recently
-dispatched event IDs (10,000 by default) so a normal post-ack retry remains an
-idempotent no-op without touching the source head. Unbounded production
+dispatched receipts -- event ID, qualified source, and candidate commit
+position (10,000 by default) -- so an exact post-ack retry remains an idempotent
+no-op without touching the source head. Unbounded production
 workloads need a durable adapter with an explicit source-head retention policy
 and a transactional unique key on `eventId`.
 
@@ -274,11 +278,13 @@ const outbox = new InMemoryOutbox<OrderCreated>({
 ```
 
 It uses `envelope.event.eventId` as `dispatchId`, preserves insertion order,
-dedupes pending, dead-lettered, and recently dispatched re-adds by `eventId`,
-and implements dispatch tracking. Once a dispatched receipt is evicted, a
-candidate behind the current source head fails with `EventHarvestError` rather
-than rewinding the head. This is intentionally fail-safe, not an unbounded
-idempotency promise; durable outboxes keep the event-ID receipt in storage.
+dedupes exact pending, dead-lettered, and recently dispatched re-adds by
+`eventId`, and implements dispatch tracking. A contradictory source or commit
+position rejects instead of being mistaken for a retry. Once a dispatched
+receipt is evicted, a candidate behind the current source head fails with
+`EventHarvestError` rather than rewinding the head. This is intentionally
+fail-safe, not an unbounded idempotency promise; durable outboxes keep the
+event-ID receipt in storage.
 
 It is not a production outbox for a database-backed app. It is not part of
 your database transaction, and it does not roll back when the database rolls
@@ -636,12 +642,17 @@ Use this checklist before calling an outbox production-ready:
 
 - Transactional adapter: outbox rows commit and roll back with aggregate rows.
 - Contract tests: run `@shirudo/ddd-kit/testing` outbox contracts against the
-  real storage adapter.
+  real storage adapter. They prove commit sequence/size finalization, eventful
+  predecessor linkage, qualified source-head isolation, and immutable
+  source-position identity in addition to delivery behavior. Enable the
+  rollback capability to prove that a rolled-back add advances neither rows nor
+  the source head.
 - Commit-order reads: `getPending` is ordered by a monotonic position.
 - Multi-instance claiming: if more than one dispatcher runs, `getPending`
   claims records or uses visibility timeouts.
-- Idempotent add and ack: duplicates on `eventId` do not create duplicate
-  records, and repeated `markDispatched` calls are safe.
+- Idempotent add and ack: exact retries on `eventId` do not create duplicate
+  records, contradictory receipts reject, and repeated `markDispatched` calls
+  are safe.
 - Dispatch tracking: poison records have bounded retries and dead-lettering.
 - Alerting: `deadLetters()`, oldest pending age, poll failures, dispatch
   failures, and ack failures are visible.
