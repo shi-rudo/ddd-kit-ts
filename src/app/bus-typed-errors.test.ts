@@ -15,15 +15,22 @@ class AppError {
 	) {}
 }
 
+class ExpectedFailure extends Error {}
+
 const toAppError = (thrown: unknown): AppError =>
 	new AppError(thrown instanceof Error ? thrown.message : "UNKNOWN", thrown);
+
+const mapExpectedAppError = (
+	thrown: unknown,
+): { readonly error: AppError } | undefined =>
+	thrown instanceof ExpectedFailure ? { error: toAppError(thrown) } : undefined;
 
 type Commands = { Create: { id: string } };
 type Queries = { GetName: string };
 
 describe("CommandBus typed error channel", () => {
 	it("carries a handler's typed err(E) through execute unchanged", async () => {
-		const bus = new CommandBus<Commands, AppError>({ errorMapper: toAppError });
+		const bus = new CommandBus<Commands, AppError>();
 		bus.register("Create", async () => err(new AppError("DENIED")));
 
 		const result = await bus.execute({ type: "Create", id: "x" });
@@ -36,10 +43,12 @@ describe("CommandBus typed error channel", () => {
 		}
 	});
 
-	it("maps a thrown value into the typed channel via errorMapper", async () => {
-		const bus = new CommandBus<Commands, AppError>({ errorMapper: toAppError });
+	it("maps a recognized thrown value into the typed channel via mapExpectedError", async () => {
+		const bus = new CommandBus<Commands, AppError>({
+			mapExpectedError: mapExpectedAppError,
+		});
 		bus.register("Create", async () => {
-			throw new Error("boom");
+			throw new ExpectedFailure("boom");
 		});
 
 		const result = await bus.execute({ type: "Create", id: "x" });
@@ -48,15 +57,17 @@ describe("CommandBus typed error channel", () => {
 		if (result.isErr()) expect(result.error.code).toBe("boom");
 	});
 
-	it("the no-handler dispatch throws past the errorMapper (wiring bug, not a channel value)", async () => {
-		const bus = new CommandBus<Commands, AppError>({ errorMapper: toAppError });
+	it("the no-handler dispatch throws past mapExpectedError (wiring bug, not a channel value)", async () => {
+		const bus = new CommandBus<Commands, AppError>({
+			mapExpectedError: mapExpectedAppError,
+		});
 
 		await expect(bus.execute({ type: "Create", id: "x" })).rejects.toThrow(
 			"No handler registered for command type: Create",
 		);
 	});
 
-	it("defaults to a string channel with no options (backward compatible)", async () => {
+	it("keeps returned string errors in the default channel", async () => {
 		const bus = new CommandBus<Commands>();
 		bus.register("Create", async () => err("nope"));
 
@@ -67,62 +78,62 @@ describe("CommandBus typed error channel", () => {
 		if (result.isErr()) expect(result.error).toBe("nope");
 	});
 
-	it("requires an errorMapper once the channel is widened (compile-time)", () => {
-		// The function body is type-checked but never invoked; the assertion is
-		// that the missing required `errorMapper` is a compile error.
-		const missingMapper = () =>
-			// @ts-expect-error widened E without an errorMapper is rejected
-			new CommandBus<Commands, AppError>();
-		expect(typeof missingMapper).toBe("function");
+	it("allows a widened channel without a mapper because throws propagate", () => {
+		const noMapper = () => new CommandBus<Commands, AppError>();
+		expect(typeof noMapper).toBe("function");
 	});
 
-	it("requires an errorMapper for a string-literal-union channel (compile-time)", () => {
-		// Every subtype of string passes [E] extends [string]; the gate must
-		// use [string] extends [E] so an error-code union cannot silently
-		// fall back to describeThrown, whose arbitrary strings would escape
-		// the declared union and fall through exhaustive switches.
+	it("keeps literal-union channels closed under explicit mapping", () => {
 		type Codes = "DB_CONN" | "TIMEOUT";
-		const missingCommandMapper = () =>
-			// @ts-expect-error a literal-union E without an errorMapper is rejected
-			new CommandBus<Commands, Codes>();
-		const missingQueryMapper = () =>
-			// @ts-expect-error a literal-union E without an errorMapper is rejected
-			new QueryBus<Queries, Codes>();
+		const noCommandMapper = () => new CommandBus<Commands, Codes>();
+		const noQueryMapper = () => new QueryBus<Queries, Codes>();
 		const withMapper = () =>
-			new CommandBus<Commands, Codes>({ errorMapper: () => "TIMEOUT" });
+			new CommandBus<Commands, Codes>({
+				mapExpectedError: () => ({ error: "TIMEOUT" }),
+			});
 
-		expect(typeof missingCommandMapper).toBe("function");
-		expect(typeof missingQueryMapper).toBe("function");
+		expect(typeof noCommandMapper).toBe("function");
+		expect(typeof noQueryMapper).toBe("function");
 		expect(typeof withMapper).toBe("function");
 	});
 
-	it("requires an errorMapper for an unknown channel (compile-time)", () => {
-		// describeThrown's string output is assignable to unknown, but an
-		// unknown channel says "I handle raw values": silently flattening a
-		// rich Error to a string would lose stack, cause, and custom fields.
-		// Optional options are reserved for E = string exactly (and the
-		// unavoidable any).
-		const missingUnknownMapper = () =>
-			// @ts-expect-error an unknown E without an errorMapper is rejected
-			new CommandBus<Commands, unknown>();
+	it("allows an unknown channel without flattening thrown values", () => {
+		const noUnknownMapper = () => new CommandBus<Commands, unknown>();
 		const withUnknownMapper = () =>
-			new CommandBus<Commands, unknown>({ errorMapper: (thrown) => thrown });
+			new CommandBus<Commands, unknown>({
+				mapExpectedError: (thrown) => ({ error: thrown }),
+			});
 
-		expect(typeof missingUnknownMapper).toBe("function");
+		expect(typeof noUnknownMapper).toBe("function");
 		expect(typeof withUnknownMapper).toBe("function");
+	});
+
+	it("rejects the removed catch-all errorMapper option (compile-time)", () => {
+		const legacyCommandMapper = () =>
+			new CommandBus<Commands, AppError>({
+				// @ts-expect-error use mapExpectedError and classify explicitly
+				errorMapper: toAppError,
+			});
+		const legacyQueryMapper = () =>
+			new QueryBus<Queries, AppError>({
+				// @ts-expect-error use mapExpectedError and classify explicitly
+				errorMapper: toAppError,
+			});
+		expect(typeof legacyCommandMapper).toBe("function");
+		expect(typeof legacyQueryMapper).toBe("function");
 	});
 });
 
-describe("a throwing errorMapper must not destroy the handler's failure", () => {
+describe("a throwing mapExpectedError must not destroy the handler's failure", () => {
 	const handlerFailure = new Error("pool exhausted");
 	const mapperFailure = new Error("mapper blew up");
-	const throwingMapper = (): AppError => {
+	const throwingMapper = (): { readonly error: AppError } | undefined => {
 		throw mapperFailure;
 	};
 
 	it("CommandBus: execute rejects with ErrorMapperFailedError carrying both causes", async () => {
 		const bus = new CommandBus<Commands, AppError>({
-			errorMapper: throwingMapper,
+			mapExpectedError: throwingMapper,
 		});
 		bus.register("Create", async () => {
 			throw handlerFailure;
@@ -145,13 +156,13 @@ describe("a throwing errorMapper must not destroy the handler's failure", () => 
 		// inner bus is a wiring bug and must not surface as an ordinary
 		// err value of the outer channel.
 		const inner = new CommandBus<Commands, AppError>({
-			errorMapper: throwingMapper,
+			mapExpectedError: throwingMapper,
 		});
 		inner.register("Create", async () => {
 			throw handlerFailure;
 		});
 		const outer = new CommandBus<{ Wrap: { id: string } }, AppError>({
-			errorMapper: toAppError,
+			mapExpectedError: mapExpectedAppError,
 		});
 		outer.register("Wrap", async () =>
 			inner.execute({ type: "Create", id: "x" }),
@@ -168,7 +179,7 @@ describe("a throwing errorMapper must not destroy the handler's failure", () => 
 
 	it("QueryBus: execute rejects with ErrorMapperFailedError carrying both causes", async () => {
 		const bus = new QueryBus<Queries, AppError>({
-			errorMapper: throwingMapper,
+			mapExpectedError: throwingMapper,
 		});
 		bus.register("GetName", async () => {
 			throw handlerFailure;
@@ -188,10 +199,12 @@ describe("a throwing errorMapper must not destroy the handler's failure", () => 
 });
 
 describe("QueryBus typed error channel", () => {
-	it("maps a thrown value into the typed channel via errorMapper", async () => {
-		const bus = new QueryBus<Queries, AppError>({ errorMapper: toAppError });
+	it("maps a recognized thrown value into the typed channel via mapExpectedError", async () => {
+		const bus = new QueryBus<Queries, AppError>({
+			mapExpectedError: mapExpectedAppError,
+		});
 		bus.register("GetName", async () => {
-			throw new Error("db down");
+			throw new ExpectedFailure("db down");
 		});
 
 		const result = await bus.execute({ type: "GetName" });
@@ -202,7 +215,9 @@ describe("QueryBus typed error channel", () => {
 	});
 
 	it("executeUnsafe still throws the raw error, bypassing the mapper", async () => {
-		const bus = new QueryBus<Queries, AppError>({ errorMapper: toAppError });
+		const bus = new QueryBus<Queries, AppError>({
+			mapExpectedError: mapExpectedAppError,
+		});
 		bus.register("GetName", async () => {
 			throw new Error("db down");
 		});
@@ -250,8 +265,6 @@ describe("duplicate handler registration is a named wiring error", () => {
 		})();
 
 		expect(thrown).toBeInstanceOf(DuplicateHandlerRegistrationError);
-		expect((thrown as DuplicateHandlerRegistrationError).busKind).toBe(
-			"query",
-		);
+		expect((thrown as DuplicateHandlerRegistrationError).busKind).toBe("query");
 	});
 });

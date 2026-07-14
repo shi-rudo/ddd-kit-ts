@@ -1,10 +1,9 @@
 import { ok, type Result } from "@shirudo/result";
 import {
-	type BusArgs,
+	type ExpectedErrorMapper,
 	handlerOrThrow,
 	mapHandlerFailure,
 	registerOnce,
-	resolveErrorMapper,
 } from "./bus-internals";
 import type { Query, QueryHandler } from "./query";
 
@@ -46,24 +45,14 @@ type QueryTypeMap = Record<string, unknown>;
  */
 export interface QueryBusOptions<E = string> {
 	/**
-	 * Maps a value thrown by a registered handler into the bus's error
-	 * channel `E`. Dispatching an unregistered query type is NOT mapped:
-	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
-	 * `describeThrown`, which renders any thrown value as a `string`.
-	 * base-error's `toStructuredError` fits this slot directly when `E` is a
-	 * `StructuredError`.
+	 * Explicitly recognizes an expected handler failure and maps it into the
+	 * bus's error channel. Return `{ error }` only for failures this boundary
+	 * owns; return `undefined` to rethrow the exact original value. With no
+	 * mapper, every handler throw propagates. Unregistered-handler and nested
+	 * bus wiring errors always propagate.
 	 */
-	errorMapper?: (thrown: unknown) => E;
+	mapExpectedError?: (thrown: unknown) => { readonly error: E } | undefined;
 }
-
-/**
- * Constructor arguments for {@link QueryBus}. When `E` is the default `string`,
- * options are optional (the built-in `describeThrown` mapper applies).
- * When `E` is widened, an `errorMapper` is required, so a typed channel can
- * never silently fall back to string values. The conditional lives in the
- * shared {@link BusArgs} so the two buses cannot drift.
- */
-type QueryBusArgs<E> = BusArgs<E, QueryBusOptions<E>>;
 
 /**
  * Query Bus interface for dispatching queries to their handlers.
@@ -100,6 +89,9 @@ export interface IQueryBus<
 	 * @returns Result containing the query result if successful, or an error of type `E`
 	 * @throws UnregisteredHandlerError when no handler is registered for
 	 *   `query.type` (a wiring bug; never delivered through the channel)
+	 * @throws The exact handler failure when `mapExpectedError` is absent or
+	 *   returns `undefined`
+	 * @throws ErrorMapperFailedError when `mapExpectedError` fails
 	 */
 	execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
@@ -112,7 +104,7 @@ export interface IQueryBus<
 	 *
 	 * @param query - The query to execute
 	 * @returns The query result
-	 * @throws Error if no handler is registered for the query type
+	 * @throws The exact handler failure or UnregisteredHandlerError
 	 */
 	executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
@@ -177,10 +169,10 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	implements IQueryBus<TMap, E>
 {
 	private readonly handlers = new Map<string, StoredQueryHandler>();
-	private readonly errorMapper: (thrown: unknown) => E;
+	private readonly mapExpectedError: ExpectedErrorMapper<E> | undefined;
 
-	constructor(...args: QueryBusArgs<E>) {
-		this.errorMapper = resolveErrorMapper(args[0]);
+	constructor(options?: QueryBusOptions<E>) {
+		this.mapExpectedError = options?.mapExpectedError;
 	}
 
 	register<
@@ -202,7 +194,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 			const result = (await handler(query)) as R;
 			return ok(result);
 		} catch (error) {
-			return mapHandlerFailure(error, this.errorMapper, "query");
+			return mapHandlerFailure(error, this.mapExpectedError, "query");
 		}
 	}
 

@@ -96,9 +96,9 @@ describe("CommandBus", () => {
 			// expected failure.
 			let mapperCalls = 0;
 			const bus = new CommandBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => {
+				mapExpectedError: (thrown) => {
 					mapperCalls += 1;
-					return thrown;
+					return { error: thrown };
 				},
 			});
 			bus.register("Outer", async () => {
@@ -112,15 +112,15 @@ describe("CommandBus", () => {
 			expect(mapperCalls).toBe(0);
 		});
 
-		it("bypasses the errorMapper for unregistered types: the wiring bug throws instead of riding the channel", async () => {
+		it("bypasses mapExpectedError for unregistered types: the wiring bug throws instead of riding the channel", async () => {
 			// The error CHANNEL is for expected failures a handler produced;
 			// a mis-wired bus is a bug that must crash loud, not something a
 			// generic err-branch can absorb.
 			let mapperCalls = 0;
 			const bus = new CommandBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => {
+				mapExpectedError: (thrown) => {
 					mapperCalls += 1;
-					return thrown;
+					return { error: thrown };
 				},
 			});
 
@@ -274,20 +274,14 @@ describe("CommandBus", () => {
 	});
 });
 
-describe("CommandBus – non-Error throws keep their diagnostics", () => {
-	it("serialises a structured thrown object into the error string", async () => {
+describe("CommandBus – non-Error throws keep their identity", () => {
+	it("propagates a structured thrown object unchanged", async () => {
 		const bus = new CommandBus();
+		const failure = { code: "DB_CONN", detail: "pool exhausted" };
 		bus.register("CreateOrder", async () => {
-			throw { code: "DB_CONN", detail: "pool exhausted" };
+			throw failure;
 		});
 
-		const result = await bus.execute({ type: "CreateOrder" });
-
-		expect(result.isErr()).toBe(true);
-		if (result.isErr()) {
-			// '[object Object]' would destroy all diagnostic information.
-			expect(result.error).toContain("DB_CONN");
-			expect(result.error).toContain("pool exhausted");
-		}
+		await expect(bus.execute({ type: "CreateOrder" })).rejects.toBe(failure);
 	});
 });

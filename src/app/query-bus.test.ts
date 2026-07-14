@@ -77,9 +77,9 @@ describe("QueryBus", () => {
 		it("rethrows a nested dispatch's wiring bug instead of absorbing it into the channel", async () => {
 			let mapperCalls = 0;
 			const bus = new QueryBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => {
+				mapExpectedError: (thrown) => {
 					mapperCalls += 1;
-					return thrown;
+					return { error: thrown };
 				},
 			});
 			bus.register("Outer", async () => {
@@ -222,12 +222,12 @@ describe("QueryBus", () => {
 			).rejects.toBeInstanceOf(UnregisteredHandlerError);
 		});
 
-		it("bypasses the errorMapper for unregistered types: the wiring bug throws instead of riding the channel", async () => {
+		it("bypasses mapExpectedError for unregistered types: the wiring bug throws instead of riding the channel", async () => {
 			let mapperCalls = 0;
 			const bus = new QueryBus<Record<string, unknown>, unknown>({
-				errorMapper: (thrown) => {
+				mapExpectedError: (thrown) => {
 					mapperCalls += 1;
-					return thrown;
+					return { error: thrown };
 				},
 			});
 
@@ -330,18 +330,13 @@ describe("QueryBus – registration and throw diagnostics", () => {
 		);
 	});
 
-	it("serialises a structured thrown object into the error string", async () => {
+	it("propagates a structured thrown object unchanged", async () => {
 		const bus = new QueryBus();
+		const failure = { code: 503, hint: "replica lag" };
 		bus.register("GetOrder", async () => {
-			throw { code: 503, hint: "replica lag" };
+			throw failure;
 		});
 
-		const result = await bus.execute({ type: "GetOrder" });
-
-		expect(result.isErr()).toBe(true);
-		if (result.isErr()) {
-			expect(result.error).toContain("503");
-			expect(result.error).toContain("replica lag");
-		}
+		await expect(bus.execute({ type: "GetOrder" })).rejects.toBe(failure);
 	});
 });

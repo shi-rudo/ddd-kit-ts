@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 3.0.0 carries everything since 2.2.0 in one breaking window. It has two
 halves. The first is a tightening pass over the core: structured errors
 with one identifier, a version bump on every `setState`, buses that
-throw on wiring bugs, one delete contract, identity-based repository
+map only explicitly expected failures, one delete contract, identity-based repository
 loads, and consumer-owned query ports. The second is the event-driven
 periphery around that core: the outbox seam with a minimal dispatcher,
 command idempotency, projections, a snapshot store, durable deadlines, the
@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Six do not (steps 3, 5, 11,
-12, 14, and 15) and deserve a deliberate pass over the call sites.
+Most of these surface at compile time. Seven do not (steps 3, 5, 11,
+12, 14, 15, and 20) and deserve a deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -102,8 +102,8 @@ if (result.isErr()) {
   // domain failure OR "No handler registered for ..."
 }
 
-// after: the error channel only carries failures a REGISTERED
-// handler produced; catch the named type only at a deliberate seam
+// after: the error channel only carries explicit expected failures;
+// catch the named wiring type only at a deliberate seam
 const result = await commandBus.execute(command); // throws on wiring bugs
 ```
 
@@ -573,6 +573,41 @@ boundary against application code that deliberately lies to its own adapter.
 implementations continue calling `session.enrollSaved` or
 `session.enrollDeleted`; the session now retains the underlying scoped tokens
 and passes them to `withCommit` automatically.
+
+#### 20. Bus error mapping is selective (runtime change)
+
+`CommandBus.execute` and `QueryBus.execute` no longer convert every handler
+throw into `Err`. The removed `errorMapper` option and the default stringifier
+made programmer errors, cancellation, and unknown infrastructure failures look
+like expected application outcomes. Without a policy, thrown values now
+propagate unchanged.
+
+Command handlers should return `err(E)` for expected failures they already
+own. For a known exception-first dependency, replace the total mapper with a
+selective `mapExpectedError` decision:
+
+```ts
+// before: every thrown value was flattened into the channel
+const bus = new CommandBus<Commands, AppError>({
+  errorMapper: toAppError,
+});
+
+// after: only the named expected failure becomes Err<AppError>
+const bus = new CommandBus<Commands, AppError>({
+  mapExpectedError: (thrown) =>
+    thrown instanceof OrderAlreadyConfirmedError
+      ? { error: toAppError(thrown) }
+      : undefined,
+});
+```
+
+Returning `undefined` means "not mine" and rethrows the exact original value;
+the positive `{ error }` wrapper keeps `undefined` available as an intentional
+`E`. No mapper is required for a widened error channel. Audit existing mappers
+instead of mechanically renaming them: a total conversion recreates the old
+catch-all behavior explicitly. `ErrorMapperFailedError` remains the crash-loud
+wiring error when the configured decision itself throws and preserves both the
+handler failure and mapper failure.
 
 ### Changed (breaking): commit enrollment is provenance-bound
 
@@ -1212,8 +1247,9 @@ and passes them to `withCommit` automatically.
   through the error channel, completing the crash-loud wiring-bug posture
   (`MissingHandlerError` precedent): a mis-wired bus fails the request
   loudly instead of surfacing as an expected failure a generic err-branch
-  can absorb. The `errorMapper` now only ever sees failures a REGISTERED
-  handler produced. `executeUnsafe` already threw.
+  can absorb. The selective `mapExpectedError` policy never receives a direct
+  unregistered dispatch or the same error propagated by a nested dispatch.
+  `executeUnsafe` already threw.
 - Migration: remove err-branches that matched the
   "No handler registered" message (default string channel) or the
   `UnregisteredHandlerError` type (typed channels); where the case must
@@ -1492,35 +1528,27 @@ and passes them to `withCommit` automatically.
   classifier throw counts as "not retryable" and the ORIGINAL error
   surfaces unchanged.
 
-### Fixed: bus error channels are honest for literal unions and broken mappers
+### Changed (breaking): buses map only explicitly expected failures
 
-- A string-literal-union error channel (e.g.
-  `E = "DB_CONN" | "TIMEOUT"`) slipped through the `errorMapper`
-  requirement: every subtype of `string` passed the
-  `[E] extends [string]` gate, so the built-in `describeThrown`
-  fallback could deliver arbitrary strings outside the declared union,
-  falling through exhaustive switches. The gate now tests both
-  directions, so options are optional only when `E` IS `string` (and
-  the unavoidable `any`); literal unions, object types, and `unknown`
-  all require an explicit `errorMapper` at compile time, for both
-  buses.
-- A THROWING `errorMapper` no longer replaces the handler's original
-  failure: `execute` now throws the new `ErrorMapperFailedError`
-  (crash-loud, same family as `UnregisteredHandlerError`) carrying the
-  handler's error as `cause` and the mapper's own failure as
-  `mapperCause`. Like a nested `UnregisteredHandlerError`, a nested
-  dispatch's `ErrorMapperFailedError` stays a throw and is never
-  mapped into the outer bus's channel. The default mapper
-  `describeThrown` is also total now: it no longer throws for a cyclic
-  null-prototype thrown value, a revoked Proxy, or an Error subclass
-  with a hostile `message` getter.
-- Internal: the buses' shared wiring semantics (constructor-args
-  conditional, mapper resolution, register-once guard, no-handler
-  gate, handler-failure mapping) moved into one internal module, so a
-  fix to one bus can no longer silently miss the other; `CommandBus`
-  adopted the factored no-handler gate `QueryBus` already had.
-- Added: `ErrorMapperFailedError` (and its options type) is exported
-  from the main entry.
+- Removed the total `errorMapper` option and its implicit string fallback.
+  With no policy, every registered-handler throw propagates unchanged, so its
+  identity, cause chain, cancellation semantics, and retry classification are
+  preserved.
+- Added the selective `mapExpectedError(thrown)` option. Returning
+  `{ error: E }` positively classifies the failure into the Result channel;
+  returning `undefined` declines it and rethrows the exact original. The
+  wrapper makes `E = undefined` unambiguous.
+- Widened error channels no longer require constructor options. A command
+  handler can return `err(E)` directly without configuring exception mapping.
+  Literal-union channels remain closed because a positive mapper decision must
+  produce their declared `E`.
+- A `mapExpectedError` that throws or returns a malformed decision produces
+  `ErrorMapperFailedError` (crash-loud,
+  same family as `UnregisteredHandlerError`) carrying the handler failure as
+  `cause` and the mapper failure as `mapperCause`. Nested wiring and mapper
+  failures never enter an outer Result channel.
+- Internal shared bus wiring still owns registration, dispatch, and failure
+  classification once, so command and query semantics cannot drift.
 
 ### Fixed: `toPublicErrorView` is total and no longer trusts duck-typed `publicIssues()`
 

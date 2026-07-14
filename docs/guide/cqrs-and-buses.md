@@ -159,9 +159,9 @@ Without a type map, registration is intentionally loose. That is useful in tests
 
 Dispatching a command type with no registered handler throws `UnregisteredHandlerError`.
 
-That is a wiring bug, not a domain failure. The command bus does not put it on the `Result` error channel and does not pass it through `errorMapper`. A missing registration means the application was bootstrapped incorrectly, so it should fail loudly at the boundary that turns programming bugs into 500s.
+That is a wiring bug, not a domain failure. The command bus does not put it on the `Result` error channel and does not pass it through `mapExpectedError`. A missing registration means the application was bootstrapped incorrectly, so it should fail loudly at the boundary that turns programming bugs into 500s.
 
-Registered handlers are different. If a registered handler throws, `CommandBus.execute` catches the thrown value and maps it into the bus error channel. By default the channel is `string`. If you want structured errors, create the bus with a typed `errorMapper`.
+A registered handler's throw is not automatically an expected failure either. With no error policy, `CommandBus.execute` rethrows the exact value. Prefer returning `err(...)` for failures already expressed by a command handler. If an exception-first dependency needs translation, configure `mapExpectedError` as a selective boundary: return `{ error }` for a recognized expected failure and `undefined` for everything else. Unknown programmer errors, cancellation, and infrastructure failures then retain their type, cause chain, and cancellation behavior.
 
 ## Queries
 
@@ -208,7 +208,7 @@ const unsafe = await queryBus.executeUnsafe({
 
 The bus gives you two execution styles:
 
-- `execute(...)` returns `Result<R, E>` and maps thrown handler failures into the error channel.
+- `execute(...)` returns `Result<R, E>` and applies the optional selective `mapExpectedError` policy; unclassified handler failures throw.
 - `executeUnsafe(...)` returns `R` directly and lets handler failures throw.
 
 Both variants throw `UnregisteredHandlerError` for missing handlers. Missing query registration is still a wiring bug.
