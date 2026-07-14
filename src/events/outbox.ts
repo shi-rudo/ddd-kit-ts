@@ -9,6 +9,7 @@ import type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	EventCommitCandidate,
+	EventCommitCandidatePosition,
 	OutboxRecord,
 	OutboxWriter,
 } from "./ports";
@@ -54,10 +55,11 @@ export interface InMemoryOutboxOptions {
 	maxDeliveryAttempts?: number;
 
 	/**
-	 * Maximum recently dispatched event identities (id plus source) retained for
-	 * idempotent `add` retries and cross-source collision detection. Older
-	 * receipts are evicted in dispatch order; a later candidate behind its source
-	 * head then rejects instead of rewinding the cursor.
+	 * Maximum recently dispatched event receipts (id, qualified source, and
+	 * candidate commit position) retained for idempotent `add` retries and
+	 * collision detection. Older receipts are evicted in dispatch order; a later
+	 * candidate behind its source head then rejects instead of rewinding the
+	 * cursor.
 	 * Default `10_000`.
 	 */
 	maxRetainedDispatchedEventIds?: number;
@@ -75,6 +77,13 @@ type TrackedRecord<Evt extends AnyDomainEvent> = {
 type EventSourceCursor = {
 	aggregateVersion: number;
 	previousEventfulAggregateVersion: number | null;
+	commitSize: number;
+	eventIdsBySequence: ReadonlyMap<number, string>;
+};
+
+type DispatchedEventReceipt = {
+	readonly source: AggregateAddress;
+	readonly position: EventCommitCandidatePosition;
 };
 
 /**
@@ -86,12 +95,14 @@ type EventSourceCursor = {
  * choice. Active storage is a `Map` keyed by `eventId`, and a bounded
  * recent-dispatch receipt cache keeps retries idempotent after acknowledgement.
  * Re-adding a pending event refreshes the stored commit envelope while the
- * delivery attempt count survives. A retry is only idempotent when its
- * qualified aggregate source matches: reusing an `eventId` for another source
+ * delivery attempt count survives. Its commit sequence and size remain
+ * immutable; only this transaction-unaware adapter may move a still-pending
+ * event to another aggregate version after an outer rollback leaked the first
+ * add. Dead-lettered and acknowledged retries must match the complete original
+ * candidate receipt. Reusing an `eventId` for another source or commit position
  * throws {@link EventHarvestError} while the pending, dead-letter, or bounded
  * dispatched receipt still proves the collision. Insertion order is preserved:
- * `getPending` returns records in commit order, as the port contract
- * requires.
+ * `getPending` returns records in commit order, as the port contract requires.
  *
  * Dispatch tracking: `markFailed` increments the record's attempt count
  * and, at `maxDeliveryAttempts`, moves it to the dead-letter set
@@ -144,8 +155,11 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	private readonly dead = new Map<string, DeadLetterRecord<Evt>>();
 	/** Latest eventful commit and its predecessor per qualified source. */
 	private readonly sourceCursors = new Map<string, EventSourceCursor>();
-	/** Bounded insertion-ordered receipts for retries after acknowledgement. */
-	private readonly dispatchedEventIds = new Map<string, AggregateAddress>();
+	/** Bounded insertion-ordered receipts for exact retries after acknowledgement. */
+	private readonly dispatchedEventIds = new Map<
+		string,
+		DispatchedEventReceipt
+	>();
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
 
@@ -163,23 +177,43 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
+		// Prove identity/receipt and source-position consistency for the whole input
+		// before mutating pending records or source heads. Otherwise a conflict later
+		// in one add() call could reject only after its earlier prefix had leaked.
+		this.assertBatchEventReceiptIntegrity(events);
+		this.assertBatchPositionIntegrity(events);
 		for (const message of events) {
 			const { event, source, position } = message;
-			const dispatchedSource = this.dispatchedEventIds.get(event.eventId);
-			if (dispatchedSource !== undefined) {
-				assertSameEventSource(event, source, dispatchedSource);
+			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
+			if (dispatchedReceipt !== undefined) {
+				assertSameEventSource(event, source, dispatchedReceipt.source);
+				assertSameCandidateReceipt(
+					event,
+					position,
+					dispatchedReceipt.position,
+					false,
+				);
 				// eventId is the outbox idempotency key. Refresh its LRU position
 				// without recreating a pending record or touching the source head.
-				this.rememberDispatched(event.eventId, dispatchedSource);
+				this.rememberDispatched(
+					event.eventId,
+					dispatchedReceipt.source,
+					dispatchedReceipt.position,
+				);
 				continue;
 			}
 			const existing = this.pending.get(event.eventId);
 			const deadLetter = this.dead.get(event.eventId);
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
+				// A pending record may move to another aggregateVersion only because
+				// this in-memory adapter cannot observe rollback and the same event is
+				// re-harvested. Its index and commit cardinality remain immutable.
+				assertSameCandidateReceipt(event, position, existing.position, true);
 			}
 			if (deadLetter) {
 				assertSameEventSource(event, source, deadLetter.source);
+				assertSameCandidateReceipt(event, position, deadLetter.position, false);
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
@@ -219,6 +253,30 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					event.type,
 				);
 			}
+			if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
+				if (sourceCursor.commitSize !== position.commitSize) {
+					throw new EventHarvestError(
+						`InMemoryOutbox rejected event "${event.eventId}" for ` +
+							`${source.aggregateType} ${source.aggregateId}: aggregate version ` +
+							`${position.aggregateVersion} was already recorded with commitSize ` +
+							`${sourceCursor.commitSize}, not ${position.commitSize}.`,
+						event.type,
+					);
+				}
+				const positionOwner = sourceCursor.eventIdsBySequence.get(
+					position.commitSequence,
+				);
+				if (positionOwner !== undefined && positionOwner !== event.eventId) {
+					throw new EventHarvestError(
+						`InMemoryOutbox rejected event "${event.eventId}" for ` +
+							`${source.aggregateType} ${source.aggregateId}: source position ` +
+							`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
+							`already owned by event "${positionOwner}". One qualified source ` +
+							"position must identify exactly one immutable event.",
+						event.type,
+					);
+				}
+			}
 			let previousEventfulAggregateVersion: number | null;
 			const refreshesLeakedCommit =
 				existing !== undefined &&
@@ -236,7 +294,23 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					this.sourceCursors.set(sourceKey, {
 						aggregateVersion: position.aggregateVersion,
 						previousEventfulAggregateVersion,
+						commitSize: position.commitSize,
+						eventIdsBySequence: new Map([
+							[position.commitSequence, event.eventId],
+						]),
 					});
+				} else if (
+					sourceCursor?.aggregateVersion === position.aggregateVersion &&
+					!sourceCursor.eventIdsBySequence.has(position.commitSequence)
+				) {
+					this.sourceCursors.set(
+						sourceKey,
+						cursorWithEvent(
+							sourceCursor,
+							position.commitSequence,
+							event.eventId,
+						),
+					);
 				}
 			} else if (existing !== undefined) {
 				previousEventfulAggregateVersion =
@@ -244,12 +318,26 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			} else if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
 				previousEventfulAggregateVersion =
 					sourceCursor.previousEventfulAggregateVersion;
+				if (!sourceCursor.eventIdsBySequence.has(position.commitSequence)) {
+					this.sourceCursors.set(
+						sourceKey,
+						cursorWithEvent(
+							sourceCursor,
+							position.commitSequence,
+							event.eventId,
+						),
+					);
+				}
 			} else {
 				previousEventfulAggregateVersion =
 					sourceCursor?.aggregateVersion ?? null;
 				this.sourceCursors.set(sourceKey, {
 					aggregateVersion: position.aggregateVersion,
 					previousEventfulAggregateVersion,
+					commitSize: position.commitSize,
+					eventIdsBySequence: new Map([
+						[position.commitSequence, event.eventId],
+					]),
 				});
 			}
 			const ownedPosition = Object.freeze({
@@ -274,6 +362,88 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				position: ownedPosition,
 				attempts: 0,
 			});
+		}
+	}
+
+	private assertBatchEventReceiptIntegrity(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): void {
+		for (const { event, source, position } of events) {
+			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
+			if (dispatchedReceipt !== undefined) {
+				assertSameEventSource(event, source, dispatchedReceipt.source);
+				assertSameCandidateReceipt(
+					event,
+					position,
+					dispatchedReceipt.position,
+					false,
+				);
+				continue;
+			}
+			const existing = this.pending.get(event.eventId);
+			if (existing !== undefined) {
+				assertSameEventSource(event, source, existing.source);
+				assertSameCandidateReceipt(event, position, existing.position, true);
+			}
+			const deadLetter = this.dead.get(event.eventId);
+			if (deadLetter !== undefined) {
+				assertSameEventSource(event, source, deadLetter.source);
+				assertSameCandidateReceipt(event, position, deadLetter.position, false);
+			}
+		}
+	}
+
+	private assertBatchPositionIntegrity(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): void {
+		const simulatedCursors = new Map<string, EventSourceCursor>();
+		for (const { event, source, position } of events) {
+			const sourceKey = encodeAggregateAddress(source);
+			const cursor =
+				simulatedCursors.get(sourceKey) ?? this.sourceCursors.get(sourceKey);
+			if (
+				cursor === undefined ||
+				position.aggregateVersion > cursor.aggregateVersion
+			) {
+				simulatedCursors.set(sourceKey, {
+					aggregateVersion: position.aggregateVersion,
+					previousEventfulAggregateVersion: cursor?.aggregateVersion ?? null,
+					commitSize: position.commitSize,
+					eventIdsBySequence: new Map([
+						[position.commitSequence, event.eventId],
+					]),
+				});
+				continue;
+			}
+			if (position.aggregateVersion < cursor.aggregateVersion) continue;
+			if (cursor.commitSize !== position.commitSize) {
+				throw new EventHarvestError(
+					`InMemoryOutbox rejected event "${event.eventId}" for ` +
+						`${source.aggregateType} ${source.aggregateId}: aggregate version ` +
+						`${position.aggregateVersion} was already recorded with commitSize ` +
+						`${cursor.commitSize}, not ${position.commitSize}.`,
+					event.type,
+				);
+			}
+			const positionOwner = cursor.eventIdsBySequence.get(
+				position.commitSequence,
+			);
+			if (positionOwner !== undefined && positionOwner !== event.eventId) {
+				throw new EventHarvestError(
+					`InMemoryOutbox rejected event "${event.eventId}" for ` +
+						`${source.aggregateType} ${source.aggregateId}: source position ` +
+						`(${position.aggregateVersion}, ${position.commitSequence}) is ` +
+						`already owned by event "${positionOwner}". One qualified source ` +
+						"position must identify exactly one immutable event.",
+					event.type,
+				);
+			}
+			if (positionOwner === undefined) {
+				simulatedCursors.set(
+					sourceKey,
+					cursorWithEvent(cursor, position.commitSequence, event.eventId),
+				);
+			}
 		}
 	}
 
@@ -310,7 +480,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		for (const id of dispatchIds) {
 			const record = this.pending.get(id) ?? this.dead.get(id);
 			if (record !== undefined) {
-				this.rememberDispatched(id, record.source);
+				this.rememberDispatched(id, record.source, record.position);
 			}
 			this.pending.delete(id);
 			// Manual redelivery then ack: dispatching a dead-lettered record
@@ -319,9 +489,20 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	private rememberDispatched(eventId: string, source: AggregateAddress): void {
+	private rememberDispatched(
+		eventId: string,
+		source: AggregateAddress,
+		position: EventCommitCandidatePosition,
+	): void {
 		this.dispatchedEventIds.delete(eventId);
-		this.dispatchedEventIds.set(eventId, source);
+		this.dispatchedEventIds.set(eventId, {
+			source: Object.freeze({ ...source }),
+			position: Object.freeze({
+				aggregateVersion: position.aggregateVersion,
+				commitSequence: position.commitSequence,
+				commitSize: position.commitSize,
+			}),
+		});
 		while (this.dispatchedEventIds.size > this.maxRetainedDispatchedEventIds) {
 			const oldest = this.dispatchedEventIds.keys().next();
 			if (oldest.done) break;
@@ -353,6 +534,46 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	async deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>> {
 		return [...this.dead.values()].map((record) => ({ ...record }));
 	}
+}
+
+function cursorWithEvent(
+	cursor: EventSourceCursor,
+	commitSequence: number,
+	eventId: string,
+): EventSourceCursor {
+	return {
+		...cursor,
+		eventIdsBySequence: new Map(cursor.eventIdsBySequence).set(
+			commitSequence,
+			eventId,
+		),
+	};
+}
+
+function assertSameCandidateReceipt(
+	event: AnyDomainEvent,
+	received: EventCommitCandidatePosition,
+	recorded: EventCommitCandidatePosition,
+	allowAggregateVersionRefresh: boolean,
+): void {
+	const sameVersion =
+		allowAggregateVersionRefresh ||
+		received.aggregateVersion === recorded.aggregateVersion;
+	if (
+		sameVersion &&
+		received.commitSequence === recorded.commitSequence &&
+		received.commitSize === recorded.commitSize
+	) {
+		return;
+	}
+	throw new EventHarvestError(
+		`InMemoryOutbox rejected event "${event.eventId}": its commit candidate ` +
+			`changed from (${recorded.aggregateVersion}, ${recorded.commitSequence}; ` +
+			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
+			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
+			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
 }
 
 function assertSameEventSource(

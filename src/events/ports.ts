@@ -263,17 +263,23 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * transaction. A state-only aggregate save does not call `add()` and must
 	 * therefore not advance this event-source head.
 	 *
+	 * A qualified source position `(aggregateType, aggregateId,
+	 * aggregateVersion, commitSequence)` MUST identify one immutable event. All
+	 * candidates for the same aggregate commit MUST also agree on `commitSize`.
+	 * Enforce both constraints before advancing the source head; a conflicting
+	 * retry must reject without replacing the stored event or changing the head.
+	 *
 	 * **Idempotency:** implementations should dedupe on
 	 * `candidate.event.eventId`. `withCommit` itself does not retry, but the
 	 * surrounding use case (a queue consumer, an HTTP retry, a transactional
 	 * outbox-dispatcher loop) may legitimately invoke the same write more than
 	 * once. A unique-key constraint on `(eventId)` in the outbox table is the
 	 * standard implementation; the source-head update and dedupe decision must
-	 * share the transaction. Idempotency applies only when that id still names
-	 * the same qualified aggregate source. Reusing an `eventId` for another
-	 * `aggregateType` / `aggregateId` is a caller bug: adapters that retain the
-	 * conflicting record should reject it rather than replace or silently
-	 * reinterpret it as a retry.
+	 * share the transaction. Idempotency applies only to an exact candidate
+	 * retry: the same event ID, qualified source, aggregate version, commit
+	 * sequence, and commit size. Reusing an `eventId` for another source or
+	 * position is a caller bug: adapters that retain the conflicting record
+	 * should reject it rather than replace or silently reinterpret it as a retry.
 	 */
 	add: (events: ReadonlyArray<EventCommitCandidate<Evt>>) => Promise<void>;
 }

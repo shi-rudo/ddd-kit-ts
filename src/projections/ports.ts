@@ -10,10 +10,11 @@ import type { CommitPosition } from "../events/ports";
  * the current commit facts; the event source finalizes the predecessor on the
  * surrounding `CommittedDomainEvent`.
  *
- * A source MUST map exactly one logical event to each position. Custom
+ * A source MUST map exactly one immutable receipt to each qualified position:
+ * one `eventId`, one `commitSize`, and one eventful predecessor. Custom
  * envelopes may translate another store's cursor into these fields, but
- * mapping two different eventIds to one position destroys the proof and
- * is a source-adapter bug.
+ * changing any part of an already observed receipt destroys the proof and is
+ * a source-adapter bug.
  */
 export type ProjectionPosition = CommitPosition;
 
@@ -21,9 +22,10 @@ export type ProjectionPosition = CommitPosition;
  * Durable receipt for the last event one projection applied from an aggregate
  * stream. The position answers "how far?"; `lastAppliedEventId` identifies the
  * event at exactly that watermark. Together they let the projector distinguish
- * a true watermark redelivery from a source mapping a different event to the
- * same position. Older positions still rely on the source's one-event-per-
- * position contract because a checkpoint deliberately retains no full history.
+ * a true watermark redelivery from a source changing the event identity,
+ * commit cardinality, or predecessor at the same position. Older positions
+ * still rely on the source's immutable-receipt-per-position contract because a
+ * checkpoint deliberately retains no full history.
  */
 export interface ProjectionCheckpoint {
 	readonly position: ProjectionPosition;

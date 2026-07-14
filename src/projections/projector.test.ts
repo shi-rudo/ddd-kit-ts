@@ -180,10 +180,7 @@ describe("Projector", () => {
 			skipped: 0,
 		});
 		expect(wireBatch[1]?.position.previousEventfulAggregateVersion).toBe(1);
-		expect(rows).toEqual([
-			"evt-o-json-linked-1-0",
-			"evt-o-json-linked-3-0",
-		]);
+		expect(rows).toEqual(["evt-o-json-linked-1-0", "evt-o-json-linked-3-0"]);
 	});
 
 	it("requires a committed envelope at the type level", () => {
@@ -295,10 +292,7 @@ describe("Projector", () => {
 		await expect(
 			projector.project([...fullCommit, nextCommit]),
 		).resolves.toEqual({ applied: 3, skipped: 0 });
-		expect(rows).toEqual([
-			"evt-o-complete-1-0",
-			"evt-o-complete-3-0",
-		]);
+		expect(rows).toEqual(["evt-o-complete-1-0", "evt-o-complete-3-0"]);
 	});
 
 	it("rejects a different eventId redelivered at the stored watermark", async () => {
@@ -330,6 +324,101 @@ describe("Projector", () => {
 		});
 		expect(rows).toEqual([original.event.eventId]);
 	});
+
+	it.each([
+		{
+			name: "commitSize",
+			contradict: (
+				position: CommittedDomainEvent<OrderPlaced>["position"],
+			) => ({
+				...position,
+				commitSize: position.commitSize + 1,
+			}),
+		},
+		{
+			name: "previousEventfulAggregateVersion",
+			contradict: (
+				position: CommittedDomainEvent<OrderPlaced>["position"],
+			) => ({
+				...position,
+				previousEventfulAggregateVersion: 0,
+			}),
+		},
+	])(
+		"rejects contradictory $name metadata at the stored watermark",
+		async ({ contradict }) => {
+			const rows: string[] = [];
+			const projector = new Projector<OrderEvent, undefined>({
+				scope: passthroughScope,
+				checkpoints: new InMemoryProjectionCheckpointStore(),
+				projection: arrayProjection(rows),
+			});
+			const first = placed("o-receipt-watermark", 1, 0);
+			const original = placed("o-receipt-watermark", 2, 0);
+			const contradiction = {
+				...original,
+				position: contradict(original.position),
+			};
+
+			await projector.project([first, original]);
+
+			await expect(projector.project([contradiction])).rejects.toMatchObject({
+				code: "PROJECTION_RECEIPT_VIOLATION",
+				category: "INFRASTRUCTURE",
+			});
+			expect(rows).toEqual([first.event.eventId, original.event.eventId]);
+		},
+	);
+
+	it.each([
+		{
+			name: "commitSize",
+			batch: () => {
+				const original = placed("o-receipt-batch-size", 1, 0);
+				return [
+					original,
+					{
+						...original,
+						position: { ...original.position, commitSize: 2 },
+					},
+				];
+			},
+		},
+		{
+			name: "previousEventfulAggregateVersion",
+			batch: () => {
+				const first = placed("o-receipt-batch-previous", 1, 0);
+				const original = placed("o-receipt-batch-previous", 2, 0);
+				return [
+					first,
+					original,
+					{
+						...original,
+						position: {
+							...original.position,
+							previousEventfulAggregateVersion: 0,
+						},
+					},
+				];
+			},
+		},
+	])(
+		"rejects contradictory $name metadata inside one batch before apply",
+		async ({ batch }) => {
+			const rows: string[] = [];
+			const projector = new Projector<OrderEvent, undefined>({
+				scope: passthroughScope,
+				checkpoints: new InMemoryProjectionCheckpointStore(),
+				projection: arrayProjection(rows),
+			});
+
+			await expect(projector.project(batch())).rejects.toMatchObject({
+				code: "PROJECTION_RECEIPT_VIOLATION",
+				category: "INFRASTRUCTURE",
+			});
+			expect(rows).toEqual([]);
+		},
+	);
 
 	it("rejects a missing aggregate commit before advancing the watermark", async () => {
 		const rows: string[] = [];
@@ -399,9 +488,7 @@ describe("Projector", () => {
 		await outbox.add([candidate(afterStateOnly)]);
 		const [nextRecord] = await outbox.getPending();
 		if (!nextRecord) throw new Error("expected next outbox record");
-		expect(
-			nextRecord.position.previousEventfulAggregateVersion,
-		).toBe(1);
+		expect(nextRecord.position.previousEventfulAggregateVersion).toBe(1);
 		await expect(projector.project([nextRecord])).resolves.toEqual({
 			applied: 1,
 			skipped: 0,
@@ -427,6 +514,23 @@ describe("Projector", () => {
 			category: "INFRASTRUCTURE",
 		});
 		expect(rows).toEqual([first.event.eventId]);
+	});
+
+	it("allows an exact in-batch redelivery after a later unseen position", async () => {
+		const rows: string[] = [];
+		const projector = new Projector<OrderEvent, undefined>({
+			scope: passthroughScope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection(rows),
+		});
+		const first = placed("o-in-batch-redelivery", 1, 0);
+		const second = placed("o-in-batch-redelivery", 2, 0);
+		const redeliveredFirst = placed("o-in-batch-redelivery", 1, 0);
+
+		await expect(
+			projector.project([first, second, redeliveredFirst]),
+		).resolves.toEqual({ applied: 2, skipped: 1 });
+		expect(rows).toEqual([first.event.eventId, second.event.eventId]);
 	});
 
 	it("allows descending redeliveries already covered by the batch-start checkpoint", async () => {
@@ -891,9 +995,13 @@ describe("Projector", () => {
 			checkpoints,
 			projection: arrayProjection(rows),
 		});
-		const event = createDomainEvent("OrderPlaced", { total: 1 }, {
-			eventId: "evt-unaddressed",
-		});
+		const event = createDomainEvent(
+			"OrderPlaced",
+			{ total: 1 },
+			{
+				eventId: "evt-unaddressed",
+			},
+		);
 		const committed: CommittedDomainEvent<typeof event> = {
 			event,
 			source: { aggregateType: "Order", aggregateId: "o-envelope" },

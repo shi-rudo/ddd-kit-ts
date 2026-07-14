@@ -298,25 +298,31 @@ transport therefore fails loudly at the first gap instead of silently dropping
 the late event. Repair/replay the missing event (or reset and rebuild) before
 the chain can advance.
 
-The checkpoint also stores the `eventId` at exactly its watermark. If the
-source later supplies another ID at that position, the projector throws
-`ProjectionIdentityViolationError` before `apply`. The same check covers two
-different IDs mapped to one position inside the current batch. Exact duplicate
-IDs remain ordinary redeliveries.
+The checkpoint stores the full position receipt plus the `eventId` at exactly
+its watermark. If the source later supplies another ID at that position, the
+projector throws `ProjectionIdentityViolationError` before `apply`. If the ID
+matches but `commitSize` or `previousEventfulAggregateVersion` changes, it
+throws `ProjectionReceiptViolationError`: identity alone cannot prove that the
+source has not rewritten its chain. The same two checks run for repeated
+positions inside one batch. Only an exact receipt -- the same ID and all four
+position fields -- is an ordinary redelivery.
 
 This is deliberately a bounded receipt, not an unbounded processed-event
-ledger. A position older than the watermark cannot be identity-compared with
-`lastAppliedEventId`; skipping it relies on the source invariant that one
-qualified aggregate position maps immutably to one logical event. Enforce that
-at the persistence boundary with a unique key such as `(aggregate_type,
-aggregate_id, aggregate_version, commit_sequence)`. `eventId` is a consistency
-check, not a security proof for messages from an untrusted producer.
+ledger. A position older than the watermark cannot be compared with the stored
+receipt; skipping it relies on the source invariant that one qualified
+aggregate position maps immutably to one logical event and one commit shape.
+Enforce that at the persistence boundary with a unique key such as
+`(aggregate_type, aggregate_id, aggregate_version, commit_sequence)`, and reject
+conflicting IDs or commit sizes before advancing the source head. `eventId` is
+a consistency check, not a security proof for messages from an untrusted
+producer.
 
-The projector also scans each batch before `apply`: when two positions that
-were both still unseen at batch start descend for the same aggregate, it throws
-`ProjectionOrderViolationError`. Positions already covered by the batch-start
-checkpoint remain valid late redeliveries, so diagnostics do not weaken normal
-at-least-once idempotency.
+The projector also scans each batch before `apply`: when two distinct positions
+that were both still unseen at batch start descend for the same aggregate, it
+throws `ProjectionOrderViolationError`. Positions already covered by the
+batch-start checkpoint remain valid late redeliveries. An exact receipt already
+seen earlier in the same batch is also a legal redelivery, even after a later
+position; it is not mistaken for an inversion.
 
 The `aggregateType` in the address is a technical stream category: unique
 across everything feeding one checkpoint store. Two bounded contexts may both
@@ -324,10 +330,10 @@ have an `Order`; if their events share projection infrastructure, qualify the
 name at the source ("sales.order", "fulfillment.order").
 
 This means your read-model rows do not need their own event-id column for the
-normal kit path. The checkpoint table does need `lastAppliedEventId`. If the
-dispatcher redelivers the same event after a crash, the checkpoint verifies an
-exact watermark match or recognizes an older traversed position and skips it
-before `apply` runs.
+normal kit path. The checkpoint table does need `lastAppliedEventId` plus all
+four position fields. If the dispatcher redelivers the same event after a
+crash, the checkpoint verifies an exact watermark receipt or recognizes an
+older traversed position and skips it before `apply` runs.
 
 The checkpoint table must live in the same database as the read model. The
 read-model update and checkpoint save are one transaction. A checkpoint
@@ -476,7 +482,9 @@ bad projector wiring. Descending unseen positions inside one input batch reject
 with `ProjectionOrderViolationError`, identifying a per-aggregate transport
 ordering violation directly. A different `eventId` at one batch position or at
 the stored watermark rejects with `ProjectionIdentityViolationError`, exposing
-a broken source-position mapping.
+a broken source-position mapping. The same ID with a different commit size or
+predecessor rejects with `ProjectionReceiptViolationError`, exposing a rewritten
+source-chain receipt.
 
 ## Several Projections From One Outbox
 

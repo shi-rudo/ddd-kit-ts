@@ -210,8 +210,8 @@ export class ProjectionGapError extends InfrastructureError<"PROJECTION_GAP"> {
  * aggregate in descending order. Unlike {@link ProjectionGapError}, this is
  * direct proof that the feed violated its per-aggregate ordering contract;
  * no missing-history inference is needed. Positions already covered by the
- * checkpoint at batch start remain valid late redeliveries and do not trip
- * this diagnostic guard.
+ * checkpoint at batch start and exact receipts repeated inside the batch
+ * remain valid redeliveries and do not trip this diagnostic guard.
  */
 export class ProjectionOrderViolationError extends InfrastructureError<"PROJECTION_ORDER_VIOLATION"> {
 	constructor(
@@ -251,6 +251,30 @@ export class ProjectionIdentityViolationError extends InfrastructureError<"PROJE
 				`Projector(${projection}): position ${position} was already associated ` +
 				`with event ${recordedEventId}, but the source supplied event ${eventId} ` +
 				"at the same position. A source must map exactly one logical event to each position.",
+		});
+	}
+}
+
+/**
+ * Thrown when one logical projection position keeps its event identity but its
+ * commit-boundary receipt changes. `commitSize` and
+ * `previousEventfulAggregateVersion` are part of the continuity proof, so a
+ * source must keep them immutable just like the eventId. Accepting a
+ * contradictory redelivery could hide an incomplete commit or predecessor.
+ */
+export class ProjectionReceiptViolationError extends InfrastructureError<"PROJECTION_RECEIPT_VIOLATION"> {
+	constructor(
+		public readonly projection: string,
+		public readonly eventId: string,
+		public readonly recordedReceipt: string,
+		public readonly receivedReceipt: string,
+	) {
+		super({
+			code: "PROJECTION_RECEIPT_VIOLATION",
+			message:
+				`Projector(${projection}): event ${eventId} changed its commit receipt ` +
+				`at one logical position from ${recordedReceipt} to ${receivedReceipt}. ` +
+				"A source must keep commitSize and previousEventfulAggregateVersion immutable.",
 		});
 	}
 }
@@ -973,6 +997,7 @@ export type KitErrorCode =
 	| "PROJECTION_GAP"
 	| "PROJECTION_IDENTITY_VIOLATION"
 	| "PROJECTION_ORDER_VIOLATION"
+	| "PROJECTION_RECEIPT_VIOLATION"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"

@@ -108,6 +108,7 @@ export {
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
+	ProjectionReceiptViolationError,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

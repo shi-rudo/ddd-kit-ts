@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { InMemoryOutbox } from "../events/outbox";
+import type { Outbox } from "../events/ports";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,
@@ -18,21 +19,7 @@ function createInMemoryHarness(): OutboxContractHarness<TestEvent> {
 			});
 			return {
 				outbox,
-				addCommitted: (events) =>
-					outbox.add(
-						events.map((event, commitSequence) => ({
-							event,
-							source: {
-								aggregateId: "contract-aggregate",
-								aggregateType: "ContractAggregate",
-							},
-							position: {
-								aggregateVersion: 1,
-								commitSequence,
-								commitSize: events.length,
-							},
-						})),
-					),
+				addCommitted: (events) => outbox.add(events),
 				// No addRolledBack: the in-memory outbox cannot keep rollback
 				// purity (documented limitation); the test stays visible as
 				// skipped.
@@ -62,6 +49,47 @@ describe("outbox contract suite against InMemoryOutbox", () => {
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
 			"providesRolledBackAdds",
 		]);
+	});
+
+	it("pins the source-position integrity laws in the portable suite", () => {
+		expect(tests.map((test) => test.name)).toEqual(
+			expect.arrayContaining([
+				"finalizes complete commit receipts and links the next eventful commit",
+				"rejects different event identities at one qualified source position",
+				"keeps event-source heads isolated by aggregate type and id",
+			]),
+		);
+	});
+
+	it("the source-chain law kills an adapter that drops every predecessor", async () => {
+		const mutant = createInMemoryHarness();
+		const createEnvironment = mutant.createEnvironment;
+		mutant.createEnvironment = async () => {
+			const environment = await createEnvironment();
+			const realOutbox = environment.outbox;
+			const outbox: Outbox<TestEvent> = {
+				add: (events) => realOutbox.add(events),
+				getPending: async (limit) =>
+					(await realOutbox.getPending(limit)).map((record) => ({
+						...record,
+						position: {
+							...record.position,
+							previousEventfulAggregateVersion: null,
+						},
+					})),
+				markDispatched: (ids) => realOutbox.markDispatched(ids),
+			};
+			return { ...environment, outbox };
+		};
+		const sourceChainTest = createOutboxContractTests(mutant).find(
+			(test) =>
+				test.name ===
+				"finalizes complete commit receipts and links the next eventful commit",
+		);
+		expect(sourceChainTest).toBeDefined();
+		await expect(sourceChainTest?.run()).rejects.toThrow(
+			/links? the next eventful commit|link the next eventful commit/i,
+		);
 	});
 
 	it("a plain-outbox harness marks the tracking tests as skipped, with a loud run()", async () => {

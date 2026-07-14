@@ -16,6 +16,7 @@ import {
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
+	ProjectionReceiptViolationError,
 	SnapshotSchemaMismatchError,
 	UnenrolledChangesError,
 	UnprojectableEventError,
@@ -61,7 +62,10 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1" }),
+			new DuplicateAggregateError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			}),
 		code: "DUPLICATE_AGGREGATE",
 		category: "INFRASTRUCTURE",
 		retryable: false,
@@ -98,12 +102,7 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new ProjectionOrderViolationError(
-				"orders",
-				"evt-1",
-				"3:0/1",
-				"2:0/1",
-			),
+			new ProjectionOrderViolationError("orders", "evt-1", "3:0/1", "2:0/1"),
 		code: "PROJECTION_ORDER_VIOLATION",
 		category: "INFRASTRUCTURE",
 		retryable: false,
@@ -117,6 +116,13 @@ const concreteCases: ReadonlyArray<{
 				"1:0/1",
 			),
 		code: "PROJECTION_IDENTITY_VIOLATION",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ProjectionReceiptViolationError("orders", "evt-1", "1:0/1", "1:0/2"),
+		code: "PROJECTION_RECEIPT_VIOLATION",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -194,8 +200,7 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 
 	it("further structured kit errors carry their codes", () => {
 		expect(
-			new EventHarvestError("event without aggregateId", "OrderConfirmed")
-				.code,
+			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
 		).toBe("EVENT_HARVEST_FAILED");
 		expect(new UnenrolledChangesError("o-1").code).toBe("UNENROLLED_CHANGES");
 		expect(new AggregateDeletedError("o-1").code).toBe("AGGREGATE_DELETED");
@@ -292,7 +297,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		// Type-level completeness check: a class code missing from the
 		// hand-maintained KitErrorCode union fails compilation here.
 		type AssertKitCode<T extends KitErrorCode> = T;
-			type _Checks = [
+		type _Checks = [
 			AssertKitCode<AggregateDeletedError["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
 			AssertKitCode<ConcurrencyConflictError["code"]>,
@@ -305,6 +310,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ProjectionGapError["code"]>,
 			AssertKitCode<ProjectionIdentityViolationError["code"]>,
 			AssertKitCode<ProjectionOrderViolationError["code"]>,
+			AssertKitCode<ProjectionReceiptViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
 			AssertKitCode<UnenrolledChangesError["code"]>,
 			AssertKitCode<UnprojectableEventError["code"]>,

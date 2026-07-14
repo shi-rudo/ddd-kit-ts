@@ -62,6 +62,7 @@ const INDEX_SURFACE = [
 	"ProjectionGapError",
 	"ProjectionIdentityViolationError",
 	"ProjectionOrderViolationError",
+	"ProjectionReceiptViolationError",
 	"Projector",
 	"QueryBus",
 	"ReentrantDomainStateMachineEvaluationError",
