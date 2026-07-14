@@ -556,6 +556,10 @@ Tokens are opaque and bound to one transactional callback attempt. Forged
 tokens and tokens retained from an earlier invocation throw
 `EventHarvestError` before the outbox write. Repeated enrollment of the same
 aggregate instance returns one token, and repeated tokens are harvested once.
+Every token issued during the callback must be returned in `commits`; omitting
+an enrolled write throws inside the transaction instead of committing state
+without its event harvest and post-commit acknowledgement. To abandon an
+enrolled write, throw so the transaction rolls back.
 The callback capability is sealed as soon as the callback settles so delayed,
 unawaited enrollment fails loudly.
 
@@ -581,8 +585,9 @@ and passes them to `withCommit` automatically.
 - `UnitOfWorkSession` extends the same enrollment contract. Repositories remain
   responsible for enrollment, while `UnitOfWork` retains and forwards tokens
   without exposing a second use-case return protocol.
-- Legacy naked aggregate results, forged tokens, stale tokens, and enrollment
-  after callback settlement fail inside the transaction before event harvest.
+- Legacy naked aggregate results, forged tokens, stale tokens, omitted enrolled
+  tokens, and enrollment after callback settlement fail inside the transaction
+  before event harvest.
 
 ### Fixed: projection receipt integrity and executable source-position laws
 

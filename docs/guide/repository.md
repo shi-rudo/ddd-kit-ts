@@ -180,7 +180,9 @@ The token proves that this invocation's enrollment capability issued it. It
 cannot prove what an arbitrary storage adapter did internally, so only the
 repository should attest its participating write. This is a crash-loud
 contract boundary against accidental smuggling, not a security boundary
-against application code deliberately claiming a write it never made.
+against application code deliberately claiming a write it never made. Return
+every token the callback obtains: omitting an enrolled write rejects the
+transaction. Throw instead when that write must roll back.
 
 With `UnitOfWork`, the repository enrolls the aggregate before the row write:
 

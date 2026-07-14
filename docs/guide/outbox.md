@@ -39,8 +39,10 @@ The important line is the return value. The use case returns opaque tokens for
 the repository writes it enrolled, not naked aggregates and not
 `order.pendingEvents`. A fresh but unsaved aggregate therefore cannot be
 harvested or acknowledged accidentally. `withCommit` owns event harvesting
-and persistence cleanup. Repositories save state; they do not clear events or
-call `markPersisted`.
+and persistence cleanup. Every issued token must be present in `commits`; an
+omission rejects inside the transaction rather than committing state without
+its events. Repositories save state; they do not clear events or call
+`markPersisted`.
 
 ## What Happens On Commit
 

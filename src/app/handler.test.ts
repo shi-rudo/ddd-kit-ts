@@ -225,7 +225,7 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
-	it("does not harvest an enrolled aggregate whose token was not returned", async () => {
+	it("rejects an enrolled aggregate whose token was not returned", async () => {
 		const outbox = createMockOutbox();
 		const event = createDomainEvent(
 			"OrderCreated",
@@ -234,13 +234,15 @@ describe("withCommit", () => {
 		);
 		const aggregate = createMockAggregate([event]);
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async (_ctx, enrollment) => {
-				enrollment.enrollSaved(aggregate);
-				return { result: undefined, commits: [] };
-			},
-		);
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => {
+					enrollment.enrollSaved(aggregate);
+					return { result: undefined, commits: [] };
+				},
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
 
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);

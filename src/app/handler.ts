@@ -77,7 +77,9 @@ export interface AggregateCommitToken<
 /**
  * Invocation-scoped enrollment capability handed to a {@link withCommit}
  * callback. Call `enrollSaved` only for an aggregate participating in the
- * repository write, and return the resulting token in `commits`.
+ * repository write, and return every resulting token in `commits`. Omitting
+ * any token rejects the transaction: an enrolled write may not commit without
+ * its event harvest and post-commit acknowledgement.
  */
 export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	enrollSaved(
@@ -98,6 +100,7 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 	result: R;
 	/**
 	 * Commit tokens returned by the invocation's enrollment capability.
+	 * Every token minted during the callback must appear at least once.
 	 * Naked aggregates are intentionally not accepted: touching an aggregate
 	 * does not prove that its repository write participated in the transaction.
 	 */
@@ -126,6 +129,7 @@ function createCommitTokenScope<
 		IAggregateRoot<Id<string>, Evt>,
 		AggregateCommitToken<Evt>
 	>();
+	let mintedTokenCount = 0;
 	let open = true;
 
 	const enroll = (
@@ -165,6 +169,7 @@ function createCommitTokenScope<
 		) as AggregateCommitToken<Evt>;
 		tokensByAggregate.set(aggregate, token);
 		recordsByToken.set(token, { aggregate, disposition });
+		mintedTokenCount += 1;
 		return token;
 	};
 
@@ -210,6 +215,13 @@ function createCommitTokenScope<
 				if (seen.has(tokenObject)) continue;
 				seen.add(tokenObject);
 				records.push(record);
+			}
+			if (seen.size !== mintedTokenCount) {
+				throw new EventHarvestError(
+					"withCommit: every token minted by the current enrollment " +
+						"capability must be returned in `commits`. If an enrolled write " +
+						"must not commit, throw so the transaction rolls back.",
+				);
 			}
 			return records;
 		},
