@@ -33,11 +33,13 @@ export interface IUnitOfWorkRepository<
  *
  * In DDD a Repository is a "collection illusion" for aggregates: load by
  * identity, save the whole aggregate, delete the whole aggregate.
- * Querying by
- * arbitrary criteria is a separate concern (CQRS read-side, ad-hoc bulk
- * operations) and lives on the `IQueryableRepository` extension below, so
- * write-side repositories don't have to implement query plumbing they
- * don't need.
+ * Querying by arbitrary criteria is a separate concern. Consumer applications
+ * declare domain-specific repository ports for command-side lookups, while UI,
+ * search, reporting, and other read-heavy access belongs on query/read-model
+ * ports. The kit deliberately does not ship a generic query repository: a
+ * persistence-native filter would reverse dependency ownership, while bounds,
+ * ordering, uniqueness, and continuation semantics belong to each consumer's
+ * use case.
  *
  * Repositories work exclusively with Aggregate Root Entities. The Aggregate
  * Root represents the aggregate externally and is the only object that can
@@ -157,9 +159,12 @@ export interface IRepository<
 	 *    language, you probably want path 1 or 2 instead.
 	 *
 	 * **Id-only BULK cleanup deliberately has no port method:** loading
-	 * aggregates one by one just to delete them at scale is waste.
-	 * Declare a repository-specific method on your concrete class
-	 * instead (e.g. `purgeExpired(before: Date)`); the port stays an
+	 * aggregates one by one just to delete them at scale is waste. Keep
+	 * infrastructure maintenance in an adapter-owned maintenance component.
+	 * If an application use case invokes that capability, declare a separate,
+	 * consumer-owned driven port such as
+	 * `ExpiredAggregatePurger.purgeExpired(before)`; do not make the use case
+	 * depend on a concrete repository class. This port stays an
 	 * aggregate-lifecycle contract.
 	 *
 	 * In pure event-sourced systems `delete` is rarely meaningful:
@@ -169,70 +174,4 @@ export interface IRepository<
 	 * tables.
 	 */
 	delete(aggregate: TAgg): Promise<void>;
-}
-
-/**
- * Repository extension that adds filter-based querying. `TFilter` is the
- * filter shape your persistence layer speaks: a Drizzle `SQL` expression, a
- * Prisma `WhereInput`, a MongoDB filter document, a plain
- * `(t: TAgg) => boolean` predicate for in-memory repos, or anything else.
- *
- * The Repository implementation owns its query language, so `TFilter`
- * can be the storage's native shape for the strongest possible typing.
- * When the lookup criteria are DOMAIN language rather than storage
- * language, use the kit's `Specification<TAgg>` as the `TFilter` for
- * this extension's `find`/`findOne`, or name your own
- * `findSatisfying(spec)` method (see the repository guide): it is
- * deliberately not a method-less marker interface but carries
- * evaluation semantics (`isSatisfiedBy`, combinators, and a
- * translatable ubiquitous-language name), so in-memory repositories
- * honor it with a one-line filter while storage adapters translate the
- * named leaves explicitly.
- *
- * Aggregates that are only ever accessed by id should implement
- * `IRepository` directly and skip this extension.
- *
- * @template TAgg    - The aggregate root type
- * @template TId     - The aggregate root identifier type
- * @template TFilter - The filter shape understood by this repository
- *
- * @example
- * ```typescript
- * // In-memory repo with a predicate filter
- * type Predicate<T> = (t: T) => boolean;
- * class InMemoryOrders implements IQueryableRepository<Order, OrderId, Predicate<Order>> {
- *   // ...
- *   async find(filter: Predicate<Order>): Promise<Order[]> { ... }
- *   async findOne(filter: Predicate<Order>): Promise<Order | null> { ... }
- * }
- *
- * // Drizzle repo with a SQL expression filter
- * import type { SQL } from "drizzle-orm";
- * class DrizzleOrders implements IQueryableRepository<Order, OrderId, SQL> {
- *   // ...
- * }
- * ```
- */
-export interface IQueryableRepository<
-	TAgg extends IAggregateRoot<TId>,
-	TId extends Id<string>,
-	TFilter,
-> extends IRepository<TAgg, TId> {
-	/**
-	 * Returns the first aggregate matching the filter, or `null` if none.
-	 */
-	findOne(filter: TFilter): Promise<TAgg | null>;
-
-	/**
-	 * Returns **every** aggregate matching the filter: no pagination,
-	 * no cursor. For unbounded result sets, prefer a read-side projection
-	 * (CQRS read model) over loading aggregates in bulk; aggregates are
-	 * write-side objects and rehydrating thousands of them by id is rarely
-	 * what you want. If you need pagination on the write side, declare a
-	 * domain-specific paged method on your concrete repository (e.g.
-	 * `findPage(filter, cursor)`): the library does not prescribe a
-	 * pagination contract because cursor/offset/keyset semantics vary too
-	 * much across storage backends.
-	 */
-	find(filter: TFilter): Promise<TAgg[]>;
 }

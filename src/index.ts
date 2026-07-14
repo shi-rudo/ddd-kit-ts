@@ -255,11 +255,7 @@ export type {
 export { type AggregateClass, IdentityMap } from "./repo/identity-map";
 export { InMemoryEventStore } from "./repo/in-memory-event-store";
 export { InMemorySnapshotStore } from "./repo/in-memory-snapshot-store";
-export type {
-	IQueryableRepository,
-	IRepository,
-	IUnitOfWorkRepository,
-} from "./repo/repository";
+export type { IRepository, IUnitOfWorkRepository } from "./repo/repository";
 // computeBackoffDelay is deliberately NOT exported: internal since 2.x
 // (unit-tested via direct source import), removed from the surface in v3.
 export {

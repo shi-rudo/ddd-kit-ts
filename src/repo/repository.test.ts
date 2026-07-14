@@ -1,5 +1,8 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vitest";
+// @ts-expect-error IQueryableRepository was removed from the public API;
+// consumer applications own domain-specific query repository ports instead.
+import type { IQueryableRepository as RemovedQueryableRepository } from "../index";
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import {
@@ -9,7 +12,12 @@ import {
 	InfrastructureError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type { IQueryableRepository, IRepository } from "./repository";
+import type { IRepository } from "./repository";
+
+type RemovedQueryContract = RemovedQueryableRepository<never, never, never>;
+const removedQueryContractMustStayAbsent =
+	null as unknown as RemovedQueryContract;
+void removedQueryContractMustStayAbsent;
 
 type OrderId = Id<"OrderId">;
 type Order = IAggregateRoot<OrderId> & {
@@ -315,104 +323,6 @@ describe("Repository contract", () => {
 					persistedVersion: undefined,
 				}),
 			).rejects.toBeInstanceOf(ConcurrencyConflictError);
-		});
-	});
-
-	describe("IQueryableRepository: owns its filter language", () => {
-		it("accepts an in-memory predicate filter", async () => {
-			type Predicate<T> = (t: T) => boolean;
-
-			class InMemoryQueryableOrders
-				implements IQueryableRepository<Order, OrderId, Predicate<Order>>
-			{
-				private readonly byId = new Map<OrderId, Order>();
-
-				async findById(id: OrderId): Promise<Order | null> {
-					return this.byId.get(id) ?? null;
-				}
-				async getById(id: OrderId): Promise<Order> {
-					const existing = this.byId.get(id);
-					if (!existing)
-						throw new AggregateNotFoundError({ aggregateType: "Order", id });
-					return existing;
-				}
-				async exists(id: OrderId): Promise<boolean> {
-					return this.byId.has(id);
-				}
-				async save(aggregate: Order): Promise<void> {
-					this.byId.set(aggregate.id, aggregate);
-				}
-				async delete(aggregate: Order): Promise<void> {
-					this.byId.delete(aggregate.id);
-				}
-				async findOne(filter: Predicate<Order>): Promise<Order | null> {
-					for (const o of this.byId.values()) if (filter(o)) return o;
-					return null;
-				}
-				async find(filter: Predicate<Order>): Promise<Order[]> {
-					return [...this.byId.values()].filter(filter);
-				}
-			}
-
-			const repo = new InMemoryQueryableOrders();
-			await repo.save({
-				id: "o-1" as OrderId,
-				version: 1 as never,
-				customerId: "c-1",
-				total: 100,
-				markPersisted: () => {},
-				pendingEvents: [],
-				clearPendingEvents: () => {},
-				persistedVersion: undefined,
-			});
-			await repo.save({
-				id: "o-2" as OrderId,
-				version: 1 as never,
-				customerId: "c-2",
-				total: 250,
-				markPersisted: () => {},
-				pendingEvents: [],
-				clearPendingEvents: () => {},
-				persistedVersion: undefined,
-			});
-
-			const found = await repo.find((o) => o.total > 200);
-			expect(found).toHaveLength(1);
-			expect(found[0]?.customerId).toBe("c-2");
-
-			const single = await repo.findOne((o) => o.customerId === "c-1");
-			expect(single?.id).toBe("o-1");
-		});
-
-		it("accepts a structural filter type (analogue to Prisma WhereInput)", () => {
-			type OrderFilter = { customerId?: string; minTotal?: number };
-
-			// Compile-time only: the type is preserved end-to-end.
-			class StructuralOrders
-				implements IQueryableRepository<Order, OrderId, OrderFilter>
-			{
-				async findById(): Promise<Order | null> {
-					return null;
-				}
-				async getById(id: OrderId): Promise<Order> {
-					throw new AggregateNotFoundError({ aggregateType: "Order", id });
-				}
-				async exists(): Promise<boolean> {
-					return false;
-				}
-				async save(): Promise<void> {}
-				async delete(): Promise<void> {}
-				async findOne(_filter: OrderFilter): Promise<Order | null> {
-					return null;
-				}
-				async find(_filter: OrderFilter): Promise<Order[]> {
-					return [];
-				}
-			}
-
-			const repo = new StructuralOrders();
-			// This should typecheck: the structural filter survives.
-			void repo.find({ customerId: "c-1", minTotal: 100 });
 		});
 	});
 });

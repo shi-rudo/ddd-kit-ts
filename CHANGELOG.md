@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 3.0.0 carries everything since 2.2.0 in one breaking window. It has two
 halves. The first is a tightening pass over the core: structured errors
 with one identifier, a version bump on every `setState`, buses that
-throw on wiring bugs, one delete contract, and the get/find naming
-contract on repositories. The second is the event-driven periphery
-around that core: the outbox seam with a minimal dispatcher, command
-idempotency, projections, a snapshot store, durable deadlines, the
+throw on wiring bugs, one delete contract, identity-based repository
+loads, and consumer-owned query ports. The second is the event-driven
+periphery around that core: the outbox seam with a minimal dispatcher,
+command idempotency, projections, a snapshot store, durable deadlines, the
 specification primitive, adapter contract suites for all of it, and the
 opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
@@ -118,10 +118,12 @@ await orderRepository.delete(order.id);
 await orderRepository.delete(order);
 ```
 
-Id-only bulk cleanup moves to repository-specific methods off the port
-(a `purgeExpired(before)` of your own naming).
+Id-only bulk cleanup moves off the aggregate repository port. Keep purely
+infrastructure maintenance in an adapter-side component; if an application
+use case invokes it, define a separate consumer-owned driven port such as
+`ExpiredOrderPurger.purgeExpired(before)`.
 
-#### 5. Repository loads follow the get/find contract (not compile-checked)
+#### 5. Repository loads follow the identity lookup contract (not compile-checked)
 
 `getById` is renamed to `findById` (returns the aggregate or `null`),
 and `getByIdOrFail` is renamed to `getById` (returns the aggregate or
@@ -489,6 +491,34 @@ The result is the new type-only `StreamReadResult<Evt>`:
 Event-sourced repository contract harnesses keep `committedStreamEvents`, but
 that callback now returns `StreamReadResult<Evt>` instead of an array.
 
+#### 18. Generic filtered repositories move to consumer-owned ports
+
+`IQueryableRepository` is removed. It exposed adapter-native filters and left
+selection, bounds, ordering, and continuation semantics undefined.
+
+```ts
+// before
+interface PrismaInvoices
+  extends IQueryableRepository<Invoice, InvoiceId, Prisma.InvoiceWhereInput> {}
+
+// after: the use case owns this port; Prisma stays inside the adapter
+interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
+  findByNumber(number: InvoiceNumber): Promise<Invoice | null>;
+  findDunningCandidates(
+    criteria: DunningCriteria,
+    page: { after?: DunningCursor; limit: DunningPageSize },
+  ): Promise<DunningCandidatePage>;
+}
+```
+
+Give a single-result method a domain-backed uniqueness guarantee. Give every
+multi-result aggregate method a validated mandatory limit, one stable total
+order, and a cursor bound to that order. UI, search, reporting, and other
+read-heavy access belongs on projection/query ports. `Specification<T>` stays
+available as executable domain criteria, but it is accepted through a
+consumer-owned method with explicit result semantics rather than a kit-wide
+generic repository.
+
 ### Fixed: projection receipt integrity and executable source-position laws
 
 - A watermark or in-batch position is now an exact receipt, not merely an
@@ -709,6 +739,20 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   internal base, so the hardening cannot drift. New guide page:
   Deadlines.
 
+### Removed (breaking): generic filtered repository
+
+- `IQueryableRepository<TAgg, TId, TFilter>` is no longer exported. Its native
+  filter parameter reversed dependency ownership, `find` could hydrate an
+  unbounded aggregate set, and `findOne` promised neither uniqueness nor a
+  stable selection order.
+- Consumer applications declare domain/application repository ports with
+  intent-revealing methods. Single-result methods state a uniqueness law;
+  multi-result methods require a validated hard limit, stable total order, and
+  continuation semantics. Adapter-native filters stay private to adapters.
+- Infrastructure-only bulk cleanup belongs in an adapter maintenance
+  component. An application-triggered cleanup uses a separate consumer-owned
+  driven port, not a method discovered on a concrete repository class.
+
 ### Added: Specification primitive
 
 - `Specification<T>` (abstract class) and the `specification(name,
@@ -720,9 +764,9 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   structure via `composite` so an adapter can walk down to the named
   leaves and translate each one explicitly; the kit deliberately ships
   no expression trees and no translation machinery. In-memory
-  repositories and test fakes implement `findSatisfying`-style lookups
-  (`IQueryableRepository.find` with `Specification` as the `TFilter`,
-  or a method of your own naming) as a one-line filter. The class is
+  repositories and test fakes implement consumer-owned
+  `findSatisfying`-style lookups as a filter followed by the port's declared
+  stable ordering and bound. The class is
   deliberately left open, so a consumer can layer a classic
   double-dispatch translation on top; the repository guide's new
   Specifications section covers that construction, the drift risk of
@@ -1033,9 +1077,10 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   the identity-map tombstone, and an OCC predicate on `persistedVersion`
   all need the instance, which an id cannot provide. The contract-test
   suites already used the aggregate-taking shape and are unchanged.
-- Id-only BULK cleanup deliberately has no port method: declare a
-  repository-specific method (e.g. `purgeExpired(before)`) instead of
-  loading aggregates one by one to purge them.
+- Id-only BULK cleanup deliberately has no aggregate-repository method. Keep
+  infrastructure maintenance in an adapter-side component, or expose an
+  application-triggered cleanup through a separate consumer-owned driven port
+  instead of loading aggregates one by one.
 - Migration: change `delete(id)` implementations and call sites to
   `delete(aggregate)`; where only the id is at hand, load first
   (`getByIdOrFail`), which the richer deletion flows require anyway.
