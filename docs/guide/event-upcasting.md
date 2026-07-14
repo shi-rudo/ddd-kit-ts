@@ -56,17 +56,36 @@ ambiguous and forces consumers to infer schema from fields. Do not do that.
 Upcast after reading from storage and before events reach the aggregate:
 
 ```ts
-const stored = await eventStore.readStream({
-  aggregateType: "Order",
-  aggregateId: orderId,
-});
-if (!stored.exists) return null;
-
-const history = stored.events.map(upcastOrderEvent) as OrderEvent[];
-
+const address = { aggregateType: "Order", aggregateId: orderId };
 const order = Order.reconstitute(orderId);
-const result = order.loadFromHistory(history);
+let fromVersion = 0;
+let targetVersion: number | undefined;
+
+for (;;) {
+  const page = await eventStore.readStream(address, {
+    fromVersion,
+    toVersion: targetVersion,
+    limit: 256,
+  });
+  if (!page.exists) return null;
+  targetVersion ??= page.lastVersion;
+  if (fromVersion === targetVersion) break;
+  if (page.events.length === 0) {
+    throw new Error("EventStore returned a non-progressing stream page");
+  }
+
+  const current = page.events.map(upcastOrderEvent) as OrderEvent[];
+  const result = order.loadFromHistory(current);
+  if (result.isErr()) throw result.error;
+  fromVersion += page.events.length;
+}
 ```
+
+Upcast one bounded page at a time. Preserve each stored envelope's identity,
+pin the first observed stream head, and advance by the number of stored events,
+not by the number of output objects an upcaster happens to produce. A one-to-one
+upcaster is the normal case; split/merge migrations need an explicit storage
+position cursor outside the event array.
 
 The aggregate only handles the current union:
 

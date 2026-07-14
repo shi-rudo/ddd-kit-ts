@@ -16,11 +16,20 @@ export interface EventStoreAppendOptions {
 /** Options for {@link EventStore.readStream}. */
 export interface ReadStreamOptions {
 	/**
+	 * Maximum number of events returned by this page. Required so callers
+	 * cannot accidentally materialize an unbounded stream. Must be a positive
+	 * safe integer. An adapter may return fewer events, but must return at least
+	 * one while unread events remain inside the requested window.
+	 */
+	readonly limit: number;
+
+	/**
 	 * Return only events AFTER this stream position (1-based event count),
 	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
-	 * snapshot.version })` yields exactly the events
-	 * `restoreFromSnapshotWithEvents` needs. Defaults to `0` (the whole
-	 * stream).
+	 * snapshot.version, limit: 256 })` yields the next page of events
+	 * `restoreFromSnapshotWithEvents` needs. Defaults to `0` (the first
+	 * stream page).
+	 * Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;
 
@@ -31,6 +40,7 @@ export interface ReadStreamOptions {
 	 * `0` therefore returns an empty window; a value beyond the head clamps
 	 * to the head; and `fromVersion >= toVersion` is an empty interval, not
 	 * an error.
+	 * Must be a non-negative safe integer when present.
 	 */
 	readonly toVersion?: number;
 }
@@ -39,7 +49,8 @@ export interface ReadStreamOptions {
  * State returned by {@link EventStore.readStream}.
  *
  * `lastVersion` is always the actual stream head (the event count), independent
- * of the requested read window. `exists: true` implies `lastVersion >= 1`: an
+ * of the requested read window and page limit. `exists: true` implies
+ * `lastVersion >= 1`: an
  * existing stream has at least one event, while metadata or tombstones without
  * events must be reported as `exists: false`. A missing stream is therefore
  * distinguishable from an existing stream whose requested window is empty.
@@ -83,11 +94,24 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * async findById(id: OrderId): Promise<Order | null> {
  *   const cached = this.session.identityMap.get(Order, id);
  *   if (cached) return cached;
- *   const stream = await this.eventStore.readStream(this.stream(id));
- *   if (!stream.exists) return null;
+ *   const address = this.stream(id);
  *   const order = Order.reconstitute(id); // bare instance, no events
- *   const result = order.loadFromHistory(stream.events);
- *   if (result.isErr()) throw result.error; // corrupt stream
+ *   let fromVersion = 0;
+ *   let targetVersion: number | undefined;
+ *   for (;;) {
+ *     const page = await this.eventStore.readStream(address, {
+ *       fromVersion,
+ *       toVersion: targetVersion,
+ *       limit: 256,
+ *     });
+ *     if (!page.exists) return null;
+ *     targetVersion ??= page.lastVersion; // pin the first observed head
+ *     if (fromVersion === targetVersion) break;
+ *     if (page.events.length === 0) throw new Error("non-progressing stream page");
+ *     const result = order.loadFromHistory(page.events);
+ *     if (result.isErr()) throw result.error; // corrupt stream
+ *     fromVersion += page.events.length;
+ *   }
  *   this.session.identityMap.set(Order, id, order);
  *   return order;
  * }
@@ -171,25 +195,37 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	): Promise<void>;
 
 	/**
-	 * Reads the qualified stream in append order. An unknown stream returns
+	 * Reads one bounded page of the qualified stream in append order. An unknown stream returns
 	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
 	 * `exists: true` even when its requested window is empty. An existing stream
 	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
 	 * metadata or tombstones without events must be reported as absent.
-	 * `lastVersion` is always the actual stream head. `options.fromVersion`
+	 * `lastVersion` is always the actual stream head. `options.limit` is
+	 * mandatory and caps the returned array. An adapter may return fewer than
+	 * the requested limit, but if the requested window still contains unread
+	 * events it must return a non-empty contiguous prefix so callers can make
+	 * progress. `options.fromVersion`
 	 * excludes positions at or below its 1-based event count;
 	 * `options.toVersion` includes positions through its count, so both bounds
 	 * describe `(fromVersion, toVersion]`. `toVersion: 0` and inverted ranges
 	 * return an empty existing window, while a bound beyond the head clamps to
 	 * the head. This distinction is load-bearing for snapshot catch-up and
 	 * point-in-time reconstruction: a repository can verify the requested
-	 * historical window against the authoritative head. `exists`, `lastVersion`,
-	 * and `events` must describe one consistent view of the stream. The returned
+	 * historical window against the authoritative head. `limit` must be a
+	 * positive safe integer; present bounds must be non-negative safe integers.
+	 * Invalid options reject with `RangeError` before querying storage.
+	 *
+	 * Each page's `exists`, `lastVersion`, and `events` must describe one
+	 * consistent view of the stream. Multiple page reads are not one database
+	 * snapshot: pin the first page's `lastVersion` as `toVersion` on every
+	 * continuation, then advance `fromVersion` by the number of events actually
+	 * returned. Because streams are append-only, that yields a stable prefix
+	 * even if new events arrive while replay is in progress. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.
 	 */
 	readStream(
 		stream: AggregateAddress,
-		options?: ReadStreamOptions,
+		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>>;
 }

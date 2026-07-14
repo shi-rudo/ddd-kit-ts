@@ -289,6 +289,23 @@ export default {
 
 See [Edge Runtimes](./edge-runtimes.md).
 
+### Replaying Only the First EventStore Page
+
+`EventStore.readStream` returns one bounded page, not the complete stream. A
+repository that calls it once and immediately returns the aggregate silently
+loads partial state whenever the stream exceeds its chosen `limit`.
+
+Start at `fromVersion: 0`, record the first page's `lastVersion`, and pass that
+value as `toVersion` on every later page. Advance `fromVersion` by the number of
+events actually returned, because adapters may return fewer than requested.
+Replay each page into the same fresh aggregate, and add it to the identity map
+only after the cursor reaches the pinned head. A zero-length page before that
+point is a violated adapter contract, not end-of-stream.
+
+Pinning the head matters. Without it, events appended during a slow load keep
+moving the target, so one request can observe an open-ended mixture of stream
+states. See [Event Sourcing](./event-sourcing.md#loading-from-history).
+
 ### Treating Kit Errors as Unstructured Errors
 
 Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
@@ -332,6 +349,7 @@ When reviewing code that uses the kit, scan for these signals:
 - repositories that do not call aggregate lifecycle methods
 - insert/update branching on `persistedVersion`, not `version`
 - one aggregate instance per id inside one unit of work
+- event-sourced repositories continue bounded pages to a pinned stream head
 - scoped test factories instead of leaked global factories
 - edge/runtime code that loads aggregates per request
 - structured errors preserved until the boundary that maps them

@@ -11,6 +11,17 @@ import type {
 	StreamReadResult,
 } from "./event-store";
 
+function assertStreamPosition(
+	name: "fromVersion" | "toVersion",
+	value: number | undefined,
+): void {
+	if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+		throw new RangeError(
+			`InMemoryEventStore: ${name} must be a non-negative safe integer, got ${String(value)}`,
+		);
+	}
+}
+
 /**
  * In-memory reference implementation of `EventStore<Evt>`.
  *
@@ -18,7 +29,8 @@ import type {
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
  * appends, explicit missing/existing stream state with the actual head,
- * append-order reads, and `(fromVersion, toVersion]` slicing.
+ * append-order reads, mandatory page bounds, and `(fromVersion, toVersion]`
+ * slicing. Invalid limits or positions reject with `RangeError`.
  *
  * For production, back the port with a durable store whose append and
  * the aggregate transaction share atomicity (a table with a
@@ -71,22 +83,30 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 
 	async readStream(
 		stream: AggregateAddress,
-		options?: ReadStreamOptions,
+		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>> {
+		if (!Number.isSafeInteger(options?.limit) || options.limit < 1) {
+			throw new RangeError(
+				`InMemoryEventStore: limit must be a positive safe integer, got ${String(options?.limit)}`,
+			);
+		}
+		assertStreamPosition("fromVersion", options.fromVersion);
+		assertStreamPosition("toVersion", options.toVersion);
 		const events = this.streams.get(encodeAggregateAddress(stream));
 		if (events === undefined) {
 			return { exists: false, lastVersion: 0, events: [] };
 		}
-		const fromVersion = Math.max(0, options?.fromVersion ?? 0);
-		const toVersion =
-			options?.toVersion === undefined
-				? undefined
-				: Math.max(0, options.toVersion);
+		const fromVersion = options.fromVersion ?? 0;
+		const toVersion = options.toVersion;
+		const pageEnd = Math.min(
+			toVersion ?? events.length,
+			fromVersion + options.limit,
+		);
 		// slice() always copies: callers never see the internal array.
 		return {
 			exists: true,
 			lastVersion: events.length,
-			events: events.slice(fromVersion, toVersion),
+			events: events.slice(fromVersion, pageEnd),
 		};
 	}
 }

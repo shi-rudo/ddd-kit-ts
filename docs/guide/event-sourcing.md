@@ -246,7 +246,11 @@ interface EventStore<Evt extends AnyDomainEvent> {
 
   readStream(
     stream: AggregateAddress,
-    options?: { fromVersion?: number; toVersion?: number },
+    options: {
+      limit: number;
+      fromVersion?: number;
+      toVersion?: number;
+    },
   ): Promise<StreamReadResult<Evt>>;
 }
 
@@ -275,7 +279,13 @@ contexts with the same domain name share storage, qualify it at the source
 - rejected appends must leave the stream unchanged
 - equal raw ids under different aggregate types must remain isolated
 
-`readStream(stream)` reports both stream state and events. A missing stream is
+`readStream(stream, options)` reports both stream state and one bounded event
+page. `limit` is mandatory, so no port call can accidentally materialize an
+unbounded stream. It must be a positive safe integer. An adapter may return
+fewer events than requested, but an unread window must return at least one
+event so continuation makes progress.
+
+A missing stream is
 `{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
 `exists: true` even when its requested window is empty. An existing stream has
 at least one event, so `exists: true` implies `lastVersion >= 1`; metadata or
@@ -288,9 +298,17 @@ the head clamps to the head, and `fromVersion >= toVersion` describes an empty
 interval rather than an error. This is how a snapshot-backed repository
 distinguishes "aggregate is gone" from "snapshot is already at the head", and
 how a point-in-time reader verifies the requested historical position against
-the actual head.
+the actual head. `limit` must be a positive safe integer; present stream bounds
+must be non-negative safe integers. Invalid options reject with `RangeError`.
 Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
-view of the stream; do not assemble the result from racing reads.
+view of the page; do not assemble the result from racing reads.
+
+Separate pages are separate store reads. For a stable replay, record the first
+page's `lastVersion`, pass it as `toVersion` on every continuation, and advance
+`fromVersion` by the number of events actually returned. New appends can move
+the reported head while the load runs, but they cannot enter that pinned
+prefix. The next repository load sees them; a save from the older prefix still
+meets the normal OCC guard.
 
 A database adapter should also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
@@ -322,7 +340,8 @@ describe("PgOrderEventRepository", () => {
 ```
 
 The store suite proves qualified-key isolation, OCC/atomicity, stream-state
-reporting, ordering, and both read bounds. The repository suite covers append
+reporting, per-page bounds, gapless continuation, ordering, and both position
+bounds. The repository suite covers append
 conflicts, duplicate creates, replay equality, rollback purity, commit
 lifecycle, snapshot catch-up, and point-in-time windows through the repository
 adapter.
@@ -333,22 +352,39 @@ Reconstitution starts with a blank aggregate and folds the stream into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
-  const stream = await eventStore.readStream({
-    aggregateType: "Order",
-    aggregateId: id,
-  });
-  if (!stream.exists) return null;
-
+  const address = { aggregateType: "Order", aggregateId: id };
   const order = Order.reconstitute(id);
-  const result = order.loadFromHistory(stream.events);
+  let fromVersion = 0;
+  let targetVersion: number | undefined;
 
-  if (result.isErr()) {
-    throw result.error;
+  for (;;) {
+    const page = await eventStore.readStream(address, {
+      fromVersion,
+      toVersion: targetVersion,
+      limit: 256,
+    });
+    if (!page.exists) return null;
+
+    targetVersion ??= page.lastVersion;
+    if (fromVersion === targetVersion) break;
+    if (page.events.length === 0) {
+      throw new Error("EventStore returned a non-progressing stream page");
+    }
+
+    const result = order.loadFromHistory(page.events);
+    if (result.isErr()) throw result.error;
+    fromVersion += page.events.length;
   }
 
   return order;
 }
 ```
+
+The first page pins the authoritative head; subsequent pages replay only that
+prefix. Calling `loadFromHistory` once per page keeps allocation bounded. If a
+later page fails, discard the local aggregate and do not place it in the
+identity map. Replay remains all-or-nothing per call, and no partially loaded
+instance escapes the repository.
 
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a handler that rejects a
@@ -409,33 +445,48 @@ async function findOrderAsOfVersion(
   id: OrderId,
   toVersion: number,
 ): Promise<OrderView | null> {
-  if (!Number.isInteger(toVersion) || toVersion < 0) {
+  if (!Number.isSafeInteger(toVersion) || toVersion < 0) {
     throw new RangeError("toVersion must be a non-negative stream position");
   }
 
-  const stream = await eventStore.readStream(
-    { aggregateType: "Order", aggregateId: id },
-    { toVersion },
+  const address = { aggregateType: "Order", aggregateId: id };
+  let page = await eventStore.readStream(
+    address,
+    { toVersion, limit: 256 },
   );
 
-  if (!stream.exists || toVersion === 0) return null;
-  if (toVersion > stream.lastVersion) {
+  if (!page.exists || toVersion === 0) return null;
+  if (toVersion > page.lastVersion) {
     throw new RangeError(
-      `Order stream ends at ${stream.lastVersion}, before ${toVersion}`,
+      `Order stream ends at ${page.lastVersion}, before ${toVersion}`,
     );
   }
 
   const historical = Order.reconstitute(id);
-  const result = historical.loadFromHistory(stream.events);
-  if (result.isErr()) throw result.error;
+  let fromVersion = 0;
+  while (fromVersion < toVersion) {
+    if (!page.exists || page.events.length === 0) {
+      throw new Error("EventStore returned a non-progressing stream page");
+    }
+    const result = historical.loadFromHistory(page.events);
+    if (result.isErr()) throw result.error;
+    fromVersion += page.events.length;
+    if (fromVersion < toVersion) {
+      page = await eventStore.readStream(address, {
+        fromVersion,
+        toVersion,
+        limit: 256,
+      });
+    }
+  }
   return historical.toView();
 }
 ```
 
-The explicit head check prevents a request for version `10` from silently
+The explicit head check on the first page prevents a request for version `10` from silently
 becoming "latest" when the stream currently ends at version `7`. For combined
 snapshot and point-in-time reads, use `{ fromVersion: snapshot.version,
-toVersion }` and restore only when the snapshot version is at or below the
+toVersion, limit }` and restore only when the snapshot version is at or below the
 requested version.
 
 ## Snapshots
@@ -464,26 +515,47 @@ async function findById(id: OrderId): Promise<Order | null> {
     return replayFromZero(id);
   }
 
-  const tail = await eventStore.readStream(
-    address,
-    { fromVersion: snapshot.version },
-  );
+  let tail = await eventStore.readStream(address, {
+    fromVersion: snapshot.version,
+    limit: 256,
+  });
 
   if (
     !tail.exists ||
-    tail.lastVersion < snapshot.version ||
-    tail.events.length !== tail.lastVersion - snapshot.version
+    tail.lastVersion < snapshot.version
   ) {
     return discardSnapshotAndRefold();
   }
 
   const order = Order.reconstitute(id);
+  const targetVersion = tail.lastVersion;
+  let fromVersion = snapshot.version;
 
   try {
     const result = order.restoreFromSnapshotWithEvents(snapshot, tail.events);
 
     if (result.isErr()) {
       return discardSnapshotAndRefold();
+    }
+    fromVersion += tail.events.length;
+
+    while (fromVersion < targetVersion) {
+      tail = await eventStore.readStream(address, {
+        fromVersion,
+        toVersion: targetVersion,
+        limit: 256,
+      });
+      if (
+        !tail.exists ||
+        tail.lastVersion < targetVersion ||
+        tail.events.length === 0
+      ) {
+        return discardSnapshotAndRefold();
+      }
+
+      const catchUp = order.loadFromHistory(tail.events);
+      if (catchUp.isErr()) return discardSnapshotAndRefold();
+      fromVersion += tail.events.length;
     }
   } catch (error) {
     if (error instanceof SnapshotSchemaMismatchError) {
@@ -497,12 +569,14 @@ async function findById(id: OrderId): Promise<Order | null> {
 }
 ```
 
-The three stream checks before restore are deliberate. A missing stream means
-the snapshot cannot establish aggregate existence. A head behind the snapshot
-means the authoritative stream was truncated or replaced. A tail length that
-does not bridge `snapshot.version` to `lastVersion` means the adapter omitted a
-position. All three discard the derived snapshot and refold from the stream;
-none may return the snapshot-backed aggregate.
+The page checks are deliberate. A missing stream means the snapshot cannot
+establish aggregate existence. A head behind the snapshot or behind the pinned
+target means the authoritative stream was truncated or replaced. A zero-length
+page before the cursor reaches the target cannot make progress and violates the
+EventStore contract. All three discard the derived snapshot and refold from the
+stream; none may return the partially restored aggregate. Reaching the target
+cursor proves every page bridged the snapshot to the pinned head without
+materializing the whole tail.
 
 `restoreFromSnapshotWithEvents(...)` has the same `Result<void, DomainError>`
 boundary as `loadFromHistory(...)`. A `DomainError` from snapshot conversion,

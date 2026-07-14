@@ -275,15 +275,16 @@ function createInMemoryEsHarness(
 					if (events === undefined) {
 						return { exists: false, lastVersion: 0, events: [] };
 					}
-					const fromVersion = Math.max(0, options?.fromVersion ?? 0);
-					const toVersion =
-						options?.toVersion === undefined
-							? undefined
-							: Math.max(0, options.toVersion);
+					const fromVersion = options.fromVersion ?? 0;
+					const toVersion = options.toVersion;
+					const pageEnd = Math.min(
+						toVersion ?? events.length,
+						fromVersion + options.limit,
+					);
 					return {
 						exists: true,
 						lastVersion: events.length,
-						events: events.slice(fromVersion, toVersion),
+						events: events.slice(fromVersion, pageEnd),
 					};
 				},
 			};
