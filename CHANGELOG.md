@@ -502,8 +502,10 @@ that callback now returns `StreamReadResult<Evt>` instead of an array.
   throws `ProjectionOrderViolationError`.
 - `InMemoryOutbox` enforces immutable qualified source positions and commit
   sizes, including pending, dead-lettered, and bounded post-ack retries. A
-  conflicting add rejects without replacing the stored event or advancing the
-  source head.
+  conflicting add (including one `eventId` assigned two receipts within the
+  same input batch) rejects during preflight without replacing the stored
+  event or advancing the source head. Exact batch-local repetition remains
+  idempotent.
 - `createOutboxContractTests` now composes explicit `EventCommitCandidate`
   values and proves commit completeness, eventful-predecessor linkage,
   source-head isolation by aggregate type and id, position identity, and
