@@ -3,8 +3,8 @@ import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
-	EventCommitCandidate,
 	EventBus,
+	EventCommitCandidate,
 	OutboxWriter,
 } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
@@ -59,54 +59,214 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	signal?: AbortSignal;
 }
 
+declare const aggregateCommitTokenBrand: unique symbol;
+
+/**
+ * Opaque receipt that one aggregate was explicitly enrolled in the current
+ * {@link withCommit} invocation. Tokens are minted only by the invocation's
+ * {@link CommitEnrollment} capability and are bound to that invocation at
+ * runtime; a forged token or one retained from an earlier call is rejected
+ * inside the transaction.
+ */
+export interface AggregateCommitToken<
+	Evt extends AnyDomainEvent = AnyDomainEvent,
+> {
+	readonly [aggregateCommitTokenBrand]: Evt;
+}
+
+/**
+ * Invocation-scoped enrollment capability handed to a {@link withCommit}
+ * callback. Call `enrollSaved` only for an aggregate participating in the
+ * repository write, and return every resulting token in `commits`. Omitting
+ * any token rejects the transaction: an enrolled write may not commit without
+ * its event harvest and post-commit acknowledgement.
+ */
+export interface CommitEnrollment<Evt extends AnyDomainEvent> {
+	enrollSaved(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt>;
+	/**
+	 * Enroll an aggregate whose row is deleted by the current transaction.
+	 * Its events are harvested, but post-commit cleanup clears them without
+	 * calling `markPersisted` or the post-save `onPersisted` hook.
+	 */
+	enrollDeleted(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt>;
+}
+
 /** The resolved value of a {@link withCommit} work callback. */
 export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 	result: R;
-	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
 	/**
-	 * Optional marker: which of `aggregates` were DELETED in this unit
-	 * of work. Must be a SUBSET of `aggregates` (enforced inside the
-	 * transaction with `EventHarvestError`: a deleted aggregate missing
-	 * from `aggregates` would lose its deletion events silently).
-	 * Their pending events are harvested like any other
-	 * (deletion events must reach the outbox), but the post-commit
-	 * lifecycle differs: `markPersisted` is NOT called on them. It
-	 * would fire the user-overridable `onPersisted` hook, whose
-	 * post-save semantics (cache fill, read-model warm-up) are a lie
-	 * for a row that was just deleted. Their pending events are
-	 * cleared directly instead, so a later commit cannot re-emit them.
+	 * Commit tokens returned by the invocation's enrollment capability.
+	 * Every token minted during the callback must appear at least once.
+	 * Naked aggregates are intentionally not accepted: touching an aggregate
+	 * does not prove that its repository write participated in the transaction.
 	 */
-	deleted?: ReadonlyArray<IAggregateRoot<Id<string>, Evt>>;
+	commits: ReadonlyArray<AggregateCommitToken<Evt>>;
+}
+
+type CommitDisposition = "saved" | "deleted";
+
+interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
+	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	disposition: CommitDisposition;
+}
+
+interface CommitTokenScope<Evt extends AnyDomainEvent> {
+	readonly enrollment: CommitEnrollment<Evt>;
+	close(): void;
+	resolve(tokens: unknown): ReadonlyArray<AggregateCommitRecord<Evt>>;
+}
+
+/** One token registry per transactional callback attempt. */
+function createCommitTokenScope<
+	Evt extends AnyDomainEvent,
+>(): CommitTokenScope<Evt> {
+	const recordsByToken = new WeakMap<object, AggregateCommitRecord<Evt>>();
+	const tokensByAggregate = new WeakMap<
+		IAggregateRoot<Id<string>, Evt>,
+		AggregateCommitToken<Evt>
+	>();
+	let mintedTokenCount = 0;
+	let open = true;
+
+	const enroll = (
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+		disposition: CommitDisposition,
+	): AggregateCommitToken<Evt> => {
+		if (!open) {
+			throw new EventHarvestError(
+				"withCommit: commit enrollment was used after its work callback " +
+					"settled. Await every repository write and return its token before " +
+					"leaving the callback.",
+			);
+		}
+
+		const existing = tokensByAggregate.get(aggregate);
+		if (existing) {
+			const record = recordsByToken.get(existing);
+			if (!record) {
+				throw new EventHarvestError(
+					"withCommit: internal commit-token registry is inconsistent.",
+				);
+			}
+			if (record.disposition === "deleted" && disposition === "saved") {
+				throw new EventHarvestError(
+					`withCommit: aggregate ${String(aggregate.id)} was enrolled as ` +
+						"saved after it was enrolled as deleted in the same transaction.",
+				);
+			}
+			if (disposition === "deleted") {
+				record.disposition = "deleted";
+			}
+			return existing;
+		}
+
+		const token = Object.freeze(
+			Object.create(null),
+		) as AggregateCommitToken<Evt>;
+		tokensByAggregate.set(aggregate, token);
+		recordsByToken.set(token, { aggregate, disposition });
+		mintedTokenCount += 1;
+		return token;
+	};
+
+	return {
+		enrollment: Object.freeze({
+			enrollSaved: (aggregate: IAggregateRoot<Id<string>, Evt>) =>
+				enroll(aggregate, "saved"),
+			enrollDeleted: (aggregate: IAggregateRoot<Id<string>, Evt>) =>
+				enroll(aggregate, "deleted"),
+		}),
+		close: () => {
+			open = false;
+		},
+		resolve: (tokens) => {
+			if (!Array.isArray(tokens)) {
+				throw new EventHarvestError(
+					"withCommit: the work callback must return `commits` containing " +
+						"tokens from the current enrollment capability. Naked aggregate " +
+						"arrays are not commit evidence.",
+				);
+			}
+
+			const seen = new Set<object>();
+			const records: AggregateCommitRecord<Evt>[] = [];
+			for (const token of tokens) {
+				if (
+					token === null ||
+					(typeof token !== "object" && typeof token !== "function")
+				) {
+					throw new EventHarvestError(
+						"withCommit: a commit token was not minted by this callback's " +
+							"enrollment capability. Forged and stale tokens are rejected.",
+					);
+				}
+				const tokenObject = token as object;
+				const record = recordsByToken.get(tokenObject);
+				if (!record) {
+					throw new EventHarvestError(
+						"withCommit: a commit token was not minted by this callback's " +
+							"enrollment capability. Forged and stale tokens are rejected.",
+					);
+				}
+				if (seen.has(tokenObject)) continue;
+				seen.add(tokenObject);
+				records.push(record);
+			}
+			if (seen.size !== mintedTokenCount) {
+				throw new EventHarvestError(
+					"withCommit: every token minted by the current enrollment " +
+						"capability must be returned in `commits`. If an enrolled write " +
+						"must not commit, throw so the transaction rolls back.",
+				);
+			}
+			return records;
+		},
+	};
 }
 
 /**
  * Helper for executing a write Use Case inside a transaction scope.
  *
- * The use-case callback returns the aggregates it touched; `withCommit`
- * owns the post-save lifecycle (harvest, outbox, mark-persisted, publish).
- * This matches the Vernon / Axon / EventFlow unit-of-work pattern:
- * `Repository.save` is pure persistence; "this aggregate has been
- * committed" is the orchestrator's call to make, not the repo's.
+ * The use-case callback receives an invocation-scoped enrollment capability
+ * and returns opaque commit tokens for the repository writes that completed
+ * in the transaction. `withCommit` owns the post-save lifecycle (harvest,
+ * outbox, mark-persisted, publish). A naked aggregate is not commit evidence:
+ * merely touching or constructing one must never make it look persisted.
+ *
+ * **Trust boundary.** A token proves invocation-local enrollment, not that the
+ * kit inspected a database write; a generic transaction helper cannot observe
+ * adapter internals. Repository code must enroll only writes participating in
+ * this transaction. `UnitOfWork` centralizes that rule in repository methods.
+ * The opaque, scoped token prevents accidental aggregate smuggling and stale
+ * reuse; it is not a security boundary against code that deliberately lies to
+ * its own persistence capability.
  *
  * Order of operations:
- *  1. `fn(ctx)` runs inside `scope.transactional(...)`; domain mutations
- *     + repo writes happen here. `ctx` is whatever transaction handle the
- *     `scope` exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or
- *     `undefined` for context-free scopes).
+ *  1. `fn(ctx, enrollment)` runs inside `scope.transactional(...)`; domain
+ *     mutations + repo writes happen here. After a repository write has
+ *     enrolled an aggregate, the callback includes that opaque token in its
+ *     `commits` result. Tokens are invocation-bound: forged or stale tokens
+ *     fail before harvest. `ctx` is whatever transaction handle the `scope`
+ *     exposes (Drizzle `tx`, Prisma `tx`, Mongo session, or `undefined` for
+ *     context-free scopes).
  *  2. **Still inside the transaction**, `withCommit` harvests every
  *     aggregate's `pendingEvents` and writes them via `outbox.add` (so
  *     events persist atomically with the state change). Skipped when no
-	 *     events were recorded. Each bare domain event is composed into an
-	 *     `EventCommitCandidate` carrying its aggregate source and the commit
-	 *     facts known by the application. The outbox source atomically links
-	 *     that candidate to the preceding eventful commit and persists the
-	 *     resulting `CommittedDomainEvent`. The domain event itself is never
-	 *     stamped or copied.
+ *     events were recorded. Each bare domain event is composed into an
+ *     `EventCommitCandidate` carrying its aggregate source and the commit
+ *     facts known by the application. The outbox source atomically links
+ *     that candidate to the preceding eventful commit and persists the
+ *     resulting `CommittedDomainEvent`. The domain event itself is never
+ *     stamped or copied.
  *
  *     **Harvest order.** Events are concatenated in the order
- *     aggregates appear in the returned `aggregates` array, then in
+ *     tokens appear in the returned `commits` array, then in
  *     each aggregate's `pendingEvents` order (insertion order via
- *     `apply` / `commit` / `addDomainEvent`). So `aggregates: [a, b]`
+ *     `apply` / `commit` / `addDomainEvent`). So tokens for `[a, b]`
  *     with `a` emitting `[e1, e2]` and `b` emitting `[e3]` produces
  *     `outbox.add([envelope(e1), envelope(e2), envelope(e3)])` and
  *     `bus.publish([e1, e2, e3])` in that exact order.
@@ -127,11 +287,10 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
  *     across aggregates at delivery time.
  *  3. The transaction commits.
  *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
- *     fires on each returned aggregate; only now are pending events
- *     considered flushed. Aggregates listed in the optional `deleted`
- *     marker array are the exception: their pending events are cleared
- *     directly WITHOUT `markPersisted`, so the post-save `onPersisted`
- *     hook never fires for a row that was just deleted.
+ *     fires on each saved enrollment; only now are pending events considered
+ *     flushed. Deleted enrollments are the exception: their pending events
+ *     are cleared directly WITHOUT `markPersisted`, so the post-save
+ *     `onPersisted` hook never fires for a row that was just deleted.
  *  5. `bus.publish(events)` fires for the in-process fast path (skipped
  *     when no events or no `bus` is wired).
  *
@@ -167,12 +326,10 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
  * every consumer's ordering and idempotency watermarks. Mutate first,
  * save last.
  *
- * **Duplicate aggregates are deduped by reference.** If the returned
- * `aggregates` array contains the same instance twice (e.g. a use
- * case touches an order via two repository references that happen to
- * resolve to the same identity-map entry), `withCommit` dedupes by
- * JavaScript object identity before harvesting. Each event lands in
- * the outbox exactly once and `markPersisted` fires exactly once. Two
+ * **Duplicate enrollment is idempotent by reference.** Enrolling the same
+ * instance repeatedly returns the same token, and a repeated token in
+ * `commits` is harvested once. Each event lands in the outbox exactly once
+ * and `markPersisted` fires exactly once. Two
  * *different* instances with the same logical id cannot be detected
  * at this layer; that is a Repository contract violation (failure to
  * maintain Fowler's Identity Map per Unit of Work). See
@@ -182,18 +339,22 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
  *
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)
  * ```typescript
- * const result = await withCommit({ outbox, bus, scope }, async (tx) => {
+ * const result = await withCommit({ outbox, bus, scope }, async (tx, enrollment) => {
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
  *   await orderRepository.save(order);             // pure persistence; does NOT call markPersisted
- *   return { result: order.id, aggregates: [order] };
+ *   const commit = enrollment.enrollSaved(order);   // attest the repository write
+ *   return { result: order.id, commits: [commit] };
  * });
  * ```
  */
 export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx>,
-	fn: (ctx: TCtx) => Promise<WithCommitWorkResult<Evt, R>>,
+	fn: (
+		ctx: TCtx,
+		enrollment: CommitEnrollment<Evt>,
+	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;
@@ -209,30 +370,25 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	const { result, aggregates, deleted, events } =
 		await deps.scope.transactional(
 			async (ctx) => {
-				const fnResult = await fn(ctx);
-				// Dedupe by object identity. A use case that touches the same
-				// aggregate via two repository references (same identity-map
-				// entry) would otherwise double-harvest its events and call
-				// markPersisted twice. Distinct instances with the same logical
-				// id are NOT detected here; that's a different misuse class.
-				const uniqueAggregates = Array.from(new Set(fnResult.aggregates));
-				// Subset guard: `deleted` is a MARKER over `aggregates`, not a
-				// second harvest source. A deleted aggregate missing from
-				// `aggregates` would have its deletion events silently lost
-				// (never harvested into the outbox) and double-emitted by a
-				// later commit; fail inside the transaction like the other
-				// harvest guards so nothing commits.
-				const aggregateSet = new Set(uniqueAggregates);
-				for (const deletedAggregate of fnResult.deleted ?? []) {
-					if (!aggregateSet.has(deletedAggregate)) {
-						throw new EventHarvestError(
-							"withCommit: an aggregate in `deleted` is not listed in " +
-								"`aggregates`. The harvest only reads `aggregates`, so " +
-								"its deletion events would be silently dropped. List " +
-								"every deleted aggregate in BOTH arrays.",
-						);
-					}
+				const tokenScope = createCommitTokenScope<Evt>();
+				let fnResult: WithCommitWorkResult<Evt, R>;
+				try {
+					fnResult = await fn(ctx, tokenScope.enrollment);
+				} finally {
+					// A callback can leak the capability into delayed work. Seal it as
+					// soon as the callback settles so a late enrollment fails loudly
+					// instead of being accepted after the harvest snapshot.
+					tokenScope.close();
 				}
+				const commitRecords = tokenScope.resolve(fnResult.commits);
+				const uniqueAggregates = commitRecords.map(
+					({ aggregate }) => aggregate,
+				);
+				const deletedAggregates = new Set(
+					commitRecords
+						.filter(({ disposition }) => disposition === "deleted")
+						.map(({ aggregate }) => aggregate),
+				);
 				// Prepare each bare domain event for source finalization in the outbox.
 				// The aggregate's event remains untouched and is what the in-process
 				// domain bus receives.
@@ -284,9 +440,9 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					await deps.outbox.add(candidates);
 				}
 				return {
-					...fnResult,
+					result: fnResult.result,
 					aggregates: uniqueAggregates,
-					deleted: new Set(fnResult.deleted ?? []),
+					deleted: deletedAggregates,
 					events: candidates.map(({ event }) => event),
 				};
 			},

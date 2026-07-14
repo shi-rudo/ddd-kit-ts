@@ -1,9 +1,11 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import { EventHarvestError } from "../core/errors";
 import type { TransactionScope } from "../repo/scope";
 import {
-	withCommit,
+	type CommitEnrollment,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
+	withCommit,
 } from "./handler";
 
 /**
@@ -145,6 +147,41 @@ export interface IdempotentCommitResult<R> {
 	readonly result: R;
 }
 
+function scopeWorkEnrollment<Evt extends AnyDomainEvent>(
+	parent: CommitEnrollment<Evt>,
+): { readonly enrollment: CommitEnrollment<Evt>; close(): void } {
+	let open = true;
+	const assertOpen = (): void => {
+		if (!open) {
+			throw new EventHarvestError(
+				"withIdempotentCommit: commit enrollment was used after the " +
+					"user work callback settled. Await every repository write before " +
+					"returning from the callback.",
+			);
+		}
+	};
+
+	return {
+		enrollment: Object.freeze({
+			enrollSaved: (
+				aggregate: Parameters<CommitEnrollment<Evt>["enrollSaved"]>[0],
+			) => {
+				assertOpen();
+				return parent.enrollSaved(aggregate);
+			},
+			enrollDeleted: (
+				aggregate: Parameters<CommitEnrollment<Evt>["enrollDeleted"]>[0],
+			) => {
+				assertOpen();
+				return parent.enrollDeleted(aggregate);
+			},
+		}),
+		close: () => {
+			open = false;
+		},
+	};
+}
+
 /**
  * {@link withCommit} with command idempotency: the duplicate-safe write
  * path for retryable deliveries (client retries, at-least-once
@@ -155,11 +192,13 @@ export interface IdempotentCommitResult<R> {
  *     FIRST. A completed previous execution short-circuits: the stored
  *     outcome is returned with `replayed: true`, `fn` never runs, no
  *     aggregate is touched, and no event is re-emitted.
- *  2. On a fresh claim, `fn(ctx)` runs as in `withCommit`, then
+ *  2. On a fresh claim, `fn(ctx, enrollment)` runs as in `withCommit`, then
  *     `store.complete(ctx, key, fn's result)` stores the outcome IN THE
  *     SAME transaction as the aggregate writes and the outbox. Commit
  *     makes command effect, events, and idempotency record durable
- *     atomically.
+ *     atomically. The user-facing enrollment capability is sealed and its
+ *     commit-token array is copied before `complete` can yield, so leaked
+ *     callback state cannot change the later harvest receipt.
  *  3. After the commit, `store.confirm(key)` finalizes the outcome (a
  *     no-op for transactional stores; the finalize step a
  *     non-transactional store needs to distinguish a committed outcome
@@ -182,14 +221,13 @@ export interface IdempotentCommitResult<R> {
  * The stored outcome is `fn`'s `result` value; it must be plain,
  * serialisable data (see {@link IdempotencyStore}).
  */
-export async function withIdempotentCommit<
-	Evt extends AnyDomainEvent,
-	R,
-	TCtx,
->(
+export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	deps: WithCommitDeps<Evt, TCtx> & { idempotency: IdempotencyStore<TCtx> },
 	request: IdempotentCommitRequest,
-	fn: (ctx: TCtx) => Promise<WithCommitWorkResult<Evt, R>>,
+	fn: (
+		ctx: TCtx,
+		enrollment: CommitEnrollment<Evt>,
+	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<IdempotentCommitResult<R>> {
 	const store = deps.idempotency;
 	// Per-attempt claim marker. Set by the claim step inside the
@@ -229,20 +267,33 @@ export async function withIdempotentCommit<
 
 	const outcome = await withCommit<Evt, IdempotentCommitResult<R>, TCtx>(
 		{ ...deps, scope },
-		async (ctx) => {
+		async (ctx, enrollment) => {
 			const claim = await store.claim(ctx, request.key, request.fingerprint);
 			if (claim.status === "completed") {
 				return {
 					result: { replayed: true, result: claim.outcome as R },
-					aggregates: [],
+					commits: [],
 				};
 			}
 			attemptClaimed = true;
-			const work = await fn(ctx);
-			await store.complete(ctx, request.key, work.result);
+			const workEnrollment = scopeWorkEnrollment(enrollment);
+			let work: WithCommitWorkResult<Evt, R>;
+			try {
+				work = await fn(ctx, workEnrollment.enrollment);
+			} finally {
+				workEnrollment.close();
+			}
+			// Snapshot the user-controlled receipt before complete() yields. A
+			// leaked mutable array must not be able to add or remove aggregate
+			// commits while the idempotency adapter is persisting the outcome.
+			const result = work.result;
+			const commits = Array.isArray(work.commits)
+				? Object.freeze([...work.commits])
+				: work.commits;
+			await store.complete(ctx, request.key, result);
 			return {
-				...work,
-				result: { replayed: false, result: work.result },
+				result: { replayed: false, result },
+				commits,
 			};
 		},
 	);

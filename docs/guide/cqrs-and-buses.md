@@ -82,7 +82,7 @@ const placeOrderHandler: CommandHandler<
 
   const result = await withCommit(
     { scope, outbox, bus: eventBus },
-    async (tx) => {
+    async (tx, enrollment) => {
       const orders = makeOrderRepository(tx);
       const order = Order.place(newOrderId(), cmd.customerId);
 
@@ -96,7 +96,10 @@ const placeOrderHandler: CommandHandler<
 
       await orders.save(order);
 
-      return { result: order.id, aggregates: [order] };
+      return {
+        result: order.id,
+        commits: [enrollment.enrollSaved(order)],
+      };
     },
   );
 
@@ -221,7 +224,7 @@ import { withCommit } from "@shirudo/ddd-kit";
 
 const result = await withCommit(
   { scope, outbox, bus: eventBus },
-  async (tx) => {
+  async (tx, enrollment) => {
     const orders = makeOrderRepository(tx);
 
     const order = await orders.getById(orderId);
@@ -229,7 +232,10 @@ const result = await withCommit(
 
     await orders.save(order);
 
-    return { result: order.id, aggregates: [order] };
+    return {
+      result: order.id,
+      commits: [enrollment.enrollSaved(order)],
+    };
   },
 );
 ```
@@ -239,7 +245,8 @@ The order matters:
 1. Open the persistence transaction through `scope`.
 2. Load and mutate aggregates inside the transaction.
 3. Persist aggregates through transaction-bound repositories.
-4. Harvest pending events from returned aggregates.
+4. Validate the invocation-scoped commit tokens and harvest their pending
+   events.
 5. Write those events to the outbox in the same transaction.
 6. Commit.
 7. Mark aggregates persisted.

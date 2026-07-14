@@ -116,56 +116,74 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const { commandBus, eventBus, outbox, scope } = deps;
 
 	const placeOrder: CommandHandler<PlaceOrderCommand, OrderId> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
 			await deps.orderRepository.save(order);
-			return { result: ok(order.id), aggregates: [order] };
+			return {
+				result: ok(order.id),
+				commits: [enrollment.enrollSaved(order)],
+			};
 		});
 
 	const requestPayment: CommandHandler<
 		RequestPaymentCommand,
 		PaymentId
 	> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
 			await deps.paymentRepository.save(payment);
-			return { result: ok(payment.id), aggregates: [payment] };
+			return {
+				result: ok(payment.id),
+				commits: [enrollment.enrollSaved(payment)],
+			};
 		});
 
 	const requestShipping: CommandHandler<
 		RequestShippingCommand,
 		ShipmentId
 	> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
 			await deps.shipmentRepository.save(shipment);
-			return { result: ok(shipment.id), aggregates: [shipment] };
+			return {
+				result: ok(shipment.id),
+				commits: [enrollment.enrollSaved(shipment)],
+			};
 		});
 
 	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.confirm();
 			await deps.orderRepository.save(order);
-			return { result: ok(undefined as void), aggregates: [order] };
+			return {
+				result: ok(undefined as void),
+				commits: [enrollment.enrollSaved(order)],
+			};
 		});
 
 	const cancelOrder: CommandHandler<CancelOrderCommand, void> = async (cmd) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.cancel(cmd.reason);
 			await deps.orderRepository.save(order);
-			return { result: ok(undefined as void), aggregates: [order] };
+			return {
+				result: ok(undefined as void),
+				commits: [enrollment.enrollSaved(order)],
+			};
 		});
 
 	const refundPayment: CommandHandler<RefundPaymentCommand, void> = async (
 		cmd,
 	) =>
-		withCommit({ outbox, bus: eventBus, scope }, async () => {
+		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
 			payment.refund();
 			await deps.paymentRepository.save(payment);
-			return { result: ok(undefined as void), aggregates: [payment] };
+			return {
+				result: ok(undefined as void),
+				commits: [enrollment.enrollSaved(payment)],
+			};
 		});
 
 	commandBus.register("PlaceOrder", placeOrder);
@@ -282,13 +300,19 @@ async function simulatePaymentResult(
 	outcome: { kind: "received" } | { kind: "failed"; reason: string },
 ): Promise<void> {
 	const { outbox, eventBus, scope, paymentRepository } = deps;
-	await withCommit({ outbox, bus: eventBus, scope }, async () => {
-		const payment = await paymentRepository.getById(paymentId);
-		if (outcome.kind === "received") payment.receive();
-		else payment.fail(outcome.reason);
-		await paymentRepository.save(payment);
-		return { result: ok(undefined as void), aggregates: [payment] };
-	});
+	await withCommit(
+		{ outbox, bus: eventBus, scope },
+		async (_tx, enrollment) => {
+			const payment = await paymentRepository.getById(paymentId);
+			if (outcome.kind === "received") payment.receive();
+			else payment.fail(outcome.reason);
+			await paymentRepository.save(payment);
+			return {
+				result: ok(undefined as void),
+				commits: [enrollment.enrollSaved(payment)],
+			};
+		},
+	);
 }
 
 async function simulateShippingResult(
@@ -299,13 +323,19 @@ async function simulateShippingResult(
 		| { kind: "failed"; reason: string },
 ): Promise<void> {
 	const { outbox, eventBus, scope, shipmentRepository } = deps;
-	await withCommit({ outbox, bus: eventBus, scope }, async () => {
-		const shipment = await shipmentRepository.getById(shipmentId);
-		if (outcome.kind === "completed") shipment.complete(outcome.trackingId);
-		else shipment.fail(outcome.reason);
-		await shipmentRepository.save(shipment);
-		return { result: ok(undefined as void), aggregates: [shipment] };
-	});
+	await withCommit(
+		{ outbox, bus: eventBus, scope },
+		async (_tx, enrollment) => {
+			const shipment = await shipmentRepository.getById(shipmentId);
+			if (outcome.kind === "completed") shipment.complete(outcome.trackingId);
+			else shipment.fail(outcome.reason);
+			await shipmentRepository.save(shipment);
+			return {
+				result: ok(undefined as void),
+				commits: [enrollment.enrollSaved(shipment)],
+			};
+		},
+	);
 }
 
 // ----------------------------------------------------------------------------

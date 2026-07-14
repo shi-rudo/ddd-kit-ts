@@ -126,8 +126,8 @@ export interface IRepository<
 	 * `aggregate.persistedVersion` when the domain cares about
 	 * delete-vs-update races); in unit-of-work repositories also call
 	 * `session.enrollDeleted(aggregate)`. Event harvest stays the
-	 * orchestrator's job: with plain `withCommit`, return the aggregate
-	 * in the `aggregates` array AND mark it in `deleted`.
+	 * orchestrator's job: with plain `withCommit`, return the opaque token
+	 * from `enrollment.enrollDeleted(aggregate)` in `commits`.
 	 *
 	 * Before reaching for `delete`, ask whether the user-facing "delete"
 	 * is the right domain verb. Most are actually state transitions

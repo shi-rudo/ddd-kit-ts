@@ -103,15 +103,21 @@ const confirmOrder: CommandHandler<
   ConfirmOrderError
 > = async (command) => {
   try {
-    const orderId = await withCommit({ scope, outbox, bus }, async (tx) => {
-      const orders = makeOrderRepository(tx);
-      const order = await orders.getById(command.orderId);
+    const orderId = await withCommit(
+      { scope, outbox, bus },
+      async (tx, enrollment) => {
+        const orders = makeOrderRepository(tx);
+        const order = await orders.getById(command.orderId);
 
-      order.confirm();
-      await orders.save(order);
+        order.confirm();
+        await orders.save(order);
 
-      return { result: order.id, aggregates: [order] };
-    });
+        return {
+          result: order.id,
+          commits: [enrollment.enrollSaved(order)],
+        };
+      },
+    );
 
     return ok(orderId);
   } catch (error) {
@@ -136,14 +142,17 @@ handler wraps that value in `ok(...)`.
 You can also put a `Result` inside `withCommit`'s `result` field:
 
 ```ts
-return withCommit({ scope, outbox }, async (tx) => {
+return withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(command.orderId);
 
   order.confirm();
   await orders.save(order);
 
-  return { result: ok(order.id), aggregates: [order] };
+  return {
+    result: ok(order.id),
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 
@@ -241,14 +250,17 @@ Use it when the caller already wants try/catch semantics.
 `withCommit` is not a command bus. It is a transaction orchestrator.
 
 ```ts
-const orderId = await withCommit({ scope, outbox }, async (tx) => {
+const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(id);
 
   order.confirm();
   await orders.save(order);
 
-  return { result: order.id, aggregates: [order] };
+  return {
+    result: order.id,
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 

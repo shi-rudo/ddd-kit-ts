@@ -3,6 +3,7 @@ import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent, DomainEvent } from "../aggregate/domain-event";
 import {
 	ConcurrencyConflictError,
+	EventHarvestError,
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
@@ -12,6 +13,11 @@ import { InMemoryOutbox } from "../events/outbox";
 import type { EventCommitCandidate } from "../events/ports";
 import { RetryingTransactionScope } from "../repo/retrying-scope";
 import type { TransactionScope } from "../repo/scope";
+import type {
+	AggregateCommitToken,
+	CommitEnrollment,
+	WithCommitWorkResult,
+} from "./handler";
 import { withIdempotentCommit } from "./idempotency";
 import { InMemoryIdempotencyStore } from "./in-memory-idempotency-store";
 
@@ -51,14 +57,123 @@ function createDeps() {
 const request = { key: "req-1", fingerprint: "fp-1" };
 
 describe("withIdempotentCommit", () => {
+	it("rejects a legacy naked aggregate result and releases the claim", async () => {
+		const deps = createDeps();
+		const order = new Order("o-legacy" as OrderId);
+		order.confirm();
+
+		await expect(
+			withIdempotentCommit(
+				deps,
+				request,
+				async () =>
+					({
+						result: "must not commit",
+						aggregates: [order],
+					}) as unknown as WithCommitWorkResult<AnyDomainEvent, string>,
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
+		expect(order.pendingEvents).toHaveLength(1);
+		expect(await deps.outbox.getPending()).toEqual([]);
+
+		await expect(
+			withIdempotentCommit(deps, request, async () => ({
+				result: "retry",
+				commits: [],
+			})),
+		).resolves.toEqual({ replayed: false, result: "retry" });
+	});
+
+	it("seals the user enrollment capability before idempotency completion", async () => {
+		const deps = createDeps();
+		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
+		let signalCompleteStarted: () => void = () => {};
+		const completeStarted = new Promise<void>((resolve) => {
+			signalCompleteStarted = resolve;
+		});
+		let releaseComplete: () => void = () => {};
+		const completeBlocked = new Promise<void>((resolve) => {
+			releaseComplete = resolve;
+		});
+		deps.idempotency.complete = async (ctx, key, outcome) => {
+			await originalComplete(ctx, key, outcome);
+			signalCompleteStarted();
+			await completeBlocked;
+		};
+
+		let leaked: CommitEnrollment<AnyDomainEvent> | undefined;
+		const execution = withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, enrollment) => {
+				leaked = enrollment;
+				return { result: "ok", commits: [] };
+			},
+		);
+		await completeStarted;
+
+		expect(() => leaked?.enrollSaved(new Order("o-late" as OrderId))).toThrow(
+			EventHarvestError,
+		);
+		releaseComplete();
+		await expect(execution).resolves.toEqual({ replayed: false, result: "ok" });
+	});
+
+	it("snapshots commit tokens before idempotency completion can yield", async () => {
+		const deps = createDeps();
+		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);
+		let signalCompleteStarted: () => void = () => {};
+		const completeStarted = new Promise<void>((resolve) => {
+			signalCompleteStarted = resolve;
+		});
+		let releaseComplete: () => void = () => {};
+		const completeBlocked = new Promise<void>((resolve) => {
+			releaseComplete = resolve;
+		});
+		deps.idempotency.complete = async (ctx, key, outcome) => {
+			await originalComplete(ctx, key, outcome);
+			signalCompleteStarted();
+			await completeBlocked;
+		};
+
+		const order = new Order("o-snapshot" as OrderId);
+		order.confirm();
+		let mutableCommits: AggregateCommitToken<AnyDomainEvent>[] = [];
+		const execution = withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, enrollment) => {
+				mutableCommits = [enrollment.enrollSaved(order)];
+				return { result: order.id, commits: mutableCommits };
+			},
+		);
+		await completeStarted;
+		mutableCommits.length = 0;
+		releaseComplete();
+
+		await expect(execution).resolves.toEqual({
+			replayed: false,
+			result: "o-snapshot",
+		});
+		expect(order.pendingEvents).toHaveLength(0);
+		expect(await deps.outbox.getPending()).toHaveLength(1);
+	});
+
 	it("runs the work fresh, stores the outcome, and harvests events", async () => {
 		const deps = createDeps();
 		const order = new Order("o-1" as OrderId);
 
-		const outcome = await withIdempotentCommit(deps, request, async () => {
-			order.confirm();
-			return { result: { orderId: order.id }, aggregates: [order] };
-		});
+		const outcome = await withIdempotentCommit(
+			deps,
+			request,
+			async (_ctx, enrollment) => {
+				order.confirm();
+				return {
+					result: { orderId: order.id },
+					commits: [enrollment.enrollSaved(order)],
+				};
+			},
+		);
 
 		expect(outcome).toEqual({ replayed: false, result: { orderId: "o-1" } });
 		expect(order.pendingEvents).toHaveLength(0); // markPersisted ran
@@ -70,11 +185,17 @@ describe("withIdempotentCommit", () => {
 	it("replays the stored outcome on a duplicate without re-running the work", async () => {
 		const deps = createDeps();
 		let executions = 0;
-		const work = async () => {
+		const work = async (
+			_ctx: undefined,
+			enrollment: CommitEnrollment<AnyDomainEvent>,
+		) => {
 			executions++;
 			const order = new Order("o-1" as OrderId);
 			order.confirm();
-			return { result: { orderId: order.id }, aggregates: [order] };
+			return {
+				result: { orderId: order.id },
+				commits: [enrollment.enrollSaved(order)],
+			};
 		};
 
 		await withIdempotentCommit(deps, request, work);
@@ -90,14 +211,14 @@ describe("withIdempotentCommit", () => {
 		const deps = createDeps();
 		await withIdempotentCommit(deps, request, async () => ({
 			result: "first",
-			aggregates: [],
+			commits: [],
 		}));
 
 		await expect(
 			withIdempotentCommit(
 				deps,
 				{ key: request.key, fingerprint: "fp-OTHER" },
-				async () => ({ result: "second", aggregates: [] }),
+				async () => ({ result: "second", commits: [] }),
 			),
 		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
 	});
@@ -111,14 +232,14 @@ describe("withIdempotentCommit", () => {
 
 		const first = withIdempotentCommit(deps, request, async () => {
 			await firstBlocked;
-			return { result: "first", aggregates: [] };
+			return { result: "first", commits: [] };
 		});
 		// Give the first execution time to claim.
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		const second = withIdempotentCommit(deps, request, async () => ({
 			result: "second",
-			aggregates: [],
+			commits: [],
 		}));
 		await expect(second).rejects.toBeInstanceOf(IdempotencyInFlightError);
 		await expect(second).rejects.toMatchObject({ retryable: true });
@@ -152,7 +273,7 @@ describe("withIdempotentCommit", () => {
 					actualVersion: 2,
 				});
 			}
-			return { result: "second attempt", aggregates: [] };
+			return { result: "second attempt", commits: [] };
 		});
 
 		expect(executions).toBe(2);
@@ -178,11 +299,17 @@ describe("withIdempotentCommit", () => {
 			idempotency: new InMemoryIdempotencyStore<undefined>(),
 		};
 		let executions = 0;
-		const work = async () => {
+		const work = async (
+			_ctx: undefined,
+			enrollment: CommitEnrollment<AnyDomainEvent>,
+		) => {
 			executions++;
 			const order = new Order(`o-${executions}` as OrderId);
 			order.confirm();
-			return { result: { orderId: order.id }, aggregates: [order] };
+			return {
+				result: { orderId: order.id },
+				commits: [enrollment.enrollSaved(order)],
+			};
 		};
 
 		// First call: complete() runs, then the outbox write fails inside
@@ -211,7 +338,7 @@ describe("withIdempotentCommit", () => {
 
 		const retried = await withIdempotentCommit(deps, request, async () => ({
 			result: "second attempt",
-			aggregates: [],
+			commits: [],
 		}));
 		expect(retried).toEqual({ replayed: false, result: "second attempt" });
 	});
@@ -232,7 +359,7 @@ describe("withIdempotentCommit", () => {
 		const deps = createDeps();
 		await withIdempotentCommit(deps, request, async () => ({
 			result: "first",
-			aggregates: [],
+			commits: [],
 		}));
 		let abandoned = false;
 		const originalAbandon = deps.idempotency.abandon.bind(deps.idempotency);
@@ -245,7 +372,7 @@ describe("withIdempotentCommit", () => {
 			withIdempotentCommit(
 				deps,
 				{ key: request.key, fingerprint: "fp-OTHER" },
-				async () => ({ result: "x", aggregates: [] }),
+				async () => ({ result: "x", commits: [] }),
 			),
 		).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
 		expect(abandoned).toBe(false);

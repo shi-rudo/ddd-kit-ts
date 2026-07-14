@@ -139,12 +139,15 @@ type DispatchedEventReceipt = {
  * const outbox = new InMemoryOutbox<OrderEvent>();
  * const bus = new EventBusImpl<OrderEvent>();
  *
- * await withCommit({ scope, outbox, bus }, async (tx) => {
+ * await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
  *   const orderRepository = makeOrderRepository(tx);
  *   const order = await orderRepository.getById(id);
  *   order.confirm();
  *   await orderRepository.save(order);
- *   return { result: order.id, aggregates: [order] };
+ *   return {
+ *     result: order.id,
+ *     commits: [enrollment.enrollSaved(order)],
+ *   };
  * });
  * ```
  */

@@ -12,7 +12,11 @@ import type { EventBus, OutboxWriter } from "../events/ports";
 import { type AggregateClass, IdentityMap } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
-import { withCommit } from "./handler";
+import {
+	type AggregateCommitToken,
+	type CommitEnrollment,
+	withCommit,
+} from "./handler";
 
 /**
  * Thrown when `UnitOfWork.run()` is called while the same instance is
@@ -140,10 +144,10 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  * Repositories enroll every aggregate they write so the unit of work
  * can harvest pending events into the outbox (inside the transaction)
  * and call `markPersisted` after the commit - the same lifecycle
- * `withCommit` runs for its returned `aggregates` array, minus the
- * footgun: with enrollment, "forgot to list the aggregate" cannot
- * happen per call site; each repository implements it once and its
- * tests pin it once.
+ * `withCommit` runs for its opaque commit tokens. The session retains
+ * tokens returned by repository enrollment, so "forgot to list the
+ * aggregate" cannot happen per use-case call site; each repository
+ * implements enrollment once and its tests pin it once.
  *
  * Contract for repository implementations:
  * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats
@@ -154,7 +158,7 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  *   the deleted-gate then throws `AggregateDeletedError` before any SQL
  *   runs (instead of the write surfacing as a confusing
  *   `ConcurrencyConflictError` against the deleted row). Enrollment is
- *   idempotent per instance, mirroring `withCommit`'s reference dedupe,
+ *   idempotent per instance, mirroring `withCommit`'s token dedupe,
  *   and a failed write rolls the whole unit of work back anyway.
  * - `delete(aggregate)` calls {@link enrollDeleted} - ONE call does all
  *   the deletion bookkeeping: the identity-map entry is removed and
@@ -167,9 +171,8 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  * The use case can also enroll manually via `context.session` for the
  * rare write that bypasses a repository.
  */
-export interface UnitOfWorkSession<
-	Evt extends AnyDomainEvent = AnyDomainEvent,
-> {
+export interface UnitOfWorkSession<Evt extends AnyDomainEvent = AnyDomainEvent>
+	extends CommitEnrollment<Evt> {
 	/**
 	 * The per-operation Identity Map (Fowler): one aggregate type+id,
 	 * one in-memory instance. Created fresh per `run()`, cleared on
@@ -179,7 +182,9 @@ export interface UnitOfWorkSession<
 	readonly identityMap: IdentityMap;
 
 	/** Enroll an aggregate that was (or will be) written in this unit of work. */
-	enrollSaved(aggregate: IAggregateRoot<Id<string>, Evt>): void;
+	enrollSaved(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt>;
 
 	/**
 	 * Enroll an aggregate whose row was (or will be) deleted in this
@@ -187,7 +192,9 @@ export interface UnitOfWorkSession<
 	 * are harvested like any other; re-saving the instance afterwards
 	 * throws `AggregateDeletedError`.
 	 */
-	enrollDeleted(aggregate: IAggregateRoot<Id<string>, Evt>): void;
+	enrollDeleted(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt>;
 }
 
 /**
@@ -300,18 +307,18 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
  * - **Tx-bound repositories via a registry.** The callback receives
  *   ready-made repositories instead of a raw transaction handle; the
  *   factory map is wired once at construction.
- * - **Enrollment instead of a returned aggregates array.** Repositories
- *   enroll what they write via {@link UnitOfWorkSession}; the use case
- *   cannot forget to list an aggregate (the `withCommit` footgun).
+ * - **Repository-owned enrollment.** Repositories enroll what they write via
+ *   {@link UnitOfWorkSession}; the session retains the invocation-scoped
+ *   commit tokens, so the use case cannot forget to return one.
  * - **Lifecycle errors.** {@link NestedUnitOfWorkError},
  *   {@link TransactionClosedError}, {@link CommitError},
  *   {@link RollbackError}, {@link AggregateDeletedError}.
  *
  * - **A per-operation Identity Map** on the session: repositories
  *   check it before hydrating and register after, so one type+id maps
- *   to one in-memory instance per unit of work (the contract
- *   `withCommit`'s reference-dedupe relies on, now shipped instead of
- *   merely documented).
+ *   to one in-memory instance per unit of work (the contract that makes
+ *   reference-keyed commit-token enrollment sound, now shipped instead
+ *   of merely documented).
  *
  * What it deliberately does NOT do (v1): no auto-flush (explicit
  * `save()` only - `hasChanges` makes a redundant save a cheap no-op),
@@ -404,7 +411,7 @@ export class UnitOfWork<
 					onPersistError: this.deps.onPersistError,
 					signal: options?.signal,
 				},
-				async (tx) => {
+				async (tx, enrollment) => {
 					// Fresh state per scope invocation: a TransactionScope that
 					// retries its callback (serialization-failure retry wrappers)
 					// re-runs this fn, and state from the rolled-back attempt
@@ -412,7 +419,7 @@ export class UnitOfWork<
 					// leak into the retry. The previous attempt's session is
 					// closed so its leaked contexts turn loud.
 					session?.close();
-					const s = new Session<Evt>();
+					const s = new Session<Evt>(enrollment);
 					session = s;
 					workCompleted = false;
 					workThrew = false;
@@ -433,10 +440,9 @@ export class UnitOfWork<
 						// repo.save() promise still in flight) must throw
 						// TransactionClosedError instead of being silently
 						// accepted-but-never-harvested.
-						const aggregates = s.enrolledAggregates;
-						const deleted = s.deletedAggregates;
+						const commits = s.commitTokens;
 						s.close();
-						return { result, aggregates, deleted };
+						return { result, commits };
 					} catch (error) {
 						workThrew = true;
 						workError = error;
@@ -473,15 +479,20 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	// then preserves per-aggregate emission order).
 	private readonly _enrolled = new Set<IAggregateRoot<Id<string>, Evt>>();
 	private readonly _deleted = new Set<IAggregateRoot<Id<string>, Evt>>();
+	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
 	private _closed = false;
+
+	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
 
 	public get identityMap(): IdentityMap {
 		this.assertOpen("session.identityMap");
 		return this._identityMap;
 	}
 
-	public enrollSaved(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+	public enrollSaved(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt> {
 		this.assertOpen("session.enrollSaved");
 		// Two gates, one invariant: the instance set catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
@@ -498,10 +509,16 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 			throw new AggregateDeletedError(String(aggregate.id));
 		}
 		this._enrolled.add(aggregate);
+		const token = this.commitEnrollment.enrollSaved(aggregate);
+		this._commitTokens.add(token);
+		return token;
 	}
 
-	public enrollDeleted(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+	public enrollDeleted(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+	): AggregateCommitToken<Evt> {
 		this.assertOpen("session.enrollDeleted");
+		const token = this.commitEnrollment.enrollDeleted(aggregate);
 		this._deleted.add(aggregate);
 		// One call does ALL the deletion bookkeeping: the identity-map
 		// entry is removed and tombstoned automatically (keyed on the
@@ -517,9 +534,11 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// Deleted aggregates stay in the harvest set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
 		// delete with event harvest). withCommit receives them in the
-		// `deleted` marker set and skips markPersisted for them, so the
+		// deleted token disposition and skips markPersisted for them, so the
 		// post-save onPersisted hook never fires for a deletion.
 		this._enrolled.add(aggregate);
+		this._commitTokens.add(token);
+		return token;
 	}
 
 	/**
@@ -547,16 +566,8 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		}
 	}
 
-	public get enrolledAggregates(): ReadonlyArray<
-		IAggregateRoot<Id<string>, Evt>
-	> {
-		return [...this._enrolled];
-	}
-
-	public get deletedAggregates(): ReadonlyArray<
-		IAggregateRoot<Id<string>, Evt>
-	> {
-		return [...this._deleted];
+	public get commitTokens(): ReadonlyArray<AggregateCommitToken<Evt>> {
+		return [...this._commitTokens];
 	}
 
 	public close(): void {

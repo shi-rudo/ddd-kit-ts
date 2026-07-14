@@ -68,7 +68,7 @@ Use `pendingEvents` and `clearPendingEvents()` on both aggregate base classes. O
 
 The word "pending" matters. These events have happened in memory, but they have not been safely handed to the transaction/outbox boundary yet. Calling them `domainEvents` makes them sound like a historical event log. They are not. They are a short-lived queue owned by the aggregate until `withCommit` harvests them and `markPersisted` clears them after commit.
 
-Review signal: code that reads `pendingEvents` directly should be rare. Application code usually returns `{ aggregates: [aggregate] }` and lets `withCommit` do the harvest. Direct reads are mostly for tests, custom orchestration, or diagnostics.
+Review signal: code that reads `pendingEvents` directly should be rare. Application code returns invocation-bound commit tokens and lets `withCommit` do the harvest. Direct reads are mostly for tests, custom orchestration, or diagnostics.
 
 ### Passing a Transaction to `repo.save`
 
@@ -83,11 +83,14 @@ Do not call `repo.save(tx, aggregate)`.
 In this kit, a repository instance is already bound to the transaction. You create it inside the transaction boundary:
 
 ```ts
-await withCommit({ tx }, async (tx) => {
+await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orderRepository = makeOrderRepository(tx);
   await orderRepository.save(order);
 
-  return { result: order.id, aggregates: [order] };
+  return {
+    result: order.id,
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 
@@ -95,19 +98,25 @@ That shape keeps the transaction out of the domain-facing repository API. Caller
 
 This is a small version of dependency inversion. The application service asks for an order repository scoped to this operation; the adapter knows how to bind it to the database transaction. See [Repository](./repository.md).
 
-### Returning Events from `withCommit`
+### Returning Naked Aggregates Or Events From `withCommit`
 
-The `withCommit` callback should return participating aggregates, not manually harvested events.
+The `withCommit` callback should return opaque commit tokens, not naked aggregates or manually harvested events.
 
 ```ts
 // Wrong
 return { result, events: order.pendingEvents };
 
-// Right
+// Also wrong: touching an aggregate does not prove it was saved
 return { result, aggregates: [order] };
+
+// Right, after the repository write succeeds
+return {
+  result,
+  commits: [enrollment.enrollSaved(order)],
+};
 ```
 
-The callback's job is to declare which aggregates participated in the transaction. `withCommit` then harvests events from those aggregates at the correct point in the lifecycle.
+The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If an enrolled write should not commit, throw so the transaction rolls back. `withCommit` then harvests events from those enrolled aggregates at the correct point in the lifecycle.
 
 Manual harvesting is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will harvest before save, some after save, and some after an error. The whole point of `withCommit` is to centralize that order:
 
@@ -118,7 +127,7 @@ Manual harvesting is tempting because it looks explicit. The problem is timing. 
 5. Commit.
 6. Mark aggregates as persisted.
 
-Return aggregates and let the unit-of-work boundary do its job. See [Outbox & Transactions](./outbox.md).
+Return commit tokens and let the unit-of-work boundary do its job. See [Outbox & Transactions](./outbox.md).
 
 ## Runtime Mistakes
 
@@ -222,10 +231,16 @@ const orderB = await orders.findById(orderId);
 orderA.confirm();
 orderB.ship("tracking-123");
 
-return { result: orderId, aggregates: [orderA, orderB] };
+return {
+  result: orderId,
+  commits: [
+    enrollment.enrollSaved(orderA),
+    enrollment.enrollSaved(orderB),
+  ],
+};
 ```
 
-If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can try to save state. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on save order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
+If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can receive different commit tokens. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on save order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
 
 An identity map makes the second `findById` return the same object. Now the operation is forced to deal with one aggregate instance and one version history.
 

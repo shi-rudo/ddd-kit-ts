@@ -119,10 +119,10 @@ factory.
 Within one unit of work, loading the same aggregate twice must return the same
 JavaScript object.
 
-That is not just an optimization. `withCommit` dedupes aggregates by object
-identity before harvesting events. If a repository returns two different
-instances for the same aggregate id, both instances can be harvested and
-marked independently.
+That is not just an optimization. Commit enrollment is idempotent by object
+identity. If a repository returns two different instances for the same
+aggregate id, it can mint two different commit tokens and both instances can
+be harvested and marked independently.
 
 The map is per operation:
 
@@ -159,19 +159,30 @@ across operations; that bypasses optimistic concurrency.
 publish events, does not clear pending events, and does not call
 `markPersisted`.
 
-With plain `withCommit`, the use case returns the saved aggregate:
+With plain `withCommit`, the callback receives an invocation-scoped enrollment
+capability. After the repository write succeeds, enroll the saved aggregate
+and return the opaque token. A naked aggregate is not commit evidence:
 
 ```ts
-await withCommit({ scope, outbox, bus }, async (tx) => {
+await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
   order.confirm();
   await orders.save(order);
 
-  return { result: order.id, aggregates: [order] };
+  const commit = enrollment.enrollSaved(order);
+  return { result: order.id, commits: [commit] };
 });
 ```
+
+The token proves that this invocation's enrollment capability issued it. It
+cannot prove what an arbitrary storage adapter did internally, so only the
+repository should attest its participating write. This is a crash-loud
+contract boundary against accidental smuggling, not a security boundary
+against application code deliberately claiming a write it never made. Return
+every token the callback obtains: omitting an enrolled write rejects the
+transaction. Throw instead when that write must roll back.
 
 With `UnitOfWork`, the repository enrolls the aggregate before the row write:
 
@@ -386,14 +397,17 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   }
 }
 
-await withCommit({ scope, outbox, bus }, async (tx) => {
+await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
   order.archive(reason, new Date());
   await orders.save(order);
 
-  return { result: undefined, aggregates: [order] };
+  return {
+    result: undefined,
+    commits: [enrollment.enrollSaved(order)],
+  };
 });
 ```
 
@@ -416,18 +430,21 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   }
 }
 
-await withCommit({ scope, outbox, bus }, async (tx) => {
+await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
   order.recordDeletion(reason, new Date());
   await orders.delete(order);
 
-  return { result: undefined, aggregates: [order], deleted: [order] };
+  return {
+    result: undefined,
+    commits: [enrollment.enrollDeleted(order)],
+  };
 });
 ```
 
-The `deleted` marker tells `withCommit` to harvest the event but skip
+The deleted commit token tells `withCommit` to harvest the event but skip
 `markPersisted`, because the row no longer exists. In a `UnitOfWork`
 repository, `delete` should call `session.enrollDeleted(order)`, which also
 tombstones the identity map entry for the rest of the run.
