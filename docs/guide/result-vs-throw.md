@@ -20,18 +20,18 @@ about boundaries:
 | Value object class constructor | instance | throws `DomainError` subclass |
 | `voWithValidation` | `Result<VO<T>, string>` | `Err<string>` |
 | `voValidated` | `Result<VO<T>, ValidationError>` | `Err<ValidationError>` |
-| `CommandHandler<C, R, E>` | `Ok<R>` | `Err<E>` or throw for the bus mapper |
-| `CommandBus.execute` | `Result<R, E>` | catches handler throws into `Err<E>` |
+| `CommandHandler<C, R, E>` | `Ok<R>` | `Err<E>` or throw |
+| `CommandBus.execute` | `Result<R, E>` | passes through `Err<E>`; selectively maps a recognized throw, otherwise rethrows |
 | `QueryHandler<Q, R>` | `R` | throws |
-| `QueryBus.execute` | `Result<R, E>` | catches handler throws into `Err<E>` |
+| `QueryBus.execute` | `Result<R, E>` | selectively maps a recognized throw, otherwise rethrows |
 | `QueryBus.executeUnsafe` | `R` | throws |
 | `withCommit` | `R` | throws |
 | `UnitOfWork.run` | `R` | throws |
 | `loadFromHistory` / snapshot replay | `Result<void, DomainError>` | `Err<DomainError>` for domain-nameable corruption; wiring and infrastructure corruption still throws (`ForeignEventError`, `SnapshotSchemaMismatchError`) |
 
 The old mental shortcut "app-service boundary returns Result" is too broad.
-The bus boundary returns `Result`; the transaction helper returns whatever you
-put in its `result` field.
+Bus results carry explicit expected failures, but unclassified exceptions still
+throw. The transaction helper returns whatever you put in its `result` field.
 
 ## Domain Code Throws
 
@@ -160,14 +160,16 @@ That is useful when you want the transaction helper to return the exact
 handler result. It does not change `withCommit`; it still returns the `result`
 value you supplied.
 
-## Buses Map Throws
+## Buses Map Only Expected Throws
 
-`CommandBus.execute` always returns `Result<R, E>`.
+`CommandBus.execute` returns `Result<R, E>` when the handler returns normally.
+It does not assume that every thrown value belongs in `E`.
 
-If a command handler returns `err(...)`, that error passes through. If the
-handler throws, the bus catches the thrown value and maps it into `E`.
+If a command handler returns `err(...)`, that error passes through. With no
+error policy, a handler throw propagates unchanged.
 
-By default, `E` is `string`:
+The default error-channel type is still `string`, so handlers can return
+string errors without configuration:
 
 ```ts
 const commandBus = new CommandBus<CommandResults>();
@@ -182,24 +184,45 @@ if (result.isErr()) {
 }
 ```
 
-For typed error channels, widen `E` and provide an `errorMapper`:
+For typed error channels, widen `E`. No mapper is required when handlers
+return `err(typedError)` directly:
 
 ```ts
-import {
-  toStructuredError,
-  type StructuredError,
-} from "@shirudo/base-error";
+const commandBus = new CommandBus<CommandResults, ConfirmOrderError>();
+```
 
-const commandBus = new CommandBus<CommandResults, StructuredError>({
-  errorMapper: toStructuredError,
+When an exception-first dependency exposes a known expected failure, classify
+and map only that type:
+
+```ts
+const commandBus = new CommandBus<CommandResults, ConfirmOrderError>({
+  mapExpectedError: (thrown) =>
+    thrown instanceof OrderAlreadyConfirmedError
+      ? {
+          error: {
+            code: "ORDER_ALREADY_CONFIRMED",
+            orderId: thrown.orderId,
+          },
+        }
+      : undefined,
 });
 ```
 
-The mapper is required when the bus error type is not the default `string`.
-That prevents a typed channel from silently falling back to string errors.
+Returning `{ error }` is the positive classification decision. Returning
+`undefined` rethrows the exact original value. The wrapper also leaves
+`undefined` available as an intentional error-channel value:
 
-An unregistered command or query type is not mapped into the error channel. It
-throws `UnregisteredHandlerError`, because it is a wiring bug.
+```ts
+mapExpectedError: (thrown) =>
+  thrown instanceof ExpectedEmptyFailure ? { error: undefined } : undefined;
+```
+
+An unregistered command or query type always throws
+`UnregisteredHandlerError`. A nested bus wiring error and a failure thrown by
+`mapExpectedError` also stay crash-loud. Do not use a total conversion such as
+`(thrown) => ({ error: toStructuredError(thrown) })`: that would explicitly
+classify programming errors, cancellation, and unknown infrastructure failures
+as ordinary business outcomes.
 
 ## Queries Return Data
 
@@ -231,8 +254,9 @@ if (result.isOk()) {
 }
 ```
 
-If the handler throws, `execute` maps the thrown value into `Err<E>` using the
-same default/string or configured `errorMapper` behavior as the command bus.
+If the handler throws, `execute` uses the same selective `mapExpectedError`
+policy as the command bus. With no policy, or when the policy returns
+`undefined`, the exact thrown value propagates.
 
 `executeUnsafe` skips the `Result` wrapper:
 

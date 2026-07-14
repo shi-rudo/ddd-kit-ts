@@ -591,14 +591,15 @@ export interface ErrorMapperFailedErrorOptions {
 	readonly busKind: "command" | "query";
 	/** The registered handler's ORIGINAL failure (also set as `cause`). */
 	readonly handlerError: unknown;
-	/** The value the errorMapper itself threw. */
+	/** The mapper failure or invalid-decision diagnostic. */
 	readonly mapperError: unknown;
 }
 
 /**
  * Produced by the in-memory `CommandBus` / `QueryBus` when the configured
- * `errorMapper` THROWS while mapping a registered handler's failure. A
- * broken mapper is a wiring bug: letting its throw propagate bare would
+ * `mapExpectedError` policy fails while classifying a registered handler's
+ * failure, either by throwing or by returning an invalid decision. A broken
+ * mapper is a wiring bug: letting its failure propagate bare would
  * replace the handler's original failure entirely, and the rest of the
  * kit is fastidious about never letting a secondary failure mask the
  * primary one (`RollbackError.rollbackCause`, the neutralized observers).
@@ -613,13 +614,14 @@ export interface ErrorMapperFailedErrorOptions {
  */
 export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"> {
 	readonly busKind: "command" | "query";
-	/** The value the errorMapper itself threw. */
+	/** The mapper failure or invalid-decision diagnostic. */
 	readonly mapperCause: unknown;
 
 	constructor(options: ErrorMapperFailedErrorOptions) {
 		super(
 			"ERROR_MAPPER_FAILED",
-			`The ${options.busKind} bus errorMapper threw while mapping a ` +
+			`The ${options.busKind} bus mapExpectedError policy failed while ` +
+				"classifying a " +
 				"handler failure. The original handler error is preserved as " +
 				"cause; the mapper's own failure as mapperCause.",
 			options.handlerError,

@@ -1,10 +1,9 @@
 import type { Result } from "@shirudo/result";
 import {
-	type BusArgs,
+	type ExpectedErrorMapper,
 	handlerOrThrow,
 	mapHandlerFailure,
 	registerOnce,
-	resolveErrorMapper,
 } from "./bus-internals";
 import type { Command, CommandHandler } from "./command";
 
@@ -46,24 +45,14 @@ type CommandTypeMap = Record<string, unknown>;
  */
 export interface CommandBusOptions<E = string> {
 	/**
-	 * Maps a value thrown by a registered handler into the bus's error
-	 * channel `E`. Dispatching an unregistered command type is NOT mapped:
-	 * that wiring bug throws `UnregisteredHandlerError`. Defaults to
-	 * `describeThrown`, which renders any thrown value as a `string`.
-	 * base-error's `toStructuredError` fits this slot directly when `E` is a
-	 * `StructuredError`.
+	 * Explicitly recognizes an expected handler failure and maps it into the
+	 * bus's error channel. Return `{ error }` only for failures this boundary
+	 * owns; return `undefined` to rethrow the exact original value. With no
+	 * mapper, every handler throw propagates. Unregistered-handler and nested
+	 * bus wiring errors always propagate.
 	 */
-	errorMapper?: (thrown: unknown) => E;
+	mapExpectedError?: (thrown: unknown) => { readonly error: E } | undefined;
 }
-
-/**
- * Constructor arguments for {@link CommandBus}. When `E` is the default
- * `string`, options are optional (the built-in `describeThrown` mapper
- * applies). When `E` is widened, an `errorMapper` is required, so a typed
- * channel can never silently fall back to string values. The conditional
- * lives in the shared {@link BusArgs} so the two buses cannot drift.
- */
-type CommandBusArgs<E> = BusArgs<E, CommandBusOptions<E>>;
 
 /**
  * Command Bus interface for dispatching commands to their handlers.
@@ -101,6 +90,9 @@ export interface ICommandBus<
 	 * @returns Result containing the success value or an error of type `E`
 	 * @throws UnregisteredHandlerError when no handler is registered for
 	 *   `command.type` (a wiring bug; never delivered through the channel)
+	 * @throws The exact handler failure when `mapExpectedError` is absent or
+	 *   returns `undefined`
+	 * @throws ErrorMapperFailedError when `mapExpectedError` fails
 	 */
 	execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
@@ -167,10 +159,10 @@ export class CommandBus<
 > implements ICommandBus<TMap, E>
 {
 	private readonly handlers = new Map<string, StoredCommandHandler<E>>();
-	private readonly errorMapper: (thrown: unknown) => E;
+	private readonly mapExpectedError: ExpectedErrorMapper<E> | undefined;
 
-	constructor(...args: CommandBusArgs<E>) {
-		this.errorMapper = resolveErrorMapper(args[0]);
+	constructor(options?: CommandBusOptions<E>) {
+		this.mapExpectedError = options?.mapExpectedError;
 	}
 
 	register<
@@ -193,7 +185,7 @@ export class CommandBus<
 		try {
 			return (await handler(command)) as Result<R, E>;
 		} catch (error) {
-			return mapHandlerFailure(error, this.errorMapper, "command");
+			return mapHandlerFailure(error, this.mapExpectedError, "command");
 		}
 	}
 }
