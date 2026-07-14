@@ -750,7 +750,8 @@ Aggregate constructors pass that value through
 `super(id, state, { domainEventFactory })`. `recordEvent(...)` and
 `createSnapshot()` then use the same captured factory and clock. Omitting the
 config preserves the zero-configuration default. Per-event `eventId` and
-`occurredAt` options continue to override factory defaults.
+`occurredAt` options continue to override factory defaults. Captured clock
+readings are defensively copied and reject an invalid `Date` immediately.
 
 ### Changed (breaking): domain-event factories are immutable and instance-bound
 

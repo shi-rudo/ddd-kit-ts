@@ -4,8 +4,8 @@ import {
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
-	defaultDomainEventFactory,
 	type DomainEvent,
+	defaultDomainEventFactory,
 	type EventMetadata,
 	mergeMetadata,
 } from "./domain-event";
@@ -273,6 +273,20 @@ describe("DomainEvent", () => {
 			expect(reading).not.toBe(shared);
 			expect(reading).not.toBe(event.occurredAt);
 			expect(reading.getTime()).toBe(shared.getTime());
+		});
+
+		it("rejects an invalid Date from its captured clock at every read path", () => {
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => "event-id",
+				clock: () => new Date(Number.NaN),
+			});
+
+			expect(() => factory.now()).toThrowError(
+				new TypeError("domain-event clock must return a valid Date"),
+			);
+			expect(() => factory.create("Ticked")).toThrowError(
+				new TypeError("domain-event clock must return a valid Date"),
+			);
 		});
 	});
 

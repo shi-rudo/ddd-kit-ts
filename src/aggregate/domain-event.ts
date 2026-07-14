@@ -197,7 +197,10 @@ export interface DomainEventFactory {
 			options?: CreateDomainEventOptions,
 		): DomainEvent<T, P>;
 	};
-	/** Reads the captured clock and returns a defensive `Date` copy. */
+	/**
+	 * Reads the captured clock and returns a defensive `Date` copy.
+	 * Throws `TypeError` when the clock does not return a valid date.
+	 */
 	readonly now: () => Date;
 }
 

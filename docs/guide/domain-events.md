@@ -133,6 +133,8 @@ The returned `DomainEventFactory` is frozen and permanently captures those two
 functions. Creating another factory cannot change this one or the
 `defaultDomainEventFactory`. This makes the same API safe across overlapping
 async requests and parallel tests; no restore hook or async context is needed.
+Every clock read is defensively copied and fails immediately with a `TypeError`
+if the injected clock does not return a valid `Date`.
 
 Per-event `eventId` and `occurredAt` options still win over the captured
 defaults.
