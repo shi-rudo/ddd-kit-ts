@@ -19,6 +19,7 @@ import type {
 	WithCommitWorkResult,
 } from "./handler";
 import { withIdempotentCommit } from "./idempotency";
+import type { IdempotencyClaimHandle } from "./idempotency";
 import { InMemoryIdempotencyStore } from "./in-memory-idempotency-store";
 
 type OrderId = Id<"OrderId">;
@@ -55,6 +56,18 @@ function createDeps() {
 }
 
 const request = { key: "req-1", fingerprint: "fp-1" };
+
+async function claimHandle(
+	store: InMemoryIdempotencyStore<undefined>,
+	key: string,
+	fingerprint: string,
+): Promise<IdempotencyClaimHandle> {
+	const claim = await store.claim(undefined, key, fingerprint);
+	if (claim.status !== "claimed") {
+		throw new Error(`Expected a fresh claim, received ${claim.status}`);
+	}
+	return claim.claim;
+}
 
 describe("withIdempotentCommit", () => {
 	it("rejects a legacy naked aggregate result and releases the claim", async () => {
@@ -363,9 +376,9 @@ describe("withIdempotentCommit", () => {
 		}));
 		let abandoned = false;
 		const originalAbandon = deps.idempotency.abandon.bind(deps.idempotency);
-		deps.idempotency.abandon = async (key: string) => {
+		deps.idempotency.abandon = async (claim: IdempotencyClaimHandle) => {
 			abandoned = true;
-			return originalAbandon(key);
+			return originalAbandon(claim);
 		};
 
 		await expect(
@@ -382,10 +395,10 @@ describe("withIdempotentCommit", () => {
 describe("InMemoryIdempotencyStore", () => {
 	it("isolates stored outcomes from caller mutation", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
-		await store.claim(undefined, "k", "fp");
+		const handle = await claimHandle(store, "k", "fp");
 		const outcome = { items: ["a"] };
-		await store.complete(undefined, "k", outcome);
-		await store.confirm("k");
+		await store.complete(undefined, handle, outcome);
+		await store.confirm(handle);
 		outcome.items.push("b"); // caller mutates after storing
 
 		const claim = await store.claim(undefined, "k", "fp");
@@ -402,15 +415,15 @@ describe("InMemoryIdempotencyStore", () => {
 
 	it("throws the wiring error on complete without a claim", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
-		await expect(store.complete(undefined, "k", "x")).rejects.toBeInstanceOf(
-			IdempotencyCompletionWithoutClaimError,
-		);
+		await expect(
+			store.complete(undefined, { key: "k", token: "missing" }, "x"),
+		).rejects.toBeInstanceOf(IdempotencyCompletionWithoutClaimError);
 	});
 
 	it("a staged, unconfirmed outcome is in-flight, never replayed", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
-		await store.claim(undefined, "k", "fp");
-		await store.complete(undefined, "k", "uncommitted");
+		const handle = await claimHandle(store, "k", "fp");
+		await store.complete(undefined, handle, "uncommitted");
 		await expect(store.claim(undefined, "k", "fp")).rejects.toBeInstanceOf(
 			IdempotencyInFlightError,
 		);
@@ -418,17 +431,19 @@ describe("InMemoryIdempotencyStore", () => {
 
 	it("abandon releases pending and staged entries, never confirmed records", async () => {
 		const store = new InMemoryIdempotencyStore<undefined>();
-		await store.claim(undefined, "staged", "fp");
-		await store.complete(undefined, "staged", "uncommitted");
-		await store.abandon("staged");
-		await expect(store.claim(undefined, "staged", "fp")).resolves.toEqual({
-			status: "claimed",
-		});
+		const staged = await claimHandle(store, "staged", "fp");
+		await store.complete(undefined, staged, "uncommitted");
+		await store.abandon(staged);
+		await expect(store.claim(undefined, "staged", "fp")).resolves.toMatchObject(
+			{
+				status: "claimed",
+			},
+		);
 
-		await store.claim(undefined, "confirmed", "fp");
-		await store.complete(undefined, "confirmed", "done");
-		await store.confirm("confirmed");
-		await store.abandon("confirmed");
+		const confirmed = await claimHandle(store, "confirmed", "fp");
+		await store.complete(undefined, confirmed, "done");
+		await store.confirm(confirmed);
+		await store.abandon(confirmed);
 		const claim = await store.claim(undefined, "confirmed", "fp");
 		expect(claim).toEqual({ status: "completed", outcome: "done" });
 	});

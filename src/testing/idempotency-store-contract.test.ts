@@ -7,12 +7,28 @@ import {
 
 function createInMemoryHarness(): IdempotencyStoreContractHarness<undefined> {
 	return {
-		createEnvironment: async () => ({
-			store: new InMemoryIdempotencyStore<undefined>(),
-			run: (work) => work(undefined),
-		}),
+		createEnvironment: async () => {
+			let now = new Date("2026-07-14T10:00:00.000Z");
+			let token = 0;
+			return {
+				store: new InMemoryIdempotencyStore<undefined>({
+					clock: () => new Date(now),
+					claimTokenFactory: () => `claim-${++token}`,
+					leaseDurationMs: 100,
+					renewAfterMs: 40,
+				}),
+				run: (work) => work(undefined),
+				expireLease: async (claim) => {
+					if (!claim.lease) throw new Error("leased claim expected");
+					now = new Date(new Date(claim.lease.expiresAt).getTime() + 1);
+				},
+				advanceTimeTo: async (instant) => {
+					now = new Date(instant);
+				},
+			};
+		},
 		// The in-memory store cannot see commits: complete() stages, confirm()
-		// finalizes, abandon() compensates. That is the two-phase-hooks family.
+		// finalizes, abandon() compensates, and leases make crashes recoverable.
 		family: "non-transactional",
 	};
 }
@@ -31,15 +47,20 @@ describe("idempotency-store contract suite against InMemoryIdempotencyStore", ()
 		]);
 	});
 
-	it("the transactional family runs the rollback proof and skips the two-phase-hook tests", () => {
+	it("the transactional family runs the rollback proof and skips the leased-store tests", () => {
 		const harness = createInMemoryHarness();
 		harness.family = "transactional";
 		const transactionalTests = createIdempotencyStoreContractTests(harness);
 
 		const skipped = transactionalTests.filter((test) => test.skipped);
 		// In-flight (sequentially unprovable for the single-transaction
-		// pattern) plus the three two-phase-hook proofs.
+		// pattern), four lease/reconciliation proofs, plus the three
+		// leased-store lifecycle proofs.
 		expect(skipped.map((test) => test.skipped?.capability)).toEqual([
+			"family: non-transactional",
+			"family: non-transactional",
+			"family: non-transactional",
+			"family: non-transactional",
 			"family: non-transactional",
 			"family: non-transactional",
 			"family: non-transactional",
