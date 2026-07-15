@@ -1,12 +1,12 @@
 # Process Manager / Saga example
 
-A worked example of orchestrating a multi-step business workflow across three aggregates using `EventBus` + `CommandBus` + a Process-Manager aggregate. Vernon IDDD §12-13.
+A worked example of orchestrating a multi-step business workflow across three aggregates using `EventBus` + `CommandBus` + a Process-Manager aggregate. It includes state-stored and event-sourced process-state variants. Vernon IDDD §12-13.
 
 ::: info Saga vs Process Manager
 The two terms are often used interchangeably in modern DDD, but they trace to different sources:
 
 - **Saga** (Garcia-Molina & Salem, 1987): a sequence of local transactions, each with a compensating action. Can be choreographed (each step listens for events independently) or orchestrated.
-- **Process Manager** (Hohpe & Woolf, *Enterprise Integration Patterns*; Vernon, *IDDD* §12): specifically a centralised, stateful orchestrator. The Process Manager IS an aggregate.
+- **Process Manager** (Hohpe & Woolf, *Enterprise Integration Patterns*; Vernon, *IDDD* §12): specifically a centralised, stateful orchestrator. It owns process state and can reuse aggregate persistence and concurrency mechanics; it does not own participant business invariants.
 
 This example implements a **Process Manager** (centralised state machine in `CheckoutSaga`) but calls it `CheckoutSaga` because that's the term most consumers reach for. If you wanted choreography instead, you'd remove `CheckoutSaga` and put the "what to do next" logic directly into each aggregate's event subscribers, with no central state.
 :::
@@ -35,17 +35,24 @@ PlaceOrder ──▶ Order.place ──▶ OrderPlaced ─┐
 ## Files
 
 - **`order.ts`**, **`payment.ts`**, **`shipping.ts`**: three small state-stored aggregates (`AggregateRoot`). Each has a `static create` / `static request` factory that records its first event, plus domain methods (`confirm`, `cancel`, `receive`, `fail`, `complete`) that mutate state and record events.
-- **`checkout-saga.ts`**: the Process Manager. It is an `AggregateRoot` whose lifecycle is implemented with `DomainMachineDefinition`, `createInitialDomainMachineSnapshot`, and `transitionDomainState` (`awaiting-payment` → `awaiting-shipping` → `completed` / `cancelled-*`). Its aggregate `TEvent` generic stays at `never`: the saga does not publish events of its own; application subscribers dispatch commands after its transition methods succeed.
+- **`checkout-saga.ts`**: the state-stored Process Manager. It is an `AggregateRoot` whose lifecycle is implemented with `DomainMachineDefinition`, `createInitialDomainMachineSnapshot`, and `transitionDomainState` (`awaiting-payment` → `awaiting-shipping` → `completed` / `cancelled-*`). Its aggregate `TEvent` generic stays at `never`: the saga does not publish events of its own; application subscribers dispatch commands after its transition methods succeed.
+- **`event-sourced-checkout-saga.ts`**: the compact event-sourced counterpart. It uses `EventSourcedAggregate`; process decisions are the stream's source of truth, pure handlers evolve process state, and `reconstitute` plus `loadFromHistory` emits no new work. Its decision events carry enough data for an application/outbox subscriber to map them to participant commands after commit.
 - **`saga.spec.ts`**: wiring + tests. Three scenarios:
   1. Happy path: order → payment received → shipping completed → order confirmed
   2. Payment-failure compensation: payment fails → saga cancels → order cancelled, no shipment created
   3. Shipping-failure compensation: payment succeeds, shipping fails → saga refunds payment → cancels order
+- **`event-sourced-checkout-saga.spec.ts`**: pins decision events, replay without new pending events, terminal compensation decisions, and illegal-transition rejection.
 
 ## Key patterns demonstrated
 
-### The saga is an aggregate
+### The saga reuses aggregate mechanics
 
-Per Vernon §12, a Process Manager has identity, state, and a lifecycle: exactly an aggregate. `CheckoutSaga` extends `AggregateRoot<CheckoutSagaState, OrderId>` and is persisted through `IRepository` just like `Order` / `Payment` / `Shipment`. Saga id = `OrderId` (one saga per order).
+Per Vernon §12, a Process Manager has identity, durable state, and a lifecycle,
+so aggregate mechanics are a useful implementation shape. Conceptually it
+coordinates process invariants rather than owning the immediate business
+invariants of `Order`, `Payment`, or `Shipment`. `CheckoutSaga` extends
+`AggregateRoot<CheckoutSagaState, OrderId>` and is persisted through
+`IRepository`; saga id = `OrderId` (one saga per order).
 
 Its public methods stay in the ubiquitous language (`advanceToShipping()`,
 `cancelOnPaymentFailure()`), while an internal `DomainMachineDefinition` is the
@@ -58,20 +65,44 @@ structured `InvalidDomainTransitionError`.
 ### The saga's outgoing work is commands
 
 A Process Manager's job is to turn events into commands: it consumes events from
-other aggregates and requests the next step in the workflow. This example keeps
-that application orchestration explicit in the EventBus subscribers: the saga's
-machine transitions update state and return no machine `outputs`; after the saga
-is saved, the subscriber dispatches the corresponding command.
+other aggregates and requests the next step in the workflow. The state-stored
+example keeps that application orchestration explicit in the EventBus
+subscribers: the saga's machine transitions update state and return no machine
+`outputs`; after the saga is saved, the subscriber dispatches the corresponding
+command.
 
 An alternative is to return command-shaped machine `outputs` from reducers and
 let the application layer dispatch them after persistence. Those values are not
 domain events and are not published automatically. This example also keeps the
-aggregate's `TEvent = never`, so it records no progress events. If monitoring or
-downstream processes need `CheckoutStarted`, `AwaitingPayment`, or
-`ProcessCompleted`, declare an aggregate event union and record those events via
-`recordEvent`/`commit`; do not reinterpret machine outputs as domain events.
+state-stored aggregate's `TEvent = never`, so it records no progress events. If
+monitoring or downstream processes need `CheckoutStarted`, `AwaitingPayment`,
+or `ProcessCompleted`, declare an aggregate event union and record those events
+via `recordEvent`/`commit`; do not reinterpret machine outputs as domain events.
 
-Either way the core principle holds: Process Managers turn events into commands. Whether they *also* turn events into events is a per-app call.
+The event-sourced variant takes the durable form: its committed decision event
+is mapped to the participant command after the outbox boundary. Either way the
+core principle holds: Process Managers turn incoming facts into requested work.
+
+### State-stored or event-sourced?
+
+The two classes make process-state persistence an explicit choice. Prefer the
+state-stored `CheckoutSaga` when the current process position is authoritative,
+ordinary repository tooling is enough, and full historical replay has no
+business value. It may still publish progress events or write an audit log;
+that does not make those records its source of truth.
+
+Prefer `EventSourcedCheckoutSaga` when the complete sequence of process
+decisions is itself authoritative, replaying it explains or reproduces the
+process, and the team is prepared to own event upcasting, bounded stream reads,
+stream OCC, and snapshot policy. An audit requirement by itself is not enough.
+Snapshots are optional, rebuildable acceleration; they never replace the
+stream.
+
+Both variants own only process state and process invariants. Payment, order,
+and shipping rules remain with their participant aggregates. The event-sourced
+variant records decisions such as `CheckoutPaymentRequested`; an application
+subscriber maps the committed event to `RequestPayment`. Replaying the stream
+only folds state and never dispatches that command again.
 
 ### EventBus subscribers as the saga's reflexes
 

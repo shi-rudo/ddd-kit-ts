@@ -212,7 +212,8 @@ The generated API reference lives in [docs/api](./docs/api/).
 - [examples/order-with-entity-items](./examples/order-with-entity-items): an
   aggregate with child entities
 - [examples/rugby](./examples/rugby): an event-sourced aggregate
-- [examples/saga](./examples/saga): a process manager / saga workflow
+- [examples/saga](./examples/saga): state-stored and event-sourced process
+  manager / saga variants
 
 ## Contributing
 

@@ -9,11 +9,11 @@ what happens next.
 
 The kit's answer may be surprising after all the ports on the neighboring
 pages: there is no saga primitive here, and that is a decision, not a gap.
-A saga is a regular aggregate. Everything it needs already exists, and this
-page shows how the pieces fit. If you want the design procedure itself,
-which steps are compensatable, how to classify failures, when a saga is the
-wrong tool entirely, that lives in the skill's `saga-design.md`; this page
-is about wiring, not design.
+A saga can reuse the regular aggregate lifecycle machinery. Everything it
+needs already exists, and this page shows how the pieces fit. If you want the
+design procedure itself, which steps are compensatable, how to classify
+failures, when a saga is the wrong tool entirely, that lives in the skill's
+`saga-design.md`; this page is about wiring, not design.
 
 The runnable version of everything below sits in
 [`examples/saga`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga):
@@ -73,29 +73,69 @@ Evans's sense. When this page says "aggregate" about the saga from here
 on, it means the implementation shape, not the modeling claim.
 
 Concretely: the process state ("payment requested, waiting"; "shipping
-requested"; "compensating") lives behind an `IRepository`, is protected by
-optimistic concurrency, and its allowed transitions sit well in a
-`DomainStateMachine`, which turns "a timeout arrived after the payment was
-already received" from a bug you have to remember to handle into a
-transition that simply does not exist.
+requested"; "compensating") is protected by optimistic concurrency. In the
+state-stored variant it lives behind an `IRepository`, and its allowed
+transitions sit well in a `DomainStateMachine`, which turns "a timeout arrived
+after the payment was already received" from a bug you have to remember to
+handle into a transition that simply does not exist.
 
 ```ts
 class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
   // The machine carries the process rules: which inputs are legal in
   // which state. See examples/saga/checkout-saga.ts for the full class.
-  paymentReceived(paymentId: PaymentId): void { /* transition + event */ }
-  paymentTimedOut(): void { /* transition into compensation + event */ }
+  advanceToShipping(): void { /* transition stored process state */ }
+  cancelOnPaymentFailure(): void { /* transition into compensation */ }
 }
 ```
 
-Two properties fall out of this for free, and both matter more for sagas
-than for most aggregates. Concurrency: when a payment event and a timeout
-race each other, both reactions load the saga, and optimistic concurrency
-makes sure only one of them wins; the loser retries against the new state
-and finds its transition no longer applies. And auditability: the saga's
-own events are the process history. That is an audit trail, not event
-sourcing; the saga's state is still stored state, and nothing on this page
-requires or implies rebuilding it from events.
+Concurrency matters more for sagas than for most aggregates. When a payment
+event and a timeout race each other, both reactions load the saga, and
+optimistic concurrency makes sure only one of them wins; the loser retries
+against the new state and finds its transition no longer applies.
+
+## State-stored or event-sourced process state?
+
+The runnable example includes both shapes. `CheckoutSaga` stores the current
+process state and uses `DomainStateMachine` for legal transitions.
+`EventSourcedCheckoutSaga` extends `EventSourcedAggregate`; its event stream is
+the source of truth and folds into the same kind of process position. Neither
+choice changes the participant boundaries or makes the process more strongly
+consistent.
+
+Choose from the source-of-truth requirement, not from fashion or the mere wish
+for an audit log:
+
+| Need | Prefer state-stored | Prefer event-sourced |
+| --- | --- | --- |
+| Operational question | "What must happen next?" | "Which decisions led here?" is a first-class domain question |
+| Source of truth | Current process row or snapshot | Complete process-event stream |
+| Historical replay | Not required; optional notifications may support audit | Required to reproduce process state and explain past decisions |
+| Schema evolution | Migrate one current-state shape | Upcast immutable event versions and keep old histories replayable |
+| Reads and recovery | One bounded state load | Bounded stream replay, usually with optional rebuildable snapshots |
+| Tooling and operations | Ordinary repository and row inspection | EventStore adapter, stream OCC, replay tests, upcasters, snapshot policy |
+
+An audit requirement alone does not select event sourcing. A state-stored
+process can write append-only audit records or publish progress events while
+its row remains authoritative. Choose event sourcing when the complete process
+history itself is the authoritative model, replaying that history is valuable
+to the business, and the team accepts the event-evolution and operational
+cost. Snapshots then remain disposable acceleration data, never a second source
+of truth.
+
+The compact event-sourced variant deliberately records process decisions such
+as `CheckoutPaymentRequested` and `CheckoutShippingRequested`, not copies of
+participant state. Those events both rebuild the process position and cross the
+outbox boundary after commit, where application subscribers map them to
+participant commands. Its handlers are pure evolution functions; replay calls
+no bus and emits no new work:
+
+```ts
+const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
+const replayed = saga.loadFromHistory(history);
+if (replayed.isErr()) throw replayed.error;
+
+// No command was dispatched and no pending event was created by replay.
+```
 
 ## Events in, through the dispatcher
 
@@ -210,7 +250,7 @@ bus.subscribe("CheckoutPaymentRequested", async (event) => {
     type: "RequestPayment",
     orderId: event.aggregateId as OrderId,
     paymentId: event.payload.paymentId,
-    amount: event.payload.amount,
+    amount: event.payload.total,
   });
 });
 ```
@@ -284,12 +324,13 @@ state machine, not a local variable, owns the process position.
 
 ## What the kit deliberately does not ship
 
-No `SagaStore`: the saga persists through `IRepository` like every
-aggregate, and a second persistence port for the same job would be a
-duplicate. No correlation machinery: finding a saga is a lookup over ids
-you already have. No timeout scheduling beyond the `DeadlineStore`, and no
-step or workflow DSL: the moment step classification becomes kit
-configuration instead of state-machine transitions, the kit has become a
-workflow engine, and there are dedicated tools for that (and a dedicated
-warning about them in `saga-design.md`). The pieces above compose; that is
-the feature.
+No `SagaStore`: the state-stored variant persists through `IRepository`, and
+the event-sourced variant through the same `EventStore` plus repository adapter
+as any other `EventSourcedAggregate`. A second persistence port for the same
+jobs would be a duplicate. No correlation machinery: finding a saga is a
+lookup over ids you already have. No timeout scheduling beyond the
+`DeadlineStore`, and no step or workflow DSL: the moment step classification
+becomes kit configuration instead of state-machine transitions, the kit has
+become a workflow engine, and there are dedicated tools for that (and a
+dedicated warning about them in `saga-design.md`). The pieces above compose;
+that is the feature.
