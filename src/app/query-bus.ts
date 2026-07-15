@@ -60,6 +60,8 @@ export interface QueryBusOptions<E = string> {
  *
  * Supports an optional type map (`TMap`) for automatic return type inference.
  * Without a type map, the return type must be specified manually or defaults to `unknown`.
+ * With a concrete result map, its entry is the only result type for that
+ * query; the loose explicit-result overloads are unavailable.
  *
  * @template TMap - Optional mapping from query type strings to return types
  *
@@ -96,7 +98,16 @@ export interface IQueryBus<
 	execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
 	): Promise<Result<TMap[Q["type"]], E>>;
-	execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
+	// Manual result typing belongs only to the default untyped map shape.
+	execute<Q extends Query, R>(
+		query: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? Q
+					: never
+				: never,
+	): Promise<Result<R, E>>;
 
 	/**
 	 * Executes a query by dispatching it to the registered handler.
@@ -109,7 +120,15 @@ export interface IQueryBus<
 	executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
 	): Promise<TMap[Q["type"]]>;
-	executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
+	executeUnsafe<Q extends Query, R>(
+		query: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? Q
+					: never
+				: never,
+	): Promise<R>;
 
 	/**
 	 * Registers a handler for a specific query type.
@@ -134,7 +153,8 @@ export interface IQueryBus<
  * Handlers are stored in a Map and dispatched based on query type.
  *
  * Supports an optional type map (`TMap`) for automatic return type inference.
- * When `TMap` is provided, `execute()` and `executeUnsafe()` infer the result type from the query type.
+ * When `TMap` is concrete, `execute()` and `executeUnsafe()` infer the result type from the query type.
+ * Explicit competing result generics cannot override that map.
  * Without `TMap`, it works like before (return type defaults to `unknown` or can be specified manually).
  *
  * **Note:** This is a basic implementation suitable for development and simple use cases.
@@ -187,7 +207,16 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	async execute<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
 	): Promise<Result<TMap[Q["type"]], E>>;
-	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>>;
+	// Keep the class surface identical to IQueryBus's untyped fallback.
+	async execute<Q extends Query, R>(
+		query: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? Q
+					: never
+				: never,
+	): Promise<Result<R, E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
 		const handler = handlerOrThrow(this.handlers, "query", query.type);
 		try {
@@ -201,7 +230,15 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	async executeUnsafe<Q extends Query & { type: keyof TMap & string }>(
 		query: Q,
 	): Promise<TMap[Q["type"]]>;
-	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R>;
+	async executeUnsafe<Q extends Query, R>(
+		query: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? Q
+					: never
+				: never,
+	): Promise<R>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
 		// Same no-handler gate as execute: one implementation so the two
 		// paths cannot drift.

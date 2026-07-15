@@ -60,6 +60,8 @@ export interface CommandBusOptions<E = string> {
  *
  * Supports an optional type map (`TMap`) for automatic return type inference.
  * Without a type map, the return type must be specified manually or defaults to `unknown`.
+ * With a concrete result map, its entry is the only result type for that
+ * command; the loose explicit-result overload is unavailable.
  *
  * @template TMap - Optional mapping from command type strings to return types
  *
@@ -97,7 +99,16 @@ export interface ICommandBus<
 	execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
 	): Promise<Result<TMap[C["type"]], E>>;
-	execute<C extends Command, R>(command: C): Promise<Result<R, E>>;
+	// Manual result typing belongs only to the default untyped map shape.
+	execute<C extends Command, R>(
+		command: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? C
+					: never
+				: never,
+	): Promise<Result<R, E>>;
 
 	/**
 	 * Registers a handler for a specific command type.
@@ -122,7 +133,8 @@ export interface ICommandBus<
  * Handlers are stored in a Map and dispatched based on command type.
  *
  * Supports an optional type map (`TMap`) for automatic return type inference.
- * When `TMap` is provided, `execute()` infers the result type from the command type.
+ * When `TMap` is concrete, `execute()` infers the result type from the command type.
+ * An explicit competing result generic cannot override that map.
  * Without `TMap`, it works like before (return type defaults to `unknown` or can be specified manually).
  *
  * **Note:** This is a basic implementation suitable for development and simple use cases.
@@ -177,7 +189,16 @@ export class CommandBus<
 	async execute<C extends Command & { type: keyof TMap & string }>(
 		command: C,
 	): Promise<Result<TMap[C["type"]], E>>;
-	async execute<C extends Command, R>(command: C): Promise<Result<R, E>>;
+	// Keep the class surface identical to ICommandBus's untyped fallback.
+	async execute<C extends Command, R>(
+		command: 0 extends 1 & TMap
+			? never
+			: string extends keyof TMap
+				? Record<string, unknown> extends TMap
+					? C
+					: never
+				: never,
+	): Promise<Result<R, E>>;
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
 		// No-handler dispatch is a wiring bug, not a domain failure: thrown,
 		// never delivered through the error channel (see handlerOrThrow).

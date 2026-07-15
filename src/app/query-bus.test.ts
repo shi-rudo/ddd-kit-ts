@@ -2,7 +2,7 @@ import type { Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { UnregisteredHandlerError } from "../core/errors";
 import type { Query } from "./query";
-import { QueryBus } from "./query-bus";
+import { type IQueryBus, QueryBus } from "./query-bus";
 
 describe("QueryBus", () => {
 	describe("register", () => {
@@ -315,6 +315,84 @@ describe("QueryBus", () => {
 			const result = await bus.execute({ type: "GetOrder" });
 
 			expectTypeOf(result).toEqualTypeOf<Result<unknown, string>>();
+		});
+
+		it("does not let explicit result generics bypass a supplied type map", () => {
+			type GetOrderQuery = Query & {
+				type: "GetOrder";
+				orderId: string;
+			};
+			type Order = { id: string };
+			type Queries = { GetOrder: Order | null };
+			const bus = new QueryBus<Queries>();
+			const port: IQueryBus<Queries> = bus;
+
+			const bypassConcrete = () => {
+				// @ts-expect-error: TMap owns GetOrder's result type
+				return bus.execute<GetOrderQuery, number>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+			};
+			const bypassPort = () => {
+				// @ts-expect-error: the port must preserve the same TMap gate
+				return port.execute<GetOrderQuery, number>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+			};
+			const bypassUnsafeConcrete = () => {
+				// @ts-expect-error: executeUnsafe cannot override TMap either
+				return bus.executeUnsafe<GetOrderQuery, number>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+			};
+			const bypassUnsafePort = () => {
+				// @ts-expect-error: the unsafe port keeps the same TMap gate
+				return port.executeUnsafe<GetOrderQuery, number>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+			};
+			const looseCall = () =>
+				new QueryBus().execute<GetOrderQuery, Order | null>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+			const looseUnsafeCall = () =>
+				new QueryBus().executeUnsafe<GetOrderQuery, Order | null>({
+					type: "GetOrder",
+					orderId: "order-1",
+				});
+
+			expect(typeof bypassConcrete).toBe("function");
+			expect(typeof bypassPort).toBe("function");
+			expect(typeof bypassUnsafeConcrete).toBe("function");
+			expect(typeof bypassUnsafePort).toBe("function");
+			expectTypeOf(looseCall).returns.toEqualTypeOf<
+				Promise<Result<Order | null, string>>
+			>();
+			expectTypeOf(looseUnsafeCall).returns.toEqualTypeOf<
+				Promise<Order | null>
+			>();
+		});
+
+		it("does not mistake a typed index map for the loose default", () => {
+			type GetOrderQuery = Query & { type: "GetOrder" };
+			const bus = new QueryBus<Record<string, { id: string } | null>>();
+
+			const bypass = () => {
+				// @ts-expect-error: a typed string index owns the result type
+				return bus.execute<GetOrderQuery, number>({ type: "GetOrder" });
+			};
+			const bypassUnsafe = () => {
+				// @ts-expect-error: executeUnsafe keeps the same typed-index gate
+				return bus.executeUnsafe<GetOrderQuery, number>({ type: "GetOrder" });
+			};
+
+			expect(typeof bypass).toBe("function");
+			expect(typeof bypassUnsafe).toBe("function");
 		});
 	});
 });

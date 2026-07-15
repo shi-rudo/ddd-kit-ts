@@ -143,6 +143,7 @@ type Commands = {
 };
 
 const bus = new CommandBus<Commands>();
+declare const placeOrder: PlaceOrderCommand;
 
 bus.register("PlaceOrder", placeOrderHandler);
 
@@ -151,9 +152,12 @@ bus.register("Unknown", async () => ok("x"));
 
 // @ts-expect-error: PlaceOrder must return Result<OrderId, string>
 bus.register("PlaceOrder", async () => ok(42));
+
+// @ts-expect-error: Commands owns PlaceOrder's OrderId result
+bus.execute<PlaceOrderCommand, number>(placeOrder);
 ```
 
-Without a type map, registration is intentionally loose. That is useful in tests and prototypes. In application code, prefer the map. It catches typos at bootstrap instead of at runtime.
+A concrete type map is the single source of truth for handler and execution results. An explicit `<Command, Result>` argument cannot select a competing result type. The default `Record<string, unknown>` map shape remains intentionally loose, including when it is written explicitly to select a custom error-channel type. That is useful in tests and prototypes. In application code, prefer a concrete map. It catches typos at bootstrap instead of at runtime.
 
 ### Unregistered Commands
 
@@ -212,6 +216,8 @@ The bus gives you two execution styles:
 - `executeUnsafe(...)` returns `R` directly and lets handler failures throw.
 
 Both variants throw `UnregisteredHandlerError` for missing handlers. Missing query registration is still a wiring bug.
+
+As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
 
 In a CQRS application, query handlers usually read from projection tables or read models, not from aggregates. Aggregates are write-side consistency boundaries. Read models are shaped for screens and API responses. See [Read-Side Projections](./projections.md).
 
