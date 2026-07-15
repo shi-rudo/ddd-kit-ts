@@ -31,6 +31,22 @@ export type ExpectedErrorMapper<E> = (
 ) => ExpectedErrorDecision<E> | undefined;
 
 /**
+ * Keeps manual result typing available only for the deliberately untyped
+ * default map. Concrete maps, typed or refined index maps, and `any` keep their
+ * mapped result contract authoritative.
+ */
+export type UntypedMapDispatch<
+	TMap extends Record<string, unknown>,
+	TMessage,
+> = 0 extends 1 & TMap
+	? never
+	: string extends keyof TMap
+		? Record<string, unknown> extends TMap
+			? TMessage
+			: never
+		: never;
+
+/**
  * Registers a handler exactly once. Silent replacement would turn the first
  * handler into dead code with no signal; wiring bugs must surface at
  * registration time.

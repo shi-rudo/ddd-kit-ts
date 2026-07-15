@@ -1,8 +1,10 @@
 # Read Model Design
 
-Use read model design when serving queries from a denormalized, precomputed view
-separated from the write model: its read shape, how it is kept current, how its
-freshness and eventual-consistency lag are handled, and how it is rebuilt.
+Use read-side design when serving caller-shaped query results, whether they are
+computed on demand from the authoritative write source or backed by a
+materialized, precomputed view. It covers the query contract, its read shape,
+how materialized views are kept current, how freshness and eventual-consistency
+lag are handled, and how those views are rebuilt.
 
 This reference has two parts. Part 1 - Principles are invariants: they always
 hold, no choice involved. Part 2 - Decision procedures are forks and sequences
@@ -34,6 +36,7 @@ fork is entered at the matching condition.
 
 - Core rule
 - Part 1 - Principles
+  - Query results are detached contracts
   - The read side does not go through the domain model
   - A read model is per read shape
   - Separate from the write model
@@ -56,20 +59,41 @@ fork is entered at the matching condition.
 
 ## Core Rule
 
-A read model is a denormalized, precomputed view built and optimized for one
-query, read shape, or screen. It holds no business invariants, no aggregates, and
-no state transitions; the read side does not go through the domain model. It is
-eventually consistent with the write side by default. That lag is a designed
+A query returns a detached contract built for its caller, never a live aggregate
+instance. An API resource may align one-to-one with an aggregate in business
+language, but its representation is still a DTO or projection independent of
+aggregate behavior and persistence lifecycle. A materialized read model is a
+denormalized, precomputed view optimized for one query, read shape, or screen.
+It holds no business invariants, no aggregates, and no state transitions; the
+read side does not go through the domain model. When maintained asynchronously,
+it is eventually consistent with the write side. That lag is a designed
 property: named, bounded, visible where needed, and absorbed in the UX or guarded
-by a freshness path. One read model per read shape is the default; do not reuse
-the write model for reads.
+by a freshness path. One materialized model per read shape is the default; do
+not reuse the write model for reads.
 
 ## Part 1 - Principles
 
+### Query Results Are Detached Contracts
+
+- A query or transport boundary returns a DTO, projection, or other detached
+  representation, never a live aggregate instance.
+- An API resource may deliberately mirror one aggregate's business identity and
+  visible fields. That alignment does not make the runtime aggregate itself a
+  safe response object.
+- Returning the live aggregate lets in-process callers invoke mutations outside
+  the intended command and Unit of Work. It also couples the query contract to
+  aggregate behavior, versioning, pending events, and persistence lifecycle.
+- A simple query may construct its detached DTO on demand from the authoritative
+  write store through a consumer-owned query port. The read and write paths may
+  use the same database or table; neither a materialized projection nor a
+  separate database is required.
+
 ### The Read Side Does Not Go Through the Domain Model
 
-- The read model holds no business invariants, no aggregates, and no state
-  transitions. It reads precomputed data and returns DTOs or projections.
+- The query result holds no business invariants, no aggregates, and no state
+  transitions. An on-demand query service reads authoritative data directly; a
+  materialized read model reads precomputed data. Both return detached DTOs or
+  projections.
 - It carries no write-side validation stack. The command side enforces rules; the
   read side reports.
 - Read-side rules that do belong: authorization, tenant separation, privacy
@@ -176,8 +200,9 @@ Discriminator: does a separate read model earn its complexity?
    `context-coordination.md` (*Read Composition*). A materialized projection is
    one possible outcome and is designed here.
 
-Hard limits: do not build a read model for simple CRUD. Do not reuse the write
-aggregate as the read model; that is indirection, not CQRS.
+Hard limits: do not build a materialized read model for simple CRUD. Do not
+reuse or return the live write aggregate as the query result; construct a
+detached contract instead.
 
 ### Read Model Shape - sequence
 
@@ -202,9 +227,11 @@ state, it has crossed into the write side. Move that logic back.
 Discriminator: the freshness the read needs, the coupling you accept, and the
 operational cost you can carry.
 
-1. **On-demand from the authoritative write source** -> compute the view when
-   queried. Fresh when computed directly from the write source, simple to start,
-   but pays the cost per read.
+1. **On-demand from the authoritative write source** -> compute a detached DTO
+   through a consumer-owned query port when queried. It may use the same database
+   or table as the write path and is fresh when computed directly from that
+   source. This is simple to start and avoids projection synchronization, but
+   pays the query cost per read.
 2. **On-demand from a cache** -> low ceremony and fast reads, but freshness
    depends on explicit TTL, invalidation, or versioning. State the policy.
 3. **Synchronous local projection** -> update the read model in the same
@@ -326,6 +353,8 @@ Read model table:
 
 - A read model is built for simple CRUD where the write store would serve the
   query.
+- A query or transport boundary returns a live aggregate, exposing mutation
+  methods, versioning, pending events, or persistence lifecycle to its caller.
 - The query handler uses the write aggregate: indirection labeled CQRS.
 - One generic read table is joined differently per screen instead of a model per
   shape.
@@ -359,6 +388,7 @@ Read model table:
 When designing a read model, emit:
 
 - The read shape it serves: screen, API, report, or query.
+- The detached query contract returned to the caller; never a live aggregate.
 - Whether a separate read model is justified, or the write store/repository/query
   service serves it.
 - The denormalized fields, store, and keying for the access pattern.

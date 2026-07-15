@@ -143,6 +143,7 @@ type Commands = {
 };
 
 const bus = new CommandBus<Commands>();
+declare const placeOrder: PlaceOrderCommand;
 
 bus.register("PlaceOrder", placeOrderHandler);
 
@@ -151,9 +152,12 @@ bus.register("Unknown", async () => ok("x"));
 
 // @ts-expect-error: PlaceOrder must return Result<OrderId, string>
 bus.register("PlaceOrder", async () => ok(42));
+
+// @ts-expect-error: Commands owns PlaceOrder's OrderId result
+bus.execute<PlaceOrderCommand, number>(placeOrder);
 ```
 
-Without a type map, registration is intentionally loose. That is useful in tests and prototypes. In application code, prefer the map. It catches typos at bootstrap instead of at runtime.
+A concrete type map is the single source of truth for handler and execution results. An explicit `<Command, Result>` argument cannot select a competing result type. The default `Record<string, unknown>` map shape remains intentionally loose, including when it is written explicitly to select a custom error-channel type. That is useful in tests and prototypes. In application code, prefer a concrete map. It catches typos at bootstrap instead of at runtime.
 
 ### Unregistered Commands
 
@@ -213,7 +217,9 @@ The bus gives you two execution styles:
 
 Both variants throw `UnregisteredHandlerError` for missing handlers. Missing query registration is still a wiring bug.
 
-In a CQRS application, query handlers usually read from projection tables or read models, not from aggregates. Aggregates are write-side consistency boundaries. Read models are shaped for screens and API responses. See [Read-Side Projections](./projections.md).
+As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
+
+In a CQRS application, query handlers return DTOs shaped for their use case. They may read materialized projections, but a simple management or setup flow can query the authoritative write store on demand through a consumer-owned query port when a separate projection would add synchronization and rebuild cost without earning it. The query port may use the same database and tables as the write side; it still returns a detached DTO rather than a live aggregate. Load an aggregate through its repository when the application needs it for a command or domain decision, not merely to render display data. See [Read-Side Projections](./projections.md).
 
 ## `withCommit`: The Write-Side Boundary
 

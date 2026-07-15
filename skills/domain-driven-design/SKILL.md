@@ -1,6 +1,6 @@
 ---
 name: domain-driven-design
-version: 1.5.0
+version: 1.6.0
 description: Apply Domain-Driven Design to understand and model a business domain. Use when discovering subdomains, designing bounded contexts, distilling the core domain, selecting business-logic implementation patterns, deciding whether a domain model is warranted, defining ubiquitous language, identifying aggregates and invariants, designing use cases and application services, designing domain services, designing repositories, unit of work, transaction managers, designing read models and CQRS read sides, designing error contracts and error management, designing domain events, choosing tactical DDD patterns, mapping context relationships, choosing cross-context coordination patterns, designing sagas or process managers, or reviewing whether a model expresses the domain clearly.
 ---
 

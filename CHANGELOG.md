@@ -19,6 +19,16 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed (breaking): typed bus maps own execution result types
+
+- `CommandBus<TMap>` and `ICommandBus<TMap>` no longer expose the loose
+  `<Command, Result>` execution overload when a result map is supplied.
+- `QueryBus<TMap>` and `IQueryBus<TMap>` apply the same rule to both `execute`
+  and `executeUnsafe`. The mapped entry is the single result type for a message.
+- Buses using the default `Record<string, unknown>` map shape retain the
+  explicit-result overload for tests, prototypes, custom error-channel types,
+  and deliberately untyped composition. Runtime dispatch behavior is unchanged.
+
 ### Added: event-sourced Process Manager example
 
 - Add a compact `EventSourcedCheckoutSaga` next to the existing state-stored
@@ -943,6 +953,30 @@ The immediate `onDeadLetter` callback is deliberately not a durable
 notification boundary. A process can stop after `markFailed` commits and before
 the callback runs, so production monitoring must also poll and reconcile
 `deadLetters()`.
+
+#### 28. Typed bus maps cannot be bypassed with explicit result generics
+
+When a concrete `TMap` is supplied, its entry now owns the result type of
+`execute` and `executeUnsafe`. The loose overload remains only with the default
+`Record<string, unknown>` map shape.
+
+```ts
+type Commands = { PlaceOrder: OrderId };
+const typed = new CommandBus<Commands>();
+declare const command: PlaceOrderCommand;
+
+// before: the fallback overload could contradict Commands and still compile
+typed.execute<PlaceOrderCommand, number>(command);
+
+// after: infer Result<OrderId, E> from Commands
+typed.execute(command);
+
+// intentional loose mode still permits a manual result type
+new CommandBus().execute<PlaceOrderCommand, OrderId>(command);
+```
+
+Remove explicit result generics from typed bus calls. If an integration truly
+has no closed message map, use the default untyped map shape deliberately.
 
 ### Changed (breaking): productive pollers require explicit operability
 

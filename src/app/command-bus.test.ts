@@ -2,7 +2,7 @@ import { err, ok, type Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { UnregisteredHandlerError } from "../core/errors";
 import type { Command } from "./command";
-import { CommandBus } from "./command-bus";
+import { CommandBus, type ICommandBus } from "./command-bus";
 
 describe("CommandBus", () => {
 	describe("register", () => {
@@ -230,6 +230,87 @@ describe("CommandBus", () => {
 			const result = await bus.execute({ type: "CreateOrder" });
 
 			expectTypeOf(result).toEqualTypeOf<Result<unknown, string>>();
+		});
+
+		it("does not let explicit result generics bypass a supplied type map", () => {
+			type CreateOrderCommand = Command & {
+				type: "CreateOrder";
+				customerId: string;
+			};
+			type Commands = { CreateOrder: string };
+			const bus = new CommandBus<Commands>();
+			const port: ICommandBus<Commands> = bus;
+
+			const bypassConcrete = () => {
+				// @ts-expect-error: TMap owns CreateOrder's result type
+				return bus.execute<CreateOrderCommand, number>({
+					type: "CreateOrder",
+					customerId: "customer-1",
+				});
+			};
+			const bypassPort = () => {
+				// @ts-expect-error: the port must preserve the same TMap gate
+				return port.execute<CreateOrderCommand, number>({
+					type: "CreateOrder",
+					customerId: "customer-1",
+				});
+			};
+			const looseCall = () =>
+				new CommandBus().execute<CreateOrderCommand, string>({
+					type: "CreateOrder",
+					customerId: "customer-1",
+				});
+			const looseCallWithCustomError = () =>
+				new CommandBus<Record<string, unknown>, "EXPECTED">().execute<
+					CreateOrderCommand,
+					string
+				>({
+					type: "CreateOrder",
+					customerId: "customer-1",
+				});
+
+			expect(typeof bypassConcrete).toBe("function");
+			expect(typeof bypassPort).toBe("function");
+			expectTypeOf(looseCall).returns.toEqualTypeOf<
+				Promise<Result<string, string>>
+			>();
+			expectTypeOf(looseCallWithCustomError).returns.toEqualTypeOf<
+				Promise<Result<string, "EXPECTED">>
+			>();
+		});
+
+		it("does not mistake supplied index maps or any for the loose default", () => {
+			type CreateOrderCommand = Command & { type: "CreateOrder" };
+			type HybridMap = {
+				[type: string]: unknown;
+				CreateOrder: string;
+			};
+			const indexed = new CommandBus<Record<string, string>>();
+			const hybrid = new CommandBus<HybridMap>();
+			const anyMapped = new CommandBus<ReturnType<typeof JSON.parse>>();
+
+			const bypassIndexed = () => {
+				// @ts-expect-error: a typed string index still owns the result type
+				return indexed.execute<CreateOrderCommand, number>({
+					type: "CreateOrder",
+				});
+			};
+			const bypassHybrid = () => {
+				// @ts-expect-error: a refined key makes this a supplied result map
+				return hybrid.execute<CreateOrderCommand, number>({
+					type: "CreateOrder",
+				});
+			};
+			const bypassAny = () => {
+				// @ts-expect-error: any is not the intentional untyped default
+				return anyMapped.execute<CreateOrderCommand, number>({
+					type: "CreateOrder",
+				});
+			};
+
+			expect(typeof bypassIndexed).toBe("function");
+			expect(typeof bypassHybrid).toBe("function");
+			expect(typeof bypassAny).toBe("function");
 		});
 	});
 
