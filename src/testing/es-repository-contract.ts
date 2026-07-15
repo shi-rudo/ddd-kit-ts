@@ -43,7 +43,7 @@ export interface EsRepositoryContractEnvironment<
 	 * Execute one unit of work against the adapter under test. Wire this
 	 * through your real `UnitOfWork` / `withCommit` setup: the commit
 	 * boundary IS part of what the suite proves (outbox harvest,
-	 * `markPersisted`, rollback purity).
+	 * post-commit acknowledgement, rollback purity).
 	 */
 	run<R>(
 		work: (ctx: { repository: EsContractRepository<TAgg> }) => Promise<R>,
@@ -141,7 +141,7 @@ export type EsRepositoryContractTest = ContractTest;
  *   guard and its atomicity.
  * - The replay/lifecycle tests prove your read path (fold order,
  *   identity map wiring) and the commit lifecycle (outbox harvest,
- *   `markPersisted`, rollback purity).
+ *   post-commit acknowledgement, rollback purity).
  * - The duplicate-create and stream-read tests prove the create race,
  *   missing-vs-empty distinction, actual head, snapshot catch-up, and
  *   point-in-time reads.
@@ -357,7 +357,7 @@ export function createEsRepositoryContractTests<
 				assertEqual(
 					aggregate.pendingEvents.length,
 					0,
-					"pending events must be cleared after a successful commit (markPersisted ran)",
+					"pending events must be cleared after a successful commit (acknowledgement ran)",
 				);
 				assertEqual(
 					aggregate.persistedVersion,

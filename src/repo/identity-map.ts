@@ -144,8 +144,8 @@ export class IdentityMap {
 		// the first value), so the unit of work can later tell events
 		// RECORDED AFTER load apart from a reconstitution that already
 		// carried events. Assumes pendingEvents is append-only between load
-		// and commit (the kit's recordEvent model); only markPersisted /
-		// clearPendingEvents shrink it, and those run post-commit.
+		// and commit (the kit's recordEvent model); only the internal
+		// post-commit capability shrinks it.
 		if (
 			aggregate !== null &&
 			typeof aggregate === "object" &&

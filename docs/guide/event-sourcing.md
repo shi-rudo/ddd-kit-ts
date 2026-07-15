@@ -164,9 +164,9 @@ already ties the event and the state transition together.
 ## Saving new events
 
 After `apply(...)`, new events sit in `pendingEvents`. The repository appends
-those events to the stream. It should not clear pending events and it should not
-call `markPersisted(...)`; `withCommit` owns that lifecycle after the
-transaction commits.
+those events to the stream. It cannot clear or acknowledge them through the
+aggregate API; `withCommit` owns that internal lifecycle after the transaction
+commits.
 
 ```ts
 import type {
@@ -211,8 +211,8 @@ The normal lifecycle is:
 4. Return the token from `enrollment.enrollSaved(aggregate)` in
    `withCommit`'s `commits` array. `UnitOfWork` does this from repository
    enrollment automatically.
-5. `withCommit` writes outbox rows, commits the transaction, then calls
-   `markPersisted(version)`.
+5. `withCommit` writes outbox rows, commits the transaction, then acknowledges
+   the aggregate through its kit-internal capability.
 
 That last step clears `pendingEvents` and aligns `persistedVersion`.
 

@@ -26,31 +26,16 @@ type Order = IAggregateRoot<OrderId> & {
 };
 
 describe("IAggregateRoot interface contract", () => {
-	it("declares markPersisted so Repository.save can call it through the interface", () => {
-		// What a Repository.save implementer actually does after persisting:
-		// push the new version back into the aggregate. That call has to
-		// type-check against IAggregateRoot (the interface), not against
-		// the abstract class. If markPersisted only existed on the class,
-		// this function below would not compile.
-		function postSave<TId extends Id<string>, A extends IAggregateRoot<TId>>(
-			agg: A,
-			persistedVersion: Version,
-		): void {
-			agg.markPersisted(persistedVersion);
-		}
-
-		// Smoke-call to keep the function referenced (otherwise dead-code
-		// elimination at runtime hides the compile-time pin).
+	it("exposes persistence facts without lifecycle mutation authority", () => {
 		const stub: IAggregateRoot<OrderId> = {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
-			markPersisted: () => {},
 			pendingEvents: [],
-			clearPendingEvents: () => {},
 			persistedVersion: undefined,
 		};
-		postSave(stub, 1 as Version);
-		expect(typeof stub.markPersisted).toBe("function");
+
+		expect(stub.persistedVersion).toBeUndefined();
+		expect(stub.pendingEvents).toEqual([]);
 	});
 });
 
@@ -91,9 +76,7 @@ describe("Repository contract", () => {
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
-				markPersisted: () => {},
 				pendingEvents: [],
-				clearPendingEvents: () => {},
 				persistedVersion: undefined,
 			};
 
@@ -317,9 +300,7 @@ describe("Repository contract", () => {
 					version: 3 as never,
 					customerId: "c-1",
 					total: 100,
-					markPersisted: () => {},
 					pendingEvents: [],
-					clearPendingEvents: () => {},
 					persistedVersion: undefined,
 				}),
 			).rejects.toBeInstanceOf(ConcurrencyConflictError);

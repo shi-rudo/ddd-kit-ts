@@ -41,8 +41,8 @@ the repository writes it enrolled, not naked aggregates and not
 harvested or acknowledged accidentally. `withCommit` owns event harvesting
 and persistence cleanup. Every issued token must be present in `commits`; an
 omission rejects inside the transaction rather than committing state without
-its events. Repositories save state; they do not clear events or call
-`markPersisted`.
+its events. Repositories save state; aggregate lifecycle acknowledgement is
+not part of their API.
 
 ## What Happens On Commit
 
@@ -55,13 +55,24 @@ its events. Repositories save state; they do not clear events or call
    commit tokens, harvests `pendingEvents` from their aggregates, and calls
    `outbox.add(events)`.
 4. The transaction commits.
-5. After commit, `withCommit` marks the aggregates as persisted and clears
-   their pending events.
-6. If a `bus` was supplied, it publishes the same committed events to
+5. After commit, `withCommit` acknowledges every saved aggregate through a
+   non-exported capability and discards harvested events for deleted rows.
+6. The optional `onPersisted(aggregate, version)` Application observer runs
+   for successfully acknowledged saved aggregates only, after every commit
+   record has completed its acknowledgement attempt. Its version argument is
+   the commit-time value captured before any observer ran.
+7. If a `bus` was supplied, it publishes the same committed events to
    in-process subscribers.
 
 If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
+
+`onPersisted` may be asynchronous and is awaited, but it is not a delivery
+guarantee. A failure is reported to `onPersistError` and never rejects the
+already committed result. Use the outbox for side effects that must survive a
+process crash. The same failure observer reports a runtime failure in the
+internal acknowledgement step; peer aggregates are still processed, and only
+successfully acknowledged aggregates reach `onPersisted`.
 
 If `bus.publish` fails after the commit, `withCommit` does not reject. The
 write already succeeded, and returning an error would make normal callers

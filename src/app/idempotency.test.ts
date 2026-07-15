@@ -189,7 +189,7 @@ describe("withIdempotentCommit", () => {
 		);
 
 		expect(outcome).toEqual({ replayed: false, result: { orderId: "o-1" } });
-		expect(order.pendingEvents).toHaveLength(0); // markPersisted ran
+		expect(order.pendingEvents).toHaveLength(0); // acknowledgement ran
 		const pending = await deps.outbox.getPending();
 		expect(pending).toHaveLength(1);
 		expect(pending[0]?.event.type).toBe("OrderConfirmed");

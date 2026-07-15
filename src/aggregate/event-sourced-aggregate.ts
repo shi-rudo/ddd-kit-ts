@@ -429,9 +429,8 @@ export abstract class EventSourcedAggregate<
 				String(this.id),
 				`its in-memory version (${this.version}) was never persisted ` +
 					"(persistedVersion is undefined), so additive replay would " +
-					"mark unpersisted history as persisted; call " +
-					"markPersisted(version) only after that state was actually " +
-					"saved, then catch-up replay",
+					"mark unpersisted history as persisted; save it through " +
+					"withCommit or UnitOfWork first, then catch-up replay",
 			);
 		}
 	}

@@ -128,7 +128,10 @@ async function save(order: Order): Promise<void> {
 }
 ```
 
-Notice what the repository does not do: it does not call `order.markPersisted(...)`. `save()` is persistence only. `withCommit` and `UnitOfWork` mark aggregates as persisted after the transaction commits and after pending events have been harvested.
+Notice what the repository does not do: it does not mutate the aggregate's
+persistence lifecycle. `save()` is persistence only. `withCommit` and
+`UnitOfWork` acknowledge aggregates through an internal capability after the
+transaction commits and after pending events have been harvested.
 
 ### Why `persistedVersion` Matters
 

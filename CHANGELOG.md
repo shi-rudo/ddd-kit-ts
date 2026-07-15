@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Eight do not (steps 3, 5, 11,
-12, 14, 15, 20, and the option-validation part of 22) and deserve a
+Most of these surface at compile time. Nine do not (steps 3, 5, 11,
+12, 14, 15, 20, 25, and the option-validation part of 22) and deserve a
 deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
@@ -551,9 +551,9 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
 ```
 
 For hard deletion, return `enrollment.enrollDeleted(aggregate)` instead. The
-token keeps deletion-event harvest while suppressing the post-save
-`markPersisted` hook. `withIdempotentCommit` receives the same second callback
-argument and uses the same work-result shape.
+token keeps deletion-event harvest while suppressing saved-row acknowledgement
+and the Application-Shell `onPersisted` observer. `withIdempotentCommit`
+receives the same second callback argument and uses the same work-result shape.
 
 Tokens are opaque and bound to one transactional callback attempt. Forged
 tokens and tokens retained from an earlier invocation throw
@@ -792,6 +792,77 @@ const snapshots = new InMemorySnapshotStore({
 `maxEntries` evicts the least recently used snapshot. `ttlMs` expires from the
 last save; loads update LRU recency but do not extend the TTL. All new numeric
 options must be positive safe integers.
+
+#### 25. Aggregate persistence lifecycle moves to the Application Shell
+
+`IAggregateRoot` no longer exposes `markPersisted` or
+`clearPendingEvents`, and aggregate subclasses no longer provide the
+`onPersisted(version)` Template Method. A public or overridable lifecycle
+mutator could skip pending-event cleanup, erase uncommitted facts, or move the
+OCC baseline without a database commit.
+
+`withCommit` and `UnitOfWork` now acknowledge saved aggregates through a
+non-exported capability after the transaction commits. Deleted aggregates have
+their harvested events discarded without saved-row acknowledgement. Only after
+every commit record has completed its acknowledgement attempt does the optional
+Application-Shell observer run for successfully acknowledged saved aggregates:
+
+```ts
+// before: infrastructure behavior lived on the domain object
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected override onPersisted(version: Version): void {
+    orderCache.evict(this.id, version);
+  }
+}
+
+// after: the composition root owns the post-commit observer
+const deps = {
+  scope,
+  outbox,
+  onPersisted: async (aggregate: IAggregateRoot<OrderId, OrderEvent>, version: Version) => {
+    await orderCache.evict(aggregate.id, version);
+  },
+  onPersistError: (error: unknown, aggregate: IAggregateRoot<OrderId, OrderEvent>) => {
+    logger.error({ error, aggregateId: aggregate.id });
+  },
+};
+```
+
+The observer may be asynchronous and is awaited before bus publication. Its
+failure is reported through `onPersistError` and never makes an already
+committed write look failed. The same observer reports a rare runtime failure
+of internal acknowledgement or disposal while peer aggregates continue.
+Deleted aggregates do not trigger `onPersisted`.
+
+Behavioral change for existing `markRestored` overrides: post-commit
+acknowledgement no longer calls that overridable Post-Load marker. Such
+overrides continue to run for reconstitution and snapshot restoration, where
+calling `super.markRestored(version)` first remains required, but they no
+longer run after a save. Move Post-Save logging, metrics, and cache invalidation
+to the Application-Shell `onPersisted` observer shown above.
+
+Custom structural implementations of `IAggregateRoot` can still satisfy
+repository ports, but cannot be enrolled in `withCommit` or `UnitOfWork`:
+enrollment rejects them inside the transaction because they have no internal
+acknowledgement capability. Extend `AggregateRoot` for state-stored domains or
+`EventSourcedAggregate` for event-sourced domains. Event sourcing remains
+optional; ordinary `AggregateRoot` instances use the same Unit-of-Work path.
+
+For deliberate in-memory abandonment, discard the dirty aggregate instance
+and reconstitute a fresh one. Public event disposal is no longer available.
+
+### Changed (breaking): aggregate persistence lifecycle is application-owned
+
+- Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
+  both aggregate base classes.
+- Removed the protected aggregate `onPersisted(version)` Template Method.
+- Added optional async `onPersisted(aggregate, version)` dependencies to
+  `withCommit` and `UnitOfWork`; observer and internal acknowledgement failures
+  route to `onPersistError` without rejecting a committed result.
+- Saved acknowledgement and deleted-event disposal now use a non-exported,
+  instance-bound capability after commit.
+- Commit enrollment rejects structural aggregate lookalikes before any outbox
+  write or transaction commit.
 
 ### Added: explicit retention for in-memory reference stores
 

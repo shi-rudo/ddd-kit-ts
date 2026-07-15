@@ -6,6 +6,10 @@ import {
 	BaseAggregate,
 } from "./base-aggregate";
 import type { AnyDomainEvent } from "./domain-event";
+import {
+	aggregatePersistenceCapabilityFor,
+	registerAggregatePersistenceCapability,
+} from "./persistence-lifecycle";
 
 // Re-export for backwards compatibility: `IAggregateRoot` lives in
 // `aggregate.ts` (the type hub) but consumers historically imported it
@@ -74,8 +78,8 @@ export abstract class AggregateRoot<
 	TSnapshotState = TState,
 > extends BaseAggregate<TState, TId, TEvent, TSnapshotState> {
 	/**
-	 * The state reference as of the last {@link markRestored} /
-	 * `markPersisted` (the persistence-lifecycle markers). Only
+	 * The state reference as of the last {@link markRestored} or
+	 * kit-internal post-commit acknowledgement. Only
 	 * meaningful while {@link _hasBaseline} is `true`; tracked by a
 	 * separate flag rather than an `undefined` sentinel so a `TState`
 	 * that itself admits `undefined` cannot be confused with the
@@ -99,6 +103,23 @@ export abstract class AggregateRoot<
 		config?: AggregateConfig,
 	) {
 		super(id, initialState, config);
+		const baseCapability = aggregatePersistenceCapabilityFor(this);
+		if (!baseCapability) {
+			throw new Error("Aggregate persistence capability was not registered");
+		}
+		registerAggregatePersistenceCapability(this, {
+			acknowledge: (version) => {
+				baseCapability.acknowledge(version);
+				this._baselineState = this._state;
+				this._hasBaseline = true;
+			},
+			discardPendingEvents: () => baseCapability.discardPendingEvents(),
+		});
+	}
+
+	private captureBaseline(): void {
+		this._baselineState = this._state;
+		this._hasBaseline = true;
 	}
 
 	/**
@@ -106,11 +127,12 @@ export abstract class AggregateRoot<
 	 * Additionally captures the current state reference as the dirty-
 	 * tracking baseline for {@link changedKeys} / {@link hasChanges}.
 	 *
-	 * Covers all three baseline-capture paths through a single override:
-	 * `reconstitute(...)` factories, {@link restoreFromSnapshot} (which
-	 * assigns the restored state *before* calling this), and
-	 * `markPersisted` (which delegates here, so a successful save
-	 * re-baselines the diff).
+	 * Covers the load-time baseline-capture paths: `reconstitute(...)`
+	 * factories and {@link restoreFromSnapshot}, which assigns the restored
+	 * state *before* calling this. Kit-internal post-commit acknowledgement
+	 * deliberately re-baselines without calling this overridable method.
+	 * Overrides are therefore Post-Load only; put Post-Save behavior in the
+	 * Application-Shell `onPersisted` observer on `withCommit` or `UnitOfWork`.
 	 *
 	 * If you override this, call `super.markRestored(version)` FIRST:
 	 * skipping it leaves the baseline uncaptured, so `changedKeys`
@@ -120,13 +142,12 @@ export abstract class AggregateRoot<
 	 */
 	protected override markRestored(version: Version): void {
 		super.markRestored(version);
-		this._baselineState = this._state;
-		this._hasBaseline = true;
+		this.captureBaseline();
 	}
 
 	/**
 	 * Top-level state keys whose value (or presence) changed since the
-	 * last {@link markRestored} / `markPersisted`. Never-persisted
+	 * last {@link markRestored} / post-commit acknowledgement. Never-persisted
 	 * aggregates report ALL current keys (the insert path).
 	 *
 	 * This is the write-scoping signal for **partial writes in multi-table
@@ -183,7 +204,7 @@ export abstract class AggregateRoot<
 	 * The version clause is deliberate: `setState({...state})` with
 	 * identical per-key values yields empty {@link changedKeys} but a
 	 * bumped version. If a repository skipped `save()` on a state-only
-	 * check, `withCommit` would still call `markPersisted(version)` after
+	 * check, `withCommit` would still acknowledge the current version after
 	 * commit, desyncing `persistedVersion` from the DB row; and the next
 	 * uncontended save would throw a false `ConcurrencyConflictError`.
 	 *
@@ -328,8 +349,8 @@ export abstract class AggregateRoot<
 	 * throws `UnreplayableAggregateError` before anything moves (the
 	 * restore re-baselines the version, so unflushed events would later be
 	 * harvested claiming a version they were never part of; see that
-	 * error's docs). `clearPendingEvents()` is the deliberate-discard
-	 * escape hatch for the in-memory undo pattern.
+	 * error's docs). Discard a dirty instance and reconstitute a fresh one
+	 * when an in-memory operation is deliberately abandoned.
 	 *
 	 * @param snapshot - The snapshot to restore from
 	 */

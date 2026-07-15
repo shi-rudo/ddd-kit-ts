@@ -418,7 +418,11 @@ that returns `this.state`.
 ::: warning Restore only into a clean aggregate
 `restoreFromSnapshot` throws `UnreplayableAggregateError` if the target aggregate has pending events.
 
-Take undo snapshots when the aggregate is clean, usually right after load or save. If an operation fails and you want to roll back in memory, clear the events recorded since that clean point with `clearPendingEvents()`, then restore the snapshot.
+Take snapshots only from a clean aggregate, usually right after load or save.
+If an in-memory operation must be abandoned, discard that dirty aggregate
+instance and reconstitute a fresh one. Public event disposal would let callers
+erase facts without a committed persistence boundary, so the aggregate API
+does not expose it.
 :::
 
 ## When to Skip `commit`

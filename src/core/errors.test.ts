@@ -134,15 +134,11 @@ describe("MissingHandlerError", () => {
 });
 
 describe("UnreplayableAggregateError", () => {
-	it("keeps the class message remediation-neutral; remedies are thrower-specific", () => {
+	it("keeps the class message focused on fresh-instance reconstitution", () => {
 		// The error is thrown by loadFromHistory (two distinct guards),
-		// restoreFromSnapshotWithEvents, and AggregateRoot.restoreFromSnapshot,
-		// and the safe remedy differs per guard: clearPendingEvents() for a
-		// deliberate discard of unflushed events, markPersisted() only for a
-		// catch-up replay after the state was actually saved. A remedy baked
-		// into the class message is wrong for at least one thrower (token-level
-		// assertions, so a rephrased harmful remedy still fails), so each
-		// throw site carries its own remedy in the reason.
+		// restoreFromSnapshotWithEvents, and AggregateRoot.restoreFromSnapshot.
+		// Public lifecycle mutation is intentionally absent; each throw site
+		// can add context while the class keeps the safe common remedy.
 		const error = new UnreplayableAggregateError(
 			"agg-1",
 			"it carries 2 unflushed pending event(s)",
