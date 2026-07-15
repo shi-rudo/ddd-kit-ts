@@ -434,6 +434,13 @@ import { OutboxDispatcher } from "@shirudo/ddd-kit";
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink: projector.toOutboxSink(),
+  observers: {
+    onDispatchError: (error, record) =>
+      log.error({ error, record }, "projection dispatch failed"),
+    onPollError: (error) => log.error({ error }, "outbox poll failed"),
+    onDeadLetter: (record) =>
+      alerts.page({ record }, "projection input dead letter"),
+  },
 });
 
 const stop = new AbortController();
@@ -717,6 +724,13 @@ const orderListProjector = new Projector({
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink: orderListProjector.toOutboxSink(),
+  observers: {
+    onDispatchError: (error, record) =>
+      log.error({ error, record }, "projection dispatch failed"),
+    onPollError: (error) => log.error({ error }, "outbox poll failed"),
+    onDeadLetter: (record) =>
+      alerts.page({ record }, "projection input dead letter"),
+  },
 });
 
 const stop = new AbortController();

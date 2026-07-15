@@ -235,6 +235,13 @@ const processor = new DeadlineProcessor({
     if (deadline.scope !== "checkout-saga") return;
     await reactToPaymentTimeout(deadline); // same inbox pattern, key: deliveryId
   },
+  observers: {
+    onDeliveryError: (error, deadline) =>
+      log.error({ error, deadline }, "deadline delivery failed"),
+    onPollError: (error) => log.error({ error }, "deadline poll failed"),
+    onDeadLetter: (deadline) =>
+      alerts.page({ deadline }, "saga deadline dead letter"),
+  },
 });
 ```
 

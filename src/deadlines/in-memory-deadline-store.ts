@@ -146,7 +146,10 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		}
 	}
 
-	async markFailed(deliveryId: string, error?: unknown): Promise<void> {
+	async markFailed(
+		deliveryId: string,
+		error?: unknown,
+	): Promise<DeadLetterDeadline<TPayload> | undefined> {
 		for (const [key, deadline] of this.pending) {
 			if (deadline.deliveryId !== deliveryId) continue;
 			deadline.attempts += 1;
@@ -155,23 +158,31 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 			if (deadline.attempts >= this.maxDeliveryAttempts) {
 				this.pending.delete(key);
 				this.dead.set(deadline.deliveryId, deadline);
+				return toDeadLetter(deadline);
 			}
-			return;
+			return undefined;
 		}
 		// Unknown, delivered, replaced, or already dead-lettered: a late
 		// report must not resurrect or advance anything.
+		return undefined;
 	}
 
 	async deadLetters(): Promise<ReadonlyArray<DeadLetterDeadline<TPayload>>> {
 		return [...this.dead.values()]
 			.sort((a, b) => a.sequence - b.sequence)
-			.map((deadline) => ({
-				...toRecord(deadline),
-				...(deadline.lastError === undefined
-					? {}
-					: { lastError: deadline.lastError }),
-			}));
+			.map(toDeadLetter);
 	}
+}
+
+function toDeadLetter<TPayload>(
+	deadline: StoredDeadline<TPayload>,
+): DeadLetterDeadline<TPayload> {
+	return {
+		...toRecord(deadline),
+		...(deadline.lastError === undefined
+			? {}
+			: { lastError: deadline.lastError }),
+	};
 }
 
 function toRecord<TPayload>(

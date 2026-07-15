@@ -1,24 +1,45 @@
 import { describe, expect, it, vi } from "vitest";
-import { DeadlineProcessor } from "./deadline-processor";
-import type { DeadlineStore } from "./deadline-store";
+import {
+	DeadlineProcessor,
+	type DeadlineProcessorObservers,
+	type DeadlineProcessorOptions,
+} from "./deadline-processor";
+import type { DeadlineStore, DeadLetterDeadline } from "./deadline-store";
 import { InMemoryDeadlineStore } from "./in-memory-deadline-store";
 
 type Payload = { kind: string };
+type TestProcessorOptions = DeadlineProcessorOptions<Payload>;
+
+// @ts-expect-error legacy optional callbacks must not bypass the required bundle
+type RemovedDeadlinePollObserver = TestProcessorOptions["onPollError"];
+// @ts-expect-error legacy optional callbacks must not bypass the required bundle
+type RemovedDeadlineDeliveryObserver = TestProcessorOptions["onDeliveryError"];
+void (undefined as unknown as RemovedDeadlinePollObserver);
+void (undefined as unknown as RemovedDeadlineDeliveryObserver);
 
 const at = (iso: string): Date => new Date(iso);
 const T0 = "2026-03-01T10:00:00.000Z";
 const T1 = "2026-03-01T10:05:00.000Z";
 
 function fastProcessor(
-	options: ConstructorParameters<typeof DeadlineProcessor<Payload>>[0],
+	options: Omit<DeadlineProcessorOptions<Payload>, "observers"> & {
+		observers?: Partial<DeadlineProcessorObservers<Payload>>;
+	},
 ): DeadlineProcessor<Payload> {
+	const { observers, ...processorOptions } = options;
 	return new DeadlineProcessor({
 		pollIntervalMs: 1,
 		baseDelayMs: 1,
 		maxDelayMs: 2,
 		random: () => 0.5,
 		clock: () => at(T1),
-		...options,
+		...processorOptions,
+		observers: {
+			onDeliveryError: () => {},
+			onPollError: () => {},
+			onDeadLetter: () => {},
+			...observers,
+		},
 	});
 }
 
@@ -62,6 +83,53 @@ async function seeded(
 }
 
 describe("DeadlineProcessor", () => {
+	it("requires a complete observer bundle at type and runtime boundaries", () => {
+		const store = new InMemoryDeadlineStore<Payload>();
+
+		expect(
+			() =>
+				// @ts-expect-error productive pollers require explicit operability observers
+				new DeadlineProcessor({ store, handler: () => {} }),
+		).toThrow(/observers/);
+		expect(
+			() =>
+				new DeadlineProcessor({
+					store,
+					handler: () => {},
+					// @ts-expect-error every operational channel is required
+					observers: { onDeliveryError: () => {}, onPollError: () => {} },
+				}),
+		).toThrow(/onDeadLetter/);
+	});
+
+	it("reports the exact dead-letter transition through observers captured at construction", async () => {
+		const store = await seeded([{ key: "poison" }], {
+			maxDeliveryAttempts: 1,
+		});
+		const observed: DeadLetterDeadline<Payload>[] = [];
+		const options = {
+			store,
+			handler: () => {
+				throw new Error("poison");
+			},
+			observers: {
+				onDeliveryError: () => {},
+				onPollError: () => {},
+				onDeadLetter: (deadline: DeadLetterDeadline<Payload>) => {
+					observed.push(deadline);
+				},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+		options.observers.onDeadLetter = () => {};
+
+		await expect(processor.drainOnce()).resolves.toBe("stopped");
+
+		expect(observed).toMatchObject([
+			{ scope: "s", key: "poison", attempts: 1, payload: { kind: "poison" } },
+		]);
+	});
+
 	it("delivers due deadlines to the handler and acknowledges them", async () => {
 		const store = await seeded([{ key: "a" }, { key: "b" }]);
 		const handled: string[] = [];
@@ -106,8 +174,10 @@ describe("DeadlineProcessor", () => {
 				if (deadline.key === "poison") throw new Error("boom");
 				handled.push(deadline.key);
 			},
-			onDeliveryError: (_error, deadline) => {
-				errors.push(deadline.key);
+			observers: {
+				onDeliveryError: (_error, deadline) => {
+					errors.push(deadline.key);
+				},
 			},
 		});
 
@@ -182,8 +252,10 @@ describe("DeadlineProcessor", () => {
 			handler: (deadline) => {
 				handled.push(deadline.key);
 			},
-			onPollError: (error) => {
-				pollErrors.push(error);
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
 			},
 		});
 
@@ -256,8 +328,10 @@ describe("DeadlineProcessor", () => {
 			random: () => {
 				throw new Error("jitter bug");
 			},
-			onDeliveryError: () => {
-				throw new Error("observer bug");
+			observers: {
+				onDeliveryError: () => {
+					throw new Error("observer bug");
+				},
 			},
 		});
 
@@ -295,8 +369,10 @@ describe("DeadlineProcessor", () => {
 			handler: (deadline) => {
 				handled.push(deadline.key);
 			},
-			onDeliveryError: (_error, deadline) => {
-				reported.push(deadline.key);
+			observers: {
+				onDeliveryError: (_error, deadline) => {
+					reported.push(deadline.key);
+				},
 			},
 		});
 
@@ -328,11 +404,11 @@ describe("DeadlineProcessor", () => {
 	it("rejects invalid numeric options at construction", () => {
 		const store = new InMemoryDeadlineStore<Payload>();
 		const handler = (): void => {};
-		expect(
-			() => new DeadlineProcessor({ store, handler, batchSize: 0 }),
-		).toThrow(/batchSize/);
-		expect(
-			() => new DeadlineProcessor({ store, handler, pollIntervalMs: -1 }),
-		).toThrow(/pollIntervalMs/);
+		expect(() => fastProcessor({ store, handler, batchSize: 0 })).toThrow(
+			/batchSize/,
+		);
+		expect(() => fastProcessor({ store, handler, pollIntervalMs: -1 })).toThrow(
+			/pollIntervalMs/,
+		);
 	});
 });

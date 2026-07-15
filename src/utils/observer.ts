@@ -27,3 +27,24 @@ export function reportToObserver(invoke: () => void): void {
 		(result as Promise<unknown>).then(undefined, () => {});
 	}
 }
+
+/** Runtime-validates and immutably captures a production-observer bundle. */
+export function captureObserverFunctions<
+	T extends object,
+	K extends Extract<keyof T, string>,
+>(context: string, observers: T, required: readonly K[]): Readonly<Pick<T, K>> {
+	if (observers === null || typeof observers !== "object") {
+		throw new TypeError(
+			`${context}.observers must provide ${required.join(", ")}`,
+		);
+	}
+	const captured: Partial<Record<K, T[K]>> = {};
+	for (const name of required) {
+		const observer = (observers as Record<string, unknown>)[name];
+		if (typeof observer !== "function") {
+			throw new TypeError(`${context}.observers.${name} must be a function`);
+		}
+		captured[name] = observer as T[K];
+	}
+	return Object.freeze(captured) as Readonly<Pick<T, K>>;
+}

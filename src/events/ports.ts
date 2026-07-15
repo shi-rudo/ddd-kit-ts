@@ -356,13 +356,21 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
 	 * ceiling is reached, moves the record to the dead-letter set.
 	 * A no-op for unknown or already-dispatched ids (a late failure
 	 * report after a successful retry must not resurrect the record).
+	 * Returns the exact dead-letter record only on the call that performs
+	 * that transition; retries below the ceiling and no-ops return
+	 * `undefined`. This lets productive pollers emit an immediate signal
+	 * without scanning the durable dead-letter set after every failure.
 	 */
-	markFailed: (dispatchId: string, error?: unknown) => Promise<void>;
+	markFailed: (
+		dispatchId: string,
+		error?: unknown,
+	) => Promise<DeadLetterRecord<Evt> | undefined>;
 
 	/**
 	 * Records that exhausted their delivery attempts. They no longer
-	 * come back from `getPending`; wire this to alerting so poison
-	 * messages surface instead of rotting silently.
+	 * come back from `getPending`; wire this to durable alerting and
+	 * reconciliation so poison messages surface even if the poller stops
+	 * between this store transition and its immediate observer callback.
 	 */
 	deadLetters: () => Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
 }

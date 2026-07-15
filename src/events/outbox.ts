@@ -612,25 +612,31 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		}
 	}
 
-	async markFailed(dispatchId: string, error?: unknown): Promise<void> {
+	async markFailed(
+		dispatchId: string,
+		error?: unknown,
+	): Promise<DeadLetterRecord<Evt> | undefined> {
 		const record = this.pending.get(dispatchId);
 		// Unknown or already-dispatched (or already dead-lettered) id: a
 		// late failure report must not resurrect anything.
-		if (!record) return;
+		if (!record) return undefined;
 		record.attempts += 1;
 		record.lastError =
 			error instanceof Error ? error.message : String(error ?? "unknown");
 		if (record.attempts >= this.maxDeliveryAttempts) {
 			this.pending.delete(dispatchId);
-			this.dead.set(dispatchId, {
+			const deadLetter: DeadLetterRecord<Evt> = {
 				dispatchId: record.dispatchId,
 				event: record.event,
 				source: record.source,
 				position: record.position,
 				attempts: record.attempts,
 				lastError: record.lastError,
-			});
+			};
+			this.dead.set(dispatchId, deadLetter);
+			return { ...deadLetter };
 		}
+		return undefined;
 	}
 
 	async deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>> {

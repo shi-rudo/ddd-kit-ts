@@ -886,6 +886,67 @@ from today's decision rules. TypeScript rejects legacy overrides; JavaScript
 subclasses silently stop receiving calls to a same-named prototype method, so
 they require a manual migration.
 
+#### 27. Productive pollers require complete operability observers
+
+`OutboxDispatcher` and `DeadlineProcessor` no longer accept optional observer
+callbacks at the top level. Pass the complete required bundle, including the
+new dead-letter transition hook:
+
+```ts
+// before: failures could be silently unobserved when callbacks were omitted
+const dispatcher = new OutboxDispatcher({
+  outbox,
+  sink,
+  onDispatchError,
+  onPollError,
+});
+
+// after: the composition root makes every operational channel explicit
+const dispatcher = new OutboxDispatcher({
+  outbox,
+  sink,
+  observers: {
+    onDispatchError,
+    onPollError,
+    onDeadLetter,
+  },
+});
+```
+
+Deadline wiring uses `observers: { onDeliveryError, onPollError,
+onDeadLetter }` in the same way. TypeScript reports every missing bundle or
+hook, and the constructors validate the complete shape for JavaScript callers.
+Observer failures remain neutralized so diagnostics cannot change delivery
+state. Both pollers snapshot and freeze the supplied function references at
+construction, so later mutation of the options object cannot disable a channel.
+
+Adapter authors update `DispatchTrackingOutbox.markFailed` and
+`DeadlineStore.markFailed` to return the exact `DeadLetterRecord` or
+`DeadLetterDeadline` only on the call that crosses the attempt ceiling;
+below-ceiling retries and late, unknown, or repeated reports return
+`undefined`. The portable adapter suites prove that transition contract.
+
+The immediate `onDeadLetter` callback is deliberately not a durable
+notification boundary. A process can stop after `markFailed` commits and before
+the callback runs, so production monitoring must also poll and reconcile
+`deadLetters()`.
+
+### Changed (breaking): productive pollers require explicit operability
+
+- Added exported `OutboxDispatcherObservers` and
+  `DeadlineProcessorObservers` bundles; both are required and runtime-validated.
+- Removed the optional top-level `onDispatchError`, `onDeliveryError`, and
+  `onPollError` options. Their behavior lives in the required bundles.
+- Added required, best-effort `onDeadLetter` hooks for the exact transition
+  reported by each store. Observer throws and rejected promises remain
+  neutralized.
+- Changed both failure-tracking `markFailed` ports to return the exact
+  ceiling-crossing dead-letter record once, or `undefined` otherwise. The
+  adapter contract suites pin the one-shot behavior and final attempt count.
+- Documented the crash window between the durable store transition and its
+  immediate callback; `deadLetters()` reconciliation remains the authoritative
+  production alarm path.
+
 ### Changed (breaking): aggregate persistence lifecycle is application-owned
 
 - Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
@@ -1197,8 +1258,9 @@ they require a manual migration.
   `DeadlineProcessor` ships the hardened delivery loop (never rejects,
   jittered streak backoff, reentrancy-safe `drainOnce` for cron ticks,
   graceful stop, neutralized callbacks, injectable clock guarded even
-  against Invalid Dates) while the handler and the poll cadence stay
-  yours. A handler failure never stops the batch (deadlines carry no
+  against Invalid Dates, plus required poll/delivery/dead-letter observers)
+  while the handler and the poll cadence stay yours. A handler failure never
+  stops the batch (deadlines carry no
   cross-address ordering); deliveries are acknowledged in one batch
   call per cycle, and an ack failure ends the cycle since it signals
   the store's write path, not a poison record. The loop shell itself
@@ -1406,8 +1468,8 @@ they require a manual migration.
   At-least-once with batched prefix acks (one `markDispatched` call per
   delivered batch, only after successful publishes), sequential with
   stop-on-failure to preserve per-aggregate causal order, never rejects
-  (poll and ack failures are absorbed into the `onPollError` /
-  `onDispatchError` observers, and every failed cycle grows the jittered
+  (poll and ack failures are absorbed into the required `observers` bundle,
+  and every failed cycle grows the jittered
   backoff toward `maxDelayMs`, also with plain non-tracking outboxes),
   bounded retries and dead-lettering when given a `DispatchTrackingOutbox`
   (an ack failure never counts toward the poison ceiling and is reported
@@ -1422,7 +1484,9 @@ they require a manual migration.
   `usesDispatchTracking` flag for wiring tests (tracking detection is
   structural; a decorator that drops `markFailed`/`deadLetters` turns
   bounded retries off, and this flag is where that becomes assertable),
-  and validated numeric options.
+  and validated numeric options. The bundle also reports the exact
+  dead-letter transition immediately; durable `deadLetters()` reconciliation
+  remains required because that callback is best-effort.
   `OutboxSink.publish(record)` is the transport port; `eventBusSink`
   adapts the in-process `EventBus` for zero-broker setups (never combine
   it with `withCommit`'s `bus` fast path on the same bus, that delivers

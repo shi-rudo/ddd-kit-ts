@@ -1,6 +1,7 @@
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type {
+	DeadLetterRecord,
 	DispatchTrackingOutbox,
 	EventCommitCandidate,
 	Outbox,
@@ -522,9 +523,36 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				);
 				const [poison] = await outbox.getPending(1);
 				assert(poison !== undefined, "expected a pending record");
+				let transition: DeadLetterRecord<Evt> | undefined;
 				for (let i = 0; i < attemptCeiling; i++) {
-					await outbox.markFailed(poison.dispatchId, new Error("poison"));
+					const current = await outbox.markFailed(
+						poison.dispatchId,
+						new Error("poison"),
+					);
+					if (i < attemptCeiling - 1) {
+						assertEqual(
+							current,
+							undefined,
+							"markFailed must not report a dead-letter transition below the ceiling",
+						);
+					}
+					transition = current;
 				}
+				assertEqual(
+					transition?.dispatchId,
+					poison.dispatchId,
+					"the ceiling-crossing markFailed call must return the exact dead-letter transition",
+				);
+				assertEqual(
+					transition?.attempts,
+					attemptCeiling,
+					"the returned transition must carry the final attempt count",
+				);
+				assertEqual(
+					await outbox.markFailed(poison.dispatchId, new Error("late")),
+					undefined,
+					"a late failure report must not repeat the dead-letter transition",
+				);
 				const pending = await outbox.getPending(10);
 				assertEqual(
 					pending.length,

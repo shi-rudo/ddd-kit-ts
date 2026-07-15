@@ -131,13 +131,20 @@ export interface DeadlineStore<TPayload = unknown> {
 	 * increments its `attempts` and, once the store's ceiling is
 	 * reached, moves it to the dead-letter set that `due` no longer
 	 * returns. A no-op for unknown, delivered, or replaced ids.
+	 * Returns the exact dead-letter record only on the call that performs
+	 * that transition; retries below the ceiling and no-ops return
+	 * `undefined`.
 	 */
-	markFailed(deliveryId: string, error?: unknown): Promise<void>;
+	markFailed(
+		deliveryId: string,
+		error?: unknown,
+	): Promise<DeadLetterDeadline<TPayload> | undefined>;
 
 	/**
-	 * Deadlines that exhausted their delivery attempts. Wire this to
-	 * alerting: a growing dead-letter set means processes that stopped
-	 * waking up.
+	 * Deadlines that exhausted their delivery attempts. Wire this to durable
+	 * alerting and reconciliation: a growing set means processes that stopped
+	 * waking up, and the poller can stop between the store transition and its
+	 * immediate observer callback.
 	 */
 	deadLetters(): Promise<ReadonlyArray<DeadLetterDeadline<TPayload>>>;
 }

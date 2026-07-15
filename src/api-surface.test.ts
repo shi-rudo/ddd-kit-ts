@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { IAggregateRoot, Id, StateValidator } from "./index";
+import type {
+	DeadlineProcessorObservers,
+	IAggregateRoot,
+	Id,
+	OutboxDispatcherObservers,
+	StateValidator,
+} from "./index";
 import * as http from "./http";
 import * as index from "./index";
 import * as money from "./money";
@@ -46,6 +52,19 @@ const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;
 };
 void publicStateValidator;
+
+const publicOutboxObservers: OutboxDispatcherObservers<never> = {
+	onDispatchError: () => {},
+	onPollError: () => {},
+	onDeadLetter: () => {},
+};
+const publicDeadlineObservers: DeadlineProcessorObservers<never> = {
+	onDeliveryError: () => {},
+	onPollError: () => {},
+	onDeadLetter: () => {},
+};
+void publicOutboxObservers;
+void publicDeadlineObservers;
 
 /**
  * Pins the RUNTIME public API surface of every package entry point. The
