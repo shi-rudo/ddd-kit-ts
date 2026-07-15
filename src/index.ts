@@ -195,6 +195,7 @@ export {
 	hasEntityId,
 	type Identifiable,
 	type IEntity,
+	type StateValidator,
 	removeEntityById,
 	replaceEntityById,
 	sameEntity,

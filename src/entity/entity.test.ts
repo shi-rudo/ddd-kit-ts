@@ -37,20 +37,20 @@ type OrderItemState = {
 	quantity: number;
 };
 
+function validateOrderItemState(state: OrderItemState): void {
+	if (state.quantity < 0) {
+		throw new Error("Quantity cannot be negative");
+	}
+}
+
 class OrderItemEntity extends Entity<OrderItemState, ItemId> {
 	constructor(id: ItemId, productId: string, quantity: number) {
 		const initialState: OrderItemState = { productId, quantity };
-		super(id, initialState);
+		super(id, initialState, { validateState: validateOrderItemState });
 	}
 
 	updateQuantity(newQuantity: number): void {
-		this._state = { ...this._state, quantity: newQuantity };
-	}
-
-	protected validateState(state: OrderItemState): void {
-		if (state.quantity < 0) {
-			throw new Error("Quantity cannot be negative");
-		}
+		this.setState({ ...this.state, quantity: newQuantity });
 	}
 }
 
@@ -187,29 +187,54 @@ describe("Entity", () => {
 			);
 		});
 
-		it("calls validateState BEFORE subclass field initializers (constructor-ordering footgun)", () => {
-			// Documents the JavaScript/TS constructor ordering: the super() call
-			// (Entity's constructor) runs `validateState` BEFORE the subclass's
-			// field initializers. A subclass that reads `this.someField` from
-			// inside validateState will see `undefined`. Test pins the behavior
-			// so the doc warning stays accurate.
-			let seenMinQuantity: unknown = "untouched";
+		it("uses the configured pure validator instead of virtual constructor dispatch", () => {
+			type TrappyState = { quantity: number };
+			const raw: TrappyState = { quantity: 5 };
+			const validated: TrappyState[] = [];
+			let virtualCalls = 0;
+			let virtualFreezeCalls = 0;
 
-			class TrappyEntity extends Entity<{ quantity: number }, Id<"TrappyId">> {
-				private readonly minQuantity = 1;
-				constructor(id: Id<"TrappyId">, state: { quantity: number }) {
-					super(id, state);
-				}
-				protected validateState(_state: { quantity: number }): void {
-					seenMinQuantity = this.minQuantity;
+			class TrappyEntity extends Entity<TrappyState, Id<"TrappyId">> {
+				constructor(id: Id<"TrappyId">, state: TrappyState) {
+					super(id, state, {
+						validateState: (candidate) => validated.push(candidate),
+					});
 				}
 			}
 
-			new TrappyEntity("t-1" as Id<"TrappyId">, { quantity: 5 });
+			// JavaScript consumers can still attach same-named prototype methods.
+			// Base construction must not dispatch through either extension point.
+			Object.defineProperty(TrappyEntity.prototype, "validateState", {
+				value: () => {
+					virtualCalls += 1;
+				},
+			});
+			Object.defineProperty(TrappyEntity.prototype, "freezeState", {
+				value: (state: TrappyState) => {
+					virtualFreezeCalls += 1;
+					return state;
+				},
+			});
 
-			// The subclass field initializer hadn't run yet at validateState time,
-			// so `this.minQuantity` was undefined. DON'T rely on `this` in validateState.
-			expect(seenMinQuantity).toBeUndefined();
+			new TrappyEntity("t-1" as Id<"TrappyId">, raw);
+
+			expect(virtualCalls).toBe(0);
+			expect(virtualFreezeCalls).toBe(0);
+			expect(validated).toHaveLength(1);
+			expect(validated[0]).not.toBe(raw);
+			expect(Object.isFrozen(validated[0])).toBe(true);
+		});
+
+		it("rejects the removed subclass validation hook at compile time", () => {
+			// @ts-expect-error state validation is constructor-injected, not overridable
+			class LegacyValidator extends Entity<
+				{ quantity: number },
+				Id<"LegacyValidatorId">
+			> {
+				protected validateState(_state: { quantity: number }): void {}
+			}
+
+			expect(typeof LegacyValidator).toBe("function");
 		});
 
 		it("should call validateState during construction", () => {
@@ -522,14 +547,16 @@ describe("validation sees the stored copy on both paths", () => {
 	type ProbeState = { q: number };
 
 	class ProbeEntity extends Entity<ProbeState, ItemId> {
-		readonly seen: ProbeState[] = [];
+		readonly seen: ProbeState[];
 		constructor(initial: ProbeState) {
-			super("item-1" as ItemId, initial);
-		}
-		protected override validateState(state: ProbeState): void {
-			// The constructor runs before field initializers; guard the push.
-			this.seen?.push(state);
-			if (state.q < 0) throw new Error("q must not be negative");
+			const seen: ProbeState[] = [];
+			super("item-1" as ItemId, initial, {
+				validateState: (state) => {
+					seen.push(state);
+					if (state.q < 0) throw new Error("q must not be negative");
+				},
+			});
+			this.seen = seen;
 		}
 		set(next: ProbeState): void {
 			this.setState(next);

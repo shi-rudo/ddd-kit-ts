@@ -19,16 +19,20 @@
  *
  * This module provides:
  * - `Entity<TState, TId>` - Base class for entities with state
- * - `EntityConfig` - Construction options (opt-in deep freeze)
+ * - `EntityConfig` - Construction options (validation and opt-in deep freeze)
  * - `Identifiable<TId>` - Minimal interface for objects with id
  * - Helper functions for working with collections of entities
  *
  * @example
  * ```typescript
  * // Class-based child entity with logic
+ * const validateOrderItemState = (state: OrderItemState): void => {
+ *   if (state.quantity < 1) throw new Error("quantity must be positive");
+ * };
+ *
  * class OrderItem extends Entity<OrderItemState, ItemId> {
  *   constructor(id: ItemId, initialState: OrderItemState) {
- *     super(id, initialState);
+ *     super(id, initialState, { validateState: validateOrderItemState });
  *   }
  *
  *   updateQuantity(quantity: number): void {
@@ -60,11 +64,26 @@ import { assertNoHostileOwnProtoKey } from "../core/errors";
 import type { Id } from "../core/id";
 import { deepFreeze } from "../value-object/value-object";
 
+/** A pure invariant check that throws when a candidate state is invalid. */
+export type StateValidator<TState> = (state: TState) => void;
+
 /**
  * Construction options shared by `Entity` and (via `AggregateConfig`) the
  * aggregate base classes.
  */
-export interface EntityConfig {
+export interface EntityConfig<TState = unknown> {
+	/**
+	 * Pure state-invariant validator captured by the entity instance. It runs
+	 * against the exact frozen state stored during construction and every
+	 * {@link Entity.setState} call. Throw to reject the candidate state.
+	 *
+	 * Passing validation as data avoids virtual dispatch from the base
+	 * constructor: the function cannot observe partly initialised subclass
+	 * fields through `this`. Close over immutable policy supplied to the
+	 * concrete constructor when validation needs instance-specific inputs.
+	 */
+	readonly validateState?: StateValidator<TState>;
+
 	/**
 	 * Opt-in: freeze the WHOLE state graph (via `deepFreeze`) instead of
 	 * the default shallow freeze. This protects against nested aliases
@@ -124,7 +143,7 @@ export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
  * Provides:
  * - Identity management (id)
  * - State management
- * - State validation hook
+ * - Instance-bound pure state validation
  * - Protected state access for domain behavior
  *
  * This is the foundation for all Entities in DDD:
@@ -137,9 +156,13 @@ export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
  * @example
  * ```typescript
  * // Child Entity within an aggregate
+ * const validateOrderItemState = (state: OrderItemState): void => {
+ *   if (state.quantity < 1) throw new Error("quantity must be positive");
+ * };
+ *
  * class OrderItem extends Entity<OrderItemState, ItemId> {
  *   constructor(id: ItemId, initialState: OrderItemState) {
- *     super(id, initialState);
+ *     super(id, initialState, { validateState: validateOrderItemState });
  *   }
  *
  *   updateQuantity(quantity: number): void {
@@ -170,14 +193,16 @@ export abstract class Entity<TState, TId extends Id<string>>
 	}
 
 	/**
-	 * The state is 'protected' so that only the subclass can modify it.
-	 * Subclasses can mutate this directly or use helper methods; direct
-	 * assignments should freeze through {@link freezeState} so the
-	 * configured freeze mode is honored.
+	 * The state is `protected` so that only the subclass can modify it.
+	 * Ordinary entity behavior must use {@link setState}; direct assignment
+	 * skips instance-bound validation. Kit event-sourcing internals use direct
+	 * assignment deliberately because historical evolution must not run
+	 * today's decision validator.
 	 */
 	protected _state: TState;
 
 	private readonly _deepFreezeState: boolean;
+	private readonly validateState: StateValidator<TState>;
 
 	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
@@ -193,20 +218,26 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * or array state carries an own `"__proto__"` data key; validate and
 	 * strip untrusted input at the boundary.
 	 */
-	protected constructor(id: TId, initialState: TState, config?: EntityConfig) {
+	protected constructor(
+		id: TId,
+		initialState: TState,
+		config?: EntityConfig<TState>,
+	) {
 		if (id === null || id === undefined) {
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
 		this._deepFreezeState = config?.deepFreezeState ?? false;
-		// Both mutation paths validate the exact frozen object that is
-		// stored, so a normalizing or input-reading override cannot behave
-		// differently between construction and setState. The constructor
-		// assigns BEFORE validating: `this.state` stays readable inside a
-		// validateState override during construction (a validation throw
-		// discards the instance anyway), while setState validates before
-		// assigning so a throw leaves the previous state in place.
-		this._state = this.freezeState(shallowCopyOwned(initialState));
+		this.validateState = config?.validateState ?? noStateValidation;
+		// Both mutation paths validate the exact frozen object that is stored.
+		// Assigning the validator as an own property before invoking it also
+		// prevents same-named prototype methods in JavaScript consumers from
+		// turning this constructor call back into virtual dispatch. The module
+		// freeze helper similarly avoids the protected post-construction hook.
+		this._state = freezeStateByMode(
+			shallowCopyOwned(initialState),
+			this._deepFreezeState,
+		);
 		this.validateState(this._state);
 	}
 
@@ -214,45 +245,20 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * Freezes a state value according to this entity's configured freeze
 	 * mode: the default shallow freeze, or `deepFreeze` when
 	 * {@link EntityConfig.deepFreezeState} was enabled at construction.
-	 * Subclass code that assigns `this._state` directly (bypassing
-	 * `setState`) must freeze through this method, not `freezeShallow`,
-	 * or the opt-in silently degrades to shallow for that path.
+	 * Infrastructure-style subclass code that deliberately assigns
+	 * `this._state` directly must freeze through this method, not
+	 * `freezeShallow`, or the opt-in silently degrades to shallow for that
+	 * path. Ordinary domain behavior should use {@link setState} instead.
 	 */
 	protected freezeState(value: TState): TState {
-		return this._deepFreezeState
-			? (deepFreeze(value) as TState)
-			: freezeShallow(value);
-	}
-
-	/**
-	 * Optional validation hook to ensure state invariants. Called during
-	 * construction (from `Entity`'s constructor) and again on every
-	 * `setState()` call. Throw to reject invalid state.
-	 *
-	 * **⚠️ Must not read subclass instance fields via `this`.** The
-	 * constructor calls `validateState(initialState)` BEFORE the subclass's
-	 * field initializers run, so `this.someField` is `undefined` at that
-	 * point, a classic TypeScript/JavaScript constructor-ordering footgun.
-	 * The `state` argument is the single source of truth; treat the method
-	 * as pure with respect to `this`.
-	 *
-	 * If your invariants genuinely depend on per-instance configuration
-	 * that isn't part of the state, pass that configuration into the state
-	 * itself (DDD-canonical: the aggregate's state contains everything it
-	 * needs) or perform the additional check after construction in a
-	 * dedicated factory method.
-	 *
-	 * @param state - The state to validate
-	 * @throws Error (or `DomainError` subclass) if validation fails
-	 */
-	protected validateState(_state: TState): void {
-		// Default implementation does nothing
+		return freezeStateByMode(value, this._deepFreezeState);
 	}
 
 	/**
 	 * Sets the state of the entity.
 	 * This is a convenience method for state mutations.
-	 * Automatically validates the newState using `validateState()`.
+	 * Automatically validates `newState` with the instance-bound
+	 * {@link EntityConfig.validateState} function.
 	 *
 	 * Plain-object and array states are shallow-copied before the freeze
 	 * (the caller's object stays mutable); a class-instance state is an
@@ -270,6 +276,12 @@ export abstract class Entity<TState, TId extends Id<string>>
 		this.validateState(next);
 		this._state = next;
 	}
+}
+
+const noStateValidation: StateValidator<unknown> = () => {};
+
+function freezeStateByMode<TState>(value: TState, deep: boolean): TState {
+	return deep ? (deepFreeze(value) as TState) : freezeShallow(value);
 }
 
 /**

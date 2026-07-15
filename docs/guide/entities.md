@@ -47,8 +47,8 @@ See [Design Decisions: Version lives on the aggregate boundary](./design-decisio
 ## Class-based child entities
 
 Use `Entity<TState, TId>` when the child has meaningful behavior of its own.
-The class owns an id, a frozen state reference, a `validateState` hook, and a
-protected `setState(...)` method.
+The class owns an id, a frozen state reference, an instance-bound state
+validator, and a protected `setState(...)` method.
 
 ```ts
 import {
@@ -75,9 +75,17 @@ class InvalidOrderItemQuantityError extends DomainError<
   }
 }
 
+const validateOrderItemState = (state: OrderItemState): void => {
+  if (state.quantity < 1) {
+    throw new InvalidOrderItemQuantityError(state.quantity);
+  }
+};
+
 class OrderItem extends Entity<OrderItemState, ItemId> {
   constructor(id: ItemId, productId: string, quantity: number) {
-    super(id, { productId, quantity });
+    super(id, { productId, quantity }, {
+      validateState: validateOrderItemState,
+    });
   }
 
   changeQuantity(quantity: number): void {
@@ -94,12 +102,6 @@ class OrderItem extends Entity<OrderItemState, ItemId> {
   get quantity(): number {
     return this.state.quantity;
   }
-
-  protected override validateState(state: OrderItemState): void {
-    if (state.quantity < 1) {
-      throw new InvalidOrderItemQuantityError(state.quantity);
-    }
-  }
 }
 ```
 
@@ -109,36 +111,45 @@ The important details:
 - `state` is protected; consumers use explicit domain queries
 - `setState(...)` validates the next state and only then replaces the old one
 - if validation throws, the previous state remains in place
-- `validateState(state)` receives the state to check
+- `EntityConfig.validateState(state)` is a pure function receiving the state to check
 
-Prefer `setState(...)` for mutations. `_state` is protected for advanced
-subclasses, but direct assignment can skip validation and the configured freeze
-mode unless you are careful. If you really need a custom assignment path, pass
-the value through `freezeState(...)`.
+Use `setState(...)` for ordinary entity mutations. Direct `_state` assignment
+always skips the instance-bound validator and can also skip the configured
+freeze mode. The base keeps that field protected for specialised derivation
+machinery such as event replay, where bypassing today's decision rules is
+deliberate.
 
-### Constructor ordering
+### Validation is constructor-injected
 
-`validateState` runs from the base `Entity` constructor. In JavaScript and
-TypeScript, subclass field initializers have not run yet at that point.
+The validator runs from the base `Entity` constructor and again on every
+`setState(...)`. It is passed as a function instead of implemented as an
+overridable method, so base construction never dispatches into a partially
+initialised subclass.
 
-Do not read subclass fields from `validateState`:
+Keep the function pure with respect to the entity instance:
 
 ```ts
-class BadItem extends Entity<{ quantity: number }, ItemId> {
-  private readonly minQuantity = 1;
+function validateQuantity(
+  state: { quantity: number },
+  minQuantity: number,
+): void {
+  if (state.quantity < minQuantity) {
+    throw new Error("invalid quantity");
+  }
+}
 
-  protected override validateState(state: { quantity: number }): void {
-    // Wrong: minQuantity is undefined during the base constructor call.
-    if (state.quantity < this.minQuantity) {
-      throw new Error("invalid quantity");
-    }
+class ConfiguredItem extends Entity<{ quantity: number }, ItemId> {
+  constructor(id: ItemId, quantity: number, minQuantity: number) {
+    super(id, { quantity }, {
+      validateState: (state) => validateQuantity(state, minQuantity),
+    });
   }
 }
 ```
 
-Use the `state` argument as the source of truth. If a rule needs configuration,
-put that configuration in state or enforce the additional rule in a named static
-factory after construction.
+The closure may capture immutable constructor policy such as `minQuantity`, but
+it cannot read `this`. Prefer putting durable domain facts in state; use a named
+factory for checks that belong only to creation rather than every state write.
 
 ## Plain identifiable records
 

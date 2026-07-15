@@ -17,11 +17,12 @@ import {
 export type { IAggregateRoot } from "./aggregate";
 
 /**
- * Configuration options shared by aggregate roots: `deepFreezeState` from
- * `EntityConfig` plus an optional instance-bound `domainEventFactory` used by
- * `recordEvent` and snapshots. The former `autoVersionBump` option was removed
- * in v3: the OCC decision lives in the method NAME instead. `setState` always
- * bumps the version; the rare non-bumping mutation is the deliberately loud
+ * Configuration options shared by aggregate roots: the instance-bound
+ * `validateState` function and `deepFreezeState` from `EntityConfig`, plus an
+ * optional instance-bound `domainEventFactory` used by `recordEvent` and
+ * snapshots. The former `autoVersionBump` option was removed in v3: the OCC
+ * decision lives in the method NAME instead. `setState` always bumps the
+ * version; the rare non-bumping mutation is the deliberately loud
  * `setStateWithoutVersionBump`.
  */
 export type { AggregateConfig } from "./base-aggregate";
@@ -100,7 +101,7 @@ export abstract class AggregateRoot<
 	protected constructor(
 		id: TId,
 		initialState: TState,
-		config?: AggregateConfig,
+		config?: AggregateConfig<TState>,
 	) {
 		super(id, initialState, config);
 		const baseCapability = aggregatePersistenceCapabilityFor(this);
@@ -237,7 +238,7 @@ export abstract class AggregateRoot<
 	 * "event for a fact that never happened" footgun.
 	 *
 	 * Order of operations:
-	 *  1. `setState(newState)`: runs `validateState` first.
+	 *  1. `setState(newState)`: runs the configured state validator first.
 	 *     If it throws, the method propagates and **no event is recorded
 	 *     and no version is bumped**.
 	 *  2. Each event in `events` is appended via `addDomainEvent`.
@@ -270,7 +271,7 @@ export abstract class AggregateRoot<
 	 * where `setState` and `addDomainEvent` are otherwise decoupled and the
 	 * ordering is convention-only.
 	 *
-	 * @param newState - The new state (validated by `validateState`)
+	 * @param newState - The new state (checked by the configured validator)
 	 * @param events - One event, an array of events, or none (default)
 	 */
 	protected commit(
@@ -293,8 +294,8 @@ export abstract class AggregateRoot<
 
 	/**
 	 * Sets the state AND advances the OCC version. Validates `newState`
-	 * via `validateState()`. This is the safe default for every domain
-	 * mutation: a version that moves makes the save's optimistic
+	 * via the instance-bound state validator. This is the safe default for
+	 * every domain mutation: a version that moves makes the save's optimistic
 	 * predicate (`WHERE version = v`) catch concurrent writers. Prefer
 	 * `commit()` when the mutation also records events; it delegates
 	 * here.
@@ -315,8 +316,8 @@ export abstract class AggregateRoot<
 
 	/**
 	 * Sets the state WITHOUT advancing the OCC version. Validates
-	 * `newState` via `validateState()` and marks keys dirty like
-	 * {@link setState}.
+	 * `newState` via the instance-bound state validator and marks keys dirty
+	 * like {@link setState}.
 	 *
 	 * **The name is long on purpose.** An un-bumped mutation can be
 	 * silently overwritten by a concurrent writer: a save whose version
@@ -334,15 +335,15 @@ export abstract class AggregateRoot<
 
 	/**
 	 * Restores the aggregate from a snapshot: loads state and aligns
-	 * `version` + `persistedVersion` to the snapshot version. Validates
-	 * the restored state with `validateState`, deliberately: for a
-	 * state-stored aggregate EVERY load validates (`reconstitute` runs
-	 * the constructor's `validateState`), because the stored state IS
+	 * `version` + `persistedVersion` to the snapshot version. Checks the
+	 * restored state with the configured validator, deliberately: for a
+	 * state-stored aggregate EVERY load validates (`reconstitute` runs the
+	 * constructor, which runs the same validator), because the stored state IS
 	 * the record, and a snapshot here is a backup of that record. This
 	 * differs from `EventSourcedAggregate.restoreFromSnapshotWithEvents`
 	 * on purpose: there the stream is the record, states derive from
 	 * accepted facts, and today's rules must not gate history. When a
-	 * `validateState` rule tightens on a state-stored aggregate, the
+	 * state-validation rule tightens on a state-stored aggregate, the
 	 * remedy is a data migration, the same as for its regular rows.
 	 *
 	 * **The restore target must not carry pending events**: such a target
@@ -361,8 +362,7 @@ export abstract class AggregateRoot<
 		const restored = this.fromSnapshotState(
 			this.resolveSnapshotState(snapshot),
 		);
-		this.validateState(restored);
-		this._state = this.freezeState(restored);
+		super.setState(restored);
 		this.markRestored(snapshot.version);
 	}
 }

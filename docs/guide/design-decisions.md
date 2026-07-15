@@ -12,7 +12,7 @@ The kit keeps one clear error axis:
 - Application boundaries decide whether to turn those errors into `Result`.
 - Infrastructure replay paths return `Result` when corrupted input is an expected recoverable case.
 
-Aggregates, entities, value-object constructors, `validateState`, and `validateEvent` throw `DomainError` subclasses. That matches the DDD model: an invariant violation means the current operation tried to put the domain into a state the domain rejects. A stack trace and a concrete class such as `OrderAlreadyConfirmedError` are useful there.
+Aggregates, entities, value-object constructors, instance-bound state validators, and `validateEvent` throw `DomainError` subclasses. That matches the DDD model: an invariant violation means the current operation tried to put the domain into a state the domain rejects. A stack trace and a concrete class such as `OrderAlreadyConfirmedError` are useful there.
 
 The boundary is different. A command handler or HTTP adapter often wants to return `Result` because it is translating an application outcome into a transport response:
 
