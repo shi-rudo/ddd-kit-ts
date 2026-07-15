@@ -19,6 +19,19 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Added: selective DomainError-to-Result boundary
+
+- Add `domainErrorToResult(operation, expectedErrors)` for consumers that want
+  typed Result values at an Application boundary without changing exception-first
+  aggregate APIs.
+- The required non-empty class list is the positive classification policy. A
+  listed consumer `DomainError` subclass becomes `Err` with the exact original
+  instance; unlisted domain errors, infrastructure failures, cancellation, and
+  programming errors rethrow unchanged.
+- Sync and async operations share one Promise-based API. The expected-error list
+  is captured and runtime-validated before the operation starts, and its class
+  tuple infers the Result error union.
+
 ### Changed (breaking): relationship identity is explicit in integration envelopes
 
 - `IntegrationMessage` and `IntegrationMessageContent` now expose optional

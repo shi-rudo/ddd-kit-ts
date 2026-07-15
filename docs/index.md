@@ -22,7 +22,7 @@ features:
     details: Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, modelled after Evans and Vernon, not after a framework.
   - icon: 🔒
     title: Domain throws, App boundary returns Result
-    details: "Aggregates enforce invariants by throwing typed DomainErrors. Result lives at the App-Service boundary (CommandBus, QueryBus, withCommit): clean separation, no mixed conventions."
+    details: "Aggregates enforce invariants by throwing typed DomainErrors. Buses and the selective domainErrorToResult helper make expected Application outcomes explicit; unknown failures still throw."
   - icon: 📜
     title: Event sourcing without the framework
     details: 'EventSourcedAggregate enforces "record-after-mutation" structurally. apply() is atomic: handler throws? state and events stay in sync. loadFromHistory and snapshot+replay just work.'
