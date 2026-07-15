@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Version } from "../aggregate/aggregate";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import {
+	AggregateRoot,
+	type IAggregateRoot,
+} from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
@@ -24,34 +27,29 @@ import {
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
 
-type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
-	markPersistedCalls: number;
-};
+class MockAggregate extends AggregateRoot<
+	Readonly<Record<string, never>>,
+	TestId,
+	TestEvent
+> {
+	protected readonly aggregateType = "MockOrder";
+
+	constructor(id: string, events: TestEvent[]) {
+		super(id as TestId, {});
+		this.setVersion(1 as Version);
+		for (const event of events) this.addDomainEvent(event);
+	}
+
+	public get acknowledgementCount(): number {
+		return this.persistedVersion === this.version ? 1 : 0;
+	}
+}
 
 function createMockAggregate(
 	id: string,
 	events: TestEvent[] = [],
 ): MockAggregate {
-	let pending: TestEvent[] = [...events];
-	let calls = 0;
-	return {
-		id: id as TestId,
-		version: 1 as Version,
-		persistedVersion: undefined,
-		get pendingEvents(): ReadonlyArray<TestEvent> {
-			return pending;
-		},
-		clearPendingEvents(): void {
-			pending = [];
-		},
-		markPersisted(_v: Version): void {
-			pending = [];
-			calls += 1;
-		},
-		get markPersistedCalls(): number {
-			return calls;
-		},
-	};
+	return new MockAggregate(id, events);
 }
 
 function testEvent(orderId: string): TestEvent {
@@ -153,6 +151,44 @@ function stamped(
 
 describe("UnitOfWork", () => {
 	describe("transaction lifecycle", () => {
+		it("supports a state-stored AggregateRoot without event sourcing", async () => {
+			type PlainState = Readonly<{ name: string }>;
+			class PlainAggregate extends AggregateRoot<PlainState, TestId> {
+				protected readonly aggregateType = "PlainAggregate";
+
+				constructor(id: TestId) {
+					super(id, { name: "before" });
+				}
+
+				public rename(name: string): void {
+					this.setState({ name });
+				}
+			}
+
+			const aggregate = new PlainAggregate("plain-1" as TestId);
+			aggregate.rename("after");
+			const outbox = createMockOutbox();
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					plain: (_tx: undefined, session: UnitOfWorkSession<TestEvent>) => ({
+						save: async (plain: PlainAggregate) => {
+							session.enrollSaved(plain);
+						},
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				await repositories.plain.save(aggregate);
+			});
+
+			expect(aggregate.persistedVersion).toBe(aggregate.version);
+			expect(aggregate.pendingEvents).toEqual([]);
+			expect(outbox.added).toEqual([]);
+		});
+
 		it("commits on success and returns the callback's result", async () => {
 			const callOrder: string[] = [];
 			const scope: TransactionScope<undefined> = {
@@ -174,7 +210,7 @@ describe("UnitOfWork", () => {
 			expect(callOrder).toEqual(["tx-start", "work", "tx-commit"]);
 		});
 
-		it("rolls back on callback error: error passes through unchanged, no markPersisted", async () => {
+		it("rolls back on callback error: error passes through unchanged, no acknowledgement", async () => {
 			const { uow } = createUow();
 			const agg = createMockAggregate("o-1", [testEvent("o-1")]);
 			const boom = new Error("domain rule violated");
@@ -186,7 +222,7 @@ describe("UnitOfWork", () => {
 				}),
 			).rejects.toBe(boom);
 
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(1);
 		});
 
@@ -296,10 +332,10 @@ describe("UnitOfWork", () => {
 				).added,
 			).toEqual([]);
 			expect(aggregate.pendingEvents).toEqual([event]);
-			expect(aggregate.markPersistedCalls).toBe(0);
+			expect(aggregate.acknowledgementCount).toBe(0);
 		});
 
-		it("saved aggregates: events harvested into the outbox, markPersisted after commit, publish last", async () => {
+		it("saved aggregates: events harvested, application observer after commit, publish last", async () => {
 			const callOrder: string[] = [];
 			const scope: TransactionScope<undefined> = {
 				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -329,26 +365,14 @@ describe("UnitOfWork", () => {
 				once: () => new Promise(() => {}),
 			};
 			const event = testEvent("o-1");
-			let pending: TestEvent[] = [event];
-			const agg: IAggregateRoot<TestId, TestEvent> = {
-				id: "o-1" as TestId,
-				version: 1 as Version,
-				persistedVersion: undefined,
-				get pendingEvents() {
-					return pending;
-				},
-				clearPendingEvents() {
-					pending = [];
-				},
-				markPersisted() {
-					callOrder.push("markPersisted");
-					pending = [];
-				},
-			};
+			const agg = createMockAggregate("o-1", [event]);
 			const uow = new UnitOfWork({
 				scope,
 				outbox,
 				bus,
+				onPersisted: () => {
+					callOrder.push("onPersisted");
+				},
 				repositories: {
 					orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) =>
 						new FakeOrderRepository(tx, session),
@@ -357,7 +381,7 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async ({ repositories }) => {
 				callOrder.push("work");
-				await repositories.orders.save(agg as MockAggregate);
+				await repositories.orders.save(agg);
 				return undefined;
 			});
 
@@ -366,36 +390,24 @@ describe("UnitOfWork", () => {
 				"work",
 				"outbox.add",
 				"tx-commit",
-				"markPersisted",
+				"onPersisted",
 				"bus.publish",
 			]);
 			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
 
-		it("forwards a post-commit persistence failure to onPersistError with the aggregate", async () => {
+		it("forwards a post-commit application observer failure to onPersistError", async () => {
 			const event = testEvent("o-1");
-			let pending: TestEvent[] = [event];
 			const persistError = new Error("cache eviction failed");
-			const agg: IAggregateRoot<TestId, TestEvent> = {
-				id: "o-1" as TestId,
-				version: 1 as Version,
-				persistedVersion: undefined,
-				get pendingEvents() {
-					return pending;
-				},
-				clearPendingEvents() {
-					pending = [];
-				},
-				markPersisted() {
-					pending = [];
-					throw persistError;
-				},
-			};
+			const agg = createMockAggregate("o-1", [event]);
 			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				bus: createMockBus(),
+				onPersisted: () => {
+					throw persistError;
+				},
 				onPersistError: (error, aggregate) => {
 					reported.push({ error, aggregate });
 				},
@@ -408,7 +420,7 @@ describe("UnitOfWork", () => {
 			// The committed write resolves; the cleanup failure is observed.
 			await expect(
 				uow.run(async ({ repositories }) => {
-					await repositories.orders.save(agg as MockAggregate);
+					await repositories.orders.save(agg);
 					return "ok";
 				}),
 			).resolves.toBe("ok");
@@ -435,7 +447,7 @@ describe("UnitOfWork", () => {
 					}
 				).added,
 			).toEqual([[stamped(event)]]);
-			expect(agg.markPersistedCalls).toBe(1);
+			expect(agg.acknowledgementCount).toBe(1);
 		});
 
 		it("deleted aggregates: recorded deletion events are harvested into the outbox", async () => {
@@ -470,7 +482,7 @@ describe("UnitOfWork", () => {
 			).rejects.toBeInstanceOf(AggregateDeletedError);
 
 			// The violation aborted the unit of work: nothing was committed.
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 		});
 
 		it("the use case can enroll manually via context.session", async () => {
@@ -491,7 +503,7 @@ describe("UnitOfWork", () => {
 					}
 				).added,
 			).toEqual([[stamped(event)]]);
-			expect(agg.markPersistedCalls).toBe(1);
+			expect(agg.acknowledgementCount).toBe(1);
 		});
 	});
 
@@ -576,8 +588,8 @@ describe("UnitOfWork", () => {
 			// Only the committed attempt's events were harvested; the
 			// rolled-back attempt's enrollment did not leak into the retry.
 			expect(outbox.added).toEqual([[stamped(event2)]]);
-			expect(attempt1Aggregate.markPersistedCalls).toBe(0);
-			expect(attempt2Aggregate.markPersistedCalls).toBe(1);
+			expect(attempt1Aggregate.acknowledgementCount).toBe(0);
+			expect(attempt2Aggregate.acknowledgementCount).toBe(1);
 		});
 	});
 
@@ -629,7 +641,7 @@ describe("UnitOfWork", () => {
 				}),
 			).rejects.toBeInstanceOf(NestedUnitOfWorkError);
 
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 			expect(agg.pendingEvents).toHaveLength(1);
 		});
 
@@ -656,28 +668,21 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("identity map integration", () => {
-		class OrderAggregate implements IAggregateRoot<TestId, TestEvent> {
-			public readonly version = 1 as Version;
-			public readonly persistedVersion: Version | undefined = undefined;
-			public markPersistedCalls = 0;
-			private pending: TestEvent[];
+		class OrderAggregate extends AggregateRoot<
+			Readonly<Record<string, never>>,
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
 
-			constructor(
-				public readonly id: TestId,
-				events: TestEvent[] = [],
-			) {
-				this.pending = [...events];
+			constructor(id: TestId, events: TestEvent[] = []) {
+				super(id, {});
+				this.setVersion(1 as Version);
+				for (const event of events) this.addDomainEvent(event);
 			}
 
-			get pendingEvents(): ReadonlyArray<TestEvent> {
-				return this.pending;
-			}
-			clearPendingEvents(): void {
-				this.pending = [];
-			}
-			markPersisted(_v: Version): void {
-				this.pending = [];
-				this.markPersistedCalls += 1;
+			public get acknowledgementCount(): number {
+				return this.persistedVersion === this.version ? 1 : 0;
 			}
 		}
 
@@ -755,7 +760,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(repos[0]?.hydrations).toBe(1);
-			// One instance → one harvest, one markPersisted.
+			// One instance → one harvest, one acknowledgement.
 			expect(outbox.added).toEqual([[stamped(event)]]);
 		});
 
@@ -829,7 +834,7 @@ describe("UnitOfWork", () => {
 			).rejects.toBeInstanceOf(AggregateDeletedError);
 		});
 
-		it("a deleted aggregate's events are harvested, but markPersisted (and thus onPersisted) never fires for it", async () => {
+		it("a deleted aggregate's events are harvested without saved acknowledgement or observation", async () => {
 			const event = testEvent("o-1");
 			const rows = new Map([["o-1", [event]]]);
 			const { uow, outbox } = createCachingUow(rows);
@@ -846,8 +851,8 @@ describe("UnitOfWork", () => {
 			// Deletion event reached the outbox...
 			expect(outbox.added).toEqual([[stamped(event)]]);
 			// ...but the post-save lifecycle did NOT run for the deleted
-			// aggregate: no markPersisted, no onPersisted cache-fill lie.
-			expect(deletedOrder.markPersistedCalls).toBe(0);
+			// aggregate: no saved acknowledgement or cache-fill observer lie.
+			expect(deletedOrder.acknowledgementCount).toBe(0);
 			// Pending events are still cleared so a later commit cannot
 			// re-emit them.
 			expect(deletedOrder.pendingEvents).toHaveLength(0);
@@ -879,7 +884,7 @@ describe("UnitOfWork", () => {
 
 			expect(rejection).toBeInstanceOf(CommitError);
 			expect((rejection as CommitError).cause).toBe(outboxError);
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 		});
 
 		it("a commit-phase failure (callback resolved, transactional rejected) surfaces as CommitError", async () => {
@@ -931,7 +936,7 @@ describe("UnitOfWork", () => {
 			expect(rejection).toBeInstanceOf(EventHarvestError);
 			expect(rejection).not.toBeInstanceOf(CommitError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 		});
 
 		it("a wrapping scope that nests the harvest-guard error still surfaces EventHarvestError, not CommitError", async () => {
@@ -1175,7 +1180,7 @@ describe("UnitOfWork", () => {
 			expect(receivedOpts?.signal).toBe(ac.signal);
 		});
 
-		it("a cooperative abort mid-work rolls back: error passes through, no markPersisted", async () => {
+		it("a cooperative abort mid-work rolls back: error passes through, no acknowledgement", async () => {
 			const outbox = createMockOutbox();
 			const { uow } = createUow({ outbox });
 			const agg = createMockAggregate("order-1", [testEvent("order-1")]);
@@ -1193,7 +1198,7 @@ describe("UnitOfWork", () => {
 				),
 			).rejects.toThrow("deadline exceeded");
 
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 			expect(outbox.added).toHaveLength(0);
 		});
 
@@ -1209,26 +1214,27 @@ describe("UnitOfWork", () => {
 		// repository's findById path (identityMap.set after hydration).
 		class MockOrder {}
 
-		/** A loadable aggregate with a directly-pushable pending list. */
+		/** A loadable state-stored aggregate with a test-only event recorder. */
 		function loadable(id: string, initialEvents: TestEvent[] = []) {
-			const pending: TestEvent[] = [...initialEvents];
-			return {
-				id: id as TestId,
-				version: 1 as Version,
-				persistedVersion: undefined as Version | undefined,
-				get pendingEvents(): ReadonlyArray<TestEvent> {
-					return pending;
-				},
-				clearPendingEvents(): void {
-					pending.length = 0;
-				},
-				markPersisted(_v: Version): void {
-					pending.length = 0;
-				},
-				record(e: TestEvent): void {
-					pending.push(e);
-				},
-			};
+			class LoadableAggregate extends AggregateRoot<
+				Readonly<Record<string, never>>,
+				TestId,
+				TestEvent
+			> {
+				protected readonly aggregateType = "MockOrder";
+
+				constructor() {
+					super(id as TestId, {});
+					this.setVersion(1 as Version);
+					for (const event of initialEvents) this.addDomainEvent(event);
+				}
+
+				public record(event: TestEvent): void {
+					this.commit(this.state, event);
+				}
+			}
+
+			return new LoadableAggregate();
 		}
 
 		it("throws UnenrolledChangesError when events are recorded after load and never enrolled", async () => {

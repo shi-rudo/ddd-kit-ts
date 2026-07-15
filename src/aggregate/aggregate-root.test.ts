@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	SnapshotSchemaMismatchError,
 	UnmintedEventError,
@@ -15,6 +15,19 @@ import {
 	AggregateRoot as ProductionAggregateRoot,
 } from "./aggregate-root";
 import type { AnyDomainEvent, DomainEvent } from "./domain-event";
+import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
+
+function acknowledgePersisted(aggregate: object, version: Version): void {
+	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	if (!capability) throw new Error("Missing test persistence capability");
+	capability.acknowledge(version);
+}
+
+function discardPendingEvents(aggregate: object): void {
+	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	if (!capability) throw new Error("Missing test persistence capability");
+	capability.discardPendingEvents();
+}
 
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
 abstract class AggregateRoot<
@@ -99,7 +112,7 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 
 	it("setStateWithoutVersionBump(next) mutates and marks dirty but keeps the version", () => {
 		const aggregate = fresh();
-		aggregate.markPersisted(0 as Version);
+		acknowledgePersisted(aggregate, 0 as Version);
 
 		aggregate.cacheCosmetic(7);
 
@@ -357,8 +370,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("rejects a restore target carrying pending events (UnreplayableAggregateError), same guard as the event-sourced path", () => {
 			// Rationale lives on assertRestoreTargetHasNoPendingEvents in
-			// base-aggregate.ts; clearPendingEvents() first is the
-			// deliberate-discard escape hatch.
+			// base-aggregate.ts; callers discard the dirty instance and
+			// reconstitute a fresh target.
 			type Ev = DomainEvent<"Updated", { value: number }>;
 			class EventfulAggregate extends AggregateRoot<TestState, TestId, Ev> {
 				protected readonly aggregateType = "EventfulAggregate";
@@ -1054,7 +1067,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("markPersisted (post-save hook)", () => {
+	describe("kit-internal persistence acknowledgement", () => {
 		type TestRecorded = DomainEvent<"TestRecorded", { value: number }>;
 
 		class EventingAggregate extends AggregateRoot<
@@ -1081,7 +1094,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			expect(aggregate.pendingEvents.length).toBe(2);
 
-			aggregate.markPersisted(42 as Version);
+			acknowledgePersisted(aggregate, 42 as Version);
 
 			expect(aggregate.version).toBe(42);
 			expect(aggregate.pendingEvents).toHaveLength(0);
@@ -1089,123 +1102,43 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("can be invoked on a fresh aggregate without events", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-			aggregate.markPersisted(7 as Version);
+			acknowledgePersisted(aggregate, 7 as Version);
 			expect(aggregate.version).toBe(7);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
-		it("calls the onPersisted hook after clearing pendingEvents", () => {
-			// onPersisted is the framework-safe subclass extension point.
-			// It fires AFTER pendingEvents is cleared, so a subclass can't
-			// accidentally read stale events when implementing the hook.
-			class HookingAggregate extends AggregateRoot<
-				TestState,
-				TestId,
-				TestRecorded
-			> {
-				protected readonly aggregateType = "HookingAggregate";
-				public hookCalls: Array<{
-					version: Version;
-					pendingLengthDuringHook: number;
-				}> = [];
-
-				constructor(id: TestId, state: TestState) {
-					super(id, state);
-				}
-				addTestEvent(value: number): void {
-					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
-				}
-				protected override onPersisted(version: Version): void {
-					this.hookCalls.push({
-						version,
-						pendingLengthDuringHook: this.pendingEvents.length,
-					});
-				}
-			}
-
-			const aggregate = new HookingAggregate("hook-1" as TestId, {
-				value: 0,
+		it("does not expose acknowledgement or event disposal on aggregates", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
-			aggregate.addTestEvent(2);
 
-			aggregate.markPersisted(99 as Version);
-
-			expect(aggregate.hookCalls).toHaveLength(1);
-			expect(aggregate.hookCalls[0]!.version).toBe(99);
-			// Critical: pendingEvents is already empty when the hook runs.
-			// This is what makes onPersisted the safe extension point.
-			expect(aggregate.hookCalls[0]!.pendingLengthDuringHook).toBe(0);
+			expect("markPersisted" in aggregate).toBe(false);
+			expect("clearPendingEvents" in aggregate).toBe(false);
 		});
 
-		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
-			// NEGATIVE example: this is the bug pattern hit in production.
-			// A subclass overrides markPersisted directly, forgets to call
-			// super, and the framework's pendingEvents cleanup never runs.
-			// Next save re-dispatches the same events through the outbox.
-			class BuggyAggregate extends AggregateRoot<
-				TestState,
-				TestId,
-				TestRecorded
-			> {
-				protected readonly aggregateType = "BuggyAggregate";
-				public sideEffectFired = false;
-				constructor(id: TestId, state: TestState) {
-					super(id, state);
-				}
-				addTestEvent(value: number): void {
-					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
-				}
-				// ❌ This is the bug: override without super.markPersisted(version)
-				public override markPersisted(_version: Version): void {
-					this.sideEffectFired = true;
-					// MISSING: super.markPersisted(_version)
-					// pendingEvents stays populated. Catastrophic under withCommit.
-				}
-			}
+		it("keeps the capability off the aggregate while duplicate package instances can resolve it", async () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+			const exposesCapability = Object.getOwnPropertySymbols(aggregate).some(
+				(symbol) => {
+					const value = Object.getOwnPropertyDescriptor(aggregate, symbol)
+						?.value as
+						| { acknowledge?: unknown; discardPendingEvents?: unknown }
+						| undefined;
+					return (
+						typeof value?.acknowledge === "function" &&
+						typeof value.discardPendingEvents === "function"
+					);
+				},
+			);
 
-			const buggy = new BuggyAggregate("bug-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			buggy.addTestEvent(1);
-			buggy.markPersisted(5 as Version);
+			expect(exposesCapability).toBe(false);
 
-			expect(buggy.sideEffectFired).toBe(true);
-			// THE BUG: pendingEvents was NOT cleared.
-			expect(buggy.pendingEvents).toHaveLength(1);
-
-			// ✅ The fix: same intent via onPersisted, framework cleanup
-			// runs first, side-effect still fires.
-			class FixedAggregate extends AggregateRoot<
-				TestState,
-				TestId,
-				TestRecorded
-			> {
-				protected readonly aggregateType = "FixedAggregate";
-				public sideEffectFired = false;
-				constructor(id: TestId, state: TestState) {
-					super(id, state);
-				}
-				addTestEvent(value: number): void {
-					this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
-				}
-				protected override onPersisted(_version: Version): void {
-					this.sideEffectFired = true;
-					// pendingEvents is already empty here, by design.
-				}
-			}
-
-			const fixed = new FixedAggregate("fix-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			fixed.addTestEvent(1);
-			fixed.markPersisted(5 as Version);
-
-			expect(fixed.sideEffectFired).toBe(true);
-			expect(fixed.pendingEvents).toHaveLength(0);
+			vi.resetModules();
+			const foreignModule = await import("./persistence-lifecycle");
+			expect(
+				foreignModule.aggregatePersistenceCapabilityFor(aggregate),
+			).toBeDefined();
 		});
 	});
 
@@ -1281,7 +1214,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents).toHaveLength(1);
 			expect(agg.pendingEvents[0]?.type).toBe("SomethingHappened");
 
-			agg.clearPendingEvents();
+			discardPendingEvents(agg);
 			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
@@ -1378,16 +1311,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 		}
 
-		class HookSpyAggregate extends TestAggregate {
-			public hookCalls: Version[] = [];
-			protected override onPersisted(version: Version): void {
-				this.hookCalls.push(version);
-			}
-			public callMarkRestored(version: Version): void {
-				this.markRestored(version);
-			}
-		}
-
 		it("persistedVersion is undefined on a freshly-constructed aggregate", () => {
 			const agg = TestAggregate.create("id-1" as TestId, 42);
 
@@ -1419,29 +1342,15 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.persistedVersion).toBe(5);
 		});
 
-		it("markRestored does NOT fire the onPersisted hook", () => {
-			const agg = new HookSpyAggregate("id-1" as TestId, {
-				value: 1,
-				status: "inactive",
-			});
-			agg.callMarkRestored(3 as Version);
-
-			expect(agg.hookCalls).toEqual([]);
-		});
-
-		it("markPersisted updates persistedVersion AND fires onPersisted", () => {
-			const agg = new HookSpyAggregate("id-1" as TestId, {
-				value: 1,
-				status: "inactive",
-			});
+		it("internal acknowledgement updates persistedVersion", () => {
+			const agg = TestAggregate.create("id-1" as TestId, 1);
 			agg.updateValue(2);
 			expect(agg.persistedVersion).toBeUndefined();
 
-			agg.markPersisted(1 as Version);
+			acknowledgePersisted(agg, 1 as Version);
 
 			expect(agg.version).toBe(1);
 			expect(agg.persistedVersion).toBe(1);
-			expect(agg.hookCalls).toEqual([1]);
 		});
 
 		it("mutations bump version but do NOT touch persistedVersion (OCC baseline stays at load value)", () => {
@@ -1490,7 +1399,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				status: "active",
 			});
 			// Establish a baseline so we can verify nothing moves on failure.
-			agg.markPersisted(2 as Version);
+			acknowledgePersisted(agg, 2 as Version);
 			const stateBefore = agg.state;
 			const versionBefore = agg.version;
 			const baselineBefore = agg.persistedVersion;
@@ -1512,7 +1421,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.persistedVersion).toBe(baselineBefore);
 		});
 
-		it("multi-save cycle: persistedVersion advances on each markPersisted across multiple save iterations", () => {
+		it("multi-save cycle: persistedVersion advances on each acknowledgement", () => {
 			const agg = RestoringAggregate.reconstitute(
 				"id-1" as TestId,
 				{ value: 0, status: "inactive" },
@@ -1526,7 +1435,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.version).toBe(3);
 			expect(agg.persistedVersion).toBe(1); // baseline unchanged
 
-			agg.markPersisted(3 as Version);
+			acknowledgePersisted(agg, 3 as Version);
 			expect(agg.version).toBe(3);
 			expect(agg.persistedVersion).toBe(3); // baseline advanced
 
@@ -1535,7 +1444,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.version).toBe(4);
 			expect(agg.persistedVersion).toBe(3); // baseline tracks the NEW load-time value
 
-			agg.markPersisted(4 as Version);
+			acknowledgePersisted(agg, 4 as Version);
 			expect(agg.version).toBe(4);
 			expect(agg.persistedVersion).toBe(4);
 		});
@@ -1696,7 +1605,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 				expect(agg.changedKeys.size).toBe(0);
 				// The version was bumped past persistedVersion. Skipping save()
-				// here would let withCommit's markPersisted desync the OCC
+				// here would let withCommit's acknowledgement desync the OCC
 				// baseline from the DB row → false ConcurrencyConflictError on
 				// the next save. hasChanges must therefore stay true.
 				expect(agg.version).not.toBe(agg.persistedVersion);
@@ -1887,13 +1796,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				// The unflushed event still needs its trip through withCommit.
 				expect(agg.hasChanges).toBe(true);
 
-				agg.markPersisted(agg.version);
+				acknowledgePersisted(agg, agg.version);
 				expect(agg.hasChanges).toBe(false);
 			});
 		});
 
 		describe("persistence lifecycle", () => {
-			it("markPersisted re-baselines: changedKeys empties, hasChanges false", () => {
+			it("acknowledgement re-baselines: changedKeys empties, hasChanges false", () => {
 				const agg = DirtyAggregate.reconstitute(
 					"d-1" as TestId,
 					baseState(),
@@ -1902,13 +1811,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				agg.rename("beta");
 				expect(agg.changedKeys.has("name")).toBe(true);
 
-				agg.markPersisted(agg.version);
+				acknowledgePersisted(agg, agg.version);
 
 				expect(agg.changedKeys.size).toBe(0);
 				expect(agg.hasChanges).toBe(false);
 			});
 
-			it("two consecutive mutate→markPersisted cycles diff against the moved baseline", () => {
+			it("two consecutive mutate-and-acknowledge cycles use the moved baseline", () => {
 				const agg = DirtyAggregate.reconstitute(
 					"d-1" as TestId,
 					baseState(),
@@ -1917,7 +1826,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 				agg.rename("beta");
 				expect(new Set(agg.changedKeys)).toEqual(new Set(["name"]));
-				agg.markPersisted(agg.version);
+				acknowledgePersisted(agg, agg.version);
 
 				agg.replaceItems([{ id: "i2", qty: 1 }]);
 				// Cycle 2 must diff against the post-save baseline: "name"
@@ -1937,7 +1846,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				expect(agg.changedKeys.size).toBe(0);
 			});
 
-			it("clearPendingEvents does not touch the baseline", () => {
+			it("discarding pending events does not touch the baseline", () => {
 				const agg = DirtyAggregate.reconstitute(
 					"d-1" as TestId,
 					baseState(),
@@ -1946,7 +1855,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				agg.rename("beta");
 				const before = new Set(agg.changedKeys);
 
-				agg.clearPendingEvents();
+				discardPendingEvents(agg);
 
 				expect(new Set(agg.changedKeys)).toEqual(before);
 			});
@@ -2045,7 +1954,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				expect(agg.changedKeys.has("items")).toBe(true);
 
 				// …then move the baseline; the next read must reflect it.
-				agg.markPersisted(agg.version);
+				acknowledgePersisted(agg, agg.version);
 				expect(agg.changedKeys.size).toBe(0);
 			});
 

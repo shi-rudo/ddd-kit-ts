@@ -45,7 +45,7 @@ export interface RepositoryContractEnvironment<
 	 * Execute one unit of work against the adapter under test: open the
 	 * transaction, hand the suite a tx-bound repository, commit on
 	 * resolve, roll back on throw, and run the post-commit lifecycle
-	 * (event harvest into the outbox, `markPersisted`). Wire this
+	 * (event harvest into the outbox, post-commit acknowledgement). Wire this
 	 * through your real `UnitOfWork` / `withCommit` setup: the commit
 	 * boundary IS part of what the suite proves.
 	 */
@@ -652,7 +652,7 @@ export function createRepositoryContractTests<
 				assertEqual(
 					aggregate.persistedVersion,
 					aggregate.version,
-					"after a successful commit, persistedVersion must equal version (markPersisted ran)",
+					"after a successful commit, persistedVersion must equal version (acknowledgement ran)",
 				);
 			}),
 		},

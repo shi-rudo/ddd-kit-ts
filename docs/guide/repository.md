@@ -8,8 +8,8 @@ It is not a query service, not an event publisher, and not the owner of the
 aggregate lifecycle after commit. Those boundaries matter:
 
 - The repository writes rows and maps storage errors.
-- `withCommit` or `UnitOfWork` harvests events and calls `markPersisted` after
-  the transaction commits.
+- `withCommit` or `UnitOfWork` harvests events and acknowledges the aggregate
+  through an internal capability after the transaction commits.
 - Read-side queries that need lists, search, or denormalized data belong on
   projections, not on write-side repositories.
 
@@ -178,8 +178,7 @@ across operations; that bypasses optimistic concurrency.
 ## Save Is Pure Persistence
 
 `save(aggregate)` writes the aggregate and maps storage conflicts. It does not
-publish events, does not clear pending events, and does not call
-`markPersisted`.
+publish events or mutate aggregate lifecycle state.
 
 With plain `withCommit`, the callback receives an invocation-scoped enrollment
 capability. After the repository write succeeds, enroll the saved aggregate
@@ -290,9 +289,9 @@ Version is a mutation sequence, not "plus one per transaction". If an
 aggregate is loaded at version `7` and three version-bumping methods run, it
 can commit as version `10`. That is correct.
 
-After the transaction commits, `withCommit` or `UnitOfWork` calls
-`markPersisted(aggregate.version)`. That syncs `persistedVersion`, clears
-pending events, and re-baselines dirty tracking.
+After the transaction commits, `withCommit` or `UnitOfWork` uses a non-exported
+capability to sync `persistedVersion`, clear pending events, and re-baseline
+dirty tracking.
 
 ## Event-Sourced Repositories
 
@@ -466,8 +465,9 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
 });
 ```
 
-The deleted commit token tells `withCommit` to harvest the event but skip
-`markPersisted`, because the row no longer exists. In a `UnitOfWork`
+The deleted commit token tells `withCommit` to harvest the event and discard it
+after commit without acknowledging a saved row, because that row no longer
+exists. In a `UnitOfWork`
 repository, `delete` should call `session.enrollDeleted(order)`, which also
 tombstones the identity map entry for the rest of the run.
 

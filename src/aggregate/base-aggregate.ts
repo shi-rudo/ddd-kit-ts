@@ -15,6 +15,7 @@ import {
 	type DomainEvent,
 	isMintedEvent,
 } from "./domain-event";
+import { registerAggregatePersistenceCapability } from "./persistence-lifecycle";
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
 export interface AggregateConfig extends EntityConfig {
@@ -30,8 +31,8 @@ export interface AggregateConfig extends EntityConfig {
  * Shared base for both `AggregateRoot` (state-stored) and
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
  * identical across the two flavours: version + persistedVersion
- * tracking, pending events buffer, the `markRestored` (Post-Load) /
- * `markPersisted` (Post-Save) lifecycle markers, and the
+ * tracking, the kit-internal post-commit acknowledgement capability,
+ * the `markRestored` post-load marker, and the
  * `recordEvent` helper that auto-injects `aggregateId` +
  * `aggregateType` on every event the aggregate emits.
  *
@@ -93,8 +94,8 @@ export abstract class BaseAggregate<
 	 *
 	 * Distinct from {@link version}, which is the in-memory
 	 * post-mutation value. Mutations bump `_version` but never touch
-	 * `_persistedVersion`; that field only moves on {@link markRestored}
-	 * (Post-Load) and {@link markPersisted} (Post-Save).
+	 * `_persistedVersion`; that field moves on {@link markRestored}
+	 * (Post-Load) and kit-internal post-commit acknowledgement.
 	 */
 	private _persistedVersion: Version | undefined = undefined;
 
@@ -110,6 +111,16 @@ export abstract class BaseAggregate<
 		super(id, initialState, config);
 		this.domainEventFactory =
 			config?.domainEventFactory ?? defaultDomainEventFactory;
+		registerAggregatePersistenceCapability(this, {
+			acknowledge: (version) => {
+				this._version = version;
+				this._persistedVersion = version;
+				this._pendingEvents = [];
+			},
+			discardPendingEvents: () => {
+				this._pendingEvents = [];
+			},
+		});
 	}
 
 	public get version(): Version {
@@ -137,25 +148,6 @@ export abstract class BaseAggregate<
 		return this._pendingEvents.length;
 	}
 
-	/**
-	 * Clears the pending-event list. Called by `markPersisted` after a
-	 * successful write: the events have been handed off to the outbox
-	 * / event store and are no longer the aggregate's responsibility.
-	 *
-	 * Also the deliberate-discard escape hatch for the in-memory undo
-	 * pattern: call it BEFORE `restoreFromSnapshot` / the replay methods
-	 * when the recorded events belong to work that is being rolled back.
-	 * The undo snapshot itself must have been taken on a CLEAN aggregate
-	 * (no pending events): `createSnapshot` bakes pending events' version
-	 * bumps into `snapshot.version`, so restoring a dirty-taken snapshot
-	 * after clearing desyncs `persistedVersion` from the store and loses
-	 * those events. See {@link UnreplayableAggregateError} for the guard
-	 * rationale.
-	 */
-	public clearPendingEvents(): void {
-		this._pendingEvents = [];
-	}
-
 	protected setVersion(version: Version): void {
 		this._version = version;
 	}
@@ -175,13 +167,12 @@ export abstract class BaseAggregate<
 	 * `reconstitute(...)` factories to assemble an in-memory aggregate
 	 * from a persisted row.
 	 *
-	 * Does NOT fire {@link onPersisted}; that hook has post-save
-	 * semantics (metrics, audit, cache eviction), not post-load. The
-	 * Factory-vs-Reconstitution distinction (Vernon §11) is honoured
-	 * structurally: two separate markers, one for each transition.
+	 * The Factory-vs-Reconstitution distinction (Vernon §11) is honoured
+	 * structurally: reconstitution stays inside the aggregate factory while
+	 * post-save acknowledgement belongs to application commit orchestration.
 	 *
-	 * **If you override this, call `super.markRestored(version)` FIRST**,
-	 * same discipline as {@link markPersisted}. The marker is load-bearing
+	 * **If you override this, call `super.markRestored(version)` FIRST**.
+	 * The marker is load-bearing
 	 * twice over: it syncs `version`/`persistedVersion`, and on
 	 * `AggregateRoot` it also captures the dirty-tracking baseline for
 	 * `changedKeys`/`hasChanges`. An override that skips `super` leaves
@@ -205,70 +196,6 @@ export abstract class BaseAggregate<
 		this.setVersion(version);
 		this._persistedVersion = version;
 	}
-
-	/**
-	 * **Framework lifecycle method (`@sealed`).** Called by `withCommit`
-	 * (or by your own orchestration code, after harvesting `pendingEvents`)
-	 * to push the persisted version back into the in-memory aggregate and
-	 * clear `pendingEvents`. TypeScript has no `final` keyword, but
-	 * subclasses **should not** override this method directly.
-	 *
-	 * Overriding without calling `super.markPersisted(version)` silently
-	 * leaks `pendingEvents`: the next `withCommit` will re-dispatch them
-	 * through the outbox, double-emitting events. This bug has been hit
-	 * in production by consumers; the {@link onPersisted} hook below is
-	 * the safer extension point.
-	 *
-	 * If you must override (legitimate cases are very rare), call
-	 * `super.markPersisted(version)` FIRST so the framework's cleanup
-	 * runs, then add your logic afterwards.
-	 *
-	 * @param version - The version assigned by the persistence layer
-	 * @see onPersisted, the safe extension point for subclasses
-	 */
-	public markPersisted(version: Version): void {
-		this.markRestored(version);
-		this._pendingEvents = [];
-		this.onPersisted(version);
-	}
-
-	/**
-	 * Subclass extension point: fires AFTER {@link markPersisted} has
-	 * updated the version and cleared `pendingEvents`. Override this for
-	 * post-persist logging, metrics, or cache-eviction without risk of
-	 * breaking the framework's pendingEvents cleanup.
-	 *
-	 * The default implementation is a no-op. Subclasses do NOT need to
-	 * call `super.onPersisted(version)`: there is nothing in the parent
-	 * implementation to preserve.
-	 *
-	 * **Observer contract: errors are swallowed.** `withCommit` invokes
-	 * `markPersisted` after the transaction has committed; a throwing hook
-	 * must neither abort the loop for peer aggregates nor make the
-	 * committed write look failed, so `withCommit` catches and discards
-	 * hook errors. Handle failures inside the hook if you need them.
-	 *
-	 * **`onPersisted` deliberately receives only the version, not the
-	 * drained events.** Event-driven post-persist logic (aggregate-level
-	 * audit logging, per-event-type side effects) belongs in `EventBus`
-	 * subscribers or the outbox dispatcher; that is the proper
-	 * Aggregate-Boundary separation. Building event-aware logic into
-	 * `onPersisted` couples aggregate lifecycle to event processing and
-	 * recreates the boundary problems Vernon's aggregate discipline is
-	 * meant to prevent.
-	 *
-	 * **The hook must return synchronously.** `markPersisted` is `void`-
-	 * typed and calls `onPersisted` without `await`. TypeScript's
-	 * permissive `void` will accept an `async`-override returning
-	 * `Promise<void>`, but the returned promise is fire-and-forget:
-	 * any rejection becomes an unhandled rejection and `withCommit`
-	 * proceeds without waiting. For asynchronous work, subscribe to the
-	 * relevant domain event on the `EventBus` instead; that is the
-	 * properly awaited extension point.
-	 *
-	 * @param version - The version that was just persisted
-	 */
-	protected onPersisted(_version: Version): void {}
 
 	/**
 	 * Appends a domain event to the pending list. Prefer the higher-level
@@ -587,8 +514,8 @@ function assertSnapshotSafe(
  * moves. Every restore path re-baselines the version via `markRestored`, so
  * unflushed events recorded against the old baseline would later be
  * harvested claiming a version baseline they were never part of. When the
- * discard is deliberate (an in-memory undo), call `clearPendingEvents()`
- * first.
+ * discard is deliberate, discard this dirty instance and reconstitute a
+ * fresh aggregate instead of mutating persistence lifecycle state publicly.
  *
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
@@ -607,8 +534,8 @@ export function assertRestoreTargetHasNoPendingEvents(aggregate: {
 		throw new UnreplayableAggregateError(
 			String(aggregate.id),
 			`it carries ${pending} unflushed pending event(s) that are not ` +
-				"part of the persisted stream; if discarding them is deliberate " +
-				"(an in-memory undo), call clearPendingEvents() before restoring",
+				"part of the persisted stream; discard this dirty instance and " +
+				"reconstitute a fresh aggregate before restoring persisted history",
 		);
 	}
 }

@@ -102,16 +102,11 @@ export interface IRepository<
 	 *    value). If the row count is `0`, another writer raced you:
 	 *    throw `ConcurrencyConflictError`.
 	 *
-	 * Do **not** call `aggregate.markPersisted(...)` here. The library's
-	 * `withCommit` orchestrator handles the post-save lifecycle (harvest
-	 * pending events into the outbox, then mark persisted after commit).
-	 * Calling `markPersisted` inside `save` clears pending events too early
-	 * and breaks the harvest path, and is also why the Vernon/Axon/
-	 * EventFlow pattern separates persistence from commit-events.
-	 *
-	 * If you are not using `withCommit` (custom orchestration), call
-	 * `aggregate.markPersisted(aggregate.version)` yourself **after** you
-	 * have harvested `aggregate.pendingEvents` for downstream dispatch.
+	 * The aggregate exposes no lifecycle mutation methods. `withCommit` or
+	 * `UnitOfWork` holds the internal capability that acknowledges a saved
+	 * aggregate only after pending events were harvested and the surrounding
+	 * transaction committed. Custom orchestration must wrap one of those
+	 * application boundaries rather than trying to clear events in `save`.
 	 */
 	save(aggregate: TAgg): Promise<void>;
 

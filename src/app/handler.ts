@@ -1,5 +1,10 @@
+import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import {
+	aggregatePersistenceCapabilityFor,
+	type AggregatePersistenceCapability,
+} from "../aggregate/persistence-lifecycle";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
@@ -34,15 +39,27 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 */
 	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
 	/**
-	 * Observer for post-commit persistence-cleanup failures: a throw from
-	 * `markPersisted`, the user-overridable `onPersisted` hook, or
-	 * `clearPendingEvents`. Called once per failing aggregate with the
-	 * error and that aggregate. Symmetric with {@link onPublishError}: the
+	 * Application-shell observer invoked for each successfully acknowledged
+	 * saved aggregate, after every commit record has completed its internal
+	 * acknowledgement attempt. Deleted aggregates do not trigger it. `version`
+	 * is the commit-time value captured before any observer runs. Observer
+	 * failures are reported through `onPersistError` and never turn an already
+	 * committed write into an apparent failure.
+	 */
+	onPersisted?: (
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+		version: Version,
+	) => void | Promise<void>;
+	/**
+	 * Observer for post-commit persistence failures: either the internal
+	 * acknowledgement/disposal step or the application-shell `onPersisted`
+	 * observer. Called once per failure with the error and affected aggregate.
+	 * Symmetric with {@link onPublishError}: the
 	 * transaction has already committed, so the failure must NOT reject the
 	 * write; without this observer it would otherwise vanish silently. The
 	 * hook is an observer only: if it throws, its error is swallowed so the
-	 * post-commit invariant holds, and the loop continues marking the
-	 * remaining aggregates.
+	 * post-commit invariant holds, and the loop continues the remaining
+	 * post-commit work.
 	 */
 	onPersistError?: (
 		error: unknown,
@@ -79,7 +96,10 @@ export interface AggregateCommitToken<
  * callback. Call `enrollSaved` only for an aggregate participating in the
  * repository write, and return every resulting token in `commits`. Omitting
  * any token rejects the transaction: an enrolled write may not commit without
- * its event harvest and post-commit acknowledgement.
+ * its event harvest and post-commit acknowledgement. Enrollable instances
+ * must extend `AggregateRoot` or `EventSourcedAggregate`; structural
+ * `IAggregateRoot` lookalikes have no internal lifecycle capability and fail
+ * before commit.
  */
 export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	enrollSaved(
@@ -87,8 +107,8 @@ export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	): AggregateCommitToken<Evt>;
 	/**
 	 * Enroll an aggregate whose row is deleted by the current transaction.
-	 * Its events are harvested, but post-commit cleanup clears them without
-	 * calling `markPersisted` or the post-save `onPersisted` hook.
+	 * Its events are harvested and discarded after commit, but the saved-only
+	 * application `onPersisted` observer is not called.
 	 */
 	enrollDeleted(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
@@ -111,6 +131,7 @@ type CommitDisposition = "saved" | "deleted";
 
 interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	readonly persistence: AggregatePersistenceCapability;
 	disposition: CommitDisposition;
 }
 
@@ -164,11 +185,21 @@ function createCommitTokenScope<
 			return existing;
 		}
 
+		const persistence = aggregatePersistenceCapabilityFor(aggregate);
+		if (!persistence) {
+			throw new EventHarvestError(
+				`withCommit: aggregate ${String(aggregate.id)} has no kit-managed ` +
+					"persistence lifecycle. Extend AggregateRoot or " +
+					"EventSourcedAggregate; repository DTOs and structural lookalikes " +
+					"cannot be enrolled for commit acknowledgement.",
+			);
+		}
+
 		const token = Object.freeze(
 			Object.create(null),
 		) as AggregateCommitToken<Evt>;
 		tokensByAggregate.set(aggregate, token);
-		recordsByToken.set(token, { aggregate, disposition });
+		recordsByToken.set(token, { aggregate, persistence, disposition });
 		mintedTokenCount += 1;
 		return token;
 	};
@@ -286,11 +317,11 @@ function createCommitTokenScope<
  *     too, but parallel dispatchers or message brokers may reorder
  *     across aggregates at delivery time.
  *  3. The transaction commits.
- *  4. **After** the commit, `aggregate.markPersisted(aggregate.version)`
- *     fires on each saved enrollment; only now are pending events considered
- *     flushed. Deleted enrollments are the exception: their pending events
- *     are cleared directly WITHOUT `markPersisted`, so the post-save
- *     `onPersisted` hook never fires for a row that was just deleted.
+ *  4. **After** the commit, a non-exported capability acknowledges every
+ *     saved enrollment and discards pending events for deleted enrollments.
+ *     Only after the complete commit set is clean does the optional
+ *     application-shell `onPersisted(aggregate, version)` observer run for
+ *     saved aggregates. Deleted rows never trigger that observer.
  *  5. `bus.publish(events)` fires for the in-process fast path (skipped
  *     when no events or no `bus` is wired).
  *
@@ -310,12 +341,12 @@ function createCommitTokenScope<
  * the outbox. The hook is an observer: if it throws, its error is
  * swallowed so the post-commit invariant holds.
  *
- * If the transaction rolls back, `markPersisted` is **not** called: the
- * aggregate keeps its pending events, so the caller can retry or discard.
+ * If the transaction rolls back, no acknowledgement occurs: the aggregate
+ * keeps its pending events, so the caller can retry or discard the instance.
  *
  * **Do not mutate an aggregate after `repository.save(...)` inside `fn`.**
  * `withCommit` cannot see what `save` wrote; the post-commit
- * `markPersisted` syncs `persistedVersion` to the CURRENT in-memory
+ * internal acknowledgement syncs `persistedVersion` to the CURRENT in-memory
  * version and (on `AggregateRoot`) re-baselines dirty tracking against
  * the CURRENT state. A mutation between `save` and the callback's return
  * therefore desyncs OCC (next save throws a false
@@ -329,7 +360,7 @@ function createCommitTokenScope<
  * **Duplicate enrollment is idempotent by reference.** Enrolling the same
  * instance repeatedly returns the same token, and a repeated token in
  * `commits` is harvested once. Each event lands in the outbox exactly once
- * and `markPersisted` fires exactly once. Two
+ * and post-commit acknowledgement runs exactly once. Two
  * *different* instances with the same logical id cannot be detected
  * at this layer; that is a Repository contract violation (failure to
  * maintain Fowler's Identity Map per Unit of Work). See
@@ -343,7 +374,7 @@ function createCommitTokenScope<
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
- *   await orderRepository.save(order);             // pure persistence; does NOT call markPersisted
+ *   await orderRepository.save(order);             // pure persistence; no lifecycle mutation
  *   const commit = enrollment.enrollSaved(order);   // attest the repository write
  *   return { result: order.id, commits: [commit] };
  * });
@@ -367,113 +398,119 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		);
 	}
 
-	const { result, aggregates, deleted, events } =
-		await deps.scope.transactional(
-			async (ctx) => {
-				const tokenScope = createCommitTokenScope<Evt>();
-				let fnResult: WithCommitWorkResult<Evt, R>;
-				try {
-					fnResult = await fn(ctx, tokenScope.enrollment);
-				} finally {
-					// A callback can leak the capability into delayed work. Seal it as
-					// soon as the callback settles so a late enrollment fails loudly
-					// instead of being accepted after the harvest snapshot.
-					tokenScope.close();
+	const { result, commitRecords, events } = await deps.scope.transactional(
+		async (ctx) => {
+			const tokenScope = createCommitTokenScope<Evt>();
+			let fnResult: WithCommitWorkResult<Evt, R>;
+			try {
+				fnResult = await fn(ctx, tokenScope.enrollment);
+			} finally {
+				// A callback can leak the capability into delayed work. Seal it as
+				// soon as the callback settles so a late enrollment fails loudly
+				// instead of being accepted after the harvest snapshot.
+				tokenScope.close();
+			}
+			const commitRecords = tokenScope.resolve(fnResult.commits);
+			const uniqueAggregates = commitRecords.map(({ aggregate }) => aggregate);
+			// Prepare each bare domain event for source finalization in the outbox.
+			// The aggregate's event remains untouched and is what the in-process
+			// domain bus receives.
+			const candidates = uniqueAggregates.flatMap((agg) => {
+				if (
+					agg.pendingEvents.length > 0 &&
+					agg.persistedVersion !== undefined &&
+					(agg.version as number) <= (agg.persistedVersion as number)
+				) {
+					throw new EventHarvestError(
+						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
+							`did not advance its version beyond persistedVersion ` +
+							`(${agg.persistedVersion}). An eventful commit needs a unique ` +
+							`cursor; use AggregateRoot.commit(currentState, event) instead ` +
+							`of addDomainEvent(event) alone.`,
+					);
 				}
-				const commitRecords = tokenScope.resolve(fnResult.commits);
-				const uniqueAggregates = commitRecords.map(
-					({ aggregate }) => aggregate,
-				);
-				const deletedAggregates = new Set(
-					commitRecords
-						.filter(({ disposition }) => disposition === "deleted")
-						.map(({ aggregate }) => aggregate),
-				);
-				// Prepare each bare domain event for source finalization in the outbox.
-				// The aggregate's event remains untouched and is what the in-process
-				// domain bus receives.
-				const candidates = uniqueAggregates.flatMap((agg) => {
-					if (
-						agg.pendingEvents.length > 0 &&
-						agg.persistedVersion !== undefined &&
-						(agg.version as number) <= (agg.persistedVersion as number)
-					) {
+				return agg.pendingEvents.map((event, index) => {
+					const commitSize = agg.pendingEvents.length;
+					const aggregateId = event.aggregateId;
+					const aggregateType = event.aggregateType;
+					const missing: string[] = [];
+					if (!aggregateId) missing.push("aggregateId");
+					if (!aggregateType) missing.push("aggregateType");
+					if (!aggregateId || !aggregateType) {
 						throw new EventHarvestError(
-							`withCommit: aggregate ${String(agg.id)} recorded events but ` +
-								`did not advance its version beyond persistedVersion ` +
-								`(${agg.persistedVersion}). An eventful commit needs a unique ` +
-								`cursor; use AggregateRoot.commit(currentState, event) instead ` +
-								`of addDomainEvent(event) alone.`,
+							`withCommit: event "${event.type}" is missing ${missing.join(
+								" and ",
+							)}. ` +
+								`Use this.recordEvent(type, payload) inside aggregate methods ` +
+								`instead of createDomainEvent(...); recordEvent auto-injects ` +
+								`aggregateId and aggregateType. Outbox dispatchers and ` +
+								`projection handlers rely on the envelope source.`,
+							event.type,
 						);
 					}
-					return agg.pendingEvents.map((event, index) => {
-						const commitSize = agg.pendingEvents.length;
-						const aggregateId = event.aggregateId;
-						const aggregateType = event.aggregateType;
-						const missing: string[] = [];
-						if (!aggregateId) missing.push("aggregateId");
-						if (!aggregateType) missing.push("aggregateType");
-						if (!aggregateId || !aggregateType) {
-							throw new EventHarvestError(
-								`withCommit: event "${event.type}" is missing ${missing.join(
-									" and ",
-								)}. ` +
-									`Use this.recordEvent(type, payload) inside aggregate methods ` +
-									`instead of createDomainEvent(...); recordEvent auto-injects ` +
-									`aggregateId and aggregateType. Outbox dispatchers and ` +
-									`projection handlers rely on the envelope source.`,
-								event.type,
-							);
-						}
-						return Object.freeze({
-							event,
-							source: Object.freeze({ aggregateId, aggregateType }),
-							position: Object.freeze({
-								aggregateVersion: agg.version as number,
-								commitSequence: index,
-								commitSize,
-							}),
-						}) as EventCommitCandidate<Evt>;
-					});
+					return Object.freeze({
+						event,
+						source: Object.freeze({ aggregateId, aggregateType }),
+						position: Object.freeze({
+							aggregateVersion: agg.version as number,
+							commitSequence: index,
+							commitSize,
+						}),
+					}) as EventCommitCandidate<Evt>;
 				});
-				if (candidates.length > 0) {
-					await deps.outbox.add(candidates);
-				}
-				return {
-					result: fnResult.result,
-					aggregates: uniqueAggregates,
-					deleted: deletedAggregates,
-					events: candidates.map(({ event }) => event),
-				};
-			},
-			{ signal: deps.signal },
-		);
+			});
+			if (candidates.length > 0) {
+				await deps.outbox.add(candidates);
+			}
+			return {
+				result: fnResult.result,
+				commitRecords,
+				events: candidates.map(({ event }) => event),
+			};
+		},
+		{ signal: deps.signal },
+	);
 
-	// Post-commit: mark each aggregate as persisted (clears pendingEvents).
+	// Post-commit: capture the persisted versions, acknowledge every saved
+	// aggregate, and discard pending events for deleted aggregates through the
+	// non-exported capability.
 	// Done AFTER the tx commits so a rolled-back transaction never silently
-	// "consumes" the in-memory pending events. DELETED aggregates get their
-	// pending events cleared without markPersisted: the row is gone, and
-	// firing the post-save onPersisted hook for a deletion would hand the
-	// hook a semantic lie (see the `deleted` field JSDoc above).
-	for (const agg of aggregates) {
+	// "consumes" the in-memory pending events. A deleted row does not trigger
+	// the saved-only application observer.
+	const persistedObservations: Array<{
+		readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+		readonly version: Version;
+	}> = [];
+	for (const { aggregate, persistence, disposition } of commitRecords) {
 		try {
-			if (deleted.has(agg)) {
-				agg.clearPendingEvents();
+			if (disposition === "deleted") {
+				persistence.discardPendingEvents();
 			} else {
-				agg.markPersisted(agg.version);
+				const version = aggregate.version;
+				persistence.acknowledge(version);
+				persistedObservations.push({ aggregate, version });
 			}
 		} catch (error) {
-			// Only the user-overridable onPersisted hook can throw here, and
-			// it runs AFTER the framework cleanup (events already flushed for
-			// THIS aggregate). Aborting the loop would leave the remaining
-			// aggregates un-marked (double-emitting their events on the next
-			// commit) and reject a committed write. Hook failures are
-			// observer failures: the post-commit invariant wins. Report the
-			// failure to onPersistError instead of dropping it silently
-			// (symmetric with the onPublishError path below); a throwing OR
-			// async-rejecting observer is neutralised so it cannot break the
-			// invariant either.
-			reportToObserver(() => deps.onPersistError?.(error, agg));
+			// An aggregate can still be made hostile at runtime, for example by
+			// freezing it after construction. The transaction has committed, so
+			// continue cleaning peers and report the failed acknowledgement rather
+			// than rejecting a successful write or double-emitting peer events.
+			reportToObserver(() => deps.onPersistError?.(error, aggregate));
+		}
+	}
+
+	// Application observers run only after every commit record has completed
+	// its acknowledgement attempt, and only for successful acknowledgements.
+	// A slow or failing observer can therefore never prevent peer cleanup. Each
+	// observer receives the version captured before any observer ran, so an
+	// earlier callback cannot rewrite a later callback's commit receipt.
+	if (deps.onPersisted) {
+		for (const { aggregate, version } of persistedObservations) {
+			try {
+				await deps.onPersisted(aggregate, version);
+			} catch (error) {
+				reportToObserver(() => deps.onPersistError?.(error, aggregate));
+			}
 		}
 	}
 

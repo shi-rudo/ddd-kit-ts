@@ -389,11 +389,10 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
  * Reconstitution belongs on a bare instance: construct the aggregate
  * without factory-recorded events or prior mutations, then restore.
  *
- * The safe remedy differs per guard, so each throw site carries its own
- * in the `reason` it passes: `clearPendingEvents()` when deliberately
- * discarding unflushed events (an in-memory undo), `markPersisted()`
- * only for a catch-up replay after the state was actually saved. The
- * class message itself stays remediation-neutral.
+ * Each throw site carries the safe remedy in its `reason`. Persistence
+ * lifecycle state is intentionally not mutable through the aggregate API:
+ * commit an actually saved instance through application orchestration, or
+ * discard a dirty instance and replay into a fresh one.
  */
 export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGGREGATE"> {
 	constructor(

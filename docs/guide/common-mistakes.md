@@ -62,11 +62,16 @@ Do not work around the error with `any`. That turns a useful compile-time bounda
 
 ### Using Old Domain Event Names
 
-The aggregate event queue is called `pendingEvents`.
+The aggregate event queue is called `pendingEvents`. Older names such as
+`domainEvents` and `clearDomainEvents()` are not part of the current interface,
+and there is deliberately no public clear method.
 
-Use `pendingEvents` and `clearPendingEvents()` on both aggregate base classes. Older names such as `domainEvents` and `clearDomainEvents()` are not part of the current interface.
-
-The word "pending" matters. These events have happened in memory, but they have not been safely handed to the transaction/outbox boundary yet. Calling them `domainEvents` makes them sound like a historical event log. They are not. They are a short-lived queue owned by the aggregate until `withCommit` harvests them and `markPersisted` clears them after commit.
+The word "pending" matters. These events have happened in memory, but they
+have not been safely handed to the transaction/outbox boundary yet. Calling
+them `domainEvents` makes them sound like a historical event log. They are not.
+They are a short-lived queue owned by the aggregate until `withCommit`
+harvests them and acknowledges the committed aggregate through an internal
+capability.
 
 Review signal: code that reads `pendingEvents` directly should be rare. Application code returns invocation-bound commit tokens and lets `withCommit` do the harvest. Direct reads are mostly for tests, custom orchestration, or diagnostics.
 
@@ -125,7 +130,7 @@ Manual harvesting is tempting because it looks explicit. The problem is timing. 
 3. Harvest pending events.
 4. Write the outbox in the same transaction.
 5. Commit.
-6. Mark aggregates as persisted.
+6. Acknowledge saved aggregates through the kit-internal capability.
 
 Return commit tokens and let the unit-of-work boundary do its job. See [Outbox & Transactions](./outbox.md).
 
@@ -152,29 +157,46 @@ That metadata is not incidental. It is how downstream code connects a fact back 
 
 Review signal: `createDomainEvent` inside a method on an `AggregateRoot` or `EventSourcedAggregate` should draw attention. Outside aggregates it can be correct; inside aggregates it is usually the wrong abstraction. See [Domain Events](./domain-events.md).
 
-### Overriding `markPersisted`
+### Putting Post-Commit Behavior In The Aggregate
 
-Do not override `markPersisted(version)` unless you are extending the framework lifecycle itself.
+Aggregates expose neither `markPersisted`, `clearPendingEvents`, nor an
+`onPersisted` Template Method. Persistence acknowledgement is application
+lifecycle, not domain behavior, and an overridable aggregate hook can break the
+pending-event and OCC baseline invariants.
 
-`markPersisted` is not a domain hook. It is lifecycle machinery. After a successful commit, it aligns the aggregate's persisted version and clears pending events. If an override forgets to call `super.markPersisted(version)`, the aggregate still carries events that were already written to the outbox. The next commit can dispatch them again.
-
-For domain-specific post-save behavior, override `onPersisted(version)` instead:
+Put logging, metrics, and cache invalidation in the Application Shell through
+the optional observer instead:
 
 ```ts
-protected override onPersisted(version: Version): void {
-  this.lastPersistedVersionSeenByTests = version;
-}
+await withCommit(
+  {
+    scope,
+    outbox,
+    onPersisted: async (aggregate, version) => {
+      await aggregateCache.evict(aggregate.id, version);
+    },
+    onPersistError: (error, aggregate) => logger.error({ error, id: aggregate.id }),
+  },
+  work,
+);
 ```
 
-`onPersisted` runs after the framework cleanup. There is no parent implementation you need to remember to call, so it is the safer extension point.
+The kit first completes the acknowledgement pass for the entire commit set,
+then runs the observer for successfully acknowledged saved aggregates. A slow
+or failing observer therefore cannot leave a peer aggregate carrying events
+that were already committed. Deleted aggregates do not trigger the saved-only
+observer. The version argument is captured before any observer runs, so it
+remains an honest commit receipt even if application code still holds a mutable
+reference to a peer aggregate.
 
-Senior review rule: lifecycle methods that maintain invariants should be hard to override casually. If a subclass wants notification, use the notification hook, not the state-mutating lifecycle method.
-
-### Calling `markPersisted` from `Repository.save`
+### Trying To Manage Lifecycle From `Repository.save`
 
 `Repository.save` should persist data. It should not change the aggregate lifecycle.
 
-`withCommit` calls `markPersisted` after the transaction commits. If `save` calls it earlier, pending events are cleared before `withCommit` can harvest them, and the outbox receives nothing.
+Only `withCommit` and `UnitOfWork` hold the internal acknowledgement capability.
+If repository code uses a cast or other escape hatch to clear events earlier,
+pending events disappear before the transaction boundary can harvest them and
+the outbox receives nothing.
 
 This mistake usually comes from trying to make `save` feel complete: "I saved the row, so I should mark the aggregate saved." That is correct in a simple Active Record style model. It is wrong in an outbox-backed transaction model.
 
@@ -185,11 +207,16 @@ The database row save and the aggregate lifecycle marker happen at different mom
 3. `withCommit` harvests pending events.
 4. The outbox records are written in the same transaction.
 5. The transaction commits.
-6. The aggregate is marked persisted and pending events are cleared.
+6. The application boundary acknowledges the saved aggregate and clears its
+   pending events internally.
 
-If the transaction rolls back after `save`, the in-memory aggregate must not pretend its events were flushed. That is why `save` is pure persistence and `withCommit` owns the post-commit marker.
+If the transaction rolls back after `save`, the in-memory aggregate must not
+pretend its events were flushed. That is why `save` is pure persistence and the
+application boundary owns acknowledgement.
 
-Review signal: repository implementations should not call `markPersisted`, `clearPendingEvents`, or other aggregate lifecycle methods. See [Outbox & Transactions](./outbox.md).
+Review signal: repository implementations should not mutate aggregate lifecycle
+state through casts or hidden implementation details. See
+[Outbox & Transactions](./outbox.md).
 
 ### Using `version === 0` for Insert vs Update
 

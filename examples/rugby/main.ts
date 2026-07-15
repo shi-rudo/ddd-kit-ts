@@ -9,56 +9,44 @@ function main() {
 	const homeTeam: Team = { id: "team-ger", name: "Germany" };
 	const awayTeam: Team = { id: "team-bel", name: "Belgium" };
 	const match = RugbyMatch.schedule(matchId, homeTeam, awayTeam, new Date());
+	let displayedEventCount = 0;
+	const logNewEvents = (): void => {
+		console.log(
+			"New pending events:",
+			match.pendingEvents.slice(displayedEventCount).map((event) => event.type),
+		);
+		displayedEventCount = match.pendingEvents.length;
+	};
 
 	console.log("Initial state:", match.view);
-	console.log(
-		"Pending events:",
-		match.pendingEvents.map((e) => e.type),
-	);
-	match.clearPendingEvents();
+	logNewEvents();
 	console.log("---------------------------------");
 
 	console.log("\n--- Scoring a try for Germany ---");
 	match.scoreTry(homeTeam.id, "Hans Tebroke");
 	console.log("Current state:", match.view);
 	console.log("Scoring plays:", match.view.scoringPlays);
-	console.log(
-		"Pending events:",
-		match.pendingEvents.map((e) => e.type),
-	);
-	match.clearPendingEvents();
+	logNewEvents();
 	console.log("---------------------------------");
 
 	console.log("\n--- Scoring a conversion for Germany ---");
 	match.scoreConversion(homeTeam.id, "Hans Tebroke");
 	console.log("Current state:", match.view);
 	console.log("Scoring plays:", match.view.scoringPlays);
-	console.log(
-		"Pending events:",
-		match.pendingEvents.map((e) => e.type),
-	);
-	match.clearPendingEvents();
+	logNewEvents();
 	console.log("---------------------------------");
 
 	console.log("\n--- Scoring a penalty for Belgium ---");
 	match.scorePenaltyGoal(awayTeam.id, "Alan Williams");
 	console.log("Current state:", match.view);
 	console.log("Scoring plays:", match.view.scoringPlays);
-	console.log(
-		"Pending events:",
-		match.pendingEvents.map((e) => e.type),
-	);
-	match.clearPendingEvents();
+	logNewEvents();
 	console.log("---------------------------------");
 
 	console.log("\n--- Finishing the match ---");
 	match.finish();
 	console.log("Final state:", match.view);
-	console.log(
-		"Pending events:",
-		match.pendingEvents.map((e) => e.type),
-	);
-	match.clearPendingEvents();
+	logNewEvents();
 	console.log("---------------------------------");
 }
 

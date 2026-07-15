@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Version } from "../aggregate/aggregate";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import {
+	AggregateRoot,
+	type IAggregateRoot,
+} from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
@@ -16,35 +19,37 @@ import {
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
 
-type MockAggregate = IAggregateRoot<TestId, TestEvent> & {
-	markPersistedCalls: number;
-};
+class MockAggregate extends AggregateRoot<
+	Readonly<Record<string, never>>,
+	TestId,
+	TestEvent
+> {
+	protected readonly aggregateType = "MockOrder";
+
+	constructor(events: TestEvent[], version: number, persistedVersion?: number) {
+		super("agg-1" as TestId, {});
+		if (persistedVersion !== undefined) {
+			this.markRestored(persistedVersion as Version);
+		}
+		this.setVersion(version as Version);
+		for (const event of events) this.addDomainEvent(event);
+	}
+
+	public get acknowledgementCount(): number {
+		return this.persistedVersion === this.version ? 1 : 0;
+	}
+
+	public advanceForObserverTest(): void {
+		this.setVersion((this.version + 1) as Version);
+	}
+}
 
 function createMockAggregate(
 	events: TestEvent[],
 	version = 1,
 	persistedVersion?: number,
 ): MockAggregate {
-	let pending: TestEvent[] = [...events];
-	let calls = 0;
-	return {
-		id: "agg-1" as TestId,
-		version: version as Version,
-		persistedVersion: persistedVersion as Version | undefined,
-		get pendingEvents(): ReadonlyArray<TestEvent> {
-			return pending;
-		},
-		clearPendingEvents(): void {
-			pending = [];
-		},
-		markPersisted(_v: Version): void {
-			pending = [];
-			calls += 1;
-		},
-		get markPersistedCalls(): number {
-			return calls;
-		},
-	};
+	return new MockAggregate(events, version, persistedVersion);
 }
 
 function createMockScope(): TransactionScope<undefined> {
@@ -159,6 +164,34 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("rejects structural aggregate lookalikes before the transaction can commit", async () => {
+		let committed = false;
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+				const result = await fn(undefined);
+				committed = true;
+				return result;
+			},
+		};
+		const lookalike: IAggregateRoot<TestId, TestEvent> = {
+			id: "lookalike" as TestId,
+			version: 1 as Version,
+			persistedVersion: undefined,
+			pendingEvents: [],
+		};
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit({ outbox, scope }, async (_ctx, enrollment) => ({
+				result: "must not commit",
+				commits: [enrollment.enrollSaved(lookalike)],
+			})),
+		).rejects.toThrow(/Extend AggregateRoot or EventSourcedAggregate/);
+
+		expect(committed).toBe(false);
+		expect(outbox.added).toEqual([]);
+	});
+
 	it("rejects a fresh aggregate that was never enrolled by persistence", async () => {
 		const outbox = createMockOutbox();
 		const event = createDomainEvent(
@@ -180,7 +213,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.markPersistedCalls).toBe(0);
+		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 
 	it("rejects a forged commit token before harvesting", async () => {
@@ -201,7 +234,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.markPersistedCalls).toBe(0);
+		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 
 	it("rejects a token minted by an earlier withCommit invocation", async () => {
@@ -246,7 +279,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.markPersistedCalls).toBe(0);
+		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 
 	it("seals enrollment before the outbox write begins", async () => {
@@ -430,7 +463,7 @@ describe("withCommit", () => {
 		).rejects.toThrow("Outbox failed");
 	});
 
-	it("orders outbox.add inside tx, markPersisted + bus.publish after commit", async () => {
+	it("orders outbox.add inside tx, application observer + bus.publish after commit", async () => {
 		const callOrder: string[] = [];
 		const scope: TransactionScope<undefined> = {
 			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
@@ -455,43 +488,97 @@ describe("withCommit", () => {
 			subscribeAll: () => () => {},
 			once: () => new Promise(() => {}),
 		};
-		// A specifically-instrumented mock that records when markPersisted is called.
-		let pending: TestEvent[] = [
+		const agg = createMockAggregate([
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "o-1" },
 				{ aggregateId: "o-1", aggregateType: "MockOrder" },
 			),
-		];
-		const agg: IAggregateRoot<TestId, TestEvent> = {
-			id: "agg-1" as TestId,
-			version: 1 as Version,
-			persistedVersion: undefined,
-			get pendingEvents() {
-				return pending;
-			},
-			clearPendingEvents() {
-				pending = [];
-			},
-			markPersisted() {
-				callOrder.push("markPersisted");
-				pending = [];
-			},
-		};
+		]);
 
-		await withCommit({ outbox, bus, scope }, async (_ctx, enrollment) => {
-			callOrder.push("fn");
-			return enrolledResult(enrollment, "ok", [agg]);
-		});
+		await withCommit(
+			{
+				outbox,
+				bus,
+				scope,
+				onPersisted: () => {
+					callOrder.push("onPersisted");
+				},
+			},
+			async (_ctx, enrollment) => {
+				callOrder.push("fn");
+				return enrolledResult(enrollment, "ok", [agg]);
+			},
+		);
 
 		expect(callOrder).toEqual([
 			"tx-start",
 			"fn",
 			"outbox.add",
 			"tx-commit",
-			"markPersisted",
+			"onPersisted",
 			"bus.publish",
 		]);
+	});
+
+	it("acknowledges every aggregate before application post-commit observers run", async () => {
+		const first = createMockAggregate([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "first" },
+				{ aggregateId: "first", aggregateType: "MockOrder" },
+			),
+		]);
+		const second = createMockAggregate([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "second" },
+				{ aggregateId: "second", aggregateType: "MockOrder" },
+			),
+		]);
+		const observed: Array<{ aggregate: unknown; version: Version }> = [];
+
+		await withCommit(
+			{
+				outbox: createMockOutbox(),
+				scope: createMockScope(),
+				onPersisted: async (aggregate, version) => {
+					// Application observers never see a half-acknowledged commit set.
+					expect(first.pendingEvents).toEqual([]);
+					expect(second.pendingEvents).toEqual([]);
+					observed.push({ aggregate, version });
+				},
+			},
+			async (_ctx, enrollment) =>
+				enrolledResult(enrollment, "ok", [first, second]),
+		);
+
+		 expect(observed).toEqual([
+			{ aggregate: first, version: 1 },
+			{ aggregate: second, version: 1 },
+		]);
+	});
+
+	it("passes an immutable commit-version receipt to each application observer", async () => {
+		const first = createMockAggregate([]);
+		const second = createMockAggregate([]);
+		const observedVersions: Version[] = [];
+
+		await withCommit(
+			{
+				outbox: createMockOutbox(),
+				scope: createMockScope(),
+				onPersisted: (aggregate, version) => {
+					observedVersions.push(version);
+					if (aggregate === first) second.advanceForObserverTest();
+				},
+			},
+			async (_ctx, enrollment) =>
+				enrolledResult(enrollment, "ok", [first, second]),
+		);
+
+		expect(observedVersions).toEqual([1, 1]);
+		expect(second.version).toBe(2);
 	});
 
 	it("threads the TransactionScope context through to fn", async () => {
@@ -513,7 +600,7 @@ describe("withCommit", () => {
 		expect(received).toBe(tx);
 	});
 
-	it("calls markPersisted only AFTER the tx commits (not on a rolled-back tx)", async () => {
+	it("acknowledges only AFTER the tx commits (not on a rolled-back tx)", async () => {
 		const scope = createMockScope();
 		const agg = createMockAggregate([
 			createDomainEvent(
@@ -529,9 +616,9 @@ describe("withCommit", () => {
 			}),
 		).rejects.toThrow("write failed");
 
-		// fn threw before withCommit even saw the aggregate; markPersisted
-		// must NOT have been called and pending events must survive.
-		expect(agg.markPersistedCalls).toBe(0);
+		// The callback failed before enrollment; acknowledgement must not run
+		// and pending events must survive.
+		expect(agg.acknowledgementCount).toBe(0);
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
@@ -549,7 +636,7 @@ describe("withCommit", () => {
 		expect(bus.published).toHaveLength(0);
 	});
 
-	it("calls markPersisted on EACH returned aggregate", async () => {
+	it("acknowledges EACH enrolled aggregate", async () => {
 		const a = createMockAggregate([
 			createDomainEvent(
 				"OrderCreated",
@@ -570,8 +657,8 @@ describe("withCommit", () => {
 			async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [a, b]),
 		);
 
-		expect(a.markPersistedCalls).toBe(1);
-		expect(b.markPersistedCalls).toBe(1);
+		expect(a.acknowledgementCount).toBe(1);
+		expect(b.acknowledgementCount).toBe(1);
 		expect(a.pendingEvents).toHaveLength(0);
 		expect(b.pendingEvents).toHaveLength(0);
 	});
@@ -652,10 +739,10 @@ describe("withCommit", () => {
 		});
 	});
 
-	it("deleted-marked aggregates: events harvested, pendingEvents cleared, but markPersisted (and onPersisted) never fires", async () => {
+	it("deleted aggregates: events are harvested and discarded without saved acknowledgement or observation", async () => {
 		// Deletion events must reach the outbox atomically with the row
 		// removal, but the post-save lifecycle is a semantic lie for a
-		// deleted row: a user onPersisted hook doing cache-fill would
+		// deleted row: an application observer doing cache-fill would
 		// resurrect the deleted aggregate in the cache.
 		const deletionEvent = createDomainEvent(
 			"OrderCreated",
@@ -682,10 +769,10 @@ describe("withCommit", () => {
 			[stamped(savedEvent), stamped(deletionEvent)],
 		]);
 		// Saved aggregate: full post-commit lifecycle.
-		expect(savedAgg.markPersistedCalls).toBe(1);
+		expect(savedAgg.acknowledgementCount).toBe(1);
 		// Deleted aggregate: events cleared (no re-emission on a later
-		// commit), but NO markPersisted → no onPersisted hook.
-		expect(deletedAgg.markPersistedCalls).toBe(0);
+		// commit), but no saved acknowledgement or application observer.
+		expect(deletedAgg.acknowledgementCount).toBe(0);
 		expect(deletedAgg.pendingEvents).toHaveLength(0);
 	});
 
@@ -740,7 +827,7 @@ describe("withCommit", () => {
 	it("dedupes aggregates by reference: same instance twice harvests events once and markPersists once", async () => {
 		// A use case that touches the same aggregate via two repository
 		// references (same identity-map entry) would otherwise double-
-		// harvest its events through the outbox and call markPersisted
+		// harvest its events through the outbox and acknowledge
 		// twice. Dedupe is by JavaScript object identity; distinct
 		// instances with the same logical id are NOT detected here.
 		const event = createDomainEvent(
@@ -762,8 +849,8 @@ describe("withCommit", () => {
 		// Event harvested exactly once.
 		expect(outbox.added).toEqual([[stamped(event)]]);
 		expect(bus.published).toEqual([[event]]);
-		// markPersisted called exactly once on the deduped aggregate.
-		expect(agg.markPersistedCalls).toBe(1);
+		// Acknowledgement runs exactly once on the deduped aggregate.
+		expect(agg.acknowledgementCount).toBe(1);
 	});
 
 	it("throws if a harvested event is missing aggregateId (recordEvent guard)", async () => {
@@ -853,9 +940,9 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(bus.published).toHaveLength(0);
-		// markPersisted still runs; keeps the lifecycle consistent even
+		// Acknowledgement still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
-		expect(agg.markPersistedCalls).toBe(1);
+		expect(agg.acknowledgementCount).toBe(1);
 	});
 
 	it("rejects an eventful persisted commit that did not advance aggregate version", async () => {
@@ -877,8 +964,52 @@ describe("withCommit", () => {
 		expect(outbox.added).toHaveLength(0);
 	});
 
-	describe("post-commit markPersisted isolation", () => {
-		it("marks every aggregate persisted even when one onPersisted hook throws", async () => {
+	describe("post-commit application observer isolation", () => {
+		it("contains an internal acknowledgement failure and continues with peer aggregates", async () => {
+			const frozen = createMockAggregate([
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId: "frozen" },
+					{ aggregateId: "frozen", aggregateType: "MockOrder" },
+				),
+			]);
+			Object.freeze(frozen);
+			const peer = createMockAggregate([
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId: "peer" },
+					{ aggregateId: "peer", aggregateType: "MockOrder" },
+				),
+			]);
+			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
+			const observed: unknown[] = [];
+			const bus = createMockBus();
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus,
+					scope: createMockScope(),
+					onPersisted: (aggregate) => {
+						observed.push(aggregate);
+					},
+					onPersistError: (error, aggregate) =>
+						reported.push({ error, aggregate }),
+				},
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "ok", [frozen, peer]),
+			);
+
+			expect(result).toBe("ok");
+			expect(reported).toHaveLength(1);
+			expect(reported[0]?.aggregate).toBe(frozen);
+			expect(peer.acknowledgementCount).toBe(1);
+			expect(peer.pendingEvents).toEqual([]);
+			expect(observed).toEqual([peer]);
+			expect(bus.published).toHaveLength(1);
+		});
+
+		it("acknowledges every aggregate even when one application observer throws", async () => {
 			const eventA = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "a" },
@@ -890,59 +1021,68 @@ describe("withCommit", () => {
 				{ aggregateId: "b", aggregateType: "MockOrder" },
 			);
 			const aggA = createMockAggregate([eventA]);
-			const throwingA: MockAggregate = {
-				...aggA,
-				get pendingEvents() {
-					return aggA.pendingEvents;
-				},
-				get markPersistedCalls() {
-					return aggA.markPersistedCalls;
-				},
-				markPersisted(v) {
-					aggA.markPersisted(v);
-					// User-overridable onPersisted hooks can throw; the
-					// post-commit loop must not abort for the peers.
-					throw new Error("cache eviction failed");
-				},
-			};
 			const aggB = createMockAggregate([eventB]);
 			const bus = createMockBus();
+			const observed: unknown[] = [];
 
 			const result = await withCommit(
-				{ outbox: createMockOutbox(), bus, scope: createMockScope() },
+				{
+					outbox: createMockOutbox(),
+					bus,
+					scope: createMockScope(),
+					onPersisted: (aggregate) => {
+						if (aggregate === aggA) throw new Error("cache eviction failed");
+						observed.push(aggregate);
+					},
+				},
 				async (_ctx, enrollment) =>
-					enrolledResult(enrollment, "ok", [throwingA, aggB]),
+					enrolledResult(enrollment, "ok", [aggA, aggB]),
 			);
 
 			// Committed result survives; B's pending events were flushed
 			// (no double emission on the next commit); publish still ran.
 			expect(result).toBe("ok");
-			expect(aggB.markPersistedCalls).toBe(1);
+			expect(aggB.acknowledgementCount).toBe(1);
 			expect(aggB.pendingEvents).toHaveLength(0);
+			expect(observed).toEqual([aggB]);
 			expect(bus.published).toHaveLength(1);
 		});
 
-		it("reports a post-commit persistence failure via onPersistError with the failing aggregate", async () => {
+		it("awaits an asynchronous application observer", async () => {
+			const aggregate = createMockAggregate([]);
+			let release: () => void = () => {};
+			const blocked = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			let settled = false;
+
+			const execution = withCommit(
+				{
+					outbox: createMockOutbox(),
+					scope: createMockScope(),
+					onPersisted: async () => blocked,
+				},
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "ok", [aggregate]),
+			).finally(() => {
+				settled = true;
+			});
+
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			release();
+			await expect(execution).resolves.toBe("ok");
+		});
+
+		it("reports an application observer failure via onPersistError with the failing aggregate", async () => {
 			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "a" },
 				{ aggregateId: "a", aggregateType: "MockOrder" },
 			);
-			const base = createMockAggregate([event]);
+			const aggregate = createMockAggregate([event]);
 			const persistError = new Error("cache eviction failed");
-			const throwing: MockAggregate = {
-				...base,
-				get pendingEvents() {
-					return base.pendingEvents;
-				},
-				get markPersistedCalls() {
-					return base.markPersistedCalls;
-				},
-				markPersisted(v) {
-					base.markPersisted(v);
-					throw persistError;
-				},
-			};
 			const reported: Array<{ error: unknown; aggregate: unknown }> = [];
 
 			const result = await withCommit(
@@ -950,12 +1090,15 @@ describe("withCommit", () => {
 					outbox: createMockOutbox(),
 					bus: createMockBus(),
 					scope: createMockScope(),
+					onPersisted: () => {
+						throw persistError;
+					},
 					onPersistError: (error, aggregate) => {
 						reported.push({ error, aggregate });
 					},
 				},
 				async (_ctx, enrollment) =>
-					enrolledResult(enrollment, "ok", [throwing]),
+					enrolledResult(enrollment, "ok", [aggregate]),
 			);
 
 			// The write committed; the persistence-cleanup failure is reported,
@@ -963,7 +1106,7 @@ describe("withCommit", () => {
 			expect(result).toBe("ok");
 			expect(reported).toHaveLength(1);
 			expect(reported[0]?.error).toBe(persistError);
-			expect(reported[0]?.aggregate).toBe(throwing);
+			expect(reported[0]?.aggregate).toBe(aggregate);
 		});
 
 		it("swallows a throwing onPersistError observer so the post-commit invariant holds", async () => {
@@ -978,19 +1121,6 @@ describe("withCommit", () => {
 				{ aggregateId: "b", aggregateType: "MockOrder" },
 			);
 			const aggA = createMockAggregate([eventA]);
-			const throwingA: MockAggregate = {
-				...aggA,
-				get pendingEvents() {
-					return aggA.pendingEvents;
-				},
-				get markPersistedCalls() {
-					return aggA.markPersistedCalls;
-				},
-				markPersisted(v) {
-					aggA.markPersisted(v);
-					throw new Error("cache eviction failed");
-				},
-			};
 			const aggB = createMockAggregate([eventB]);
 
 			const result = await withCommit(
@@ -998,18 +1128,21 @@ describe("withCommit", () => {
 					outbox: createMockOutbox(),
 					bus: createMockBus(),
 					scope: createMockScope(),
+					onPersisted: (aggregate) => {
+						if (aggregate === aggA) throw new Error("cache eviction failed");
+					},
 					onPersistError: () => {
 						// A misbehaving observer must not break the invariant.
 						throw new Error("observer blew up");
 					},
 				},
 				async (_ctx, enrollment) =>
-					enrolledResult(enrollment, "ok", [throwingA, aggB]),
+					enrolledResult(enrollment, "ok", [aggA, aggB]),
 			);
 
 			// Peer B is still marked; the committed write still resolves.
 			expect(result).toBe("ok");
-			expect(aggB.markPersistedCalls).toBe(1);
+			expect(aggB.acknowledgementCount).toBe(1);
 			expect(aggB.pendingEvents).toHaveLength(0);
 		});
 
@@ -1036,7 +1169,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("ok");
 			expect(reported).toBe(0);
-			expect(agg.markPersistedCalls).toBe(1);
+			expect(agg.acknowledgementCount).toBe(1);
 		});
 
 		it("neutralises an async (rejecting) onPersistError instead of leaking an unhandled rejection", async () => {
@@ -1048,20 +1181,7 @@ describe("withCommit", () => {
 				{ orderId: "a" },
 				{ aggregateId: "a", aggregateType: "MockOrder" },
 			);
-			const base = createMockAggregate([event]);
-			const throwing: MockAggregate = {
-				...base,
-				get pendingEvents() {
-					return base.pendingEvents;
-				},
-				get markPersistedCalls() {
-					return base.markPersistedCalls;
-				},
-				markPersisted(v) {
-					base.markPersisted(v);
-					throw new Error("cleanup failed");
-				},
-			};
+			const aggregate = createMockAggregate([event]);
 
 			const unhandled: unknown[] = [];
 			const onUnhandled = (reason: unknown): void => {
@@ -1075,12 +1195,15 @@ describe("withCommit", () => {
 						outbox: createMockOutbox(),
 						bus: createMockBus(),
 						scope: createMockScope(),
+						onPersisted: () => {
+							throw new Error("observer failed");
+						},
 						onPersistError: async () => {
 							throw new Error("async sink down");
 						},
 					},
 					async (_ctx, enrollment) =>
-						enrolledResult(enrollment, "ok", [throwing]),
+						enrolledResult(enrollment, "ok", [aggregate]),
 				);
 
 				expect(result).toBe("ok");
@@ -1133,7 +1256,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("order-123");
 			// The commit lifecycle completed: pending events are flushed.
-			expect(agg.markPersistedCalls).toBe(1);
+			expect(agg.acknowledgementCount).toBe(1);
 		});
 
 		it("reports the publish error and the affected events via onPublishError", async () => {
@@ -1216,7 +1339,7 @@ describe("withCommit", () => {
 				),
 			).rejects.toThrow("outbox write failed");
 			// Rolled back: pending events must survive for a retry.
-			expect(agg.markPersistedCalls).toBe(0);
+			expect(agg.acknowledgementCount).toBe(0);
 		});
 	});
 });
@@ -1244,7 +1367,7 @@ describe("commit enrollment lifecycle", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);
-		expect(aggregate.markPersistedCalls).toBe(0);
+		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 });
 

@@ -19,6 +19,19 @@ import {
 } from "./aggregate";
 import type { AnyDomainEvent } from "./domain-event";
 import { EventSourcedAggregate as ProductionEventSourcedAggregate } from "./event-sourced-aggregate";
+import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
+
+function acknowledgePersisted(aggregate: object, version: Version): void {
+	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	if (!capability) throw new Error("Missing test persistence capability");
+	capability.acknowledge(version);
+}
+
+function discardPendingEvents(aggregate: object): void {
+	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	if (!capability) throw new Error("Missing test persistence capability");
+	capability.discardPendingEvents();
+}
 
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
 abstract class EventSourcedAggregate<
@@ -220,7 +233,7 @@ describe("EventSourcedAggregate", () => {
 			);
 			// Catch-up replay requires a persisted baseline; a fresh
 			// factory-created target throws UnreplayableAggregateError.
-			aggregate.markPersisted(aggregate.version);
+			acknowledgePersisted(aggregate, aggregate.version);
 			const initialVersion = aggregate.version; // 1 after creation
 
 			const history: TestEvent[] = [
@@ -638,10 +651,10 @@ describe("EventSourcedAggregate", () => {
 				}
 			})();
 			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
-			// The pending-events guard names its own remedy; the
-			// unpersisted-version remedy (markPersisted) would be harmful here.
-			expect((thrown as Error).message).toContain("clearPendingEvents");
-			expect((thrown as Error).message).not.toContain("markPersisted");
+			expect((thrown as Error).message).toContain(
+				"discard this dirty instance",
+			);
+			expect((thrown as Error).message).toContain("fresh aggregate");
 			// Crash-loud programming bug, never a Result Err, and nothing moved.
 			expect(aggregate.version).toBe(1);
 			expect(aggregate.persistedVersion).toBeUndefined();
@@ -653,7 +666,7 @@ describe("EventSourcedAggregate", () => {
 				"test-1" as TestId,
 				10,
 			);
-			aggregate.clearPendingEvents();
+			discardPendingEvents(aggregate);
 			expect(aggregate.version).toBe(1);
 			expect(aggregate.persistedVersion).toBeUndefined();
 
@@ -670,11 +683,9 @@ describe("EventSourcedAggregate", () => {
 				}
 			})();
 			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
-			// This guard's remedy is markPersisted AFTER an actual save;
-			// clearPendingEvents does nothing here (events are already empty)
-			// and must not be recommended.
-			expect((thrown as Error).message).toContain("markPersisted");
-			expect((thrown as Error).message).not.toContain("clearPendingEvents");
+			// Only actual application commit orchestration may establish the
+			// missing persistence baseline.
+			expect((thrown as Error).message).toContain("withCommit or UnitOfWork");
 		});
 
 		it("should advance version additively on a persisted aggregate (catch-up replay)", () => {
@@ -685,7 +696,7 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(1); // created event
 			// Simulate the post-save lifecycle: the creation event is now
 			// part of the persisted stream, so catching up is legitimate.
-			aggregate.markPersisted(aggregate.version);
+			acknowledgePersisted(aggregate, aggregate.version);
 
 			const history: TestEvent[] = [
 				createDomainEvent("TestEventUpdated", {
@@ -752,7 +763,7 @@ describe("EventSourcedAggregate", () => {
 				"test-1" as TestId,
 				10,
 			);
-			aggregate.markPersisted(aggregate.version);
+			acknowledgePersisted(aggregate, aggregate.version);
 
 			const result = aggregate.loadFromHistory([]);
 
@@ -842,7 +853,7 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
-	describe("markPersisted (post-save hook)", () => {
+	describe("kit-internal persistence acknowledgement", () => {
 		it("updates the version and clears pending events", () => {
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
@@ -853,82 +864,20 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBeGreaterThan(0);
 			expect(aggregate.pendingEvents.length).toBeGreaterThan(0);
 
-			aggregate.markPersisted(99 as Version);
+			acknowledgePersisted(aggregate, 99 as Version);
 
 			expect(aggregate.version).toBe(99);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
-		it("calls the onPersisted hook after clearing pendingEvents", () => {
-			class HookingAggregate extends TestEventSourcedAggregate {
-				public hookCalls: Array<{
-					version: Version;
-					pendingLengthDuringHook: number;
-				}> = [];
-				protected override onPersisted(version: Version): void {
-					this.hookCalls.push({
-						version,
-						pendingLengthDuringHook: this.pendingEvents.length,
-					});
-				}
-			}
-
-			const aggregate = new HookingAggregate("hook-1" as TestId, {
+		it("does not expose acknowledgement or event disposal on aggregates", () => {
+			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.updateValue(20);
 
-			aggregate.markPersisted(99 as Version);
-
-			expect(aggregate.hookCalls).toHaveLength(1);
-			expect(aggregate.hookCalls[0]!.version).toBe(99);
-			// onPersisted runs AFTER pendingEvents is cleared, so subclass
-			// hook code can never accidentally read stale events.
-			expect(aggregate.hookCalls[0]!.pendingLengthDuringHook).toBe(0);
-		});
-
-		it("documents the footgun: overriding markPersisted without super leaks pendingEvents (use onPersisted instead)", () => {
-			// NEGATIVE example: this is the bug pattern observed in
-			// production usage. Override markPersisted directly, forget
-			// super, framework cleanup never runs, next withCommit
-			// re-dispatches the same events.
-			class BuggyAggregate extends TestEventSourcedAggregate {
-				public sideEffectFired = false;
-				public override markPersisted(_version: Version): void {
-					this.sideEffectFired = true;
-					// MISSING: super.markPersisted(_version)
-				}
-			}
-
-			const buggy = new BuggyAggregate("bug-1" as TestId, {
-				value: 10,
-				status: "inactive",
-			});
-			buggy.updateValue(20);
-			buggy.markPersisted(7 as Version);
-
-			expect(buggy.sideEffectFired).toBe(true);
-			// THE BUG: events still in pendingEvents.
-			expect(buggy.pendingEvents.length).toBeGreaterThan(0);
-
-			// ✅ Same intent via onPersisted: framework cleans up first.
-			class FixedAggregate extends TestEventSourcedAggregate {
-				public sideEffectFired = false;
-				protected override onPersisted(_version: Version): void {
-					this.sideEffectFired = true;
-				}
-			}
-
-			const fixed = new FixedAggregate("fix-1" as TestId, {
-				value: 10,
-				status: "inactive",
-			});
-			fixed.updateValue(20);
-			fixed.markPersisted(7 as Version);
-
-			expect(fixed.sideEffectFired).toBe(true);
-			expect(fixed.pendingEvents).toHaveLength(0);
+			expect("markPersisted" in aggregate).toBe(false);
+			expect("clearPendingEvents" in aggregate).toBe(false);
 		});
 	});
 
@@ -1114,7 +1063,7 @@ describe("EventSourcedAggregate", () => {
 			// restored stream; harvesting them after markRestored would emit
 			// them with a version baseline they were never part of.
 			const source = TestEventSourcedAggregate.create("test-1" as TestId, 10);
-			source.markPersisted(source.version);
+			acknowledgePersisted(source, source.version);
 			const snapshot = source.createSnapshot();
 
 			const dirty = TestEventSourcedAggregate.create("test-1" as TestId, 0);
@@ -1356,26 +1305,6 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.persistedVersion).toBeUndefined();
 		});
 
-		it("markRestored does NOT fire the onPersisted hook", () => {
-			class HookSpyAggregate extends TestEventSourcedAggregate {
-				public hookCalls: Version[] = [];
-				protected override onPersisted(version: Version): void {
-					this.hookCalls.push(version);
-				}
-				public callMarkRestored(version: Version): void {
-					this.markRestored(version);
-				}
-			}
-
-			const agg = new HookSpyAggregate("id-1" as TestId, {
-				value: 1,
-				status: "inactive",
-			});
-			agg.callMarkRestored(3 as Version);
-
-			expect(agg.hookCalls).toEqual([]);
-		});
-
 		it("loadFromHistory aligns persistedVersion to the final post-replay version", () => {
 			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
 				value: 0,
@@ -1419,26 +1348,18 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.pendingEvents).toHaveLength(1);
 		});
 
-		it("markPersisted updates persistedVersion AND fires onPersisted", () => {
-			class HookSpyAggregate extends TestEventSourcedAggregate {
-				public hookCalls: Version[] = [];
-				protected override onPersisted(version: Version): void {
-					this.hookCalls.push(version);
-				}
-			}
-
-			const agg = new HookSpyAggregate("id-1" as TestId, {
+		it("internal acknowledgement updates persistedVersion", () => {
+			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
 				value: 0,
 				status: "inactive",
 			});
 			agg.updateValue(1);
 			expect(agg.persistedVersion).toBeUndefined();
 
-			agg.markPersisted(1 as Version);
+			acknowledgePersisted(agg, 1 as Version);
 
 			expect(agg.version).toBe(1);
 			expect(agg.persistedVersion).toBe(1);
-			expect(agg.hookCalls).toEqual([1]);
 		});
 
 		it("restoreFromSnapshotWithEvents aligns persistedVersion to the final version", () => {
@@ -1476,7 +1397,7 @@ describe("EventSourcedAggregate", () => {
 				status: "inactive",
 			});
 			// Establish a prior persisted baseline.
-			agg.markPersisted(2 as Version);
+			acknowledgePersisted(agg, 2 as Version);
 			const baselineBefore = agg.persistedVersion;
 
 			// Second event triggers ValidatingAggregate.validateEvent.
@@ -1517,13 +1438,13 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.persistedVersion).toBeUndefined();
 		});
 
-		it("multi-save cycle: persistedVersion advances on each markPersisted across save iterations", () => {
+		it("multi-save cycle: persistedVersion advances on each acknowledgement", () => {
 			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 10);
 			// First save: create event landed at v1.
 			expect(agg.version).toBe(1);
 			expect(agg.persistedVersion).toBeUndefined();
 
-			agg.markPersisted(1 as Version);
+			acknowledgePersisted(agg, 1 as Version);
 			expect(agg.persistedVersion).toBe(1);
 
 			// Second save cycle: one more event, then save at v2.
@@ -1531,7 +1452,7 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.version).toBe(2);
 			expect(agg.persistedVersion).toBe(1);
 
-			agg.markPersisted(2 as Version);
+			acknowledgePersisted(agg, 2 as Version);
 			expect(agg.persistedVersion).toBe(2);
 
 			// Third save cycle: another event, save at v3.
@@ -1539,7 +1460,7 @@ describe("EventSourcedAggregate", () => {
 			expect(agg.version).toBe(3);
 			expect(agg.persistedVersion).toBe(2);
 
-			agg.markPersisted(3 as Version);
+			acknowledgePersisted(agg, 3 as Version);
 			expect(agg.persistedVersion).toBe(3);
 		});
 
@@ -1549,7 +1470,7 @@ describe("EventSourcedAggregate", () => {
 				status: "inactive",
 			});
 			// Establish a prior persisted baseline.
-			agg.markPersisted(2 as Version);
+			acknowledgePersisted(agg, 2 as Version);
 			const baselineBeforeRestore = agg.persistedVersion;
 
 			const snapshot: AggregateSnapshot<TestState> = {

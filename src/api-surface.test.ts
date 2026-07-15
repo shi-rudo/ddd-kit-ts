@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { IAggregateRoot, Id } from "./index";
 import * as http from "./http";
 import * as index from "./index";
 import * as money from "./money";
@@ -28,6 +29,18 @@ type RemovedFactoryMutationSurface =
 	| typeof RemovedWithEventIdFactory;
 
 void (undefined as unknown as RemovedFactoryMutationSurface);
+
+type PublicAggregateLifecycleSurface = IAggregateRoot<Id<"ApiSurface">>;
+// @ts-expect-error persistence acknowledgement belongs to the application shell
+type RemovedMarkPersisted = PublicAggregateLifecycleSurface["markPersisted"];
+type RemovedClearPendingEvents =
+	PublicAggregateLifecycleSurface[
+		// @ts-expect-error pending-event disposal is a kit-internal persistence capability
+		"clearPendingEvents"
+	];
+
+void (undefined as unknown as RemovedMarkPersisted);
+void (undefined as unknown as RemovedClearPendingEvents);
 
 /**
  * Pins the RUNTIME public API surface of every package entry point. The

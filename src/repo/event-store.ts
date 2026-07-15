@@ -137,7 +137,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *
  * **One save per aggregate per unit of work, after all mutations.**
  * `pendingEvents` are cleared and `persistedVersion` advances only AFTER
- * the commit (`markPersisted`), so a second `save` of the same instance
+ * the commit (internal acknowledgement), so a second `save` of the same instance
  * inside one unit of work would re-append the already-appended events
  * with a stale `expectedVersion` and deterministically conflict, with no
  * concurrent writer in sight. This is the same rule the state-stored

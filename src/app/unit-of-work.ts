@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../aggregate/aggregate";
+import type { IAggregateRoot, Version } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
@@ -143,7 +143,7 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
  *
  * Repositories enroll every aggregate they write so the unit of work
  * can harvest pending events into the outbox (inside the transaction)
- * and call `markPersisted` after the commit - the same lifecycle
+ * and acknowledge them after the commit through the same internal lifecycle
  * `withCommit` runs for its opaque commit tokens. The session retains
  * tokens returned by repository enrollment, so "forgot to list the
  * aggregate" cannot happen per use-case call site; each repository
@@ -218,7 +218,7 @@ export interface UnitOfWorkContext<
 	 * enrollment (its aggregate's events are NOT harvested unless you
 	 * also call `session.enrollSaved`), and the identity map (a later
 	 * `findById` of the same aggregate hydrates a SECOND instance:
-	 * double harvest, double `markPersisted`). Use it only for writes no
+	 * double harvest, double acknowledgement). Use it only for writes no
 	 * repository covers, pair it with manual enrollment, and prefer
 	 * adding a repository method whenever one could exist.
 	 */
@@ -282,10 +282,17 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
 	/** See `withCommit`: observer for post-commit `bus.publish` failures. */
 	onPublishError?: (error: unknown, events: ReadonlyArray<Evt>) => void;
 	/**
-	 * See `withCommit`: observer for post-commit persistence-cleanup failures
-	 * (a throw from `markPersisted`, the `onPersisted` hook, or
-	 * `clearPendingEvents`). Called once per failing aggregate; observer only,
-	 * never rejects the committed write.
+	 * See `withCommit`: application-shell observer after acknowledgement.
+	 * The version argument is captured before any observer runs.
+	 */
+	onPersisted?: (
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+		version: Version,
+	) => void | Promise<void>;
+	/**
+	 * See `withCommit`: failure observer for internal post-commit
+	 * acknowledgement/disposal and the application-shell `onPersisted`
+	 * callback. Never rejects the committed write.
 	 */
 	onPersistError?: (
 		error: unknown,
@@ -300,7 +307,7 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
  * transaction and either persist completely or not at all.
  *
  * Built ON TOP of `withCommit` - the commit orchestration (event
- * harvest into the outbox inside the transaction, `markPersisted`
+ * harvest into the outbox inside the transaction, internal acknowledgement
  * after the commit, best-effort in-process publish last) is inherited,
  * not reimplemented. What this layer adds:
  *
@@ -372,7 +379,7 @@ export class UnitOfWork<
 	/**
 	 * Execute one unit of work: open the transaction, hand the callback
 	 * tx-bound repositories, commit on resolve, roll back on throw,
-	 * run the post-commit lifecycle (markPersisted, publish) for every
+	 * run the post-commit lifecycle (acknowledge, observe, publish) for every
 	 * enrolled aggregate. Returns the callback's result.
 	 */
 	public async run<R>(
@@ -408,6 +415,7 @@ export class UnitOfWork<
 					bus: this.deps.bus,
 					scope: this.deps.scope,
 					onPublishError: this.deps.onPublishError,
+					onPersisted: this.deps.onPersisted,
 					onPersistError: this.deps.onPersistError,
 					signal: options?.signal,
 				},
@@ -534,8 +542,8 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// Deleted aggregates stay in the harvest set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
 		// delete with event harvest). withCommit receives them in the
-		// deleted token disposition and skips markPersisted for them, so the
-		// post-save onPersisted hook never fires for a deletion.
+		// deleted token disposition, so the saved-only application observer
+		// never fires for a deletion.
 		this._enrolled.add(aggregate);
 		this._commitTokens.add(token);
 		return token;

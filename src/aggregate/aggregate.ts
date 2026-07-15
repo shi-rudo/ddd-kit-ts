@@ -54,7 +54,9 @@ export interface AggregateSnapshot<TState> {
  * dependency on the aggregate hierarchy.
  *
  * Full per-member documentation lives on the concrete `BaseAggregate`
- * class; the interface is intentionally terse to avoid drift.
+ * class; the interface is intentionally terse to avoid drift. Persistence
+ * facts are readable, but acknowledgement and pending-event disposal are not
+ * part of this surface. `withCommit` / `UnitOfWork` hold that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
@@ -64,8 +66,6 @@ export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
 	readonly version: Version;
 	readonly persistedVersion: Version | undefined;
 	readonly pendingEvents: ReadonlyArray<TEvent>;
-	clearPendingEvents(): void;
-	markPersisted(version: Version): void;
 }
 
 /**

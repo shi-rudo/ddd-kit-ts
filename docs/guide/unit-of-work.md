@@ -10,8 +10,14 @@ applies:
 1. Run the application work inside `TransactionScope.transactional(...)`.
 2. Harvest pending events into the outbox inside the transaction.
 3. Commit.
-4. Mark persisted aggregates after commit.
-5. Publish to the optional in-process bus last.
+4. Acknowledge persisted aggregates through an internal capability.
+5. Run the optional Application-Shell post-commit observer.
+6. Publish to the optional in-process bus last.
+
+Event sourcing is not required. A normal state-stored `AggregateRoot` with
+`TEvent = never` uses the same enrollment and acknowledgement path; its outbox
+batch is simply empty. `EventSourcedAggregate` is an alternative persistence
+model, not a prerequisite for `UnitOfWork`.
 
 What `UnitOfWork` adds is repository wiring, enrollment, and an identity map.
 Use plain `withCommit` when the application service can return explicit,
@@ -134,16 +140,16 @@ async delete(order: Order): Promise<void> {
 ```
 
 `enrollDeleted` removes the identity-map entry, records a tombstone, keeps the
-aggregate in the harvest set, and tells the post-commit lifecycle to clear its
-pending events without calling `markPersisted`.
+aggregate in the harvest set, and tells the post-commit lifecycle to discard
+its pending events without acknowledging a saved row.
 
 ## Identity Map
 
 `session.identityMap` gives one aggregate type and id one in-memory instance
 inside a `run()`.
 
-Why it matters: event harvest and `markPersisted` dedupe by JavaScript object
-identity. If a repository hydrates the same aggregate twice, the unit of work
+Why it matters: event harvest and post-commit acknowledgement dedupe by
+JavaScript object identity. If a repository hydrates the same aggregate twice, the unit of work
 can see two objects and harvest both. The identity map prevents that.
 
 Important behavior:
@@ -167,8 +173,10 @@ Inside one `run()`:
 - Before commit, newly recorded pending events on loaded aggregates must be
   enrolled or `UnenrolledChangesError` is thrown.
 - Enrolled events are written to the outbox inside the same transaction.
-- After commit, saved aggregates are marked persisted.
-- Deleted aggregates have pending events cleared without `markPersisted`.
+- After commit, saved aggregates are acknowledged through an internal
+  capability.
+- Deleted aggregates have pending events discarded without saved-row
+  acknowledgement.
 - Optional bus publishing happens after commit and is best-effort.
 
 The callback result is returned directly:
