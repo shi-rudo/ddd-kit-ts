@@ -1021,7 +1021,10 @@ Copy same-named domain-event metadata deliberately when it belongs in the
 public contract; the helper never exposes it implicitly. Remove the three
 reserved keys from custom integration metadata. The codec now rejects that
 duplication even though the generic metadata type still permits arbitrary JSON
-keys at compile time.
+keys at compile time. For a rolling deployment, upgrade producers first, wait
+until all in-flight messages containing reserved keys in custom metadata have
+drained, and only then upgrade consumers. A new consumer rejects that legacy
+shape instead of silently accepting two relationship locations.
 
 ### Changed (breaking): productive pollers require explicit operability
 
