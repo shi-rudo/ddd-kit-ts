@@ -19,6 +19,18 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed (breaking): relationship identity is explicit in integration envelopes
+
+- `IntegrationMessage` and `IntegrationMessageContent` now expose optional
+  first-class `correlationId`, `conversationId`, and `causationId` headers.
+- `createIntegrationMessage` requires the boundary mapper to select those
+  headers explicitly. It never copies private domain-event metadata or invents
+  a missing relationship.
+- The three names are reserved and are rejected inside custom integration
+  `metadata`, removing two possible sources of truth for message relationships.
+- `integrationMessageToCommittedEvent` copies validated relationship headers
+  into the minted local event metadata.
+
 ### Changed (breaking): typed bus maps own execution result types
 
 - `CommandBus<TMap>` and `ICommandBus<TMap>` no longer expose the loose
@@ -44,9 +56,9 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Ten do not (steps 3, 5, 11,
-12, 14, 15, 20, 25, 26, and the option-validation part of 22) and deserve a
-deliberate pass over the call sites.
+Most of these surface at compile time. Eleven do not (steps 3, 5, 11,
+12, 14, 15, 20, 25, 26, 29, and the option-validation part of 22) and deserve
+a deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
 
@@ -977,6 +989,39 @@ new CommandBus().execute<PlaceOrderCommand, OrderId>(command);
 
 Remove explicit result generics from typed bus calls. If an integration truly
 has no closed message map, use the default untyped map shape deliberately.
+
+#### 29. Move relationship ids from custom metadata to envelope headers (runtime change)
+
+`correlationId`, `conversationId`, and `causationId` are standard message
+relationships, not application-defined metadata. They now live directly on the
+integration envelope:
+
+```ts
+// before: accepted but ambiguous with future envelope headers
+createIntegrationMessage(record, (event) => ({
+  type: "sales.order-placed.v1",
+  version: 1,
+  payload: mapOrder(event),
+  metadata: { correlationId: event.metadata?.correlationId },
+}));
+
+// after: explicit public relationship headers
+createIntegrationMessage(record, (event) => ({
+  type: "sales.order-placed.v1",
+  version: 1,
+  payload: mapOrder(event),
+  correlationId: event.metadata?.correlationId,
+  conversationId: event.metadata?.conversationId,
+  causationId: event.metadata?.causationId,
+}));
+```
+
+The mapper fields are optional. When omitted, the wire header remains absent.
+Copy same-named domain-event metadata deliberately when it belongs in the
+public contract; the helper never exposes it implicitly. Remove the three
+reserved keys from custom integration metadata. The codec now rejects that
+duplication even though the generic metadata type still permits arbitrary JSON
+keys at compile time.
 
 ### Changed (breaking): productive pollers require explicit operability
 

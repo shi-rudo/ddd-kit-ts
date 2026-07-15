@@ -3,6 +3,7 @@ import type {
 	DeadlineProcessorObservers,
 	IAggregateRoot,
 	Id,
+	IntegrationMessageRelationships,
 	OutboxDispatcherObservers,
 	StateValidator,
 } from "./index";
@@ -65,6 +66,13 @@ const publicDeadlineObservers: DeadlineProcessorObservers<never> = {
 };
 void publicOutboxObservers;
 void publicDeadlineObservers;
+
+const publicIntegrationRelationships: IntegrationMessageRelationships = {
+	correlationId: "corr-1",
+	conversationId: "conversation-1",
+	causationId: "cause-1",
+};
+void publicIntegrationRelationships;
 
 /**
  * Pins the RUNTIME public API surface of every package entry point. The

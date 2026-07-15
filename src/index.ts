@@ -212,6 +212,7 @@ export {
 	type IntegrationMessage,
 	type IntegrationMessageContent,
 	type IntegrationMessageMapper,
+	type IntegrationMessageRelationships,
 	integrationMessageToCommittedEvent,
 	type JsonObject,
 	type JsonPrimitive,

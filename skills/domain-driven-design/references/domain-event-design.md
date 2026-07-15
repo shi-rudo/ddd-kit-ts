@@ -120,9 +120,11 @@ Avoid command names, technical names, and transport names:
 
 - Include stable identifiers and the relevant business facts.
 - Include a stable `eventId` or message id when handlers need deduplication.
-- Include correlation and causation ids when a process manager, saga, or
-  tracing must relate events across a flow. Like event ids and sequence
-  numbers, they are metadata that is hard to retrofit later.
+- Include correlation, conversation, and causation ids when a process manager,
+  saga, or tracing must relate events across a flow. Like event ids and sequence
+  numbers, they are metadata that is hard to retrofit later. On a public
+  integration message, carry them as explicit envelope headers rather than
+  payload fields or free-form custom metadata.
 - Include an `occurredAt` timestamp when audit or time-based policy matters.
   `occurredAt` is not an ordering key; clock skew and ties make it unreliable
   for sequence.
@@ -161,6 +163,12 @@ Avoid command names, technical names, and transport names:
 - An integration event is a public contract between systems or bounded contexts.
   It needs a stable name, compatible schema evolution, versioning rules, and
   explicit ownership.
+- Its envelope owns transport identity and relationship headers. `messageId`
+  identifies this message, `correlationId` groups one operation or trace,
+  `conversationId` spans a longer business interaction, and `causationId`
+  identifies the immediate cause. Keep these separate from business payload and
+  custom metadata, and do not invent a value when that relationship does not
+  exist.
 - Never publish a raw in-process domain event across a bounded-context boundary.
   Translate it at the boundary when the fact needs to leave the context. Keep
   transport concerns outside the domain model.
@@ -326,9 +334,10 @@ When designing a domain event, define:
 - Event name in ubiquitous language.
 - Source bounded context and aggregate.
 - Business decision that records it.
-- Payload fields, event id, correlation and causation ids if a process or
-  tracing needs them, ordering or sequence field if any, and privacy
-  constraints.
+- Payload fields, event id, correlation, conversation, and causation ids if a
+  process or tracing needs them, ordering or sequence field if any, and privacy
+  constraints. For public messages, place relationship ids in the explicit
+  envelope.
 - Immediate invariants already protected before the event is recorded.
 - Subscribers, handlers, policies, or processes that may react.
 - Consistency timing: same transaction, post-commit, or eventual, with the

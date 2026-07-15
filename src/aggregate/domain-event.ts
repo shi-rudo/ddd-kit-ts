@@ -33,6 +33,12 @@ export interface EventMetadata {
 	correlationId?: string;
 
 	/**
+	 * Conversation ID shared by every message in one long-running business
+	 * interaction, even when that interaction spans several correlations.
+	 */
+	conversationId?: string;
+
+	/**
 	 * Causation ID referencing the event or command that caused this event.
 	 * Used to build event chains and understand causality.
 	 */
@@ -121,7 +127,8 @@ export interface DomainEvent<T extends string, P = void> {
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
-	 * Includes correlationId, causationId, userId, source, and custom fields.
+	 * Includes correlationId, conversationId, causationId, userId, source, and
+	 * custom fields.
 	 */
 	readonly metadata?: EventMetadata;
 }
