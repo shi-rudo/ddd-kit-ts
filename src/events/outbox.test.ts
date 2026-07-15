@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
-import { EventHarvestError } from "../core/errors";
+import {
+	EventHarvestError,
+	InMemoryCapacityExceededError,
+} from "../core/errors";
 import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 import type { EventCommitCandidate } from "./ports";
 
@@ -25,6 +28,90 @@ function candidate(
 }
 
 describe("InMemoryOutbox", () => {
+	describe("capacity", () => {
+		it("rejects an oversized batch atomically and releases record capacity after acknowledgement", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({ maxRecords: 1 });
+			const first = createDomainEvent("OrderCreated", { orderId: "o-1" });
+			const second = createDomainEvent("OrderCreated", { orderId: "o-2" });
+
+			await expect(
+				outbox.add([candidate(first), candidate(second)]),
+			).rejects.toMatchObject({
+				code: "IN_MEMORY_CAPACITY_EXCEEDED",
+				store: "InMemoryOutbox",
+				resource: "records",
+				limit: 1,
+				current: 0,
+				attempted: 2,
+			});
+			expect(await outbox.getPending()).toEqual([]);
+
+			await outbox.add([candidate(first)]);
+			await expect(outbox.add([candidate(first)])).resolves.toBeUndefined();
+			await outbox.markDispatched([first.eventId]);
+			await expect(outbox.add([candidate(second)])).resolves.toBeUndefined();
+		});
+
+		it("counts a dead letter as the same record and permits requeue at capacity", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxRecords: 1,
+				maxDeliveryAttempts: 1,
+			});
+			const event = createDomainEvent("OrderCreated", { orderId: "o-1" });
+			await outbox.add([candidate(event)]);
+
+			await outbox.markFailed(event.eventId, new Error("poison"));
+			expect(await outbox.deadLetters()).toHaveLength(1);
+			await expect(outbox.add([candidate(event)])).resolves.toBeUndefined();
+			expect(await outbox.deadLetters()).toEqual([]);
+			expect(await outbox.getPending()).toHaveLength(1);
+		});
+
+		it("rejects a new source atomically while allowing the existing source to advance", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>({
+				maxRecords: 2,
+				maxSources: 1,
+			});
+			const forSource = (eventId: string, aggregateId: string) =>
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId: aggregateId },
+					{ eventId, aggregateType: "Order", aggregateId },
+				);
+			const first = forSource("evt-o1-1", "o-1");
+			const next = forSource("evt-o1-2", "o-1");
+			const foreign = forSource("evt-o2-1", "o-2");
+			await outbox.add([candidate(first, 1)]);
+			await outbox.markDispatched([first.eventId]);
+
+			await expect(
+				outbox.add([candidate(next, 2), candidate(foreign, 1)]),
+			).rejects.toBeInstanceOf(InMemoryCapacityExceededError);
+			expect(await outbox.getPending()).toEqual([]);
+
+			await expect(outbox.add([candidate(next, 2)])).resolves.toBeUndefined();
+			await expect(outbox.add([candidate(foreign, 1)])).rejects.toMatchObject({
+				resource: "sources",
+				limit: 1,
+				current: 1,
+				attempted: 1,
+			});
+		});
+
+		it.each([
+			["maxRecords", 0],
+			["maxRecords", -1],
+			["maxRecords", 1.5],
+			["maxRecords", Number.MAX_SAFE_INTEGER + 1],
+			["maxSources", 0],
+			["maxSources", -1],
+			["maxSources", 1.5],
+			["maxSources", Number.MAX_SAFE_INTEGER + 1],
+		] as const)("rejects invalid %s capacity %s", (name, value) => {
+			expect(() => new InMemoryOutbox({ [name]: value })).toThrow(RangeError);
+		});
+	});
+
 	it("stores the committed envelope while exposing its bare event in the record", async () => {
 		const outbox = new InMemoryOutbox<OrderCreated>();
 		const event = createDomainEvent("OrderCreated", { orderId: "o-1" });

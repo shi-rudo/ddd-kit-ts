@@ -3,7 +3,9 @@ import {
 	IdempotencyCompletionWithoutClaimError,
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
+	InMemoryCapacityExceededError,
 } from "../core/errors";
+import { assertPositiveSafeInteger } from "../utils/validate";
 import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,
@@ -46,6 +48,8 @@ export interface InMemoryIdempotencyStoreOptions {
 	readonly leaseDurationMs?: number;
 	/** Heartbeat delay advertised to the wrapper. Default: half the lease. */
 	readonly renewAfterMs?: number;
+	/** Maximum number of pending, staged, and confirmed records. */
+	readonly maxEntries?: number;
 }
 
 const DEFAULT_LEASE_DURATION_MS = 30_000;
@@ -55,8 +59,11 @@ function positiveSafeInteger(value: number): boolean {
 }
 
 /**
- * In-memory reference implementation of {@link IdempotencyStore} for tests
- * and single-process applications.
+ * In-memory reference implementation of {@link IdempotencyStore} for
+ * finite-lifetime tests and demos. Without `maxEntries`, every confirmed
+ * receipt remains reachable for the lifetime of the instance. A long-lived
+ * process must configure the limit or use a durable adapter; exhaustion
+ * rejects new keys before mutation and never forgets an idempotency decision.
  *
  * It is deliberately not transaction-aware. Claims and staged outcomes carry
  * bounded leases, while every mutation compares the store-minted token. An
@@ -72,6 +79,7 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 	private readonly claimTokenFactory: () => string;
 	private readonly leaseDurationMs: number;
 	private readonly renewAfterMs: number;
+	private readonly maxEntries: number | undefined;
 	private tokenGeneration = 0;
 
 	constructor(options: InMemoryIdempotencyStoreOptions = {}) {
@@ -81,6 +89,14 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 		this.leaseDurationMs = options.leaseDurationMs ?? DEFAULT_LEASE_DURATION_MS;
 		this.renewAfterMs =
 			options.renewAfterMs ?? Math.floor(this.leaseDurationMs / 2);
+		if (options.maxEntries !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryIdempotencyStore",
+				"maxEntries",
+				options.maxEntries,
+			);
+		}
+		this.maxEntries = options.maxEntries;
 		if (
 			!positiveSafeInteger(this.leaseDurationMs) ||
 			this.leaseDurationMs > 2_147_483_647
@@ -107,8 +123,21 @@ export class InMemoryIdempotencyStore<TCtx = unknown>
 	): Promise<IdempotencyClaim> {
 		const now = this.nowMs();
 		const existing = this.entries.get(key);
-		if (existing === undefined)
+		if (existing === undefined) {
+			if (
+				this.maxEntries !== undefined &&
+				this.entries.size >= this.maxEntries
+			) {
+				throw new InMemoryCapacityExceededError({
+					store: "InMemoryIdempotencyStore",
+					resource: "entries",
+					limit: this.maxEntries,
+					current: this.entries.size,
+					attempted: 1,
+				});
+			}
 			return this.createPending(key, fingerprint, now);
+		}
 		if (existing.fingerprint !== fingerprint) {
 			throw new IdempotencyKeyReuseError({
 				key,

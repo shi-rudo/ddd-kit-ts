@@ -9,6 +9,7 @@ import {
 	ErrorMapperFailedError,
 	EventHarvestError,
 	HostileStateKeyError,
+	InMemoryCapacityExceededError,
 	InfrastructureError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
@@ -136,6 +137,19 @@ const concreteCases: ReadonlyArray<{
 		error: () =>
 			new ProjectionReceiptViolationError("orders", "evt-1", "1:0/1", "1:0/2"),
 		code: "PROJECTION_RECEIPT_VIOLATION",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new InMemoryCapacityExceededError({
+				store: "InMemoryEventStore",
+				resource: "events",
+				limit: 2,
+				current: 2,
+				attempted: 1,
+			}),
+		code: "IN_MEMORY_CAPACITY_EXCEEDED",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -318,6 +332,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ErrorMapperFailedError["code"]>,
 			AssertKitCode<EventHarvestError["code"]>,
 			AssertKitCode<HostileStateKeyError["code"]>,
+			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,

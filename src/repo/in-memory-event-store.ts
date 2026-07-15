@@ -3,13 +3,25 @@ import {
 	encodeAggregateAddress,
 } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { ConcurrencyConflictError } from "../core/errors";
+import {
+	ConcurrencyConflictError,
+	InMemoryCapacityExceededError,
+} from "../core/errors";
+import { assertPositiveSafeInteger } from "../utils/validate";
 import type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
 	StreamReadResult,
 } from "./event-store";
+
+/** Optional fail-loud capacities for the finite-lifetime reference store. */
+export interface InMemoryEventStoreOptions {
+	/** Maximum aggregate streams retained by this instance. */
+	readonly maxStreams?: number;
+	/** Maximum events retained across every stream in this instance. */
+	readonly maxEvents?: number;
+}
 
 function assertStreamPosition(
 	name: "fromVersion" | "toVersion",
@@ -25,7 +37,11 @@ function assertStreamPosition(
 /**
  * In-memory reference implementation of `EventStore<Evt>`.
  *
- * Intended for tests, single-process workers, and quick-start demos.
+ * Intended for finite-lifetime tests and quick-start demos. With no capacity
+ * options, streams and events are unbounded for the lifetime of the instance.
+ * Long-lived processes must configure `maxStreams` and `maxEvents` or use a
+ * durable adapter. Capacity exhaustion rejects before mutation with
+ * `InMemoryCapacityExceededError`; histories are never silently evicted.
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
  * appends, explicit missing/existing stream state with the actual head,
@@ -47,6 +63,28 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 	implements EventStore<Evt>
 {
 	private readonly streams = new Map<string, Evt[]>();
+	private readonly maxStreams: number | undefined;
+	private readonly maxEvents: number | undefined;
+	private totalEvents = 0;
+
+	constructor(options: InMemoryEventStoreOptions = {}) {
+		if (options.maxStreams !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryEventStore",
+				"maxStreams",
+				options.maxStreams,
+			);
+		}
+		if (options.maxEvents !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryEventStore",
+				"maxEvents",
+				options.maxEvents,
+			);
+		}
+		this.maxStreams = options.maxStreams;
+		this.maxEvents = options.maxEvents;
+	}
 
 	async append(
 		stream: AggregateAddress,
@@ -64,6 +102,31 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 				actualVersion: existing?.length ?? 0,
 			});
 		}
+		if (
+			existing === undefined &&
+			this.maxStreams !== undefined &&
+			this.streams.size >= this.maxStreams
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryEventStore",
+				resource: "streams",
+				limit: this.maxStreams,
+				current: this.streams.size,
+				attempted: 1,
+			});
+		}
+		if (
+			this.maxEvents !== undefined &&
+			this.totalEvents + events.length > this.maxEvents
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryEventStore",
+				resource: "events",
+				limit: this.maxEvents,
+				current: this.totalEvents,
+				attempted: events.length,
+			});
+		}
 		// Atomic by construction: the conflict check above throws before
 		// anything is written (including the get-or-create, so a rejected
 		// append on a nonexistent stream leaves no empty entry behind).
@@ -79,6 +142,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		for (const event of events) {
 			storedEvents.push(event);
 		}
+		this.totalEvents += events.length;
 	}
 
 	async readStream(

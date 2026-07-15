@@ -266,8 +266,8 @@ event sources, use `eventId`.
 ## InMemoryOutbox
 
 `InMemoryOutbox` is the reference implementation. Use it for tests, examples,
-single-process demos, and small workers where process restart losing pending
-events is acceptable. It retains one event-source cursor per qualified
+and finite-lifetime demos where process restart losing pending events is
+acceptable. It retains one event-source cursor per qualified
 aggregate even after dispatch so later eventful commits can be linked. Its
 memory therefore grows with distinct aggregate sources, not only with pending
 messages. It also retains a bounded, insertion-ordered cache of recently
@@ -284,9 +284,20 @@ type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
 const outbox = new InMemoryOutbox<OrderCreated>({
   maxDeliveryAttempts: 5,
+  maxRecords: 10_000,
+  maxSources: 50_000,
   maxRetainedDispatchedEventIds: 10_000,
 });
 ```
+
+`maxRecords` counts pending plus dead-letter records; moving between those
+states does not consume another slot, and acknowledgement releases it.
+`maxSources` bounds the permanent per-aggregate source cursors. If either limit
+would be crossed, the complete `add()` batch rejects before records or cursors
+move. Existing retries remain usable at capacity. Omitting either option leaves
+that collection unbounded, supported only for finite-lifetime tests and demos.
+Neither collection is silently evicted because forgetting it would weaken
+delivery or source-order guarantees.
 
 It uses `envelope.event.eventId` as `dispatchId`, preserves insertion order,
 dedupes exact pending, dead-lettered, and recently dispatched re-adds by

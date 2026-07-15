@@ -122,6 +122,49 @@ export abstract class InfrastructureError<
 	}
 }
 
+/** Options bag for {@link InMemoryCapacityExceededError}. */
+export interface InMemoryCapacityExceededErrorOptions {
+	/** Concrete reference adapter whose configured capacity was exhausted. */
+	readonly store: string;
+	/** Bounded collection or logical resource, such as `events` or `sources`. */
+	readonly resource: string;
+	/** Configured maximum number of retained records. */
+	readonly limit: number;
+	/** Records retained before the rejected operation. */
+	readonly current: number;
+	/** New records the rejected operation would have retained. */
+	readonly attempted: number;
+}
+
+/**
+ * A finite-capacity in-memory reference adapter rejected new state before
+ * mutation. Existing records remain usable; callers must release explicit
+ * lifecycle state, increase the configured limit, or switch to a durable
+ * adapter. The error is not retryable without one of those external changes.
+ */
+export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMORY_CAPACITY_EXCEEDED"> {
+	readonly store: string;
+	readonly resource: string;
+	readonly limit: number;
+	readonly current: number;
+	readonly attempted: number;
+
+	constructor(options: InMemoryCapacityExceededErrorOptions) {
+		super({
+			code: "IN_MEMORY_CAPACITY_EXCEEDED",
+			message:
+				`${options.store} cannot retain ${options.attempted} new ` +
+				`${options.resource}: configured limit ${options.limit}, ` +
+				`currently retained ${options.current}`,
+		});
+		this.store = options.store;
+		this.resource = options.resource;
+		this.limit = options.limit;
+		this.current = options.current;
+		this.attempted = options.attempted;
+	}
+}
+
 /**
  * Thrown when event dispatch reaches a type with no own handler registration.
  * This covers `EventSourcedAggregate.apply()` and the exhaustive
@@ -1093,6 +1136,7 @@ export type KitErrorCode =
 	| "IDEMPOTENCY_IN_FLIGHT"
 	| "IDEMPOTENCY_KEY_REUSE"
 	| "IDEMPOTENCY_RECONCILIATION_REQUIRED"
+	| "IN_MEMORY_CAPACITY_EXCEEDED"
 	| "INVALID_DOMAIN_MACHINE_CONTEXT"
 	| "INVALID_DOMAIN_MACHINE_DEFINITION"
 	| "INVALID_DOMAIN_MACHINE_INPUT"

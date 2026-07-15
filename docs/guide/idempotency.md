@@ -167,17 +167,22 @@ the existing replay/fingerprint/rollback laws without wall-clock sleeps.
 
 ## In-memory reference
 
-`InMemoryIdempotencyStore` is a reference implementation for tests and
-single-process applications:
+`InMemoryIdempotencyStore` is a reference implementation for finite-lifetime
+tests and demos:
 
 ```ts
 const idempotency = new InMemoryIdempotencyStore({
   leaseDurationMs: 30_000,
   renewAfterMs: 10_000,
+  maxEntries: 10_000,
   clock: () => new Date(),
 });
 ```
 
 It is not durable. A process restart loses confirmed records and can execute a
 duplicate again. Production idempotency requires durable storage, regardless
-of whether that storage is transactional or leased.
+of whether that storage is transactional or leased. Without `maxEntries`, all
+claims and confirmed receipts are retained for the instance lifetime. At the
+limit, existing keys still replay, renew, reconcile, or release normally, but a
+new key fails before mutation with `InMemoryCapacityExceededError`. The store
+never evicts a confirmed decision because doing so would weaken idempotency.

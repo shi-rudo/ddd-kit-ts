@@ -447,4 +447,46 @@ describe("InMemoryIdempotencyStore", () => {
 		const claim = await store.claim(undefined, "confirmed", "fp");
 		expect(claim).toEqual({ status: "completed", outcome: "done" });
 	});
+
+	it("rejects a new key at capacity while preserving replay of existing keys", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>({ maxEntries: 1 });
+		const existing = await claimHandle(store, "existing", "fp");
+		await store.complete(undefined, existing, { orderId: "o-1" });
+		await store.confirm(existing);
+
+		await expect(store.claim(undefined, "new", "fp-new")).rejects.toMatchObject(
+			{
+				code: "IN_MEMORY_CAPACITY_EXCEEDED",
+				store: "InMemoryIdempotencyStore",
+				resource: "entries",
+				limit: 1,
+				current: 1,
+				attempted: 1,
+			},
+		);
+		await expect(store.claim(undefined, "existing", "fp")).resolves.toEqual({
+			status: "completed",
+			outcome: { orderId: "o-1" },
+		});
+		expect(store.size).toBe(1);
+	});
+
+	it("releases capacity when an unconfirmed claim is abandoned", async () => {
+		const store = new InMemoryIdempotencyStore<undefined>({ maxEntries: 1 });
+		const first = await claimHandle(store, "first", "fp-1");
+		await store.abandon(first);
+
+		await expect(
+			store.claim(undefined, "second", "fp-2"),
+		).resolves.toMatchObject({ status: "claimed" });
+	});
+
+	it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects invalid maxEntries capacity %s",
+		(maxEntries) => {
+			expect(() => new InMemoryIdempotencyStore({ maxEntries })).toThrowError(
+				RangeError,
+			);
+		},
+	);
 });

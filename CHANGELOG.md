@@ -753,6 +753,64 @@ config preserves the zero-configuration default. Per-event `eventId` and
 `occurredAt` options continue to override factory defaults. Captured clock
 readings are defensively copied and reject an invalid `Date` immediately.
 
+#### 24. Long-lived in-memory references declare retention explicitly
+
+Existing constructors remain source-compatible. With no capacity options, the
+semantic maps in the shipped in-memory stores are unbounded and supported only
+for finite-lifetime tests and demos. Long-lived reference deployments now opt
+into explicit ceilings:
+
+```ts
+const eventStore = new InMemoryEventStore({
+  maxStreams: 1_000,
+  maxEvents: 100_000,
+});
+const outbox = new InMemoryOutbox({
+  maxRecords: 10_000,
+  maxSources: 50_000,
+});
+const idempotency = new InMemoryIdempotencyStore({ maxEntries: 10_000 });
+const checkpoints = new InMemoryProjectionCheckpointStore({
+  maxCheckpoints: 50_000,
+});
+const deadlines = new InMemoryDeadlineStore({ maxRecords: 10_000 });
+```
+
+Crossing one of those limits throws the structured, non-retryable
+`InMemoryCapacityExceededError` before mutation. Existing records remain
+usable; correctness state is never evicted implicitly. Snapshots are the safe
+exception because they are rebuildable derived data:
+
+```ts
+const snapshots = new InMemorySnapshotStore({
+  maxEntries: 10_000,
+  ttlMs: 3_600_000,
+  clock,
+});
+```
+
+`maxEntries` evicts the least recently used snapshot. `ttlMs` expires from the
+last save; loads update LRU recency but do not extend the TTL. All new numeric
+options must be positive safe integers.
+
+### Added: explicit retention for in-memory reference stores
+
+- Added optional fail-loud capacities to `InMemoryEventStore`,
+  `InMemoryIdempotencyStore`, `InMemoryProjectionCheckpointStore`,
+  `InMemoryOutbox`, and `InMemoryDeadlineStore`. Multi-record outbox adds and
+  EventStore appends preflight the complete operation before mutation.
+- Added `InMemoryCapacityExceededError`
+  (`IN_MEMORY_CAPACITY_EXCEEDED`) with store, resource, limit, current count,
+  and attempted growth fields. It is an `InfrastructureError` and deliberately
+  non-retryable until an operator releases state, changes capacity, or replaces
+  the adapter.
+- Added optional LRU `maxEntries`, save-relative `ttlMs`, and an instance-bound
+  clock to `InMemorySnapshotStore`. Automatic eviction is restricted to
+  snapshots because they can be rebuilt without changing domain behavior.
+- Documented that omitted limits mean unbounded, finite-lifetime reference
+  mode. Identity maps remain operation-scoped, and checkpoint lock tails are
+  self-cleaning, so neither needs a process-lifetime capacity option.
+
 ### Changed (breaking): domain-event factories are immutable and instance-bound
 
 - Added `DomainEventFactory`, `DomainEventFactoryOptions`,
