@@ -127,11 +127,12 @@ export abstract class AggregateRoot<
 	 * Additionally captures the current state reference as the dirty-
 	 * tracking baseline for {@link changedKeys} / {@link hasChanges}.
 	 *
-	 * Covers all three baseline-capture paths through a single override:
-	 * `reconstitute(...)` factories, {@link restoreFromSnapshot} (which
-	 * assigns the restored state *before* calling this), and
-	 * kit-internal post-commit acknowledgement (so a successful save
-	 * re-baselines the diff).
+	 * Covers the load-time baseline-capture paths: `reconstitute(...)`
+	 * factories and {@link restoreFromSnapshot}, which assigns the restored
+	 * state *before* calling this. Kit-internal post-commit acknowledgement
+	 * deliberately re-baselines without calling this overridable method.
+	 * Overrides are therefore Post-Load only; put Post-Save behavior in the
+	 * Application-Shell `onPersisted` observer on `withCommit` or `UnitOfWork`.
 	 *
 	 * If you override this, call `super.markRestored(version)` FIRST:
 	 * skipping it leaves the baseline uncaptured, so `changedKeys`

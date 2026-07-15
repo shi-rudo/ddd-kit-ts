@@ -834,6 +834,13 @@ committed write look failed. The same observer reports a rare runtime failure
 of internal acknowledgement or disposal while peer aggregates continue.
 Deleted aggregates do not trigger `onPersisted`.
 
+Behavioral change for existing `markRestored` overrides: post-commit
+acknowledgement no longer calls that overridable Post-Load marker. Such
+overrides continue to run for reconstitution and snapshot restoration, where
+calling `super.markRestored(version)` first remains required, but they no
+longer run after a save. Move Post-Save logging, metrics, and cache invalidation
+to the Application-Shell `onPersisted` observer shown above.
+
 Custom structural implementations of `IAggregateRoot` can still satisfy
 repository ports, but cannot be enrolled in `withCommit` or `UnitOfWork`:
 enrollment rejects them inside the transaction because they have no internal
