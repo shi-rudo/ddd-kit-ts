@@ -19,6 +19,19 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Added: event-sourced Process Manager example
+
+- Add a compact `EventSourcedCheckoutSaga` next to the existing state-stored
+  checkout Process Manager. Its stream records process decisions, replay folds
+  state without emitting pending events or commands, and committed decision
+  events can be mapped to participant commands at the application/outbox
+  boundary.
+- Document the selection criteria explicitly: an audit wish alone does not
+  justify event sourcing. Prefer it only when complete process history is the
+  authoritative model and replay value outweighs event upcasting, bounded
+  stream reads, stream OCC, and snapshot-policy costs. Both variants keep
+  participant rules in their owning aggregates.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Ten do not (steps 3, 5, 11,
