@@ -17,6 +17,7 @@ about boundaries:
 | API | Success | Failure |
 | --- | --- | --- |
 | Aggregate method | returns `void` or data | throws `DomainError` subclass |
+| `domainErrorToResult` | `Ok<T>` | listed `DomainError` subclass becomes `Err`; everything else throws |
 | Value object class constructor | instance | throws `DomainError` subclass |
 | `voWithValidation` | `Result<VO<T>, string>` | `Err<string>` |
 | `voValidated` | `Result<VO<T>, ValidationError>` | `Err<ValidationError>` |
@@ -71,6 +72,33 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 This gives callers a stack trace and a real type to catch. A `Result` return
 from every aggregate method would push invariant handling into every call site
 and make illegal state transitions look like normal branching.
+
+## Optional DomainError-to-Result Boundary
+
+When one Application boundary prefers a typed Result, wrap the operation rather
+than changing the aggregate API:
+
+```ts
+import { domainErrorToResult } from "@shirudo/ddd-kit";
+
+const result = await domainErrorToResult(
+  () => order.confirm(),
+  [OrderAlreadyConfirmedError],
+);
+// Result<void, OrderAlreadyConfirmedError>
+```
+
+The required class list is a positive decision about the failures this caller
+can handle. A listed error becomes `Err` with the exact original instance. An
+unlisted `DomainError`, an `InfrastructureError`, cancellation, a programming
+error, or any other thrown value propagates unchanged. The helper accepts sync
+and async operations and always returns a Promise.
+
+Do not replace the list with a catch-all base class. A newly introduced domain
+rejection may require a different caller reaction and must not silently join an
+existing public error contract. If the use case exposes smaller transport- or
+application-owned error values, map the selected `Err` afterward; the helper
+does not decide that public contract for you.
 
 ## Command Handlers Return Result
 

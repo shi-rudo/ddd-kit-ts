@@ -199,7 +199,10 @@ as its declared standard contract, the mapped-exceptions escape above. A
 result-first library would force its result type onto every consumer; thrown
 structured errors are the ecosystem's common denominator, and a consumer that
 prefers result values wraps the library's calls at its own port with a small
-try/catch adapter. The declared standard must be real: structured error
+try/catch adapter. That adapter positively enumerates the concrete errors the
+caller can handle; it never catches a broad base error and silently admits
+future failures into the public Result union. Unlisted errors retain their
+original throw identity. The declared standard must be real: structured error
 classes and a closed code union, not ad-hoc throws.
 
 Hard limits: do not adopt exception-based expected-error flow where the type

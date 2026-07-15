@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
 	DeadlineProcessorObservers,
+	DomainErrorClass,
 	IAggregateRoot,
 	Id,
 	IntegrationMessageRelationships,
@@ -73,6 +74,7 @@ const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	causationId: "cause-1",
 };
 void publicIntegrationRelationships;
+void (undefined as unknown as DomainErrorClass);
 
 /**
  * Pins the RUNTIME public API surface of every package entry point. The
@@ -164,6 +166,7 @@ const INDEX_SURFACE = [
 	"deepFreeze",
 	"deepOmit",
 	"defaultDomainEventFactory",
+	"domainErrorToResult",
 	"encodeIntegrationMessage",
 	"entityIds",
 	"eventBusSink",

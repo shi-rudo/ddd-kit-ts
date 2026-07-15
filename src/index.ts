@@ -43,6 +43,10 @@ export {
 	type CommandBusOptions,
 	type ICommandBus,
 } from "./app/command-bus";
+export {
+	domainErrorToResult,
+	type DomainErrorClass,
+} from "./app/domain-error-result";
 // App orchestration: withCommit + Unit of Work
 export {
 	type AggregateCommitToken,

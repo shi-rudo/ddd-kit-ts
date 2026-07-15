@@ -130,7 +130,8 @@ This example shows the core conventions:
 - `commit(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
 - Domain rules throw `DomainError` subclasses. Application boundaries decide
-  whether to turn those errors into `Result`, HTTP responses, or logs.
+  whether to turn selected errors into `Result` with `domainErrorToResult`, map
+  them to HTTP responses, or let unknown failures propagate.
 - `pendingEvents` are not historical events yet. They are the aggregate's
   unflushed event queue until the transaction/outbox boundary harvests them.
 
