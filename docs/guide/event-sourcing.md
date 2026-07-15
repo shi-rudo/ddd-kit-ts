@@ -313,9 +313,13 @@ meets the normal OCC guard.
 A database adapter should also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
-`InMemoryEventStore` is the reference implementation for tests and demos. It is
-memory-only and does not participate in your database transaction. Production
-adapters must implement the same contract against durable storage.
+`InMemoryEventStore` is the reference implementation for finite-lifetime tests
+and demos. It is memory-only and does not participate in your database
+transaction. Without options, its streams and events are unbounded. A
+long-lived process must configure both `maxStreams` and `maxEvents`; crossing a
+limit throws `InMemoryCapacityExceededError` before the append changes any
+stream. History is never evicted automatically. Production adapters must
+implement the same contract against durable storage.
 
 Run both the EventStore and event-sourced repository contract suites against
 your adapter:
@@ -623,8 +627,13 @@ inside the transaction. If a snapshot save is lost, correctness is unchanged and
 the next load replays more events. That is also why `SnapshotStore` has no
 transaction context.
 
-`InMemorySnapshotStore` is the reference implementation. Production adapters
-should pass `createSnapshotStoreContractTests` from
+`InMemorySnapshotStore` is the reference implementation. Without retention
+options it is unbounded and intended only for finite-lifetime tests and demos.
+Snapshots are rebuildable derived data, so this is the one in-memory store that
+may forget state safely: `maxEntries` enables least-recently-used eviction, and
+`ttlMs` expires entries relative to an optional instance-bound `clock`. Loading
+a snapshot updates LRU recency but does not extend its TTL; saving it does.
+Production adapters should pass `createSnapshotStoreContractTests` from
 `@shirudo/ddd-kit/testing`.
 
 ### Plain snapshot state

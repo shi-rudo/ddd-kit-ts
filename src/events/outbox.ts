@@ -3,8 +3,14 @@ import {
 	encodeAggregateAddress,
 } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import { EventHarvestError } from "../core/errors";
-import { assertPositiveInteger } from "../utils/validate";
+import {
+	EventHarvestError,
+	InMemoryCapacityExceededError,
+} from "../core/errors";
+import {
+	assertPositiveInteger,
+	assertPositiveSafeInteger,
+} from "../utils/validate";
 import type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
@@ -47,6 +53,12 @@ export function outboxWriterAcceptingEventLoss<
 
 /** Construction options for {@link InMemoryOutbox}. */
 export interface InMemoryOutboxOptions {
+	/** Maximum records retained across pending and dead-letter states. */
+	readonly maxRecords?: number;
+
+	/** Maximum qualified aggregate source cursors retained by this instance. */
+	readonly maxSources?: number;
+
 	/**
 	 * Failed-delivery ceiling: once `markFailed` has been reported this
 	 * many times for a record, it moves to {@link InMemoryOutbox.deadLetters}
@@ -90,7 +102,11 @@ type DispatchedEventReceipt = {
  * In-memory reference implementation of `DispatchTrackingOutbox<Evt>`
  * (and therefore of the plain `Outbox<Evt>` port).
  *
- * Intended for tests, single-process workers, and quick-start demos.
+ * Intended for finite-lifetime tests and quick-start demos. Without
+ * `maxRecords` and `maxSources`, active delivery state and source cursors are
+ * unbounded. Long-lived processes must configure both limits or use a durable
+ * adapter. Exhaustion rejects the complete `add` batch before mutation;
+ * correctness state is never silently evicted.
  * Uses the event's own `eventId` as the dispatch id: the common, clean
  * choice. Active storage is a `Map` keyed by `eventId`, and a bounded
  * recent-dispatch receipt cache keeps retries idempotent after acknowledgement.
@@ -112,19 +128,19 @@ type DispatchedEventReceipt = {
  * dead-lettered records (manual redelivery then ack).
  * To link future eventful commits, the implementation also retains one
  * source cursor per qualified aggregate after dispatch. Consequently a
- * long-lived instance is bounded by active records PLUS distinct aggregate
- * sources it has ever seen PLUS `maxRetainedDispatchedEventIds`; use a durable
- * adapter with an explicit source-head lifecycle and an event-id unique key for
- * unbounded production workloads.
+ * long-lived instance is bounded only when `maxRecords` and `maxSources` are
+ * configured, plus `maxRetainedDispatchedEventIds`; use a durable adapter with
+ * an explicit source-head lifecycle and an event-id unique key for unbounded
+ * production workloads.
  *
  * For production, back the outbox with a transactional store so the
  * outbox row participates in the same transaction as the aggregate
  * write (see `TransactionScope` + `withCommit`). This class lives in
  * memory only: events are lost on process restart. Do NOT use it as a
  * dummy for bus-only setups without a dispatcher draining it: records
- * that are never `markDispatched` accumulate in the pending map
- * unbounded. For a deliberate no-delivery setup use
- * {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
+ * that are never `markDispatched` accumulate until `maxRecords` rejects a new
+ * add, or without that option grow unbounded. For a deliberate no-delivery
+ * setup use {@link outboxWriterAcceptingEventLoss} instead. Sharper still:
  * events `add()`ed inside a transaction that later rolls back are NOT
  * removed (the Map knows nothing about your scope's rollback). Tests
  * that assert rollback purity need an outbox that participates in the
@@ -165,6 +181,8 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 	>();
 	private readonly maxDeliveryAttempts: number;
 	private readonly maxRetainedDispatchedEventIds: number;
+	private readonly maxRecords: number | undefined;
+	private readonly maxSources: number | undefined;
 
 	constructor(options?: InMemoryOutboxOptions) {
 		const max = options?.maxDeliveryAttempts ?? 5;
@@ -177,6 +195,22 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			retained,
 		);
 		this.maxRetainedDispatchedEventIds = retained;
+		if (options?.maxRecords !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryOutbox",
+				"maxRecords",
+				options.maxRecords,
+			);
+		}
+		if (options?.maxSources !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryOutbox",
+				"maxSources",
+				options.maxSources,
+			);
+		}
+		this.maxRecords = options?.maxRecords;
+		this.maxSources = options?.maxSources;
 	}
 
 	async add(events: ReadonlyArray<EventCommitCandidate<Evt>>): Promise<void> {
@@ -185,6 +219,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 		// in one add() call could reject only after its earlier prefix had leaked.
 		this.assertBatchEventReceiptIntegrity(events);
 		this.assertBatchPositionIntegrity(events);
+		this.assertCapacity(events);
 		for (const message of events) {
 			const { event, source, position } = message;
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
@@ -364,6 +399,51 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				source: ownedSource,
 				position: ownedPosition,
 				attempts: 0,
+			});
+		}
+	}
+
+	private assertCapacity(
+		events: ReadonlyArray<EventCommitCandidate<Evt>>,
+	): void {
+		const newRecordIds = new Set<string>();
+		const newSourceKeys = new Set<string>();
+		for (const { event, source } of events) {
+			if (
+				this.pending.has(event.eventId) ||
+				this.dead.has(event.eventId) ||
+				this.dispatchedEventIds.has(event.eventId)
+			) {
+				continue;
+			}
+			newRecordIds.add(event.eventId);
+			const sourceKey = encodeAggregateAddress(source);
+			if (!this.sourceCursors.has(sourceKey)) newSourceKeys.add(sourceKey);
+		}
+
+		const currentRecords = this.pending.size + this.dead.size;
+		if (
+			this.maxRecords !== undefined &&
+			currentRecords + newRecordIds.size > this.maxRecords
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryOutbox",
+				resource: "records",
+				limit: this.maxRecords,
+				current: currentRecords,
+				attempted: newRecordIds.size,
+			});
+		}
+		if (
+			this.maxSources !== undefined &&
+			this.sourceCursors.size + newSourceKeys.size > this.maxSources
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryOutbox",
+				resource: "sources",
+				limit: this.maxSources,
+				current: this.sourceCursors.size,
+				attempted: newSourceKeys.size,
 			});
 		}
 	}

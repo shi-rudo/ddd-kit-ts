@@ -65,6 +65,7 @@ const INDEX_SURFACE = [
 	"IdempotencyKeyReuseError",
 	"IdempotencyReconciliationRequiredError",
 	"IdentityMap",
+	"InMemoryCapacityExceededError",
 	"InMemoryDeadlineStore",
 	"InMemoryEventStore",
 	"InMemoryIdempotencyStore",

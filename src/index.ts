@@ -113,6 +113,8 @@ export {
 	type IdempotencyKeyReuseErrorOptions,
 	IdempotencyReconciliationRequiredError,
 	type IdempotencyReconciliationRequiredErrorOptions,
+	InMemoryCapacityExceededError,
+	type InMemoryCapacityExceededErrorOptions,
 	InfrastructureError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
@@ -240,7 +242,10 @@ export type {
 } from "./events/ports";
 
 // Projections: checkpoint port, runner, in-memory reference
-export { InMemoryProjectionCheckpointStore } from "./projections/in-memory-checkpoint-store";
+export {
+	InMemoryProjectionCheckpointStore,
+	type InMemoryProjectionCheckpointStoreOptions,
+} from "./projections/in-memory-checkpoint-store";
 export {
 	isPositionAfter,
 	type Projection,
@@ -269,8 +274,14 @@ export type {
 	StreamReadResult,
 } from "./repo/event-store";
 export { type AggregateClass, IdentityMap } from "./repo/identity-map";
-export { InMemoryEventStore } from "./repo/in-memory-event-store";
-export { InMemorySnapshotStore } from "./repo/in-memory-snapshot-store";
+export {
+	InMemoryEventStore,
+	type InMemoryEventStoreOptions,
+} from "./repo/in-memory-event-store";
+export {
+	InMemorySnapshotStore,
+	type InMemorySnapshotStoreOptions,
+} from "./repo/in-memory-snapshot-store";
 export type { IRepository, IUnitOfWorkRepository } from "./repo/repository";
 // computeBackoffDelay is deliberately NOT exported: internal since 2.x
 // (unit-tested via direct source import), removed from the surface in v3.

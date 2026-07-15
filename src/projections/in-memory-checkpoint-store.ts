@@ -2,12 +2,19 @@ import {
 	type AggregateAddress,
 	encodeAggregateAddress,
 } from "../aggregate/aggregate-address";
+import { InMemoryCapacityExceededError } from "../core/errors";
+import { assertPositiveSafeInteger } from "../utils/validate";
 import {
 	isPositionAfter,
 	type ProjectionCheckpoint,
 	type ProjectionCheckpointStore,
 	type ProjectionPosition,
 } from "./ports";
+
+export interface InMemoryProjectionCheckpointStoreOptions {
+	/** Maximum checkpoints across all projection names and aggregate addresses. */
+	readonly maxCheckpoints?: number;
+}
 
 /**
  * In-memory reference implementation of
@@ -21,6 +28,11 @@ import {
  * disposable in-memory read models; production atomicity is the durable
  * adapter's contract, proved with `createProjectionCheckpointStoreContractTests`
  * and its rollback capability.
+ *
+ * Without `maxCheckpoints`, checkpoint retention is unbounded and supported
+ * only for finite-lifetime tests and demos. A configured limit rejects a new
+ * address before mutation; existing watermarks remain updatable and are never
+ * evicted because forgetting one would change projection correctness.
  *
  * Do not nest `withCheckpointLocks` calls whose key sets overlap. This
  * reference has no async-context tracking for reentrancy: a nested call waits
@@ -37,6 +49,19 @@ export class InMemoryProjectionCheckpointStore
 	>();
 	/** Full checkpoint key -> tail of the process-local exclusive-access queue. */
 	private readonly lockTails = new Map<string, Promise<void>>();
+	private readonly maxCheckpoints: number | undefined;
+	private checkpointCount = 0;
+
+	constructor(options: InMemoryProjectionCheckpointStoreOptions = {}) {
+		if (options.maxCheckpoints !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryProjectionCheckpointStore",
+				"maxCheckpoints",
+				options.maxCheckpoints,
+			);
+		}
+		this.maxCheckpoints = options.maxCheckpoints;
+	}
 
 	async withCheckpointLocks<R>(
 		_ctx: unknown,
@@ -102,15 +127,31 @@ export class InMemoryProjectionCheckpointStore
 		address: AggregateAddress,
 		checkpoint: ProjectionCheckpoint,
 	): Promise<void> {
+		const addressKey = encodeAggregateAddress(address);
 		let perAggregate = this.checkpoints.get(projection);
+		const isNewCheckpoint = perAggregate?.has(addressKey) !== true;
+		if (
+			isNewCheckpoint &&
+			this.maxCheckpoints !== undefined &&
+			this.checkpointCount >= this.maxCheckpoints
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryProjectionCheckpointStore",
+				resource: "checkpoints",
+				limit: this.maxCheckpoints,
+				current: this.checkpointCount,
+				attempted: 1,
+			});
+		}
 		if (perAggregate === undefined) {
 			perAggregate = new Map();
 			this.checkpoints.set(projection, perAggregate);
 		}
-		perAggregate.set(encodeAggregateAddress(address), {
+		perAggregate.set(addressKey, {
 			...checkpoint,
 			position: { ...checkpoint.position },
 		});
+		if (isNewCheckpoint) this.checkpointCount += 1;
 	}
 
 	async hasReached(
@@ -126,6 +167,7 @@ export class InMemoryProjectionCheckpointStore
 	}
 
 	async reset(_ctx: unknown, projection: string): Promise<void> {
+		this.checkpointCount -= this.checkpoints.get(projection)?.size ?? 0;
 		this.checkpoints.delete(projection);
 	}
 }

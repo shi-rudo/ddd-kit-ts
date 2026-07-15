@@ -417,6 +417,12 @@ capability.
 
 `InMemoryProjectionCheckpointStore` is a test/reference implementation. It is
 not transaction-aware, so it does not prove production rollback behavior.
+Without `maxCheckpoints`, its checkpoint map is unbounded and intended only for
+finite-lifetime tests and demos. A configured limit counts addresses across all
+projection names. New addresses then fail before mutation with
+`InMemoryCapacityExceededError`, while an existing watermark can still advance
+and `reset(projection)` releases its slots. Checkpoints are never evicted
+automatically because forgetting one changes projection correctness.
 
 ## Feeding The Projector
 

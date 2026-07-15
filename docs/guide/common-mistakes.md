@@ -216,6 +216,36 @@ The last placeholder should be `aggregate.persistedVersion`, not `aggregate.vers
 
 Review signal: any insert/update branch based on `version === 0` is suspect. The repository should branch on `persistedVersion === undefined`. See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
 
+### Keeping Unbounded In-Memory Stores Alive
+
+The shipped in-memory stores are semantic reference adapters, not process-wide
+caches. When their capacity options are omitted, their maps are unbounded and
+supported only for finite-lifetime tests and demos.
+
+For a long-lived demo or worker, configure the concrete adapter explicitly:
+
+```ts
+const events = new InMemoryEventStore({
+  maxStreams: 1_000,
+  maxEvents: 100_000,
+});
+const outbox = new InMemoryOutbox({
+  maxRecords: 10_000,
+  maxSources: 50_000,
+});
+```
+
+Event history, idempotency receipts, projection checkpoints, deadline/outbox
+delivery state, and outbox source cursors are correctness state. Their limits
+throw `InMemoryCapacityExceededError` before mutation; they never trigger
+automatic eviction. Increasing a limit or moving to a durable adapter is an
+operator decision, not a retry loop.
+
+Snapshots are different. They are derived from event history and can be
+rebuilt, so `InMemorySnapshotStore` supports `maxEntries` with LRU eviction and
+optional `ttlMs`. Do not generalize that policy to the other stores: silently
+forgetting an idempotency receipt or checkpoint changes behavior.
+
 ### Returning Multiple Instances for the Same Aggregate
 
 Within one Unit of Work, repeated `findById(id)` calls should return the same in-memory aggregate instance.

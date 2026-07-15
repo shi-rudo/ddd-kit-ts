@@ -293,6 +293,63 @@ describe("InMemoryEventStore", () => {
 
 		expect((await store.readStream(streamA, allEvents)).events).toHaveLength(1);
 	});
+
+	it("rejects an event-capacity overflow atomically across streams", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({ maxEvents: 2 });
+		const first = renamed("a");
+		await store.append(streamA, [first], { expectedVersion: 0 });
+
+		await expect(
+			store.append(streamB, [renamed("b", streamB), renamed("c", streamB)], {
+				expectedVersion: 0,
+			}),
+		).rejects.toMatchObject({
+			code: "IN_MEMORY_CAPACITY_EXCEEDED",
+			store: "InMemoryEventStore",
+			resource: "events",
+			limit: 2,
+			current: 1,
+			attempted: 2,
+		});
+		expect((await store.readStream(streamA, allEvents)).events).toEqual([
+			first,
+		]);
+		await expect(store.readStream(streamB, allEvents)).resolves.toMatchObject({
+			exists: false,
+		});
+	});
+
+	it("rejects a new stream at capacity while allowing an existing stream to grow", async () => {
+		const store = new InMemoryEventStore<OrderEvent>({
+			maxStreams: 1,
+			maxEvents: 3,
+		});
+		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });
+
+		await expect(
+			store.append(streamB, [renamed("b", streamB)], { expectedVersion: 0 }),
+		).rejects.toMatchObject({
+			code: "IN_MEMORY_CAPACITY_EXCEEDED",
+			resource: "streams",
+			limit: 1,
+			current: 1,
+			attempted: 1,
+		});
+		await expect(
+			store.append(streamA, [renamed("c")], { expectedVersion: 1 }),
+		).resolves.toBeUndefined();
+	});
+
+	it.each([
+		["maxEvents", 0],
+		["maxEvents", 1.5],
+		["maxStreams", -1],
+		["maxStreams", Number.MAX_SAFE_INTEGER + 1],
+	] as const)("rejects invalid %s capacity %s", (option, value) => {
+		expect(() => new InMemoryEventStore({ [option]: value })).toThrowError(
+			RangeError,
+		);
+	});
 });
 
 describe("store hygiene", () => {

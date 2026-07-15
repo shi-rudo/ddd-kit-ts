@@ -247,9 +247,16 @@ In-memory adapters are useful for tests, but they are still memory-only:
 - `InMemoryEventStore`
 - `InMemorySnapshotStore`
 - `InMemoryIdempotencyStore`
+- `InMemoryDeadlineStore`
+- `InMemoryProjectionCheckpointStore`
 
 Use them to test behavior and contracts. Do not read their existence as a
-production durability story for serverless or edge deployments.
+production durability story for serverless or edge deployments. Their
+unconfigured semantic collections are supported only for finite-lifetime tests
+and demos. Optional capacities reject before mutation instead of forgetting
+event history, receipts, checkpoints, delivery state, or source cursors.
+Snapshots are the exception: they are rebuildable derived data, so their
+optional capacity uses LRU eviction and their optional TTL may expire entries.
 
 For request deadlines, pass an `AbortSignal` through APIs that accept it. In
 tests, use an instance-bound factory or a per-event `occurredAt` option for

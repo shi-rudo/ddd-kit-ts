@@ -168,3 +168,11 @@ itself with `createDeadlineStoreContractTests` from
 `@shirudo/ddd-kit/testing`; a Postgres implementation is a single table with
 an index on `(due_at)` and the usual `ON CONFLICT` upsert for the
 one-per-address rule.
+
+Without `maxRecords`, pending and dead-letter records are unbounded for the
+instance lifetime. Long-lived demos may set the option; once pending plus dead
+letters reaches it, scheduling a new address throws
+`InMemoryCapacityExceededError` before mutation. Rescheduling an existing
+pending address remains legal, and cancellation, acknowledgement, or explicit
+dead-letter delivery releases capacity. The store never discards a deadline
+silently.

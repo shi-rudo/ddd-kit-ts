@@ -29,3 +29,16 @@ export function assertPositiveInteger(
 		);
 	}
 }
+
+/** Guard for retained-record capacities that must fit exact JS integers. */
+export function assertPositiveSafeInteger(
+	context: string,
+	field: string,
+	value: number,
+): void {
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new RangeError(
+			`${context}: ${field} must be a positive safe integer, got ${value}`,
+		);
+	}
+}

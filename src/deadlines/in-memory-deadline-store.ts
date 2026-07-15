@@ -1,4 +1,8 @@
-import { assertPositiveInteger } from "../utils/validate";
+import { InMemoryCapacityExceededError } from "../core/errors";
+import {
+	assertPositiveInteger,
+	assertPositiveSafeInteger,
+} from "../utils/validate";
 import type {
 	DeadLetterDeadline,
 	DeadlineStore,
@@ -7,6 +11,9 @@ import type {
 
 /** Construction options for {@link InMemoryDeadlineStore}. */
 export interface InMemoryDeadlineStoreOptions {
+	/** Maximum records retained across pending and dead-letter states. */
+	readonly maxRecords?: number;
+
 	/**
 	 * How many failed delivery attempts move a deadline to the
 	 * dead-letter set. Default `5`.
@@ -28,7 +35,10 @@ interface StoredDeadline<TPayload> {
 
 /**
  * In-memory reference implementation of {@link DeadlineStore}: defines
- * the port's semantics and serves tests and single-process demos.
+ * the port's semantics and serves finite-lifetime tests and demos. Without
+ * `maxRecords`, pending and dead-letter records are unbounded. A configured
+ * limit rejects a new address before mutation; delivery state is never
+ * silently evicted.
  *
  * **Not transaction-aware**, the same documented limitation as the
  * other in-memory references: a rolled-back `schedule` or `cancel`
@@ -46,12 +56,21 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 	/** Keyed by deliveryId: several incarnations of one address can be dead. */
 	private readonly dead = new Map<string, StoredDeadline<TPayload>>();
 	private readonly maxDeliveryAttempts: number;
+	private readonly maxRecords: number | undefined;
 	private nextSequence = 0;
 
 	constructor(options: InMemoryDeadlineStoreOptions = {}) {
 		const max = options.maxDeliveryAttempts ?? 5;
 		assertPositiveInteger("InMemoryDeadlineStore", "maxDeliveryAttempts", max);
 		this.maxDeliveryAttempts = max;
+		if (options.maxRecords !== undefined) {
+			assertPositiveSafeInteger(
+				"InMemoryDeadlineStore",
+				"maxRecords",
+				options.maxRecords,
+			);
+		}
+		this.maxRecords = options.maxRecords;
 	}
 
 	async schedule(deadline: {
@@ -60,11 +79,25 @@ export class InMemoryDeadlineStore<TPayload = unknown>
 		dueAt: Date;
 		payload: TPayload;
 	}): Promise<void> {
+		const deadlineAddress = address(deadline.scope, deadline.key);
+		if (
+			!this.pending.has(deadlineAddress) &&
+			this.maxRecords !== undefined &&
+			this.pending.size + this.dead.size >= this.maxRecords
+		) {
+			throw new InMemoryCapacityExceededError({
+				store: "InMemoryDeadlineStore",
+				resource: "records",
+				limit: this.maxRecords,
+				current: this.pending.size + this.dead.size,
+				attempted: 1,
+			});
+		}
 		const sequence = this.nextSequence++;
 		// Replacing an occupied address gets a FRESH incarnation: a late
 		// ack or failure report against the old deliveryId must not touch
 		// the successor.
-		this.pending.set(address(deadline.scope, deadline.key), {
+		this.pending.set(deadlineAddress, {
 			deliveryId: `deadline-${sequence}`,
 			scope: deadline.scope,
 			key: deadline.key,
