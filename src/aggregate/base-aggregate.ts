@@ -18,7 +18,8 @@ import {
 import { registerAggregatePersistenceCapability } from "./persistence-lifecycle";
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
-export interface AggregateConfig extends EntityConfig {
+export interface AggregateConfig<TState = unknown>
+	extends EntityConfig<TState> {
 	/**
 	 * Immutable event factory captured by this aggregate instance. Its clock
 	 * also stamps snapshots, keeping request-local event and snapshot time
@@ -106,7 +107,7 @@ export abstract class BaseAggregate<
 	protected constructor(
 		id: TId,
 		initialState: TState,
-		config?: AggregateConfig,
+		config?: AggregateConfig<TState>,
 	) {
 		super(id, initialState, config);
 		this.domainEventFactory =

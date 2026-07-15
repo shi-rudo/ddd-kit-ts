@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { IAggregateRoot, Id } from "./index";
+import type { IAggregateRoot, Id, StateValidator } from "./index";
 import * as http from "./http";
 import * as index from "./index";
 import * as money from "./money";
@@ -41,6 +41,11 @@ type RemovedClearPendingEvents =
 
 void (undefined as unknown as RemovedMarkPersisted);
 void (undefined as unknown as RemovedClearPendingEvents);
+
+const publicStateValidator: StateValidator<{ value: number }> = (state) => {
+	void state.value;
+};
+void publicStateValidator;
 
 /**
  * Pins the RUNTIME public API surface of every package entry point. The

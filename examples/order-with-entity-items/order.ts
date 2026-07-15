@@ -24,6 +24,12 @@ export type OrderItemView = Readonly<{
 	lineTotal: Money;
 }>;
 
+function validateOrderState(state: OrderState): void {
+	if (!state.customerId) {
+		throw new Error("Customer ID is required");
+	}
+}
+
 /**
  * Order is an Aggregate Root (an Entity with version).
  *
@@ -36,6 +42,9 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	protected readonly aggregateType = "Order";
 
 	private itemCounter = 0;
+	private constructor(id: OrderId, initialState: OrderState) {
+		super(id, initialState, { validateState: validateOrderState });
+	}
 
 	static create(id: OrderId, customerId: string): Order {
 		const initialState: OrderState = {
@@ -180,15 +189,5 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 		return (
 			findEntityById(this.state.items, itemId)?.isForProduct(productId) ?? false
 		);
-	}
-
-	/**
-	 * Validates the aggregate state.
-	 * This enforces aggregate-wide invariants.
-	 */
-	protected validateState(state: OrderState): void {
-		if (!state.customerId) {
-			throw new Error("Customer ID is required");
-		}
 	}
 }

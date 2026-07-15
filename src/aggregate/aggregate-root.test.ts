@@ -50,7 +50,11 @@ type TestState = {
 
 class TestAggregate extends AggregateRoot<TestState, TestId> {
 	protected readonly aggregateType = "TestAggregate";
-	constructor(id: TestId, initialState: TestState, config?: AggregateConfig) {
+	constructor(
+		id: TestId,
+		initialState: TestState,
+		config?: AggregateConfig<TestState>,
+	) {
 		super(id, initialState, config);
 	}
 
@@ -82,8 +86,12 @@ class TestAggregate extends AggregateRoot<TestState, TestId> {
 describe("setState OCC contract (named methods, no flag argument)", () => {
 	class NamedMethodsAggregate extends AggregateRoot<TestState, TestId> {
 		protected readonly aggregateType = "NamedMethodsAggregate";
-		constructor(id: TestId, initialState: TestState) {
-			super(id, initialState);
+		constructor(
+			id: TestId,
+			initialState: TestState,
+			config?: AggregateConfig<TestState>,
+		) {
+			super(id, initialState, config);
 		}
 
 		rename(value: number): void {
@@ -123,8 +131,12 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 
 	it("setStateWithoutVersionBump still validates the new state", () => {
 		class Validated extends NamedMethodsAggregate {
-			protected override validateState(state: TestState): void {
-				if (state.value < 0) throw new Error("value must not be negative");
+			constructor(id: TestId, initialState: TestState) {
+				super(id, initialState, {
+					validateState: (state) => {
+						if (state.value < 0) throw new Error("value must not be negative");
+					},
+				});
 			}
 			breakIt(): void {
 				this.setStateWithoutVersionBump({ ...this.state, value: -1 });
@@ -908,10 +920,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			protected readonly aggregateType = "FailingValidator";
 
 			constructor(id: TestId, state: TestState) {
-				super(id, state);
-			}
-			protected validateState(state: TestState): void {
-				if (state.value < 0) throw new Error("negative");
+				super(id, state, {
+					validateState: (candidate) => {
+						if (candidate.value < 0) throw new Error("negative");
+					},
+				});
 			}
 			tryCommit(value: number, ev: Ev): void {
 				this.commit({ ...this.state, value }, ev);
@@ -1172,12 +1185,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			class ValidatedAggregate extends AggregateRoot<TestState, TestId> {
 				protected readonly aggregateType = "ValidatedAggregate";
 				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState);
-				}
-				protected validateState(state: TestState): void {
-					if (state.value < 0) {
-						throw new Error("Value cannot be negative");
-					}
+					super(id, initialState, {
+						validateState: (state) => {
+							if (state.value < 0) {
+								throw new Error("Value cannot be negative");
+							}
+						},
+					});
 				}
 				public update(value: number) {
 					this.setState({ ...this.state, value });
@@ -1387,10 +1401,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("restoreFromSnapshot failure (validateState throws) leaves state, version, and persistedVersion unchanged", () => {
 			class StrictAggregate extends TestAggregate {
-				protected override validateState(state: TestState): void {
-					if (state.value < 0) {
-						throw new Error("value must be non-negative");
-					}
+				constructor(id: TestId, initialState: TestState) {
+					super(id, initialState, {
+						validateState: (state) => {
+							if (state.value < 0) {
+								throw new Error("value must be non-negative");
+							}
+						},
+					});
 				}
 			}
 
@@ -1460,8 +1478,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		class DirtyAggregate extends AggregateRoot<DirtyState, TestId> {
 			protected readonly aggregateType = "DirtyAggregate";
-			constructor(id: TestId, state: DirtyState) {
-				super(id, state);
+			constructor(
+				id: TestId,
+				state: DirtyState,
+				config?: AggregateConfig<DirtyState>,
+			) {
+				super(id, state, config);
 			}
 
 			static reconstitute(
@@ -1862,8 +1884,12 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			it("a failed validateState leaves changedKeys unchanged", () => {
 				class GuardedAggregate extends DirtyAggregate {
-					protected override validateState(state: DirtyState): void {
-						if (state.name === "") throw new Error("name required");
+					constructor(id: TestId, state: DirtyState) {
+						super(id, state, {
+							validateState: (candidate) => {
+								if (candidate.name === "") throw new Error("name required");
+							},
+						});
 					}
 					static reconstituteGuarded(
 						id: TestId,

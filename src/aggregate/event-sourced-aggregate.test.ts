@@ -1090,13 +1090,13 @@ describe("EventSourcedAggregate", () => {
 				protected readonly aggregateType = "StateValidatingAggregate";
 
 				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState);
-				}
-
-				protected validateState(state: TestState): void {
-					if (state.value < 0) {
-						throw new NegativeValueError();
-					}
+					super(id, initialState, {
+						validateState: (state) => {
+							if (state.value < 0) {
+								throw new NegativeValueError();
+							}
+						},
+					});
 				}
 
 				protected readonly handlers = {

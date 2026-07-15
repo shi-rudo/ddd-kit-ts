@@ -245,34 +245,43 @@ An aggregate should reject impossible business states and impossible business op
 
 This is where the theory matters most. Aggregate invariants are not just validation sprinkled around the codebase; they are the rules that protect the aggregate's consistency boundary. Put each rule where the aggregate can enforce it reliably.
 
-| Location | Use it for | Kit hook |
+| Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during `setState` and `commit` |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction, `setState`, and `commit` |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
 
 ### State Invariants
 
-Use `validateState` for rules that must always be true when the aggregate holds a state.
+Pass a pure `validateState` function for rules that must always be true when
+the aggregate holds a state.
 
 ```ts
+function validateOrderState(state: OrderState): void {
+  if (state.items.length > 100) {
+    throw new TooManyItemsError();
+  }
+
+  if (state.items.some((item) => item.qty < 1)) {
+    throw new InvalidQuantityError();
+  }
+}
+
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  protected validateState(state: OrderState): void {
-    if (state.items.length > 100) {
-      throw new TooManyItemsError(this.id);
-    }
-
-    if (state.items.some((item) => item.qty < 1)) {
-      throw new InvalidQuantityError(this.id);
-    }
+  constructor(id: OrderId, state: OrderState) {
+    super(id, state, { validateState: validateOrderState });
   }
 }
 ```
 
-`validateState` runs on every `setState` call, including calls made by `commit`. It catches both bad domain transitions and corrupted state loaded from persistence.
+The validator runs on construction and every `setState` call, including calls
+made by `commit` and state-stored snapshot restoration. It catches both bad
+domain transitions and corrupt state loaded from persistence. It does not run
+while event-sourced history evolves; replay uses historical facts and pure
+event handlers rather than today's decision rules.
 
 ### Event-Sourced Invariants
 

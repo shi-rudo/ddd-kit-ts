@@ -13,6 +13,18 @@ export type OrderItemState = {
 	lineTotal: Money;
 };
 
+function validateOrderItemState(state: OrderItemState): void {
+	if (state.quantity <= 0) {
+		throw new Error("Quantity must be greater than 0");
+	}
+	if (isNegativeMoney(state.lineTotal)) {
+		throw new Error("Line total cannot be negative");
+	}
+	if (!state.productId) {
+		throw new Error("Product ID is required");
+	}
+}
+
 /**
  * OrderItem is a Child Entity within the Order aggregate.
  *
@@ -36,7 +48,7 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 			quantity,
 			lineTotal,
 		};
-		super(id, initialState);
+		super(id, initialState, { validateState: validateOrderItemState });
 	}
 
 	get productId(): string {
@@ -73,20 +85,5 @@ export class OrderItem extends Entity<OrderItemState, ItemId> {
 	 */
 	isForProduct(productId: string): boolean {
 		return this.state.productId === productId;
-	}
-
-	/**
-	 * Validates state when constructed or updated.
-	 */
-	protected validateState(state: OrderItemState): void {
-		if (state.quantity <= 0) {
-			throw new Error("Quantity must be greater than 0");
-		}
-		if (isNegativeMoney(state.lineTotal)) {
-			throw new Error("Line total cannot be negative");
-		}
-		if (!state.productId) {
-			throw new Error("Product ID is required");
-		}
 	}
 }

@@ -21,8 +21,8 @@ here, with a before and after.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
-Most of these surface at compile time. Nine do not (steps 3, 5, 11,
-12, 14, 15, 20, 25, and the option-validation part of 22) and deserve a
+Most of these surface at compile time. Ten do not (steps 3, 5, 11,
+12, 14, 15, 20, 25, 26, and the option-validation part of 22) and deserve a
 deliberate pass over the call sites.
 
 #### 1. Errors carry one identifier: match on `code`
@@ -851,6 +851,41 @@ optional; ordinary `AggregateRoot` instances use the same Unit-of-Work path.
 For deliberate in-memory abandonment, discard the dirty aggregate instance
 and reconstitute a fresh one. Public event disposal is no longer available.
 
+#### 26. State validation is constructor-injected (runtime change)
+
+`Entity.validateState` is no longer an overridable method. Calling a virtual
+method from the base constructor exposed partly initialised subclasses: fields
+declared by the concrete entity did not exist yet when the first validation
+ran. Pass a pure validator through `EntityConfig<TState>` or
+`AggregateConfig<TState>` instead:
+
+```ts
+// before: virtual dispatch from Entity's constructor
+class Order extends AggregateRoot<OrderState, OrderId> {
+  protected validateState(state: OrderState): void {
+    if (state.items.length > 100) throw new TooManyItemsError();
+  }
+}
+
+// after: ordinary data captured before the base constructor invokes it
+function validateOrderState(state: OrderState): void {
+  if (state.items.length > 100) throw new TooManyItemsError();
+}
+
+class Order extends AggregateRoot<OrderState, OrderId> {
+  constructor(id: OrderId, state: OrderState) {
+    super(id, state, { validateState: validateOrderState });
+  }
+}
+```
+
+The validator receives the exact frozen copy that the entity stores. It runs
+during construction and every `setState` call. State-stored snapshot restore
+uses the same path, while event-sourced replay remains deliberately exempt
+from today's decision rules. TypeScript rejects legacy overrides; JavaScript
+subclasses silently stop receiving calls to a same-named prototype method, so
+they require a manual migration.
+
 ### Changed (breaking): aggregate persistence lifecycle is application-owned
 
 - Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
@@ -863,6 +898,17 @@ and reconstitute a fresh one. Public event disposal is no longer available.
   instance-bound capability after commit.
 - Commit enrollment rejects structural aggregate lookalikes before any outbox
   write or transaction commit.
+
+### Changed (breaking): state validation is instance-bound
+
+- Added `StateValidator<TState>` and `EntityConfig<TState>.validateState`;
+  `AggregateConfig<TState>` forwards the same option.
+- Removed the overridable `Entity.validateState` method, eliminating virtual
+  dispatch from base construction.
+- Construction, `setState`, `commit`, and state-stored snapshot restoration
+  validate the exact frozen candidate through the captured function.
+- Event-sourced replay continues to evolve historical facts without running
+  today's decision validation.
 
 ### Added: explicit retention for in-memory reference stores
 
