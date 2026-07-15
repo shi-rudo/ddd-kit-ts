@@ -1,6 +1,7 @@
 {
 	"name": "@shirudo/ddd-kit",
 	"version": "3.0.0-rc.2",
+	"packageManager": "pnpm@10.32.1",
 	"description": "Composable TypeScript toolkit for tactical DDD",
 	"type": "module",
 	"repository": {

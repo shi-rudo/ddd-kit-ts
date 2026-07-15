@@ -19,6 +19,19 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Release engineering
+
+- Tag-triggered releases now run the complete verification matrix and package
+  smoke before publishing through npm Trusted Publishing with OIDC provenance.
+  The publish job carries no long-lived registry token, uses pinned tooling,
+  validates the tag against `package.json`, and only accepts commits reachable
+  from `main`. It publishes the exact smoke-tested tarball without checking out
+  source, installing project dependencies, or running project lifecycle scripts
+  while OIDC permission is present.
+- Prereleases publish under `next`; stable versions publish under `latest`.
+  `RELEASING.md` documents the one-time trust/environment setup and the release
+  procedure.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Nine do not (steps 3, 5, 11,
