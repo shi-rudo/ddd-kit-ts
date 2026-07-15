@@ -118,10 +118,10 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
 		saga.assertCanRecord("not-started", "CheckoutPaymentRequested");
 		saga.apply(
-			saga.recordEvent("CheckoutPaymentRequested", {
+			saga.recordEvent<CheckoutPaymentRequested>("CheckoutPaymentRequested", {
 				total,
 				paymentId,
-			}) as CheckoutPaymentRequested,
+			}),
 		);
 		return saga;
 	}
@@ -134,15 +134,15 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 	requestShipping(shipmentId: ShipmentId): void {
 		this.assertCanRecord("awaiting-payment", "CheckoutShippingRequested");
 		this.apply(
-			this.recordEvent("CheckoutShippingRequested", {
+			this.recordEvent<CheckoutShippingRequested>("CheckoutShippingRequested", {
 				shipmentId,
-			}) as CheckoutShippingRequested,
+			}),
 		);
 	}
 
 	complete(): void {
 		this.assertCanRecord("awaiting-shipping", "CheckoutCompleted");
-		this.apply(this.recordEvent("CheckoutCompleted", {}) as CheckoutCompleted);
+		this.apply(this.recordEvent<CheckoutCompleted>("CheckoutCompleted", {}));
 	}
 
 	cancelAfterPaymentFailure(reason: string): void {
@@ -151,9 +151,10 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 			"CheckoutCancellationRequestedAfterPaymentFailure",
 		);
 		this.apply(
-			this.recordEvent("CheckoutCancellationRequestedAfterPaymentFailure", {
-				reason,
-			}) as CheckoutCancellationRequestedAfterPaymentFailure,
+			this.recordEvent<CheckoutCancellationRequestedAfterPaymentFailure>(
+				"CheckoutCancellationRequestedAfterPaymentFailure",
+				{ reason },
+			),
 		);
 	}
 
@@ -171,10 +172,10 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 			);
 		}
 		this.apply(
-			this.recordEvent("CheckoutCompensationRequestedAfterShippingFailure", {
-				paymentId,
-				reason,
-			}) as CheckoutCompensationRequestedAfterShippingFailure,
+			this.recordEvent<CheckoutCompensationRequestedAfterShippingFailure>(
+				"CheckoutCompensationRequestedAfterShippingFailure",
+				{ paymentId, reason },
+			),
 		);
 	}
 
