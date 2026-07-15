@@ -219,7 +219,7 @@ Both variants throw `UnregisteredHandlerError` for missing handlers. Missing que
 
 As with commands, a concrete query type map owns the result of both execution styles. Explicit `<Query, Result>` arguments are available only with the default untyped map shape; they cannot override `Queries[query.type]`.
 
-In a CQRS application, query handlers usually read from projection tables or read models, not from aggregates. Aggregates are write-side consistency boundaries. Read models are shaped for screens and API responses. See [Read-Side Projections](./projections.md).
+In a CQRS application, query handlers return DTOs shaped for their use case. They may read materialized projections, but a simple management or setup flow can query the authoritative write store on demand through a consumer-owned query port when a separate projection would add synchronization and rebuild cost without earning it. The query port may use the same database and tables as the write side; it still returns a detached DTO rather than a live aggregate. Load an aggregate through its repository when the application needs it for a command or domain decision, not merely to render display data. See [Read-Side Projections](./projections.md).
 
 ## `withCommit`: The Write-Side Boundary
 
