@@ -232,6 +232,7 @@ The kit only requires a string. Choose the id format that fits your storage and 
 ```ts
 interface EventMetadata {
   correlationId?: string;
+  conversationId?: string;
   causationId?: string;
   userId?: string;
   source?: string;
@@ -243,7 +244,9 @@ Use metadata for tracing and operational context, not for core domain state. If 
 
 The usual meanings:
 
-- `correlationId` groups work that belongs to one request or workflow.
+- `correlationId` groups messages that belong to one operation or trace.
+- `conversationId` remains stable across a longer business interaction that may
+  contain several correlations.
 - `causationId` points to the event or command that caused this event.
 - `userId` records the actor when known.
 - `source` names the producing component or bounded context.
@@ -340,8 +343,18 @@ domain event.
 
 At the outbox sink, map the committed event to a separate
 `IntegrationMessage` with `createIntegrationMessage(record, mapper)`. The
-mapper chooses the public type, schema version, JSON payload, and optional JSON
-metadata. `encodeIntegrationMessage` validates the whole graph and rejects
+mapper chooses the public type, schema version, JSON payload, explicit
+relationship headers, and optional custom JSON metadata. The public envelope
+has distinct optional `correlationId`, `conversationId`, and `causationId`
+headers. The boundary mapper explicitly chooses every public relationship
+header. `createIntegrationMessage` never copies private domain-event metadata
+implicitly; map a same-named field deliberately when it belongs in the public
+contract. Omitted relationships stay absent rather than receiving a synthetic
+value.
+
+Relationship names are reserved at the envelope level. Putting one inside the
+free-form `metadata` object rejects as ambiguous. `encodeIntegrationMessage`
+validates the whole graph and rejects
 special values, cycles, sparse arrays, non-finite numbers, and properties JSON
 would discard. It also rejects hostile own `__proto__` keys before downstream
 copy operations can activate them. `decodeIntegrationMessage` performs the
@@ -350,12 +363,14 @@ with an explicit offset and up to millisecond precision, normalizes them to
 canonical UTC `.sssZ`, and returns a deeply frozen message. The producer-side
 codec continues to emit and require that canonical representation.
 
-The wire envelope retains `messageId`, an ISO `occurredAt`, the qualified
-aggregate source, and the complete commit position. Consumers that feed the
-kit's `Projector` can compose the validated message into a minted local event
-with `integrationMessageToCommittedEvent`. That event uses the published type
-and JSON payload; restoring the producer's private domain types is deliberately
-not attempted.
+The wire envelope retains `messageId`, the three relationship headers when
+present, an ISO `occurredAt`, the qualified aggregate source, and the complete
+commit position. Consumers that feed the kit's `Projector` can compose the
+validated message into a minted local event with
+`integrationMessageToCommittedEvent`. The relationship headers become local
+event metadata for downstream tracing; the event still uses the published type
+and JSON payload, and restoring the producer's private domain types is
+deliberately not attempted.
 
 See the complete [SQS FIFO mapping](./outbox.md#sinks-and-brokers).
 

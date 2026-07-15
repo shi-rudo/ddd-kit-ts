@@ -3,6 +3,7 @@ import {
 	type AnyDomainEvent,
 	createDomainEvent,
 	type DomainEvent,
+	type EventMetadata,
 } from "../aggregate/domain-event";
 import { InvalidIntegrationMessageError } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
@@ -18,21 +19,34 @@ export type JsonValue =
 /** A JSON-safe object used for optional integration metadata. */
 export type JsonObject = { readonly [key: string]: JsonValue };
 
+/** Standard relationship headers carried by the public message envelope. */
+export interface IntegrationMessageRelationships {
+	/** Groups messages that belong to one operation or trace. */
+	readonly correlationId?: string;
+	/** Groups a long-running business interaction across several correlations. */
+	readonly conversationId?: string;
+	/** Identifies the message, event, or command that immediately caused this one. */
+	readonly causationId?: string;
+}
+
 /** Application-owned public content produced from one internal domain event. */
 export interface IntegrationMessageContent<
 	TType extends string,
 	TPayload extends JsonValue,
 	TMetadata extends JsonObject = JsonObject,
-> {
+> extends IntegrationMessageRelationships {
 	readonly type: TType;
 	readonly version: number;
 	readonly payload: TPayload;
+	/** Custom JSON metadata; relationship header names are reserved. */
 	readonly metadata?: TMetadata;
 }
 
 /**
  * JSON-safe broker envelope, deliberately separate from {@link DomainEvent}.
- * Its source cursor supports ordered, gap-aware projection consumption.
+ * Standard message relationships are explicit headers rather than payload or
+ * custom metadata. Its source cursor supports ordered, gap-aware projection
+ * consumption.
  */
 export interface IntegrationMessage<
 	TType extends string = string,
@@ -54,9 +68,10 @@ export type IntegrationMessageMapper<
 > = (event: Evt) => IntegrationMessageContent<TType, TPayload, TMetadata>;
 
 /**
- * Maps a committed domain event to a deeply frozen JSON-safe message.
- * Values JSON would change or discard reject as
- * {@link InvalidIntegrationMessageError}.
+ * Maps a committed domain event to a deeply frozen JSON-safe message. The
+ * mapper explicitly chooses every public relationship header; producer-private
+ * domain metadata is never copied implicitly. Values JSON would change or
+ * discard reject as {@link InvalidIntegrationMessageError}.
  */
 export function createIntegrationMessage<
 	Evt extends AnyDomainEvent,
@@ -73,6 +88,7 @@ export function createIntegrationMessage<
 		type: content.type,
 		version: content.version,
 		occurredAt: record.event.occurredAt.toISOString(),
+		...relationshipHeaders(content),
 		payload: content.payload,
 		...(content.metadata === undefined ? {} : { metadata: content.metadata }),
 		source: record.source,
@@ -107,8 +123,8 @@ export function decodeIntegrationMessage(
 
 /**
  * Composes a validated public message into a minted local projector input.
- * The public JSON schema is retained; producer-private domain types are not
- * reconstructed.
+ * Relationship headers become local event metadata. The public JSON schema is
+ * retained; producer-private domain types are not reconstructed.
  */
 export function integrationMessageToCommittedEvent<
 	TType extends string,
@@ -118,6 +134,7 @@ export function integrationMessageToCommittedEvent<
 	message: IntegrationMessage<TType, TPayload, TMetadata>,
 ): CommittedDomainEvent<DomainEvent<TType, TPayload>> {
 	const stableMessage = stabilizeIntegrationMessage(message);
+	const metadata = localEventMetadata(stableMessage);
 	return {
 		event: createDomainEvent(stableMessage.type, stableMessage.payload, {
 			eventId: stableMessage.messageId,
@@ -125,7 +142,7 @@ export function integrationMessageToCommittedEvent<
 			aggregateType: stableMessage.source.aggregateType,
 			occurredAt: new Date(stableMessage.occurredAt),
 			version: stableMessage.version,
-			metadata: stableMessage.metadata,
+			metadata,
 		}),
 		source: stableMessage.source,
 		position: stableMessage.position,
@@ -154,6 +171,13 @@ function assertIntegrationMessage(
 	}
 	if (typeof value.messageId !== "string" || value.messageId.length === 0) {
 		invalid("$.messageId", "must be a non-empty string");
+	}
+	for (const field of RELATIONSHIP_FIELDS) {
+		if (!Object.hasOwn(value, field)) continue;
+		const relationshipId = value[field];
+		if (typeof relationshipId !== "string" || relationshipId.length === 0) {
+			invalid(`$.${field}`, "must be a non-empty string when present");
+		}
 	}
 	if (typeof value.type !== "string" || value.type.length === 0) {
 		invalid("$.type", "must be a non-empty string");
@@ -188,6 +212,16 @@ function assertIntegrationMessage(
 		!isJsonObject(value.metadata)
 	) {
 		invalid("$.metadata", "must be a plain JSON object when present");
+	}
+	if (isJsonObject(value.metadata)) {
+		for (const field of RELATIONSHIP_FIELDS) {
+			if (Object.hasOwn(value.metadata, field)) {
+				invalid(
+					`$.metadata.${field}`,
+					"is reserved for the explicit message envelope header",
+				);
+			}
+		}
 	}
 	if (!isJsonObject(value.source)) {
 		invalid("$.source", "must be a plain JSON object");
@@ -254,6 +288,36 @@ function assertIntegrationMessage(
 			"must be null at genesis or an earlier non-negative aggregate version",
 		);
 	}
+}
+
+const RELATIONSHIP_FIELDS = [
+	"correlationId",
+	"conversationId",
+	"causationId",
+] as const;
+
+function relationshipHeaders(
+	primary: IntegrationMessageRelationships,
+): IntegrationMessageRelationships {
+	const { correlationId, conversationId, causationId } = primary;
+	return {
+		...(correlationId === undefined ? {} : { correlationId }),
+		...(conversationId === undefined ? {} : { conversationId }),
+		...(causationId === undefined ? {} : { causationId }),
+	};
+}
+
+function localEventMetadata(
+	message: IntegrationMessage,
+): EventMetadata | undefined {
+	const relationships = relationshipHeaders(message);
+	if (
+		message.metadata === undefined &&
+		Object.keys(relationships).length === 0
+	) {
+		return undefined;
+	}
+	return { ...message.metadata, ...relationships };
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

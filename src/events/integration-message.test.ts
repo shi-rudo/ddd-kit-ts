@@ -39,6 +39,11 @@ describe("integration message codec", () => {
 				aggregateId: "o-1",
 				aggregateType: "Order",
 				occurredAt,
+				metadata: {
+					correlationId: "internal-correlation",
+					conversationId: "internal-conversation",
+					causationId: "internal-cause",
+				},
 			},
 		);
 		const committed: CommittedDomainEvent<typeof event> = {
@@ -60,7 +65,10 @@ describe("integration message codec", () => {
 				amounts: [...domainEvent.payload.amounts],
 				tags: [...domainEvent.payload.tags],
 			},
-			metadata: { correlationId: "corr-1" },
+			correlationId: "corr-1",
+			conversationId: "conversation-1",
+			causationId: "command-1",
+			metadata: { tenantId: "tenant-1" },
 		}));
 		const decoded = decodeIntegrationMessage(encodeIntegrationMessage(message));
 		const projected = integrationMessageToCommittedEvent(decoded);
@@ -75,7 +83,10 @@ describe("integration message codec", () => {
 				amounts: [["gross", 1250]],
 				tags: ["pilot", "priority"],
 			},
-			metadata: { correlationId: "corr-1" },
+			correlationId: "corr-1",
+			conversationId: "conversation-1",
+			causationId: "command-1",
+			metadata: { tenantId: "tenant-1" },
 			source: { aggregateType: "Order", aggregateId: "o-1" },
 			position: {
 				aggregateVersion: 1,
@@ -88,8 +99,52 @@ describe("integration message codec", () => {
 		expect(Object.isFrozen(decoded.payload)).toBe(true);
 		expect(projected.event.occurredAt).toEqual(occurredAt);
 		expect(projected.event.payload).toEqual(decoded.payload);
+		expect(projected.event.metadata).toEqual({
+			correlationId: "corr-1",
+			conversationId: "conversation-1",
+			causationId: "command-1",
+			tenantId: "tenant-1",
+		});
 		expect(projected.source).toEqual(decoded.source);
 		expect(projected.position).toEqual(decoded.position);
+	});
+
+	it("does not expose domain relationship metadata unless the boundary mapper maps it", () => {
+		const event = createDomainEvent(
+			"OrderPlaced",
+			{ totalMinor: "1250" },
+			{
+				eventId: "evt-order-relationships",
+				aggregateId: "o-1",
+				aggregateType: "Order",
+				occurredAt: new Date("2026-07-13T09:00:00.000Z"),
+				metadata: {
+					correlationId: "corr-internal",
+					conversationId: "conversation-internal",
+					causationId: "cause-internal",
+				},
+			},
+		);
+		const committed: CommittedDomainEvent<typeof event> = {
+			event,
+			source: { aggregateType: "Order", aggregateId: "o-1" },
+			position: {
+				aggregateVersion: 1,
+				commitSequence: 0,
+				commitSize: 1,
+				previousEventfulAggregateVersion: null,
+			},
+		};
+
+		const message = createIntegrationMessage(committed, (domainEvent) => ({
+			type: "sales.order-placed.v1",
+			version: 1,
+			payload: domainEvent.payload,
+		}));
+
+		expect(Object.hasOwn(message, "correlationId")).toBe(false);
+		expect(Object.hasOwn(message, "conversationId")).toBe(false);
+		expect(Object.hasOwn(message, "causationId")).toBe(false);
 	});
 
 	it("defensively owns a valid mutable message before composing a committed event", () => {
@@ -219,6 +274,44 @@ describe("integration message codec", () => {
 			})),
 		).toThrow(InvalidIntegrationMessageError);
 	});
+
+	it.each([
+		["correlationId", ""],
+		["conversationId", 42],
+		["causationId", null],
+	] as const)("rejects an invalid %s envelope header", (field, value) => {
+		let caught: unknown;
+		try {
+			decodeIntegrationMessage(
+				JSON.stringify({ ...validWireMessage(), [field]: value }),
+			);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(InvalidIntegrationMessageError);
+		expect(caught).toMatchObject({ path: `$.${field}` });
+	});
+
+	it.each(["correlationId", "conversationId", "causationId"] as const)(
+		"rejects a duplicate %s hidden in custom metadata",
+		(field) => {
+			let caught: unknown;
+			try {
+				decodeIntegrationMessage(
+					JSON.stringify({
+						...validWireMessage(),
+						metadata: { [field]: "ambiguous" },
+					}),
+				);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(InvalidIntegrationMessageError);
+			expect(caught).toMatchObject({ path: `$.metadata.${field}` });
+		},
+	);
 
 	it.each([
 		[

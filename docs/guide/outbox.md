@@ -521,6 +521,9 @@ const publishOrderPlaced: IntegrationMessageMapper<
     amounts: [...event.payload.amounts],
     tags: [...event.payload.tags],
   },
+  correlationId: event.metadata?.correlationId,
+  conversationId: event.metadata?.conversationId,
+  causationId: event.metadata?.causationId,
 });
 
 const sqsSink: OutboxSink<OrderPlaced> = {
@@ -547,6 +550,13 @@ an unmapped special value instead of letting `JSON.stringify` silently turn a
 `Map` or `Set` into `{}`. It also preserves and validates the complete source
 cursor, including the explicit `null` at genesis.
 
+The public envelope carries optional `correlationId`, `conversationId`, and
+`causationId` headers. The boundary mapper explicitly selects which
+relationships belong in the public contract. `createIntegrationMessage` never
+copies private domain-event metadata implicitly. Custom `metadata` must not
+repeat the reserved names, and no header is invented when the relationship is
+unknown.
+
 Decode and validate before handing a broker body to a projector:
 
 ```ts
@@ -564,7 +574,8 @@ await publishedOrderProjector.project([
 The converted event represents the published integration schema; it does not
 reconstruct the producer's private domain event or turn ISO strings back into
 domain `Date` objects. A receiving bounded context owns any further mapping to
-its own commands or model.
+its own commands or model. The three relationship headers are copied into the
+minted local event metadata so tracing and process context survive the boundary.
 
 The dispatcher preserves order up to the sink. After that, broker
 configuration decides what consumers observe. If the broker cannot preserve
