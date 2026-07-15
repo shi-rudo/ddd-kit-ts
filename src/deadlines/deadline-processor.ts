@@ -1,11 +1,43 @@
-import { reportToObserver } from "../utils/observer";
+import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
-import type { DeadlineStore, DueDeadline } from "./deadline-store";
+import type {
+	DeadlineStore,
+	DeadLetterDeadline,
+	DueDeadline,
+} from "./deadline-store";
+
+/**
+ * Required operational observers for {@link DeadlineProcessor}. All hooks are
+ * best-effort notifications: synchronous throws and rejected promises are
+ * neutralized so observability cannot change delivery state. The processor
+ * captures and freezes these function references at construction, so later
+ * mutation of the supplied object cannot disable an operational channel.
+ *
+ * `onDeadLetter` fires immediately after `markFailed` reports the exact
+ * transition. It is not a durable notification boundary: a process can stop
+ * after the store commits the transition and before the callback runs. Keep
+ * polling {@link DeadlineStore.deadLetters} for durable alerting and
+ * reconciliation; the hook provides low-latency diagnostics.
+ */
+export interface DeadlineProcessorObservers<TPayload> {
+	/** A handler, acknowledgement, or failure-tracking operation failed. */
+	readonly onDeliveryError: (
+		error: unknown,
+		deadline: DueDeadline<TPayload>,
+	) => void;
+	/** Reading the due page failed. */
+	readonly onPollError: (error: unknown) => void;
+	/** A deadline crossed the store's dead-letter threshold. */
+	readonly onDeadLetter: (deadline: DeadLetterDeadline<TPayload>) => void;
+}
 
 /** Construction options for {@link DeadlineProcessor}. */
 export interface DeadlineProcessorOptions<TPayload> {
 	/** The poll surface; see {@link DeadlineStore}. */
 	store: DeadlineStore<TPayload>;
+
+	/** Complete, required operational observer bundle. */
+	observers: DeadlineProcessorObservers<TPayload>;
 
 	/**
 	 * Receives each due deadline as an input. A throw signals delivery
@@ -47,23 +79,6 @@ export interface DeadlineProcessorOptions<TPayload> {
 	 * waiting; a throwing clock degrades to the system time.
 	 */
 	clock?: () => Date;
-
-	/**
-	 * Observer for delivery failures (the handler threw; the failure
-	 * was reported to `markFailed`) and for ack failures
-	 * (`markDelivered` threw; the deadline was HANDLED and will
-	 * redeliver as an at-least-once duplicate, deliberately not counted
-	 * toward the ceiling). Observer contract as everywhere in the kit:
-	 * a throwing observer is neutralized and cannot break the loop.
-	 */
-	onDeliveryError?: (error: unknown, deadline: DueDeadline<TPayload>) => void;
-
-	/**
-	 * Observer for `due` failures (storage unavailable, query error).
-	 * The loop survives them: it reports here, backs off, and polls
-	 * again. Same neutralized observer contract.
-	 */
-	onPollError?: (error: unknown) => void;
 }
 
 /**
@@ -106,19 +121,18 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		deadline: DueDeadline<TPayload>,
 	) => Promise<void> | void;
 	private readonly clock: () => Date;
-	private readonly onDeliveryError?: (
-		error: unknown,
-		deadline: DueDeadline<TPayload>,
-	) => void;
-	private readonly onPollError?: (error: unknown) => void;
+	private readonly observers: DeadlineProcessorObservers<TPayload>;
 
 	constructor(options: DeadlineProcessorOptions<TPayload>) {
 		super("DeadlineProcessor", options);
+		this.observers = captureObserverFunctions(
+			"DeadlineProcessor",
+			options.observers,
+			["onDeliveryError", "onPollError", "onDeadLetter"],
+		);
 		this.store = options.store;
 		this.handler = options.handler;
 		this.clock = options.clock ?? (() => new Date());
-		this.onDeliveryError = options.onDeliveryError;
-		this.onPollError = options.onPollError;
 	}
 
 	/**
@@ -133,7 +147,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 				batch = await this.store.due(this.now(), this.batchSize);
 			} catch (error) {
 				this.consecutiveFailures += 1;
-				reportToObserver(() => this.onPollError?.(error));
+				reportToObserver(() => this.observers.onPollError(error));
 				return "stopped";
 			}
 			if (batch.length === 0) {
@@ -153,11 +167,21 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 					delivered.push(deadline);
 				} catch (error) {
 					handlerFailed = true;
-					reportToObserver(() => this.onDeliveryError?.(error, deadline));
+					reportToObserver(() =>
+						this.observers.onDeliveryError(error, deadline),
+					);
 					try {
-						await this.store.markFailed(deadline.deliveryId, error);
+						const deadLetter = await this.store.markFailed(
+							deadline.deliveryId,
+							error,
+						);
+						if (deadLetter !== undefined) {
+							reportToObserver(() => this.observers.onDeadLetter(deadLetter));
+						}
 					} catch (markError) {
-						reportToObserver(() => this.onDeliveryError?.(markError, deadline));
+						reportToObserver(() =>
+							this.observers.onDeliveryError(markError, deadline),
+						);
 					}
 				}
 			}
@@ -176,7 +200,9 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 				} catch (error) {
 					acked = false;
 					for (const deadline of delivered) {
-						reportToObserver(() => this.onDeliveryError?.(error, deadline));
+						reportToObserver(() =>
+							this.observers.onDeliveryError(error, deadline),
+						);
 					}
 				}
 			}

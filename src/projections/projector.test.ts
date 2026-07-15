@@ -1244,6 +1244,11 @@ describe("Projector", () => {
 			baseDelayMs: 1,
 			maxDelayMs: 2,
 			random: () => 0.5,
+			observers: {
+				onDispatchError: () => {},
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
 		});
 		const [redelivery] = await outbox.getPending(1);
 		if (!redelivery) throw new Error("expected pending outbox record");

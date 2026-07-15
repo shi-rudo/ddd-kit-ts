@@ -5,11 +5,26 @@ import { InMemoryOutbox } from "./outbox";
 import {
 	eventBusSink,
 	OutboxDispatcher,
+	type OutboxDispatcherObservers,
+	type OutboxDispatcherOptions,
 	type OutboxSink,
 } from "./outbox-dispatcher";
-import type { CommittedDomainEvent, Outbox, OutboxRecord } from "./ports";
+import type {
+	CommittedDomainEvent,
+	DeadLetterRecord,
+	Outbox,
+	OutboxRecord,
+} from "./ports";
 
 type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
+type TestDispatcherOptions = OutboxDispatcherOptions<TestEvent>;
+
+// @ts-expect-error legacy optional callbacks must not bypass the required bundle
+type RemovedDispatcherPollObserver = TestDispatcherOptions["onPollError"];
+// @ts-expect-error legacy optional callbacks must not bypass the required bundle
+type RemovedDispatcherErrorObserver = TestDispatcherOptions["onDispatchError"];
+void (undefined as unknown as RemovedDispatcherPollObserver);
+void (undefined as unknown as RemovedDispatcherErrorObserver);
 
 function makeEvent(n: number): TestEvent {
 	return createDomainEvent("ThingHappened", { n }, { eventId: `evt-${n}` });
@@ -29,14 +44,23 @@ function makeCommitted(n: number): CommittedDomainEvent<TestEvent> {
 }
 
 function fastDispatcher<Evt extends TestEvent>(
-	options: ConstructorParameters<typeof OutboxDispatcher<Evt>>[0],
+	options: Omit<OutboxDispatcherOptions<Evt>, "observers"> & {
+		observers?: Partial<OutboxDispatcherObservers<Evt>>;
+	},
 ): OutboxDispatcher<Evt> {
+	const { observers, ...dispatcherOptions } = options;
 	return new OutboxDispatcher({
 		pollIntervalMs: 1,
 		baseDelayMs: 1,
 		maxDelayMs: 2,
 		random: () => 0.5,
-		...options,
+		...dispatcherOptions,
+		observers: {
+			onDispatchError: () => {},
+			onPollError: () => {},
+			onDeadLetter: () => {},
+			...observers,
+		},
 	});
 }
 
@@ -77,6 +101,55 @@ function interceptOutbox(
 }
 
 describe("OutboxDispatcher", () => {
+	it("requires a complete observer bundle at type and runtime boundaries", () => {
+		const outbox = new InMemoryOutbox<TestEvent>();
+		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
+
+		expect(
+			() =>
+				// @ts-expect-error productive pollers require explicit operability observers
+				new OutboxDispatcher({ outbox, sink }),
+		).toThrow(/observers/);
+		expect(
+			() =>
+				new OutboxDispatcher({
+					outbox,
+					sink,
+					// @ts-expect-error every operational channel is required
+					observers: { onDispatchError: () => {}, onPollError: () => {} },
+				}),
+		).toThrow(/onDeadLetter/);
+	});
+
+	it("reports the exact dead-letter transition through observers captured at construction", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		const observed: DeadLetterRecord<TestEvent>[] = [];
+		const options = {
+			outbox,
+			sink: {
+				publish: async () => {
+					throw new Error("poison");
+				},
+			},
+			observers: {
+				onDispatchError: () => {},
+				onPollError: () => {},
+				onDeadLetter: (record: DeadLetterRecord<TestEvent>) => {
+					observed.push(record);
+				},
+			},
+		};
+		const dispatcher = new OutboxDispatcher(options);
+		options.observers.onDeadLetter = () => {};
+
+		await expect(dispatcher.drainOnce()).resolves.toBe("stopped");
+
+		expect(observed).toMatchObject([
+			{ dispatchId: "evt-1", attempts: 1, event: { eventId: "evt-1" } },
+		]);
+	});
+
 	it("delivers in commit order and acks the delivered batch in one call, only after publish", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
 		await inner.add([makeCommitted(1), makeCommitted(2), makeCommitted(3)]);
@@ -158,8 +231,10 @@ describe("OutboxDispatcher", () => {
 		const dispatcher = fastDispatcher({
 			outbox,
 			sink,
-			onPollError: (error) => {
-				pollErrors.push(error);
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
 			},
 		});
 		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
@@ -183,8 +258,10 @@ describe("OutboxDispatcher", () => {
 		const dispatcher = fastDispatcher({
 			outbox,
 			sink,
-			onDispatchError: (error) => {
-				errors.push(error);
+			observers: {
+				onDispatchError: (error) => {
+					errors.push(error);
+				},
 			},
 		});
 		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
@@ -361,7 +438,10 @@ describe("OutboxDispatcher", () => {
 		const dispatcher = fastDispatcher({
 			outbox,
 			sink,
-			onDispatchError: (_error, record) => reported.push(record.event.eventId),
+			observers: {
+				onDispatchError: (_error, record) =>
+					reported.push(record.event.eventId),
+			},
 		});
 		await runUntil(dispatcher, () => eventually(() => delivered.length >= 6));
 
@@ -437,8 +517,10 @@ describe("OutboxDispatcher", () => {
 		const dispatcher = fastDispatcher({
 			outbox,
 			sink,
-			onDispatchError: () => {
-				throw new Error("observer bug");
+			observers: {
+				onDispatchError: () => {
+					throw new Error("observer bug");
+				},
 			},
 		});
 		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
@@ -469,6 +551,11 @@ describe("OutboxDispatcher", () => {
 			outbox,
 			sink,
 			pollIntervalMs: 60_000, // would hang without abortable sleep
+			observers: {
+				onDispatchError: () => {},
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
 		});
 
 		const stop = new AbortController();
@@ -481,14 +568,14 @@ describe("OutboxDispatcher", () => {
 	it("validates numeric options at construction", () => {
 		const outbox = new InMemoryOutbox<TestEvent>();
 		const sink: OutboxSink<TestEvent> = { publish: async () => {} };
-		expect(() => new OutboxDispatcher({ outbox, sink, batchSize: 0 })).toThrow(
+		expect(() => fastDispatcher({ outbox, sink, batchSize: 0 })).toThrow(
 			"batchSize",
 		);
-		expect(
-			() => new OutboxDispatcher({ outbox, sink, pollIntervalMs: -1 }),
-		).toThrow("pollIntervalMs");
-		expect(
-			() => new OutboxDispatcher({ outbox, sink, baseDelayMs: Number.NaN }),
+		expect(() => fastDispatcher({ outbox, sink, pollIntervalMs: -1 })).toThrow(
+			"pollIntervalMs",
+		);
+		expect(() =>
+			fastDispatcher({ outbox, sink, baseDelayMs: Number.NaN }),
 		).toThrow("baseDelayMs");
 	});
 
@@ -548,8 +635,10 @@ describe("OutboxDispatcher", () => {
 			const dispatcher = fastDispatcher({
 				outbox,
 				sink,
-				onPollError: (error) => {
-					pollErrors.push(error);
+				observers: {
+					onPollError: (error) => {
+						pollErrors.push(error);
+					},
 				},
 			});
 			await expect(dispatcher.drainOnce()).resolves.toBe("stopped");

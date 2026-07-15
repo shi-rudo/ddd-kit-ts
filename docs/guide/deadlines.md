@@ -97,9 +97,13 @@ const processor = new DeadlineProcessor({
     // a delivered deadline is a proposal (see above).
     await commandBus.dispatch(toTimeoutCommand(deadline));
   },
-  onDeliveryError: (error, deadline) =>
-    log.warn({ error, key: deadline.key }, "deadline delivery failed"),
-  onPollError: (error) => log.warn({ error }, "deadline poll failed"),
+  observers: {
+    onDeliveryError: (error, deadline) =>
+      log.warn({ error, key: deadline.key }, "deadline delivery failed"),
+    onPollError: (error) => log.warn({ error }, "deadline poll failed"),
+    onDeadLetter: (deadline) =>
+      alerts.page({ key: deadline.key }, "deadline dead letter"),
+  },
 });
 
 const stop = new AbortController();
@@ -144,8 +148,13 @@ idempotent; the idempotency store with the `deliveryId` as the key is the
 ready-made answer, and if the handler feeds a saga, the saga's own inbox
 already covers it.
 
-`deadLetters()` is the set to wire into alerting. A growing dead-letter set
-means processes that stopped waking up.
+`deadLetters()` is the set to wire into durable alerting. A growing dead-letter
+set means processes that stopped waking up. The required `onDeadLetter`
+observer gives an immediate signal from the exact ceiling-crossing
+`markFailed` call, but it is best-effort: a process can stop after the store
+commits the transition and before the callback runs. Reconcile by polling the
+store; observer throws and rejected promises are neutralized so monitoring
+cannot change delivery state.
 
 Run one logical processor per store unless your adapter's `due` claims
 records for competing pollers; the same rule as the outbox dispatcher. And

@@ -1,14 +1,37 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 
-import { reportToObserver } from "../utils/observer";
+import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
 import {
 	type DispatchTrackingOutbox,
+	type DeadLetterRecord,
 	type EventBus,
 	isDispatchTrackingOutbox,
 	type Outbox,
 	type OutboxRecord,
 } from "./ports";
+
+/**
+ * Required operational observers for {@link OutboxDispatcher}. All hooks are
+ * best-effort notifications: synchronous throws and rejected promises are
+ * neutralized so observability cannot change delivery state. The dispatcher
+ * captures and freezes these function references at construction, so later
+ * mutation of the supplied object cannot disable an operational channel.
+ *
+ * `onDeadLetter` fires immediately after `markFailed` reports the exact
+ * transition. It is not a durable notification boundary: a process can stop
+ * after the store commits the transition and before the callback runs. Keep
+ * polling {@link DispatchTrackingOutbox.deadLetters} for durable alerting and
+ * reconciliation; the hook provides low-latency diagnostics.
+ */
+export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
+	/** A publish, acknowledgement, or failure-tracking operation failed. */
+	readonly onDispatchError: (error: unknown, record: OutboxRecord<Evt>) => void;
+	/** Reading the pending page failed. */
+	readonly onPollError: (error: unknown) => void;
+	/** A tracked record crossed the store's dead-letter threshold. */
+	readonly onDeadLetter: (record: DeadLetterRecord<Evt>) => void;
+}
 
 /**
  * Delivery target of the {@link OutboxDispatcher}: one driven port with a
@@ -109,6 +132,13 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	/** Where events go; see {@link OutboxSink}. */
 	sink: OutboxSink<Evt>;
 
+	/**
+	 * Complete, required operational observer bundle. A plain `Outbox` never
+	 * calls `onDeadLetter`, but the complete bundle remains required so changing
+	 * the adapter to a tracking outbox cannot silently omit the alarm path.
+	 */
+	observers: OutboxDispatcherObservers<Evt>;
+
 	/** Records fetched per poll. Default `32`. */
 	batchSize?: number;
 
@@ -152,21 +182,6 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	 * `true` (the failure counts) and cannot break the loop.
 	 */
 	countsTowardCeiling?: (error: unknown) => boolean;
-
-	/**
-	 * Observer for delivery and ack failures. Called with the error and
-	 * the affected record; wire it to logging/metrics. Observer contract
-	 * as in `withCommit`: a throwing observer is neutralized, it cannot
-	 * break the loop.
-	 */
-	onDispatchError?: (error: unknown, record: OutboxRecord<Evt>) => void;
-
-	/**
-	 * Observer for `getPending` failures (storage unavailable, query
-	 * error). The loop survives them: it reports here, backs off, and
-	 * polls again. Same neutralized observer contract.
-	 */
-	onPollError?: (error: unknown) => void;
 }
 
 /**
@@ -224,9 +239,13 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  * const dispatcher = new OutboxDispatcher({
  *   outbox,
  *   sink,
- *   onDispatchError: (error, record) =>
- *     log.warn({ error, eventId: record.event.eventId }, "dispatch failed"),
- *   onPollError: (error) => log.warn({ error }, "outbox poll failed"),
+ *   observers: {
+ *     onDispatchError: (error, record) =>
+ *       log.warn({ error, eventId: record.event.eventId }, "dispatch failed"),
+ *     onPollError: (error) => log.warn({ error }, "outbox poll failed"),
+ *     onDeadLetter: (record) =>
+ *       alerts.page({ eventId: record.event.eventId }, "outbox dead letter"),
+ *   },
  * });
  * const stop = new AbortController();
  * void dispatcher.run(stop.signal);
@@ -238,11 +257,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	private readonly outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
 	private readonly sink: OutboxSink<Evt>;
 	private readonly countsTowardCeiling?: (error: unknown) => boolean;
-	private readonly onDispatchError?: (
-		error: unknown,
-		record: OutboxRecord<Evt>,
-	) => void;
-	private readonly onPollError?: (error: unknown) => void;
+	private readonly observers: OutboxDispatcherObservers<Evt>;
 
 	/**
 	 * Whether the outbox passed at construction implements the
@@ -260,6 +275,11 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 
 	constructor(options: OutboxDispatcherOptions<Evt>) {
 		super("OutboxDispatcher", options);
+		this.observers = captureObserverFunctions(
+			"OutboxDispatcher",
+			options.observers,
+			["onDispatchError", "onPollError", "onDeadLetter"],
+		);
 		this.outbox = options.outbox;
 		this.trackingOutbox = isDispatchTrackingOutbox(options.outbox)
 			? options.outbox
@@ -267,8 +287,6 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		this.usesDispatchTracking = this.trackingOutbox !== undefined;
 		this.sink = options.sink;
 		this.countsTowardCeiling = options.countsTowardCeiling;
-		this.onDispatchError = options.onDispatchError;
-		this.onPollError = options.onPollError;
 	}
 
 	/**
@@ -285,7 +303,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				batch = await this.outbox.getPending(this.batchSize);
 			} catch (error) {
 				this.consecutiveFailures += 1;
-				reportToObserver(() => this.onPollError?.(error));
+				reportToObserver(() => this.observers.onPollError(error));
 				return "stopped";
 			}
 			if (batch.length === 0) {
@@ -359,7 +377,9 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				// to this ack failure instead of chasing them individually.
 				acked = false;
 				for (const context of batch.slice(0, delivered.length)) {
-					reportToObserver(() => this.onDispatchError?.(error, context));
+					reportToObserver(() =>
+						this.observers.onDispatchError(error, context),
+					);
 				}
 			}
 		}
@@ -367,13 +387,21 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		if (failedRecord !== undefined) {
 			const record = failedRecord;
 			const error = failure;
-			reportToObserver(() => this.onDispatchError?.(error, record));
+			reportToObserver(() => this.observers.onDispatchError(error, record));
 			const tracking = this.trackingOutbox;
 			if (tracking !== undefined && this.failureCountsTowardCeiling(error)) {
 				try {
-					await tracking.markFailed(record.dispatchId, error);
+					const deadLetter = await tracking.markFailed(
+						record.dispatchId,
+						error,
+					);
+					if (deadLetter !== undefined) {
+						reportToObserver(() => this.observers.onDeadLetter(deadLetter));
+					}
 				} catch (markError) {
-					reportToObserver(() => this.onDispatchError?.(markError, record));
+					reportToObserver(() =>
+						this.observers.onDispatchError(markError, record),
+					);
 				}
 			}
 		}

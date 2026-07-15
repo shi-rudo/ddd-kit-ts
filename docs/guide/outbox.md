@@ -342,14 +342,21 @@ system, use `OutboxDispatcher`.
 import {
   OutboxDispatcher,
   eventBusSink,
+  type OutboxDispatcherObservers,
 } from "@shirudo/ddd-kit";
+
+const outboxObservers: OutboxDispatcherObservers<OrderEvent> = {
+  onDispatchError: (error, record) =>
+    log.warn({ error, eventId: record.event.eventId }, "dispatch failed"),
+  onPollError: (error) => log.warn({ error }, "outbox poll failed"),
+  onDeadLetter: (record) =>
+    alerts.page({ eventId: record.event.eventId }, "outbox dead letter"),
+};
 
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink: eventBusSink(bus),
-  onDispatchError: (error, record) =>
-    log.warn({ error, eventId: record.event.eventId }, "dispatch failed"),
-  onPollError: (error) => log.warn({ error }, "outbox poll failed"),
+  observers: outboxObservers,
 });
 
 const stop = new AbortController();
@@ -396,19 +403,30 @@ Use `DispatchTrackingOutbox` when you run a poller:
 ```ts
 interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
   extends Outbox<Evt> {
-  markFailed(dispatchId: string, error?: unknown): Promise<void>;
+  markFailed(
+    dispatchId: string,
+    error?: unknown,
+  ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
 }
 ```
 
 On delivery failure, the dispatcher calls `markFailed` if the outbox exposes
 both `markFailed` and `deadLetters`. The store counts attempts and moves the
-record to a dead-letter set when it reaches the configured ceiling.
+record to a dead-letter set when it reaches the configured ceiling. The
+ceiling-crossing call returns that exact record, which lets the dispatcher's
+required `onDeadLetter` observer emit a low-latency alarm without scanning the
+whole set.
 
 Dead-lettering is a trade-off. Once the poison record leaves the pending set,
 later records can flow again, but strict ordering for that aggregate has been
 forfeited. That is why `deadLetters()` must be wired to alerting. A growing
-dead-letter set is an incident, not background noise.
+dead-letter set is an incident, not background noise. The callback is
+best-effort and cannot be the only alarm: a process can stop after the store
+commits the transition and before the observer runs. Poll `deadLetters()` from
+durable monitoring for reconciliation; use `onDeadLetter` for the immediate
+signal. Observer throws and rejected promises are neutralized so monitoring
+cannot alter delivery state.
 
 Recovery is explicit:
 
@@ -422,6 +440,7 @@ The dispatcher also supports `countsTowardCeiling`:
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink,
+  observers: outboxObservers,
   countsTowardCeiling: (error) => isPermanentDeliveryError(error),
 });
 ```
@@ -689,8 +708,9 @@ Use this checklist before calling an outbox production-ready:
   records, contradictory receipts reject, and repeated `markDispatched` calls
   are safe.
 - Dispatch tracking: poison records have bounded retries and dead-lettering.
-- Alerting: `deadLetters()`, oldest pending age, poll failures, dispatch
-  failures, and ack failures are visible.
+- Alerting: the required observers expose poll, dispatch, ack, and immediate
+  dead-letter transitions; durable monitoring also reconciles
+  `deadLetters()` and tracks oldest pending age.
 - Consumer dedup: every subscriber tolerates at-least-once delivery.
 - Shutdown: `run(signal)` receives the runtime stop signal, or `drainOnce` is
   bounded by a deadline.

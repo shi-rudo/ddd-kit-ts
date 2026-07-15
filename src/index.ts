@@ -141,6 +141,7 @@ export type { Id, IdGenerator } from "./core/id";
 // Deadlines: durable timeout-as-input
 export {
 	DeadlineProcessor,
+	type DeadlineProcessorObservers,
 	type DeadlineProcessorOptions,
 } from "./deadlines/deadline-processor";
 export type {
@@ -224,6 +225,7 @@ export {
 export {
 	eventBusSink,
 	OutboxDispatcher,
+	type OutboxDispatcherObservers,
 	type OutboxDispatcherOptions,
 	type OutboxSink,
 } from "./events/outbox-dispatcher";

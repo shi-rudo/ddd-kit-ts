@@ -1,4 +1,7 @@
-import type { DeadlineStore } from "../deadlines/deadline-store";
+import type {
+	DeadlineStore,
+	DeadLetterDeadline,
+} from "../deadlines/deadline-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
@@ -352,9 +355,36 @@ export function createDeadlineStoreContractTests(
 				);
 				const [poison] = await env.store.due(at(T1), 1);
 				assert(poison !== undefined, "expected the due deadline");
+				let transition: DeadLetterDeadline<SuitePayload> | undefined;
 				for (let i = 0; i < ceiling; i++) {
-					await env.store.markFailed(poison.deliveryId, new Error("boom"));
+					const current = await env.store.markFailed(
+						poison.deliveryId,
+						new Error("boom"),
+					);
+					if (i < ceiling - 1) {
+						assertEqual(
+							current,
+							undefined,
+							"markFailed must not report a dead-letter transition below the ceiling",
+						);
+					}
+					transition = current;
 				}
+				assertEqual(
+					transition?.deliveryId,
+					poison.deliveryId,
+					"the ceiling-crossing markFailed call must return the exact dead-letter transition",
+				);
+				assertEqual(
+					transition?.attempts,
+					ceiling,
+					"the returned transition must carry the final attempt count",
+				);
+				assertEqual(
+					await env.store.markFailed(poison.deliveryId, new Error("late")),
+					undefined,
+					"a late failure report must not repeat the dead-letter transition",
+				);
 				// Membership, not count: dead-lettered is terminal for every
 				// adapter, claiming or not.
 				assert(
