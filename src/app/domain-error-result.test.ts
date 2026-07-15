@@ -158,6 +158,22 @@ describe("domainErrorToResult", () => {
 		expect(invoked).toBe(false);
 	});
 
+	it("rejects the abstract DomainError base before invoking the operation", async () => {
+		let invoked = false;
+
+		await expect(
+			domainErrorToResult(
+				() => {
+					invoked = true;
+					return "unreachable";
+				},
+				// @ts-expect-error a catch-all DomainError boundary is forbidden
+				[DomainError],
+			),
+		).rejects.toThrow(TypeError);
+		expect(invoked).toBe(false);
+	});
+
 	it("accepts consumer error constructors without constraining their arguments", () => {
 		class OrderLimitExceededError extends DomainError<"ORDER_LIMIT_EXCEEDED"> {
 			constructor(readonly limit: number) {
