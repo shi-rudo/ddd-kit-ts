@@ -4,6 +4,7 @@ import {
 	handlerOrThrow,
 	mapHandlerFailure,
 	registerOnce,
+	type UntypedMapDispatch,
 } from "./bus-internals";
 import type { Command, CommandHandler } from "./command";
 
@@ -101,13 +102,7 @@ export interface ICommandBus<
 	): Promise<Result<TMap[C["type"]], E>>;
 	// Manual result typing belongs only to the default untyped map shape.
 	execute<C extends Command, R>(
-		command: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? C
-					: never
-				: never,
+		command: UntypedMapDispatch<TMap, C>,
 	): Promise<Result<R, E>>;
 
 	/**
@@ -191,13 +186,7 @@ export class CommandBus<
 	): Promise<Result<TMap[C["type"]], E>>;
 	// Keep the class surface identical to ICommandBus's untyped fallback.
 	async execute<C extends Command, R>(
-		command: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? C
-					: never
-				: never,
+		command: UntypedMapDispatch<TMap, C>,
 	): Promise<Result<R, E>>;
 	async execute<C extends Command, R>(command: C): Promise<Result<R, E>> {
 		// No-handler dispatch is a wiring bug, not a domain failure: thrown,

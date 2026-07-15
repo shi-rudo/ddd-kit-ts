@@ -4,6 +4,7 @@ import {
 	handlerOrThrow,
 	mapHandlerFailure,
 	registerOnce,
+	type UntypedMapDispatch,
 } from "./bus-internals";
 import type { Query, QueryHandler } from "./query";
 
@@ -100,13 +101,7 @@ export interface IQueryBus<
 	): Promise<Result<TMap[Q["type"]], E>>;
 	// Manual result typing belongs only to the default untyped map shape.
 	execute<Q extends Query, R>(
-		query: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? Q
-					: never
-				: never,
+		query: UntypedMapDispatch<TMap, Q>,
 	): Promise<Result<R, E>>;
 
 	/**
@@ -121,13 +116,7 @@ export interface IQueryBus<
 		query: Q,
 	): Promise<TMap[Q["type"]]>;
 	executeUnsafe<Q extends Query, R>(
-		query: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? Q
-					: never
-				: never,
+		query: UntypedMapDispatch<TMap, Q>,
 	): Promise<R>;
 
 	/**
@@ -209,13 +198,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 	): Promise<Result<TMap[Q["type"]], E>>;
 	// Keep the class surface identical to IQueryBus's untyped fallback.
 	async execute<Q extends Query, R>(
-		query: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? Q
-					: never
-				: never,
+		query: UntypedMapDispatch<TMap, Q>,
 	): Promise<Result<R, E>>;
 	async execute<Q extends Query, R>(query: Q): Promise<Result<R, E>> {
 		const handler = handlerOrThrow(this.handlers, "query", query.type);
@@ -231,13 +214,7 @@ export class QueryBus<TMap extends QueryTypeMap = QueryTypeMap, E = string>
 		query: Q,
 	): Promise<TMap[Q["type"]]>;
 	async executeUnsafe<Q extends Query, R>(
-		query: 0 extends 1 & TMap
-			? never
-			: string extends keyof TMap
-				? Record<string, unknown> extends TMap
-					? Q
-					: never
-				: never,
+		query: UntypedMapDispatch<TMap, Q>,
 	): Promise<R>;
 	async executeUnsafe<Q extends Query, R>(query: Q): Promise<R> {
 		// Same no-handler gate as execute: one implementation so the two
