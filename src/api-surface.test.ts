@@ -6,6 +6,29 @@ import * as presentation from "./presentation";
 import * as testing from "./testing";
 import * as utils from "./utils";
 
+// @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
+import type { resetClockFactory as RemovedResetClockFactory } from "./index";
+// @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
+import type { resetEventIdFactory as RemovedResetEventIdFactory } from "./index";
+// @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
+import type { setClockFactory as RemovedSetClockFactory } from "./index";
+// @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
+import type { setEventIdFactory as RemovedSetEventIdFactory } from "./index";
+// @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
+import type { withClockFactory as RemovedWithClockFactory } from "./index";
+// @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
+import type { withEventIdFactory as RemovedWithEventIdFactory } from "./index";
+
+type RemovedFactoryMutationSurface =
+	| typeof RemovedResetClockFactory
+	| typeof RemovedResetEventIdFactory
+	| typeof RemovedSetClockFactory
+	| typeof RemovedSetEventIdFactory
+	| typeof RemovedWithClockFactory
+	| typeof RemovedWithEventIdFactory;
+
+void (undefined as unknown as RemovedFactoryMutationSurface);
+
 /**
  * Pins the RUNTIME public API surface of every package entry point. The
  * entries use curated named exports (no `export *`), so nothing internal
@@ -86,6 +109,7 @@ const INDEX_SURFACE = [
 	"canTransitionDomainState",
 	"copyMetadata",
 	"createDomainEvent",
+	"createDomainEventFactory",
 	"createInitialDomainMachineSnapshot",
 	"createIntegrationMessage",
 	"decodeIntegrationMessage",
@@ -93,6 +117,7 @@ const INDEX_SURFACE = [
 	"deepEqualExcept",
 	"deepFreeze",
 	"deepOmit",
+	"defaultDomainEventFactory",
 	"encodeIntegrationMessage",
 	"entityIds",
 	"eventBusSink",
@@ -108,12 +133,8 @@ const INDEX_SURFACE = [
 	"projectionFromHandlers",
 	"removeEntityById",
 	"replaceEntityById",
-	"resetClockFactory",
-	"resetEventIdFactory",
 	"sameEntity",
 	"sameVersion",
-	"setClockFactory",
-	"setEventIdFactory",
 	"specification",
 	"transitionDomainState",
 	"updateEntityById",
@@ -122,9 +143,7 @@ const INDEX_SURFACE = [
 	"voEqualsExcept",
 	"voValidated",
 	"voWithValidation",
-	"withClockFactory",
 	"withCommit",
-	"withEventIdFactory",
 	"withIdempotentCommit",
 ] as const;
 

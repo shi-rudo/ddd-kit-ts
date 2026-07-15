@@ -90,7 +90,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`recordEvent` calls `createDomainEvent` and fills in `aggregateId` and `aggregateType` from the aggregate. That metadata is how outbox dispatchers, projection handlers, audit logs, and process managers know which aggregate produced the event.
+`recordEvent` uses the aggregate's `DomainEventFactory` and fills in `aggregateId` and `aggregateType` from the aggregate. That metadata is how outbox dispatchers, projection handlers, audit logs, and process managers know which aggregate produced the event.
 
 Calling `createDomainEvent(...)` directly inside an aggregate is easy to get wrong because you must remember those routing fields by hand. `withCommit` validates harvested aggregate events and throws if the fields are missing, but the better path is to make the wrong event hard to create.
 
@@ -100,100 +100,127 @@ See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-
 
 ## Auto-Generated Fields
 
-`createDomainEvent` fills in common fields when you omit them:
+`createDomainEvent` uses the immutable `defaultDomainEventFactory` and fills in
+common fields when you omit them:
 
 | Field | Default | Override |
 | --- | --- | --- |
-| `eventId` | `crypto.randomUUID()` | `options.eventId` or `setEventIdFactory(fn)` |
-| `occurredAt` | current clock time | `options.occurredAt` or `setClockFactory(fn)` |
+| `eventId` | `crypto.randomUUID()` | `options.eventId` or an instance factory |
+| `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
 | `version` | `1` | `options.version` |
 | `metadata` | `undefined` | `options.metadata` |
 
 The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
 
-## Where to bootstrap the factory
+## Instance-bound factories
 
-`setEventIdFactory` and `setClockFactory` are module-level singletons. Call them once at application bootstrap, not per request.
-
-Node or Bun entry point:
+Create a factory for one application composition, request, tenant, or test when
+the immutable default is not the right policy:
 
 ```ts
-import { setEventIdFactory } from "@shirudo/ddd-kit";
+import { createDomainEventFactory } from "@shirudo/ddd-kit";
 import { v7 as uuidv7 } from "uuid";
 
-setEventIdFactory(() => uuidv7());
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: () => new Date(),
+});
 
-import { startServer } from "./server";
-
-startServer();
+const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
 ```
 
-Cloudflare Workers, Vercel Edge, and similar runtimes:
+The returned `DomainEventFactory` is frozen and permanently captures those two
+functions. Creating another factory cannot change this one or the
+`defaultDomainEventFactory`. This makes the same API safe across overlapping
+async requests and parallel tests; no restore hook or async context is needed.
+Every clock read is defensively copied and fails immediately with a `TypeError`
+if the injected clock does not return a valid `Date`.
+
+Per-event `eventId` and `occurredAt` options still win over the captured
+defaults.
+
+## Supplying a factory to an aggregate
+
+Aggregate constructors opt in by forwarding the factory through
+`AggregateConfig`:
 
 ```ts
-import { setEventIdFactory } from "@shirudo/ddd-kit";
-import { ulid } from "ulid";
-
-setEventIdFactory(() => ulid());
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // Events created during this invocation use the configured factory.
-  },
-};
-```
-
-Module top-level code runs when the isolate boots, not once per request. That is the right scope for a process-wide default.
-
-For tests, prefer reset hooks or scoped helpers:
-
-```ts
-import { afterEach, it } from "vitest";
 import {
-  createDomainEvent,
-  resetClockFactory,
-  resetEventIdFactory,
-  setClockFactory,
-  withEventIdFactory,
+  AggregateRoot,
+  type DomainEventFactory,
 } from "@shirudo/ddd-kit";
 
-afterEach(() => {
-  resetEventIdFactory();
-  resetClockFactory();
-});
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
 
-it("emits deterministic ids", () => {
-  setClockFactory(() => new Date("2026-01-01T00:00:00Z"));
+  constructor(
+    id: OrderId,
+    state: OrderState,
+    domainEventFactory: DomainEventFactory,
+  ) {
+    super(id, state, { domainEventFactory });
+  }
+}
+```
 
-  withEventIdFactory(() => "evt-1", () => {
-    const event = createDomainEvent("OrderConfirmed", { orderId: "o-1" });
-    expect(event.eventId).toBe("evt-1");
+`recordEvent(...)` now uses that aggregate instance's factory. `createSnapshot()`
+uses the same captured clock for `snapshotAt`, so event and snapshot timestamps
+cannot drift between two dependency scopes. Aggregates that omit the config use
+the immutable default and need no constructor change.
+
+At a request boundary, construct or select the factory before constructing or
+reconstituting the aggregate:
+
+```ts
+export async function handle(request: Request): Promise<Response> {
+  const domainEvents = createDomainEventFactory({
+    eventIdFactory: requestEventIds(request),
+    clock: requestClock(request),
   });
+  const order = await loadOrder(orderIdFrom(request), domainEvents);
+  order.confirm();
+  // persist order
+}
+```
+
+Repository factories should pass the same `DomainEventFactory` through every
+creation and reconstitution path for that operation.
+
+## Deterministic tests
+
+```ts
+it("emits deterministic ids and timestamps", () => {
+  const domainEvents = createDomainEventFactory({
+    eventIdFactory: () => "evt-1",
+    clock: () => new Date("2026-01-01T00:00:00.000Z"),
+  });
+  const order = new Order(orderId, initialState, domainEvents);
+
+  order.confirm();
+
+  expect(order.pendingEvents[0]?.eventId).toBe("evt-1");
 });
 ```
 
-`withEventIdFactory` and `withClockFactory` are synchronous scoped helpers. They restore the previous factory in a `finally` block, and they reject async callbacks so the factory cannot be restored before awaited code runs.
-
-For async code, prefer per-call options, constructor-injected factories, or an application-level async context such as Node's `AsyncLocalStorage`.
-
-::: warning Last setter wins
-The factories are globals inside the module. If two libraries call `setEventIdFactory` during import, the later import wins. If request code changes the factory per tenant, concurrent requests can affect each other.
-
-Use per-call `eventId` and `occurredAt` options for per-request or per-tenant variation.
-:::
+No `afterEach` reset is required because the test owns the factory instance and
+never changes module state. Async tests use the same pattern unchanged.
 
 ## Custom id formats
 
-Swap the default id factory once at bootstrap:
+Choose the id function when constructing the instance:
 
 ```ts
 // UUID v7: time-ordered and standards-track
 import { v7 as uuidv7 } from "uuid";
-setEventIdFactory(() => uuidv7());
+const uuidEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+});
 
 // ULID: compact, URL-safe, time-ordered
 import { ulid } from "ulid";
-setEventIdFactory(() => ulid());
+const ulidEvents = createDomainEventFactory({
+  eventIdFactory: () => ulid(),
+});
 ```
 
 The kit only requires a string. Choose the id format that fits your storage and interoperability needs.

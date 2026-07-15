@@ -1,16 +1,8 @@
 import { assertNoHostileOwnProtoKey } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
-import { assertNotThenable, now } from "./clock";
+import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 
-// The swappable clock lives in ./clock (so BaseAggregate.createSnapshot
-// can read it without an import cycle); its public API ships from here,
-// unchanged.
-export {
-	type ClockFactory,
-	resetClockFactory,
-	setClockFactory,
-	withClockFactory,
-} from "./clock";
+export type { ClockFactory } from "./clock";
 
 /**
  * Factory function producing a fresh, unique event identifier for each call.
@@ -22,99 +14,12 @@ export {
  * random); for production event stores prefer a **time-ordered** id
  * format (UUID v7 / ULID / KSUID) so B-tree indexes on the eventId
  * column stay clustered and `ORDER BY eventId` matches creation order.
- * Swap one in via `setEventIdFactory(() => uuidv7())` or `() => ulid()`.
+ * Supply one to {@link createDomainEventFactory} to use UUID v7, ULID,
+ * KSUID, or another collision-safe format without mutating module state.
  */
 export type EventIdFactory = () => string;
 
 const defaultEventIdFactory: EventIdFactory = () => crypto.randomUUID();
-let currentEventIdFactory: EventIdFactory = defaultEventIdFactory;
-
-/**
- * Replaces the global event-id factory used by `createDomainEvent`. Call
- * once during application bootstrap, for example:
- *
- * ```ts
- * import { ulid } from "ulid";
- * import { setEventIdFactory } from "@shirudo/ddd-kit";
- *
- * setEventIdFactory(() => ulid());
- * ```
- *
- * The per-call `options.eventId` override always wins over this factory.
- *
- * **Module-scoped: last setter wins.** The factory lives as a single
- * module variable; importing two libraries that both call this races on
- * load order, and parallel test workers will see each other's factory.
- * For test isolation and short-lived contexts prefer
- * {@link withEventIdFactory}; for multi-tenant request isolation
- * (e.g. one factory per tenant in a single Worker invocation) **prefer
- * the per-call `options.eventId`** instead of mutating the global. Same
- * caveat applies to `setClockFactory`.
- */
-export function setEventIdFactory(factory: EventIdFactory): void {
-	currentEventIdFactory = factory;
-}
-
-/**
- * Scoped variant of {@link setEventIdFactory}: installs `factory`,
- * runs `fn`, then restores the previous factory in a `finally` block,
- * so the restoration happens even if `fn` throws. Safe for parallel
- * tests and for synchronous request handlers that need a tenant-
- * specific factory without polluting the global.
- *
- * **Synchronous-only, enforced at runtime.** If `fn` returns a
- * thenable (a `Promise` or any object with a `then` method), the
- * helper throws *before* returning the value to the caller. This
- * catches the async-misuse footgun where the factory would be
- * restored before the awaited body of `fn` runs, leaving the awaited
- * code reading the previous factory. For async scoping across `await`
- * boundaries, use `AsyncLocalStorage`, which is out of scope for this
- * helper; build it on top if you need it.
- *
- * Composes by nesting: an inner `withEventIdFactory` restores back to
- * the outer's factory; the outer restores to the original.
- *
- * **When to prefer the per-call `options.eventId` instead.** If you're
- * constructing a single event and want full control over its id,
- * passing `{ eventId: "..." }` to `createDomainEvent` is the strongest
- * isolation: it bypasses the factory mechanism entirely, no global
- * mutation, no scope to manage. Reach for `withEventIdFactory` when
- * the events are constructed deep inside domain methods you can't
- * thread an explicit id through (typical test scenario), or when many
- * events in a scope should share the same factory.
- *
- * @example
- * ```ts
- * // In a vitest test:
- * it("emits deterministic ids", () => {
- *   withEventIdFactory(() => "evt-fixed", () => {
- *     const e = createDomainEvent("X", { v: 1 });
- *     expect(e.eventId).toBe("evt-fixed");
- *   });
- *   // Outside the callback the default crypto.randomUUID is restored,
- *   // even if the body had thrown.
- * });
- * ```
- */
-export function withEventIdFactory<T>(factory: EventIdFactory, fn: () => T): T {
-	const previous = currentEventIdFactory;
-	currentEventIdFactory = factory;
-	try {
-		const result = fn();
-		assertNotThenable(result, "withEventIdFactory");
-		return result;
-	} finally {
-		currentEventIdFactory = previous;
-	}
-}
-
-/**
- * Restores the default event-id factory (`crypto.randomUUID()`).
- * Intended for use in test `afterEach` hooks.
- */
-export function resetEventIdFactory(): void {
-	currentEventIdFactory = defaultEventIdFactory;
-}
 
 /**
  * Metadata associated with a domain event for traceability and correlation.
@@ -266,6 +171,88 @@ export interface CreateDomainEventOptions {
 	metadata?: EventMetadata;
 }
 
+/** Dependencies captured by one immutable domain-event factory instance. */
+export interface DomainEventFactoryOptions {
+	/** Event-id generator. Defaults to Web Crypto `crypto.randomUUID()`. */
+	readonly eventIdFactory?: EventIdFactory;
+	/** Event and snapshot clock. Defaults to `() => new Date()`. */
+	readonly clock?: ClockFactory;
+}
+
+/**
+ * Instance-bound event constructor. Each factory permanently captures its
+ * own event-id and clock dependencies, so request and test instances cannot
+ * overwrite one another through module state.
+ */
+export interface DomainEventFactory {
+	readonly create: {
+		<T extends string>(
+			type: T,
+			payload?: undefined,
+			options?: CreateDomainEventOptions,
+		): DomainEvent<T, void>;
+		<T extends string, P>(
+			type: T,
+			payload: P,
+			options?: CreateDomainEventOptions,
+		): DomainEvent<T, P>;
+	};
+	/**
+	 * Reads the captured clock and returns a defensive `Date` copy.
+	 * Throws `TypeError` when the clock does not return a valid date.
+	 */
+	readonly now: () => Date;
+}
+
+/**
+ * Creates an immutable, instance-bound domain-event factory.
+ *
+ * The supplied functions are read once and captured by value. The returned
+ * object is frozen, so another request, test, or library cannot replace its
+ * policy. Pass it through `AggregateConfig.domainEventFactory` when aggregate
+ * `recordEvent` and snapshot timestamps must share the same scope.
+ *
+ * @example
+ * ```ts
+ * const domainEvents = createDomainEventFactory({
+ *   eventIdFactory: () => uuidv7(),
+ *   clock: () => new Date(),
+ * });
+ * const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
+ * ```
+ */
+export function createDomainEventFactory(
+	options: DomainEventFactoryOptions = {},
+): DomainEventFactory {
+	const eventIdFactory = options.eventIdFactory ?? defaultEventIdFactory;
+	const clock = options.clock ?? defaultClockFactory;
+	const create = (<T extends string, P>(
+		type: T,
+		payload?: P,
+		createOptions?: CreateDomainEventOptions,
+	): DomainEvent<T, P> =>
+		mintDomainEvent(
+			type,
+			payload,
+			createOptions,
+			eventIdFactory,
+			clock,
+		)) as DomainEventFactory["create"];
+
+	return Object.freeze({
+		create,
+		now: () => readClock(clock),
+	});
+}
+
+/**
+ * Immutable UUID-v4/platform-clock factory used by the top-level
+ * {@link createDomainEvent}. It cannot be reconfigured; construct an instance
+ * with {@link createDomainEventFactory} for custom policy.
+ */
+export const defaultDomainEventFactory: DomainEventFactory =
+	createDomainEventFactory();
+
 /**
  * Creates a domain event with default values.
  * Sets occurredAt to current date and version to 1 if not provided.
@@ -382,8 +369,22 @@ export function createDomainEvent<T extends string, P>(
 	payload?: P,
 	options?: CreateDomainEventOptions,
 ): DomainEvent<T, P> {
+	return defaultDomainEventFactory.create(
+		type,
+		payload as P,
+		options,
+	) as DomainEvent<T, P>;
+}
+
+function mintDomainEvent<T extends string, P>(
+	type: T,
+	payload: P | undefined,
+	options: CreateDomainEventOptions | undefined,
+	eventIdFactory: EventIdFactory,
+	clock: ClockFactory,
+): DomainEvent<T, P> {
 	const event: DomainEvent<T, P> = {
-		eventId: options?.eventId ?? currentEventIdFactory(),
+		eventId: options?.eventId ?? eventIdFactory(),
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
@@ -394,11 +395,11 @@ export function createDomainEvent<T extends string, P>(
 		// the next mutation then throws far away from the cause. Same
 		// ownership contract as `vo()` and the occurredAt copy.
 		payload: cloneOwnedEventData(payload as P, "payload"),
-		// A caller-supplied occurredAt is copied here; the now() reading is
-		// already a defensive copy at the source (see clock.ts).
+		// A caller-supplied occurredAt and a factory reading are both copied
+		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt: options?.occurredAt
 			? new Date(options.occurredAt.getTime())
-			: now(),
+			: readClock(clock),
 		version: options?.version ?? 1,
 		metadata: guardedMetadataClone(options?.metadata),
 	};

@@ -25,16 +25,14 @@ export {
 	type CreateDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
+	createDomainEventFactory,
+	defaultDomainEventFactory,
 	type DomainEvent,
+	type DomainEventFactory,
+	type DomainEventFactoryOptions,
 	type EventIdFactory,
 	type EventMetadata,
 	mergeMetadata,
-	resetClockFactory,
-	resetEventIdFactory,
-	setClockFactory,
-	setEventIdFactory,
-	withClockFactory,
-	withEventIdFactory,
 } from "./aggregate/domain-event";
 export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
 

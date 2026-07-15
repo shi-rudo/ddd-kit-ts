@@ -246,25 +246,24 @@ An identity map makes the second `findById` return the same object. Now the oper
 
 Use the [`UnitOfWork` identity map](./unit-of-work.md#identity-map), or keep a per-operation identity map in repositories that use `withCommit` directly. The map must be scoped to one operation. A process-wide identity map would leak stale state across requests. See [Repository](./repository.md).
 
-### Setting Global Factories Directly in Tests
+### Sharing One Mutable Factory Across Tests or Requests
 
-`setEventIdFactory` and `setClockFactory` change module-level state. In parallel test runners, that state can leak between tests.
+Mutable module configuration makes the last writer the effective owner. In parallel test runners or overlapping requests, that state leaks across operation boundaries.
 
 This kind of leak is painful because each test passes alone. The failure only appears when the suite runs in a different order or when workers overlap.
 
-Use the scoped helpers:
+Create an immutable factory owned by the test or request:
 
 ```ts
-withEventIdFactory(() => "deterministic-id", () => {
-  // The factory is restored after this function returns or throws.
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => "deterministic-id",
+  clock: () => new Date("2026-01-01T00:00:00.000Z"),
 });
+
+const order = makeOrder({ domainEventFactory: domainEvents });
 ```
 
-The same rule applies to `withClockFactory`.
-
-The scoped helpers are synchronous by design; they reject async callbacks so the factory cannot be restored before awaited code runs. For async flows, use per-call event options, constructor-injected factories, or an application-level async context.
-
-The design is the same as using `try/finally` around global state. Set it for the smallest possible scope, run the synchronous test body, and restore it even on failure. If a test needs deterministic ids or clocks, make that dependency visible in the test body instead of leaving hidden process state behind. See [Domain Events -> Factory bootstrap](./domain-events.md#where-to-bootstrap-the-factory).
+No reset is needed, and awaited code keeps using the same value because nothing is installed globally. If a test needs deterministic ids or clocks, keep that dependency visible in the test setup and pass it through aggregate construction or reconstitution. See [Domain Events -> Instance-bound factories](./domain-events.md#instance-bound-factories).
 
 ### Storing Aggregates in Edge Runtime Globals
 

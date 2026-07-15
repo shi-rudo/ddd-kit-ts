@@ -1,7 +1,7 @@
 import type { Id } from "../core/id";
-import type { EntityConfig } from "../entity/entity";
 import type { AggregateSnapshot, Version } from "./aggregate";
 import {
+	type AggregateConfig,
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
@@ -13,14 +13,14 @@ import type { AnyDomainEvent } from "./domain-event";
 export type { IAggregateRoot } from "./aggregate";
 
 /**
- * Configuration options for AggregateRoot behavior: currently exactly
- * {@link EntityConfig} (the opt-in `deepFreezeState`). The former
- * `autoVersionBump` option was removed in v3: the OCC decision lives in
- * the method NAME instead. `setState` always bumps the version; the rare
- * non-bumping mutation is the deliberately loud
+ * Configuration options shared by aggregate roots: `deepFreezeState` from
+ * `EntityConfig` plus an optional instance-bound `domainEventFactory` used by
+ * `recordEvent` and snapshots. The former `autoVersionBump` option was removed
+ * in v3: the OCC decision lives in the method NAME instead. `setState` always
+ * bumps the version; the rare non-bumping mutation is the deliberately loud
  * `setStateWithoutVersionBump`.
  */
-export type AggregateConfig = EntityConfig;
+export type { AggregateConfig } from "./base-aggregate";
 
 /**
  * Base class for Aggregate Roots without Event Sourcing.
