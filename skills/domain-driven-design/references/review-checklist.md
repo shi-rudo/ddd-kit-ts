@@ -85,7 +85,11 @@ design uses that path; skip them otherwise.
 
 `domain-event-design.md`
 
-- Are events named as business facts in past tense?
+- Are events named as business facts in past tense, not CRUD echoes
+  (`CustomerUpdated`), property changes (`StatusChanged`), or technical
+  signals?
+- Would every flow survive one specific subscriber unsubscribing? A required
+  reaction is a command or an explicit step, not an event subscription.
 - Are events recorded only after the aggregate accepted the command and changed
   state, and never on a failed command?
 - Are integration events and external messages published only after commit,

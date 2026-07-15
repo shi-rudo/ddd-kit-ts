@@ -14,6 +14,7 @@ options with observable conditions, and states its hard limits.
 - Core rule
 - Part 1 - Principles
   - What a domain event is
+  - What is not a domain event
   - Domain events are not event sourcing
   - Naming
   - Recording and publication
@@ -45,6 +46,37 @@ another object to do work.
 - Never a way to ask another object to do work; that is a command.
 - The name reads sensibly as "it happened that ...". If the name describes an
   instruction, use a command instead.
+
+### What Is Not a Domain Event
+
+Past tense alone does not qualify a name. An event earns its place in the model
+only if it records a business fact a domain expert would recognize and care
+about. The recurring impostors:
+
+- A CRUD echo. `CustomerUpdated`, `RecordSaved`, `OrderDeleted` name a
+  persistence operation, not a business fact. Ask what happened in the business
+  and name that: `CustomerRelocated`, `OrderCancelled`.
+- A property-change notification. `StatusChanged`, `EmailChanged` report which
+  field mutated. The business fact behind the mutation is the event; the field
+  change is its consequence.
+- A technical signal. `CacheInvalidated`, `RetryScheduled`, `RowInserted` may
+  exist as infrastructure telemetry, never as domain events in the model.
+- A command in disguise. If the flow is broken unless one specific subscriber
+  performs one specific action, the message is a command regardless of tense.
+  Renaming `SendWelcomeEmail` to `WelcomeEmailRequested` changes nothing;
+  publishing `UserRegistered` is honest only if registration is complete
+  whether or not anyone reacts.
+- A change feed. One event per setter or per repository write means events are
+  serving data synchronization, not recording business decisions. Model the
+  decisions; use a projection or a replication mechanism for sync.
+- An indirection to hide coupling. Publishing an event so that a dependency no
+  longer appears in the dependency graph does not remove the coupling; it hides
+  it from review. If the producer knows and needs its consumer, make the call
+  or command explicit and let the design problem surface where it can be fixed.
+
+The admission test for every candidate: a domain expert recognizes the name and
+cares that the fact occurred, and the name states why the change happened, not
+which data changed. Failing that test, record no event.
 
 ### Domain Events Are Not Event Sourcing
 
@@ -114,6 +146,10 @@ Avoid command names, technical names, and transport names:
 - A handler may update other aggregates, read models, policies, or external
   processes, but it must never be required to complete the emitting aggregate's
   own invariants.
+- A handler owns a consequence the producer does not depend on: the emitting
+  use case's business outcome is complete whether or not the handler runs. A
+  reaction the outcome requires is an explicit step, a command, or part of a
+  process owner, not a subscription.
 - Record enough processed-message state, or use an idempotent write, so repeated
   handling does not duplicate side effects.
 
@@ -258,6 +294,13 @@ versions stored events via upcasting. Do not conflate the two mechanisms.
 ## Smell Checks
 
 - The event is named like a command or technical notification.
+- The event names a data mutation (`CustomerUpdated`, `StatusChanged`) instead
+  of the business fact behind it.
+- Events exist for every setter or every repository write.
+- A flow breaks if one specific subscriber stops listening; the event is a
+  command in disguise.
+- An event exists so that a dependency stops showing up in the dependency
+  graph.
 - Event sourcing is adopted because an audit trail was requested, where
   persisted domain events or a projection would serve and state could remain
   the source of truth.
