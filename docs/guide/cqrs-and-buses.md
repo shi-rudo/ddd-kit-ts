@@ -183,6 +183,10 @@ interface PlaceOrderData {
   readonly items: ReadonlyArray<PlaceOrderItem>;
 }
 
+interface PlaceOrderIntention extends PlaceOrderData {
+  readonly type: "PlaceOrder";
+}
+
 function decodePlaceOrderBody(
   body: Uint8Array,
   principal: AuthenticatedPrincipal,
@@ -457,10 +461,16 @@ interface QueueDelivery {
 }
 
 declare function recordCommandOutcome(
-  messageId: string,
+  deliveryKey: string,
   outcome: unknown,
 ): Promise<void>;
-declare function stableHash(command: PlaceOrderData): string;
+declare function stableHash(command: PlaceOrderIntention): string;
+
+const PLACE_ORDER_CONSUMER = "orders.place-order.v1";
+
+function scopedMessageKey(scope: string, messageId: string): string {
+  return JSON.stringify([scope, messageId]);
+}
 
 async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
   const correlationId = transportId(
@@ -487,18 +497,22 @@ async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
     return;
   }
 
-  const command: PlaceOrderCommand = {
+  const intention: PlaceOrderIntention = {
     type: "PlaceOrder",
     ...decoded.value,
+  };
+  const deliveryKey = scopedMessageKey(PLACE_ORDER_CONSUMER, messageId.value);
+  const command: PlaceOrderCommand = {
+    ...intention,
     correlationId: correlationId.value,
     idempotency: {
-      key: messageId.value,
-      fingerprint: stableHash(decoded.value),
+      key: deliveryKey,
+      fingerprint: stableHash(intention),
     },
   };
 
   const outcome = await commandBus.execute(command);
-  await recordCommandOutcome(messageId.value, outcome);
+  await recordCommandOutcome(deliveryKey, outcome);
   delivery.ack();
 }
 ```
@@ -506,13 +520,19 @@ async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
 `QueueDelivery` is deliberately an application-specific adapter type. RabbitMQ,
 SQS, Kafka, and other brokers use different names and settlement rules, but the
 order stays the same: bound, decode, convert, dispatch, record the outcome, then
-settle. The broker's stable message id becomes the idempotency key, while the
-fingerprint prevents that key from being reused for different command content.
+settle. The adapter must expose a stable delivery identity within this consumer.
+For Kafka that is commonly topic, partition, and offset; other brokers may
+combine a queue or producer identity with their message id. `scopedMessageKey`
+then separates this consumer from every other command stream that shares the
+idempotency store. The fingerprint includes the command type and complete
+business input, so a matching key can only replay the same intention.
+
 With a transactional idempotency store, `withIdempotentCommit` stores the key,
 fingerprint, outcome, aggregate write, and outbox entry in the application's
-transaction. `recordCommandOutcome` must also be idempotent by message id: an
-acknowledgement can fail after that observer succeeds. A correlation id helps
-tracing; it does not make an at-least-once delivery safe to repeat. See
+transaction. The separate `recordCommandOutcome` observer uses the same scoped
+delivery key and must also be idempotent because an acknowledgement can fail
+after that observer succeeds. A correlation id helps tracing; it does not make
+an at-least-once delivery safe to repeat. See
 [Idempotent Commands](./idempotency.md).
 
 ### Type Maps

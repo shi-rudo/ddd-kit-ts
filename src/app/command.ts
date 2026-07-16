@@ -37,17 +37,39 @@ import type { Result } from "@shirudo/result";
  *   body: Uint8Array,
  *   principal: AuthenticatedPrincipal,
  * ): Result<CreateOrderCommand, InvalidCommand>;
+ * declare function decodeMessageId(
+ *   value: unknown,
+ * ): Result<string, InvalidTransportMetadata>;
+ * declare function createOrderDeliveryKey(messageId: string): string;
+ *
+ * // This application service invokes the handler through withIdempotentCommit.
+ * // createOrderDeliveryKey scopes the message id by consumer. The service
+ * // fingerprints the complete CreateOrder intention and commits that claim,
+ * // the aggregate write, outbox entries, and outcome together.
+ * declare function executeIdempotentCreateOrder(
+ *   deliveryKey: string,
+ *   command: CreateOrderCommand,
+ * ): Promise<Result<OrderId, string>>;
  *
  * // Register with RabbitMQ or another external bus.
  * rabbitMQChannel.consume("order.commands", async (message) => {
+ *   const messageId = decodeMessageId(message.properties.messageId);
+ *   if (messageId.isErr()) {
+ *     rabbitMQChannel.reject(message, false); // missing identity: dead-letter
+ *     return;
+ *   }
+ *   const deliveryKey = createOrderDeliveryKey(messageId.value);
  *   const principal = authenticateProducer(message.properties.headers);
  *   const decoded = decodeCreateOrderCommand(message.content, principal);
  *   if (decoded.isErr()) {
  *     rabbitMQChannel.reject(message, false); // invalid input: dead-letter, do not retry
  *     return;
  *   }
- *   const outcome = await handler(decoded.value);
- *   await recordCommandOutcome(outcome);
+ *   const outcome = await executeIdempotentCreateOrder(
+ *     deliveryKey,
+ *     decoded.value,
+ *   );
+ *   await recordCommandOutcome(deliveryKey, outcome);
  *   rabbitMQChannel.ack(message);
  * });
  * ```
@@ -59,7 +81,9 @@ export interface Command {
 /**
  * Handler for executing commands.
  * Commands return Result for explicit error handling.
- * Commands may modify system state and should be idempotent when possible.
+ * Commands may modify system state. When a caller can retry or a broker can
+ * redeliver, the application service must enforce idempotency; this handler
+ * type alone does not provide it.
  *
  * This type can be used to mark handlers even when using external frameworks
  * (e.g., RabbitMQ, AWS SQS, Kafka) to ensure type safety and consistency.
@@ -88,14 +112,25 @@ export interface Command {
  *
  * // The broker adapter validates before calling the application handler.
  * rabbitMQChannel.consume("commands", async (msg) => {
+ *   const messageId = decodeMessageId(msg.properties.messageId);
+ *   if (messageId.isErr()) {
+ *     rabbitMQChannel.reject(msg, false);
+ *     return;
+ *   }
+ *   const deliveryKey = createOrderDeliveryKey(messageId.value);
  *   const principal = authenticateProducer(msg.properties.headers);
  *   const decoded = decodeCreateOrderCommand(msg.content, principal);
  *   if (decoded.isErr()) {
  *     rabbitMQChannel.reject(msg, false); // malformed or over limit
  *     return;
  *   }
- *   const outcome = await createOrderHandler(decoded.value);
- *   await recordCommandOutcome(outcome);
+ *   // executeIdempotentCreateOrder invokes createOrderHandler through the same
+ *   // atomic withIdempotentCommit boundary described in the first example.
+ *   const outcome = await executeIdempotentCreateOrder(
+ *     deliveryKey,
+ *     decoded.value,
+ *   );
+ *   await recordCommandOutcome(deliveryKey, outcome);
  *   rabbitMQChannel.ack(msg);
  * });
  * ```

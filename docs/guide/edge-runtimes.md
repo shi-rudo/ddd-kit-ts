@@ -183,6 +183,18 @@ type ConfirmOrderFailure =
       readonly details: { readonly orderId: OrderId };
     }
   | {
+      readonly code: "ORDER_NOT_FOUND";
+      readonly category: "NOT_FOUND";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
+      readonly code: "ORDER_STATE_CONFLICT";
+      readonly category: "CONFLICT";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
       readonly code: "ORDER_COMMAND_UNAVAILABLE";
       readonly category: "INFRASTRUCTURE";
       readonly retryable: true;
@@ -216,13 +228,32 @@ function createCommandBus(
         details: { orderId: command.orderId },
       });
     }
-    if (!response.ok) {
+    if (response.status === 404) {
+      return err({
+        code: "ORDER_NOT_FOUND",
+        category: "NOT_FOUND",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
+    if (response.status === 409) {
+      return err({
+        code: "ORDER_STATE_CONFLICT",
+        category: "CONFLICT",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
+    if (response.status >= 500) {
       return err({
         code: "ORDER_COMMAND_UNAVAILABLE",
         category: "INFRASTRUCTURE",
         retryable: true,
         details: {},
       });
+    }
+    if (!response.ok) {
+      throw new Error(`Unexpected order command response: ${response.status}`);
     }
 
     return ok(command.orderId);
@@ -375,8 +406,16 @@ function authenticationFailureResponse(
 }
 
 function commandFailureResponse(failure: ConfirmOrderFailure): Response {
-  const status = failure.category === "FORBIDDEN" ? 403 : 503;
-  return Response.json(failure, { status });
+  switch (failure.category) {
+    case "FORBIDDEN":
+      return Response.json(failure, { status: 403 });
+    case "NOT_FOUND":
+      return Response.json(failure, { status: 404 });
+    case "CONFLICT":
+      return Response.json(failure, { status: 409 });
+    case "INFRASTRUCTURE":
+      return Response.json(failure, { status: 503 });
+  }
 }
 
 function requestFailure(
@@ -397,6 +436,13 @@ function requestFailure(
 The authentication adapter maps the provider's external subject and claims to
 the local `ActorId`. If that mapping fails, it returns the authentication result
 above; the failure is not reported as malformed command JSON.
+
+The Durable Object contract distinguishes expected outcomes from availability.
+`403`, `404`, and `409` are permanent application results that the caller can
+handle without retrying. A `5xx` response means the downstream application is
+temporarily unavailable. Any other non-success status is contract drift in this
+example and throws as a defect; add another explicit outcome when the Durable
+Object deliberately introduces one.
 
 Authentication still is not authorization. The application use case loads the
 order and evaluates any application policy and state-dependent domain
