@@ -1,6 +1,6 @@
 // @ts-expect-error Node's fs module exists in the test runtime; the package stays Node-type-free.
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 const moduleDirectory = new URL(".", import.meta.url);
 

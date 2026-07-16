@@ -37,7 +37,7 @@ jobs:
         run: pnpm lint
 
       - name: Test
-        run: pnpm vitest run
+        run: pnpm test
 
       - name: Build
         run: pnpm build
@@ -52,9 +52,10 @@ jobs:
           tarball=$(printf '%s\n' /tmp/pack-smoke/shirudo-ddd-kit-*.tgz)
           cd /tmp/pack-consumer
           npm init -y
-          npm install --ignore-scripts --no-audit --no-fund "$tarball" "@shirudo/base-error@$base_error_version" "@shirudo/result@$result_version"
-          node --input-type=module -e "const m = await import('@shirudo/ddd-kit'); if (typeof m.AggregateRoot !== 'function') throw new Error('import smoke failed');"
-          node --input-type=module -e "const m = await import('@shirudo/ddd-kit/money'); if (typeof m.parseMoneyInput !== 'function') throw new Error('money entry smoke failed');"
+          npm install --ignore-scripts --no-audit --no-fund "$tarball" "@shirudo/base-error@$base_error_version" "@shirudo/result@$result_version" typescript@5.9.3
+          cp -f "$GITHUB_WORKSPACE/scripts/package-smoke/consumer.mts" .
+          npx tsc consumer.mts --strict --skipLibCheck false --target ES2022 --module NodeNext --moduleResolution NodeNext --outDir dist
+          node dist/consumer.mjs
 
   edge-runtime-smoke:
     runs-on: ubuntu-latest

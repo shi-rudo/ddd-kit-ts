@@ -1,6 +1,6 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	deepFreeze,
 	vo,

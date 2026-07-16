@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { DomainEvent } from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";

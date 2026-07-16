@@ -1,5 +1,5 @@
 // deep-omit.test.ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { deepOmit } from "./deep-omit";
 
 describe("deepOmit – Primitives and Functions", () => {
@@ -466,7 +466,10 @@ describe("deepOmit – Symbol.toStringTag spoofing", () => {
 				keep: number;
 			};
 
-			expect(result).not.toBe(value);
+			// Keep the hostile Symbol.toStringTag value out of the assertion
+			// formatter; older supported Node releases recurse while formatting a
+			// plain object that identifies itself as an Error.
+			expect(Object.is(result, value)).toBe(false);
 			expect(result.keep).toBe(2);
 			expect("secret" in result).toBe(false);
 		},

@@ -1,5 +1,5 @@
 import { ok } from "@shirudo/result";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
 import type { Command, CommandHandler } from "../../src/app/command";
 import { CommandBus } from "../../src/app/command-bus";

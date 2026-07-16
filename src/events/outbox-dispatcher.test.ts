@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { EventBusImpl } from "./event-bus";
 import { InMemoryOutbox } from "./outbox";

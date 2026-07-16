@@ -19,18 +19,34 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed: Vite+ test and package toolchain
+
+- Pin Vite+ 0.2.4, Vite 8.1.3, and Vitest 4.1.10 through the pnpm workspace
+  catalog. Internal tests import the bundled test API from `vite-plus/test` and
+  run through `vp test`.
+- Replace tsup with Vite+ Pack for all six ESM entry points. Public export names,
+  function and class names, external peer dependencies, source maps, and bundled
+  declarations remain intact; shared implementation now lives in stable
+  `dist/chunks` files.
+- Compile and execute every tarball entry in CI with TypeScript 5.9 and
+  `skipLibCheck: false`. This catches declaration-chunk and export-routing defects
+  that a source-tree typecheck or runtime-only import cannot see.
+- Keep Biome as the lint and format policy for this migration. Adopting Oxfmt
+  would rewrite the existing codebase without changing package behavior, so it
+  remains a separate, explicit style decision.
+- Remove tsup and its remaining development-server advisory. Both the production
+  and full dependency audits now report no known vulnerabilities.
+
 ### Changed: native TypeScript 7 compiler toolchain
 
 - Run `pnpm typecheck` with the native TypeScript 7.0.2 compiler. The package
   runtime, public API, emitted declarations, and TypeScript 5.9+ consumer floor
   remain unchanged.
 - Keep the importable `typescript` module on the official
-  `@typescript/typescript6` compatibility package for TypeDoc, tsup, and other
-  tools that still require the compiler API. TypeScript 7.0 intentionally ships
-  only the `tsc` CLI; `@typescript/native` supplies that binary side by side.
-- Scope TypeScript 6's `baseUrl` deprecation suppression to tsup's declaration
-  worker, because tsup 8.5.1 injects that option internally. The TypeScript 7
-  project typecheck does not suppress deprecations.
+  `@typescript/typescript6` compatibility package for TypeDoc, Vite+ Pack's
+  declaration bundler, and other tools that still require the compiler API.
+  TypeScript 7.0 intentionally ships only the `tsc` CLI;
+  `@typescript/native` supplies that binary side by side.
 - Preserve the negative domain-event creation type test under TypeScript 7's
   different overload diagnostic location without weakening the rejected shape.
 
@@ -42,8 +58,7 @@ here, with a before and after.
 - Keep the existing TypeDoc-generated API sidebar and LLM documentation plugin;
   both integrations complete the VitePress 2 client and SSR builds unchanged.
 - Remove the four remaining VitePress 1 / Vite 5 advisories from the development
-  lockfile. The full audit now reports only the separately triaged low-severity
-  tsup/esbuild development-server advisory.
+  lockfile. The later Vite+ migration removes the final tsup/esbuild advisory.
 
 ### Changed: pnpm 11 and production dependency audit gate
 

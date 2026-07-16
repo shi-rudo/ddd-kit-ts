@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { InvalidMoneyError } from "./errors";
 import { moneyOfMinor } from "./money";
 import { moneyFromSnapshot, moneyToSnapshot } from "./snapshot";

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ErrorMapperFailedError, InfrastructureError } from "../core/errors";
 import { CommandBus } from "./command-bus";
 import { QueryBus } from "./query-bus";

@@ -1,5 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 // @ts-expect-error IQueryableRepository was removed from the public API;
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../index";

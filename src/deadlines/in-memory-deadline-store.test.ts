@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { InMemoryCapacityExceededError } from "../core/errors";
 import { InMemoryDeadlineStore } from "./in-memory-deadline-store";
 

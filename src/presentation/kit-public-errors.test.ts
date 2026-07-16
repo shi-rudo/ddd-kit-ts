@@ -1,6 +1,6 @@
 import { ValidationError } from "@shirudo/base-error";
 import { LocalizedMessageSet, project } from "@shirudo/base-error/public-error";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
