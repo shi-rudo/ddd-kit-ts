@@ -136,6 +136,9 @@ Two constraints bound the judgment:
   events depend on the stage.
 - State transitions happen through named behavior that guards the transition and
   rejects illegal ones.
+- A transition method guards the legality of the transition itself and performs
+  the change; it hides no further decisions. Preconditions and permission rules
+  that gate the decision stay visible in the command that makes it.
 - Do not represent lifecycle as free-form mutable flags that any code can set.
 - State that is a pure function of other attributes is derived, not stored.
 - Time-based transitions receive an explicit clock or current-time input; system
@@ -149,6 +152,8 @@ Two constraints bound the judgment:
   `aggregate-design.md`.
 - Expose behavior as named domain decisions. Do not expose public setters unless
   a setter is itself a named decision protecting a named invariant.
+- Predicates and queries on the entity are deterministic and side-effect-free;
+  a method that mutates is named as the decision it makes, never as a check.
 - Do not expose mutable internal collections.
 - An entity with only getters and setters and no behavior or invariant is
   anemic. Either it owns behavior and invariants, or it is really a value object
@@ -343,7 +348,8 @@ Part 1 and Part 2 govern. Each item checks a property of the finished design.
 - Lifecycle states are explicit where later decisions depend on them; derived
   state is computed, not stored.
 - Transitions go through named guarded behavior; illegal transitions are
-  rejected; there is no public state setter.
+  rejected; there is no public state setter; a transition method hides no
+  decision beyond the transition's legality.
 - The entity protects its own local invariants; cross-entity invariants live on
   the aggregate root.
 - Behavior is exposed as named domain decisions; no public setters or exposed
@@ -379,6 +385,9 @@ Part 1 and Part 2 govern. Each item checks a property of the finished design.
 - Lifecycle is a free-form mutable flag any code can set.
 - State that could be derived is stored, creating two sources of truth.
 - State transitions happen through setters without guarding illegal transitions.
+- A state-transition method hides precondition or permission decisions that
+  belong to the deciding command.
+- A query-shaped method on the entity mutates state.
 - The entity is anemic: only getters and setters, no behavior or invariant.
 - A child entity is loaded or mutated directly by outside code, bypassing the
   root.

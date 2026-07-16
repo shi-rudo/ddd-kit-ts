@@ -84,6 +84,11 @@ experts can discuss, not technical verbs.
   no single object.
 - A codebase heavy with domain services and thin on aggregate behavior is a
   smell, not an architecture.
+- The same restraint governs every extracted object: do not mint a policy,
+  strategy, or specification for a single small condition. A rule that is
+  local, small, and stable stays a private method on the aggregate or entity
+  that owns it; the extraction gate lives in `tactical-patterns.md`,
+  *Specification*.
 
 ### Domain Logic, Not Orchestration
 
@@ -278,6 +283,8 @@ Service table:
 - A domain service is named `Manager`, `Helper`, or `Processor` with no domain
   meaning.
 - A value object or specification would express the rule, but a service was used.
+- A policy, strategy, or specification object exists for a single small, stable
+  condition that a private method on its owner could express.
 - A cohesive mechanism (a technical computation) is dressed up as a domain
   service, or a domain decision is buried inside a mechanism
   (`core-domain-distillation.md`).

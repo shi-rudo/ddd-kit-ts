@@ -66,10 +66,15 @@ subdomain warrants a domain model at all.
   named business creation step or multi-step rule. Then apply the construction
   rules in `aggregate-design.md` or `value-object-design.md`.
 - **Specification**: use when a reusable business predicate must be named,
-  composed, shared, or passed into a decision. Do not use it to avoid naming
-  aggregate behavior or to smuggle infrastructure queries into the domain. As
-  flexible repository lookup criteria, a Specification is also the alternative
-  to leaking a query builder (`repository-design.md`, *Interface Shape*).
+  composed, shared, or passed into a decision. A rule that is local to one
+  aggregate, small, and stable does not qualify: it stays a private method on
+  its owner. A separate predicate object is earned by reuse across call sites,
+  composition, own dependencies, an independent rate of change, independent
+  tests, or spanning several domain objects — never by line count alone. Do not
+  use it to avoid naming aggregate behavior or to smuggle infrastructure
+  queries into the domain. As flexible repository lookup criteria, a
+  Specification is also the alternative to leaking a query builder
+  (`repository-design.md`, *Interface Shape*).
 - **Gateway**: use when the core needs something from an external system (a
   payment provider, a rate source, another context's API). The port is a driven
   port the core declares, and its signature speaks the core's types: it returns
