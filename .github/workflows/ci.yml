@@ -51,3 +51,23 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund "$tarball" "@shirudo/base-error@$base_error_version" "@shirudo/result@$result_version"
           node --input-type=module -e "const m = await import('@shirudo/ddd-kit'); if (typeof m.AggregateRoot !== 'function') throw new Error('import smoke failed');"
           node --input-type=module -e "const m = await import('@shirudo/ddd-kit/money'); if (typeof m.parseMoneyInput !== 'function') throw new Error('money entry smoke failed');"
+
+  edge-runtime-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Built package in edge runtimes
+        run: pnpm test:edge-runtime
