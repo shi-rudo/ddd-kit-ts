@@ -507,8 +507,13 @@ late publish with its retry and is not a production-safe adapter. If you
 fire-and-forget and return early, the dispatcher will
 mark the record as dispatched even though the broker may never store it. A
 timeout is a transient delivery failure by default and leaves the record
-pending without consuming its poison ceiling. Worker shutdown likewise does
-not count; records not yet acknowledged stay pending for the next worker.
+pending without consuming its poison ceiling. Consequently, a record whose
+delivery always reaches the shell timeout is retried with backoff indefinitely
+instead of being dead-lettered. This deliberately favors recovery from common
+outages over the rarer slow-poison case; configure `classifyFailure` to return
+`"permanent"` for timeouts when a sink needs the opposite policy. Worker
+shutdown likewise does not count; records not yet acknowledged stay pending
+for the next worker.
 
 The same rule applies to poll-store adapters. The dispatcher always passes an
 `EffectContext` to `getPending`, `markDispatched`, and `markFailed`; the optional
