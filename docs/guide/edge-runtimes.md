@@ -120,13 +120,27 @@ bindings from `env`, build the bus from `env` inside `fetch` or inside a small
 factory. Do not register a module-scope handler that closes over a non-existent
 `env`.
 
+The request body is still untrusted on the edge. `request.json()` reads the
+whole body and returns a value TypeScript cannot validate. The example below
+authenticates first, reads at most 64 KiB from the stream, parses into `unknown`,
+allow-lists the two body fields, and only then constructs branded ids. The
+authenticated actor comes from the verified principal, not from the JSON body.
+Your authentication and schema libraries may differ; the order of the boundary
+steps should not.
+
 ```ts
-import { CommandBus, type Command } from "@shirudo/ddd-kit";
-import { err, ok } from "@shirudo/result";
+import { CommandBus, type Command, type Id } from "@shirudo/ddd-kit";
+import { err, ok, type Result } from "@shirudo/result";
+
+const MAX_COMMAND_BYTES = 64 * 1024;
+
+type OrderId = Id<"OrderId">;
+type ActorId = Id<"ActorId">;
 
 type ConfirmOrder = Command & {
-  type: "ConfirmOrder";
-  orderId: string;
+  readonly type: "ConfirmOrder";
+  readonly orderId: OrderId;
+  readonly requestedBy: ActorId;
 };
 
 type AppCommand = ConfirmOrder;
@@ -137,6 +151,20 @@ type CommandResults = {
 interface Env {
   ORDERS: DurableObjectNamespace;
 }
+
+interface AuthenticatedPrincipal {
+  readonly actorId: string;
+}
+
+type RequestFailure = {
+  readonly code: "PAYLOAD_TOO_LARGE" | "INVALID_JSON" | "INVALID_COMMAND";
+  readonly status: 400 | 413;
+};
+
+declare function authenticateRequest(
+  request: Request,
+  env: Env,
+): Promise<AuthenticatedPrincipal | null>;
 
 function createCommandBus(env: Env): CommandBus<CommandResults> {
   const bus = new CommandBus<CommandResults>();
@@ -151,7 +179,7 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
     });
 
     if (!response.ok) {
-      return err(`Order command failed with ${response.status}`);
+      return err("ORDER_COMMAND_FAILED");
     }
 
     return ok(command.orderId);
@@ -162,21 +190,149 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const command = (await request.json()) as AppCommand;
-    const result = await createCommandBus(env).execute(command);
+    const principal = await authenticateRequest(request, env);
+    if (principal === null) {
+      return Response.json({ code: "UNAUTHORIZED" }, { status: 401 });
+    }
+
+    const input = await readBoundedJson(request, MAX_COMMAND_BYTES);
+    if (input.isErr()) return failureResponse(input.error);
+
+    const command = decodeConfirmOrder(input.value, principal);
+    if (command.isErr()) return failureResponse(command.error);
+
+    const result = await createCommandBus(env).execute(command.value);
 
     if (result.isErr()) {
-      return new Response(result.error, { status: 400 });
+      return Response.json({ code: result.error }, { status: 400 });
     }
 
     return Response.json({ id: result.value });
   },
 };
+
+async function readBoundedJson(
+  request: Request,
+  maxBytes: number,
+): Promise<Result<unknown, RequestFailure>> {
+  const declaredLength = request.headers.get("content-length");
+  if (
+    declaredLength !== null &&
+    /^\d+$/.test(declaredLength) &&
+    Number(declaredLength) > maxBytes
+  ) {
+    return err({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+  }
+  if (request.body === null) {
+    return err({ code: "INVALID_JSON", status: 400 });
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel("payload too large").catch(() => undefined);
+        return err({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const parsed: unknown = JSON.parse(text);
+    return ok(parsed);
+  } catch {
+    return err({ code: "INVALID_JSON", status: 400 });
+  }
+}
+
+function decodeConfirmOrder(
+  input: unknown,
+  principal: AuthenticatedPrincipal,
+): Result<AppCommand, RequestFailure> {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.getPrototypeOf(input) !== Object.prototype
+  ) {
+    return err({ code: "INVALID_COMMAND", status: 400 });
+  }
+
+  const body = input as Record<string, unknown>;
+  const allowed = new Set(["type", "orderId"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    return err({ code: "INVALID_COMMAND", status: 400 });
+  }
+  if (body.type !== "ConfirmOrder") {
+    return err({ code: "INVALID_COMMAND", status: 400 });
+  }
+
+  const orderId = orderIdFromWire(body.orderId);
+  if (orderId.isErr()) return err(orderId.error);
+  const actorId = actorIdFromPrincipal(principal.actorId);
+  if (actorId.isErr()) return err(actorId.error);
+
+  return ok({
+    type: "ConfirmOrder",
+    orderId: orderId.value,
+    requestedBy: actorId.value,
+  });
+}
+
+function boundedId(value: unknown): Result<string, RequestFailure> {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 80 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    return err({ code: "INVALID_COMMAND", status: 400 });
+  }
+  return ok(value);
+}
+
+function orderIdFromWire(
+  value: unknown,
+): Result<OrderId, RequestFailure> {
+  const id = boundedId(value);
+  return id.isErr() ? err(id.error) : ok(id.value as OrderId);
+}
+
+function actorIdFromPrincipal(
+  value: unknown,
+): Result<ActorId, RequestFailure> {
+  const id = boundedId(value);
+  return id.isErr() ? err(id.error) : ok(id.value as ActorId);
+}
+
+function failureResponse(failure: RequestFailure): Response {
+  return Response.json({ code: failure.code }, { status: failure.status });
+}
 ```
 
 This example keeps the bus as invocation wiring. The durable state still lives
 behind the Durable Object, D1, KV, R2, or whatever persistence adapter your
-application owns.
+application owns. A body that exceeds the ceiling receives `413`; malformed
+JSON or a schema mismatch receives `400`; neither reaches the command bus.
+Those expected boundary failures are `Result` values. An unexpected stream or
+runtime failure still throws and reaches the deployable's outer error handler.
 
 For domain events, the same rule applies:
 

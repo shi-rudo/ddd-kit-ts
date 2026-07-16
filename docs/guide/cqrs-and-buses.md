@@ -87,7 +87,23 @@ not to the domain model.
 
 ## Commands
 
-Commands are write-side messages. They should carry enough data for the handler to perform one application operation.
+Commands are write-side messages. They should carry enough data for the handler
+to perform one application operation.
+
+### Decode before dispatch
+
+A TypeScript type does not exist at runtime. Following `JSON.parse(...)` with a
+command assertion therefore validates nothing; it only asks the compiler to
+trust the author. An HTTP request or broker message must earn the command type
+before it reaches the bus.
+
+The driving adapter owns that work. It limits the raw body before parsing,
+parses into `unknown`, allow-lists the wire fields, and converts primitives into
+the types used by the application and domain. Authenticated identity comes from
+the verified request or message principal, never from a customer id supplied in
+the body. The kit deliberately does not choose a schema library: this decoder is
+consumer code and can be replaced with ArkType, Valibot, Zod, or another
+allow-list decoder.
 
 ```ts
 import {
@@ -97,28 +113,30 @@ import {
   type Id,
   withCommit,
 } from "@shirudo/ddd-kit";
-import { err, ok } from "@shirudo/result";
-import {
-  type MoneyDto,
-  moneyFromDto,
-} from "@shirudo/ddd-kit/money";
+import { err, ok, type Result } from "@shirudo/result";
+import { type Money, tryMoneyFromDto } from "@shirudo/ddd-kit/money";
 
 type OrderId = Id<"OrderId">;
+type CustomerId = Id<"CustomerId">;
+type ProductId = Id<"ProductId">;
+type OrderQuantity = number & { readonly __brand: "OrderQuantity" };
+
+interface PlaceOrderItem {
+  readonly productId: ProductId;
+  readonly quantity: OrderQuantity;
+  readonly price: Money;
+}
 
 type PlaceOrderCommand = Command & {
-  type: "PlaceOrder";
-  customerId: string;
-  correlationId?: string;
-  items: Array<{
-    productId: string;
-    quantity: number;
-    price: MoneyDto;
-  }>;
+  readonly type: "PlaceOrder";
+  readonly customerId: CustomerId;
+  readonly correlationId: string;
+  readonly items: ReadonlyArray<PlaceOrderItem>;
 };
 
 type ConfirmOrderCommand = Command & {
-  type: "ConfirmOrder";
-  orderId: OrderId;
+  readonly type: "ConfirmOrder";
+  readonly orderId: OrderId;
 };
 
 type Commands = {
@@ -127,7 +145,219 @@ type Commands = {
 };
 ```
 
-The command shape is close to the transport boundary. `MoneyDto` is the right shape here because commands often come from JSON. Convert it to domain `Money` before it reaches aggregate state:
+Here is a small framework-neutral decoder. Its limits are examples, not
+universal defaults; choose them from the endpoint's real workload. Notice that
+the byte ceiling runs before `JSON.parse`, and the collection ceiling runs
+before mapping every item.
+
+```ts
+const MAX_COMMAND_BYTES = 64 * 1024;
+const MAX_ORDER_ITEMS = 100;
+const MAX_ID_LENGTH = 80;
+
+interface AuthenticatedPrincipal {
+  readonly customerId: string;
+}
+
+type BoundaryFailure = {
+  readonly code: "PAYLOAD_TOO_LARGE" | "INVALID_COMMAND";
+  readonly path: string;
+  readonly reason: string;
+};
+
+function decodePlaceOrderBody(
+  body: Uint8Array,
+  principal: AuthenticatedPrincipal,
+  correlationId: string,
+): Result<PlaceOrderCommand, BoundaryFailure> {
+  if (body.byteLength > MAX_COMMAND_BYTES) {
+    return err({
+      code: "PAYLOAD_TOO_LARGE",
+      path: "$body",
+      reason: "exceeds 64 KiB",
+    });
+  }
+
+  let input: unknown;
+  try {
+    input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch {
+    return err(invalid("$body", "must be UTF-8 JSON"));
+  }
+
+  const rootResult = recordAt(input, "$body");
+  if (rootResult.isErr()) return err(rootResult.error);
+  const root = rootResult.value;
+
+  const rootFieldError = allowOnly(root, ["type", "items"], "$body");
+  if (rootFieldError !== undefined) return err(rootFieldError);
+  if (root.type !== "PlaceOrder") {
+    return err(invalid("$body.type", "must be PlaceOrder"));
+  }
+  if (!Array.isArray(root.items)) {
+    return err(invalid("$body.items", "must be an array"));
+  }
+  if (root.items.length > MAX_ORDER_ITEMS) {
+    return err(invalid("$body.items", "exceeds 100 entries"));
+  }
+
+  const customerId = customerIdFromPrincipal(principal.customerId);
+  if (customerId.isErr()) return err(customerId.error);
+  const parsedCorrelationId = correlationIdFromTransport(correlationId);
+  if (parsedCorrelationId.isErr()) return err(parsedCorrelationId.error);
+
+  const items: PlaceOrderItem[] = [];
+  for (const [index, value] of root.items.entries()) {
+    const item = decodeItem(value, index);
+    if (item.isErr()) return err(item.error);
+    items.push(item.value);
+  }
+
+  return ok({
+    type: "PlaceOrder",
+    customerId: customerId.value,
+    correlationId: parsedCorrelationId.value,
+    items,
+  });
+}
+
+function decodeItem(
+  value: unknown,
+  index: number,
+): Result<PlaceOrderItem, BoundaryFailure> {
+  const path = `$body.items[${index}]`;
+  const itemResult = recordAt(value, path);
+  if (itemResult.isErr()) return err(itemResult.error);
+  const item = itemResult.value;
+
+  const itemFieldError = allowOnly(
+    item,
+    ["productId", "quantity", "price"],
+    path,
+  );
+  if (itemFieldError !== undefined) return err(itemFieldError);
+
+  const pricePath = `${path}.price`;
+  const priceDtoResult = recordAt(item.price, pricePath);
+  if (priceDtoResult.isErr()) return err(priceDtoResult.error);
+  const priceDto = priceDtoResult.value;
+
+  const priceFieldError = allowOnly(
+    priceDto,
+    ["amountMinor", "currency", "scale"],
+    pricePath,
+  );
+  if (priceFieldError !== undefined) return err(priceFieldError);
+
+  const price = tryMoneyFromDto(priceDto);
+  if (price.isErr()) return err(invalid(pricePath, "must be a valid MoneyDto"));
+  const productId = productIdFromWire(item.productId, `${path}.productId`);
+  if (productId.isErr()) return err(productId.error);
+  const quantity = quantityFromWire(item.quantity, `${path}.quantity`);
+  if (quantity.isErr()) return err(quantity.error);
+
+  return ok({
+    productId: productId.value,
+    quantity: quantity.value,
+    price: price.value,
+  });
+}
+
+function recordAt(
+  value: unknown,
+  path: string,
+): Result<Record<string, unknown>, BoundaryFailure> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return err(invalid(path, "must be a plain object"));
+  }
+  return ok(value as Record<string, unknown>);
+}
+
+function allowOnly(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): BoundaryFailure | undefined {
+  const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unexpected.length > 0) {
+    return invalid(path, `has unexpected fields: ${unexpected.join(", ")}`);
+  }
+}
+
+function idString(
+  value: unknown,
+  path: string,
+): Result<string, BoundaryFailure> {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_ID_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    return err(invalid(path, "is not a valid id"));
+  }
+  return ok(value);
+}
+
+function customerIdFromPrincipal(
+  value: unknown,
+): Result<CustomerId, BoundaryFailure> {
+  const id = idString(value, "$principal.customerId");
+  return id.isErr() ? err(id.error) : ok(id.value as CustomerId);
+}
+
+function productIdFromWire(
+  value: unknown,
+  path: string,
+): Result<ProductId, BoundaryFailure> {
+  const id = idString(value, path);
+  return id.isErr() ? err(id.error) : ok(id.value as ProductId);
+}
+
+function quantityFromWire(
+  value: unknown,
+  path: string,
+): Result<OrderQuantity, BoundaryFailure> {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > 1_000
+  ) {
+    return err(invalid(path, "must be an integer from 1 through 1000"));
+  }
+  return ok(value as OrderQuantity);
+}
+
+function correlationIdFromTransport(
+  value: unknown,
+): Result<string, BoundaryFailure> {
+  return idString(value, "$transport.correlationId");
+}
+
+function invalid(path: string, reason: string): BoundaryFailure {
+  return { code: "INVALID_COMMAND", path, reason };
+}
+```
+
+The casts above occur only inside constructors that have checked the runtime
+value. That is what gives a brand meaning. `tryMoneyFromDto` plays the same role
+for `Money`: the wire DTO is not allowed farther into the application. Expected
+boundary failures stay on the `Result` error channel; an unexpected defect still
+throws instead of being mislabeled as bad input.
+
+The size ceilings are operational safety rules. They do not replace domain
+invariants. For example, whether an order may be empty is a business decision
+that the order model must still protect even when a trusted internal caller
+bypasses this transport adapter.
+
+The handler now receives values that have already crossed the untrusted
+boundary:
 
 ```ts
 const placeOrderHandler: CommandHandler<
@@ -148,7 +378,7 @@ const placeOrderHandler: CommandHandler<
         order.addItem({
           productId: item.productId,
           quantity: item.quantity,
-          price: moneyFromDto(item.price),
+          price: item.price,
         });
       }
 
@@ -175,20 +405,52 @@ const commandBus = new CommandBus<Commands>();
 commandBus.register("PlaceOrder", placeOrderHandler);
 commandBus.register("ConfirmOrder", confirmOrderHandler);
 
-const result = await commandBus.execute({
-  type: "PlaceOrder",
-  customerId: "c-1",
-  items: [
-    {
-      productId: "p-1",
-      quantity: 2,
-      price: { amountMinor: "999", currency: "EUR", scale: 2 },
-    },
-  ],
-});
+declare const commandFromDrivingAdapter: PlaceOrderCommand;
+const result = await commandBus.execute(commandFromDrivingAdapter);
 ```
 
 With a type map, `execute(...)` infers the result type from `command.type`. Here `result` is `Result<OrderId, string>`.
+
+For a queue, invalid input is a poison message, not a transient failure. Reject
+or dead-letter it without retrying; acknowledge a command once the application
+has produced an expected success or rejection. Leave the message unacknowledged
+only for failures your delivery policy classifies as retryable.
+
+```ts
+interface QueueDelivery {
+  readonly body: Uint8Array;
+  readonly authenticatedPrincipal: AuthenticatedPrincipal;
+  readonly correlationId: string;
+  ack(): void;
+  deadLetter(reason: "PAYLOAD_TOO_LARGE" | "INVALID_COMMAND"): void;
+}
+
+declare function recordCommandOutcome(outcome: unknown): Promise<void>;
+
+async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
+  const decoded = decodePlaceOrderBody(
+    delivery.body,
+    delivery.authenticatedPrincipal,
+    delivery.correlationId,
+  );
+  if (decoded.isErr()) {
+    delivery.deadLetter(decoded.error.code);
+    return;
+  }
+
+  const outcome = await commandBus.execute(decoded.value);
+  await recordCommandOutcome(outcome);
+  delivery.ack();
+}
+```
+
+`QueueDelivery` is deliberately an application-specific adapter type. RabbitMQ,
+SQS, Kafka, and other brokers use different names and settlement rules, but the
+order stays the same: bound, decode, convert, dispatch, then settle.
+Production consumers must also feed the broker's stable message id into the
+application's idempotency boundary before executing a write. A correlation id
+helps tracing; it does not make an at-least-once delivery safe to repeat. See
+[Idempotent Commands](./idempotency.md).
 
 ### Type Maps
 

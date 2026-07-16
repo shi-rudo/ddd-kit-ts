@@ -26,11 +26,17 @@
  *   return await repository.findById(query.orderId);
  * };
  *
- * // Can be used with any external framework
+ * // The consumer-owned decoder caps the message size, parses to unknown,
+ * // allow-lists the schema, and constructs OrderId only after validation.
  * rabbitMQChannel.consume("queries", async (message) => {
- *   const query = JSON.parse(message.content) as GetOrderQuery;
- *   const result = await handler(query);
- *   // ... handle result
+ *   const principal = authenticateProducer(message.properties.headers);
+ *   const decoded = decodeGetOrderQuery(message.content, principal);
+ *   if (decoded.isErr()) {
+ *     rabbitMQChannel.reject(message, false); // invalid input: dead-letter
+ *     return;
+ *   }
+ *   await handler(decoded.value);
+ *   rabbitMQChannel.ack(message);
  * });
  * ```
  */
@@ -64,13 +70,17 @@ export interface Query {
  *   return await repository.findById(query.orderId);
  * };
  *
- * // Can be used with any external bus/framework
+ * // Validate at the queue adapter before calling the query handler.
  * rabbitMQChannel.consume("queries", async (msg) => {
- *   const query = JSON.parse(msg.content) as GetOrderQuery;
- *   const result = await getOrderHandler(query);
- *   // ... handle result
+ *   const principal = authenticateProducer(msg.properties.headers);
+ *   const decoded = decodeGetOrderQuery(msg.content, principal);
+ *   if (decoded.isErr()) {
+ *     rabbitMQChannel.reject(msg, false);
+ *     return;
+ *   }
+ *   await getOrderHandler(decoded.value);
+ *   rabbitMQChannel.ack(msg);
  * });
  * ```
  */
 export type QueryHandler<Q extends Query, R> = (query: Q) => Promise<R>;
-

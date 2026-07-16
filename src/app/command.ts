@@ -31,11 +31,23 @@ import type { Result } from "@shirudo/result";
  *   return ok(orderId);
  * };
  *
- * // Register with RabbitMQ or other external bus
+ * // The consumer owns this runtime decoder. It checks byte and collection
+ * // ceilings, parses to unknown, allow-lists fields, and constructs domain types.
+ * declare function decodeCreateOrderCommand(
+ *   body: Uint8Array,
+ *   principal: AuthenticatedPrincipal,
+ * ): Result<CreateOrderCommand, InvalidCommand>;
+ *
+ * // Register with RabbitMQ or another external bus.
  * rabbitMQChannel.consume("order.commands", async (message) => {
- *   const command = JSON.parse(message.content) as CreateOrderCommand;
- *   const result = await handler(command);
- *   // ... handle result
+ *   const principal = authenticateProducer(message.properties.headers);
+ *   const decoded = decodeCreateOrderCommand(message.content, principal);
+ *   if (decoded.isErr()) {
+ *     rabbitMQChannel.reject(message, false); // invalid input: dead-letter, do not retry
+ *     return;
+ *   }
+ *   await handler(decoded.value);
+ *   rabbitMQChannel.ack(message);
  * });
  * ```
  */
@@ -73,23 +85,19 @@ export interface Command {
  *   return ok(orderId);
  * };
  *
- * // Can be used with any external bus/framework
- * // RabbitMQ example:
+ * // The broker adapter validates before calling the application handler.
  * rabbitMQChannel.consume("commands", async (msg) => {
- *   const command = JSON.parse(msg.content) as CreateOrderCommand;
- *   const result = await createOrderHandler(command);
- *   // ... handle result
- * });
- *
- * // AWS SQS example:
- * sqs.receiveMessage({ QueueUrl: "..." }, async (err, data) => {
- *   const command = JSON.parse(data.Messages[0].Body) as CreateOrderCommand;
- *   const result = await createOrderHandler(command);
- *   // ... handle result
+ *   const principal = authenticateProducer(msg.properties.headers);
+ *   const decoded = decodeCreateOrderCommand(msg.content, principal);
+ *   if (decoded.isErr()) {
+ *     rabbitMQChannel.reject(msg, false); // malformed or over limit
+ *     return;
+ *   }
+ *   await createOrderHandler(decoded.value);
+ *   rabbitMQChannel.ack(msg);
  * });
  * ```
  */
 export type CommandHandler<C extends Command, R, E = string> = (
 	cmd: C,
 ) => Promise<Result<R, E>>;
-
