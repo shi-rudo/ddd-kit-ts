@@ -124,11 +124,11 @@ async function markDispatched(ids, { signal, deadlineAt } = {}) {
 }
 ```
 
-`countsTowardCeiling` remains as a deprecated compatibility alias (`false`
-maps to transient, `true` to permanent); `classifyFailure` wins when both are
-configured. Existing poll-store adapters remain structurally assignable because
-the new context parameter is optional, but production adapters should adopt it
-to avoid work continuing after the shell has timed out.
+`countsTowardCeiling` is removed in v3. Map its `false` result to
+`"transient"`, its `true` result to `"permanent"`, and use `"unknown"` when an
+adapter cannot classify safely. Existing poll-store adapters remain structurally
+assignable because the new context parameter is optional, but production
+adapters should adopt it to avoid work continuing after the shell has timed out.
 
 ### Changed: Vite+ test and package toolchain
 
@@ -1757,8 +1757,8 @@ shape instead of silently accepting two relationship locations.
   (an ack failure never counts toward the poison ceiling and is reported
   per affected record; its duplicates are rate-limited by the backoff),
   a shared transient/permanent/unknown classifier so a transient transport
-  outage does not progressively dead-letter healthy records (with
-  `countsTowardCeiling` retained as a deprecated compatibility alias),
+  outage does not progressively dead-letter healthy records (replacing the
+  former boolean `countsTowardCeiling` option),
   `drainOnce()` for cron and serverless ticks
   (reentrancy-safe: a tick that overlaps an in-flight pass joins it
   instead of double-delivering, while a joining `run(signal)` still

@@ -482,9 +482,9 @@ original delivery error remains the primary error, the failure counts as
 unknown, and `onDispatchError` receives a third assessment argument containing
 `classifierError`.
 
-`countsTowardCeiling` remains as a deprecated migration alias: `false` maps to
-transient and `true` to permanent. Prefer `classifyFailure`; when both are
-present, it wins.
+The former boolean `countsTowardCeiling` option is removed in v3. Migrate its
+`false` branch to `"transient"`, its `true` branch to `"permanent"`, and return
+`"unknown"` when the adapter cannot classify the error safely.
 
 ## Sinks And Brokers
 

@@ -24,8 +24,11 @@ type TestDispatcherOptions = OutboxDispatcherOptions<TestEvent>;
 type RemovedDispatcherPollObserver = TestDispatcherOptions["onPollError"];
 // @ts-expect-error legacy optional callbacks must not bypass the required bundle
 type RemovedDispatcherErrorObserver = TestDispatcherOptions["onDispatchError"];
+// @ts-expect-error the v3 classifier uses explicit failure kinds, not a boolean compatibility alias
+type RemovedCountsTowardCeiling = TestDispatcherOptions["countsTowardCeiling"];
 void (undefined as unknown as RemovedDispatcherPollObserver);
 void (undefined as unknown as RemovedDispatcherErrorObserver);
+void (undefined as unknown as RemovedCountsTowardCeiling);
 
 function makeEvent(n: number): TestEvent {
 	return createDomainEvent("ThingHappened", { n }, { eventId: `evt-${n}` });

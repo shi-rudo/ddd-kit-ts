@@ -207,16 +207,6 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	random?: () => number;
 
 	/**
-	 * Compatibility alias for the former boolean classifier. `false` maps to
-	 * transient and `true` to permanent. `classifyFailure` wins when both are
-	 * supplied.
-	 *
-	 * @deprecated Use `classifyFailure` to preserve transient/permanent/unknown
-	 * semantics and expose classifier failures to observers.
-	 */
-	countsTowardCeiling?: (error: unknown) => boolean;
-
-	/**
 	 * Classifies delivery errors as transient, permanent, or unknown. Transient
 	 * failures back off without consuming the poison ceiling; permanent and
 	 * unknown failures count. The default walks the cause chain: native
@@ -334,14 +324,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 			: undefined;
 		this.usesDispatchTracking = this.trackingOutbox !== undefined;
 		this.sink = options.sink;
-		this.classifyFailure =
-			options.classifyFailure ??
-			(options.countsTowardCeiling === undefined
-				? undefined
-				: (error) =>
-						options.countsTowardCeiling?.(error) === false
-							? "transient"
-							: "permanent");
+		this.classifyFailure = options.classifyFailure;
 		this.deliveryTimeoutMs =
 			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
 		this.storageTimeoutMs =
