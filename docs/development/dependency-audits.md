@@ -19,18 +19,16 @@ would otherwise hide whether the production graph is clean.
 
 ## Current development-toolchain triage
 
-Moving the lockfile forward with pnpm 11 removed 20 of the 25 findings reported
-on 2026-07-16. A compatible `qs` 6.15.2 override removes the remaining Stryker
-transitive finding. Five development-only findings remain accepted:
+Moving the lockfile forward with pnpm 11 and applying a compatible `qs` 6.15.2
+override removed 20 of the 25 findings reported on 2026-07-16. Moving the
+documentation build to VitePress 2.0.0-alpha.18 and Vite 8 removed the four
+findings retained by VitePress 1.6.4's Vite 5 toolchain. One development-only
+finding remains accepted:
 
 | Advisory | Severity | Path | Decision |
 | --- | --- | --- | --- |
-| [GHSA-67mh-4wv8-2f99](https://github.com/advisories/GHSA-67mh-4wv8-2f99) | Moderate | `vitepress > vite > esbuild@0.21.5` | Accepted until stable VitePress supports a patched Vite line. The affected esbuild development server is not used by the documentation build. |
-| [GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9) | Moderate | `vitepress > vite@5.4.21` | Accepted for the local documentation server only. CI builds static documentation and does not expose a Vite server. |
-| [GHSA-v6wh-96g9-6wx3](https://github.com/advisories/GHSA-v6wh-96g9-6wx3) | Moderate | `vitepress > vite@5.4.21` | Accepted for the local documentation server only. Do not expose `pnpm docs:dev` beyond its default loopback binding. |
-| [GHSA-fx2h-pf6j-xcff](https://github.com/advisories/GHSA-fx2h-pf6j-xcff) | High | `vitepress > vite@5.4.21` | Accepted with the same loopback-only restriction. Stable VitePress 1.6.4 declares `vite@^5.4.14`; forcing Vite 6 outside that range would replace a known development-only exposure with an unsupported toolchain combination. |
 | [GHSA-g7r4-m6w7-qqqr](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr) | Low | `tsup > esbuild@0.27.7` | Accepted because the package build uses esbuild's build API, not its development server. tsup 8.5.1 declares `esbuild@^0.27.0`; upgrade when tsup supports esbuild 0.28.1 or newer. |
 
 Re-run both `pnpm audit:prod` and `pnpm audit` whenever the lockfile or toolchain
-changes. Revisit the accepted findings when a stable VitePress release supports
-Vite 6.4.3 or newer, or when tsup supports esbuild 0.28.1 or newer.
+changes. Revisit the accepted finding when tsup supports esbuild 0.28.1 or
+newer.
