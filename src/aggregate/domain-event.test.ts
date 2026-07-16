@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { HostileStateKeyError } from "../core/errors";
 import {
 	copyMetadata,
+	type CreateDomainEventOptions,
 	createDomainEvent,
 	createDomainEventFactory,
 	type DomainEvent,
@@ -467,13 +468,14 @@ describe("commit cursor boundary", () => {
 
 	it("does not accept persistence cursor fields as creation options", () => {
 		const invalidCreation = () => {
-			// @ts-expect-error commit positions belong to CommittedDomainEvent
+			const options: CreateDomainEventOptions = {
+				// @ts-expect-error commit positions belong to CommittedDomainEvent
+				commitSize: 2,
+			};
 			createDomainEvent(
 				"Ticked",
 				{},
-				{
-					commitSize: 2,
-				},
+				options,
 			);
 		};
 

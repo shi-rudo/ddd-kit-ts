@@ -217,6 +217,12 @@ The generated API reference lives in [docs/api](./docs/api/).
 
 ## Contributing
 
+`pnpm typecheck` runs the native TypeScript 7 compiler. The `typescript`
+development dependency intentionally aliases the official TypeScript 6
+compatibility package because TypeDoc and tsup still consume the compiler API,
+which TypeScript 7.0 does not expose. Keep the two packages side by side until
+those API-based tools support TypeScript 7.
+
 Bug reports, questions, and pull requests are welcome on
 [GitHub](https://github.com/shi-rudo/ddd-kit-ts). Please open pull requests
 against `main`.
