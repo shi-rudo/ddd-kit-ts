@@ -19,6 +19,18 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed: pnpm 11 and production dependency audit gate
+
+- Pin the contributor and CI toolchain to pnpm 11.13.1, whose audit command
+  uses npm's supported bulk advisory endpoint. pnpm 10's legacy audit endpoint
+  was retired and now returns HTTP 410 instead of an advisory result.
+- Replace pnpm 10's `onlyBuiltDependencies` setting with pnpm 11's explicit
+  `allowBuilds` policy for `esbuild`, `sharp`, and `workerd`.
+- Run `pnpm audit --prod` on every pull request and push to `main`. Production
+  dependency advisories now fail CI; development-only advisories remain a
+  separately triaged toolchain concern documented in
+  `docs/development/dependency-audits.md`.
+
 ### Added: automated edge-runtime compatibility smokes
 
 - Bundle the built package and execute its main and `money` entry points in
