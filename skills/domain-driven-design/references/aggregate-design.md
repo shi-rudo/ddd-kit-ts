@@ -202,6 +202,12 @@ one active allocation per account and drop, contiguity across seats.
 - Each public command method represents one complete business decision. Callers
   should not invoke several methods in a fragile sequence to leave the aggregate
   valid.
+- Predicates and queries exposed by the aggregate, such as `canBeCancelled` or
+  `isPending`, are deterministic and side-effect-free: they mutate no state and
+  record no events.
+- A method that mutates is named as the decision it makes, never as a check. A
+  name such as `checkAndWithdraw` hides a state change behind a question; the
+  check belongs to a side-effect-free predicate, the change to a command.
 - Do not expose mutable internal collections.
 
 ### Error Handling
@@ -519,6 +525,9 @@ not a rule to memorize.
 - Used as a write model; reads and reporting use read models, projections, or
   composition.
 - Commands are named after business decisions, not CRUD operations.
+- Predicates and queries on the aggregate are deterministic and
+  side-effect-free; mutation happens only in command methods named as
+  decisions.
 - Every command protects at least one named invariant, each stating what must be
   true immediately after the command succeeds; for a fact-recording command that
   minimum is well-formed input and a valid resulting state, named as such rather
@@ -578,6 +587,8 @@ not a rule to memorize.
 - The aggregate requires external queries to validate a command.
 - The aggregate loads large child collections for ordinary commands.
 - The aggregate exposes setters or mutable collections.
+- A query-shaped method mutates state or records events, or a command hides
+  behind a check name such as `checkAndWithdraw`.
 - The repository exists for every entity instead of every aggregate root.
 - Cross-aggregate transaction is used where an event or process would fit.
 - A domain service contains rules that should live on an aggregate.

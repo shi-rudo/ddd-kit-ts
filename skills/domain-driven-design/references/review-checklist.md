@@ -53,6 +53,8 @@ design uses that path; skip them otherwise.
   demand an invented rule, but an aggregate whose commands are all
   fact-recording needs reclassification.
 - Is the aggregate root the only external mutation entry point?
+- Are predicates and queries on aggregates and entities side-effect-free, with
+  mutation only in command methods named as decisions?
 - Does a transaction change one aggregate instance? Where several must change
   atomically, was the specification itself challenged first (missed invariant
   vs eventual consistency)?
