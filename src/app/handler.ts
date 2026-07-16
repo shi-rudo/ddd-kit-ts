@@ -15,10 +15,10 @@ import type {
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import {
-	DEFAULT_EFFECT_TIMEOUT_MS,
-	type EffectContext,
-	runBoundedEffect,
-} from "../utils/effect";
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import { reportToObserver } from "../utils/observer";
 import { assertNonNegativeFinite } from "../utils/validate";
 
@@ -50,13 +50,13 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * acknowledgement attempt. Deleted aggregates do not trigger it. `version`
 	 * is the commit-time value captured before any observer runs. Observer
 	 * failures are reported through `onPersistError` and never turn an already
-	 * committed write into an apparent failure. The effect context carries
+	 * committed write into an apparent failure. The execution context carries
 	 * owner cancellation and the configured post-commit deadline.
 	 */
 	onPersisted?: (
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		version: Version,
-		context: EffectContext,
+		context: ExecutionContext,
 	) => void | Promise<void>;
 	/**
 	 * Observer for post-commit persistence failures: either the internal
@@ -76,9 +76,9 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	/**
 	 * Total time allotted to the complete post-commit application phase:
 	 * every application observer followed by in-process bus publication shares
-	 * one absolute deadline. Effects that have not started when the deadline is
+	 * one absolute deadline. Callbacks that have not started when the deadline is
 	 * reached are skipped and reported as timeouts. Defaults to `30000`ms.
-	 * Timing out or aborting these best-effort effects is reported through the
+	 * Timing out or aborting these best-effort operations is reported through the
 	 * matching error observer and never rejects an already committed write.
 	 */
 	postCommitTimeoutMs?: number;
@@ -358,7 +358,7 @@ function createCommitTokenScope<
  * the outbox. The hook is an observer: if it throws, its error is
  * swallowed so the post-commit invariant holds.
  * The complete application-observer and bus-publication phase shares one
- * absolute `postCommitTimeoutMs` budget (30 seconds by default); later effects
+ * absolute `postCommitTimeoutMs` budget (30 seconds by default); later callbacks
  * are not started once it expires. A timeout or owner abort is reported
  * through the same observer paths and never changes the committed result.
  *
@@ -409,7 +409,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
 	const postCommitTimeoutMs =
-		deps.postCommitTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 	assertNonNegativeFinite(
 		"withCommit",
 		"postCommitTimeoutMs",
@@ -538,7 +538,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	if (onPersisted) {
 		for (const { aggregate, version } of persistedObservations) {
 			try {
-				await runBoundedEffect(
+				await runBoundedExecution(
 					"withCommit.onPersisted",
 					{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
 					(context) => onPersisted(aggregate, version, context),
@@ -552,7 +552,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	const bus = deps.bus;
 	if (bus && events.length > 0) {
 		try {
-			await runBoundedEffect(
+			await runBoundedExecution(
 				"withCommit.bus.publish",
 				{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
 				(context) =>

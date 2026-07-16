@@ -17,6 +17,10 @@ import * as presentation from "./presentation";
 import * as testing from "./testing";
 import * as utils from "./utils";
 
+type PublicExecutionContext = import("./index").ExecutionContext;
+// @ts-expect-error EffectContext was replaced by the runtime-oriented ExecutionContext name in v3
+type RemovedEffectContext = import("./index").EffectContext;
+
 type IndexModule = typeof import("./index");
 // @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
 type RemovedResetClockFactory = IndexModule["resetClockFactory"];
@@ -71,6 +75,8 @@ void publicOutboxObservers;
 void publicDeadlineObservers;
 void publicDeliveryClassifier;
 void publicDeliveryAssessment;
+void (undefined as unknown as PublicExecutionContext);
+void (undefined as unknown as RemovedEffectContext);
 
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	correlationId: "corr-1",

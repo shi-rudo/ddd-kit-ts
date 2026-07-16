@@ -426,7 +426,7 @@ describe("UnitOfWork", () => {
 			expect(reported[0]?.aggregate).toBe(agg);
 		});
 
-		it("forwards the post-commit timeout and effect context", async () => {
+		it("forwards the post-commit timeout and execution context", async () => {
 			vi.useFakeTimers();
 			const agg = createMockAggregate("o-1");
 			const reported: unknown[] = [];

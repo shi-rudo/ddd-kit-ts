@@ -77,7 +77,7 @@ export interface DeadLetterDeadline<TPayload = unknown>
  * records for competing pollers; the same rule as the outbox
  * dispatcher.
  *
- * The bundled processor supplies an `EffectContext` to every poll-side
+ * The bundled processor supplies an `ExecutionContext` to every poll-side
  * operation. Production adapters MUST pass its signal to native I/O or enforce
  * a native timeout no later than `deadlineAt`; the shell can bound its wait but
  * cannot terminate a promise that ignores cancellation. A timed-out write has
@@ -127,7 +127,7 @@ export interface DeadlineStore<TPayload = unknown> {
 	due(
 		now: Date,
 		limit: number,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	): Promise<ReadonlyArray<DueDeadline<TPayload>>>;
 
 	/**
@@ -141,7 +141,7 @@ export interface DeadlineStore<TPayload = unknown> {
 	 */
 	markDelivered(
 		deliveryIds: ReadonlyArray<string>,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	): Promise<void>;
 
 	/**
@@ -159,7 +159,7 @@ export interface DeadlineStore<TPayload = unknown> {
 	markFailed(
 		deliveryId: string,
 		error?: unknown,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	): Promise<DeadLetterDeadline<TPayload> | undefined>;
 
 	/**
@@ -171,4 +171,4 @@ export interface DeadlineStore<TPayload = unknown> {
 	deadLetters(): Promise<ReadonlyArray<DeadLetterDeadline<TPayload>>>;
 }
 
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";

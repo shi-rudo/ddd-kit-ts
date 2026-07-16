@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";
 import {
 	DeadlineProcessor,
 	type DeadlineProcessorObservers,
@@ -265,13 +265,13 @@ describe("DeadlineProcessor", () => {
 		expect(pollErrors).toHaveLength(2);
 	});
 
-	it("aborts a never-settling due call through the storage effect context", async () => {
+	it("aborts a never-settling due call through the storage execution context", async () => {
 		const inner = await seeded([]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		const store: DeadlineStore<Payload> = {
 			schedule: (deadline) => inner.schedule(deadline),
 			cancel: (scope, key) => inner.cancel(scope, key),
-			due: (_now, _limit, received?: EffectContext) => {
+			due: (_now, _limit, received?: ExecutionContext) => {
 				context = received;
 				return new Promise(() => {});
 			},
@@ -304,7 +304,7 @@ describe("DeadlineProcessor", () => {
 
 	it("aborts a never-settling deadline acknowledgement without consuming the deadline", async () => {
 		const inner = await seeded([{ key: "a" }]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let ackStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			ackStarted = resolve;
@@ -313,7 +313,7 @@ describe("DeadlineProcessor", () => {
 			schedule: (deadline) => inner.schedule(deadline),
 			cancel: (scope, key) => inner.cancel(scope, key),
 			due: (now, limit) => inner.due(now, limit),
-			markDelivered: (_ids, received?: EffectContext) => {
+			markDelivered: (_ids, received?: ExecutionContext) => {
 				context = received;
 				ackStarted();
 				return new Promise<void>(() => {});
@@ -401,12 +401,12 @@ describe("DeadlineProcessor", () => {
 
 	it("aborts a never-settling deadline failure update without hiding the handler error", async () => {
 		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 9 });
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let updateStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			updateStarted = resolve;
 		});
-		store.markFailed = (_id, _error, received?: EffectContext) => {
+		store.markFailed = (_id, _error, received?: ExecutionContext) => {
 			context = received;
 			updateStarted();
 			return new Promise(() => {});
@@ -489,7 +489,7 @@ describe("DeadlineProcessor", () => {
 	it("times out a never-settling handler without consuming the poison ceiling", async () => {
 		vi.useFakeTimers();
 		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 99 });
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let handlerStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			handlerStarted = resolve;
@@ -535,7 +535,7 @@ describe("DeadlineProcessor", () => {
 
 	it("aborts a never-settling handler without counting shutdown as a delivery failure", async () => {
 		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 1 });
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		const errors: unknown[] = [];
 		const handler: DeadlineProcessorOptions<Payload>["handler"] = async (
 			_deadline,

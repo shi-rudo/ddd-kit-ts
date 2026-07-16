@@ -113,7 +113,7 @@ void processor.run(stop.signal);
 // on shutdown: stop.abort();
 ```
 
-Every handler receives an `EffectContext`. Its signal combines worker shutdown
+Every handler receives an `ExecutionContext`. Its signal combines worker shutdown
 with the per-delivery bound; `deadlineAt` is the matching absolute Unix epoch
 millisecond. The default `deliveryTimeoutMs` is 30 seconds. Pass the signal into
 I/O adapters or enforce a native timeout no later than the absolute deadline.
@@ -134,7 +134,7 @@ the assessment falls back to unknown, and `onDeliveryError` receives the
 classifier failure in its optional third argument.
 
 The default `storageTimeoutMs` is also 30 seconds. `due`, `markDelivered`, and
-`markFailed` receive an `EffectContext`; adapters must honor its signal or a
+`markFailed` receive an `ExecutionContext`; adapters must honor its signal or a
 native deadline. A timeout only bounds the processor's wait, so the outcome of
 a store write is unknown. `markDelivered` must remain idempotent when a late
 completion arrives. A late `markFailed` may count its original handler attempt;

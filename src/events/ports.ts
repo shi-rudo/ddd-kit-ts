@@ -1,17 +1,18 @@
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";
 
 /**
- * Event handler function type for subscribing to domain events. The effect
+ * Event handler function type for subscribing to domain events. The execution
  * context carries the publication's cooperative cancellation and deadline;
- * it belongs to the imperative shell, never to the domain event itself.
+ * those runtime controls belong to the imperative shell, never to the domain
+ * event itself.
  *
  * @template Evt - The type of domain event
  */
 export type EventHandler<Evt> = (
 	event: Evt,
-	context: EffectContext,
+	context: ExecutionContext,
 ) => Promise<void> | void;
 
 /** Controls one bounded in-process event publication. */
@@ -326,7 +327,7 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
  * returned records (`FOR UPDATE SKIP LOCKED` or equivalent). Without
  * claiming, run one logical dispatcher per outbox.
  *
- * The bundled dispatcher supplies an {@link EffectContext} to every poll-side
+ * The bundled dispatcher supplies an {@link ExecutionContext} to every poll-side
  * operation. Production adapters MUST pass its signal to native I/O or enforce
  * a native timeout no later than `deadlineAt`; the shell can bound its wait but
  * cannot terminate a promise that ignores cancellation. A timed-out write has
@@ -350,7 +351,7 @@ export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 	 */
 	getPending: (
 		limit?: number,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	) => Promise<ReadonlyArray<OutboxRecord<Evt>>>;
 
 	/**
@@ -361,7 +362,7 @@ export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 	 */
 	markDispatched: (
 		dispatchIds: ReadonlyArray<string>,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	) => Promise<void>;
 }
 
@@ -401,7 +402,7 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
 	markFailed: (
 		dispatchId: string,
 		error?: unknown,
-		context?: EffectContext,
+		context?: ExecutionContext,
 	) => Promise<DeadLetterRecord<Evt> | undefined>;
 
 	/**

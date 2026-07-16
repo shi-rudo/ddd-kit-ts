@@ -1,20 +1,20 @@
 import { abortReason } from "./abort";
 import { assertNonNegativeFinite } from "./validate";
 
-/** Context handed to one imperative-shell effect. */
-export interface EffectContext {
-	/** Cooperative cancellation for the in-flight effect. */
+/** Cancellation and deadline controls for one bounded shell operation. */
+export interface ExecutionContext {
+	/** Cooperative cancellation for the in-flight operation. */
 	readonly signal: AbortSignal;
-	/** Absolute Unix epoch millisecond at which the shell times the effect out. */
+	/** Absolute Unix epoch millisecond at which the shell stops waiting. */
 	readonly deadlineAt: number;
 }
 
-/** Caller controls for one bounded imperative-shell effect. */
-type EffectOptions =
+/** Caller controls for one bounded shell operation. */
+type ExecutionOptions =
 	| {
 			/** Optional owner/request cancellation signal. */
 			readonly signal?: AbortSignal;
-			/** Maximum time the shell waits for the effect. */
+			/** Maximum time the shell waits for the operation. */
 			readonly timeoutMs: number;
 			readonly deadlineAt?: never;
 	  }
@@ -22,15 +22,15 @@ type EffectOptions =
 			/** Optional owner/request cancellation signal. */
 			readonly signal?: AbortSignal;
 			readonly timeoutMs?: never;
-			/** Shared absolute deadline for a multi-effect budget. */
+			/** Shared absolute deadline for a multi-operation budget. */
 			readonly deadlineAt: number;
 	  };
 
-/** Default bound for delivery and post-commit effects. */
-export const DEFAULT_EFFECT_TIMEOUT_MS = 30_000;
+/** Default bound for delivery and post-commit operations. */
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
 
 /**
- * Runs one effect with a child signal that combines owner cancellation and a
+ * Runs one operation with a child signal that combines owner cancellation and a
  * shell-owned timeout. The returned promise settles on abort even when an
  * adapter ignores the signal; the adapter promise remains observed so a later
  * rejection cannot become an unhandled rejection.
@@ -40,10 +40,10 @@ export const DEFAULT_EFFECT_TIMEOUT_MS = 30_000;
  * overlapping retries has to pass `context.signal` to its native operation or
  * enforce a native timeout no later than `context.deadlineAt`.
  */
-export function runBoundedEffect<T>(
+export function runBoundedExecution<T>(
 	label: string,
-	options: EffectOptions,
-	effect: (context: EffectContext) => Promise<T> | T,
+	options: ExecutionOptions,
+	operation: (context: ExecutionContext) => Promise<T> | T,
 ): Promise<T> {
 	if (options.deadlineAt === undefined) {
 		assertNonNegativeFinite(label, "timeoutMs", options.timeoutMs);
@@ -111,7 +111,7 @@ export function runBoundedEffect<T>(
 		controller.signal.addEventListener("abort", onAbort, { once: true });
 		let outcome: Promise<T>;
 		try {
-			outcome = Promise.resolve(effect(context));
+			outcome = Promise.resolve(operation(context));
 		} catch (error) {
 			finish(() => reject(error));
 			return;

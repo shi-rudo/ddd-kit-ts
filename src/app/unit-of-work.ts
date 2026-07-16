@@ -12,7 +12,7 @@ import type { EventBus, OutboxWriter } from "../events/ports";
 import { type AggregateClass, IdentityMap } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";
 import {
 	type AggregateCommitToken,
 	type CommitEnrollment,
@@ -285,12 +285,12 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
 	/**
 	 * See `withCommit`: application-shell observer after acknowledgement.
 	 * The version argument is captured before any observer runs; the context
-	 * carries the bounded post-commit effect signal and deadline.
+	 * carries the bounded post-commit execution signal and deadline.
 	 */
 	onPersisted?: (
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		version: Version,
-		context: EffectContext,
+		context: ExecutionContext,
 	) => void | Promise<void>;
 	/**
 	 * See `withCommit`: failure observer for internal post-commit

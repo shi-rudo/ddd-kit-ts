@@ -70,7 +70,7 @@ its pending events, so the caller can retry or discard the instance.
 `onPersisted` may be asynchronous and is awaited, but it is not a delivery
 guarantee. All invocations and the optional bus publication share one absolute
 `postCommitTimeoutMs` budget (30 seconds by default), rather than receiving a
-fresh budget each. Every invocation receives an `EffectContext` with the
+fresh budget each. Every invocation receives an `ExecutionContext` with the
 corresponding `signal` and shared absolute `deadlineAt`; observers and bus work
 that have not started when it expires are skipped. A throw, timeout, or request abort is reported to
 `onPersistError` and never rejects the already committed result. Use the outbox
@@ -191,11 +191,11 @@ interface OutboxRecord<Evt extends AnyDomainEvent> {
 interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
   getPending(
     limit?: number,
-    context?: EffectContext,
+    context?: ExecutionContext,
   ): Promise<ReadonlyArray<OutboxRecord<Evt>>>;
   markDispatched(
     dispatchIds: ReadonlyArray<string>,
-    context?: EffectContext,
+    context?: ExecutionContext,
   ): Promise<void>;
 }
 ```
@@ -388,7 +388,7 @@ The dispatcher has a narrow contract:
   will be delivered again.
 - It dispatches sequentially in commit order.
 - It stops the batch on the first delivery failure.
-- It aborts each sink through its `EffectContext` after `deliveryTimeoutMs`
+- It aborts each sink through its `ExecutionContext` after `deliveryTimeoutMs`
   (30 seconds by default). A sink that ignores the signal cannot keep the
   dispatcher pending, but its foreign I/O can continue as zombie work.
 - It bounds `getPending`, `markDispatched`, and `markFailed` through
@@ -428,7 +428,7 @@ interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
   markFailed(
     dispatchId: string,
     error?: unknown,
-    context?: EffectContext,
+    context?: ExecutionContext,
   ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
 }
@@ -493,7 +493,7 @@ target:
 
 ```ts
 interface OutboxSink<Evt extends AnyDomainEvent> {
-  publish(record: OutboxRecord<Evt>, context: EffectContext): Promise<void>;
+  publish(record: OutboxRecord<Evt>, context: ExecutionContext): Promise<void>;
 }
 ```
 
@@ -516,7 +516,7 @@ shutdown likewise does not count; records not yet acknowledged stay pending
 for the next worker.
 
 The same rule applies to poll-store adapters. The dispatcher always passes an
-`EffectContext` to `getPending`, `markDispatched`, and `markFailed`; the optional
+`ExecutionContext` to `getPending`, `markDispatched`, and `markFailed`; the optional
 parameter preserves source compatibility for existing adapters. A storage
 timeout means the operation's outcome is unknown. Acknowledgements must be
 idempotent: a late acknowledgement may validly complete after the worker

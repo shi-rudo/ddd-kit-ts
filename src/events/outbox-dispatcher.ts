@@ -5,10 +5,10 @@ import {
 	type DeliveryFailureClassifier,
 } from "../utils/delivery-failure";
 import {
-	DEFAULT_EFFECT_TIMEOUT_MS,
-	type EffectContext,
-	runBoundedEffect,
-} from "../utils/effect";
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
 import { assertNonNegativeFinite } from "../utils/validate";
@@ -84,7 +84,10 @@ export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
  * and its dispatch acknowledgement was persisted.
  */
 export interface OutboxSink<Evt extends AnyDomainEvent> {
-	publish: (record: OutboxRecord<Evt>, context: EffectContext) => Promise<void>;
+	publish: (
+		record: OutboxRecord<Evt>,
+		context: ExecutionContext,
+	) => Promise<void>;
 }
 
 /**
@@ -326,9 +329,9 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		this.sink = options.sink;
 		this.classifyFailure = options.classifyFailure;
 		this.deliveryTimeoutMs =
-			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+			options.deliveryTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 		this.storageTimeoutMs =
-			options.storageTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+			options.storageTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 		assertNonNegativeFinite(
 			"OutboxDispatcher",
 			"deliveryTimeoutMs",
@@ -352,7 +355,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<OutboxRecord<Evt>>;
 			try {
-				batch = await runBoundedEffect(
+				batch = await runBoundedExecution(
 					"OutboxDispatcher.getPending",
 					{ signal, timeoutMs: this.storageTimeoutMs },
 					(context) => this.outbox.getPending(this.batchSize, context),
@@ -393,7 +396,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		for (const record of batch) {
 			if (signal?.aborted) break;
 			try {
-				await runBoundedEffect(
+				await runBoundedExecution(
 					"OutboxDispatcher.publish",
 					{ signal, timeoutMs: this.deliveryTimeoutMs },
 					(context) => this.sink.publish(record, context),
@@ -419,7 +422,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				// before this ack starts, the storage timeout owns that short grace
 				// period; an ack already in flight remains owner-cancellable.
 				const acknowledgementSignal = signal?.aborted ? undefined : signal;
-				await runBoundedEffect(
+				await runBoundedExecution(
 					"OutboxDispatcher.markDispatched",
 					{
 						signal: acknowledgementSignal,
@@ -457,7 +460,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 			const tracking = this.trackingOutbox;
 			if (tracking !== undefined && assessment.kind !== "transient") {
 				try {
-					const deadLetter = await runBoundedEffect(
+					const deadLetter = await runBoundedExecution(
 						"OutboxDispatcher.markFailed",
 						{ signal, timeoutMs: this.storageTimeoutMs },
 						(context) => tracking.markFailed(record.dispatchId, error, context),

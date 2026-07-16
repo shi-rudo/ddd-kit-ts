@@ -19,20 +19,20 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
-### Changed (breaking): shell effects carry cancellation and deadlines
+### Changed (breaking): shell operations carry cancellation and deadlines
 
-- Add the public `EffectContext` (`signal`, `deadlineAt`) and pass it to
+- Add the public `ExecutionContext` (`signal`, `deadlineAt`) and pass it to
   `OutboxSink.publish`, deadline handlers, `EventHandler`s, and asynchronous
   `withCommit` / `UnitOfWork` `onPersisted` observers. Domain events and domain
   APIs remain free of runtime cancellation concerns.
 - Add a 30-second default bound to each outbox delivery, deadline delivery,
   in-process event publication, and complete post-commit application phase. Configure
   it with `deliveryTimeoutMs`, `EventBus.publish(..., { timeoutMs })`, or
-  `postCommitTimeoutMs`. A timed-out delivery remains pending and follows the
-  shared default classifies native timeouts as transient, so they leave delivery
-  pending without consuming a poison-message attempt. Worker-owner cancellation
-  likewise leaves it pending without consuming an attempt.
-- `EventBus.publish(events, { signal, timeoutMs })` propagates one effect context
+  `postCommitTimeoutMs`. The shared default classifier treats native timeouts as
+  transient, so a timed-out delivery remains pending without consuming a
+  poison-message attempt. Worker-owner cancellation likewise leaves it pending
+  without consuming an attempt.
+- `EventBus.publish(events, { signal, timeoutMs })` propagates one execution context
   to every handler. A never-settling handler can no longer keep its caller
   pending indefinitely, even when the handler ignores cooperative cancellation.
 - `Projector.project(events, { signal })` forwards cancellation to
@@ -42,7 +42,7 @@ here, with a before and after.
   reporting a rollback while a database operation later commits.
 - Bound post-commit failures remain best-effort: all `onPersisted` observers and
   the bus publication share one absolute `postCommitTimeoutMs` budget rather
-  than receiving a fresh budget each; effects not yet started when it expires
+  than receiving a fresh budget each; callbacks not yet started when it expires
   are skipped. Observer timeout/abort is
   reported to `onPersistError`, and bus timeout/abort to `onPublishError`; an
   already committed use case still resolves successfully.
@@ -54,7 +54,7 @@ here, with a before and after.
   transport-specific errors. Classifier bugs are surfaced in the optional third
   observer argument without replacing the original delivery error.
 - Poll-side outbox and deadline-store methods accept an optional
-  `EffectContext`. The bundled workers always provide it and bound reads,
+  `ExecutionContext`. The bundled workers always provide it and bound reads,
   acknowledgements, and failure updates with `storageTimeoutMs` (30 seconds by
   default). This bounds the worker's wait, not arbitrary foreign I/O: production
   adapters must honor the signal or native deadline, and late write completion
@@ -90,7 +90,7 @@ const processor = new DeadlineProcessor({
 
 Existing one-argument callback implementations remain assignable in
 TypeScript, but direct calls to `OutboxSink.publish` must now provide an
-`EffectContext`. Custom `EventBus` implementations should accept and propagate
+`ExecutionContext`. Custom `EventBus` implementations should accept and propagate
 the optional `PublishOptions`; custom transaction scopes already accept the
 optional signal through `TransactionalOptions`.
 

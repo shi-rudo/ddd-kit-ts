@@ -27,22 +27,24 @@ They deliberately do not include middleware pipelines, retries, dead-letter queu
 
 That restraint is a design choice. A bus with middleware, retry policy, transport adapters, metrics, authorization, and tracing quickly becomes an application framework. The kit stops at the handler contract. You can still add cross-cutting behavior with small handler decorators, and you can still adapt the handler types to a production message broker.
 
-## Event Handlers And Effects
+## Event Handlers, Side Effects, And Cancellation
 
 A domain event says that something meaningful has already happened.
 `OrderConfirmed`, for example, records a business fact. Sending the confirmation
-email is not part of that fact; it is a reaction to it.
+email is not part of that fact; it is one possible reaction to it.
 
-We call such a reaction an **effect** when it reaches beyond the domain model or
-depends on the runtime around it. Sending an email, making an HTTP request,
-writing an audit record, or updating a cache are all effects. Unlike a domain
-decision, this work can be slow, fail, or wait forever. The imperative shell is
-the part of the application that runs and supervises it.
+An event handler defines that reaction. It may perform a **side effect**: work
+that changes or communicates with something outside the handler's own
+calculation. Sending an email, making an HTTP request, writing an audit record,
+or updating a cache are all side effects. This work can be slow, fail, or wait
+forever. The imperative shell is the part of the application that invokes the
+handler and supervises the I/O it starts.
 
-`EventBusImpl` therefore does more than invoke a handler. For each call to
-`publish`, it creates one `EffectContext` and passes it to every handler for the
-event type, including handlers registered through `subscribeAll`. The context
-gives all of those handlers the same cancellation signal and time budget:
+`EventBusImpl` therefore bounds the execution of every handler. For each call
+to `publish`, it creates one `ExecutionContext` and passes it to every handler
+for the event type, including handlers registered through `subscribeAll`. The
+context gives all of those handlers the same cancellation signal and time
+budget:
 
 ```ts
 eventBus.subscribe("OrderConfirmed", async (event, context) => {
@@ -328,7 +330,7 @@ the whole command and possibly execute the write twice. Use
 `onPublishError(error, events)` for logging and metrics. All asynchronous
 `onPersisted(aggregate, version, context)` observers and the subsequent bus
 publication share one absolute `postCommitTimeoutMs` deadline; each later
-effect receives only the remaining budget and is not started after that
+observer or bus call receives only the remaining budget and is not started after that
 deadline. Observer errors go to
 `onPersistError`. Durable delivery belongs to the outbox dispatcher.
 

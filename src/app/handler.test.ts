@@ -1181,7 +1181,7 @@ describe("withCommit", () => {
 			}
 		});
 
-		it("does not start later post-commit effects after the shared deadline", async () => {
+		it("does not start later post-commit callbacks after the shared deadline", async () => {
 			vi.useFakeTimers();
 			vi.setSystemTime(new Date("2026-07-16T12:00:00.000Z"));
 			const event = createDomainEvent(

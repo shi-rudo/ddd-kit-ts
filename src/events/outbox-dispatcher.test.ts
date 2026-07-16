@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";
 import { EventBusImpl } from "./event-bus";
 import { InMemoryOutbox } from "./outbox";
 import {
@@ -247,11 +247,11 @@ describe("OutboxDispatcher", () => {
 		expect(pollErrors).toHaveLength(2);
 	});
 
-	it("aborts a never-settling getPending call through the storage effect context", async () => {
+	it("aborts a never-settling getPending call through the storage execution context", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		const outbox = interceptOutbox(inner, {
-			getPending: (_limit, received?: EffectContext) => {
+			getPending: (_limit, received?: ExecutionContext) => {
 				context = received;
 				return new Promise<ReadonlyArray<OutboxRecord<TestEvent>>>(() => {});
 			},
@@ -277,13 +277,13 @@ describe("OutboxDispatcher", () => {
 	it("aborts a never-settling outbox acknowledgement without losing the delivered record", async () => {
 		const inner = new InMemoryOutbox<TestEvent>();
 		await inner.add([makeCommitted(1)]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let ackStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			ackStarted = resolve;
 		});
 		const outbox = interceptOutbox(inner, {
-			markDispatched: (_ids, received?: EffectContext) => {
+			markDispatched: (_ids, received?: ExecutionContext) => {
 				context = received;
 				ackStarted();
 				return new Promise<void>(() => {});
@@ -360,12 +360,12 @@ describe("OutboxDispatcher", () => {
 	it("aborts a never-settling outbox failure update without hiding the delivery error", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 9 });
 		await outbox.add([makeCommitted(1)]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let updateStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			updateStarted = resolve;
 		});
-		outbox.markFailed = (_id, _error, received?: EffectContext) => {
+		outbox.markFailed = (_id, _error, received?: ExecutionContext) => {
 			context = received;
 			updateStarted();
 			return new Promise(() => {});
@@ -520,7 +520,7 @@ describe("OutboxDispatcher", () => {
 		vi.useFakeTimers();
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
 		await outbox.add([makeCommitted(1)]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		let sinkStarted!: () => void;
 		const started = new Promise<void>((resolve) => {
 			sinkStarted = resolve;
@@ -565,7 +565,7 @@ describe("OutboxDispatcher", () => {
 	it("aborts a never-settling sink without counting shutdown as a delivery failure", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
 		await outbox.add([makeCommitted(1)]);
-		let context: EffectContext | undefined;
+		let context: ExecutionContext | undefined;
 		const errors: unknown[] = [];
 		const sink: OutboxSink<TestEvent> = {
 			publish: async (_record, received) => {

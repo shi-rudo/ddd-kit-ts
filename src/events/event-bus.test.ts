@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
-import type { EffectContext } from "../utils/effect";
+import type { ExecutionContext } from "../utils/execution";
 import { EventBusImpl } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
@@ -84,10 +84,10 @@ describe("EventBusImpl", () => {
 			expect(receivedOrderId).toBe("order-123");
 		});
 
-		it("times out a never-settling handler and aborts its effect context", async () => {
+		it("times out a never-settling handler and aborts its execution context", async () => {
 			vi.useFakeTimers();
 			const bus = new EventBusImpl<OrderEvent>();
-			let context: EffectContext | undefined;
+			let context: ExecutionContext | undefined;
 			let handlerStarted!: () => void;
 			const started = new Promise<void>((resolve) => {
 				handlerStarted = resolve;
@@ -120,7 +120,7 @@ describe("EventBusImpl", () => {
 
 		it("propagates owner cancellation to a never-settling handler", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
-			let context: EffectContext | undefined;
+			let context: ExecutionContext | undefined;
 			bus.subscribe("OrderCreated", async (_event, received) => {
 				context = received;
 				await new Promise<void>(() => {});

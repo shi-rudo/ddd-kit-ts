@@ -1,10 +1,10 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { abortReason } from "../utils/abort";
 import {
-	DEFAULT_EFFECT_TIMEOUT_MS,
-	type EffectContext,
-	runBoundedEffect,
-} from "../utils/effect";
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import type {
 	EventBus,
 	EventHandler,
@@ -152,11 +152,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		events: ReadonlyArray<Evt>,
 		options: PublishOptions = {},
 	): Promise<void> {
-		return runBoundedEffect(
+		return runBoundedExecution(
 			"EventBus.publish",
 			{
 				signal: options.signal,
-				timeoutMs: options.timeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS,
+				timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 			},
 			(context) => this.publishWithinContext(events, context),
 		);
@@ -164,7 +164,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 
 	private async publishWithinContext(
 		events: ReadonlyArray<Evt>,
-		context: EffectContext,
+		context: ExecutionContext,
 	): Promise<void> {
 		const errors: Error[] = [];
 

@@ -323,7 +323,7 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./utils/delivery-failure";
-export type { EffectContext } from "./utils/effect";
+export type { ExecutionContext } from "./utils/execution";
 
 // Validation
 export { voValidated } from "./validation";

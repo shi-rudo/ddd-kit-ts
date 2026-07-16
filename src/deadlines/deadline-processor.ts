@@ -4,10 +4,10 @@ import {
 	type DeliveryFailureClassifier,
 } from "../utils/delivery-failure";
 import {
-	DEFAULT_EFFECT_TIMEOUT_MS,
-	type EffectContext,
-	runBoundedEffect,
-} from "../utils/effect";
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
 import { assertNonNegativeFinite } from "../utils/validate";
@@ -68,7 +68,7 @@ export interface DeadlineProcessorOptions<TPayload> {
 	 */
 	handler: (
 		deadline: DueDeadline<TPayload>,
-		context: EffectContext,
+		context: ExecutionContext,
 	) => Promise<void> | void;
 
 	/** Deadlines fetched per poll. Default `32`. */
@@ -158,7 +158,7 @@ export interface DeadlineProcessorOptions<TPayload> {
  *   (counting it toward the poison ceiling would dead-letter healthy
  *   work), and the backoff paces the redelivery instead of the pass
  *   re-running every handler against a dead write path.
- * - **Bounded waiting requires bounded adapters.** Delivery and store effects
+ * - **Bounded waiting requires bounded adapters.** Delivery and store operations
  *   receive cooperative cancellation and an absolute deadline. The processor
  *   returns after its configured bound even when a promise ignores the signal,
  *   but only the adapter can terminate native I/O and prevent late work from
@@ -171,7 +171,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 	private readonly store: DeadlineStore<TPayload>;
 	private readonly handler: (
 		deadline: DueDeadline<TPayload>,
-		context: EffectContext,
+		context: ExecutionContext,
 	) => Promise<void> | void;
 	private readonly clock: () => Date;
 	private readonly observers: DeadlineProcessorObservers<TPayload>;
@@ -191,9 +191,9 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		this.classifyFailure = options.classifyFailure;
 		this.clock = options.clock ?? (() => new Date());
 		this.deliveryTimeoutMs =
-			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+			options.deliveryTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 		this.storageTimeoutMs =
-			options.storageTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+			options.storageTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
 		assertNonNegativeFinite(
 			"DeadlineProcessor",
 			"deliveryTimeoutMs",
@@ -215,7 +215,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<DueDeadline<TPayload>>;
 			try {
-				batch = await runBoundedEffect(
+				batch = await runBoundedExecution(
 					"DeadlineProcessor.due",
 					{ signal, timeoutMs: this.storageTimeoutMs },
 					(context) => this.store.due(this.now(), this.batchSize, context),
@@ -239,7 +239,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 			for (const deadline of batch) {
 				if (signal?.aborted) break;
 				try {
-					await runBoundedEffect(
+					await runBoundedExecution(
 						"DeadlineProcessor.handler",
 						{ signal, timeoutMs: this.deliveryTimeoutMs },
 						(context) => this.handler(deadline, context),
@@ -254,7 +254,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 					);
 					if (assessment.kind !== "transient") {
 						try {
-							const deadLetter = await runBoundedEffect(
+							const deadLetter = await runBoundedExecution(
 								"DeadlineProcessor.markFailed",
 								{ signal, timeoutMs: this.storageTimeoutMs },
 								(context) =>
@@ -286,7 +286,7 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 					// when shutdown won immediately after completion. An acknowledgement
 					// that was already running remains owner-cancellable.
 					const acknowledgementSignal = signal?.aborted ? undefined : signal;
-					await runBoundedEffect(
+					await runBoundedExecution(
 						"DeadlineProcessor.markDelivered",
 						{
 							signal: acknowledgementSignal,
