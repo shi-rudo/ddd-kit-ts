@@ -155,9 +155,19 @@ describe("untrusted-boundary examples", () => {
 		expect(adapter).toContain("response.status === 409");
 		expect(adapter).toContain('code: "ORDER_STATE_CONFLICT"');
 		expect(adapter).toContain('category: "CONFLICT"');
-		expect(adapter).toContain("response.status >= 500");
-		expectBefore(adapter, "response.status === 409", "response.status >= 500");
+		expect(edgeGuide).toContain(
+			"function isTransientOrderCommandStatus(status: number): boolean",
+		);
+		expect(adapter).toContain("isTransientOrderCommandStatus(response.status)");
+		expect(adapter).not.toContain("response.status >= 500");
+		expectBefore(
+			adapter,
+			"response.status === 409",
+			"isTransientOrderCommandStatus(response.status)",
+		);
 		expect(adapter).toContain("Unexpected order command response");
+		expect(edgeGuide).toContain("`502`, `503`, and `504`");
+		expect(edgeGuide).toContain("`500`, `501`, and `505`");
 	});
 
 	it("maps application failure categories to distinct HTTP statuses", () => {

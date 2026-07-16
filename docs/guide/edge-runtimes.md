@@ -206,6 +206,10 @@ declare function authenticateRequest(
   env: Env,
 ): Promise<Result<AuthenticatedPrincipal, AuthenticationFailure>>;
 
+function isTransientOrderCommandStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
 function createCommandBus(
   env: Env,
 ): CommandBus<CommandResults, ConfirmOrderFailure> {
@@ -244,7 +248,7 @@ function createCommandBus(
         details: { orderId: command.orderId },
       });
     }
-    if (response.status >= 500) {
+    if (isTransientOrderCommandStatus(response.status)) {
       return err({
         code: "ORDER_COMMAND_UNAVAILABLE",
         category: "INFRASTRUCTURE",
@@ -439,10 +443,12 @@ above; the failure is not reported as malformed command JSON.
 
 The Durable Object contract distinguishes expected outcomes from availability.
 `403`, `404`, and `409` are permanent application results that the caller can
-handle without retrying. A `5xx` response means the downstream application is
-temporarily unavailable. Any other non-success status is contract drift in this
-example and throws as a defect; add another explicit outcome when the Durable
-Object deliberately introduces one.
+handle without retrying. This port treats `502`, `503`, and `504` as temporary
+availability failures because an unchanged retry may succeed once the
+downstream service recovers. It does not infer retryability from the HTTP status
+family: `500`, `501`, and `505` remain contract drift in this example unless the
+Durable Object deliberately adds them as explicit outcomes. Any other
+non-success status also throws as a defect.
 
 Authentication still is not authorization. The application use case loads the
 order and evaluates any application policy and state-dependent domain
