@@ -241,6 +241,14 @@ and expose them to the next.
 
 ## Testing edge-shaped code
 
+The package CI bundles the built `dist` entry points and executes them inside
+both Cloudflare's `workerd` (through Miniflare) and the Vercel Edge Runtime
+simulator. The smoke imports the main and `money` entry points, mutates a small
+aggregate, records an event, dispatches through `CommandBus`, and performs exact
+money arithmetic. It also runs without Node's `process` or `Buffer` globals.
+This is a compatibility tripwire for the package runtime, not certification of
+a consumer's database, broker, or framework adapters.
+
 In-memory adapters are useful for tests, but they are still memory-only:
 
 - `InMemoryOutbox`

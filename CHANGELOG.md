@@ -19,6 +19,16 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Added: automated edge-runtime compatibility smokes
+
+- Bundle the built package and execute its main and `money` entry points in
+  Cloudflare `workerd` through Miniflare and in the official Vercel Edge Runtime
+  simulator on every pull request and push to `main`.
+- The smoke exercises aggregate mutation, domain-event minting, in-process bus
+  dispatch, and exact money arithmetic without Node `process` or `Buffer`
+  globals. Consumer-owned storage and transport adapters remain outside this
+  package-level compatibility claim.
+
 ### Added: selective DomainError-to-Result boundary
 
 - Add `domainErrorToResult(operation, expectedErrors)` for consumers that want
