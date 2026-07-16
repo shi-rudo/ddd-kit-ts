@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { err, ok } from "@shirudo/result";
 import type { Command, CommandHandler } from "./command";
 

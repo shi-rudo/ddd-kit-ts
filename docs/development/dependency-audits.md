@@ -22,13 +22,11 @@ would otherwise hide whether the production graph is clean.
 Moving the lockfile forward with pnpm 11 and applying a compatible `qs` 6.15.2
 override removed 20 of the 25 findings reported on 2026-07-16. Moving the
 documentation build to VitePress 2.0.0-alpha.18 and Vite 8 removed the four
-findings retained by VitePress 1.6.4's Vite 5 toolchain. One development-only
-finding remains accepted:
+findings retained by VitePress 1.6.4's Vite 5 toolchain. Replacing tsup with
+Vite+ Pack removed the final low-severity esbuild development-server advisory.
 
-| Advisory | Severity | Path | Decision |
-| --- | --- | --- | --- |
-| [GHSA-g7r4-m6w7-qqqr](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr) | Low | `tsup > esbuild@0.27.7` | Accepted because the package build uses esbuild's build API, not its development server. tsup 8.5.1 declares `esbuild@^0.27.0`; upgrade when tsup supports esbuild 0.28.1 or newer. |
+As of the review date, both `pnpm audit:prod` and the full `pnpm audit` report
+no known vulnerabilities. There are no accepted advisory exceptions.
 
 Re-run both `pnpm audit:prod` and `pnpm audit` whenever the lockfile or toolchain
-changes. Revisit the accepted finding when tsup supports esbuild 0.28.1 or
-newer.
+changes.

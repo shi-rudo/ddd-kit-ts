@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { type Money, moneyOfMinor } from "../../src/money";
 import { Order, type OrderId } from "./order";
 

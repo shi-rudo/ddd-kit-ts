@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@shirudo/result";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import { UnregisteredHandlerError } from "../core/errors";
 import type { Command } from "./command";
 import { CommandBus, type ICommandBus } from "./command-bus";

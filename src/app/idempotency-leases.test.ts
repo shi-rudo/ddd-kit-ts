@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { InMemoryOutbox } from "../events/outbox";
 import type { TransactionScope } from "../repo/scope";

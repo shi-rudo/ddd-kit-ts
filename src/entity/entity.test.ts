@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../core/errors";
 import type { Id } from "../core/id";
 import {

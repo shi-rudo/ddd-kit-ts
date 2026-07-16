@@ -1,5 +1,5 @@
 import { isStructuredError, matchError } from "@shirudo/base-error";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	AggregateDeletedError,
 	AggregateNotFoundError,

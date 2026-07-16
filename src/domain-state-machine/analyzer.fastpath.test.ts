@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 // Passthrough spies on the definition module: the analyzer must not call
 // validate/copy itself for a PREPARED definition (the prepared brand means

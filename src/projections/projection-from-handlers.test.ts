@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { MissingHandlerError } from "../core/errors";
 import type { TransactionScope } from "../repo/scope";

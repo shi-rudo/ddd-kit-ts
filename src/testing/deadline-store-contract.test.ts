@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { InMemoryDeadlineStore } from "../deadlines/in-memory-deadline-store";
 import {
 	createDeadlineStoreContractTests,

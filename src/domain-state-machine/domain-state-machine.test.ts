@@ -1,7 +1,7 @@
 // @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
 import { runInNewContext } from "node:vm";
 import { isBaseError } from "@shirudo/base-error";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { DomainError } from "../core/errors";
 import {
 	canTransitionDomainState,
