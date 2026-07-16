@@ -2,8 +2,8 @@ import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
-	aggregatePersistenceCapabilityFor,
 	type AggregatePersistenceCapability,
+	aggregatePersistenceCapabilityFor,
 } from "../aggregate/persistence-lifecycle";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
@@ -74,10 +74,12 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 	) => void;
 	/**
-	 * Maximum time allotted to each post-commit application observer and to
-	 * the in-process bus publication. Defaults to `30000`ms. Timing out or
-	 * aborting these best-effort effects is reported through the matching
-	 * error observer and never rejects an already committed write.
+	 * Total time allotted to the complete post-commit application phase:
+	 * every application observer followed by in-process bus publication shares
+	 * one absolute deadline. Effects that have not started when the deadline is
+	 * reached are skipped and reported as timeouts. Defaults to `30000`ms.
+	 * Timing out or aborting these best-effort effects is reported through the
+	 * matching error observer and never rejects an already committed write.
 	 */
 	postCommitTimeoutMs?: number;
 	/**
@@ -355,10 +357,10 @@ function createCommitTokenScope<
  * logger/metrics) and otherwise dropped; delivery is still guaranteed via
  * the outbox. The hook is an observer: if it throws, its error is
  * swallowed so the post-commit invariant holds.
- * Both the application observer and bus publication are independently bounded
- * by `postCommitTimeoutMs` (30 seconds by default). A timeout or owner abort is
- * reported through the same observer paths and never changes the committed
- * result.
+ * The complete application-observer and bus-publication phase shares one
+ * absolute `postCommitTimeoutMs` budget (30 seconds by default); later effects
+ * are not started once it expires. A timeout or owner abort is reported
+ * through the same observer paths and never changes the committed result.
  *
  * If the transaction rolls back, no acknowledgement occurs: the aggregate
  * keeps its pending events, so the caller can retry or discard the instance.
@@ -531,13 +533,14 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// A slow or failing observer can therefore never prevent peer cleanup. Each
 	// observer receives the version captured before any observer ran, so an
 	// earlier callback cannot rewrite a later callback's commit receipt.
+	const postCommitDeadlineAt = Date.now() + postCommitTimeoutMs;
 	const onPersisted = deps.onPersisted;
 	if (onPersisted) {
 		for (const { aggregate, version } of persistedObservations) {
 			try {
 				await runBoundedEffect(
 					"withCommit.onPersisted",
-					{ signal: deps.signal, timeoutMs: postCommitTimeoutMs },
+					{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
 					(context) => onPersisted(aggregate, version, context),
 				);
 			} catch (error) {
@@ -551,7 +554,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		try {
 			await runBoundedEffect(
 				"withCommit.bus.publish",
-				{ signal: deps.signal, timeoutMs: postCommitTimeoutMs },
+				{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
 				(context) =>
 					bus.publish(events, {
 						signal: context.signal,

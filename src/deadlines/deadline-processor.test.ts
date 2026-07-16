@@ -265,6 +265,180 @@ describe("DeadlineProcessor", () => {
 		expect(pollErrors).toHaveLength(2);
 	});
 
+	it("aborts a never-settling due call through the storage effect context", async () => {
+		const inner = await seeded([]);
+		let context: EffectContext | undefined;
+		const store: DeadlineStore<Payload> = {
+			schedule: (deadline) => inner.schedule(deadline),
+			cancel: (scope, key) => inner.cancel(scope, key),
+			due: (_now, _limit, received?: EffectContext) => {
+				context = received;
+				return new Promise(() => {});
+			},
+			markDelivered: (ids) => inner.markDelivered(ids),
+			markFailed: (id, error) => inner.markFailed(id, error),
+			deadLetters: () => inner.deadLetters(),
+		};
+		const options = {
+			store,
+			handler: () => {},
+			storageTimeoutMs: 1_000,
+			observers: {
+				onDeliveryError: () => {},
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping");
+		const loop = processor.run(stop.signal);
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(context?.deadlineAt).toBeTypeOf("number");
+	});
+
+	it("aborts a never-settling deadline acknowledgement without consuming the deadline", async () => {
+		const inner = await seeded([{ key: "a" }]);
+		let context: EffectContext | undefined;
+		let ackStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		const store: DeadlineStore<Payload> = {
+			schedule: (deadline) => inner.schedule(deadline),
+			cancel: (scope, key) => inner.cancel(scope, key),
+			due: (now, limit) => inner.due(now, limit),
+			markDelivered: (_ids, received?: EffectContext) => {
+				context = received;
+				ackStarted();
+				return new Promise<void>(() => {});
+			},
+			markFailed: (id, error) => inner.markFailed(id, error),
+			deadLetters: () => inner.deadLetters(),
+		};
+		const options = {
+			store,
+			handler: () => {},
+			storageTimeoutMs: 1_000,
+			observers: {
+				onDeliveryError: () => {},
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping during ack");
+		const loop = processor.run(stop.signal);
+		await started;
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(await inner.due(at(T1), 10)).toHaveLength(1);
+	});
+
+	it("observes one idempotent acknowledgement that completes after its storage timeout", async () => {
+		vi.useFakeTimers();
+		const inner = await seeded([{ key: "a" }]);
+		let releaseAck!: () => void;
+		const ackGate = new Promise<void>((resolve) => {
+			releaseAck = resolve;
+		});
+		let ackStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		let ackCompleted!: () => void;
+		const completed = new Promise<void>((resolve) => {
+			ackCompleted = resolve;
+		});
+		let ackCalls = 0;
+		const store: DeadlineStore<Payload> = {
+			schedule: (deadline) => inner.schedule(deadline),
+			cancel: (scope, key) => inner.cancel(scope, key),
+			due: (now, limit) => inner.due(now, limit),
+			markDelivered: async (ids) => {
+				ackCalls += 1;
+				ackStarted();
+				await ackGate;
+				await inner.markDelivered(ids);
+				ackCompleted();
+			},
+			markFailed: (id, error) => inner.markFailed(id, error),
+			deadLetters: () => inner.deadLetters(),
+		};
+		const processor = fastProcessor({
+			store,
+			handler: () => {},
+			storageTimeoutMs: 5,
+			clock: () => at(T1),
+		});
+
+		try {
+			const execution = processor.drainOnce();
+			await started;
+			await vi.advanceTimersByTimeAsync(5);
+			await expect(execution).resolves.toBe("stopped");
+			expect(await inner.due(at(T1), 10)).toHaveLength(1);
+
+			releaseAck();
+			await completed;
+			expect(await inner.due(at(T1), 10)).toHaveLength(0);
+			expect(ackCalls).toBe(1);
+		} finally {
+			releaseAck();
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts a never-settling deadline failure update without hiding the handler error", async () => {
+		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 9 });
+		let context: EffectContext | undefined;
+		let updateStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			updateStarted = resolve;
+		});
+		store.markFailed = (_id, _error, received?: EffectContext) => {
+			context = received;
+			updateStarted();
+			return new Promise(() => {});
+		};
+		const handlerError = new Error("permanent handler rejection");
+		const reported: unknown[] = [];
+		const options = {
+			store,
+			handler: () => {
+				throw handlerError;
+			},
+			storageTimeoutMs: 1_000,
+			observers: {
+				onDeliveryError: (error: unknown) => reported.push(error),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping during failure update");
+		const loop = processor.run(stop.signal);
+		await started;
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(reported).toContain(handlerError);
+	});
+
 	it("a drainOnce call during an in-flight pass joins it instead of double-delivering", async () => {
 		const store = await seeded([{ key: "a" }]);
 		let release!: () => void;
@@ -312,15 +486,21 @@ describe("DeadlineProcessor", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
-	it("times out a never-settling handler and leaves the deadline pending", async () => {
+	it("times out a never-settling handler without consuming the poison ceiling", async () => {
+		vi.useFakeTimers();
 		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 99 });
 		let context: EffectContext | undefined;
+		let handlerStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			handlerStarted = resolve;
+		});
 		const errors: unknown[] = [];
 		const handler: DeadlineProcessorOptions<Payload>["handler"] = async (
 			_deadline,
 			received,
 		) => {
 			context = received;
+			handlerStarted();
 			await new Promise<void>(() => {});
 		};
 		const options = {
@@ -336,18 +516,21 @@ describe("DeadlineProcessor", () => {
 		};
 		const processor = new DeadlineProcessor(options);
 
-		const outcome = await Promise.race([
-			processor.drainOnce(),
-			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
-		]);
+		try {
+			const execution = processor.drainOnce();
+			await started;
+			await vi.advanceTimersByTimeAsync(5);
+			await expect(execution).resolves.toBe("stopped");
 
-		expect(outcome).toBe("stopped");
-		expect(context?.signal.aborted).toBe(true);
-		expect(context?.deadlineAt).toBeTypeOf("number");
-		expect(errors).toHaveLength(1);
-		expect(errors[0]).toMatchObject({ name: "TimeoutError" });
-		const [pending] = await store.due(at(T1), 10);
-		expect(pending).toMatchObject({ key: "a", attempts: 1 });
+			expect(context?.signal.aborted).toBe(true);
+			expect(context?.deadlineAt).toBeTypeOf("number");
+			expect(errors).toHaveLength(1);
+			expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+			const [pending] = await store.due(at(T1), 10);
+			expect(pending).toMatchObject({ key: "a", attempts: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("aborts a never-settling handler without counting shutdown as a delivery failure", async () => {
@@ -371,10 +554,7 @@ describe("DeadlineProcessor", () => {
 		await vi.waitFor(() => expect(context).toBeDefined());
 
 		stop.abort(new Error("worker stopping"));
-		const outcome = await Promise.race([
-			pass,
-			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
-		]);
+		const outcome = await pass;
 
 		expect(outcome).toBe("stopped");
 		expect(context?.signal.reason).toMatchObject({
@@ -384,6 +564,98 @@ describe("DeadlineProcessor", () => {
 		const [pending] = await store.due(at(T1), 10);
 		expect(pending).toMatchObject({ key: "a", attempts: 0 });
 		expect(await store.deadLetters()).toEqual([]);
+	});
+
+	it("transient handler failures do not consume the deadline poison ceiling", async () => {
+		const store = await seeded([{ key: "transient" }], {
+			maxDeliveryAttempts: 1,
+		});
+		const assessments: unknown[] = [];
+		const options = {
+			store,
+			handler: () => {
+				throw new Error("dependency unavailable");
+			},
+			classifyFailure: () => "transient" as const,
+			observers: {
+				onDeliveryError: (
+					_error: unknown,
+					_deadline: unknown,
+					assessment?: unknown,
+				) => assessments.push(assessment),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+
+		await expect(processor.drainOnce()).resolves.toBe("stopped");
+
+		const [pending] = await store.due(at(T1), 10);
+		expect(pending).toMatchObject({ key: "transient", attempts: 0 });
+		expect(await store.deadLetters()).toEqual([]);
+		expect(assessments).toEqual([{ kind: "transient" }]);
+	});
+
+	it("the default classifier counts an explicit non-retryable failure as permanent", async () => {
+		const store = await seeded([{ key: "permanent" }], {
+			maxDeliveryAttempts: 1,
+		});
+		const assessments: unknown[] = [];
+		const processor = new DeadlineProcessor({
+			store,
+			handler: () => {
+				throw Object.assign(new Error("invalid deadline payload"), {
+					retryable: false,
+				});
+			},
+			observers: {
+				onDeliveryError: (_error, _deadline, assessment) =>
+					assessments.push(assessment),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		});
+
+		await expect(processor.drainOnce()).resolves.toBe("stopped");
+
+		expect(await store.deadLetters()).toHaveLength(1);
+		expect(assessments).toEqual([{ kind: "permanent" }]);
+	});
+
+	it("a throwing deadline classifier is reported as unknown and safely counts", async () => {
+		const store = await seeded([{ key: "unknown" }], {
+			maxDeliveryAttempts: 1,
+		});
+		const classifierError = new Error("classifier failed");
+		const assessments: unknown[] = [];
+		const options = {
+			store,
+			handler: () => {
+				throw new Error("handler failed");
+			},
+			classifyFailure: () => {
+				throw classifierError;
+			},
+			observers: {
+				onDeliveryError: (
+					_error: unknown,
+					_deadline: unknown,
+					assessment?: unknown,
+				) => assessments.push(assessment),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+
+		await expect(processor.drainOnce()).resolves.toBe("stopped");
+
+		expect(await store.deadLetters()).toHaveLength(1);
+		expect(assessments[0]).toMatchObject({
+			kind: "unknown",
+			classifierError,
+		});
 	});
 
 	it("throwing observers, clock, and jitter source are neutralized", async () => {
@@ -492,5 +764,8 @@ describe("DeadlineProcessor", () => {
 				deliveryTimeoutMs: Number.POSITIVE_INFINITY,
 			}),
 		).toThrow(/deliveryTimeoutMs/);
+		expect(() =>
+			fastProcessor({ store, handler, storageTimeoutMs: -1 }),
+		).toThrow(/storageTimeoutMs/);
 	});
 });

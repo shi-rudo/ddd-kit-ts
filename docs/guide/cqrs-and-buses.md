@@ -294,10 +294,12 @@ If post-commit `bus.publish(events)` fails, times out, or is aborted,
 `withCommit` still returns the committed result. The database transaction
 already succeeded, so rejecting the use case would encourage callers to retry
 the whole command and possibly execute the write twice. Use
-`onPublishError(error, events)` for logging and metrics. The same bound applies
-to each asynchronous `onPersisted(aggregate, version, context)` observer; its
-errors go to `onPersistError`. Durable delivery belongs to the outbox
-dispatcher.
+`onPublishError(error, events)` for logging and metrics. All asynchronous
+`onPersisted(aggregate, version, context)` observers and the subsequent bus
+publication share one absolute `postCommitTimeoutMs` deadline; each later
+effect receives only the remaining budget and is not started after that
+deadline. Observer errors go to
+`onPersistError`. Durable delivery belongs to the outbox dispatcher.
 
 See [Outbox & Transactions](./outbox.md) for the full outbox lifecycle.
 

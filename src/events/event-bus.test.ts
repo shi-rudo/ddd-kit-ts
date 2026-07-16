@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
 import type { EffectContext } from "../utils/effect";
 import { EventBusImpl } from "./event-bus";
@@ -37,11 +37,8 @@ describe("EventBusImpl", () => {
 
 		it("should return unsubscribe function", () => {
 			const bus = new EventBusImpl<OrderEvent>();
-			let called = false;
 
-			const unsubscribe = bus.subscribe("OrderCreated", async () => {
-				called = true;
-			});
+			const unsubscribe = bus.subscribe("OrderCreated", async () => {});
 
 			expect(typeof unsubscribe).toBe("function");
 		});
@@ -88,26 +85,37 @@ describe("EventBusImpl", () => {
 		});
 
 		it("times out a never-settling handler and aborts its effect context", async () => {
+			vi.useFakeTimers();
 			const bus = new EventBusImpl<OrderEvent>();
 			let context: EffectContext | undefined;
+			let handlerStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				handlerStarted = resolve;
+			});
 			bus.subscribe("OrderCreated", async (_event, received) => {
 				context = received;
+				handlerStarted();
 				await new Promise<void>(() => {});
 			});
 			const event = createDomainEvent("OrderCreated", {
 				orderId: "order-123",
 			}) as OrderCreated;
-			const outcome = await Promise.race([
-				bus.publish([event], { timeoutMs: 5 }).then(
-					() => "resolved" as const,
-					(error: unknown) => error,
-				),
-				new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
-			]);
+			const execution = bus.publish([event], { timeoutMs: 5 }).then(
+				() => "resolved" as const,
+				(error: unknown) => error,
+			);
 
-			expect(outcome).toMatchObject({ name: "TimeoutError" });
-			expect(context?.signal.aborted).toBe(true);
-			expect(context?.deadlineAt).toBeTypeOf("number");
+			try {
+				await started;
+				await vi.advanceTimersByTimeAsync(5);
+				await expect(execution).resolves.toMatchObject({
+					name: "TimeoutError",
+				});
+				expect(context?.signal.aborted).toBe(true);
+				expect(context?.deadlineAt).toBeTypeOf("number");
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("propagates owner cancellation to a never-settling handler", async () => {

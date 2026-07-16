@@ -465,8 +465,10 @@ log.info({
 ```
 
 That is useful for queue consumers, tests, and replay jobs. The signal is
-forwarded to the `TransactionScope`; actual cancellation remains cooperative
-and adapter-owned. `Projector` does not race the transaction promise, because
+checked before validation and transaction setup, so an already-aborted call
+never opens a transaction. Once work is in flight it is forwarded to the
+`TransactionScope`; actual cancellation remains cooperative and adapter-owned.
+`Projector` does not race the transaction promise, because
 returning early could claim rollback while a driver that ignored cancellation
 later commits the read model and checkpoint. Update and checkpoint therefore
 retain their existing atomicity guarantee.

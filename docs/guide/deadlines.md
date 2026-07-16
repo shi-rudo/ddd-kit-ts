@@ -93,6 +93,7 @@ for deadlines as `DeadlineProcessor`:
 const processor = new DeadlineProcessor({
   store: deadlines,
   deliveryTimeoutMs: 10_000,
+  storageTimeoutMs: 5_000,
   handler: async (deadline, { signal, deadlineAt }) => {
     // Feed it to the owner as an input; check current state first,
     // a delivered deadline is a proposal (see above).
@@ -115,10 +116,30 @@ void processor.run(stop.signal);
 Every handler receives an `EffectContext`. Its signal combines worker shutdown
 with the per-delivery bound; `deadlineAt` is the matching absolute Unix epoch
 millisecond. The default `deliveryTimeoutMs` is 30 seconds. Pass the signal into
-I/O adapters and use the deadline when an adapter accepts an absolute budget.
-A timeout follows the ordinary failed-delivery path and can consume an attempt.
+I/O adapters or enforce a native timeout no later than the absolute deadline.
+The processor bounds how long it waits but cannot terminate an arbitrary
+promise; ignoring both can leave zombie work overlapping a retry and is not a
+production-safe handler. A timeout is transient by default: it backs off and
+leaves the deadline pending without consuming its poison ceiling.
 Worker shutdown is different: it aborts a never-settling handler, leaves the
 deadline pending, and does not consume the poison-message ceiling.
+
+`classifyFailure` uses the same policy as the outbox dispatcher. Return
+`"transient"`, `"permanent"`, or `"unknown"`; permanent and unknown failures
+consume attempts. Without a custom classifier, native `TimeoutError` and a
+`retryable: true` marker anywhere in the cause chain are transient,
+`retryable: false` is permanent, and unmapped errors are unknown. A broken
+classifier cannot break the worker: the original handler error is preserved,
+the assessment falls back to unknown, and `onDeliveryError` receives the
+classifier failure in its optional third argument.
+
+The default `storageTimeoutMs` is also 30 seconds. `due`, `markDelivered`, and
+`markFailed` receive an `EffectContext`; adapters must honor its signal or a
+native deadline. A timeout only bounds the processor's wait, so the outcome of
+a store write is unknown. `markDelivered` must remain idempotent when a late
+completion arrives. A late `markFailed` may count its original handler attempt;
+it must no-op if the incarnation was delivered or replaced in the meantime.
+The processor never resubmits the same timed-out store call.
 
 For cron triggers and serverless runtimes, call `processor.drainOnce()` per
 tick instead of the long-running `run`; overlapping ticks are safe, a tick

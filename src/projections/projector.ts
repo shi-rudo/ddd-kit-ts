@@ -14,6 +14,7 @@ import {
 import type { OutboxSink } from "../events/outbox-dispatcher";
 import type { CommittedDomainEvent } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
+import { abortReason } from "../utils/abort";
 import {
 	isPositionAfter,
 	type Projection,
@@ -133,13 +134,20 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * valid cursor; the caller's at-least-once redelivery retries the batch.
 	 * The input must be a complete, ordered feed per aggregate address; an
 	 * event-type-filtered subscription cannot satisfy the cursor contract.
-	 * Cancellation is forwarded to the transaction scope rather than raced, so
-	 * the adapter remains the authority on rollback and atomicity.
+	 * An already-aborted signal rejects before validation or transaction setup.
+	 * In-flight cancellation is forwarded to the transaction scope rather than
+	 * raced, so the adapter remains the authority on rollback and atomicity.
 	 */
 	async project(
 		events: ReadonlyArray<CommittedDomainEvent<Evt>>,
 		options: ProjectOptions = {},
 	): Promise<ProjectionBatchResult> {
+		if (options.signal?.aborted) {
+			throw abortReason(
+				options.signal,
+				"Projector.project aborted before opening a transaction",
+			);
+		}
 		// Validate cursors BEFORE opening the transaction: a malformed
 		// batch must not burn a transaction or apply a prefix.
 		const cursored = events.map(({ event, source, position }) => {

@@ -26,21 +26,40 @@ here, with a before and after.
   `withCommit` / `UnitOfWork` `onPersisted` observers. Domain events and domain
   APIs remain free of runtime cancellation concerns.
 - Add a 30-second default bound to each outbox delivery, deadline delivery,
-  in-process event publication, and post-commit observer/publication. Configure
+  in-process event publication, and complete post-commit application phase. Configure
   it with `deliveryTimeoutMs`, `EventBus.publish(..., { timeoutMs })`, or
   `postCommitTimeoutMs`. A timed-out delivery remains pending and follows the
-  normal delivery-failure policy; worker-owner cancellation leaves it pending
-  without consuming a delivery attempt.
+  shared default classifies native timeouts as transient, so they leave delivery
+  pending without consuming a poison-message attempt. Worker-owner cancellation
+  likewise leaves it pending without consuming an attempt.
 - `EventBus.publish(events, { signal, timeoutMs })` propagates one effect context
   to every handler. A never-settling handler can no longer keep its caller
   pending indefinitely, even when the handler ignores cooperative cancellation.
 - `Projector.project(events, { signal })` forwards cancellation to
-  `TransactionScope.transactional`. It deliberately does not race the
+  `TransactionScope.transactional` after rejecting an already-aborted signal
+  before validation or transaction setup. It deliberately does not race the
   transaction promise: only the transaction adapter can cancel safely without
   reporting a rollback while a database operation later commits.
-- Bound post-commit failures remain best-effort: `onPersisted` timeout/abort is
+- Bound post-commit failures remain best-effort: all `onPersisted` observers and
+  the bus publication share one absolute `postCommitTimeoutMs` budget rather
+  than receiving a fresh budget each; effects not yet started when it expires
+  are skipped. Observer timeout/abort is
   reported to `onPersistError`, and bus timeout/abort to `onPublishError`; an
   already committed use case still resolves successfully.
+- `OutboxDispatcher` and `DeadlineProcessor` now share one explicit delivery
+  failure policy: `transient` backs off without consuming the poison ceiling,
+  while `permanent` and conservative `unknown` failures count. The default
+  recognizes `TimeoutError` and `retryable: true` through cause chains as
+  transient and `retryable: false` as permanent. Use `classifyFailure` to map
+  transport-specific errors. Classifier bugs are surfaced in the optional third
+  observer argument without replacing the original delivery error.
+- Poll-side outbox and deadline-store methods accept an optional
+  `EffectContext`. The bundled workers always provide it and bound reads,
+  acknowledgements, and failure updates with `storageTimeoutMs` (30 seconds by
+  default). This bounds the worker's wait, not arbitrary foreign I/O: production
+  adapters must honor the signal or native deadline, and late write completion
+  remains safe only when acknowledgements are idempotent and failure updates
+  no-op after their record or incarnation was dispatched, delivered, or replaced.
 
 Migration for shell adapters:
 
@@ -74,6 +93,42 @@ TypeScript, but direct calls to `OutboxSink.publish` must now provide an
 `EffectContext`. Custom `EventBus` implementations should accept and propagate
 the optional `PublishOptions`; custom transaction scopes already accept the
 optional signal through `TransactionalOptions`.
+
+Migration for delivery classification and poll-store cancellation:
+
+```ts
+// Before
+new OutboxDispatcher({
+  outbox,
+  sink,
+  observers,
+  countsTowardCeiling: isPermanentDeliveryError,
+});
+
+// After
+new OutboxDispatcher({
+  outbox,
+  sink,
+  observers,
+  storageTimeoutMs: 5_000,
+  classifyFailure: (error) =>
+    isTransportOutage(error)
+      ? "transient"
+      : isPermanentDeliveryError(error)
+        ? "permanent"
+        : "unknown",
+});
+
+async function markDispatched(ids, { signal, deadlineAt } = {}) {
+  await database.ack(ids, { signal, deadlineAt });
+}
+```
+
+`countsTowardCeiling` remains as a deprecated compatibility alias (`false`
+maps to transient, `true` to permanent); `classifyFailure` wins when both are
+configured. Existing poll-store adapters remain structurally assignable because
+the new context parameter is optional, but production adapters should adopt it
+to avoid work continuing after the shell has timed out.
 
 ### Changed: Vite+ test and package toolchain
 
@@ -1701,10 +1756,10 @@ shape instead of silently accepting two relationship locations.
   bounded retries and dead-lettering when given a `DispatchTrackingOutbox`
   (an ack failure never counts toward the poison ceiling and is reported
   per affected record; its duplicates are rate-limited by the backoff),
-  an optional `countsTowardCeiling` classifier so a transient transport
-  outage does not progressively dead-letter healthy records (by default
-  every failure counts; the trade-off is documented on the option and in
-  the production checklist), `drainOnce()` for cron and serverless ticks
+  a shared transient/permanent/unknown classifier so a transient transport
+  outage does not progressively dead-letter healthy records (with
+  `countsTowardCeiling` retained as a deprecated compatibility alias),
+  `drainOnce()` for cron and serverless ticks
   (reentrancy-safe: a tick that overlaps an in-flight pass joins it
   instead of double-delivering, while a joining `run(signal)` still
   honors its own abort), graceful stop via `AbortSignal`, a readonly
@@ -1714,7 +1769,7 @@ shape instead of silently accepting two relationship locations.
   and validated numeric options. The bundle also reports the exact
   dead-letter transition immediately; durable `deadLetters()` reconciliation
   remains required because that callback is best-effort.
-  `OutboxSink.publish(record)` is the transport port; `eventBusSink`
+  `OutboxSink.publish(record, context)` is the transport port; `eventBusSink`
   adapts the in-process `EventBus` for zero-broker setups (never combine
   it with `withCommit`'s `bus` fast path on the same bus, that delivers
   every event twice; and subscribe before starting the dispatcher, an

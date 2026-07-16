@@ -1,4 +1,9 @@
 import {
+	assessDeliveryFailure,
+	type DeliveryFailureAssessment,
+	type DeliveryFailureClassifier,
+} from "../utils/delivery-failure";
+import {
 	DEFAULT_EFFECT_TIMEOUT_MS,
 	type EffectContext,
 	runBoundedEffect,
@@ -7,8 +12,8 @@ import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
 import { assertNonNegativeFinite } from "../utils/validate";
 import type {
-	DeadlineStore,
 	DeadLetterDeadline,
+	DeadlineStore,
 	DueDeadline,
 } from "./deadline-store";
 
@@ -26,10 +31,15 @@ import type {
  * reconciliation; the hook provides low-latency diagnostics.
  */
 export interface DeadlineProcessorObservers<TPayload> {
-	/** A handler, acknowledgement, or failure-tracking operation failed. */
+	/**
+	 * A handler, acknowledgement, or failure-tracking operation failed.
+	 * Handler failures include their accounting assessment; store failures do
+	 * not consume poison-message attempts and have no assessment.
+	 */
 	readonly onDeliveryError: (
 		error: unknown,
 		deadline: DueDeadline<TPayload>,
+		assessment?: DeliveryFailureAssessment,
 	) => void;
 	/** Reading the due page failed. */
 	readonly onPollError: (error: unknown) => void;
@@ -51,8 +61,10 @@ export interface DeadlineProcessorOptions<TPayload> {
 	 * dead-letters past its ceiling) and moves on to the next deadline;
 	 * neighbors are independent. Remember the guide's discipline: a
 	 * delivered deadline is a proposal, so check it against current
-	 * state before acting. Pass `context.signal` to I/O adapters; its
-	 * `deadlineAt` matches the processor's per-delivery bound.
+	 * state before acting. Pass `context.signal` to I/O adapters or enforce a
+	 * native timeout no later than `context.deadlineAt`. The shell bounds its
+	 * wait but cannot terminate an ignored foreign promise; production handlers
+	 * must prevent zombie work from overlapping a retry.
 	 */
 	handler: (
 		deadline: DueDeadline<TPayload>,
@@ -80,6 +92,25 @@ export interface DeadlineProcessorOptions<TPayload> {
 	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
 	 */
 	deliveryTimeoutMs?: number;
+
+	/**
+	 * Maximum time to await one poll-store read, acknowledgement, or failure
+	 * update. The store receives the same cooperative context. This bounds the
+	 * worker's wait; production adapters must also cancel or natively bound the
+	 * underlying I/O. Default `30000`ms.
+	 */
+	storageTimeoutMs?: number;
+
+	/**
+	 * Classifies handler failures as transient, permanent, or unknown. Transient
+	 * failures back off without consuming the poison ceiling; permanent and
+	 * unknown failures count. The default walks the cause chain: native
+	 * `TimeoutError` and `retryable: true` are transient, `retryable: false` is
+	 * permanent, and unmapped errors are unknown. A throwing or invalid custom
+	 * classifier becomes unknown and is exposed through the observer assessment
+	 * without replacing the original handler error.
+	 */
+	classifyFailure?: DeliveryFailureClassifier;
 
 	/**
 	 * Jitter source for the failure backoff, injectable for
@@ -127,6 +158,11 @@ export interface DeadlineProcessorOptions<TPayload> {
  *   (counting it toward the poison ceiling would dead-letter healthy
  *   work), and the backoff paces the redelivery instead of the pass
  *   re-running every handler against a dead write path.
+ * - **Bounded waiting requires bounded adapters.** Delivery and store effects
+ *   receive cooperative cancellation and an absolute deadline. The processor
+ *   returns after its configured bound even when a promise ignores the signal,
+ *   but only the adapter can terminate native I/O and prevent late work from
+ *   overlapping a retry. A late idempotent acknowledgement remains valid.
  *
  * Run one logical processor per store unless the adapter's `due`
  * claims records; the same rule as the dispatcher.
@@ -140,6 +176,8 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 	private readonly clock: () => Date;
 	private readonly observers: DeadlineProcessorObservers<TPayload>;
 	private readonly deliveryTimeoutMs: number;
+	private readonly storageTimeoutMs: number;
+	private readonly classifyFailure?: DeliveryFailureClassifier;
 
 	constructor(options: DeadlineProcessorOptions<TPayload>) {
 		super("DeadlineProcessor", options);
@@ -150,13 +188,21 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		);
 		this.store = options.store;
 		this.handler = options.handler;
+		this.classifyFailure = options.classifyFailure;
 		this.clock = options.clock ?? (() => new Date());
 		this.deliveryTimeoutMs =
 			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+		this.storageTimeoutMs =
+			options.storageTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
 		assertNonNegativeFinite(
 			"DeadlineProcessor",
 			"deliveryTimeoutMs",
 			this.deliveryTimeoutMs,
+		);
+		assertNonNegativeFinite(
+			"DeadlineProcessor",
+			"storageTimeoutMs",
+			this.storageTimeoutMs,
 		);
 	}
 
@@ -169,8 +215,13 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<DueDeadline<TPayload>>;
 			try {
-				batch = await this.store.due(this.now(), this.batchSize);
+				batch = await runBoundedEffect(
+					"DeadlineProcessor.due",
+					{ signal, timeoutMs: this.storageTimeoutMs },
+					(context) => this.store.due(this.now(), this.batchSize, context),
+				);
 			} catch (error) {
+				if (signal?.aborted) return "stopped";
 				this.consecutiveFailures += 1;
 				reportToObserver(() => this.observers.onPollError(error));
 				return "stopped";
@@ -197,21 +248,28 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 				} catch (error) {
 					if (signal?.aborted) break;
 					handlerFailed = true;
+					const assessment = assessDeliveryFailure(error, this.classifyFailure);
 					reportToObserver(() =>
-						this.observers.onDeliveryError(error, deadline),
+						this.observers.onDeliveryError(error, deadline, assessment),
 					);
-					try {
-						const deadLetter = await this.store.markFailed(
-							deadline.deliveryId,
-							error,
-						);
-						if (deadLetter !== undefined) {
-							reportToObserver(() => this.observers.onDeadLetter(deadLetter));
+					if (assessment.kind !== "transient") {
+						try {
+							const deadLetter = await runBoundedEffect(
+								"DeadlineProcessor.markFailed",
+								{ signal, timeoutMs: this.storageTimeoutMs },
+								(context) =>
+									this.store.markFailed(deadline.deliveryId, error, context),
+							);
+							if (deadLetter !== undefined) {
+								reportToObserver(() => this.observers.onDeadLetter(deadLetter));
+							}
+						} catch (markError) {
+							if (!signal?.aborted) {
+								reportToObserver(() =>
+									this.observers.onDeliveryError(markError, deadline),
+								);
+							}
 						}
-					} catch (markError) {
-						reportToObserver(() =>
-							this.observers.onDeliveryError(markError, deadline),
-						);
 					}
 				}
 			}
@@ -224,15 +282,30 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 			let acked = true;
 			if (delivered.length > 0) {
 				try {
-					await this.store.markDelivered(
-						delivered.map((deadline) => deadline.deliveryId),
+					// A completed handler keeps one bounded acknowledgement attempt
+					// when shutdown won immediately after completion. An acknowledgement
+					// that was already running remains owner-cancellable.
+					const acknowledgementSignal = signal?.aborted ? undefined : signal;
+					await runBoundedEffect(
+						"DeadlineProcessor.markDelivered",
+						{
+							signal: acknowledgementSignal,
+							timeoutMs: this.storageTimeoutMs,
+						},
+						(context) =>
+							this.store.markDelivered(
+								delivered.map((deadline) => deadline.deliveryId),
+								context,
+							),
 					);
 				} catch (error) {
 					acked = false;
-					for (const deadline of delivered) {
-						reportToObserver(() =>
-							this.observers.onDeliveryError(error, deadline),
-						);
+					if (!signal?.aborted) {
+						for (const deadline of delivered) {
+							reportToObserver(() =>
+								this.observers.onDeliveryError(error, deadline),
+							);
+						}
 					}
 				}
 			}

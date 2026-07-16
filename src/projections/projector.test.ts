@@ -129,6 +129,31 @@ describe("Projector", () => {
 		expect(receivedSignal).toBe(controller.signal);
 	});
 
+	it("rejects an already-aborted projection before opening its transaction", async () => {
+		const controller = new AbortController();
+		const reason = new Error("projection request cancelled");
+		controller.abort(reason);
+		let opened = false;
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(
+				_fn: (ctx: undefined) => Promise<T>,
+			): Promise<T> => {
+				opened = true;
+				throw new Error("transaction should not open");
+			},
+		};
+		const projector = new Projector<OrderEvent, undefined>({
+			scope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection([]),
+		});
+
+		await expect(
+			projector.project([], { signal: controller.signal }),
+		).rejects.toBe(reason);
+		expect(opened).toBe(false);
+	});
+
 	it("reads source and position from a committed envelope while applying the bare event", async () => {
 		const rows: string[] = [];
 		const projector = new Projector<OrderEvent, undefined>({

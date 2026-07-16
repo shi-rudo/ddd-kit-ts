@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../aggregate/aggregate";
 import {
 	AggregateRoot,
@@ -1075,7 +1075,8 @@ describe("withCommit", () => {
 			await expect(execution).resolves.toBe("ok");
 		});
 
-		it("times out a never-settling application observer after commit", async () => {
+		it("times out a never-settling observer and skips the expired bus phase", async () => {
+			vi.useFakeTimers();
 			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "a" },
@@ -1086,6 +1087,10 @@ describe("withCommit", () => {
 			const reported: unknown[] = [];
 			let observerSignal: AbortSignal | undefined;
 			let observerDeadline: number | undefined;
+			let observerStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				observerStarted = resolve;
+			});
 
 			const execution = withCommit(
 				{
@@ -1096,6 +1101,7 @@ describe("withCommit", () => {
 					onPersisted: (_aggregate, _version, context) => {
 						observerSignal = context.signal;
 						observerDeadline = context.deadlineAt;
+						observerStarted();
 						return new Promise<void>(() => {});
 					},
 					onPersistError: (error) => reported.push(error),
@@ -1104,19 +1110,123 @@ describe("withCommit", () => {
 					enrolledResult(enrollment, "ok", [aggregate]),
 			);
 
-			await expect(
-				Promise.race([
-					execution,
-					new Promise((_, reject) =>
-						setTimeout(() => reject(new Error("test guard timed out")), 50),
-					),
-				]),
-			).resolves.toBe("ok");
-			expect(observerSignal?.aborted).toBe(true);
-			expect(observerDeadline).toEqual(expect.any(Number));
-			expect(reported).toHaveLength(1);
-			expect((reported[0] as Error).name).toBe("TimeoutError");
-			expect(bus.published).toHaveLength(1);
+			try {
+				await started;
+				await vi.advanceTimersByTimeAsync(5);
+				await expect(execution).resolves.toBe("ok");
+				expect(observerSignal?.aborted).toBe(true);
+				expect(observerDeadline).toEqual(expect.any(Number));
+				expect(reported).toHaveLength(1);
+				expect((reported[0] as Error).name).toBe("TimeoutError");
+				expect(bus.published).toHaveLength(0);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("uses one absolute timeout budget for the complete post-commit phase", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-07-16T12:00:00.000Z"));
+			const aggregateA = createMockAggregate([]);
+			const aggregateB = createMockAggregate([]);
+			const deadlines: number[] = [];
+			let firstObserverStarted!: () => void;
+			const firstStarted = new Promise<void>((resolve) => {
+				firstObserverStarted = resolve;
+			});
+			let secondObserverStarted!: () => void;
+			const secondStarted = new Promise<void>((resolve) => {
+				secondObserverStarted = resolve;
+			});
+			let settled = false;
+			let execution: Promise<string> | undefined;
+
+			try {
+				execution = withCommit(
+					{
+						outbox: createMockOutbox(),
+						scope: createMockScope(),
+						postCommitTimeoutMs: 100,
+						onPersisted: (_aggregate, _version, context) => {
+							deadlines.push(context.deadlineAt);
+							if (deadlines.length === 1) {
+								firstObserverStarted();
+								return new Promise<void>((resolve) => setTimeout(resolve, 60));
+							}
+							secondObserverStarted();
+							return new Promise<void>(() => {});
+						},
+						onPersistError: () => {},
+					},
+					async (_ctx, enrollment) =>
+						enrolledResult(enrollment, "committed", [aggregateA, aggregateB]),
+				);
+				void execution.then(() => {
+					settled = true;
+				});
+				await firstStarted;
+
+				await vi.advanceTimersByTimeAsync(60);
+				await secondStarted;
+				await vi.advanceTimersByTimeAsync(40);
+				await Promise.resolve();
+
+				expect(settled).toBe(true);
+				expect(deadlines).toHaveLength(2);
+				expect(new Set(deadlines).size).toBe(1);
+			} finally {
+				await vi.runAllTimersAsync();
+				if (execution) await execution;
+				vi.useRealTimers();
+			}
+		});
+
+		it("does not start later post-commit effects after the shared deadline", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-07-16T12:00:00.000Z"));
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const aggregateA = createMockAggregate([event]);
+			const aggregateB = createMockAggregate([]);
+			const bus = createMockBus();
+			let observerCalls = 0;
+			let observerStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				observerStarted = resolve;
+			});
+
+			try {
+				const execution = withCommit(
+					{
+						outbox: createMockOutbox(),
+						bus,
+						scope: createMockScope(),
+						postCommitTimeoutMs: 100,
+						onPersisted: () => {
+							observerCalls += 1;
+							observerStarted();
+							return new Promise<void>(() => {});
+						},
+						onPersistError: () => {},
+						onPublishError: () => {},
+					},
+					async (_ctx, enrollment) =>
+						enrolledResult(enrollment, "committed", [aggregateA, aggregateB]),
+				);
+				await started;
+
+				await vi.advanceTimersByTimeAsync(100);
+				await vi.runAllTimersAsync();
+				await expect(execution).resolves.toBe("committed");
+
+				expect(observerCalls).toBe(1);
+				expect(bus.published).toHaveLength(0);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("aborts a never-settling application observer without rejecting the committed result", async () => {
@@ -1418,14 +1528,20 @@ describe("withCommit", () => {
 		});
 
 		it("times out a never-settling bus after commit", async () => {
+			vi.useFakeTimers();
 			const agg = createAggWithEvent();
 			const reported: unknown[] = [];
 			let publishSignal: AbortSignal | undefined;
 			let publishTimeoutMs: number | undefined;
+			let publishStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				publishStarted = resolve;
+			});
 			const bus: EventBus<TestEvent> = {
 				publish: async (_events, options) => {
 					publishSignal = options?.signal;
 					publishTimeoutMs = options?.timeoutMs;
+					publishStarted();
 					return new Promise<void>(() => {});
 				},
 				subscribe: () => () => {},
@@ -1444,20 +1560,19 @@ describe("withCommit", () => {
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [agg]),
 			);
 
-			await expect(
-				Promise.race([
-					execution,
-					new Promise((_, reject) =>
-						setTimeout(() => reject(new Error("test guard timed out")), 50),
-					),
-				]),
-			).resolves.toBe("ok");
-			expect(publishSignal?.aborted).toBe(true);
-			expect(publishTimeoutMs).toBeGreaterThanOrEqual(0);
-			expect(publishTimeoutMs).toBeLessThanOrEqual(5);
-			expect(reported).toHaveLength(1);
-			expect((reported[0] as Error).name).toBe("TimeoutError");
-			expect(agg.acknowledgementCount).toBe(1);
+			try {
+				await started;
+				await vi.advanceTimersByTimeAsync(5);
+				await expect(execution).resolves.toBe("ok");
+				expect(publishSignal?.aborted).toBe(true);
+				expect(publishTimeoutMs).toBeGreaterThanOrEqual(0);
+				expect(publishTimeoutMs).toBeLessThanOrEqual(5);
+				expect(reported).toHaveLength(1);
+				expect((reported[0] as Error).name).toBe("TimeoutError");
+				expect(agg.acknowledgementCount).toBe(1);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("pre-commit failures still reject (outbox.add inside the tx)", async () => {

@@ -68,9 +68,11 @@ If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
 
 `onPersisted` may be asynchronous and is awaited, but it is not a delivery
-guarantee. Each invocation is bounded by `postCommitTimeoutMs` (30 seconds by
-default) and receives an `EffectContext` with the corresponding `signal` and
-absolute `deadlineAt`. A throw, timeout, or request abort is reported to
+guarantee. All invocations and the optional bus publication share one absolute
+`postCommitTimeoutMs` budget (30 seconds by default), rather than receiving a
+fresh budget each. Every invocation receives an `EffectContext` with the
+corresponding `signal` and shared absolute `deadlineAt`; observers and bus work
+that have not started when it expires are skipped. A throw, timeout, or request abort is reported to
 `onPersistError` and never rejects the already committed result. Use the outbox
 for side effects that must survive a process crash. The same failure observer
 reports a runtime failure in the internal acknowledgement step; peer
@@ -79,9 +81,9 @@ reach `onPersisted`.
 
 If `bus.publish` fails, times out, or is aborted after the commit, `withCommit`
 does not reject. The write already succeeded, and returning an error would make
-normal callers retry a committed command. The same `postCommitTimeoutMs` bound
-applies. Wire `onPublishError` to logs or metrics, and let the outbox deliver
-the durable copy.
+normal callers retry a committed command. It receives whatever remains of the
+same post-commit budget after application observers. Wire `onPublishError` to
+logs or metrics, and let the outbox deliver the durable copy.
 
 ## TransactionScope
 
@@ -187,8 +189,14 @@ interface OutboxRecord<Evt extends AnyDomainEvent> {
 }
 
 interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
-  getPending(limit?: number): Promise<ReadonlyArray<OutboxRecord<Evt>>>;
-  markDispatched(dispatchIds: ReadonlyArray<string>): Promise<void>;
+  getPending(
+    limit?: number,
+    context?: EffectContext,
+  ): Promise<ReadonlyArray<OutboxRecord<Evt>>>;
+  markDispatched(
+    dispatchIds: ReadonlyArray<string>,
+    context?: EffectContext,
+  ): Promise<void>;
 }
 ```
 
@@ -197,8 +205,10 @@ monotonic position column and an `ORDER BY`. A bare `SELECT` is not an
 ordering guarantee.
 
 `markDispatched` must be idempotent. Re-acking a dispatched id or an unknown
-id should be a no-op. This lets the dispatcher recover from partial failures
-without turning duplicates into crashes.
+id should be a no-op. This lets the dispatcher recover from partial failures,
+including a write that completes after its caller timed out, without turning
+duplicates into crashes. The context is optional for source compatibility, but
+the bundled dispatcher always supplies it.
 
 `add()` should dedupe on `eventId`. The usual implementation is a unique
 constraint plus an idempotent insert, not a unique-constraint exception. The
@@ -362,6 +372,7 @@ const dispatcher = new OutboxDispatcher({
   sink: eventBusSink(bus),
   observers: outboxObservers,
   deliveryTimeoutMs: 10_000,
+  storageTimeoutMs: 5_000,
 });
 
 const stop = new AbortController();
@@ -378,8 +389,11 @@ The dispatcher has a narrow contract:
 - It dispatches sequentially in commit order.
 - It stops the batch on the first delivery failure.
 - It aborts each sink through its `EffectContext` after `deliveryTimeoutMs`
-  (30 seconds by default). A sink that ignores the signal still cannot keep the
-  dispatcher pending indefinitely.
+  (30 seconds by default). A sink that ignores the signal cannot keep the
+  dispatcher pending, but its foreign I/O can continue as zombie work.
+- It bounds `getPending`, `markDispatched`, and `markFailed` through
+  `storageTimeoutMs` (30 seconds by default) and passes the same context to the
+  store.
 - It never rejects from `run()` or `drainOnce()`. Failures go to observers
   and the loop backs off.
 - It does not coordinate multiple process instances. If several dispatchers
@@ -414,6 +428,7 @@ interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
   markFailed(
     dispatchId: string,
     error?: unknown,
+    context?: EffectContext,
   ): Promise<DeadLetterRecord<Evt> | undefined>;
   deadLetters(): Promise<ReadonlyArray<DeadLetterRecord<Evt>>>;
 }
@@ -442,19 +457,34 @@ Recovery is explicit:
   event with a fresh attempt budget.
 - Deliver the event manually and call `markDispatched` to clear it.
 
-The dispatcher also supports `countsTowardCeiling`:
+The dispatcher classifies delivery failures before consuming the poison
+ceiling:
 
 ```ts
 const dispatcher = new OutboxDispatcher({
   outbox,
   sink,
   observers: outboxObservers,
-  countsTowardCeiling: (error) => isPermanentDeliveryError(error),
+  classifyFailure: (error) => {
+    if (isTransportOutage(error)) return "transient";
+    if (isPermanentDeliveryError(error)) return "permanent";
+    return "unknown";
+  },
 });
 ```
 
-Use it when transient outages should back off but not consume the poison
-message budget. Without this classifier, every delivery failure counts.
+`transient` failures back off but do not consume the poison-message budget.
+`permanent` and safely conservative `unknown` failures do. The shared default
+walks the error cause chain: native `TimeoutError` and `retryable: true` are
+transient, while `retryable: false` is permanent. Unmapped errors remain
+unknown. If a custom classifier throws or returns an invalid value, the
+original delivery error remains the primary error, the failure counts as
+unknown, and `onDispatchError` receives a third assessment argument containing
+`classifierError`.
+
+`countsTowardCeiling` remains as a deprecated migration alias: `false` maps to
+transient and `true` to permanent. Prefer `classifyFailure`; when both are
+present, it wins.
 
 ## Sinks And Brokers
 
@@ -467,14 +497,27 @@ interface OutboxSink<Evt extends AnyDomainEvent> {
 }
 ```
 
-The rule is simple: pass `context.signal` to the transport and resolve
+The rule is simple: pass `context.signal` to the transport (or configure a
+native timeout no later than `context.deadlineAt`) and resolve
 `publish` only after the transport has accepted the message. Await the Kafka
 producer ack, RabbitMQ publisher confirm, SQS response, JetStream publish ack,
-or HTTP `2xx`. If you fire-and-forget and return early, the dispatcher will
+or HTTP `2xx`. The shell timeout bounds how long the dispatcher waits; it cannot
+terminate an arbitrary promise. Ignoring both signal and deadline can overlap a
+late publish with its retry and is not a production-safe adapter. If you
+fire-and-forget and return early, the dispatcher will
 mark the record as dispatched even though the broker may never store it. A
-timeout is a delivery failure and leaves the record pending. Worker shutdown
-is not counted as a poison-message attempt; records not yet acknowledged stay
-pending for the next worker.
+timeout is a transient delivery failure by default and leaves the record
+pending without consuming its poison ceiling. Worker shutdown likewise does
+not count; records not yet acknowledged stay pending for the next worker.
+
+The same rule applies to poll-store adapters. The dispatcher always passes an
+`EffectContext` to `getPending`, `markDispatched`, and `markFailed`; the optional
+parameter preserves source compatibility for existing adapters. A storage
+timeout means the operation's outcome is unknown. Acknowledgements must be
+idempotent: a late acknowledgement may validly complete after the worker
+stopped waiting, and a later ack remains safe. A late `markFailed` may count its
+original delivery attempt; it must no-op if the record was dispatched in the
+meantime. The worker never resubmits the same timed-out store call.
 
 Broker mapping is usually straightforward:
 

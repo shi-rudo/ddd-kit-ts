@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as http from "./http";
 import type {
 	DeadlineProcessorObservers,
+	DeliveryFailureAssessment,
+	DeliveryFailureClassifier,
 	DomainErrorClass,
 	IAggregateRoot,
 	Id,
@@ -8,44 +11,41 @@ import type {
 	OutboxDispatcherObservers,
 	StateValidator,
 } from "./index";
-import * as http from "./http";
 import * as index from "./index";
 import * as money from "./money";
 import * as presentation from "./presentation";
 import * as testing from "./testing";
 import * as utils from "./utils";
 
+type IndexModule = typeof import("./index");
 // @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
-import type { resetClockFactory as RemovedResetClockFactory } from "./index";
+type RemovedResetClockFactory = IndexModule["resetClockFactory"];
 // @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
-import type { resetEventIdFactory as RemovedResetEventIdFactory } from "./index";
+type RemovedResetEventIdFactory = IndexModule["resetEventIdFactory"];
 // @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
-import type { setClockFactory as RemovedSetClockFactory } from "./index";
+type RemovedSetClockFactory = IndexModule["setClockFactory"];
 // @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
-import type { setEventIdFactory as RemovedSetEventIdFactory } from "./index";
+type RemovedSetEventIdFactory = IndexModule["setEventIdFactory"];
 // @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
-import type { withClockFactory as RemovedWithClockFactory } from "./index";
+type RemovedWithClockFactory = IndexModule["withClockFactory"];
 // @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
-import type { withEventIdFactory as RemovedWithEventIdFactory } from "./index";
+type RemovedWithEventIdFactory = IndexModule["withEventIdFactory"];
 
 type RemovedFactoryMutationSurface =
-	| typeof RemovedResetClockFactory
-	| typeof RemovedResetEventIdFactory
-	| typeof RemovedSetClockFactory
-	| typeof RemovedSetEventIdFactory
-	| typeof RemovedWithClockFactory
-	| typeof RemovedWithEventIdFactory;
+	| RemovedResetClockFactory
+	| RemovedResetEventIdFactory
+	| RemovedSetClockFactory
+	| RemovedSetEventIdFactory
+	| RemovedWithClockFactory
+	| RemovedWithEventIdFactory;
 
 void (undefined as unknown as RemovedFactoryMutationSurface);
 
-type PublicAggregateLifecycleSurface = IAggregateRoot<Id<"ApiSurface">>;
+type LifecycleSurface = IAggregateRoot<Id<"ApiSurface">>;
 // @ts-expect-error persistence acknowledgement belongs to the application shell
-type RemovedMarkPersisted = PublicAggregateLifecycleSurface["markPersisted"];
-type RemovedClearPendingEvents =
-	PublicAggregateLifecycleSurface[
-		// @ts-expect-error pending-event disposal is a kit-internal persistence capability
-		"clearPendingEvents"
-	];
+type RemovedMarkPersisted = LifecycleSurface["markPersisted"];
+// @ts-expect-error pending-event disposal is a kit-internal persistence capability
+type RemovedClearPendingEvents = LifecycleSurface["clearPendingEvents"];
 
 void (undefined as unknown as RemovedMarkPersisted);
 void (undefined as unknown as RemovedClearPendingEvents);
@@ -65,8 +65,12 @@ const publicDeadlineObservers: DeadlineProcessorObservers<never> = {
 	onPollError: () => {},
 	onDeadLetter: () => {},
 };
+const publicDeliveryClassifier: DeliveryFailureClassifier = () => "unknown";
+const publicDeliveryAssessment: DeliveryFailureAssessment = { kind: "unknown" };
 void publicOutboxObservers;
 void publicDeadlineObservers;
+void publicDeliveryClassifier;
+void publicDeliveryAssessment;
 
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	correlationId: "corr-1",

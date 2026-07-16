@@ -301,7 +301,10 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
 		error: unknown,
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 	) => void;
-	/** See `withCommit`: bound for each post-commit effect. Default `30000`ms. */
+	/**
+	 * See `withCommit`: one total budget shared by the complete post-commit
+	 * application phase. Default `30000`ms.
+	 */
 	postCommitTimeoutMs?: number;
 	repositories: RepositoryFactories<TCtx, TRepos, Evt>;
 }
