@@ -429,6 +429,36 @@ describe("UnitOfWork", () => {
 			expect(reported[0]?.aggregate).toBe(agg);
 		});
 
+		it("forwards the post-commit timeout and effect context", async () => {
+			const agg = createMockAggregate("o-1");
+			const reported: unknown[] = [];
+			let signal: AbortSignal | undefined;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				postCommitTimeoutMs: 5,
+				onPersisted: (_aggregate, _version, context) => {
+					signal = context.signal;
+					return new Promise<void>(() => {});
+				},
+				onPersistError: (error) => reported.push(error),
+				repositories: {
+					orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) =>
+						new FakeOrderRepository(tx, session),
+				},
+			});
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					await repositories.orders.save(agg);
+					return "committed";
+				}),
+			).resolves.toBe("committed");
+			expect(signal?.aborted).toBe(true);
+			expect(reported).toHaveLength(1);
+			expect((reported[0] as Error).name).toBe("TimeoutError");
+		});
+
 		it("saving the same instance twice harvests its events once and markPersists once", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-1");

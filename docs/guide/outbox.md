@@ -57,7 +57,7 @@ not part of their API.
 4. The transaction commits.
 5. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards harvested events for deleted rows.
-6. The optional `onPersisted(aggregate, version)` Application observer runs
+6. The optional `onPersisted(aggregate, version, effectContext)` Application observer runs
    for successfully acknowledged saved aggregates only, after every commit
    record has completed its acknowledgement attempt. Its version argument is
    the commit-time value captured before any observer ran.
@@ -68,16 +68,20 @@ If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
 
 `onPersisted` may be asynchronous and is awaited, but it is not a delivery
-guarantee. A failure is reported to `onPersistError` and never rejects the
-already committed result. Use the outbox for side effects that must survive a
-process crash. The same failure observer reports a runtime failure in the
-internal acknowledgement step; peer aggregates are still processed, and only
-successfully acknowledged aggregates reach `onPersisted`.
+guarantee. Each invocation is bounded by `postCommitTimeoutMs` (30 seconds by
+default) and receives an `EffectContext` with the corresponding `signal` and
+absolute `deadlineAt`. A throw, timeout, or request abort is reported to
+`onPersistError` and never rejects the already committed result. Use the outbox
+for side effects that must survive a process crash. The same failure observer
+reports a runtime failure in the internal acknowledgement step; peer
+aggregates are still processed, and only successfully acknowledged aggregates
+reach `onPersisted`.
 
-If `bus.publish` fails after the commit, `withCommit` does not reject. The
-write already succeeded, and returning an error would make normal callers
-retry a committed command. Wire `onPublishError` to logs or metrics, and let
-the outbox deliver the durable copy.
+If `bus.publish` fails, times out, or is aborted after the commit, `withCommit`
+does not reject. The write already succeeded, and returning an error would make
+normal callers retry a committed command. The same `postCommitTimeoutMs` bound
+applies. Wire `onPublishError` to logs or metrics, and let the outbox deliver
+the durable copy.
 
 ## TransactionScope
 
@@ -357,6 +361,7 @@ const dispatcher = new OutboxDispatcher({
   outbox,
   sink: eventBusSink(bus),
   observers: outboxObservers,
+  deliveryTimeoutMs: 10_000,
 });
 
 const stop = new AbortController();
@@ -372,6 +377,9 @@ The dispatcher has a narrow contract:
   will be delivered again.
 - It dispatches sequentially in commit order.
 - It stops the batch on the first delivery failure.
+- It aborts each sink through its `EffectContext` after `deliveryTimeoutMs`
+  (30 seconds by default). A sink that ignores the signal still cannot keep the
+  dispatcher pending indefinitely.
 - It never rejects from `run()` or `drainOnce()`. Failures go to observers
   and the loop backs off.
 - It does not coordinate multiple process instances. If several dispatchers
@@ -455,15 +463,18 @@ target:
 
 ```ts
 interface OutboxSink<Evt extends AnyDomainEvent> {
-  publish(record: OutboxRecord<Evt>): Promise<void>;
+  publish(record: OutboxRecord<Evt>, context: EffectContext): Promise<void>;
 }
 ```
 
-The rule is simple: resolve `publish` only after the transport has accepted
-the message. Await the Kafka producer ack, RabbitMQ publisher confirm, SQS
-response, JetStream publish ack, or HTTP `2xx`. If you fire-and-forget and
-return early, the dispatcher will mark the record as dispatched even though
-the broker may never store it.
+The rule is simple: pass `context.signal` to the transport and resolve
+`publish` only after the transport has accepted the message. Await the Kafka
+producer ack, RabbitMQ publisher confirm, SQS response, JetStream publish ack,
+or HTTP `2xx`. If you fire-and-forget and return early, the dispatcher will
+mark the record as dispatched even though the broker may never store it. A
+timeout is a delivery failure and leaves the record pending. Worker shutdown
+is not counted as a poison-message attempt; records not yet acknowledged stay
+pending for the next worker.
 
 Broker mapping is usually straightforward:
 
@@ -527,7 +538,7 @@ const publishOrderPlaced: IntegrationMessageMapper<
 });
 
 const sqsSink: OutboxSink<OrderPlaced> = {
-  publish: async (record) => {
+  publish: async (record, context) => {
     const message = createIntegrationMessage(record, publishOrderPlaced);
     await sqs.send(
       new SendMessageCommand({
@@ -536,6 +547,7 @@ const sqsSink: OutboxSink<OrderPlaced> = {
         MessageGroupId: message.source.aggregateId,
         MessageDeduplicationId: message.messageId,
       }),
+      { abortSignal: context.signal },
     );
   },
 };

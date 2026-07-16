@@ -247,7 +247,9 @@ export type {
 	Outbox,
 	OutboxRecord,
 	OutboxWriter,
+	PublishOptions,
 } from "./events/ports";
+export type { EffectContext } from "./utils/effect";
 
 // Projections: checkpoint port, runner, in-memory reference
 export {
@@ -270,6 +272,7 @@ export {
 } from "./projections/projection-from-handlers";
 export {
 	type ProjectionBatchResult,
+	type ProjectOptions,
 	Projector,
 	type ProjectorOptions,
 } from "./projections/projector";

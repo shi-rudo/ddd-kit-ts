@@ -92,10 +92,11 @@ for deadlines as `DeadlineProcessor`:
 ```ts
 const processor = new DeadlineProcessor({
   store: deadlines,
-  handler: async (deadline) => {
+  deliveryTimeoutMs: 10_000,
+  handler: async (deadline, { signal, deadlineAt }) => {
     // Feed it to the owner as an input; check current state first,
     // a delivered deadline is a proposal (see above).
-    await commandBus.dispatch(toTimeoutCommand(deadline));
+    await handleTimeout(deadline, { signal, deadlineAt });
   },
   observers: {
     onDeliveryError: (error, deadline) =>
@@ -110,6 +111,14 @@ const stop = new AbortController();
 void processor.run(stop.signal);
 // on shutdown: stop.abort();
 ```
+
+Every handler receives an `EffectContext`. Its signal combines worker shutdown
+with the per-delivery bound; `deadlineAt` is the matching absolute Unix epoch
+millisecond. The default `deliveryTimeoutMs` is 30 seconds. Pass the signal into
+I/O adapters and use the deadline when an adapter accepts an absolute budget.
+A timeout follows the ordinary failed-delivery path and can consume an attempt.
+Worker shutdown is different: it aborts a never-settling handler, leaves the
+deadline pending, and does not consume the poison-message ceiling.
 
 For cron triggers and serverless runtimes, call `processor.drainOnce()` per
 tick instead of the long-running `run`; overlapping ticks are safe, a tick

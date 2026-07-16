@@ -109,6 +109,26 @@ function arrayProjection(
 }
 
 describe("Projector", () => {
+	it("forwards cancellation to the projection transaction", async () => {
+		const controller = new AbortController();
+		let receivedSignal: AbortSignal | undefined;
+		const scope: TransactionScope<undefined> = {
+			transactional: (fn, options) => {
+				receivedSignal = options?.signal;
+				return fn(undefined);
+			},
+		};
+		const projector = new Projector<OrderEvent, undefined>({
+			scope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection([]),
+		});
+
+		await projector.project([], { signal: controller.signal });
+
+		expect(receivedSignal).toBe(controller.signal);
+	});
+
 	it("reads source and position from a committed envelope while applying the bare event", async () => {
 		const rows: string[] = [];
 		const projector = new Projector<OrderEvent, undefined>({
@@ -1257,9 +1277,42 @@ describe("Projector", () => {
 		// Broker redelivery repeats the already-finalized record; it does not
 		// enqueue the old aggregate commit through OutboxWriter again.
 		await expect(
-			projector.toOutboxSink().publish(redelivery),
+			projector.toOutboxSink().publish(redelivery, {
+				signal: new AbortController().signal,
+				deadlineAt: Date.now() + 1_000,
+			}),
 		).resolves.toBeUndefined();
 
 		expect(rows).toEqual(["evt-o-1-1-0", "evt-o-1-2-0"]);
+	});
+
+	it("forwards the delivery signal from its OutboxSink to the transaction", async () => {
+		const controller = new AbortController();
+		let receivedSignal: AbortSignal | undefined;
+		const scope: TransactionScope<undefined> = {
+			transactional: (fn, options) => {
+				receivedSignal = options?.signal;
+				return fn(undefined);
+			},
+		};
+		const projector = new Projector<OrderEvent, undefined>({
+			scope,
+			checkpoints: new InMemoryProjectionCheckpointStore(),
+			projection: arrayProjection([]),
+		});
+
+		const committed = placed("o-1", 1, 0);
+		await projector.toOutboxSink().publish(
+			{
+				dispatchId: committed.event.eventId,
+				...committed,
+			},
+			{
+				signal: controller.signal,
+				deadlineAt: Date.now() + 1_000,
+			},
+		);
+
+		expect(receivedSignal).toBe(controller.signal);
 	});
 });

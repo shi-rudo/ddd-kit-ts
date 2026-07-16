@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import type { EffectContext } from "../utils/effect";
 import { EventBusImpl } from "./event-bus";
 import { InMemoryOutbox } from "./outbox";
 import {
@@ -359,6 +360,151 @@ describe("OutboxDispatcher", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
+	it("times out a never-settling sink and leaves the record pending", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
+		await outbox.add([makeCommitted(1)]);
+		let context: EffectContext | undefined;
+		const errors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (_record, received) => {
+				context = received;
+				await new Promise<void>(() => {});
+			},
+		};
+		const options = {
+			outbox,
+			sink,
+			deliveryTimeoutMs: 5,
+			observers: {
+				onDispatchError: (error: unknown) => errors.push(error),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const dispatcher = new OutboxDispatcher(options);
+
+		const outcome = await Promise.race([
+			dispatcher.drainOnce(),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+		]);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.aborted).toBe(true);
+		expect(context?.deadlineAt).toBeTypeOf("number");
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+		const [pending] = await outbox.getPending();
+		expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 1 });
+	});
+
+	it("aborts a never-settling sink without counting shutdown as a delivery failure", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		let context: EffectContext | undefined;
+		const errors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (_record, received) => {
+				context = received;
+				await new Promise<void>(() => {});
+			},
+		};
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+		const pass = dispatcher.drainOnce(stop.signal);
+		await vi.waitFor(() => expect(context).toBeDefined());
+
+		stop.abort(new Error("worker stopping"));
+		const outcome = await Promise.race([
+			pass,
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+		]);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toMatchObject({
+			message: "worker stopping",
+		});
+		expect(errors).toEqual([]);
+		const [pending] = await outbox.getPending();
+		expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 0 });
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
+	it("keeps an acknowledged delivery successful when shutdown starts during the outbox ack", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		const persistDispatch = outbox.markDispatched.bind(outbox);
+		let ackStarted: () => void = () => {};
+		const acknowledging = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		let releaseAck: () => void = () => {};
+		const ackReleased = new Promise<void>((resolve) => {
+			releaseAck = resolve;
+		});
+		outbox.markDispatched = async (dispatchIds) => {
+			ackStarted();
+			await ackReleased;
+			await persistDispatch(dispatchIds);
+		};
+		const errors: unknown[] = [];
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink: { publish: async () => {} },
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+
+		const pass = dispatcher.drainOnce(stop.signal);
+		await acknowledging;
+		stop.abort(new Error("worker stopping"));
+		releaseAck();
+
+		// The pass reports worker shutdown, but the already-confirmed record is
+		// still acknowledged and is not reclassified as a delivery failure.
+		await expect(pass).resolves.toBe("stopped");
+		expect(await outbox.getPending()).toEqual([]);
+		expect(errors).toEqual([]);
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
+	it("lets broker acknowledgement win when shutdown follows it in the same turn", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		let acknowledge: () => void = () => {};
+		let publishStarted: () => void = () => {};
+		const started = new Promise<void>((resolve) => {
+			publishStarted = resolve;
+		});
+		const sink: OutboxSink<TestEvent> = {
+			publish: () =>
+				new Promise<void>((resolve) => {
+					acknowledge = resolve;
+					publishStarted();
+				}),
+		};
+		const errors: unknown[] = [];
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+
+		const pass = dispatcher.drainOnce(stop.signal);
+		await started;
+		acknowledge();
+		stop.abort(new Error("worker stopping"));
+
+		await expect(pass).resolves.toBe("stopped");
+		expect(await outbox.getPending()).toEqual([]);
+		expect(errors).toEqual([]);
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
 	it("failures classified as not counting toward the ceiling never dead-letter", async () => {
 		// Ceiling 1: with the default classifier the FIRST failure would
 		// dead-letter the record; the transient classifier keeps it alive
@@ -577,6 +723,9 @@ describe("OutboxDispatcher", () => {
 		expect(() =>
 			fastDispatcher({ outbox, sink, baseDelayMs: Number.NaN }),
 		).toThrow("baseDelayMs");
+		expect(() =>
+			fastDispatcher({ outbox, sink, deliveryTimeoutMs: -1 }),
+		).toThrow("deliveryTimeoutMs");
 	});
 
 	describe("drainOnce", () => {
@@ -656,6 +805,10 @@ describe("eventBusSink", () => {
 			seen.push(event.payload.n);
 		});
 		const sink = eventBusSink<TestEvent>(bus);
+		const context = {
+			signal: new AbortController().signal,
+			deadlineAt: Date.now() + 1_000,
+		};
 
 		const ok = makeEvent(7);
 		const okMessage = makeCommitted(7);
@@ -665,18 +818,21 @@ describe("eventBusSink", () => {
 			source: okMessage.source,
 			position: okMessage.position,
 		};
-		await sink.publish(okRecord);
+		await sink.publish(okRecord, context);
 		expect(seen).toEqual([7]);
 
 		const bad = makeEvent(99);
 		const badMessage = makeCommitted(99);
 		await expect(
-			sink.publish({
-				dispatchId: bad.eventId,
-				event: bad,
-				source: badMessage.source,
-				position: badMessage.position,
-			}),
+			sink.publish(
+				{
+					dispatchId: bad.eventId,
+					event: bad,
+					source: badMessage.source,
+					position: badMessage.position,
+				},
+				context,
+			),
 		).rejects.toThrow("handler failed");
 	});
 });

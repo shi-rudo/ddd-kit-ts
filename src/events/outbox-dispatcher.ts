@@ -1,7 +1,13 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 
+import {
+	DEFAULT_EFFECT_TIMEOUT_MS,
+	type EffectContext,
+	runBoundedEffect,
+} from "../utils/effect";
 import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
+import { assertNonNegativeFinite } from "../utils/validate";
 import {
 	type DispatchTrackingOutbox,
 	type DeadLetterRecord,
@@ -57,9 +63,15 @@ export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
  * resolves early marks records dispatched that the broker may never
  * have stored, which silently voids the at-least-once guarantee the
  * outbox exists to provide.
+ *
+ * Pass `context.signal` into the transport. `context.deadlineAt` is the
+ * absolute form of the dispatcher's per-delivery timeout. The dispatcher
+ * settles on timeout or worker abort even if an adapter ignores the signal;
+ * the record remains pending unless `publish` had already resolved and its
+ * dispatch acknowledgement was persisted.
  */
 export interface OutboxSink<Evt extends AnyDomainEvent> {
-	publish: (record: OutboxRecord<Evt>) => Promise<void>;
+	publish: (record: OutboxRecord<Evt>, context: EffectContext) => Promise<void>;
 }
 
 /**
@@ -106,7 +118,11 @@ export function eventBusSink<Evt extends AnyDomainEvent>(
 	bus: EventBus<Evt>,
 ): OutboxSink<Evt> {
 	return {
-		publish: (record) => bus.publish([record.event]),
+		publish: (record, context) =>
+			bus.publish([record.event], {
+				signal: context.signal,
+				timeoutMs: Math.max(0, context.deadlineAt - Date.now()),
+			}),
 	};
 }
 
@@ -156,6 +172,12 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 
 	/** Ceiling for the failure backoff. Default `5000`ms. */
 	maxDelayMs?: number;
+
+	/**
+	 * Maximum time to await one sink publication. The sink receives the same
+	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
+	 */
+	deliveryTimeoutMs?: number;
 
 	/**
 	 * Jitter source for the failure backoff, injectable for deterministic
@@ -258,6 +280,7 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	private readonly sink: OutboxSink<Evt>;
 	private readonly countsTowardCeiling?: (error: unknown) => boolean;
 	private readonly observers: OutboxDispatcherObservers<Evt>;
+	private readonly deliveryTimeoutMs: number;
 
 	/**
 	 * Whether the outbox passed at construction implements the
@@ -287,6 +310,13 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		this.usesDispatchTracking = this.trackingOutbox !== undefined;
 		this.sink = options.sink;
 		this.countsTowardCeiling = options.countsTowardCeiling;
+		this.deliveryTimeoutMs =
+			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+		assertNonNegativeFinite(
+			"OutboxDispatcher",
+			"deliveryTimeoutMs",
+			this.deliveryTimeoutMs,
+		);
 	}
 
 	/**
@@ -351,9 +381,16 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		for (const record of batch) {
 			if (signal?.aborted) break;
 			try {
-				await this.sink.publish(record);
+				await runBoundedEffect(
+					"OutboxDispatcher.publish",
+					{ signal, timeoutMs: this.deliveryTimeoutMs },
+					(context) => this.sink.publish(record, context),
+				);
 				delivered.push(record.dispatchId);
 			} catch (error) {
+				if (signal?.aborted) {
+					break;
+				}
 				failedRecord = record;
 				failure = error;
 				break;

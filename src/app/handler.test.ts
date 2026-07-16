@@ -553,7 +553,7 @@ describe("withCommit", () => {
 				enrolledResult(enrollment, "ok", [first, second]),
 		);
 
-		 expect(observed).toEqual([
+		expect(observed).toEqual([
 			{ aggregate: first, version: 1 },
 			{ aggregate: second, version: 1 },
 		]);
@@ -1075,6 +1075,101 @@ describe("withCommit", () => {
 			await expect(execution).resolves.toBe("ok");
 		});
 
+		it("times out a never-settling application observer after commit", async () => {
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "a" },
+				{ aggregateId: "a", aggregateType: "MockOrder" },
+			);
+			const aggregate = createMockAggregate([event]);
+			const bus = createMockBus();
+			const reported: unknown[] = [];
+			let observerSignal: AbortSignal | undefined;
+			let observerDeadline: number | undefined;
+
+			const execution = withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus,
+					scope: createMockScope(),
+					postCommitTimeoutMs: 5,
+					onPersisted: (_aggregate, _version, context) => {
+						observerSignal = context.signal;
+						observerDeadline = context.deadlineAt;
+						return new Promise<void>(() => {});
+					},
+					onPersistError: (error) => reported.push(error),
+				},
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "ok", [aggregate]),
+			);
+
+			await expect(
+				Promise.race([
+					execution,
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("test guard timed out")), 50),
+					),
+				]),
+			).resolves.toBe("ok");
+			expect(observerSignal?.aborted).toBe(true);
+			expect(observerDeadline).toEqual(expect.any(Number));
+			expect(reported).toHaveLength(1);
+			expect((reported[0] as Error).name).toBe("TimeoutError");
+			expect(bus.published).toHaveLength(1);
+		});
+
+		it("aborts a never-settling application observer without rejecting the committed result", async () => {
+			const aggregate = createMockAggregate([]);
+			const owner = new AbortController();
+			const reason = new Error("request ended after commit");
+			const reported: unknown[] = [];
+			let observerSignal: AbortSignal | undefined;
+
+			const result = await withCommit(
+				{
+					outbox: createMockOutbox(),
+					scope: createMockScope(),
+					signal: owner.signal,
+					postCommitTimeoutMs: 1_000,
+					onPersisted: (_aggregate, _version, context) => {
+						observerSignal = context.signal;
+						owner.abort(reason);
+						return new Promise<void>(() => {});
+					},
+					onPersistError: (error) => reported.push(error),
+				},
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "committed", [aggregate]),
+			);
+
+			expect(result).toBe("committed");
+			expect(observerSignal?.reason).toBe(reason);
+			expect(reported).toEqual([reason]);
+		});
+
+		it("rejects an invalid post-commit timeout before opening a transaction", async () => {
+			let opened = false;
+			const scope: TransactionScope<undefined> = {
+				transactional: async () => {
+					opened = true;
+					throw new Error("must not open");
+				},
+			};
+
+			await expect(
+				withCommit(
+					{
+						outbox: createMockOutbox(),
+						scope,
+						postCommitTimeoutMs: -1,
+					},
+					async () => ({ result: undefined, commits: [] }),
+				),
+			).rejects.toThrow(/postCommitTimeoutMs/);
+			expect(opened).toBe(false);
+		});
+
 		it("reports an application observer failure via onPersistError with the failing aggregate", async () => {
 			const event = createDomainEvent(
 				"OrderCreated",
@@ -1320,6 +1415,49 @@ describe("withCommit", () => {
 			);
 
 			expect(result).toBe("ok");
+		});
+
+		it("times out a never-settling bus after commit", async () => {
+			const agg = createAggWithEvent();
+			const reported: unknown[] = [];
+			let publishSignal: AbortSignal | undefined;
+			let publishTimeoutMs: number | undefined;
+			const bus: EventBus<TestEvent> = {
+				publish: async (_events, options) => {
+					publishSignal = options?.signal;
+					publishTimeoutMs = options?.timeoutMs;
+					return new Promise<void>(() => {});
+				},
+				subscribe: () => () => {},
+				subscribeAll: () => () => {},
+				once: () => new Promise(() => {}),
+			};
+
+			const execution = withCommit(
+				{
+					outbox: createMockOutbox(),
+					bus,
+					scope: createMockScope(),
+					postCommitTimeoutMs: 5,
+					onPublishError: (error) => reported.push(error),
+				},
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [agg]),
+			);
+
+			await expect(
+				Promise.race([
+					execution,
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error("test guard timed out")), 50),
+					),
+				]),
+			).resolves.toBe("ok");
+			expect(publishSignal?.aborted).toBe(true);
+			expect(publishTimeoutMs).toBeGreaterThanOrEqual(0);
+			expect(publishTimeoutMs).toBeLessThanOrEqual(5);
+			expect(reported).toHaveLength(1);
+			expect((reported[0] as Error).name).toBe("TimeoutError");
+			expect(agg.acknowledgementCount).toBe(1);
 		});
 
 		it("pre-commit failures still reject (outbox.add inside the tx)", async () => {

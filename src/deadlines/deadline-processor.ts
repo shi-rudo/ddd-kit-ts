@@ -1,5 +1,11 @@
+import {
+	DEFAULT_EFFECT_TIMEOUT_MS,
+	type EffectContext,
+	runBoundedEffect,
+} from "../utils/effect";
 import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
+import { assertNonNegativeFinite } from "../utils/validate";
 import type {
 	DeadlineStore,
 	DeadLetterDeadline,
@@ -45,9 +51,13 @@ export interface DeadlineProcessorOptions<TPayload> {
 	 * dead-letters past its ceiling) and moves on to the next deadline;
 	 * neighbors are independent. Remember the guide's discipline: a
 	 * delivered deadline is a proposal, so check it against current
-	 * state before acting.
+	 * state before acting. Pass `context.signal` to I/O adapters; its
+	 * `deadlineAt` matches the processor's per-delivery bound.
 	 */
-	handler: (deadline: DueDeadline<TPayload>) => Promise<void> | void;
+	handler: (
+		deadline: DueDeadline<TPayload>,
+		context: EffectContext,
+	) => Promise<void> | void;
 
 	/** Deadlines fetched per poll. Default `32`. */
 	batchSize?: number;
@@ -64,6 +74,12 @@ export interface DeadlineProcessorOptions<TPayload> {
 
 	/** Ceiling for the failure backoff. Default `5000`ms. */
 	maxDelayMs?: number;
+
+	/**
+	 * Maximum time to await one deadline handler. The handler receives the same
+	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
+	 */
+	deliveryTimeoutMs?: number;
 
 	/**
 	 * Jitter source for the failure backoff, injectable for
@@ -119,9 +135,11 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 	private readonly store: DeadlineStore<TPayload>;
 	private readonly handler: (
 		deadline: DueDeadline<TPayload>,
+		context: EffectContext,
 	) => Promise<void> | void;
 	private readonly clock: () => Date;
 	private readonly observers: DeadlineProcessorObservers<TPayload>;
+	private readonly deliveryTimeoutMs: number;
 
 	constructor(options: DeadlineProcessorOptions<TPayload>) {
 		super("DeadlineProcessor", options);
@@ -133,6 +151,13 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 		this.store = options.store;
 		this.handler = options.handler;
 		this.clock = options.clock ?? (() => new Date());
+		this.deliveryTimeoutMs =
+			options.deliveryTimeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS;
+		assertNonNegativeFinite(
+			"DeadlineProcessor",
+			"deliveryTimeoutMs",
+			this.deliveryTimeoutMs,
+		);
 	}
 
 	/**
@@ -163,9 +188,14 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 			for (const deadline of batch) {
 				if (signal?.aborted) break;
 				try {
-					await this.handler(deadline);
+					await runBoundedEffect(
+						"DeadlineProcessor.handler",
+						{ signal, timeoutMs: this.deliveryTimeoutMs },
+						(context) => this.handler(deadline, context),
+					);
 					delivered.push(deadline);
 				} catch (error) {
+					if (signal?.aborted) break;
 					handlerFailed = true;
 					reportToObserver(() =>
 						this.observers.onDeliveryError(error, deadline),

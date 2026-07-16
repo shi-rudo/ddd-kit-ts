@@ -27,6 +27,31 @@ They deliberately do not include middleware pipelines, retries, dead-letter queu
 
 That restraint is a design choice. A bus with middleware, retry policy, transport adapters, metrics, authorization, and tracing quickly becomes an application framework. The kit stops at the handler contract. You can still add cross-cutting behavior with small handler decorators, and you can still adapt the handler types to a production message broker.
 
+## Bounded Domain Event Effects
+
+`EventBusImpl` treats handlers as imperative-shell effects. One publication
+creates an `EffectContext` and passes it to every typed and catch-all handler:
+
+```ts
+eventBus.subscribe("OrderConfirmed", async (event, context) => {
+  await mailer.sendConfirmation(event.payload.orderId, {
+    signal: context.signal,
+  });
+});
+
+await eventBus.publish(events, {
+  signal: request.signal,
+  timeoutMs: 5_000,
+});
+```
+
+`context.signal` combines owner cancellation with the publication timeout, and
+`context.deadlineAt` exposes the same bound as an absolute Unix epoch
+millisecond. The default timeout is 30 seconds. Publication rejects with the
+owner signal's reason or a `TimeoutError`; it settles even when a handler
+ignores the cooperative signal. The domain event itself never carries an
+`AbortSignal`—cancellation belongs to the shell that executes the effect.
+
 ## Commands
 
 Commands are write-side messages. They should carry enough data for the handler to perform one application operation.
@@ -229,7 +254,12 @@ The bus dispatches the command. The command handler owns the use case. `withComm
 import { withCommit } from "@shirudo/ddd-kit";
 
 const result = await withCommit(
-  { scope, outbox, bus: eventBus },
+  {
+    scope,
+    outbox,
+    bus: eventBus,
+    postCommitTimeoutMs: 5_000,
+  },
   async (tx, enrollment) => {
     const orders = makeOrderRepository(tx);
 
@@ -260,7 +290,14 @@ The order matters:
 
 Publishing after commit is important. Subscribers should never observe an event for a transaction that later rolls back.
 
-If post-commit `bus.publish(events)` fails, `withCommit` still returns the committed result. The database transaction already succeeded, so rejecting the use case would encourage callers to retry the whole command and possibly execute the write twice. Use `onPublishError(error, events)` for logging and metrics. Durable delivery belongs to the outbox dispatcher.
+If post-commit `bus.publish(events)` fails, times out, or is aborted,
+`withCommit` still returns the committed result. The database transaction
+already succeeded, so rejecting the use case would encourage callers to retry
+the whole command and possibly execute the write twice. Use
+`onPublishError(error, events)` for logging and metrics. The same bound applies
+to each asynchronous `onPersisted(aggregate, version, context)` observer; its
+errors go to `onPersistError`. Durable delivery belongs to the outbox
+dispatcher.
 
 See [Outbox & Transactions](./outbox.md) for the full outbox lifecycle.
 

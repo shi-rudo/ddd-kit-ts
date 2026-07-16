@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import type { EffectContext } from "../utils/effect";
 import {
 	DeadlineProcessor,
 	type DeadlineProcessorObservers,
 	type DeadlineProcessorOptions,
 } from "./deadline-processor";
-import type { DeadlineStore, DeadLetterDeadline } from "./deadline-store";
+import type { DeadLetterDeadline, DeadlineStore } from "./deadline-store";
 import { InMemoryDeadlineStore } from "./in-memory-deadline-store";
 
 type Payload = { kind: string };
@@ -311,6 +312,80 @@ describe("DeadlineProcessor", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
+	it("times out a never-settling handler and leaves the deadline pending", async () => {
+		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 99 });
+		let context: EffectContext | undefined;
+		const errors: unknown[] = [];
+		const handler: DeadlineProcessorOptions<Payload>["handler"] = async (
+			_deadline,
+			received,
+		) => {
+			context = received;
+			await new Promise<void>(() => {});
+		};
+		const options = {
+			store,
+			handler,
+			deliveryTimeoutMs: 5,
+			clock: () => at(T1),
+			observers: {
+				onDeliveryError: (error: unknown) => errors.push(error),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const processor = new DeadlineProcessor(options);
+
+		const outcome = await Promise.race([
+			processor.drainOnce(),
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+		]);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.aborted).toBe(true);
+		expect(context?.deadlineAt).toBeTypeOf("number");
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+		const [pending] = await store.due(at(T1), 10);
+		expect(pending).toMatchObject({ key: "a", attempts: 1 });
+	});
+
+	it("aborts a never-settling handler without counting shutdown as a delivery failure", async () => {
+		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 1 });
+		let context: EffectContext | undefined;
+		const errors: unknown[] = [];
+		const handler: DeadlineProcessorOptions<Payload>["handler"] = async (
+			_deadline,
+			received,
+		) => {
+			context = received;
+			await new Promise<void>(() => {});
+		};
+		const processor = fastProcessor({
+			store,
+			handler,
+			observers: { onDeliveryError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+		const pass = processor.drainOnce(stop.signal);
+		await vi.waitFor(() => expect(context).toBeDefined());
+
+		stop.abort(new Error("worker stopping"));
+		const outcome = await Promise.race([
+			pass,
+			new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 50)),
+		]);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toMatchObject({
+			message: "worker stopping",
+		});
+		expect(errors).toEqual([]);
+		const [pending] = await store.due(at(T1), 10);
+		expect(pending).toMatchObject({ key: "a", attempts: 0 });
+		expect(await store.deadLetters()).toEqual([]);
+	});
+
 	it("throwing observers, clock, and jitter source are neutralized", async () => {
 		const store = await seeded([{ key: "poison" }, { key: "healthy" }], {
 			maxDeliveryAttempts: 1,
@@ -410,5 +485,12 @@ describe("DeadlineProcessor", () => {
 		expect(() => fastProcessor({ store, handler, pollIntervalMs: -1 })).toThrow(
 			/pollIntervalMs/,
 		);
+		expect(() =>
+			fastProcessor({
+				store,
+				handler,
+				deliveryTimeoutMs: Number.POSITIVE_INFINITY,
+			}),
+		).toThrow(/deliveryTimeoutMs/);
 	});
 });

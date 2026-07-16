@@ -38,6 +38,12 @@ export interface ProjectorOptions<Evt extends AnyDomainEvent, TCtx> {
 	projection: Projection<Evt, TCtx>;
 }
 
+/** Controls one atomic projection batch. */
+export interface ProjectOptions {
+	/** Cancellation forwarded cooperatively to the projection transaction. */
+	readonly signal?: AbortSignal;
+}
+
 /** Outcome of one {@link Projector.project} batch. */
 export interface ProjectionBatchResult {
 	/** Events applied and checkpointed in this batch. */
@@ -127,9 +133,12 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 * valid cursor; the caller's at-least-once redelivery retries the batch.
 	 * The input must be a complete, ordered feed per aggregate address; an
 	 * event-type-filtered subscription cannot satisfy the cursor contract.
+	 * Cancellation is forwarded to the transaction scope rather than raced, so
+	 * the adapter remains the authority on rollback and atomicity.
 	 */
 	async project(
 		events: ReadonlyArray<CommittedDomainEvent<Evt>>,
+		options: ProjectOptions = {},
 	): Promise<ProjectionBatchResult> {
 		// Validate cursors BEFORE opening the transaction: a malformed
 		// batch must not burn a transaction or apply a prefix.
@@ -387,13 +396,15 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 			}
 			return { applied, skipped };
 		};
-		return this.scope.transactional((ctx) =>
-			this.checkpoints.withCheckpointLocks(
-				ctx,
-				this.projection.name,
-				lockAddresses,
-				() => projectWithLocks(ctx),
-			),
+		return this.scope.transactional(
+			(ctx) =>
+				this.checkpoints.withCheckpointLocks(
+					ctx,
+					this.projection.name,
+					lockAddresses,
+					() => projectWithLocks(ctx),
+				),
+			{ signal: options.signal },
 		);
 	}
 
@@ -441,8 +452,8 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 	 */
 	toOutboxSink(): OutboxSink<Evt> {
 		return {
-			publish: async (record) => {
-				await this.project([record]);
+			publish: async (record, context) => {
+				await this.project([record], { signal: context.signal });
 			},
 		};
 	}

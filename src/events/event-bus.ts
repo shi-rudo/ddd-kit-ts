@@ -1,6 +1,16 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { abortReason } from "../utils/abort";
-import type { EventBus, EventHandler, OnceOptions } from "./ports";
+import {
+	DEFAULT_EFFECT_TIMEOUT_MS,
+	type EffectContext,
+	runBoundedEffect,
+} from "../utils/effect";
+import type {
+	EventBus,
+	EventHandler,
+	OnceOptions,
+	PublishOptions,
+} from "./ports";
 
 /**
  * Simple in-memory event bus implementation.
@@ -138,10 +148,30 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	 *  - errors collected and thrown after the batch (single Error, or
 	 *    `AggregateError` for multiple failures).
 	 */
-	async publish(events: ReadonlyArray<Evt>): Promise<void> {
+	async publish(
+		events: ReadonlyArray<Evt>,
+		options: PublishOptions = {},
+	): Promise<void> {
+		return runBoundedEffect(
+			"EventBus.publish",
+			{
+				signal: options.signal,
+				timeoutMs: options.timeoutMs ?? DEFAULT_EFFECT_TIMEOUT_MS,
+			},
+			(context) => this.publishWithinContext(events, context),
+		);
+	}
+
+	private async publishWithinContext(
+		events: ReadonlyArray<Evt>,
+		context: EffectContext,
+	): Promise<void> {
 		const errors: Error[] = [];
 
 		for (const event of events) {
+			if (context.signal.aborted) {
+				throw abortReason(context.signal, "EventBus.publish aborted");
+			}
 			// Typed and catch-all handlers share ONE allSettled batch, so the
 			// contract holds across both kinds: none sees the others' errors,
 			// none is skipped when a peer fails. Snapshot so a handler
@@ -156,7 +186,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			];
 			if (batch.length > 0) {
 				const results = await Promise.allSettled(
-					batch.map(async (handler) => handler(event)),
+					batch.map(async (handler) => handler(event, context)),
 				);
 				for (const result of results) {
 					if (result.status === "rejected") {
@@ -172,6 +202,9 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 						);
 					}
 				}
+			}
+			if (context.signal.aborted) {
+				throw abortReason(context.signal, "EventBus.publish aborted");
 			}
 		}
 

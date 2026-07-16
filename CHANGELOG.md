@@ -19,6 +19,62 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed (breaking): shell effects carry cancellation and deadlines
+
+- Add the public `EffectContext` (`signal`, `deadlineAt`) and pass it to
+  `OutboxSink.publish`, deadline handlers, `EventHandler`s, and asynchronous
+  `withCommit` / `UnitOfWork` `onPersisted` observers. Domain events and domain
+  APIs remain free of runtime cancellation concerns.
+- Add a 30-second default bound to each outbox delivery, deadline delivery,
+  in-process event publication, and post-commit observer/publication. Configure
+  it with `deliveryTimeoutMs`, `EventBus.publish(..., { timeoutMs })`, or
+  `postCommitTimeoutMs`. A timed-out delivery remains pending and follows the
+  normal delivery-failure policy; worker-owner cancellation leaves it pending
+  without consuming a delivery attempt.
+- `EventBus.publish(events, { signal, timeoutMs })` propagates one effect context
+  to every handler. A never-settling handler can no longer keep its caller
+  pending indefinitely, even when the handler ignores cooperative cancellation.
+- `Projector.project(events, { signal })` forwards cancellation to
+  `TransactionScope.transactional`. It deliberately does not race the
+  transaction promise: only the transaction adapter can cancel safely without
+  reporting a rollback while a database operation later commits.
+- Bound post-commit failures remain best-effort: `onPersisted` timeout/abort is
+  reported to `onPersistError`, and bus timeout/abort to `onPublishError`; an
+  already committed use case still resolves successfully.
+
+Migration for shell adapters:
+
+```ts
+// Before
+const sink: OutboxSink<OrderEvent> = {
+  publish: async (record) => broker.publish(record),
+};
+const processor = new DeadlineProcessor({
+  store,
+  handler: async (deadline) => handle(deadline),
+  observers,
+});
+
+// After
+const sink: OutboxSink<OrderEvent> = {
+  publish: async (record, { signal }) =>
+    broker.publish(record, { signal }),
+};
+const processor = new DeadlineProcessor({
+  store,
+  deliveryTimeoutMs: 10_000,
+  handler: async (deadline, { signal, deadlineAt }) =>
+    handle(deadline, { signal, deadlineAt }),
+  observers,
+});
+```
+
+Existing one-argument callback implementations remain assignable in
+TypeScript, but direct calls to `OutboxSink.publish` must now provide an
+`EffectContext`. Custom `EventBus` implementations should accept and propagate
+the optional `PublishOptions`; custom transaction scopes already accept the
+optional signal through `TransactionalOptions`.
+
 ### Changed: Vite+ test and package toolchain
 
 - Pin Vite+ 0.2.4, Vite 8.1.3, and Vitest 4.1.10 through the pnpm workspace

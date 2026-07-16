@@ -1,12 +1,26 @@
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { EffectContext } from "../utils/effect";
 
 /**
- * Event handler function type for subscribing to domain events.
+ * Event handler function type for subscribing to domain events. The effect
+ * context carries the publication's cooperative cancellation and deadline;
+ * it belongs to the imperative shell, never to the domain event itself.
  *
  * @template Evt - The type of domain event
  */
-export type EventHandler<Evt> = (event: Evt) => Promise<void> | void;
+export type EventHandler<Evt> = (
+	event: Evt,
+	context: EffectContext,
+) => Promise<void> | void;
+
+/** Controls one bounded in-process event publication. */
+export interface PublishOptions {
+	/** Owner/request cancellation propagated to every event handler. */
+	readonly signal?: AbortSignal;
+	/** Maximum time to await the complete publication. Default `30000`ms. */
+	readonly timeoutMs?: number;
+}
 
 /**
  * Event Bus interface for publishing and subscribing to domain events.
@@ -58,8 +72,12 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * port and a dedicated dispatcher.
 	 *
 	 * @param events - Array of events to publish
+	 * @param options - Owner cancellation and publication timeout
 	 */
-	publish: (events: ReadonlyArray<Evt>) => Promise<void>;
+	publish: (
+		events: ReadonlyArray<Evt>,
+		options?: PublishOptions,
+	) => Promise<void>;
 
 	/**
 	 * Subscribes a handler to a specific event type.
