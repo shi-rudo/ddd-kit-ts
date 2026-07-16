@@ -57,10 +57,11 @@ not part of their API.
 4. The transaction commits.
 5. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards harvested events for deleted rows.
-6. The optional `onPersisted(aggregate, version, effectContext)` Application observer runs
-   for successfully acknowledged saved aggregates only, after every commit
-   record has completed its acknowledgement attempt. Its version argument is
-   the commit-time value captured before any observer ran.
+6. The optional application observer
+   `onPersisted(aggregate, version, context)` runs for successfully acknowledged
+   saved aggregates only, after every commit record has completed its
+   acknowledgement attempt. Its version argument is the commit-time value
+   captured before any observer ran.
 7. If a `bus` was supplied, it publishes the same committed events to
    in-process subscribers.
 
