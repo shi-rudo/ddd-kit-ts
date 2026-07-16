@@ -94,10 +94,10 @@ const processor = new DeadlineProcessor({
   store: deadlines,
   deliveryTimeoutMs: 10_000,
   storageTimeoutMs: 5_000,
-  handler: async (deadline, { signal, deadlineAt }) => {
+  handler: async (deadline, context) => {
     // Feed it to the owner as an input; check current state first,
     // a delivered deadline is a proposal (see above).
-    await handleTimeout(deadline, { signal, deadlineAt });
+    await handleTimeout(deadline, context);
   },
   observers: {
     onDeliveryError: (error, deadline) =>
@@ -115,12 +115,15 @@ void processor.run(stop.signal);
 
 Every handler receives an `ExecutionContext`. Its signal combines worker shutdown
 with the per-delivery bound; `deadlineAt` is the matching absolute Unix epoch
-millisecond. The default `deliveryTimeoutMs` is 30 seconds. Pass the signal into
-I/O adapters or enforce a native timeout no later than the absolute deadline.
-The processor bounds how long it waits but cannot terminate an arbitrary
-promise; ignoring both can leave zombie work overlapping a retry and is not a
-production-safe handler. A timeout is transient by default: it backs off and
-leaves the deadline pending without consuming its poison ceiling.
+millisecond. The default `deliveryTimeoutMs` is 30 seconds. The processor can
+stop waiting at that boundary, but it cannot terminate an arbitrary promise.
+Pass `context.signal` all the way to the I/O client—for example,
+`fetch(url, { signal: context.signal })`. If the client does not accept an
+`AbortSignal`, configure its native timeout from the remaining budget:
+`Math.max(0, context.deadlineAt - Date.now())`. A handler that does neither is
+not production-safe: abandoned I/O can continue as zombie work and overlap the
+retry. A timeout is transient by default: it backs off and leaves the deadline
+pending without consuming its poison ceiling.
 Worker shutdown is different: it aborts a never-settling handler, leaves the
 deadline pending, and does not consume the poison-message ceiling.
 
