@@ -19,6 +19,17 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed: documentation build on VitePress 2 alpha
+
+- Pin the unpublished documentation toolchain to VitePress 2.0.0-alpha.18 and
+  its Vite 8 build pipeline. The package runtime, public API, and published
+  tarball remain unchanged.
+- Keep the existing TypeDoc-generated API sidebar and LLM documentation plugin;
+  both integrations complete the VitePress 2 client and SSR builds unchanged.
+- Remove the four remaining VitePress 1 / Vite 5 advisories from the development
+  lockfile. The full audit now reports only the separately triaged low-severity
+  tsup/esbuild development-server advisory.
+
 ### Changed: pnpm 11 and production dependency audit gate
 
 - Pin the contributor and CI toolchain to pnpm 11.13.1, whose audit command
