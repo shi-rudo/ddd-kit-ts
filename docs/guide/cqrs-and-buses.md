@@ -27,10 +27,22 @@ They deliberately do not include middleware pipelines, retries, dead-letter queu
 
 That restraint is a design choice. A bus with middleware, retry policy, transport adapters, metrics, authorization, and tracing quickly becomes an application framework. The kit stops at the handler contract. You can still add cross-cutting behavior with small handler decorators, and you can still adapt the handler types to a production message broker.
 
-## Bounded Domain Event Effects
+## Event Handlers And Effects
 
-`EventBusImpl` treats handlers as imperative-shell effects. One publication
-creates an `EffectContext` and passes it to every typed and catch-all handler:
+A domain event says that something meaningful has already happened.
+`OrderConfirmed`, for example, records a business fact. Sending the confirmation
+email is not part of that fact; it is a reaction to it.
+
+We call such a reaction an **effect** when it reaches beyond the domain model or
+depends on the runtime around it. Sending an email, making an HTTP request,
+writing an audit record, or updating a cache are all effects. Unlike a domain
+decision, this work can be slow, fail, or wait forever. The imperative shell is
+the part of the application that runs and supervises it.
+
+`EventBusImpl` therefore does more than invoke a handler. For each call to
+`publish`, it creates one `EffectContext` and passes it to every handler for the
+event type, including handlers registered through `subscribeAll`. The context
+gives all of those handlers the same cancellation signal and time budget:
 
 ```ts
 eventBus.subscribe("OrderConfirmed", async (event, context) => {
@@ -45,12 +57,31 @@ await eventBus.publish(events, {
 });
 ```
 
-`context.signal` combines owner cancellation with the publication timeout, and
-`context.deadlineAt` exposes the same bound as an absolute Unix epoch
-millisecond. The default timeout is 30 seconds. Publication rejects with the
-owner signal's reason or a `TimeoutError`; it settles even when a handler
-ignores the cooperative signal. The domain event itself never carries an
-`AbortSignal`—cancellation belongs to the shell that executes the effect.
+In this example, the complete publication may run for at most five seconds. It
+ends sooner if `request.signal` is aborted, for example because the client
+disconnected or the request was cancelled. The handler passes `context.signal`
+to the mailer so that the underlying I/O can stop as well.
+
+`context.signal` is aborted when either the owner cancels the work or the
+publication reaches its timeout. `context.deadlineAt` describes the same limit
+as an absolute Unix epoch millisecond, which is useful when an adapter needs to
+configure its own native deadline. The timeout covers the entire `publish`
+call, not each handler separately. If no timeout is supplied, the default is 30
+seconds.
+
+When the owner cancels, `publish` rejects with the owner's abort reason. When
+the time budget expires, it rejects with a `TimeoutError`. In either case the
+caller stops waiting, even if a handler never settles. This bound cannot,
+however, forcibly terminate an arbitrary JavaScript promise. A handler that
+ignores `context.signal` may continue working in the background. Pass the
+signal to HTTP clients, mailers, database drivers, and other adapters to avoid
+that zombie work.
+
+The domain event itself deliberately carries no `AbortSignal`.
+`OrderConfirmed` remains true whether the email succeeds, times out, or is
+cancelled. Cancellation describes how this application process handles the
+fact; it is not part of the fact. It therefore belongs to the imperative shell,
+not to the domain model.
 
 ## Commands
 
