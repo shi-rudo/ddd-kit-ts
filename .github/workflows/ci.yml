@@ -16,7 +16,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.32.1
+          version: 11.13.1
 
       - uses: actions/setup-node@v4
         with:
@@ -25,6 +25,10 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Production dependency audit
+        if: matrix.node-version == 22
+        run: pnpm audit:prod
 
       - name: Typecheck
         run: pnpm typecheck
@@ -59,7 +63,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.32.1
+          version: 11.13.1
 
       - uses: actions/setup-node@v4
         with:
