@@ -128,6 +128,10 @@ authenticated actor comes from the verified principal, not from the JSON body.
 Your authentication and schema libraries may differ; the order of the boundary
 steps should not.
 
+The `requestedBy` value below records who initiated the command. It does not
+authorize the operation by itself. The use case behind the Durable Object must
+still decide whether that actor may confirm this particular order.
+
 ```ts
 import { CommandBus, type Command, type Id } from "@shirudo/ddd-kit";
 import { err, ok, type Result } from "@shirudo/result";
@@ -145,7 +149,7 @@ type ConfirmOrder = Command & {
 
 type AppCommand = ConfirmOrder;
 type CommandResults = {
-  ConfirmOrder: string;
+  ConfirmOrder: OrderId;
 };
 
 interface Env {
@@ -153,21 +157,47 @@ interface Env {
 }
 
 interface AuthenticatedPrincipal {
-  readonly actorId: string;
+  readonly actorId: ActorId;
 }
+
+type AuthenticationFailure = {
+  readonly code: "UNAUTHORIZED";
+  readonly category: "UNAUTHORIZED";
+  readonly retryable: false;
+  readonly details: Record<string, never>;
+};
 
 type RequestFailure = {
   readonly code: "PAYLOAD_TOO_LARGE" | "INVALID_JSON" | "INVALID_COMMAND";
+  readonly category: "VALIDATION";
+  readonly retryable: false;
   readonly status: 400 | 413;
+  readonly details: { readonly path: string };
 };
+
+type ConfirmOrderFailure =
+  | {
+      readonly code: "FORBIDDEN";
+      readonly category: "FORBIDDEN";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
+      readonly code: "ORDER_COMMAND_UNAVAILABLE";
+      readonly category: "INFRASTRUCTURE";
+      readonly retryable: true;
+      readonly details: Record<string, never>;
+    };
 
 declare function authenticateRequest(
   request: Request,
   env: Env,
-): Promise<AuthenticatedPrincipal | null>;
+): Promise<Result<AuthenticatedPrincipal, AuthenticationFailure>>;
 
-function createCommandBus(env: Env): CommandBus<CommandResults> {
-  const bus = new CommandBus<CommandResults>();
+function createCommandBus(
+  env: Env,
+): CommandBus<CommandResults, ConfirmOrderFailure> {
+  const bus = new CommandBus<CommandResults, ConfirmOrderFailure>();
 
   bus.register("ConfirmOrder", async (command: ConfirmOrder) => {
     const id = env.ORDERS.idFromName(command.orderId);
@@ -178,8 +208,21 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
       body: JSON.stringify(command),
     });
 
+    if (response.status === 403) {
+      return err({
+        code: "FORBIDDEN",
+        category: "FORBIDDEN",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
     if (!response.ok) {
-      return err("ORDER_COMMAND_FAILED");
+      return err({
+        code: "ORDER_COMMAND_UNAVAILABLE",
+        category: "INFRASTRUCTURE",
+        retryable: true,
+        details: {},
+      });
     }
 
     return ok(command.orderId);
@@ -190,21 +233,21 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const principal = await authenticateRequest(request, env);
-    if (principal === null) {
-      return Response.json({ code: "UNAUTHORIZED" }, { status: 401 });
+    const authentication = await authenticateRequest(request, env);
+    if (authentication.isErr()) {
+      return authenticationFailureResponse(authentication.error);
     }
 
     const input = await readBoundedJson(request, MAX_COMMAND_BYTES);
     if (input.isErr()) return failureResponse(input.error);
 
-    const command = decodeConfirmOrder(input.value, principal);
+    const command = decodeConfirmOrder(input.value, authentication.value);
     if (command.isErr()) return failureResponse(command.error);
 
     const result = await createCommandBus(env).execute(command.value);
 
     if (result.isErr()) {
-      return Response.json({ code: result.error }, { status: 400 });
+      return commandFailureResponse(result.error);
     }
 
     return Response.json({ id: result.value });
@@ -221,10 +264,10 @@ async function readBoundedJson(
     /^\d+$/.test(declaredLength) &&
     Number(declaredLength) > maxBytes
   ) {
-    return err({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+    return err(requestFailure("PAYLOAD_TOO_LARGE", 413, "$body"));
   }
   if (request.body === null) {
-    return err({ code: "INVALID_JSON", status: 400 });
+    return err(requestFailure("INVALID_JSON", 400, "$body"));
   }
 
   const reader = request.body.getReader();
@@ -238,7 +281,7 @@ async function readBoundedJson(
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         await reader.cancel("payload too large").catch(() => undefined);
-        return err({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+        return err(requestFailure("PAYLOAD_TOO_LARGE", 413, "$body"));
       }
       chunks.push(value);
     }
@@ -258,7 +301,7 @@ async function readBoundedJson(
     const parsed: unknown = JSON.parse(text);
     return ok(parsed);
   } catch {
-    return err({ code: "INVALID_JSON", status: 400 });
+    return err(requestFailure("INVALID_JSON", 400, "$body"));
   }
 }
 
@@ -272,27 +315,25 @@ function decodeConfirmOrder(
     Array.isArray(input) ||
     Object.getPrototypeOf(input) !== Object.prototype
   ) {
-    return err({ code: "INVALID_COMMAND", status: 400 });
+    return err(requestFailure("INVALID_COMMAND", 400, "$body"));
   }
 
   const body = input as Record<string, unknown>;
   const allowed = new Set(["type", "orderId"]);
   if (Object.keys(body).some((key) => !allowed.has(key))) {
-    return err({ code: "INVALID_COMMAND", status: 400 });
+    return err(requestFailure("INVALID_COMMAND", 400, "$body"));
   }
   if (body.type !== "ConfirmOrder") {
-    return err({ code: "INVALID_COMMAND", status: 400 });
+    return err(requestFailure("INVALID_COMMAND", 400, "$body.type"));
   }
 
   const orderId = orderIdFromWire(body.orderId);
   if (orderId.isErr()) return err(orderId.error);
-  const actorId = actorIdFromPrincipal(principal.actorId);
-  if (actorId.isErr()) return err(actorId.error);
 
   return ok({
     type: "ConfirmOrder",
     orderId: orderId.value,
-    requestedBy: actorId.value,
+    requestedBy: principal.actorId,
   });
 }
 
@@ -303,7 +344,7 @@ function boundedId(value: unknown): Result<string, RequestFailure> {
     value.length > 80 ||
     !/^[A-Za-z0-9_-]+$/.test(value)
   ) {
-    return err({ code: "INVALID_COMMAND", status: 400 });
+    return err(requestFailure("INVALID_COMMAND", 400, "$body.orderId"));
   }
   return ok(value);
 }
@@ -315,16 +356,68 @@ function orderIdFromWire(
   return id.isErr() ? err(id.error) : ok(id.value as OrderId);
 }
 
-function actorIdFromPrincipal(
-  value: unknown,
-): Result<ActorId, RequestFailure> {
-  const id = boundedId(value);
-  return id.isErr() ? err(id.error) : ok(id.value as ActorId);
+function failureResponse(failure: RequestFailure): Response {
+  return Response.json(
+    {
+      code: failure.code,
+      category: failure.category,
+      retryable: failure.retryable,
+      details: failure.details,
+    },
+    { status: failure.status },
+  );
 }
 
-function failureResponse(failure: RequestFailure): Response {
-  return Response.json({ code: failure.code }, { status: failure.status });
+function authenticationFailureResponse(
+  failure: AuthenticationFailure,
+): Response {
+  return Response.json(failure, { status: 401 });
 }
+
+function commandFailureResponse(failure: ConfirmOrderFailure): Response {
+  const status = failure.category === "FORBIDDEN" ? 403 : 503;
+  return Response.json(failure, { status });
+}
+
+function requestFailure(
+  code: RequestFailure["code"],
+  status: RequestFailure["status"],
+  path: string,
+): RequestFailure {
+  return {
+    code,
+    category: "VALIDATION",
+    retryable: false,
+    status,
+    details: { path },
+  };
+}
+```
+
+The authentication adapter maps the provider's external subject and claims to
+the local `ActorId`. If that mapping fails, it returns the authentication result
+above; the failure is not reported as malformed command JSON.
+
+Authentication still is not authorization. The application use case loads the
+order and evaluates any application policy and state-dependent domain
+permission before changing it:
+
+```ts
+const confirmOrder = async (command: ConfirmOrder) => {
+  const order = await orders.getById(command.orderId);
+  if (!order.canBeConfirmedBy(command.requestedBy)) {
+    return err({
+      code: "FORBIDDEN",
+      category: "FORBIDDEN",
+      retryable: false,
+      details: { orderId: command.orderId },
+    });
+  }
+
+  order.confirm();
+  await orders.save(order);
+  return ok(order.id);
+};
 ```
 
 This example keeps the bus as invocation wiring. The durable state still lives

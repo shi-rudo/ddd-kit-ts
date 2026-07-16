@@ -111,7 +111,8 @@ import {
   type Command,
   type CommandHandler,
   type Id,
-  withCommit,
+  type IdempotentCommitRequest,
+  withIdempotentCommit,
 } from "@shirudo/ddd-kit";
 import { err, ok, type Result } from "@shirudo/result";
 import { type Money, tryMoneyFromDto } from "@shirudo/ddd-kit/money";
@@ -131,6 +132,7 @@ type PlaceOrderCommand = Command & {
   readonly type: "PlaceOrder";
   readonly customerId: CustomerId;
   readonly correlationId: string;
+  readonly idempotency: IdempotentCommitRequest;
   readonly items: ReadonlyArray<PlaceOrderItem>;
 };
 
@@ -156,25 +158,41 @@ const MAX_ORDER_ITEMS = 100;
 const MAX_ID_LENGTH = 80;
 
 interface AuthenticatedPrincipal {
-  readonly customerId: string;
+  readonly customerId: CustomerId;
 }
 
 type BoundaryFailure = {
   readonly code: "PAYLOAD_TOO_LARGE" | "INVALID_COMMAND";
-  readonly path: string;
-  readonly reason: string;
+  readonly category: "VALIDATION";
+  readonly retryable: false;
+  readonly details: {
+    readonly path: string;
+    readonly reason: string;
+  };
 };
+
+type TransportFailure = {
+  readonly code: "INVALID_TRANSPORT_METADATA";
+  readonly category: "VALIDATION";
+  readonly retryable: false;
+  readonly details: { readonly path: string };
+};
+
+interface PlaceOrderData {
+  readonly customerId: CustomerId;
+  readonly items: ReadonlyArray<PlaceOrderItem>;
+}
 
 function decodePlaceOrderBody(
   body: Uint8Array,
   principal: AuthenticatedPrincipal,
-  correlationId: string,
-): Result<PlaceOrderCommand, BoundaryFailure> {
+): Result<PlaceOrderData, BoundaryFailure> {
   if (body.byteLength > MAX_COMMAND_BYTES) {
     return err({
       code: "PAYLOAD_TOO_LARGE",
-      path: "$body",
-      reason: "exceeds 64 KiB",
+      category: "VALIDATION",
+      retryable: false,
+      details: { path: "$body", reason: "exceeds 64 KiB" },
     });
   }
 
@@ -201,11 +219,6 @@ function decodePlaceOrderBody(
     return err(invalid("$body.items", "exceeds 100 entries"));
   }
 
-  const customerId = customerIdFromPrincipal(principal.customerId);
-  if (customerId.isErr()) return err(customerId.error);
-  const parsedCorrelationId = correlationIdFromTransport(correlationId);
-  if (parsedCorrelationId.isErr()) return err(parsedCorrelationId.error);
-
   const items: PlaceOrderItem[] = [];
   for (const [index, value] of root.items.entries()) {
     const item = decodeItem(value, index);
@@ -214,9 +227,7 @@ function decodePlaceOrderBody(
   }
 
   return ok({
-    type: "PlaceOrder",
-    customerId: customerId.value,
-    correlationId: parsedCorrelationId.value,
+    customerId: principal.customerId,
     items,
   });
 }
@@ -304,13 +315,6 @@ function idString(
   return ok(value);
 }
 
-function customerIdFromPrincipal(
-  value: unknown,
-): Result<CustomerId, BoundaryFailure> {
-  const id = idString(value, "$principal.customerId");
-  return id.isErr() ? err(id.error) : ok(id.value as CustomerId);
-}
-
 function productIdFromWire(
   value: unknown,
   path: string,
@@ -334,22 +338,42 @@ function quantityFromWire(
   return ok(value as OrderQuantity);
 }
 
-function correlationIdFromTransport(
+function transportId(
   value: unknown,
-): Result<string, BoundaryFailure> {
-  return idString(value, "$transport.correlationId");
+  path: string,
+): Result<string, TransportFailure> {
+  if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+    return err({
+      code: "INVALID_TRANSPORT_METADATA",
+      category: "VALIDATION",
+      retryable: false,
+      details: { path },
+    });
+  }
+  return ok(value);
 }
 
 function invalid(path: string, reason: string): BoundaryFailure {
-  return { code: "INVALID_COMMAND", path, reason };
+  return {
+    code: "INVALID_COMMAND",
+    category: "VALIDATION",
+    retryable: false,
+    details: { path, reason },
+  };
 }
 ```
 
+The authentication adapter has already translated the external subject or
+claims into the local `AuthenticatedPrincipal`. A subject that cannot be mapped
+to `CustomerId` is therefore an authentication or identity-mapping failure; it
+never becomes `INVALID_COMMAND` and never enters this payload decoder.
+
 The casts above occur only inside constructors that have checked the runtime
 value. That is what gives a brand meaning. `tryMoneyFromDto` plays the same role
-for `Money`: the wire DTO is not allowed farther into the application. Expected
-boundary failures stay on the `Result` error channel; an unexpected defect still
-throws instead of being mislabeled as bad input.
+for `Money`: the wire DTO is not allowed farther into the application. Payload,
+transport, and authentication failures retain separate codes even when a broker
+eventually routes all permanent input failures to the same dead-letter channel.
+An unexpected defect still throws instead of being mislabeled as bad input.
 
 The size ceilings are operational safety rules. They do not replace domain
 invariants. For example, whether an order may be empty is a business decision
@@ -368,8 +392,9 @@ const placeOrderHandler: CommandHandler<
     return err("EMPTY_ORDER");
   }
 
-  const result = await withCommit(
-    { scope, outbox, bus: eventBus },
+  const outcome = await withIdempotentCommit(
+    { scope, outbox, idempotency, bus: eventBus },
+    cmd.idempotency,
     async (tx, enrollment) => {
       const orders = makeOrderRepository(tx);
       const order = Order.place(newOrderId(), cmd.customerId);
@@ -391,7 +416,7 @@ const placeOrderHandler: CommandHandler<
     },
   );
 
-  return ok(result);
+  return ok(outcome.result);
 };
 ```
 
@@ -421,35 +446,73 @@ interface QueueDelivery {
   readonly body: Uint8Array;
   readonly authenticatedPrincipal: AuthenticatedPrincipal;
   readonly correlationId: string;
+  readonly messageId: string;
   ack(): void;
-  deadLetter(reason: "PAYLOAD_TOO_LARGE" | "INVALID_COMMAND"): void;
+  deadLetter(
+    reason:
+      | "PAYLOAD_TOO_LARGE"
+      | "INVALID_COMMAND"
+      | "INVALID_TRANSPORT_METADATA",
+  ): void;
 }
 
-declare function recordCommandOutcome(outcome: unknown): Promise<void>;
+declare function recordCommandOutcome(
+  messageId: string,
+  outcome: unknown,
+): Promise<void>;
+declare function stableHash(command: PlaceOrderData): string;
 
 async function consumePlaceOrder(delivery: QueueDelivery): Promise<void> {
+  const correlationId = transportId(
+    delivery.correlationId,
+    "$transport.correlationId",
+  );
+  if (correlationId.isErr()) {
+    delivery.deadLetter(correlationId.error.code);
+    return;
+  }
+
+  const messageId = transportId(delivery.messageId, "$transport.messageId");
+  if (messageId.isErr()) {
+    delivery.deadLetter(messageId.error.code);
+    return;
+  }
+
   const decoded = decodePlaceOrderBody(
     delivery.body,
     delivery.authenticatedPrincipal,
-    delivery.correlationId,
   );
   if (decoded.isErr()) {
     delivery.deadLetter(decoded.error.code);
     return;
   }
 
-  const outcome = await commandBus.execute(decoded.value);
-  await recordCommandOutcome(outcome);
+  const command: PlaceOrderCommand = {
+    type: "PlaceOrder",
+    ...decoded.value,
+    correlationId: correlationId.value,
+    idempotency: {
+      key: messageId.value,
+      fingerprint: stableHash(decoded.value),
+    },
+  };
+
+  const outcome = await commandBus.execute(command);
+  await recordCommandOutcome(messageId.value, outcome);
   delivery.ack();
 }
 ```
 
 `QueueDelivery` is deliberately an application-specific adapter type. RabbitMQ,
 SQS, Kafka, and other brokers use different names and settlement rules, but the
-order stays the same: bound, decode, convert, dispatch, then settle.
-Production consumers must also feed the broker's stable message id into the
-application's idempotency boundary before executing a write. A correlation id
-helps tracing; it does not make an at-least-once delivery safe to repeat. See
+order stays the same: bound, decode, convert, dispatch, record the outcome, then
+settle. The broker's stable message id becomes the idempotency key, while the
+fingerprint prevents that key from being reused for different command content.
+With a transactional idempotency store, `withIdempotentCommit` stores the key,
+fingerprint, outcome, aggregate write, and outbox entry in the application's
+transaction. `recordCommandOutcome` must also be idempotent by message id: an
+acknowledgement can fail after that observer succeeds. A correlation id helps
+tracing; it does not make an at-least-once delivery safe to repeat. See
 [Idempotent Commands](./idempotency.md).
 
 ### Type Maps

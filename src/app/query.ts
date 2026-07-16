@@ -35,7 +35,8 @@
  *     rabbitMQChannel.reject(message, false); // invalid input: dead-letter
  *     return;
  *   }
- *   await handler(decoded.value);
+ *   const result = await handler(decoded.value);
+ *   await publishQueryReply(message, result);
  *   rabbitMQChannel.ack(message);
  * });
  * ```
@@ -78,7 +79,8 @@ export interface Query {
  *     rabbitMQChannel.reject(msg, false);
  *     return;
  *   }
- *   await getOrderHandler(decoded.value);
+ *   const result = await getOrderHandler(decoded.value);
+ *   await publishQueryReply(msg, result);
  *   rabbitMQChannel.ack(msg);
  * });
  * ```

@@ -46,7 +46,8 @@ import type { Result } from "@shirudo/result";
  *     rabbitMQChannel.reject(message, false); // invalid input: dead-letter, do not retry
  *     return;
  *   }
- *   await handler(decoded.value);
+ *   const outcome = await handler(decoded.value);
+ *   await recordCommandOutcome(outcome);
  *   rabbitMQChannel.ack(message);
  * });
  * ```
@@ -93,7 +94,8 @@ export interface Command {
  *     rabbitMQChannel.reject(msg, false); // malformed or over limit
  *     return;
  *   }
- *   await createOrderHandler(decoded.value);
+ *   const outcome = await createOrderHandler(decoded.value);
+ *   await recordCommandOutcome(outcome);
  *   rabbitMQChannel.ack(msg);
  * });
  * ```
