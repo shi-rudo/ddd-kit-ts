@@ -10,7 +10,13 @@ export default defineConfig({
     testing: "src/testing.ts",
   },
   format: ["esm"], // ES modules only
-  dts: true, // Generate .d.ts files
+  dts: {
+    // tsup 8.5.1 injects the deprecated `baseUrl` option into its declaration
+    // worker even though this project does not configure it. Keep the
+    // suppression local to that TypeScript 6 compatibility-API path; the
+    // TypeScript 7 project typecheck remains unsuppressed.
+    compilerOptions: { ignoreDeprecations: "6.0" },
+  },
   splitting: false, // Libraries should not be split
   sourcemap: true, // Source maps for better debugging
   clean: true, // Clean dist folder before build

@@ -19,6 +19,21 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed: native TypeScript 7 compiler toolchain
+
+- Run `pnpm typecheck` with the native TypeScript 7.0.2 compiler. The package
+  runtime, public API, emitted declarations, and TypeScript 5.9+ consumer floor
+  remain unchanged.
+- Keep the importable `typescript` module on the official
+  `@typescript/typescript6` compatibility package for TypeDoc, tsup, and other
+  tools that still require the compiler API. TypeScript 7.0 intentionally ships
+  only the `tsc` CLI; `@typescript/native` supplies that binary side by side.
+- Scope TypeScript 6's `baseUrl` deprecation suppression to tsup's declaration
+  worker, because tsup 8.5.1 injects that option internally. The TypeScript 7
+  project typecheck does not suppress deprecations.
+- Preserve the negative domain-event creation type test under TypeScript 7's
+  different overload diagnostic location without weakening the rejected shape.
+
 ### Changed: documentation build on VitePress 2 alpha
 
 - Pin the unpublished documentation toolchain to VitePress 2.0.0-alpha.18 and
