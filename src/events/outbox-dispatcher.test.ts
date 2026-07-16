@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import type { ExecutionContext } from "../utils/execution";
 import { EventBusImpl } from "./event-bus";
 import { InMemoryOutbox } from "./outbox";
 import {
@@ -23,8 +24,11 @@ type TestDispatcherOptions = OutboxDispatcherOptions<TestEvent>;
 type RemovedDispatcherPollObserver = TestDispatcherOptions["onPollError"];
 // @ts-expect-error legacy optional callbacks must not bypass the required bundle
 type RemovedDispatcherErrorObserver = TestDispatcherOptions["onDispatchError"];
+// @ts-expect-error the v3 classifier uses explicit failure kinds, not a boolean compatibility alias
+type RemovedCountsTowardCeiling = TestDispatcherOptions["countsTowardCeiling"];
 void (undefined as unknown as RemovedDispatcherPollObserver);
 void (undefined as unknown as RemovedDispatcherErrorObserver);
+void (undefined as unknown as RemovedCountsTowardCeiling);
 
 function makeEvent(n: number): TestEvent {
 	return createDomainEvent("ThingHappened", { n }, { eventId: `evt-${n}` });
@@ -243,6 +247,159 @@ describe("OutboxDispatcher", () => {
 		expect(pollErrors).toHaveLength(2);
 	});
 
+	it("aborts a never-settling getPending call through the storage execution context", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		let context: ExecutionContext | undefined;
+		const outbox = interceptOutbox(inner, {
+			getPending: (_limit, received?: ExecutionContext) => {
+				context = received;
+				return new Promise<ReadonlyArray<OutboxRecord<TestEvent>>>(() => {});
+			},
+		});
+		const options = {
+			outbox,
+			sink: { publish: async () => {} },
+			storageTimeoutMs: 1_000,
+		};
+		const dispatcher = fastDispatcher(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping");
+		const loop = dispatcher.run(stop.signal);
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(context?.deadlineAt).toBeTypeOf("number");
+	});
+
+	it("aborts a never-settling outbox acknowledgement without losing the delivered record", async () => {
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeCommitted(1)]);
+		let context: ExecutionContext | undefined;
+		let ackStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		const outbox = interceptOutbox(inner, {
+			markDispatched: (_ids, received?: ExecutionContext) => {
+				context = received;
+				ackStarted();
+				return new Promise<void>(() => {});
+			},
+		});
+		const options = {
+			outbox,
+			sink: { publish: async () => {} },
+			storageTimeoutMs: 1_000,
+		};
+		const dispatcher = fastDispatcher(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping during ack");
+		const loop = dispatcher.run(stop.signal);
+		await started;
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(await inner.getPending()).toHaveLength(1);
+	});
+
+	it("observes one idempotent acknowledgement that completes after its storage timeout", async () => {
+		vi.useFakeTimers();
+		const inner = new InMemoryOutbox<TestEvent>();
+		await inner.add([makeCommitted(1)]);
+		let releaseAck!: () => void;
+		const ackGate = new Promise<void>((resolve) => {
+			releaseAck = resolve;
+		});
+		let ackStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		let ackCompleted!: () => void;
+		const completed = new Promise<void>((resolve) => {
+			ackCompleted = resolve;
+		});
+		let ackCalls = 0;
+		const outbox = interceptOutbox(inner, {
+			markDispatched: async (ids) => {
+				ackCalls += 1;
+				ackStarted();
+				await ackGate;
+				await inner.markDispatched(ids);
+				ackCompleted();
+			},
+		});
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink: { publish: async () => {} },
+			storageTimeoutMs: 5,
+		});
+
+		try {
+			const execution = dispatcher.drainOnce();
+			await started;
+			await vi.advanceTimersByTimeAsync(5);
+			await expect(execution).resolves.toBe("stopped");
+			expect(await inner.getPending()).toHaveLength(1);
+
+			releaseAck();
+			await completed;
+			expect(await inner.getPending()).toHaveLength(0);
+			expect(ackCalls).toBe(1);
+		} finally {
+			releaseAck();
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts a never-settling outbox failure update without hiding the delivery error", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 9 });
+		await outbox.add([makeCommitted(1)]);
+		let context: ExecutionContext | undefined;
+		let updateStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			updateStarted = resolve;
+		});
+		outbox.markFailed = (_id, _error, received?: ExecutionContext) => {
+			context = received;
+			updateStarted();
+			return new Promise(() => {});
+		};
+		const deliveryError = new Error("permanent rejection");
+		const reported: unknown[] = [];
+		const options = {
+			outbox,
+			sink: {
+				publish: async () => {
+					throw deliveryError;
+				},
+			},
+			storageTimeoutMs: 1_000,
+			observers: {
+				onDispatchError: (error: unknown) => reported.push(error),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const dispatcher = new OutboxDispatcher(options);
+		const stop = new AbortController();
+		const reason = new Error("worker stopping during failure update");
+		const loop = dispatcher.run(stop.signal);
+		await started;
+
+		stop.abort(reason);
+		const outcome = await loop.then(() => "stopped" as const);
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toBe(reason);
+		expect(reported).toContain(deliveryError);
+	});
+
 	it("reports failures to the tracking outbox so poison messages dead-letter and unblock the queue", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 2 });
 		await outbox.add([makeCommitted(1), makeCommitted(2)]);
@@ -359,10 +516,160 @@ describe("OutboxDispatcher", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
-	it("failures classified as not counting toward the ceiling never dead-letter", async () => {
-		// Ceiling 1: with the default classifier the FIRST failure would
-		// dead-letter the record; the transient classifier keeps it alive
-		// through a simulated outage until delivery succeeds.
+	it("times out a never-settling sink without consuming the poison ceiling", async () => {
+		vi.useFakeTimers();
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 99 });
+		await outbox.add([makeCommitted(1)]);
+		let context: ExecutionContext | undefined;
+		let sinkStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			sinkStarted = resolve;
+		});
+		const errors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (_record, received) => {
+				context = received;
+				sinkStarted();
+				await new Promise<void>(() => {});
+			},
+		};
+		const options = {
+			outbox,
+			sink,
+			deliveryTimeoutMs: 5,
+			observers: {
+				onDispatchError: (error: unknown) => errors.push(error),
+				onPollError: () => {},
+				onDeadLetter: () => {},
+			},
+		};
+		const dispatcher = new OutboxDispatcher(options);
+
+		try {
+			const execution = dispatcher.drainOnce();
+			await started;
+			await vi.advanceTimersByTimeAsync(5);
+			await expect(execution).resolves.toBe("stopped");
+
+			expect(context?.signal.aborted).toBe(true);
+			expect(context?.deadlineAt).toBeTypeOf("number");
+			expect(errors).toHaveLength(1);
+			expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+			const [pending] = await outbox.getPending();
+			expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("aborts a never-settling sink without counting shutdown as a delivery failure", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		let context: ExecutionContext | undefined;
+		const errors: unknown[] = [];
+		const sink: OutboxSink<TestEvent> = {
+			publish: async (_record, received) => {
+				context = received;
+				await new Promise<void>(() => {});
+			},
+		};
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+		const pass = dispatcher.drainOnce(stop.signal);
+		await vi.waitFor(() => expect(context).toBeDefined());
+
+		stop.abort(new Error("worker stopping"));
+		const outcome = await pass;
+
+		expect(outcome).toBe("stopped");
+		expect(context?.signal.reason).toMatchObject({
+			message: "worker stopping",
+		});
+		expect(errors).toEqual([]);
+		const [pending] = await outbox.getPending();
+		expect(pending).toMatchObject({ dispatchId: "evt-1", attempts: 0 });
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
+	it("keeps an acknowledged delivery successful when shutdown starts during the outbox ack", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		const persistDispatch = outbox.markDispatched.bind(outbox);
+		let ackStarted: () => void = () => {};
+		const acknowledging = new Promise<void>((resolve) => {
+			ackStarted = resolve;
+		});
+		let releaseAck: () => void = () => {};
+		const ackReleased = new Promise<void>((resolve) => {
+			releaseAck = resolve;
+		});
+		outbox.markDispatched = async (dispatchIds) => {
+			ackStarted();
+			await ackReleased;
+			await persistDispatch(dispatchIds);
+		};
+		const errors: unknown[] = [];
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink: { publish: async () => {} },
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+
+		const pass = dispatcher.drainOnce(stop.signal);
+		await acknowledging;
+		stop.abort(new Error("worker stopping"));
+		releaseAck();
+
+		// The pass reports worker shutdown, but the already-confirmed record is
+		// still acknowledged and is not reclassified as a delivery failure.
+		await expect(pass).resolves.toBe("stopped");
+		expect(await outbox.getPending()).toEqual([]);
+		expect(errors).toEqual([]);
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
+	it("lets broker acknowledgement win when shutdown follows it in the same turn", async () => {
+		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
+		await outbox.add([makeCommitted(1)]);
+		let acknowledge: () => void = () => {};
+		let publishStarted: () => void = () => {};
+		const started = new Promise<void>((resolve) => {
+			publishStarted = resolve;
+		});
+		const sink: OutboxSink<TestEvent> = {
+			publish: () =>
+				new Promise<void>((resolve) => {
+					acknowledge = resolve;
+					publishStarted();
+				}),
+		};
+		const errors: unknown[] = [];
+		const dispatcher = fastDispatcher({
+			outbox,
+			sink,
+			observers: { onDispatchError: (error) => errors.push(error) },
+		});
+		const stop = new AbortController();
+
+		const pass = dispatcher.drainOnce(stop.signal);
+		await started;
+		acknowledge();
+		stop.abort(new Error("worker stopping"));
+
+		await expect(pass).resolves.toBe("stopped");
+		expect(await outbox.getPending()).toEqual([]);
+		expect(errors).toEqual([]);
+		expect(await outbox.deadLetters()).toEqual([]);
+	});
+
+	it("transient failures back off without consuming the poison ceiling", async () => {
+		// Ceiling 1: the default cause-chain classifier recognizes the broker's
+		// retryable marker and keeps the record alive until the outage recovers.
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
 		await outbox.add([makeCommitted(1)]);
 		let outage = 3;
@@ -371,24 +678,21 @@ describe("OutboxDispatcher", () => {
 			publish: async (record) => {
 				if (outage > 0) {
 					outage--;
-					throw new Error("broker down");
+					throw Object.assign(new Error("broker down"), { retryable: true });
 				}
 				delivered.push(record.event.payload.n);
 			},
 		};
 
-		const dispatcher = fastDispatcher({
-			outbox,
-			sink,
-			countsTowardCeiling: () => false,
-		});
+		const options = { outbox, sink };
+		const dispatcher = fastDispatcher(options);
 		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
 
 		expect(delivered).toEqual([1]);
 		expect(await outbox.deadLetters()).toHaveLength(0);
 	});
 
-	it("a throwing countsTowardCeiling classifier counts the failure and cannot break the loop", async () => {
+	it("a throwing failure classifier becomes observable unknown failure and cannot break the loop", async () => {
 		const outbox = new InMemoryOutbox<TestEvent>({ maxDeliveryAttempts: 1 });
 		await outbox.add([makeCommitted(1), makeCommitted(2)]);
 		const delivered: number[] = [];
@@ -399,19 +703,33 @@ describe("OutboxDispatcher", () => {
 			},
 		};
 
-		const dispatcher = fastDispatcher({
+		const assessments: unknown[] = [];
+		const classifierError = new Error("classifier bug");
+		const options = {
 			outbox,
 			sink,
-			countsTowardCeiling: () => {
-				throw new Error("classifier bug");
+			classifyFailure: () => {
+				throw classifierError;
 			},
-		});
+			observers: {
+				onDispatchError: (
+					_error: unknown,
+					_record: unknown,
+					assessment?: unknown,
+				) => assessments.push(assessment),
+			},
+		};
+		const dispatcher = fastDispatcher(options);
 		await runUntil(dispatcher, () => eventually(() => delivered.length === 1));
 
 		// The safe default under a broken classifier: the failure counted,
 		// the poison record dead-lettered, the successor flowed.
 		expect(delivered).toEqual([2]);
 		expect(await outbox.deadLetters()).toHaveLength(1);
+		expect(assessments[0]).toMatchObject({
+			kind: "unknown",
+			classifierError,
+		});
 	});
 
 	it("reports a failed ack once per record of the delivered prefix", async () => {
@@ -577,6 +895,12 @@ describe("OutboxDispatcher", () => {
 		expect(() =>
 			fastDispatcher({ outbox, sink, baseDelayMs: Number.NaN }),
 		).toThrow("baseDelayMs");
+		expect(() =>
+			fastDispatcher({ outbox, sink, deliveryTimeoutMs: -1 }),
+		).toThrow("deliveryTimeoutMs");
+		expect(() =>
+			fastDispatcher({ outbox, sink, storageTimeoutMs: Number.NaN }),
+		).toThrow("storageTimeoutMs");
 	});
 
 	describe("drainOnce", () => {
@@ -656,6 +980,10 @@ describe("eventBusSink", () => {
 			seen.push(event.payload.n);
 		});
 		const sink = eventBusSink<TestEvent>(bus);
+		const context = {
+			signal: new AbortController().signal,
+			deadlineAt: Date.now() + 1_000,
+		};
 
 		const ok = makeEvent(7);
 		const okMessage = makeCommitted(7);
@@ -665,18 +993,21 @@ describe("eventBusSink", () => {
 			source: okMessage.source,
 			position: okMessage.position,
 		};
-		await sink.publish(okRecord);
+		await sink.publish(okRecord, context);
 		expect(seen).toEqual([7]);
 
 		const bad = makeEvent(99);
 		const badMessage = makeCommitted(99);
 		await expect(
-			sink.publish({
-				dispatchId: bad.eventId,
-				event: bad,
-				source: badMessage.source,
-				position: badMessage.position,
-			}),
+			sink.publish(
+				{
+					dispatchId: bad.eventId,
+					event: bad,
+					source: badMessage.source,
+					position: badMessage.position,
+				},
+				context,
+			),
 		).rejects.toThrow("handler failed");
 	});
 });

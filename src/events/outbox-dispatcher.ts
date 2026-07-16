@@ -1,10 +1,20 @@
 import type { AnyDomainEvent } from "../aggregate/domain-event";
-
+import {
+	assessDeliveryFailure,
+	type DeliveryFailureAssessment,
+	type DeliveryFailureClassifier,
+} from "../utils/delivery-failure";
+import {
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import { captureObserverFunctions, reportToObserver } from "../utils/observer";
 import { PollLoop } from "../utils/poll-loop";
+import { assertNonNegativeFinite } from "../utils/validate";
 import {
-	type DispatchTrackingOutbox,
 	type DeadLetterRecord,
+	type DispatchTrackingOutbox,
 	type EventBus,
 	isDispatchTrackingOutbox,
 	type Outbox,
@@ -25,8 +35,16 @@ import {
  * reconciliation; the hook provides low-latency diagnostics.
  */
 export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
-	/** A publish, acknowledgement, or failure-tracking operation failed. */
-	readonly onDispatchError: (error: unknown, record: OutboxRecord<Evt>) => void;
+	/**
+	 * A publish, acknowledgement, or failure-tracking operation failed.
+	 * Delivery failures include their accounting assessment. Store failures do
+	 * not; they are operationally distinct from poison-message attempts.
+	 */
+	readonly onDispatchError: (
+		error: unknown,
+		record: OutboxRecord<Evt>,
+		assessment?: DeliveryFailureAssessment,
+	) => void;
 	/** Reading the pending page failed. */
 	readonly onPollError: (error: unknown) => void;
 	/** A tracked record crossed the store's dead-letter threshold. */
@@ -57,9 +75,19 @@ export interface OutboxDispatcherObservers<Evt extends AnyDomainEvent> {
  * resolves early marks records dispatched that the broker may never
  * have stored, which silently voids the at-least-once guarantee the
  * outbox exists to provide.
+ *
+ * Pass `context.signal` into the transport or enforce a native timeout no
+ * later than `context.deadlineAt`. The dispatcher bounds its own wait, but it
+ * cannot terminate a foreign promise that ignores cancellation; such an
+ * adapter can leave zombie I/O overlapping the retry and is not production
+ * conforming. The record remains pending unless `publish` had already resolved
+ * and its dispatch acknowledgement was persisted.
  */
 export interface OutboxSink<Evt extends AnyDomainEvent> {
-	publish: (record: OutboxRecord<Evt>) => Promise<void>;
+	publish: (
+		record: OutboxRecord<Evt>,
+		context: ExecutionContext,
+	) => Promise<void>;
 }
 
 /**
@@ -106,7 +134,11 @@ export function eventBusSink<Evt extends AnyDomainEvent>(
 	bus: EventBus<Evt>,
 ): OutboxSink<Evt> {
 	return {
-		publish: (record) => bus.publish([record.event]),
+		publish: (record, context) =>
+			bus.publish([record.event], {
+				signal: context.signal,
+				timeoutMs: Math.max(0, context.deadlineAt - Date.now()),
+			}),
 	};
 }
 
@@ -158,30 +190,35 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 	maxDelayMs?: number;
 
 	/**
+	 * Maximum time to await one sink publication. The sink receives the same
+	 * deadline as an AbortSignal and an absolute `deadlineAt`. Default `30000`ms.
+	 */
+	deliveryTimeoutMs?: number;
+
+	/**
+	 * Maximum time to await one poll-store read, acknowledgement, or failure
+	 * update. The store receives the same cooperative context. This bounds the
+	 * worker's wait; production adapters must also cancel or natively bound the
+	 * underlying I/O. Default `30000`ms.
+	 */
+	storageTimeoutMs?: number;
+
+	/**
 	 * Jitter source for the failure backoff, injectable for deterministic
 	 * tests. Default `Math.random`.
 	 */
 	random?: () => number;
 
 	/**
-	 * Classifies a delivery failure before it is reported to a tracking
-	 * outbox's `markFailed`: return `false` for failures that must NOT
-	 * count toward the attempt ceiling (the broker is down, a DNS blip),
-	 * `true` for genuine poison suspects (serialization failure,
-	 * permanent rejection). Default: every failure counts.
-	 *
-	 * The trade-off of the default: a transport outage that outlasts
-	 * roughly `ceiling x maxDelayMs` dead-letters HEALTHY head records
-	 * one after another, and they wait in `deadLetters()` for manual
-	 * redelivery, the exact loss the outbox exists to prevent. Size the
-	 * store's ceiling for the longest outage you tolerate, or classify
-	 * here. Failures classified as not counting still grow the
-	 * consecutive-failure backoff; they just never dead-letter.
-	 *
-	 * Observer-grade robustness: a throwing classifier is treated as
-	 * `true` (the failure counts) and cannot break the loop.
+	 * Classifies delivery errors as transient, permanent, or unknown. Transient
+	 * failures back off without consuming the poison ceiling; permanent and
+	 * unknown failures count. The default walks the cause chain: native
+	 * `TimeoutError` and `retryable: true` are transient, `retryable: false` is
+	 * permanent, and unmapped errors are unknown. A throwing or invalid custom
+	 * classifier becomes unknown and is exposed through the observer assessment
+	 * without replacing the original delivery error.
 	 */
-	countsTowardCeiling?: (error: unknown) => boolean;
+	classifyFailure?: DeliveryFailureClassifier;
 }
 
 /**
@@ -213,9 +250,11 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
  *   toward `maxDelayMs`, so a persistent fault degrades to a slow,
  *   observable retry cadence instead of a hot loop or a dead loop.
  * - **Bounded retries only with tracking.** With a
- *   {@link DispatchTrackingOutbox}, every delivery failure that
- *   {@link OutboxDispatcherOptions.countsTowardCeiling} classifies as
- *   counting (the default: all of them) is reported via `markFailed`;
+ *   {@link DispatchTrackingOutbox}, permanent and unknown delivery failures
+ *   are reported via `markFailed`; transient failures back off without
+ *   consuming the poison ceiling. The shared default recognizes native
+ *   timeouts and `retryable` markers, and consumers can override it through
+ *   {@link OutboxDispatcherOptions.classifyFailure};
  *   the store owns the ceiling and the dead-letter set (wire
  *   `deadLetters()` to alerting). An ack failure
  *   (`markDispatched` throwing) is NOT reported as a delivery failure:
@@ -256,8 +295,10 @@ export interface OutboxDispatcherOptions<Evt extends AnyDomainEvent> {
 export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	private readonly outbox: Outbox<Evt> | DispatchTrackingOutbox<Evt>;
 	private readonly sink: OutboxSink<Evt>;
-	private readonly countsTowardCeiling?: (error: unknown) => boolean;
+	private readonly classifyFailure?: DeliveryFailureClassifier;
 	private readonly observers: OutboxDispatcherObservers<Evt>;
+	private readonly deliveryTimeoutMs: number;
+	private readonly storageTimeoutMs: number;
 
 	/**
 	 * Whether the outbox passed at construction implements the
@@ -286,7 +327,21 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 			: undefined;
 		this.usesDispatchTracking = this.trackingOutbox !== undefined;
 		this.sink = options.sink;
-		this.countsTowardCeiling = options.countsTowardCeiling;
+		this.classifyFailure = options.classifyFailure;
+		this.deliveryTimeoutMs =
+			options.deliveryTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+		this.storageTimeoutMs =
+			options.storageTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+		assertNonNegativeFinite(
+			"OutboxDispatcher",
+			"deliveryTimeoutMs",
+			this.deliveryTimeoutMs,
+		);
+		assertNonNegativeFinite(
+			"OutboxDispatcher",
+			"storageTimeoutMs",
+			this.storageTimeoutMs,
+		);
 	}
 
 	/**
@@ -300,8 +355,13 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		while (!signal?.aborted) {
 			let batch: ReadonlyArray<OutboxRecord<Evt>>;
 			try {
-				batch = await this.outbox.getPending(this.batchSize);
+				batch = await runBoundedExecution(
+					"OutboxDispatcher.getPending",
+					{ signal, timeoutMs: this.storageTimeoutMs },
+					(context) => this.outbox.getPending(this.batchSize, context),
+				);
 			} catch (error) {
+				if (signal?.aborted) return "stopped";
 				this.consecutiveFailures += 1;
 				reportToObserver(() => this.observers.onPollError(error));
 				return "stopped";
@@ -321,21 +381,6 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 	}
 
 	/**
-	 * Applies the `countsTowardCeiling` classifier with observer-grade
-	 * robustness: no classifier or a throwing classifier means the
-	 * failure counts (the safe default; an uncounted poison record would
-	 * retry forever).
-	 */
-	private failureCountsTowardCeiling(error: unknown): boolean {
-		if (this.countsTowardCeiling === undefined) return true;
-		try {
-			return this.countsTowardCeiling(error);
-		} catch {
-			return true;
-		}
-	}
-
-	/**
 	 * Dispatches one batch sequentially and acks the delivered prefix in
 	 * a single `markDispatched` call. Returns `true` when every record
 	 * was delivered and acked, `false` when the pass stopped early
@@ -351,9 +396,16 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		for (const record of batch) {
 			if (signal?.aborted) break;
 			try {
-				await this.sink.publish(record);
+				await runBoundedExecution(
+					"OutboxDispatcher.publish",
+					{ signal, timeoutMs: this.deliveryTimeoutMs },
+					(context) => this.sink.publish(record, context),
+				);
 				delivered.push(record.dispatchId);
 			} catch (error) {
+				if (signal?.aborted) {
+					break;
+				}
 				failedRecord = record;
 				failure = error;
 				break;
@@ -365,7 +417,19 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		let acked = true;
 		if (delivered.length > 0) {
 			try {
-				await this.outbox.markDispatched(delivered);
+				// A broker acknowledgement that won the publish/abort race must still
+				// get one bounded persistence attempt. If shutdown had already fired
+				// before this ack starts, the storage timeout owns that short grace
+				// period; an ack already in flight remains owner-cancellable.
+				const acknowledgementSignal = signal?.aborted ? undefined : signal;
+				await runBoundedExecution(
+					"OutboxDispatcher.markDispatched",
+					{
+						signal: acknowledgementSignal,
+						timeoutMs: this.storageTimeoutMs,
+					},
+					(context) => this.outbox.markDispatched(delivered, context),
+				);
 				this.consecutiveFailures = 0;
 			} catch (error) {
 				// The events WERE delivered; a failed ack means they will
@@ -376,10 +440,12 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 				// each one, so the operator can match the coming duplicates
 				// to this ack failure instead of chasing them individually.
 				acked = false;
-				for (const context of batch.slice(0, delivered.length)) {
-					reportToObserver(() =>
-						this.observers.onDispatchError(error, context),
-					);
+				if (!signal?.aborted) {
+					for (const context of batch.slice(0, delivered.length)) {
+						reportToObserver(() =>
+							this.observers.onDispatchError(error, context),
+						);
+					}
 				}
 			}
 		}
@@ -387,21 +453,27 @@ export class OutboxDispatcher<Evt extends AnyDomainEvent> extends PollLoop {
 		if (failedRecord !== undefined) {
 			const record = failedRecord;
 			const error = failure;
-			reportToObserver(() => this.observers.onDispatchError(error, record));
+			const assessment = assessDeliveryFailure(error, this.classifyFailure);
+			reportToObserver(() =>
+				this.observers.onDispatchError(error, record, assessment),
+			);
 			const tracking = this.trackingOutbox;
-			if (tracking !== undefined && this.failureCountsTowardCeiling(error)) {
+			if (tracking !== undefined && assessment.kind !== "transient") {
 				try {
-					const deadLetter = await tracking.markFailed(
-						record.dispatchId,
-						error,
+					const deadLetter = await runBoundedExecution(
+						"OutboxDispatcher.markFailed",
+						{ signal, timeoutMs: this.storageTimeoutMs },
+						(context) => tracking.markFailed(record.dispatchId, error, context),
 					);
 					if (deadLetter !== undefined) {
 						reportToObserver(() => this.observers.onDeadLetter(deadLetter));
 					}
 				} catch (markError) {
-					reportToObserver(() =>
-						this.observers.onDispatchError(markError, record),
-					);
+					if (!signal?.aborted) {
+						reportToObserver(() =>
+							this.observers.onDispatchError(markError, record),
+						);
+					}
 				}
 			}
 		}

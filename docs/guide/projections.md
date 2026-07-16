@@ -454,7 +454,9 @@ poll retries it.
 You can also feed batches directly:
 
 ```ts
-const result = await projector.project(committedEvents);
+const result = await projector.project(committedEvents, {
+  signal: request.signal,
+});
 
 log.info({
   applied: result.applied,
@@ -462,7 +464,14 @@ log.info({
 });
 ```
 
-That is useful for queue consumers, tests, and replay jobs.
+That is useful for queue consumers, tests, and replay jobs. The signal is
+checked before validation and transaction setup, so an already-aborted call
+never opens a transaction. Once work is in flight it is forwarded to the
+`TransactionScope`; actual cancellation remains cooperative and adapter-owned.
+`Projector` does not race the transaction promise, because
+returning early could claim rollback while a driver that ignored cancellation
+later commits the read model and checkpoint. Update and checkpoint therefore
+retain their existing atomicity guarantee.
 
 The projector accepts committed envelopes, not bare domain events. `withCommit`
 creates those envelopes automatically. For another source, compose the event
@@ -506,9 +515,9 @@ models, fan out in the sink:
 
 ```ts
 const sink: OutboxSink<OrderEvent> = {
-  publish: async (record) => {
-    await orderListProjector.project([record]);
-    await orderDetailProjector.project([record]);
+  publish: async (record, context) => {
+    await orderListProjector.project([record], { signal: context.signal });
+    await orderDetailProjector.project([record], { signal: context.signal });
   },
 };
 ```

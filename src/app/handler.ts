@@ -2,8 +2,8 @@ import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
-	aggregatePersistenceCapabilityFor,
 	type AggregatePersistenceCapability,
+	aggregatePersistenceCapabilityFor,
 } from "../aggregate/persistence-lifecycle";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
@@ -14,7 +14,13 @@ import type {
 } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
+import {
+	DEFAULT_EXECUTION_TIMEOUT_MS,
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../utils/execution";
 import { reportToObserver } from "../utils/observer";
+import { assertNonNegativeFinite } from "../utils/validate";
 
 /** Dependencies for {@link withCommit}. */
 export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
@@ -44,11 +50,13 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * acknowledgement attempt. Deleted aggregates do not trigger it. `version`
 	 * is the commit-time value captured before any observer runs. Observer
 	 * failures are reported through `onPersistError` and never turn an already
-	 * committed write into an apparent failure.
+	 * committed write into an apparent failure. The execution context carries
+	 * owner cancellation and the configured post-commit deadline.
 	 */
 	onPersisted?: (
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		version: Version,
+		context: ExecutionContext,
 	) => void | Promise<void>;
 	/**
 	 * Observer for post-commit persistence failures: either the internal
@@ -65,6 +73,15 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 		error: unknown,
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 	) => void;
+	/**
+	 * Total time allotted to the complete post-commit application phase:
+	 * every application observer followed by in-process bus publication shares
+	 * one absolute deadline. Callbacks that have not started when the deadline is
+	 * reached are skipped and reported as timeouts. Defaults to `30000`ms.
+	 * Timing out or aborting these best-effort operations is reported through the
+	 * matching error observer and never rejects an already committed write.
+	 */
+	postCommitTimeoutMs?: number;
 	/**
 	 * Cooperative-cancellation signal. If already aborted, `withCommit`
 	 * rejects with the signal's `reason` BEFORE opening the transaction.
@@ -320,7 +337,7 @@ function createCommitTokenScope<
  *  4. **After** the commit, a non-exported capability acknowledges every
  *     saved enrollment and discards pending events for deleted enrollments.
  *     Only after the complete commit set is clean does the optional
- *     application-shell `onPersisted(aggregate, version)` observer run for
+ *     application-shell `onPersisted(aggregate, version, context)` observer run for
  *     saved aggregates. Deleted rows never trigger that observer.
  *  5. `bus.publish(events)` fires for the in-process fast path (skipped
  *     when no events or no `bus` is wired).
@@ -340,6 +357,10 @@ function createCommitTokenScope<
  * logger/metrics) and otherwise dropped; delivery is still guaranteed via
  * the outbox. The hook is an observer: if it throws, its error is
  * swallowed so the post-commit invariant holds.
+ * The complete application-observer and bus-publication phase shares one
+ * absolute `postCommitTimeoutMs` budget (30 seconds by default); later callbacks
+ * are not started once it expires. A timeout or owner abort is reported
+ * through the same observer paths and never changes the committed result.
  *
  * If the transaction rolls back, no acknowledgement occurs: the aggregate
  * keeps its pending events, so the caller can retry or discard the instance.
@@ -387,6 +408,14 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		enrollment: CommitEnrollment<Evt>,
 	) => Promise<WithCommitWorkResult<Evt, R>>,
 ): Promise<R> {
+	const postCommitTimeoutMs =
+		deps.postCommitTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+	assertNonNegativeFinite(
+		"withCommit",
+		"postCommitTimeoutMs",
+		postCommitTimeoutMs,
+	);
+
 	// Pre-flight: an already-aborted caller never opens a transaction.
 	// Throwing the signal's reason matches the web AbortSignal convention;
 	// the `??` fallback mirrors event-bus.ts and guards a non-spec polyfill
@@ -504,19 +533,34 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// A slow or failing observer can therefore never prevent peer cleanup. Each
 	// observer receives the version captured before any observer ran, so an
 	// earlier callback cannot rewrite a later callback's commit receipt.
-	if (deps.onPersisted) {
+	const postCommitDeadlineAt = Date.now() + postCommitTimeoutMs;
+	const onPersisted = deps.onPersisted;
+	if (onPersisted) {
 		for (const { aggregate, version } of persistedObservations) {
 			try {
-				await deps.onPersisted(aggregate, version);
+				await runBoundedExecution(
+					"withCommit.onPersisted",
+					{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
+					(context) => onPersisted(aggregate, version, context),
+				);
 			} catch (error) {
 				reportToObserver(() => deps.onPersistError?.(error, aggregate));
 			}
 		}
 	}
 
-	if (deps.bus && events.length > 0) {
+	const bus = deps.bus;
+	if (bus && events.length > 0) {
 		try {
-			await deps.bus.publish(events);
+			await runBoundedExecution(
+				"withCommit.bus.publish",
+				{ signal: deps.signal, deadlineAt: postCommitDeadlineAt },
+				(context) =>
+					bus.publish(events, {
+						signal: context.signal,
+						timeoutMs: Math.max(0, context.deadlineAt - Date.now()),
+					}),
+			);
 		} catch (error) {
 			// The tx has committed and the outbox holds the events; an
 			// outbox dispatcher will deliver them. Rejecting here would turn

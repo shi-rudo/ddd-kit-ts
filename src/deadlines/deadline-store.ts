@@ -77,6 +77,14 @@ export interface DeadLetterDeadline<TPayload = unknown>
  * records for competing pollers; the same rule as the outbox
  * dispatcher.
  *
+ * The bundled processor supplies an `ExecutionContext` to every poll-side
+ * operation. Production adapters MUST pass its signal to native I/O or enforce
+ * a native timeout no later than `deadlineAt`; the shell can bound its wait but
+ * cannot terminate a promise that ignores cancellation. A timed-out write has
+ * an unknown outcome. Acknowledgements must remain idempotent when they complete
+ * late; a late failure update may count its original delivery attempt and must
+ * still no-op after the incarnation was delivered or replaced.
+ *
  * Verify an adapter with `createDeadlineStoreContractTests` from
  * `@shirudo/ddd-kit/testing`; `InMemoryDeadlineStore` is the
  * reference.
@@ -113,18 +121,28 @@ export interface DeadlineStore<TPayload = unknown> {
 	 * empty page (poll loops computing a remaining capacity may pass
 	 * it). `now` is a parameter on purpose: the poll loop owns the
 	 * clock, which keeps adapters deterministic and tests free of real
-	 * time.
+	 * time. The bundled processor always supplies `context`; it is optional only
+	 * so existing adapters remain assignable.
 	 */
-	due(now: Date, limit: number): Promise<ReadonlyArray<DueDeadline<TPayload>>>;
+	due(
+		now: Date,
+		limit: number,
+		context?: ExecutionContext,
+	): Promise<ReadonlyArray<DueDeadline<TPayload>>>;
 
 	/**
 	 * Acknowledges delivered incarnations so they stop coming back.
 	 * Idempotent on already-acknowledged and unknown ids, and a no-op
 	 * for ids of REPLACED incarnations (a late ack after a reschedule
 	 * must not consume the successor). Also clears a dead-lettered
-	 * incarnation (manual redelivery, then ack).
+	 * incarnation (manual redelivery, then ack). It remains idempotent if the
+	 * operation completes after the caller timed out. The bundled processor
+	 * always supplies `context`.
 	 */
-	markDelivered(deliveryIds: ReadonlyArray<string>): Promise<void>;
+	markDelivered(
+		deliveryIds: ReadonlyArray<string>,
+		context?: ExecutionContext,
+	): Promise<void>;
 
 	/**
 	 * Records one failed delivery attempt for the incarnation:
@@ -133,11 +151,15 @@ export interface DeadlineStore<TPayload = unknown> {
 	 * returns. A no-op for unknown, delivered, or replaced ids.
 	 * Returns the exact dead-letter record only on the call that performs
 	 * that transition; retries below the ceiling and no-ops return
-	 * `undefined`.
+	 * `undefined`. A late completion may count that original delivery attempt; it
+	 * must still no-op if the incarnation was delivered or replaced in the
+	 * meantime. The bundled processor never reissues the same store call and
+	 * always supplies `context`.
 	 */
 	markFailed(
 		deliveryId: string,
 		error?: unknown,
+		context?: ExecutionContext,
 	): Promise<DeadLetterDeadline<TPayload> | undefined>;
 
 	/**
@@ -148,3 +170,5 @@ export interface DeadlineStore<TPayload = unknown> {
 	 */
 	deadLetters(): Promise<ReadonlyArray<DeadLetterDeadline<TPayload>>>;
 }
+
+import type { ExecutionContext } from "../utils/execution";

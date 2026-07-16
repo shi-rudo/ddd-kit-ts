@@ -1,12 +1,27 @@
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { ExecutionContext } from "../utils/execution";
 
 /**
- * Event handler function type for subscribing to domain events.
+ * Event handler function type for subscribing to domain events. The execution
+ * context carries the publication's cooperative cancellation and deadline;
+ * those runtime controls belong to the imperative shell, never to the domain
+ * event itself.
  *
  * @template Evt - The type of domain event
  */
-export type EventHandler<Evt> = (event: Evt) => Promise<void> | void;
+export type EventHandler<Evt> = (
+	event: Evt,
+	context: ExecutionContext,
+) => Promise<void> | void;
+
+/** Controls one bounded in-process event publication. */
+export interface PublishOptions {
+	/** Owner/request cancellation propagated to every event handler. */
+	readonly signal?: AbortSignal;
+	/** Maximum time to await the complete publication. Default `30000`ms. */
+	readonly timeoutMs?: number;
+}
 
 /**
  * Event Bus interface for publishing and subscribing to domain events.
@@ -58,8 +73,12 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * port and a dedicated dispatcher.
 	 *
 	 * @param events - Array of events to publish
+	 * @param options - Owner cancellation and publication timeout
 	 */
-	publish: (events: ReadonlyArray<Evt>) => Promise<void>;
+	publish: (
+		events: ReadonlyArray<Evt>,
+		options?: PublishOptions,
+	) => Promise<void>;
 
 	/**
 	 * Subscribes a handler to a specific event type.
@@ -307,6 +326,14 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
  * support several concurrent pollers must make `getPending` claim the
  * returned records (`FOR UPDATE SKIP LOCKED` or equivalent). Without
  * claiming, run one logical dispatcher per outbox.
+ *
+ * The bundled dispatcher supplies an {@link ExecutionContext} to every poll-side
+ * operation. Production adapters MUST pass its signal to native I/O or enforce
+ * a native timeout no later than `deadlineAt`; the shell can bound its wait but
+ * cannot terminate a promise that ignores cancellation. A timed-out write has
+ * an unknown outcome. Acknowledgements must remain idempotent when they complete
+ * late; a late failure update may count its original delivery attempt and must
+ * still no-op after the record was dispatched.
  */
 export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 	/**
@@ -319,16 +346,24 @@ export interface Outbox<Evt extends AnyDomainEvent> extends OutboxWriter<Evt> {
 	 * primary key works) and an `ORDER BY` on it; a bare `SELECT` returns
 	 * rows in storage order, not insertion order. The dispatcher polls
 	 * this on a schedule. When `limit` is omitted, the implementation
-	 * decides on a default page size.
+	 * decides on a default page size. The bundled dispatcher always supplies
+	 * `context`; it is optional only so existing adapters remain assignable.
 	 */
-	getPending: (limit?: number) => Promise<ReadonlyArray<OutboxRecord<Evt>>>;
+	getPending: (
+		limit?: number,
+		context?: ExecutionContext,
+	) => Promise<ReadonlyArray<OutboxRecord<Evt>>>;
 
 	/**
 	 * Marks the given dispatch records as delivered so subsequent
 	 * `getPending` calls don't return them. Must be idempotent on
-	 * already-marked ids.
+	 * already-marked ids, including a late completion after the caller's
+	 * storage deadline. The bundled dispatcher always supplies `context`.
 	 */
-	markDispatched: (dispatchIds: ReadonlyArray<string>) => Promise<void>;
+	markDispatched: (
+		dispatchIds: ReadonlyArray<string>,
+		context?: ExecutionContext,
+	) => Promise<void>;
 }
 
 /**
@@ -359,11 +394,15 @@ export interface DispatchTrackingOutbox<Evt extends AnyDomainEvent>
 	 * Returns the exact dead-letter record only on the call that performs
 	 * that transition; retries below the ceiling and no-ops return
 	 * `undefined`. This lets productive pollers emit an immediate signal
-	 * without scanning the durable dead-letter set after every failure.
+	 * without scanning the durable dead-letter set after every failure. A late
+	 * completion may count that original delivery attempt; it must still no-op if
+	 * the record was dispatched in the meantime. The bundled dispatcher never
+	 * reissues the same store call and always supplies `context`.
 	 */
 	markFailed: (
 		dispatchId: string,
 		error?: unknown,
+		context?: ExecutionContext,
 	) => Promise<DeadLetterRecord<Evt> | undefined>;
 
 	/**

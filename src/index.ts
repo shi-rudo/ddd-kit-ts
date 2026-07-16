@@ -26,10 +26,10 @@ export {
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
-	defaultDomainEventFactory,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
+	defaultDomainEventFactory,
 	type EventIdFactory,
 	type EventMetadata,
 	mergeMetadata,
@@ -44,8 +44,8 @@ export {
 	type ICommandBus,
 } from "./app/command-bus";
 export {
-	domainErrorToResult,
 	type DomainErrorClass,
+	domainErrorToResult,
 } from "./app/domain-error-result";
 // App orchestration: withCommit + Unit of Work
 export {
@@ -117,9 +117,9 @@ export {
 	type IdempotencyKeyReuseErrorOptions,
 	IdempotencyReconciliationRequiredError,
 	type IdempotencyReconciliationRequiredErrorOptions,
+	InfrastructureError,
 	InMemoryCapacityExceededError,
 	type InMemoryCapacityExceededErrorOptions,
-	InfrastructureError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	type KitErrorOptions,
@@ -200,9 +200,9 @@ export {
 	hasEntityId,
 	type Identifiable,
 	type IEntity,
-	type StateValidator,
 	removeEntityById,
 	replaceEntityById,
+	type StateValidator,
 	sameEntity,
 	updateEntityById,
 } from "./entity/entity";
@@ -247,8 +247,8 @@ export type {
 	Outbox,
 	OutboxRecord,
 	OutboxWriter,
+	PublishOptions,
 } from "./events/ports";
-
 // Projections: checkpoint port, runner, in-memory reference
 export {
 	InMemoryProjectionCheckpointStore,
@@ -270,10 +270,10 @@ export {
 } from "./projections/projection-from-handlers";
 export {
 	type ProjectionBatchResult,
+	type ProjectOptions,
 	Projector,
 	type ProjectorOptions,
 } from "./projections/projector";
-
 // Repository: ports, identity map, event store, scopes
 export type {
 	EventStore,
@@ -302,14 +302,12 @@ export type {
 	TransactionScope,
 } from "./repo/scope";
 export type { SnapshotStore } from "./repo/snapshot-store";
-
 // Specifications
 export {
 	Specification,
 	type SpecificationComposite,
 	specification,
 } from "./specification/specification";
-
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,
@@ -320,6 +318,12 @@ export {
 	deepEqualExcept,
 	deepOmit,
 } from "./utils";
+export type {
+	DeliveryFailureAssessment,
+	DeliveryFailureClassifier,
+	DeliveryFailureKind,
+} from "./utils/delivery-failure";
+export type { ExecutionContext } from "./utils/execution";
 
 // Validation
 export { voValidated } from "./validation";

@@ -92,10 +92,12 @@ for deadlines as `DeadlineProcessor`:
 ```ts
 const processor = new DeadlineProcessor({
   store: deadlines,
-  handler: async (deadline) => {
+  deliveryTimeoutMs: 10_000,
+  storageTimeoutMs: 5_000,
+  handler: async (deadline, context) => {
     // Feed it to the owner as an input; check current state first,
     // a delivered deadline is a proposal (see above).
-    await commandBus.dispatch(toTimeoutCommand(deadline));
+    await handleTimeout(deadline, context);
   },
   observers: {
     onDeliveryError: (error, deadline) =>
@@ -110,6 +112,37 @@ const stop = new AbortController();
 void processor.run(stop.signal);
 // on shutdown: stop.abort();
 ```
+
+Every handler receives an `ExecutionContext`. Its signal combines worker shutdown
+with the per-delivery bound; `deadlineAt` is the matching absolute Unix epoch
+millisecond. The default `deliveryTimeoutMs` is 30 seconds. The processor can
+stop waiting at that boundary, but it cannot terminate an arbitrary promise.
+Pass `context.signal` all the way to the I/O client—for example,
+`fetch(url, { signal: context.signal })`. If the client does not accept an
+`AbortSignal`, configure its native timeout from the remaining budget:
+`Math.max(0, context.deadlineAt - Date.now())`. A handler that does neither is
+not production-safe: abandoned I/O can continue as zombie work and overlap the
+retry. A timeout is transient by default: it backs off and leaves the deadline
+pending without consuming its poison ceiling.
+Worker shutdown is different: it aborts a never-settling handler, leaves the
+deadline pending, and does not consume the poison-message ceiling.
+
+`classifyFailure` uses the same policy as the outbox dispatcher. Return
+`"transient"`, `"permanent"`, or `"unknown"`; permanent and unknown failures
+consume attempts. Without a custom classifier, native `TimeoutError` and a
+`retryable: true` marker anywhere in the cause chain are transient,
+`retryable: false` is permanent, and unmapped errors are unknown. A broken
+classifier cannot break the worker: the original handler error is preserved,
+the assessment falls back to unknown, and `onDeliveryError` receives the
+classifier failure in its optional third argument.
+
+The default `storageTimeoutMs` is also 30 seconds. `due`, `markDelivered`, and
+`markFailed` receive an `ExecutionContext`; adapters must honor its signal or a
+native deadline. A timeout only bounds the processor's wait, so the outcome of
+a store write is unknown. `markDelivered` must remain idempotent when a late
+completion arrives. A late `markFailed` may count its original handler attempt;
+it must no-op if the incarnation was delivered or replaced in the meantime.
+The processor never resubmits the same timed-out store call.
 
 For cron triggers and serverless runtimes, call `processor.drainOnce()` per
 tick instead of the long-running `run`; overlapping ticks are safe, a tick

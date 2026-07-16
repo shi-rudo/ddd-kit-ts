@@ -1,9 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../aggregate/aggregate";
-import {
-	AggregateRoot,
-	type IAggregateRoot,
-} from "../aggregate/aggregate-root";
+import { AggregateRoot } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
@@ -427,6 +424,48 @@ describe("UnitOfWork", () => {
 			expect(reported).toHaveLength(1);
 			expect(reported[0]?.error).toBe(persistError);
 			expect(reported[0]?.aggregate).toBe(agg);
+		});
+
+		it("forwards the post-commit timeout and execution context", async () => {
+			vi.useFakeTimers();
+			const agg = createMockAggregate("o-1");
+			const reported: unknown[] = [];
+			let signal: AbortSignal | undefined;
+			let observerStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				observerStarted = resolve;
+			});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				postCommitTimeoutMs: 5,
+				onPersisted: (_aggregate, _version, context) => {
+					signal = context.signal;
+					observerStarted();
+					return new Promise<void>(() => {});
+				},
+				onPersistError: (error) => reported.push(error),
+				repositories: {
+					orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) =>
+						new FakeOrderRepository(tx, session),
+				},
+			});
+
+			const execution = uow.run(async ({ repositories }) => {
+				await repositories.orders.save(agg);
+				return "committed";
+			});
+
+			try {
+				await started;
+				await vi.advanceTimersByTimeAsync(5);
+				await expect(execution).resolves.toBe("committed");
+				expect(signal?.aborted).toBe(true);
+				expect(reported).toHaveLength(1);
+				expect((reported[0] as Error).name).toBe("TimeoutError");
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("saving the same instance twice harvests its events once and markPersists once", async () => {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { createDomainEvent, type DomainEvent } from "../aggregate/aggregate";
+import type { ExecutionContext } from "../utils/execution";
 import { EventBusImpl } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
@@ -36,11 +37,8 @@ describe("EventBusImpl", () => {
 
 		it("should return unsubscribe function", () => {
 			const bus = new EventBusImpl<OrderEvent>();
-			let called = false;
 
-			const unsubscribe = bus.subscribe("OrderCreated", async () => {
-				called = true;
-			});
+			const unsubscribe = bus.subscribe("OrderCreated", async () => {});
 
 			expect(typeof unsubscribe).toBe("function");
 		});
@@ -84,6 +82,72 @@ describe("EventBusImpl", () => {
 
 			expect(called).toBe(true);
 			expect(receivedOrderId).toBe("order-123");
+		});
+
+		it("times out a never-settling handler and aborts its execution context", async () => {
+			vi.useFakeTimers();
+			const bus = new EventBusImpl<OrderEvent>();
+			let context: ExecutionContext | undefined;
+			let handlerStarted!: () => void;
+			const started = new Promise<void>((resolve) => {
+				handlerStarted = resolve;
+			});
+			bus.subscribe("OrderCreated", async (_event, received) => {
+				context = received;
+				handlerStarted();
+				await new Promise<void>(() => {});
+			});
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "order-123",
+			}) as OrderCreated;
+			const execution = bus.publish([event], { timeoutMs: 5 }).then(
+				() => "resolved" as const,
+				(error: unknown) => error,
+			);
+
+			try {
+				await started;
+				await vi.advanceTimersByTimeAsync(5);
+				await expect(execution).resolves.toMatchObject({
+					name: "TimeoutError",
+				});
+				expect(context?.signal.aborted).toBe(true);
+				expect(context?.deadlineAt).toBeTypeOf("number");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("propagates owner cancellation to a never-settling handler", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let context: ExecutionContext | undefined;
+			bus.subscribe("OrderCreated", async (_event, received) => {
+				context = received;
+				await new Promise<void>(() => {});
+			});
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "order-123",
+			}) as OrderCreated;
+			const stop = new AbortController();
+			const execution = bus.publish([event], {
+				signal: stop.signal,
+				timeoutMs: 1_000,
+			});
+			await expect.poll(() => context).toBeDefined();
+			const reason = new Error("request cancelled");
+
+			stop.abort(reason);
+
+			await expect(execution).rejects.toBe(reason);
+			expect(context?.signal.reason).toBe(reason);
+		});
+
+		it("rejects an invalid publication timeout", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			await expect(bus.publish([], { timeoutMs: Number.NaN })).rejects.toThrow(
+				/timeoutMs/,
+			);
 		});
 
 		it("should call all handlers for an event type", async () => {
