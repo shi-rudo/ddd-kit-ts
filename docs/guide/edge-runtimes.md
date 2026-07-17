@@ -120,26 +120,136 @@ bindings from `env`, build the bus from `env` inside `fetch` or inside a small
 factory. Do not register a module-scope handler that closes over a non-existent
 `env`.
 
-```ts
-import { CommandBus, type Command } from "@shirudo/ddd-kit";
-import { err, ok } from "@shirudo/result";
+The request body is still untrusted on the edge. `request.json()` reads the
+whole body and returns a value TypeScript cannot validate. The example below
+authenticates first, reads at most 64 KiB from the stream, parses into `unknown`,
+allow-lists the two body fields, and only then constructs branded ids. The
+authenticated actor comes from the verified principal, not from the JSON body.
+Your authentication and schema libraries may differ; the order of the boundary
+steps should not.
 
-type ConfirmOrder = Command & {
-  type: "ConfirmOrder";
-  orderId: string;
+The `requestedBy` value below records who initiated the command. It does not
+authorize the operation by itself. The use case behind the Durable Object must
+still decide whether that actor may confirm this particular order.
+
+The client also creates one high-entropy `Idempotency-Key`, such as a UUID, for
+the logical command and reuses that key only when retrying the same intention.
+The edge validates it separately from the body, scopes it to this consumer and
+authenticated actor, and fingerprints the complete business intention. This is
+application coordination metadata; it never becomes state on the `Order`
+aggregate.
+
+```ts
+import {
+  CommandBus,
+  type Command,
+  type Id,
+  type IdempotentCommitRequest,
+  withIdempotentCommit,
+} from "@shirudo/ddd-kit";
+import { err, ok, type Result } from "@shirudo/result";
+
+const MAX_COMMAND_BYTES = 64 * 1024;
+const CONFIRM_ORDER_CONSUMER = "edge.confirm-order.v1";
+
+type OrderId = Id<"OrderId">;
+type ActorId = Id<"ActorId">;
+type IdempotencyKey = Id<"IdempotencyKey">;
+
+type ConfirmOrderIntention = Command & {
+  readonly type: "ConfirmOrder";
+  readonly orderId: OrderId;
+  readonly requestedBy: ActorId;
 };
+
+type ConfirmOrder = ConfirmOrderIntention & {
+  readonly idempotency: IdempotentCommitRequest;
+};
+
+type ConfirmOrderOutcome =
+  | { readonly status: "confirmed"; readonly orderId: OrderId }
+  | { readonly status: "forbidden"; readonly orderId: OrderId };
 
 type AppCommand = ConfirmOrder;
 type CommandResults = {
-  ConfirmOrder: string;
+  ConfirmOrder: OrderId;
 };
 
 interface Env {
   ORDERS: DurableObjectNamespace;
 }
 
-function createCommandBus(env: Env): CommandBus<CommandResults> {
-  const bus = new CommandBus<CommandResults>();
+interface AuthenticatedPrincipal {
+  readonly actorId: ActorId;
+}
+
+type AuthenticationFailure = {
+  readonly code: "UNAUTHORIZED";
+  readonly category: "UNAUTHORIZED";
+  readonly retryable: false;
+  readonly details: Record<string, never>;
+};
+
+type RequestFailure = {
+  readonly code:
+    | "PAYLOAD_TOO_LARGE"
+    | "INVALID_JSON"
+    | "INVALID_COMMAND"
+    | "INVALID_IDEMPOTENCY_KEY";
+  readonly category: "VALIDATION";
+  readonly retryable: false;
+  readonly status: 400 | 413;
+  readonly details: { readonly path: string };
+};
+
+type ConfirmOrderFailure =
+  | {
+      readonly code: "FORBIDDEN";
+      readonly category: "FORBIDDEN";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
+      readonly code: "ORDER_NOT_FOUND";
+      readonly category: "NOT_FOUND";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
+      readonly code: "ORDER_STATE_CONFLICT";
+      readonly category: "CONFLICT";
+      readonly retryable: false;
+      readonly details: { readonly orderId: OrderId };
+    }
+  | {
+      readonly code: "ORDER_COMMAND_UNAVAILABLE";
+      readonly category: "INFRASTRUCTURE";
+      readonly retryable: true;
+      readonly details: Record<string, never>;
+    };
+
+declare function authenticateRequest(
+  request: Request,
+  env: Env,
+): Promise<Result<AuthenticatedPrincipal, AuthenticationFailure>>;
+declare function stableHash(intention: ConfirmOrderIntention): string;
+
+function scopedCommandKey(
+  scope: string,
+  actorId: ActorId,
+  key: IdempotencyKey,
+): string {
+  return JSON.stringify([scope, actorId, key]);
+}
+
+function isTransientOrderCommandStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+function createCommandBus(
+  env: Env,
+): CommandBus<CommandResults, ConfirmOrderFailure> {
+  const bus = new CommandBus<CommandResults, ConfirmOrderFailure>();
 
   bus.register("ConfirmOrder", async (command: ConfirmOrder) => {
     const id = env.ORDERS.idFromName(command.orderId);
@@ -150,8 +260,40 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
       body: JSON.stringify(command),
     });
 
+    if (response.status === 403) {
+      return err({
+        code: "FORBIDDEN",
+        category: "FORBIDDEN",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
+    if (response.status === 404) {
+      return err({
+        code: "ORDER_NOT_FOUND",
+        category: "NOT_FOUND",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
+    if (response.status === 409) {
+      return err({
+        code: "ORDER_STATE_CONFLICT",
+        category: "CONFLICT",
+        retryable: false,
+        details: { orderId: command.orderId },
+      });
+    }
+    if (isTransientOrderCommandStatus(response.status)) {
+      return err({
+        code: "ORDER_COMMAND_UNAVAILABLE",
+        category: "INFRASTRUCTURE",
+        retryable: true,
+        details: {},
+      });
+    }
     if (!response.ok) {
-      return err(`Order command failed with ${response.status}`);
+      throw new Error(`Unexpected order command response: ${response.status}`);
     }
 
     return ok(command.orderId);
@@ -162,21 +304,299 @@ function createCommandBus(env: Env): CommandBus<CommandResults> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const command = (await request.json()) as AppCommand;
-    const result = await createCommandBus(env).execute(command);
+    const authentication = await authenticateRequest(request, env);
+    if (authentication.isErr()) {
+      return authenticationFailureResponse(authentication.error);
+    }
+
+    const idempotencyKey = idempotencyKeyFromHeader(
+      request.headers.get("Idempotency-Key"),
+    );
+    if (idempotencyKey.isErr()) return failureResponse(idempotencyKey.error);
+
+    const input = await readBoundedJson(request, MAX_COMMAND_BYTES);
+    if (input.isErr()) return failureResponse(input.error);
+
+    const command = decodeConfirmOrder(
+      input.value,
+      authentication.value,
+      idempotencyKey.value,
+    );
+    if (command.isErr()) return failureResponse(command.error);
+
+    const result = await createCommandBus(env).execute(command.value);
 
     if (result.isErr()) {
-      return new Response(result.error, { status: 400 });
+      return commandFailureResponse(result.error);
     }
 
     return Response.json({ id: result.value });
   },
 };
+
+async function readBoundedJson(
+  request: Request,
+  maxBytes: number,
+): Promise<Result<unknown, RequestFailure>> {
+  const declaredLength = request.headers.get("content-length");
+  if (
+    declaredLength !== null &&
+    /^\d+$/.test(declaredLength) &&
+    Number(declaredLength) > maxBytes
+  ) {
+    return err(requestFailure("PAYLOAD_TOO_LARGE", 413, "$body"));
+  }
+  if (request.body === null) {
+    return err(requestFailure("INVALID_JSON", 400, "$body"));
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel("payload too large").catch(() => undefined);
+        return err(requestFailure("PAYLOAD_TOO_LARGE", 413, "$body"));
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const parsed: unknown = JSON.parse(text);
+    return ok(parsed);
+  } catch {
+    return err(requestFailure("INVALID_JSON", 400, "$body"));
+  }
+}
+
+function decodeConfirmOrder(
+  input: unknown,
+  principal: AuthenticatedPrincipal,
+  idempotencyKey: IdempotencyKey,
+): Result<AppCommand, RequestFailure> {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    Array.isArray(input) ||
+    Object.getPrototypeOf(input) !== Object.prototype
+  ) {
+    return err(requestFailure("INVALID_COMMAND", 400, "$body"));
+  }
+
+  const body = input as Record<string, unknown>;
+  const allowed = new Set(["type", "orderId"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    return err(requestFailure("INVALID_COMMAND", 400, "$body"));
+  }
+  if (body.type !== "ConfirmOrder") {
+    return err(requestFailure("INVALID_COMMAND", 400, "$body.type"));
+  }
+
+  const orderId = orderIdFromWire(body.orderId);
+  if (orderId.isErr()) return err(orderId.error);
+
+  const intention: ConfirmOrderIntention = {
+    type: "ConfirmOrder",
+    orderId: orderId.value,
+    requestedBy: principal.actorId,
+  };
+
+  return ok({
+    ...intention,
+    idempotency: {
+      key: scopedCommandKey(CONFIRM_ORDER_CONSUMER, principal.actorId, idempotencyKey),
+      fingerprint: stableHash(intention),
+    },
+  });
+}
+
+function boundedId(
+  value: unknown,
+  code: "INVALID_COMMAND" | "INVALID_IDEMPOTENCY_KEY",
+  path: string,
+): Result<string, RequestFailure> {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 80 ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    return err(requestFailure(code, 400, path));
+  }
+  return ok(value);
+}
+
+function idempotencyKeyFromHeader(
+  value: string | null,
+): Result<IdempotencyKey, RequestFailure> {
+  const id = boundedId(
+    value,
+    "INVALID_IDEMPOTENCY_KEY",
+    "$header.Idempotency-Key",
+  );
+  return id.isErr() ? err(id.error) : ok(id.value as IdempotencyKey);
+}
+
+function orderIdFromWire(
+  value: unknown,
+): Result<OrderId, RequestFailure> {
+  const id = boundedId(value, "INVALID_COMMAND", "$body.orderId");
+  return id.isErr() ? err(id.error) : ok(id.value as OrderId);
+}
+
+function failureResponse(failure: RequestFailure): Response {
+  return Response.json(
+    {
+      code: failure.code,
+      category: failure.category,
+      retryable: failure.retryable,
+      details: failure.details,
+    },
+    { status: failure.status },
+  );
+}
+
+function authenticationFailureResponse(
+  failure: AuthenticationFailure,
+): Response {
+  return Response.json(failure, { status: 401 });
+}
+
+function commandFailureResponse(failure: ConfirmOrderFailure): Response {
+  switch (failure.category) {
+    case "FORBIDDEN":
+      return Response.json(failure, { status: 403 });
+    case "NOT_FOUND":
+      return Response.json(failure, { status: 404 });
+    case "CONFLICT":
+      return Response.json(failure, { status: 409 });
+    case "INFRASTRUCTURE":
+      return Response.json(failure, { status: 503 });
+  }
+}
+
+function requestFailure(
+  code: RequestFailure["code"],
+  status: RequestFailure["status"],
+  path: string,
+): RequestFailure {
+  return {
+    code,
+    category: "VALIDATION",
+    retryable: false,
+    status,
+    details: { path },
+  };
+}
 ```
+
+The authentication adapter maps the provider's external subject and claims to
+the local `ActorId`. If that mapping fails, it returns the authentication result
+above; the failure is not reported as malformed command JSON.
+
+The `Idempotency-Key` is another independent boundary value. A missing,
+malformed, or oversized key produces `INVALID_IDEMPOTENCY_KEY`; it is not
+reported as bad JSON. `stableHash` stands for a deterministic canonical hash,
+not a plain `JSON.stringify` whose result could depend on property insertion
+order. Its input contains the command type, order id, and authenticated actor,
+so the same scoped key cannot silently replay a different intention.
+
+The Durable Object contract distinguishes expected outcomes from availability.
+`403`, `404`, and `409` are permanent application results that the caller can
+handle without retrying. This port treats `502`, `503`, and `504` as temporary
+availability failures because an unchanged request may succeed once the
+downstream service recovers. It does not infer retryability from the HTTP status
+family: `500`, `501`, and `505` remain contract drift in this example unless the
+Durable Object deliberately adds them as explicit outcomes. Any other
+non-success status also throws as a defect.
+
+Retryability is a property of the failure, not permission to retry blindly. A
+`502` or `504` can arrive after the Durable Object committed but before its
+response reached the caller. Repeating the command is therefore safe only
+because the use case below records and replays the logical command's outcome.
+
+Authentication still is not authorization. The application use case loads the
+order and evaluates any application policy and state-dependent domain
+permission before changing it:
+
+```ts
+const confirmOrder = async (command: ConfirmOrder) => {
+  const outcome = await withIdempotentCommit(
+    { scope, outbox, idempotency, bus: eventBus },
+    command.idempotency,
+    async (tx, enrollment) => {
+      const orders = makeOrderRepository(tx);
+      const order = await orders.getById(command.orderId);
+      if (!order.canBeConfirmedBy(command.requestedBy)) {
+        return {
+          result: {
+            status: "forbidden",
+            orderId: command.orderId,
+          } satisfies ConfirmOrderOutcome,
+          commits: [],
+        };
+      }
+
+      order.confirm();
+      await orders.save(order);
+      return {
+        result: {
+          status: "confirmed",
+          orderId: order.id,
+        } satisfies ConfirmOrderOutcome,
+        commits: [enrollment.enrollSaved(order)],
+      };
+    },
+  );
+
+  if (outcome.result.status === "confirmed") {
+    return ok(outcome.result.orderId);
+  }
+  return err({
+    code: "FORBIDDEN",
+    category: "FORBIDDEN",
+    retryable: false,
+    details: { orderId: outcome.result.orderId },
+  });
+};
+```
+
+This guarantee requires a transactional idempotency store in the same commit
+boundary as the order repository and outbox. `withIdempotentCommit` claims the
+scoped key before touching the domain and stores the key, fingerprint,
+serializable outcome, aggregate write, and outbox record atomically. A retry
+with the same key and fingerprint receives the same stored outcome without
+running `order.confirm()` again—even if the first response was lost. Reusing the
+key for a different fingerprint is rejected rather than replayed. A separate
+idempotency store cannot prove this atomic boundary without the reconciliation
+protocol described in [Idempotent Commands](./idempotency.md).
+
+`ConfirmOrderOutcome` is deliberately plain data. The application maps that
+stored receipt back to `Result` only after `withIdempotentCommit` returns, so a
+storage adapter never has to preserve a class prototype across serialization.
 
 This example keeps the bus as invocation wiring. The durable state still lives
 behind the Durable Object, D1, KV, R2, or whatever persistence adapter your
-application owns.
+application owns. A body that exceeds the ceiling receives `413`; malformed
+JSON or a schema mismatch receives `400`; neither reaches the command bus.
+Those expected boundary failures are `Result` values. An unexpected stream or
+runtime failure still throws and reaches the deployable's outer error handler.
 
 For domain events, the same rule applies:
 
@@ -278,6 +698,8 @@ deterministic time.
 - Use per-event options for one exceptional id or timestamp.
 - Build edge handlers from invocation dependencies such as `env`.
 - Keep aggregates and unit-of-work state inside the operation.
+- Give retryable write commands a scoped idempotency key and fingerprint, and
+  commit their serializable outcome atomically with state and outbox changes.
 - Use in-process buses only inside one invocation.
 - Use an outbox plus durable transport for cross-invocation event delivery.
 - Treat in-memory stores as tests, demos, or single-process references.
