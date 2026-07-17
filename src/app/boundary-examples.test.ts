@@ -143,6 +143,11 @@ describe("untrusted-boundary examples", () => {
 
 	it("keeps permanent downstream outcomes out of the retryable failure", () => {
 		const edgeGuide = sourceOf("edgeGuide");
+		const classifier = sectionBetween(
+			edgeGuide,
+			"function isTransientOrderCommandStatus",
+			"function createCommandBus",
+		);
 		const adapter = sectionBetween(
 			edgeGuide,
 			'bus.register("ConfirmOrder"',
@@ -158,6 +163,10 @@ describe("untrusted-boundary examples", () => {
 		expect(edgeGuide).toContain(
 			"function isTransientOrderCommandStatus(status: number): boolean",
 		);
+		expect(classifier).toContain(
+			"return status === 502 || status === 503 || status === 504;",
+		);
+		expect(classifier).not.toContain(">=");
 		expect(adapter).toContain("isTransientOrderCommandStatus(response.status)");
 		expect(adapter).not.toContain("response.status >= 500");
 		expectBefore(
@@ -168,6 +177,65 @@ describe("untrusted-boundary examples", () => {
 		expect(adapter).toContain("Unexpected order command response");
 		expect(edgeGuide).toContain("`502`, `503`, and `504`");
 		expect(edgeGuide).toContain("`500`, `501`, and `505`");
+	});
+
+	it("makes an ambiguous downstream command retry idempotent", () => {
+		const edgeGuide = sourceOf("edgeGuide");
+		const requestHandler = sectionBetween(
+			edgeGuide,
+			"async fetch(request: Request",
+			"async function readBoundedJson",
+		);
+		const decoder = sectionBetween(
+			edgeGuide,
+			"function decodeConfirmOrder",
+			"function boundedId",
+		);
+		const useCase = sectionBetween(
+			edgeGuide,
+			"const confirmOrder = async",
+			"This example keeps the bus",
+		);
+
+		expect(edgeGuide).toContain('type IdempotencyKey = Id<"IdempotencyKey">;');
+		expect(edgeGuide).toContain(
+			"readonly idempotency: IdempotentCommitRequest;",
+		);
+		expect(edgeGuide).toContain('request.headers.get("Idempotency-Key")');
+		expect(requestHandler).toContain("idempotencyKeyFromHeader(");
+		expectBefore(
+			requestHandler,
+			"idempotencyKeyFromHeader(",
+			"decodeConfirmOrder(",
+		);
+		expect(decoder).toContain("const intention: ConfirmOrderIntention = {");
+		expect(decoder).toContain(
+			"scopedCommandKey(CONFIRM_ORDER_CONSUMER, principal.actorId, idempotencyKey)",
+		);
+		expect(decoder).toContain("fingerprint: stableHash(intention)");
+		expect(edgeGuide).toContain("body: JSON.stringify(command)");
+		expect(edgeGuide).toContain('"INVALID_IDEMPOTENCY_KEY"');
+		expect(edgeGuide).toContain('"$header.Idempotency-Key"');
+		expect(useCase).toContain("withIdempotentCommit(");
+		expect(useCase).toContain("command.idempotency");
+		expectBefore(useCase, "withIdempotentCommit(", "order.confirm();");
+		expect(edgeGuide).toContain("type ConfirmOrderOutcome =");
+		expect(useCase).toContain('status: "forbidden"');
+		expect(useCase).toContain('status: "confirmed"');
+		expect(useCase).not.toContain("result: err(");
+		expect(useCase).not.toContain("result: ok(");
+		expectBefore(
+			useCase,
+			"order.confirm();",
+			"commits: [enrollment.enrollSaved(order)]",
+		);
+		expect(useCase).toContain('outcome.result.status === "confirmed"');
+		expect(useCase).toContain("return ok(outcome.result.orderId)");
+		expect(edgeGuide).toContain("same stored outcome");
+		expect(edgeGuide).toContain("atomically");
+		expect(edgeGuide).toContain(
+			"Retryability is a property of the failure, not permission to retry blindly",
+		);
 	});
 
 	it("maps application failure categories to distinct HTTP statuses", () => {
