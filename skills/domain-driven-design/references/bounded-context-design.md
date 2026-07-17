@@ -159,6 +159,11 @@ by technology, table, or convenience, and it should align with a single team.
   reverse.
 - A modulith with clean context boundaries has the same strategic design as
   microservices, minus the network.
+- Hosting a context inside another deployable, for example as a module of the
+  web application, is a legitimate topology choice. Dissolving the module into
+  the deployable's delivery code is not: the boundary disappears with the
+  module, and with it the language, the ownership, and the seam a later
+  extraction would need.
 
 ### Autonomy
 
@@ -251,7 +256,12 @@ domain. Criticality is not differentiation: "we cannot operate without it"
 marks a mission-critical supporting subdomain, not a core one; necessity is an
 operational property. When more than one subdomain is claimed core, or the
 claim rests on criticality, run the distillation gate
-(`core-domain-distillation.md`, *Qualification*).
+(`core-domain-distillation.md`, *Qualification*). Classification decides
+investment only, never existence: a supporting or generic verdict routes to a
+cheaper pattern in `business-logic-pattern-selection.md`, not to removing the
+boundary. The subdomain still lives in a bounded context, its own or a
+declared host (*Context-Subdomain Alignment*), and its logic never moves into
+a delivery mechanism.
 
 ### Context-Subdomain Alignment - fork
 
@@ -394,6 +404,9 @@ Context table:
 - A single invariant or transaction spans two contexts.
 - Core-level modeling is spent on a generic subdomain, or a generic solution is
   bought for the core.
+- A supporting or generic verdict is read as "no bounded context needed" and
+  the subdomain's logic is inlined into a delivery mechanism such as the web
+  application, instead of a cheaper pattern inside a kept boundary.
 - High complexity is mistaken for importance: a low-differentiation subdomain is
   treated as core because it is hard.
 - Subdomain classification is treated as a fixed label instead of a snapshot with

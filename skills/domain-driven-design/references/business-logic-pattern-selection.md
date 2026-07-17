@@ -46,6 +46,7 @@ heuristic.
   - Data complexity vs logic complexity
   - Architecture and testing follow the pattern
   - The mapping is a default, not a prohibition
+  - Downgrade the pattern, not the boundary
   - The choice can evolve
 - Part 2 - Decision procedures
   - Selection
@@ -162,6 +163,22 @@ script.
   override is cheap; for an active record it is expensive because you fight the
   pattern, or abandon it for a data mapper and a domain model.
 
+### Downgrade the Pattern, Not the Boundary
+
+- A supporting or generic verdict selects a cheaper pattern; it never
+  dissolves the subdomain's boundary or its layering. Whether that boundary
+  lives as its own deployable or as a module inside a host is a topology
+  correlate, decided in `bounded-context-design.md` (*Topology Is a
+  Correlate, Not the Boundary*).
+- Every terminal in the tree keeps a presentation layer on top: transaction
+  scripts and services live in the business-logic layer, called by
+  controllers and handlers, never written into them. The driving-adapter
+  contract in `use-case-design.md` applies to the cheap patterns too.
+- The kept module is what makes evolution affordable (see *The Choice Can
+  Evolve*): a script inside a named module upgrades to a domain model in
+  place; logic dissolved into a delivery mechanism must first be recovered
+  from it.
+
 ### The Choice Can Evolve
 
 - A subdomain's pattern can change as the subdomain evolves (see *Subdomains
@@ -246,7 +263,9 @@ simple logic. Architecture: layered, 3 layers (or CQRS if multiple persistent
 models). Testing: reversed pyramid - the logic is thin and spread across
 procedures and I/O, so integration and end-to-end tests carry the weight. Hard
 limit: do not carry a core subdomain's complex rules in scripts; the logic
-sprawls and rots.
+sprawls and rots. The three layers are real: scripts are called by the
+presentation layer, never written into it (*Downgrade the Pattern, Not the
+Boundary*).
 
 **Active Record.** Objects mirror database rows; logic is thin CRUD over complex
 data. Fit: supporting or generic subdomain, complex data structures, simple
@@ -304,6 +323,9 @@ Selection table:
   invariant, producing domain-model form without substance.
 - A transaction script carries a core subdomain's complex rules
   (under-engineering; the logic sprawls and rots).
+- A supporting or generic verdict is used to dissolve structure: use cases or
+  scripts are inlined into the presentation layer or the delivery deployable,
+  leaving nothing to upgrade when the subdomain drifts toward core.
 - "Anemic" is flagged as a smell in a transaction-script or active-record
   subdomain, where it is correct.
 - Rich aggregates are anemic in a subdomain that chose the domain-model path.

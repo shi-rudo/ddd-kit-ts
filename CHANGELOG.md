@@ -183,6 +183,18 @@ adapters should adopt it to avoid work continuing after the shell has timed out.
   separately triaged toolchain concern documented in
   `docs/development/dependency-audits.md`.
 
+### Changed: DDD skill downgrades the pattern, never the boundary
+
+- The domain-driven-design skill (1.10.0) closes a misreading where a
+  supporting or generic subdomain verdict was taken as permission to dissolve
+  the boundary and inline application logic into the delivery mechanism.
+  Subdomain classification decides modeling investment only: the pattern
+  selection reference gains a "Downgrade the Pattern, Not the Boundary"
+  principle with a matching smell and transaction-script hard limit, the
+  bounded-context reference states that hosting a context inside a deployable
+  never dissolves its module and flags the inlining smell, and the skill
+  workflow names the rule at the pattern-selection step.
+
 ### Added: automated edge-runtime compatibility smokes
 
 - Bundle the built package and execute its main and `money` entry points in

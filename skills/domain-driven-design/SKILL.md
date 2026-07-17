@@ -1,6 +1,6 @@
 ---
 name: domain-driven-design
-version: 1.9.0
+version: 1.10.0
 description: Apply Domain-Driven Design to understand and model a business domain. Use when discovering subdomains, designing bounded contexts, distilling the core domain, selecting business-logic implementation patterns, deciding whether a domain model is warranted, defining ubiquitous language, identifying aggregates and invariants, designing use cases and application services, designing domain services, designing repositories, unit of work, transaction managers, designing read models and CQRS read sides, designing error contracts and error management, designing domain events, choosing tactical DDD patterns, mapping context relationships, choosing cross-context coordination patterns, designing sagas or process managers, or reviewing whether a model expresses the domain clearly.
 ---
 
@@ -50,6 +50,10 @@ when the user wants TypeScript code with `@shirudo/ddd-kit`.
 - Start from business capabilities and language, not database tables,
   controllers, or package names.
 - Treat bounded contexts as language and model boundaries, not just folders.
+- Subdomain classification decides modeling investment, never whether a
+  boundary exists. A supporting or generic verdict selects a cheaper
+  business-logic pattern inside a kept boundary; it never inlines the
+  subdomain's logic into a delivery mechanism.
 - Design aggregates around invariants that must be transactionally protected.
 - Keep one transaction scoped to one aggregate unless the domain proves
   otherwise.
@@ -74,6 +78,8 @@ when the user wants TypeScript code with `@shirudo/ddd-kit`.
 4. Select the business-logic implementation pattern before detailed tactical
    modeling. An audit or history requirement alone never selects event
    sourcing; that gate demands full business history as the source of truth.
+   A supporting or generic verdict downgrades the pattern, never the
+   boundary: the subdomain keeps its module and its layering.
 5. Describe the context map and integration relationships; if an interaction
    spans contexts at runtime, choose the coordination pattern separately.
 6. Identify aggregates by asking which invariants need transactional
