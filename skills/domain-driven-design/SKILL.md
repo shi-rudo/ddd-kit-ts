@@ -1,6 +1,6 @@
 ---
 name: domain-driven-design
-version: 1.9.0
+version: 1.11.0
 description: Apply Domain-Driven Design to understand and model a business domain. Use when discovering subdomains, designing bounded contexts, distilling the core domain, selecting business-logic implementation patterns, deciding whether a domain model is warranted, defining ubiquitous language, identifying aggregates and invariants, designing use cases and application services, designing domain services, designing repositories, unit of work, transaction managers, designing read models and CQRS read sides, designing error contracts and error management, designing domain events, choosing tactical DDD patterns, mapping context relationships, choosing cross-context coordination patterns, designing sagas or process managers, or reviewing whether a model expresses the domain clearly.
 ---
 
@@ -113,6 +113,65 @@ and versioning live in `domain-event-design.md`; read-model mechanics live in
 `read-model-design.md`; failure contracts live in
 `error-management-design.md`. Neighboring documents should point to the owner,
 not restate the decision.
+
+## Review Orchestration
+
+This section applies to reviews and audits only. The *Workflow* above is a
+dependent sequence — each step feeds the next — and is not parallelized. A
+review is the opposite shape: independent concern checks applied to a finished
+surface, which fans out cleanly.
+
+Independence is the point. A concern judged in isolation is not anchored by
+another concern's verdict, and agreement across concerns on the same element is
+a signal to raise severity. `references/review-checklist.md` already partitions
+the work into concern sections, each owned by a reference document and carrying
+its own findings format — those sections are the review's units of work.
+
+**Mode.** Fan out when a subagent mechanism is available and the reviewed
+surface is more than a small model; otherwise review sequentially in one context
+(the default). Both paths read the same reference documents and produce the same
+severity-ordered findings — fan-out changes who reads which document, not what is
+judged.
+
+**Phase 0 — Scope and gate.** Establish the reviewed surface (model, proposal,
+or code), then resolve the Pattern Fit gate first
+(`business-logic-pattern-selection.md`): does the subdomain warrant a domain
+model at all? Its verdict decides which concerns are live — the aggregate,
+tactical-pattern, and domain-event sections apply only on the domain-model path.
+Triage the remaining conditional sections as the checklist instructs: read
+models, sagas, and the sections after *Layering and Boundaries* are reviewed only
+when the design uses that path. The result is the list of active concerns to fan
+out.
+
+**Phase 1 — Concern fan-out.** Run one finder per active concern. Each finder
+reads its owner reference document and the reviewed surface, applies that
+section's checks, and returns findings in the checklist's findings format
+(severity, evidence, why it matters for the domain model, suggested correction).
+Every finder:
+
+- names the **discriminating premise** behind each finding (per Operating
+  Principles) — a verdict without its premise cannot be verified or overturned;
+- reports every finding it can evidence, without pre-filtering on confidence —
+  synthesis dedups and Phase 3 tests premises;
+- stays in its concern — it does not soften a verdict because another concern
+  might disagree, and does not restate a decision another section owns.
+
+**Phase 2 — Synthesis (needs every finder).** Dedup findings that name the same
+element and mechanism, keeping the one with the most concrete evidence. Where
+several concerns fault the same element, raise its severity — cross-concern
+agreement rarely leaves a finding minor. Fold in the Pattern Fit verdict: when
+the subdomain does not warrant a domain model, demote or drop domain-model-path
+findings (anemic model, aggregate shape) the pattern makes moot. Then produce the
+review result per *Output Shape*: findings ordered by severity, open questions, a
+short summary.
+
+**Phase 3 — Premise verification (optional; recommended when the review gates a
+decision).** For each high-severity finding, test its discriminating premise
+against the surface and any recorded decisions: the finding stands only while the
+premise holds. If elicitation or a recorded decision overturns the premise,
+re-run that concern's check and re-verdict — state which premise fell instead of
+defending the original finding. This is the premise-bound principle applied as a
+verification pass.
 
 ## Output Shape
 
