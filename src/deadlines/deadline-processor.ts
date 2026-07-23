@@ -41,7 +41,7 @@ export interface DeadlineProcessorObservers<TPayload> {
 		deadline: DueDeadline<TPayload>,
 		assessment?: DeliveryFailureAssessment,
 	) => void;
-	/** Reading the due page failed. */
+	/** Reading the poll clock or due page failed. */
 	readonly onPollError: (error: unknown) => void;
 	/** A deadline crossed the store's dead-letter threshold. */
 	readonly onDeadLetter: (deadline: DeadLetterDeadline<TPayload>) => void;
@@ -121,9 +121,10 @@ export interface DeadlineProcessorOptions<TPayload> {
 	random?: () => number;
 
 	/**
-	 * The clock the poll passes to {@link DeadlineStore.due}. Default
-	 * `() => new Date()`. Injectable so tests fire deadlines without
-	 * waiting; a throwing clock degrades to the system time.
+	 * The clock the poll passes to {@link DeadlineStore.due}. Omit it to use
+	 * `() => new Date()`. An injected clock that throws or returns an invalid
+	 * `Date` fails the cycle before the store is read, reports through
+	 * `onPollError`, and participates in the normal failure backoff.
 	 */
 	clock?: () => Date;
 }
@@ -139,8 +140,8 @@ export interface DeadlineProcessorOptions<TPayload> {
  * What it shares with the dispatcher is the loop hardening, which is
  * exactly the part hand-rolled loops get wrong:
  *
- * - **Never rejects.** Poll errors, handler throws, ack failures, and
- *   observer bugs are absorbed and reported; `run(signal)` resolves on
+ * - **Never rejects.** Clock and poll errors, handler throws, ack failures,
+ *   and observer bugs are absorbed and reported; `run(signal)` resolves on
  *   abort and never becomes an unhandled rejection.
  * - **Backs off under failure.** A cycle containing any failure grows
  *   the jittered exponential backoff toward `maxDelayMs` (one step per
@@ -326,17 +327,14 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 	}
 
 	/**
-	 * The injected clock, neutralized like every user callback: a
-	 * throwing clock, and equally an Invalid Date, degrades to system
-	 * time. An Invalid Date would otherwise compare false against every
-	 * dueAt and silently halt all delivery with no observer signal.
+	 * Reads and validates the poll clock before the store is consulted.
+	 * The caller's poll-error path reports any throw and applies backoff.
 	 */
 	private now(): Date {
-		try {
-			const value = this.clock();
-			return Number.isNaN(value.getTime()) ? new Date() : value;
-		} catch {
-			return new Date();
+		const value = this.clock();
+		if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+			throw new TypeError("DeadlineProcessor: clock must return a valid Date");
 		}
+		return value;
 	}
 }

@@ -60,6 +60,12 @@ here, with a before and after.
   adapters must honor the signal or native deadline, and late write completion
   remains safe only when acknowledgements are idempotent and failure updates
   no-op after their record or incarnation was dispatched, delivered, or replaced.
+- An explicitly configured `DeadlineProcessor.clock` is now strict. If it
+  throws or returns an invalid `Date`, the cycle stops before
+  `DeadlineStore.due`, reports the failure through `onPollError`, and uses the
+  existing failure backoff. Omit `clock` to retain the system-time default;
+  the processor no longer hides a broken injected dependency by switching time
+  sources.
 
 Migration for shell adapters:
 

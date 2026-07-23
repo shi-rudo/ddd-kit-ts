@@ -170,9 +170,15 @@ returns immediately by design; there the tick cadence is the pacing, so do
 not wrap it in a tight `while` loop without your own delay, and let the
 `"stopped"` return value tell you the cycle hit a failure.
 
-The clock is injectable (`clock` option, handed to `due` on every poll),
-which keeps adapters deterministic and lets tests fire deadlines without
-waiting for real time.
+The clock is injectable (`clock` option, handed to `due` on every poll), which
+keeps adapters deterministic and lets tests fire deadlines without waiting for
+real time. Omit it to use the system clock. Once you provide a clock, the
+processor treats it as an explicit dependency: if it throws or returns an
+invalid `Date`, the processor does not silently change time sources.
+`DeadlineStore.due` is not called, `onPollError` receives the clock error, and
+the cycle returns `"stopped"`. Under `run(signal)`, repeated clock failures grow
+the same jittered backoff as store-read failures; a later valid clock read lets
+polling recover normally.
 
 Delivery is at-least-once: a crash or a failed acknowledgement after
 handling redelivers on a later poll, deliberately without counting toward
