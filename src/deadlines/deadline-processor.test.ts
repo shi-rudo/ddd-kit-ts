@@ -83,6 +83,25 @@ async function seeded(
 	return store;
 }
 
+function countingStore(
+	inner: DeadlineStore<Payload>,
+): DeadlineStore<Payload> & { readonly dueCalls: () => number } {
+	let dueCalls = 0;
+	return {
+		schedule: (deadline) => inner.schedule(deadline),
+		cancel: (scope, key) => inner.cancel(scope, key),
+		due: (now, limit, context) => {
+			dueCalls += 1;
+			return inner.due(now, limit, context);
+		},
+		markDelivered: (ids, context) => inner.markDelivered(ids, context),
+		markFailed: (id, error, context) =>
+			inner.markFailed(id, error, context),
+		deadLetters: () => inner.deadLetters(),
+		dueCalls: () => dueCalls,
+	};
+}
+
 describe("DeadlineProcessor", () => {
 	it("requires a complete observer bundle at type and runtime boundaries", () => {
 		const store = new InMemoryDeadlineStore<Payload>();
@@ -165,18 +184,7 @@ describe("DeadlineProcessor", () => {
 
 	it("reports a throwing injected clock before reading the deadline store", async () => {
 		const inner = await seeded([{ key: "a" }]);
-		let dueCalls = 0;
-		const store: DeadlineStore<Payload> = {
-			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
-			due: (now, limit) => {
-				dueCalls += 1;
-				return inner.due(now, limit);
-			},
-			markDelivered: (ids) => inner.markDelivered(ids),
-			markFailed: (id, error) => inner.markFailed(id, error),
-			deadLetters: () => inner.deadLetters(),
-		};
+		const store = countingStore(inner);
 		const clockError = new Error("clock unavailable");
 		const pollErrors: unknown[] = [];
 		const handled: string[] = [];
@@ -196,7 +204,7 @@ describe("DeadlineProcessor", () => {
 		});
 
 		expect(await processor.drainOnce()).toBe("stopped");
-		expect(dueCalls).toBe(0);
+		expect(store.dueCalls()).toBe(0);
 		expect(handled).toEqual([]);
 		expect(pollErrors).toEqual([clockError]);
 	});
@@ -204,18 +212,7 @@ describe("DeadlineProcessor", () => {
 	it("backs off repeated clock failures and recovers when the clock becomes valid", async () => {
 		vi.useFakeTimers();
 		const inner = await seeded([{ key: "a" }]);
-		let dueCalls = 0;
-		const store: DeadlineStore<Payload> = {
-			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
-			due: (now, limit) => {
-				dueCalls += 1;
-				return inner.due(now, limit);
-			},
-			markDelivered: (ids) => inner.markDelivered(ids),
-			markFailed: (id, error) => inner.markFailed(id, error),
-			deadLetters: () => inner.deadLetters(),
-		};
+		const store = countingStore(inner);
 		const clockError = new Error("clock unavailable");
 		let clockReads = 0;
 		const pollErrors: unknown[] = [];
@@ -245,21 +242,21 @@ describe("DeadlineProcessor", () => {
 		try {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(clockReads).toBe(1);
-			expect(dueCalls).toBe(0);
+			expect(store.dueCalls()).toBe(0);
 			expect(pollErrors).toEqual([clockError]);
 
 			await vi.advanceTimersByTimeAsync(9);
 			expect(clockReads).toBe(1);
 			await vi.advanceTimersByTimeAsync(1);
 			expect(clockReads).toBe(2);
-			expect(dueCalls).toBe(0);
+			expect(store.dueCalls()).toBe(0);
 			expect(pollErrors).toEqual([clockError, clockError]);
 
 			await vi.advanceTimersByTimeAsync(19);
 			expect(clockReads).toBe(2);
 			await vi.advanceTimersByTimeAsync(1);
 			expect(handled).toEqual(["a"]);
-			expect(dueCalls).toBe(2);
+			expect(store.dueCalls()).toBe(2);
 		} finally {
 			stop.abort();
 			await loop;
@@ -834,20 +831,31 @@ describe("DeadlineProcessor", () => {
 		expect(await inner.deadLetters()).toHaveLength(0);
 	});
 
+	it("reports a non-Date injected clock before reading the deadline store", async () => {
+		const inner = await seeded([{ key: "a" }]);
+		const store = countingStore(inner);
+		const pollErrors: unknown[] = [];
+		const processor = fastProcessor({
+			store,
+			handler: () => {},
+			clock: () => 1 as unknown as Date,
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			},
+		});
+
+		expect(await processor.drainOnce()).toBe("stopped");
+		expect(store.dueCalls()).toBe(0);
+		expect(pollErrors).toEqual([
+			new TypeError("DeadlineProcessor: clock must return a valid Date"),
+		]);
+	});
+
 	it("reports an invalid injected clock before reading the deadline store", async () => {
 		const inner = await seeded([{ key: "a" }]);
-		let dueCalls = 0;
-		const store: DeadlineStore<Payload> = {
-			schedule: (deadline) => inner.schedule(deadline),
-			cancel: (scope, key) => inner.cancel(scope, key),
-			due: (now, limit) => {
-				dueCalls += 1;
-				return inner.due(now, limit);
-			},
-			markDelivered: (ids) => inner.markDelivered(ids),
-			markFailed: (id, error) => inner.markFailed(id, error),
-			deadLetters: () => inner.deadLetters(),
-		};
+		const store = countingStore(inner);
 		const pollErrors: unknown[] = [];
 		const handled: string[] = [];
 		const processor = fastProcessor({
@@ -864,7 +872,7 @@ describe("DeadlineProcessor", () => {
 		});
 
 		expect(await processor.drainOnce()).toBe("stopped");
-		expect(dueCalls).toBe(0);
+		expect(store.dueCalls()).toBe(0);
 		expect(handled).toEqual([]);
 		expect(pollErrors).toHaveLength(1);
 		expect(pollErrors[0]).toEqual(
