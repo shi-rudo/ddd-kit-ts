@@ -107,11 +107,14 @@ allow-list decoder.
 
 ```ts
 import {
+  AggregateRoot,
   CommandBus,
+  DomainError,
   type Command,
   type CommandHandler,
   type Id,
   type IdempotentCommitRequest,
+  domainErrorToResult,
   withIdempotentCommit,
 } from "@shirudo/ddd-kit";
 import { err, ok, type Result } from "@shirudo/result";
@@ -127,6 +130,51 @@ interface PlaceOrderItem {
   readonly quantity: OrderQuantity;
   readonly price: Money;
 }
+
+type OrderState = {
+  readonly customerId: CustomerId;
+  readonly items: ReadonlyArray<PlaceOrderItem>;
+  readonly status: "placed";
+};
+
+class EmptyOrderError extends DomainError<"EMPTY_ORDER"> {
+  constructor() {
+    super({
+      code: "EMPTY_ORDER",
+      message: "A placed order requires at least one item",
+    });
+  }
+}
+
+class Order extends AggregateRoot<OrderState, OrderId> {
+  protected readonly aggregateType = "Order";
+
+  static place(
+    id: OrderId,
+    customerId: CustomerId,
+    items: ReadonlyArray<PlaceOrderItem>,
+  ): Order {
+    if (items.length === 0) {
+      throw new EmptyOrderError();
+    }
+
+    return new Order(id, {
+      customerId,
+      items: [...items],
+      status: "placed",
+    });
+  }
+}
+
+type PlaceOrderOutcome =
+  | {
+      readonly status: "placed";
+      readonly orderId: OrderId;
+    }
+  | {
+      readonly status: "rejected";
+      readonly code: "EMPTY_ORDER";
+    };
 
 type PlaceOrderCommand = Command & {
   readonly type: "PlaceOrder";
@@ -384,47 +432,69 @@ invariants. For example, whether an order may be empty is a business decision
 that the order model must still protect even when a trusted internal caller
 bypasses this transport adapter.
 
-The handler now receives values that have already crossed the untrusted
-boundary:
+`Order.place(...)` therefore receives every position needed for the decision and
+either creates one complete, placed order or rejects the operation. There is no
+public path that first creates a placed empty order and asks the application
+layer to repair it one position at a time. An empty array is structurally valid
+input—it is an array within the transport limits—but it violates the domain rule
+expressed by `EmptyOrderError`.
+
+The handler receives values that have already crossed the untrusted boundary. It
+coordinates the transaction and persistence, while `domainErrorToResult`
+selectively turns the one expected domain rejection into an application
+outcome:
 
 ```ts
 const placeOrderHandler: CommandHandler<
   PlaceOrderCommand,
   OrderId
 > = async (cmd) => {
-  if (cmd.items.length === 0) {
-    return err("EMPTY_ORDER");
-  }
-
   const outcome = await withIdempotentCommit(
     { scope, outbox, idempotency, bus: eventBus },
     cmd.idempotency,
     async (tx, enrollment) => {
       const orders = makeOrderRepository(tx);
-      const order = Order.place(newOrderId(), cmd.customerId);
+      const placement = await domainErrorToResult(
+        () => Order.place(newOrderId(), cmd.customerId, cmd.items),
+        [EmptyOrderError],
+      );
 
-      for (const item of cmd.items) {
-        order.addItem({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        });
+      if (placement.isErr()) {
+        return {
+          result: {
+            status: "rejected",
+            code: placement.error.code,
+          } satisfies PlaceOrderOutcome,
+          commits: [],
+        };
       }
 
+      const order = placement.value;
       await orders.save(order);
 
       return {
-        result: order.id,
+        result: {
+          status: "placed",
+          orderId: order.id,
+        } satisfies PlaceOrderOutcome,
         commits: [enrollment.enrollSaved(order)],
       };
     },
   );
 
-  return ok(outcome.result);
+  return outcome.result.status === "rejected"
+    ? err(outcome.result.code)
+    : ok(outcome.result.orderId);
 };
 ```
 
-A command handler returns `Result<R, E>`. Use the success channel for the useful result, such as a new id. Use the error channel for expected application failures you want the caller to handle as values. Infrastructure failures and wiring bugs can still throw.
+The transaction stores a plain `PlaceOrderOutcome`, including a rejection, so a
+duplicate idempotency key replays the same logical answer instead of running the
+decision again. Only after that replay boundary does the handler expose the
+usual `Result<R, E>`: the success channel carries the new id and the error
+channel carries `EMPTY_ORDER`. `domainErrorToResult` lists the exact domain
+error it is allowed to translate. Infrastructure failures, cancellation, and
+wiring bugs remain throws rather than being mislabeled as business rejections.
 
 Wire the bus at bootstrap:
 

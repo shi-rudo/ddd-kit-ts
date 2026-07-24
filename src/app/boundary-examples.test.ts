@@ -61,6 +61,68 @@ describe("untrusted-boundary examples", () => {
 		expect(edgeGuide).toContain("readonly retryable: false;");
 	});
 
+	it("keeps empty placement rejection inside the Order domain model", () => {
+		const cqrsGuide = sourceOf("cqrsGuide");
+		const domainModel = sectionBetween(
+			cqrsGuide,
+			"class EmptyOrderError",
+			"type PlaceOrderOutcome",
+		);
+
+		expect(domainModel).toContain(
+			'extends DomainError<"EMPTY_ORDER">',
+		);
+		expect(domainModel).toContain("if (items.length === 0)");
+		expect(domainModel).toContain("throw new EmptyOrderError()");
+	});
+
+	it("constructs a non-empty placed order inside the Order domain model", () => {
+		const cqrsGuide = sourceOf("cqrsGuide");
+		const domainModel = sectionBetween(
+			cqrsGuide,
+			"class EmptyOrderError",
+			"type PlaceOrderOutcome",
+		);
+
+		expect(domainModel).toContain("static place(");
+		expect(domainModel).toContain(
+			"items: ReadonlyArray<PlaceOrderItem>",
+		);
+		expect(domainModel).toContain("items: [...items]");
+		expect(domainModel).toContain('status: "placed"');
+		expect(domainModel.match(/new Order\(/g)).toHaveLength(1);
+	});
+
+	it("delegates placement to the Order domain model", () => {
+		const cqrsGuide = sourceOf("cqrsGuide");
+		const handler = sectionBetween(
+			cqrsGuide,
+			"const placeOrderHandler",
+			"A command handler returns",
+		);
+
+		expect(handler).not.toContain("cmd.items.length");
+		expect(handler).not.toContain("order.addItem");
+		expect(handler).toContain(
+			"Order.place(newOrderId(), cmd.customerId, cmd.items)",
+		);
+		expect(handler).toContain("await orders.save(order)");
+	});
+
+	it("maps only EmptyOrderError into the application outcome", () => {
+		const cqrsGuide = sourceOf("cqrsGuide");
+		const handler = sectionBetween(
+			cqrsGuide,
+			"const placeOrderHandler",
+			"A command handler returns",
+		);
+
+		expect(handler).toContain("domainErrorToResult(");
+		expect(handler).toContain("[EmptyOrderError]");
+		expect(handler).toContain("placement.error.code");
+		expect(handler).toContain('status: "rejected"');
+	});
+
 	it("shows atomic idempotency before settling an at-least-once command", () => {
 		const cqrsGuide = sourceOf("cqrsGuide");
 		const consumer = sectionBetween(

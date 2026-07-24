@@ -2526,6 +2526,10 @@ shape instead of silently accepting two relationship locations.
 - Record the decision to keep `commit()`'s transaction-flavored name in
   the design-decisions guide (the atomic semantics are the point; the
   method is `protected`, so aggregates expose domain verbs publicly).
+- Move the CQRS guide's non-empty-order rule from `PlaceOrder` handler
+  branching into the `Order.place(...)` domain factory. The handler now
+  selectively maps `EmptyOrderError`, stores a plain idempotent outcome,
+  and remains responsible only for orchestration and application mapping.
 
 ### Fixed: Value Object cloning and equality hardening
 
