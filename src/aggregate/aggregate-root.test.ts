@@ -5,12 +5,14 @@ import {
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
+import { SnapshotTimeValidationError } from "./domain-event-errors";
 import {
 	type AggregateSnapshot,
 	createDomainEventFactory,
 	type Version,
 } from "./aggregate";
 import {
+	type AggregateEventConvenienceFactory,
 	type AggregateConfig,
 	AggregateRoot as ProductionAggregateRoot,
 } from "./aggregate-root";
@@ -18,7 +20,6 @@ import type {
 	AnyDomainEvent,
 	DomainEvent,
 	DomainEventFactory,
-	DomainEventFacts,
 } from "./domain-event";
 import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
 
@@ -318,15 +319,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					super("strict" as TestId, { value: 0, status: "inactive" }, config);
 				}
 
-				update(value: number, facts: DomainEventFacts): Updated {
-					const event = this.recordEvent("Updated", { value }, facts);
-					this.commit({ ...this.state, value }, event);
-					return event;
-				}
-
-				recordWithoutFactsMustNotCompile(): Updated {
-					// @ts-expect-error event identity and occurrence time are required
-					return this.recordEvent("Updated", { value: 1 });
+				update(value: number): void {
+					this.commit(
+						{ ...this.state, value },
+						this.createEvent("Updated", { value }),
+					);
 				}
 			}
 
@@ -334,6 +331,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				create: (() => {
 					throw new Error("hidden event factory was read");
 				}) as DomainEventFactory["create"],
+				createStamp: () => {
+					throw new Error("hidden event-stamp factory was read");
+				},
 				createFacts: () => {
 					throw new Error("hidden event-facts factory was read");
 				},
@@ -347,25 +347,29 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const twin = new StrictAggregate({
 				domainEventFactory: hiddenFactoryMustNotBeRead,
 			});
-			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
 			const snapshotAt = new Date("2027-04-05T06:08:00.000Z");
-			const facts = {
-				eventId: "explicit-event-id",
-				occurredAt,
-			};
 
-			const event = aggregate.update(42, facts);
+			aggregate.update(42);
 			const snapshot = aggregate.createSnapshot(snapshotAt);
-			const twinEvent = twin.update(42, facts);
+			twin.update(42);
 			const twinSnapshot = twin.createSnapshot(snapshotAt);
+			const [event] = aggregate.pendingEvents;
+			const [twinEvent] = twin.pendingEvents;
 
-			expect(event.eventId).toBe("explicit-event-id");
-			expect(event.occurredAt).toEqual(occurredAt);
+			expect(event).toEqual({
+				type: "Updated",
+				aggregateId: "strict",
+				aggregateType: "StrictAggregate",
+				payload: { value: 42 },
+				version: 1,
+			});
+			expect(event).not.toHaveProperty("eventId");
+			expect(event).not.toHaveProperty("occurredAt");
 			expect(snapshot.snapshotAt).toEqual(snapshotAt);
 			expect(twinEvent).toEqual(event);
 			expect(twinSnapshot).toEqual(snapshot);
-			expect(event.occurredAt).not.toBe(occurredAt);
-			expect(twinEvent.occurredAt).not.toBe(event.occurredAt);
+			expect(Object.isFrozen(event)).toBe(true);
+			expect(Object.isFrozen(event?.payload)).toBe(true);
 			expect(snapshot.snapshotAt).not.toBe(snapshotAt);
 			expect(twinSnapshot.snapshotAt).not.toBe(snapshot.snapshotAt);
 		});
@@ -373,12 +377,47 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("rejects an invalid explicit snapshot time", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
+			expect(() => aggregate.createSnapshot(new Date(Number.NaN))).toThrowError(
+				expect.objectContaining({
+					name: "SnapshotTimeValidationError",
+					code: "SNAPSHOT_TIME_INVALID",
+					field: "snapshotAt",
+				}),
+			);
+			expect(() => aggregate.createSnapshot(0 as unknown as Date)).toThrowError(
+				expect.objectContaining({
+					code: "SNAPSHOT_TIME_INVALID",
+					field: "snapshotAt",
+				}),
+			);
 			expect(() => aggregate.createSnapshot(new Date(Number.NaN))).toThrow(
-				new TypeError("snapshotAt must be a valid Date"),
+				SnapshotTimeValidationError,
 			);
-			expect(() => aggregate.createSnapshot(0 as unknown as Date)).toThrow(
-				new TypeError("snapshotAt must be a valid Date"),
+		});
+
+		it("validates snapshot time before mapping snapshot state", () => {
+			let mappingCalls = 0;
+			class MappingAggregate extends AggregateRoot<TestState, TestId> {
+				protected readonly aggregateType = "MappingAggregate";
+
+				constructor(id: TestId, state: TestState) {
+					super(id, state);
+				}
+
+				protected override toSnapshotState(state: TestState): TestState {
+					mappingCalls += 1;
+					return super.toSnapshotState(state);
+				}
+			}
+			const aggregate = new MappingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+
+			expect(() => aggregate.createSnapshot(new Date(Number.NaN))).toThrow(
+				SnapshotTimeValidationError,
 			);
+			expect(mappingCalls).toBe(0);
 		});
 
 		it("uses one instance-bound factory for recorded events and snapshots", () => {
@@ -405,10 +444,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			const shared = new Date("2027-04-05T06:07:08.000Z");
-			const domainEventFactory = createDomainEventFactory({
+			const fullFactory = createDomainEventFactory({
 				eventIdFactory: () => "request-event-id",
 				clock: () => shared,
 			});
+			const domainEventFactory: AggregateEventConvenienceFactory = {
+				create: fullFactory.create,
+				now: fullFactory.now,
+			};
 			const aggregate = new FactoryBoundAggregate({ domainEventFactory });
 
 			const event = aggregate.update(42);

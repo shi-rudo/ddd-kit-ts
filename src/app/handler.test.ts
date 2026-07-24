@@ -164,6 +164,42 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
+		class DecisionAggregate extends AggregateRoot<
+			Readonly<Record<string, never>>,
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
+
+			constructor(id: TestId) {
+				super(id, {});
+			}
+
+			decide(): void {
+				this.commit(
+					{},
+					this.createEvent("OrderCreated", { orderId: "order-1" }),
+				);
+			}
+		}
+		const outbox = createMockOutbox();
+		const aggregate = new DecisionAggregate("agg-1" as TestId);
+		aggregate.decide();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "ok", [aggregate]),
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
+
+		expect(outbox.added).toHaveLength(0);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+		expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+	});
+
 	it("rejects structural aggregate lookalikes before the transaction can commit", async () => {
 		let committed = false;
 		const scope: TransactionScope<undefined> = {

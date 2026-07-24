@@ -36,18 +36,18 @@ New writes must stamp the new version:
 
 ```ts
 this.apply(
-  this.recordEvent(
+  this.createEvent(
     "OrderCreated",
     {
       customerId,
       currency,
     },
-    { ...facts, version: 2 },
+    { version: 2 },
   ),
 );
 ```
 
-If you forget to override `facts.version`, the event is written with the default version
+If you omit the producer-owned `version`, the event is written with the default version
 `1`, even though the payload has the new shape. That makes old and new events
 ambiguous and forces consumers to infer schema from fields. Do not do that.
 

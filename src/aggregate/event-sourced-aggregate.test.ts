@@ -17,7 +17,13 @@ import {
 	type DomainEvent,
 	type Version,
 } from "./aggregate";
-import type { AnyDomainEvent } from "./domain-event";
+import {
+	type AnyDomainEvent,
+	createUncommittedDomainEvent,
+	isMintedEvent,
+	isUncommittedDomainEvent,
+	type UncommittedDomainEventOf,
+} from "./domain-event";
 import { EventSourcedAggregate as ProductionEventSourcedAggregate } from "./event-sourced-aggregate";
 import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
 
@@ -64,6 +70,9 @@ type TestEvent =
 	| TestEventActivated
 	| TestEventDeactivated
 	| TestEventInvalid;
+type TestEventDecision = UncommittedDomainEventOf<TestEvent>;
+type TestEventCreatedDecision = UncommittedDomainEventOf<TestEventCreated>;
+type TestEventUpdatedDecision = UncommittedDomainEventOf<TestEventUpdated>;
 
 class InvalidTestEventError extends DomainError<"INVALID_TEST_EVENT"> {
 	constructor(reason: string) {
@@ -135,14 +144,14 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 	protected readonly handlers = {
 		TestEventCreated: (
 			state: TestState,
-			event: TestEventCreated,
+			event: TestEventCreatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.value,
 		}),
 		TestEventUpdated: (
 			state: TestState,
-			event: TestEventUpdated,
+			event: TestEventUpdatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.newValue,
@@ -170,7 +179,7 @@ class ValidatingAggregate extends EventSourcedAggregate<
 		super(id, initialState);
 	}
 
-	protected validateEvent(event: TestEvent): void {
+	protected validateEvent(event: TestEventDecision): void {
 		if (event.type === "TestEventInvalid") {
 			throw new InvalidTestEventError("forbidden event type");
 		}
@@ -183,14 +192,14 @@ class ValidatingAggregate extends EventSourcedAggregate<
 	protected readonly handlers = {
 		TestEventCreated: (
 			state: TestState,
-			event: TestEventCreated,
+			event: TestEventCreatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.value,
 		}),
 		TestEventUpdated: (
 			state: TestState,
-			event: TestEventUpdated,
+			event: TestEventUpdatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.newValue,
@@ -294,7 +303,7 @@ describe("EventSourcedAggregate", () => {
 					super(id, initialState);
 				}
 
-				protected validateEvent(event: TestEvent): void {
+				protected validateEvent(event: TestEventDecision): void {
 					if (
 						event.type === "TestEventActivated" &&
 						this.state.status === "active"
@@ -310,14 +319,14 @@ describe("EventSourcedAggregate", () => {
 				protected readonly handlers = {
 					TestEventCreated: (
 						state: TestState,
-						event: TestEventCreated,
+						event: TestEventCreatedDecision,
 					): TestState => ({
 						...state,
 						value: event.payload.value,
 					}),
 					TestEventUpdated: (
 						state: TestState,
-						event: TestEventUpdated,
+						event: TestEventUpdatedDecision,
 					): TestState => ({
 						...state,
 						value: event.payload.newValue,
@@ -368,7 +377,7 @@ describe("EventSourcedAggregate", () => {
 					TestEventCreated: (s: TestState): TestState => s,
 				} as unknown as Record<
 					TestEvent["type"],
-					(s: TestState, e: TestEvent) => TestState
+					(s: TestState, e: TestEventDecision) => TestState
 				>;
 			}
 
@@ -410,7 +419,7 @@ describe("EventSourcedAggregate", () => {
 				}
 				protected readonly handlers = {} as unknown as Record<
 					TestEvent["type"],
-					(s: TestState, e: TestEvent) => TestState
+					(s: TestState, e: TestEventDecision) => TestState
 				>;
 			}
 
@@ -512,7 +521,7 @@ describe("EventSourcedAggregate", () => {
 				TestEventCreated: (s: TestState): TestState => s,
 			} as unknown as Record<
 				TestEvent["type"],
-				(s: TestState, e: TestEvent) => TestState
+				(s: TestState, e: TestEventDecision) => TestState
 			>;
 		}
 
@@ -829,7 +838,10 @@ describe("EventSourcedAggregate", () => {
 			}
 
 			protected readonly handlers = {
-				ItemAdded: (state: NestedEsState, event: ItemAdded): NestedEsState => ({
+				ItemAdded: (
+					state: NestedEsState,
+					event: UncommittedDomainEventOf<ItemAdded>,
+				): NestedEsState => ({
 					...state,
 					items: [...state.items, event.payload.item],
 				}),
@@ -1102,11 +1114,11 @@ describe("EventSourcedAggregate", () => {
 				protected readonly handlers = {
 					TestEventCreated: (
 						state: TestState,
-						event: TestEventCreated,
+						event: TestEventCreatedDecision,
 					): TestState => ({ ...state, value: event.payload.value }),
 					TestEventUpdated: (
 						state: TestState,
-						event: TestEventUpdated,
+						event: TestEventUpdatedDecision,
 					): TestState => ({ ...state, value: event.payload.newValue }),
 					TestEventActivated: (state: TestState): TestState => ({
 						...state,
@@ -1218,7 +1230,10 @@ describe("EventSourcedAggregate", () => {
 			}
 
 			protected readonly handlers = {
-				ItemAdded: (state: CartState, e: ItemAdded): CartState => ({
+				ItemAdded: (
+					state: CartState,
+					e: UncommittedDomainEventOf<ItemAdded>,
+				): CartState => ({
 					items: [...state.items, new LineItem(e.payload.sku, 1)],
 				}),
 			};
@@ -1512,7 +1527,7 @@ describe("replay trusts history", () => {
 			super(id, initialState);
 		}
 
-		protected validateEvent(event: TestEvent): void {
+		protected validateEvent(event: TestEventDecision): void {
 			if (
 				event.type === "TestEventActivated" &&
 				this.state.status === "active"
@@ -1528,11 +1543,11 @@ describe("replay trusts history", () => {
 		protected readonly handlers = {
 			TestEventCreated: (
 				state: TestState,
-				event: TestEventCreated,
+				event: TestEventCreatedDecision,
 			): TestState => ({ ...state, value: event.payload.value }),
 			TestEventUpdated: (
 				state: TestState,
-				event: TestEventUpdated,
+				event: TestEventUpdatedDecision,
 			): TestState => ({ ...state, value: event.payload.newValue }),
 			TestEventActivated: (state: TestState): TestState => ({
 				...state,
@@ -1673,6 +1688,26 @@ describe("replay trusts history", () => {
 		expect(Object.isFrozen(recorded)).toBe(true);
 	});
 
+	it("keeps an address-stamped decision uncommitted until the shell records it", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const decision = createUncommittedDomainEvent("TestEventUpdated", {
+			newValue: 42,
+		});
+
+		agg.testApply(decision as unknown as TestEventUpdated);
+
+		const pending = agg.pendingEvents[0];
+		expect(pending?.aggregateId).toBe("test-1");
+		expect(pending?.aggregateType).toBe("RuleTighteningAggregate");
+		expect(pending).not.toHaveProperty("eventId");
+		expect(pending).not.toHaveProperty("occurredAt");
+		expect(isUncommittedDomainEvent(pending as object)).toBe(true);
+		expect(isMintedEvent(pending as object)).toBe(false);
+	});
+
 	it("rejects a tampered snapshot as Err through the structural validateRestoredState hook", () => {
 		// The structural gate the review demanded: a snapshot is derived
 		// data read back from storage, so a blob no version of the model
@@ -1701,11 +1736,11 @@ describe("replay trusts history", () => {
 			protected readonly handlers = {
 				TestEventCreated: (
 					state: TestState,
-					event: TestEventCreated,
+					event: TestEventCreatedDecision,
 				): TestState => ({ ...state, value: event.payload.value }),
 				TestEventUpdated: (
 					state: TestState,
-					event: TestEventUpdated,
+					event: TestEventUpdatedDecision,
 				): TestState => ({ ...state, value: event.payload.newValue }),
 				TestEventActivated: (state: TestState): TestState => ({
 					...state,

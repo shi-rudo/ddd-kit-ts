@@ -520,10 +520,10 @@ this.commit(
     ...this.state,
     lifecycle: result.snapshot,
   },
-  this.recordEvent("CheckoutCancelled", {
+  this.createEvent("CheckoutCancelled", {
     orderId: this.id,
     reason,
-  }, facts),
+  }),
 );
 
 return result.outputs;

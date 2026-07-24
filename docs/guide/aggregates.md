@@ -20,7 +20,6 @@ import {
   AggregateRoot,
   DomainError,
   type DomainEvent,
-  type DomainEventFacts,
   type Id,
 } from "@shirudo/ddd-kit";
 import type { Money } from "@shirudo/ddd-kit/money";
@@ -56,25 +55,28 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return new Order(id, { customerId, items: [], status: "draft" });
   }
 
-  confirm(facts: DomainEventFacts): void {
+  confirm(): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
 ```
 
-`aggregateType` and `recordEvent` are intentionally visible in every aggregate:
+`aggregateType` and `createEvent` are intentionally visible in every aggregate:
 
 - `aggregateType` tells event dispatchers, outbox processors, and projections what kind of aggregate produced an event.
-- `recordEvent(type, payload, facts)` adds the aggregate id and aggregate type to the explicit event facts, so event routing has the fields it needs without reading a hidden clock or id generator.
+- `createEvent(type, payload)` adds the aggregate id and aggregate type while
+  reading neither a clock nor an id generator.
 
-Calling `createDomainEvent(...)` directly still works, but inside an aggregate `recordEvent(...)` is the safer default.
+Calling `createDomainEvent(...)` directly still works, but inside an aggregate
+`createEvent(...)` is the safer default. The application records the pending
+decision with `recordPendingEvents(...)` before persistence.
 
 ## Creating New Aggregates
 
@@ -87,12 +89,11 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   static place(
     id: OrderId,
     customerId: string,
-    facts: DomainEventFacts,
   ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
 
     order.addDomainEvent(
-      order.recordEvent("OrderPlaced", { customerId }, facts),
+      order.createEvent("OrderPlaced", { customerId }),
     );
 
     return order;
@@ -133,11 +134,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   static place(
     id: OrderId,
     customerId: string,
-    facts: DomainEventFacts,
   ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
     order.addDomainEvent(
-      order.recordEvent("OrderPlaced", { customerId }, facts),
+      order.createEvent("OrderPlaced", { customerId }),
     );
     return order;
   }
@@ -157,6 +157,11 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 `markRestored(version)` tells the aggregate, "this state came from persistence at this version." It sets both `version` and `persistedVersion`, so the next save uses the loaded version as its optimistic-concurrency baseline.
 
 It does not call persistence hooks and it does not record events. Loading is not saving, and it is not a domain fact.
+
+`persistedVersion` is likewise not a business fact. It is a read-only receipt
+for repository adapters. Keep it, `hasChanges`, and `changedKeys` out of domain
+guards and decisions. Their v3 ownership trade-off is documented under
+[Persistence tracking stays on the tactical aggregate](/guide/design-decisions#persistence-tracking-stays-on-the-tactical-aggregate-for-v3).
 
 A repository can then be straightforward:
 
@@ -239,7 +244,7 @@ If state validation fails, no event is recorded and the version does not change.
 ```ts
 this.commit(
   { ...this.state, status: "confirmed" },
-  this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+  this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 
 this.commit(newState, [eventA, eventB]);
@@ -328,7 +333,7 @@ Most business rules live at the top of domain methods. The method checks whether
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  confirm(facts: DomainEventFacts): void {
+  confirm(): void {
     if (this.state.status === "shipped") {
       throw new CannotConfirmShippedOrderError(this.id);
     }
@@ -339,7 +344,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }

@@ -33,7 +33,8 @@ const outcome = await withIdempotentCommit(
   async (tx, enrollment) => {
     const orders = makeOrderRepository(tx);
     const order = await orders.getById(command.orderId);
-    order.confirm(domainEvents.createFacts());
+    order.confirm();
+    recordPendingEvents(order, domainEvents);
     await orders.save(order);
 
     return {
@@ -116,7 +117,8 @@ const outcome = await withIdempotentCommit(
   async (tx, enrollment, execution) => {
     const orders = makeOrderRepository(tx);
     const order = await orders.getById(command.orderId);
-    order.confirm(domainEvents.createFacts());
+    order.confirm();
+    recordPendingEvents(order, domainEvents);
     await orders.save(order);
 
     // Persist this marker in the SAME transaction as the command effect.

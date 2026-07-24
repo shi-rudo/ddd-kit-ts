@@ -607,7 +607,7 @@ In a CQRS application, query handlers return DTOs shaped for their use case. The
 The bus dispatches the command. The command handler owns the use case. `withCommit` owns the transaction and event harvest.
 
 ```ts
-import { withCommit } from "@shirudo/ddd-kit";
+import { recordPendingEvents, withCommit } from "@shirudo/ddd-kit";
 
 const result = await withCommit(
   {
@@ -620,7 +620,8 @@ const result = await withCommit(
     const orders = makeOrderRepository(tx);
 
     const order = await orders.getById(orderId);
-    order.confirm(domainEvents.createFacts());
+    order.confirm();
+    recordPendingEvents(order, domainEvents);
 
     await orders.save(order);
 
@@ -711,10 +712,10 @@ const shipmentRequested = createDomainEvent(
 );
 ```
 
-Inside aggregate methods, prefer `this.recordEvent(..., facts)`; put correlation
-metadata on the `DomainEventFacts` created by the application operation. Outside
-aggregates, `createDomainEvent(...)` is the convenient primitive, while
-`createDomainEventFromFacts(...)` is the deterministic one.
+Inside aggregate methods, prefer `this.createEvent(...)`. Attach correlation
+metadata when the application records pending events with `createStamp()`.
+Outside aggregates, `createDomainEvent(...)` is the convenient primitive,
+while `createDomainEventFromFacts(...)` is the explicit legacy constructor.
 
 ### Wrap Handlers for Ambient Context
 

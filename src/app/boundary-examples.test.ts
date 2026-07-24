@@ -225,11 +225,7 @@ describe("untrusted-boundary examples", () => {
 		expect(edgeGuide).toContain('"$header.Idempotency-Key"');
 		expect(useCase).toContain("withIdempotentCommit(");
 		expect(useCase).toContain("command.idempotency");
-		expectBefore(
-			useCase,
-			"withIdempotentCommit(",
-			"order.confirm(domainEvents.createFacts());",
-		);
+		expectBefore(useCase, "withIdempotentCommit(", "order.confirm();");
 		expect(edgeGuide).toContain("type ConfirmOrderOutcome =");
 		expect(useCase).toContain('status: "forbidden"');
 		expect(useCase).toContain('status: "confirmed"');
@@ -237,7 +233,7 @@ describe("untrusted-boundary examples", () => {
 		expect(useCase).not.toContain("result: ok(");
 		expectBefore(
 			useCase,
-			"order.confirm(domainEvents.createFacts());",
+			"recordPendingEvents(order, domainEvents);",
 			"commits: [enrollment.enrollSaved(order)]",
 		);
 		expect(useCase).toContain('outcome.result.status === "confirmed"');

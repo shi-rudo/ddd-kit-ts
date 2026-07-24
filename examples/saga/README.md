@@ -36,12 +36,13 @@ PlaceOrder ──▶ Order.place ──▶ OrderPlaced ─┐
 
 - **`order.ts`**, **`payment.ts`**, **`shipping.ts`**: three small state-stored aggregates (`AggregateRoot`). Each has a `static create` / `static request` factory that records its first event, plus domain methods (`confirm`, `cancel`, `receive`, `fail`, `complete`) that mutate state and record events.
 - **`checkout-saga.ts`**: the state-stored Process Manager. It is an `AggregateRoot` whose lifecycle is implemented with `DomainMachineDefinition`, `createInitialDomainMachineSnapshot`, and `transitionDomainState` (`awaiting-payment` → `awaiting-shipping` → `completed` / `cancelled-*`). Its aggregate `TEvent` generic stays at `never`: the saga does not publish events of its own; application subscribers dispatch commands after its transition methods succeed.
-- **`event-sourced-checkout-saga.ts`**: the compact event-sourced counterpart. It uses `EventSourcedAggregate`; process decisions are the stream's source of truth, pure handlers evolve process state, and `reconstitute` plus `loadFromHistory` emits no new work. Its decision events carry enough data for an application/outbox subscriber to map them to participant commands after commit.
+- **`event-sourced-checkout-saga.ts`**: the compact event-sourced counterpart. It uses `EventSourcedAggregate`; private process facts are the stream's source of truth, pure handlers evolve process state, and `reconstitute` plus `loadFromHistory` emits no new work.
+- **`checkout-participant-commands.ts`**: the application-boundary map from those private facts to imperative commands with explicit participant destinations. `routeEventsToCommandOutbox` runs it inside the process commit and stores the commands without publishing the private facts.
 - **`saga.spec.ts`**: wiring + tests. Three scenarios:
   1. Happy path: order → payment received → shipping completed → order confirmed
   2. Payment-failure compensation: payment fails → saga cancels → order cancelled, no shipment created
   3. Shipping-failure compensation: payment succeeds, shipping fails → saga refunds payment → cancels order
-- **`event-sourced-checkout-saga.spec.ts`**: pins decision events, replay without new pending events, terminal compensation decisions, and illegal-transition rejection.
+- **`event-sourced-checkout-saga.spec.ts`**: pins process facts and illegal transitions, plus atomic fact/command persistence, rollback, crash-after-commit recovery, replay without commands, idempotent command redelivery, trace propagation, and compensation ordering.
 
 ## Key patterns demonstrated
 
@@ -77,11 +78,23 @@ domain events and are not published automatically. This example also keeps the
 state-stored aggregate's `TEvent = never`, so it records no progress events. If
 monitoring or downstream processes need `CheckoutStarted`, `AwaitingPayment`,
 or `ProcessCompleted`, declare an aggregate event union and record those events
-via `recordEvent`/`commit`; do not reinterpret machine outputs as domain events.
+via `createEvent` plus application-shell `recordPendingEvents`; do not
+reinterpret machine outputs as domain events.
 
-The event-sourced variant takes the durable form: its committed decision event
-is mapped to the participant command after the outbox boundary. Either way the
-core principle holds: Process Managers turn incoming facts into requested work.
+The event-sourced variant takes the durable form. It records completed process
+decisions such as `CheckoutStartedAwaitingPayment` and
+`CheckoutAdvancedToShipping`. These are private history, not instructions.
+Inside the same transaction, `routeEventsToCommandOutbox` maps each accepted
+fact to an exact `RequestPayment`, `RequestShipping`, `ConfirmOrder`,
+`RefundPayment`, or `CancelOrder` message. The message names one destination;
+the fact never crosses the EventBus.
+
+The fact names do not get ahead of the participants. Shipping success records
+`CheckoutOrderConfirmationStarted` and leaves the process at
+`awaiting-order-confirmation`; only the later `OrderConfirmed` input records
+`CheckoutCompleted`, with no outgoing command. Failure decisions likewise enter
+`cancelling-*` or `compensating-*` states instead of claiming that queued
+compensation already finished.
 
 ### State-stored or event-sourced?
 
@@ -99,10 +112,9 @@ Snapshots are optional, rebuildable acceleration; they never replace the
 stream.
 
 Both variants own only process state and process invariants. Payment, order,
-and shipping rules remain with their participant aggregates. The event-sourced
-variant records decisions such as `CheckoutPaymentRequested`; an application
-subscriber maps the committed event to `RequestPayment`. Replaying the stream
-only folds state and never dispatches that command again.
+and shipping rules remain with their participant aggregates. Replaying the
+event-sourced stream only folds private facts into state. Command creation is a
+live commit concern and never runs during replay.
 
 ### EventBus subscribers as the saga's reflexes
 
@@ -130,6 +142,7 @@ The kit has no transactional rollback across aggregates: that's a database illus
 This example keeps the wiring as small as the saga logic allows: events reach the subscribers over the in-process bus fast path, and the outbox slot holds the explicit `outboxWriterAcceptingEventLoss()`. That is an honest demo trade-off, an in-process trigger is lost if the process dies between publish and subscriber, and every piece of the durable version now ships in the kit. The [sagas guide](../../docs/guide/sagas.md) walks through that wiring end to end; the short version:
 
 - The durable trigger is the transactional outbox drained by an `OutboxDispatcher` into `eventBusSink`. Delivery becomes at-least-once, so reactions must survive duplicates.
+- Outgoing participant work uses the dedicated `CommandOutboxWriter` seam. `routeEventsToCommandOutbox` writes the process fact's origin receipt and its exact addressed commands in the same transaction as the process stream. A production adapter durably retains their order and rejects conflicting retries.
 - `withIdempotentCommit` is the inbox that makes them survive: key the reaction on the event id and a redelivered event replays the stored outcome instead of double-firing the step. This also settles the compensation-retry question this README used to hand-wave: a retried `RefundPayment` never reaches `Payment.refund()` a second time, because the inbox absorbs it before the domain method runs. (Making compensation methods no-op on the target state is still good defense in depth; Sam Newman, *Building Microservices* 2nd ed. §4, covers both shapes.)
 - Saga state under concurrency needs a real repository whose `save` throws `ConcurrencyConflictError` on version mismatch, with a `RetryingTransactionScope` (or the dispatcher's redelivery) retrying the losing reaction against the new state.
 - Saga-step timeouts ("payment didn't arrive within 30 minutes") are inputs, not a scheduler problem: schedule a deadline in the same transaction as the wait via `DeadlineStore`, and let a `DeadlineProcessor` feed it back in. The [deadlines guide](../../docs/guide/deadlines.md) has the details, including why a delivered timeout is a proposal the state machine gets to veto.

@@ -52,8 +52,8 @@ const domainEvents = createDomainEventFactory({
 
 The factory is frozen and has no setter. It may live at module scope when the
 policy is genuinely process-wide, or be created inside `fetch()` when the
-policy is request- or tenant-specific. In either case, call `createFacts()` in
-the application operation and pass that value into the aggregate method.
+policy is request- or tenant-specific. In either case, call `createStamp()` in
+the application shell after the aggregate accepts the domain operation.
 
 ULID is the same shape:
 
@@ -89,7 +89,8 @@ it("emits deterministic event ids", () => {
   });
   const order = makeOrder();
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
 });
 ```
 
@@ -553,7 +554,8 @@ const confirmOrder = async (command: ConfirmOrder) => {
         };
       }
 
-      order.confirm(domainEvents.createFacts());
+      order.confirm();
+      recordPendingEvents(order, domainEvents);
       await orders.save(order);
       return {
         result: {

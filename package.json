@@ -48,6 +48,7 @@
 		"test": "vp test",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
 		"audit:prod": "pnpm audit --prod",
+		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",
 		"clean": "rm -rf dist",
 		"lint": "biome lint .",
 		"format": "pnpm exec biome format --write . && pnpm exec biome lint --write . && pnpm exec biome check --write .",

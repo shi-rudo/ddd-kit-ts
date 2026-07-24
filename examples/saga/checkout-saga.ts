@@ -116,8 +116,8 @@ function toSagaState(
 	return { ...snapshot.context, step: snapshot.state };
 }
 
-// TEvent stays at the default `never`: machine transitions are internal state
-// decisions, while aggregate domain events still go through recordEvent/commit.
+// TEvent stays at the default `never`: machine transitions are private process
+// state, and this compact state-stored variant publishes no progress events.
 export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 	protected readonly aggregateType = "CheckoutSaga";
 

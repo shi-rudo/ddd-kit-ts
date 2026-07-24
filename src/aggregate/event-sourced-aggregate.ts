@@ -17,16 +17,21 @@ import {
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import { type AnyDomainEvent, adoptMintedEvent } from "./domain-event";
+import {
+	type AnyDomainEvent,
+	type AnyUncommittedDomainEvent,
+	adoptMintedEvent,
+	adoptUncommittedDomainEvent,
+	isMintedEvent,
+	type PendingDomainEvent,
+	type UncommittedDomainEventOf,
+} from "./domain-event";
 
 // Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).
 export type { IEventSourcedAggregate } from "./aggregate";
 
-type Handler<TState, TEvent extends AnyDomainEvent> = (
-	state: TState,
-	event: TEvent,
-) => TState;
+type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
@@ -68,9 +73,9 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
  *   protected readonly aggregateType = "Order";
  *
- *   confirm(facts: DomainEventFacts): void {
+ *   confirm(): void {
  *     this.apply(
- *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+ *       this.createEvent("OrderConfirmed", { orderId: this.id }),
  *     );
  *   }
  *
@@ -112,7 +117,7 @@ export abstract class EventSourcedAggregate<
 	 * the read boundary (see the event-upcasting guide) so handlers
 	 * and replay always receive the current event shape.
 	 */
-	protected validateEvent(_event: TEvent): void {}
+	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
 
 	/**
 	 * Structural integrity check for a state restored from a SNAPSHOT.
@@ -163,7 +168,7 @@ export abstract class EventSourcedAggregate<
 	 * @param event - The domain event to apply
 	 */
 	protected apply<K extends TEvent["type"]>(
-		event: Extract<TEvent, { type: K }>,
+		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
 	): void {
 		// New facts get their address here, by construction: missing
 		// fields are stamped from the aggregate (the recordEvent
@@ -175,7 +180,7 @@ export abstract class EventSourcedAggregate<
 		const stamped = this.stampNewEventAddress(event);
 		// Validation lives HERE, not in dispatch: only new facts are
 		// checked against current rules; replay trusts history.
-		this.validateEvent(stamped);
+		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		this.dispatch(stamped);
 		this.addDomainEvent(stamped);
 		this.bumpVersion();
@@ -191,8 +196,8 @@ export abstract class EventSourcedAggregate<
 	 * are shared, already deep-frozen by `createDomainEvent`).
 	 */
 	private stampNewEventAddress<K extends TEvent["type"]>(
-		event: Extract<TEvent, { type: K }>,
-	): Extract<TEvent, { type: K }> {
+		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
+	): PendingDomainEvent<Extract<TEvent, { type: K }>> {
 		// Immutability first: runs before validate/dispatch so a rejected
 		// event cannot leave mutated state behind (addDomainEvent would
 		// catch it too, but only after the handler already committed).
@@ -218,12 +223,17 @@ export abstract class EventSourcedAggregate<
 		// the event's own wider type. `aggregateId`/`aggregateType` are
 		// `string | undefined` on DomainEvent; filling them in cannot
 		// leave the declared shape.
-		const stamped: AnyDomainEvent = adoptMintedEvent({
+		const copy = {
 			...event,
 			aggregateId: this.id,
 			aggregateType: this.aggregateType,
-		});
-		return stamped as Extract<TEvent, { type: K }>;
+		};
+		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
+			event,
+		)
+			? adoptMintedEvent(copy)
+			: adoptUncommittedDomainEvent(copy);
+		return stamped as PendingDomainEvent<Extract<TEvent, { type: K }>>;
 	}
 
 	/**
@@ -268,7 +278,7 @@ export abstract class EventSourcedAggregate<
 		}
 	}
 
-	private dispatch(event: TEvent): void {
+	private dispatch(event: TEvent | UncommittedDomainEventOf<TEvent>): void {
 		// Own-key guard: the handlers map is an object literal, so a plain
 		// property get for event.type === "toString" / "constructor" /
 		// "__proto__" (a corrupt or adversarial stream row) would resolve
@@ -276,7 +286,7 @@ export abstract class EventSourcedAggregate<
 		const handler = Object.hasOwn(this.handlers, event.type)
 			? (this.handlers[event.type as keyof typeof this.handlers] as Handler<
 					TState,
-					TEvent
+					TEvent | UncommittedDomainEventOf<TEvent>
 				>)
 			: undefined;
 		if (!handler) {
@@ -440,6 +450,9 @@ export abstract class EventSourcedAggregate<
 	 * Subclasses MUST implement this property.
 	 */
 	protected abstract readonly handlers: {
-		[K in TEvent["type"]]: Handler<TState, Extract<TEvent, { type: K }>>;
+		[K in TEvent["type"]]: Handler<
+			TState,
+			UncommittedDomainEventOf<Extract<TEvent, { type: K }>>
+		>;
 	};
 }

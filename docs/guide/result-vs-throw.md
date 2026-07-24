@@ -44,7 +44,6 @@ typed error.
 import {
   AggregateRoot,
   DomainError,
-  type DomainEventFacts,
 } from "@shirudo/ddd-kit";
 
 class OrderAlreadyConfirmedError
@@ -60,14 +59,14 @@ class OrderAlreadyConfirmedError
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  confirm(facts: DomainEventFacts): void {
+  confirm(): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -83,14 +82,10 @@ When one Application boundary prefers a typed Result, wrap the operation rather
 than changing the aggregate API:
 
 ```ts
-import {
-  createDomainEventFactory,
-  domainErrorToResult,
-} from "@shirudo/ddd-kit";
+import { domainErrorToResult } from "@shirudo/ddd-kit";
 
-const domainEvents = createDomainEventFactory();
 const result = await domainErrorToResult(
-  () => order.confirm(domainEvents.createFacts()),
+  () => order.confirm(),
   [OrderAlreadyConfirmedError],
 );
 // Result<void, OrderAlreadyConfirmedError>
@@ -145,7 +140,8 @@ const confirmOrder: CommandHandler<
         const orders = makeOrderRepository(tx);
         const order = await orders.getById(command.orderId);
 
-        order.confirm(domainEvents.createFacts());
+        order.confirm();
+        recordPendingEvents(order, domainEvents);
         await orders.save(order);
 
         return {
@@ -182,7 +178,8 @@ return withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(command.orderId);
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await orders.save(order);
 
   return {
@@ -314,7 +311,8 @@ const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(id);
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await orders.save(order);
 
   return {
@@ -334,7 +332,8 @@ calls `withCommit` directly, catch and map errors there.
 ```ts
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await repositories.orders.save(order);
   return order.id;
 });

@@ -140,12 +140,12 @@ These compile. Some even pass happy-path tests. They are more dangerous because 
 
 ### Calling `createDomainEvent` Inside an Aggregate
 
-Inside aggregate methods, prefer `this.recordEvent(type, payload, facts)`.
+Inside aggregate methods, prefer `this.createEvent(type, payload)`.
 
 ```ts
 this.commit(
   { ...this.state, status: "confirmed" },
-  this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+  this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 ```
 
@@ -318,13 +318,14 @@ const domainEvents = createDomainEventFactory({
 });
 
 const order = makeOrder();
-order.confirm(domainEvents.createFacts());
+order.confirm();
+const events = recordPendingEvents(order, domainEvents);
 ```
 
 No reset is needed, and awaited code keeps using the same value because nothing
 is installed globally. If a test needs deterministic ids or clocks, keep that
-dependency visible in the test setup and pass the generated facts into the
-aggregate operation. See [Domain Events -> Instance-bound factories](./domain-events.md#instance-bound-factories).
+dependency visible in the test setup and record the accepted decision
+explicitly. See [Domain Events -> Instance-bound factories](./domain-events.md#instance-bound-factories).
 
 ### Storing Aggregates in Edge Runtime Globals
 
@@ -406,7 +407,8 @@ Senior review rule: mock across process or infrastructure boundaries, not across
 
 When reviewing code that uses the kit, scan for these signals:
 
-- aggregate events recorded with `this.recordEvent(..., facts)` inside aggregates
+- aggregate decisions created with `this.createEvent(...)` inside aggregates
+- pending events recorded in the application shell before persistence
 - repositories created inside the transaction or unit-of-work scope
 - repositories that do not call aggregate lifecycle methods
 - insert/update branching on `persistedVersion`, not `version`

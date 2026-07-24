@@ -7,17 +7,32 @@ import type { Id } from "../core/id";
 import { Entity, type EntityConfig } from "../entity/entity";
 import { isBuiltInObject } from "../utils/array/is-built-in";
 import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
+import { SnapshotTimeValidationError } from "./domain-event-errors";
 import {
 	type AnyDomainEvent,
+	type AnyUncommittedDomainEvent,
 	type CreateDomainEventOptions,
+	type CreateUncommittedDomainEventOptions,
 	createDomainEventFromFacts,
+	createUncommittedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFacts,
 	defaultDomainEventFactory,
 	isMintedEvent,
+	isUncommittedDomainEvent,
+	type PendingDomainEvent,
+	recordDomainEvent,
+	type UncommittedDomainEventOf,
 } from "./domain-event";
+import { registerPendingEventRecordingCapability } from "./pending-event-recording";
 import { registerAggregatePersistenceCapability } from "./persistence-lifecycle";
+
+/** Minimal compatibility role used by aggregate-held convenience methods. */
+export type AggregateEventConvenienceFactory = Pick<
+	DomainEventFactory,
+	"create" | "now"
+>;
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
 export interface AggregateConfig<TState = unknown>
@@ -28,7 +43,7 @@ export interface AggregateConfig<TState = unknown>
 	 * strict paths ignore it and require event facts or snapshot time from the
 	 * application operation.
 	 */
-	readonly domainEventFactory?: DomainEventFactory;
+	readonly domainEventFactory?: AggregateEventConvenienceFactory;
 }
 
 /**
@@ -105,9 +120,9 @@ export abstract class BaseAggregate<
 	 */
 	private _persistedVersion: Version | undefined = undefined;
 
-	private _pendingEvents: TEvent[] = [];
+	private _pendingEvents: PendingDomainEvent<TEvent>[] = [];
 
-	private readonly domainEventFactory: DomainEventFactory;
+	private readonly domainEventFactory: AggregateEventConvenienceFactory;
 
 	protected constructor(
 		id: TId,
@@ -127,12 +142,36 @@ export abstract class BaseAggregate<
 				this._pendingEvents = [];
 			},
 		});
+		registerPendingEventRecordingCapability(this, {
+			record: (createStamp) => {
+				const recorded: TEvent[] = this._pendingEvents.map((event, index) => {
+					const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
+					if (isMintedEvent(candidate)) return candidate as TEvent;
+					if (!isUncommittedDomainEvent(candidate)) {
+						throw new UnmintedEventError(
+							(event as { readonly type: string }).type,
+						);
+					}
+					return recordDomainEvent(
+						candidate,
+						createStamp(candidate, index),
+					) as TEvent;
+				});
+				this._pendingEvents = recorded;
+				return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
+			},
+		});
 	}
 
 	public get version(): Version {
 		return this._version;
 	}
 
+	/**
+	 * Read-only persistence receipt for repository adapters. `undefined` means
+	 * no successful insert or restore has established a durable baseline.
+	 * Domain decisions must not branch on this storage lifecycle value.
+	 */
 	public get persistedVersion(): Version | undefined {
 		return this._persistedVersion;
 	}
@@ -141,7 +180,7 @@ export abstract class BaseAggregate<
 	 * Read-only list of domain events recorded on this aggregate that
 	 * have not yet been flushed to the outbox / persistence layer.
 	 */
-	public get pendingEvents(): ReadonlyArray<TEvent> {
+	public get pendingEvents(): ReadonlyArray<PendingDomainEvent<TEvent>> {
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
@@ -213,7 +252,7 @@ export abstract class BaseAggregate<
 	 * An event-only commit on an already-persisted aggregate has no unique
 	 * cursor and `withCommit` rejects it; use `commit(currentState, event)`.
 	 */
-	protected addDomainEvent(event: TEvent): void {
+	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		this.assertMintedEvent(event);
 		this._pendingEvents.push(event);
 	}
@@ -228,9 +267,11 @@ export abstract class BaseAggregate<
 	 * establish (a shallow-frozen literal with mutable nested data
 	 * would fool it). O(1): one WeakSet lookup.
 	 */
-	protected assertMintedEvent(event: TEvent): void {
-		if (!isMintedEvent(event)) {
-			throw new UnmintedEventError((event as AnyDomainEvent).type);
+	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
+		if (!isMintedEvent(event) && !isUncommittedDomainEvent(event)) {
+			throw new UnmintedEventError(
+				(event as AnyDomainEvent | AnyUncommittedDomainEvent).type,
+			);
 		}
 	}
 
@@ -251,10 +292,11 @@ export abstract class BaseAggregate<
 	 * snapshots written against an older `TSnapshotState` shape.
 	 */
 	public createSnapshot(snapshotAt: Date): AggregateSnapshot<TSnapshotState> {
+		const recordedAt = copySnapshotAt(snapshotAt);
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
-			snapshotAt: copySnapshotAt(snapshotAt),
+			snapshotAt: recordedAt,
 			schemaVersion: this.snapshotSchemaVersion,
 		};
 	}
@@ -352,17 +394,17 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Creates an aggregate event from explicit operation facts and injects
+	 * Legacy compatibility helper that creates a fully recorded aggregate
+	 * event from an explicit stamp and injects
 	 * `aggregateId` (from `this.id`) and `aggregateType` (from
-	 * {@link aggregateType}). This is the canonical path for recording events
-	 * from deterministic aggregate behavior.
+	 * {@link aggregateType}). New domain behavior should use
+	 * {@link createEvent}; this method remains for incremental migration.
 	 *
 	 * Downstream consumers (outbox dispatchers, projection handlers,
 	 * audit logs) route by these two fields. Calling
 	 * `createDomainEvent(...)` directly inside an aggregate method
 	 * leaves them unset and is caught at the `withCommit` harvest
-	 * boundary, but `this.recordEvent(...)` makes the right thing
-	 * impossible to forget.
+	 * boundary.
 	 *
 	 * @example
 	 * ```ts
@@ -380,8 +422,10 @@ export abstract class BaseAggregate<
 	 *
 	 * @param type    - event type discriminator (must be one of `TEvent`'s tags)
 	 * @param payload - payload for that event subtype
-	 * @param facts - explicit event identity, occurrence time, schema version,
-	 *   and metadata supplied by the application operation
+	 * @param facts - explicit event identity, recording time, and metadata
+	 *   supplied by the application operation
+	 * @deprecated Prefer {@link createEvent} in domain behavior and record the
+	 * pending decision with `recordPendingEvents` in the application shell.
 	 */
 	protected recordEvent<E extends TEvent>(
 		type: E["type"],
@@ -401,6 +445,7 @@ export abstract class BaseAggregate<
 	 * domain operation should be deterministic from its explicit inputs. If no
 	 * factory was configured, omitted values come from Web Crypto and the
 	 * platform clock.
+	 * @deprecated Prefer {@link createEvent} plus application-shell recording.
 	 */
 	protected recordEventFromFactory<E extends TEvent>(
 		type: E["type"],
@@ -413,11 +458,34 @@ export abstract class BaseAggregate<
 			aggregateType: this.aggregateType,
 		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
+
+	/**
+	 * Creates the immutable business fact accepted by this aggregate without
+	 * reading a clock, generating an id, or attaching tracing metadata.
+	 *
+	 * The application shell records pending events after the domain operation
+	 * and before persistence. Payload schema version stays here, next to the
+	 * concrete event producer, rather than in shell-owned recording data.
+	 */
+	protected createEvent<E extends TEvent>(
+		type: E["type"],
+		payload: E["payload"],
+		options?: Omit<
+			CreateUncommittedDomainEventOptions,
+			"aggregateId" | "aggregateType"
+		>,
+	): UncommittedDomainEventOf<E> {
+		return createUncommittedDomainEvent(type, payload, {
+			...options,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		}) as UncommittedDomainEventOf<E>;
+	}
 }
 
 function copySnapshotAt(snapshotAt: Date): Date {
 	if (!(snapshotAt instanceof Date) || !Number.isFinite(snapshotAt.getTime())) {
-		throw new TypeError("snapshotAt must be a valid Date");
+		throw new SnapshotTimeValidationError();
 	}
 	return new Date(snapshotAt.getTime());
 }

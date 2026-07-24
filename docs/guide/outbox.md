@@ -17,7 +17,11 @@ The kit gives you four pieces:
 The main path looks like this:
 
 ```ts
-import { InMemoryOutbox, withCommit } from "@shirudo/ddd-kit";
+import {
+  InMemoryOutbox,
+  recordPendingEvents,
+  withCommit,
+} from "@shirudo/ddd-kit";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
@@ -25,7 +29,8 @@ const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(id);
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await orders.save(order);
 
   return {
@@ -132,7 +137,8 @@ await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await orders.save(order);
 
   return {

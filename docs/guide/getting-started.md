@@ -49,8 +49,8 @@ import {
   AggregateRoot,
   createDomainEventFactory,
   DomainError,
+  recordPendingEvents,
   type DomainEvent,
-  type DomainEventFacts,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -97,7 +97,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return this.state.status;
   }
 
-  confirm(facts: DomainEventFacts): void {
+  confirm(): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
     }
@@ -107,11 +107,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
         ...this.state,
         status: "confirmed",
       },
-      this.recordEvent(
-        "OrderConfirmed",
-        { orderId: this.id },
-        facts,
-      ),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -119,7 +115,8 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 const order = Order.draft("order-1" as OrderId, "customer-1");
 const domainEvents = createDomainEventFactory();
 
-order.confirm(domainEvents.createFacts());
+order.confirm();
+recordPendingEvents(order, domainEvents);
 
 order.status; // "confirmed"
 order.version; // 1
@@ -130,16 +127,18 @@ This example shows the core conventions:
 
 - `aggregateType` is required on every concrete aggregate. It is written onto
   events so outbox dispatchers and projections know where the event came from.
-- `recordEvent(..., facts)` fills `aggregateId` and `aggregateType`
-  automatically. The application creates event identity and occurrence time
-  before it enters the aggregate.
+- `createEvent(...)` fills `aggregateId` and `aggregateType` without reading a
+  clock or id generator. `recordPendingEvents(...)` adds the technical stamp in
+  the application shell.
 - `commit(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
 - Domain rules throw `DomainError` subclasses. Application boundaries decide
   whether to turn selected errors into `Result` with `domainErrorToResult`, map
   them to HTTP responses, or let unknown failures propagate.
-- `pendingEvents` are not historical events yet. They are the aggregate's
-  unflushed event queue until the transaction/outbox boundary harvests them.
+- `pendingEvents` are not historical events yet. Before recording they are
+  immutable domain decisions; after recording they carry their stable event id
+  and recording time. They remain unflushed until the transaction/outbox
+  boundary harvests them.
 
 At this point nothing has been persisted. Persistence is an adapter concern.
 The aggregate has done domain work; a repository and `withCommit` still need to

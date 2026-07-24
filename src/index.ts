@@ -16,28 +16,44 @@ export {
 } from "./aggregate/aggregate";
 export type { AggregateAddress } from "./aggregate/aggregate-address";
 export {
+	type AggregateEventConvenienceFactory,
 	type AggregateConfig,
 	AggregateRoot,
 } from "./aggregate/aggregate-root";
 export {
 	type AnyDomainEvent,
+	type AnyUncommittedDomainEvent,
 	type ClockFactory,
 	type CreateDomainEventFactsOptions,
 	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
+	type CreateDomainEventStampOptions,
+	type CreateUncommittedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
 	createDomainEventFromFacts,
+	createUncommittedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
 	type DomainEventFacts,
+	type DomainEventStamp,
 	defaultDomainEventFactory,
 	type EventIdFactory,
 	type EventMetadata,
 	mergeMetadata,
+	type PendingDomainEvent,
+	recordDomainEvent,
+	type UncommittedDomainEvent,
+	type UncommittedDomainEventOf,
 } from "./aggregate/domain-event";
+export {
+	type DomainEventValidationCode,
+	DomainEventValidationError,
+	type DomainEventValidationField,
+	SnapshotTimeValidationError,
+} from "./aggregate/domain-event-errors";
 export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
 
 // CQRS: commands, queries, buses
@@ -47,6 +63,16 @@ export {
 	type CommandBusOptions,
 	type ICommandBus,
 } from "./app/command-bus";
+export {
+	type CommandCommitOriginCandidate,
+	type CommandMessageContent,
+	type CommandMessageRelationships,
+	type CommandOutboxCommitCandidate,
+	type CommandOutboxMapper,
+	type CommandOutboxWriter,
+	type DurableCommandMessage,
+	routeEventsToCommandOutbox,
+} from "./app/command-outbox";
 export {
 	type DomainErrorClass,
 	domainErrorToResult,
@@ -59,6 +85,11 @@ export {
 	type WithCommitWorkResult,
 	withCommit,
 } from "./app/handler";
+export {
+	type DomainEventStampFactory,
+	type DomainEventStampProvider,
+	recordPendingEvents,
+} from "./app/record-pending-events";
 export {
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,

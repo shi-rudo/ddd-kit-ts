@@ -122,19 +122,26 @@ to the business, and the team accepts the event-evolution and operational
 cost. Snapshots then remain disposable acceleration data, never a second source
 of truth.
 
-The compact event-sourced variant deliberately records process decisions such
-as `CheckoutPaymentRequested` and `CheckoutShippingRequested`, not copies of
-participant state. Those events both rebuild the process position and cross the
-outbox boundary after commit, where application subscribers map them to
-participant commands. Its handlers are pure evolution functions; replay calls
-no bus and emits no new work:
+The compact event-sourced variant deliberately records completed changes to the
+process itself: `CheckoutStartedAwaitingPayment`,
+`CheckoutAdvancedToShipping`, and
+`CheckoutCompensationStartedAfterShippingFailure`. These names matter. They say
+what the coordinator decided and where its own state moved; they do not pretend
+that `Payment` or `Shipping` has already done anything.
+
+Those private facts rebuild the process position. They are not collaboration
+events and they are not sent to a participant. While the live decision is
+committing, an application-boundary mapper creates a separate imperative
+command such as `RequestPayment` or `RequestShipping` and writes it to a
+dedicated command outbox. Replay only invokes the process-event handlers, so it
+does not run that mapper:
 
 ```ts
 const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
 const replayed = saga.loadFromHistory(history);
 if (replayed.isErr()) throw replayed.error;
 
-// No command was dispatched and no pending event was created by replay.
+// No command was enqueued and no pending fact was created by replay.
 ```
 
 ## Events in, through the dispatcher
@@ -231,34 +238,130 @@ shipping, cancel, refund. How those commands leave is the single biggest
 difference between a saga that works in a demo and one that works in
 production, and it is where most hand-rolled implementations quietly have a
 hole. The obvious wiring, dispatching the command on the bus right inside
-the subscriber (the example does this, to stay readable), has a crash
+the subscriber (the state-stored demo does this, to stay readable), has a crash
 window: the process dies after the saga's transaction committed and before
 the dispatch went out, and now the decision is durably recorded and never
 acted on. No retry fixes it, because nothing knows there is anything to
 retry.
 
-The durable version closes the window with a move this page has already
-made twice: the saga's decision is itself a fact, so it belongs in the
-same commit. Record it as an event (`PaymentRequestDemanded`, or simply
-let the saga's own transition event carry enough data), let the outbox
-deliver it with the same at-least-once guarantee as everything else, and
-let a small subscriber convert the delivered event into the command:
+Before the wiring, keep three meanings separate:
+
+- A private process fact is history owned by the Process Manager. It answers
+  "which decision moved this process here?" and is replayed to rebuild process
+  state.
+- A collaboration event tells any interested consumer that something happened
+  across a bounded-context boundary. It is past tense and may have zero, one, or
+  many subscribers.
+- A command asks one named receiver to try to do something. It is imperative,
+  has one destination, and may be rejected.
+
+Calling a private fact `CheckoutPaymentRequested` and publishing it to exactly
+one payment handler blurs all three. It looks like history, but behaves as a
+command. This is sometimes called a passive-aggressive event. The failure is
+not the past-tense spelling by itself; the failure is hiding point-to-point
+intent behind publish/subscribe semantics.
+
+The event-sourced example uses a dedicated command outbox. The aggregate first
+accepts a private fact. `recordPendingEvents` gives that fact its recording
+identity and trace metadata. Still inside the same transaction,
+`routeEventsToCommandOutbox` maps it to the exact addressed command that must
+survive the commit:
 
 ```ts
-bus.subscribe("CheckoutPaymentRequested", async (event) => {
-  await commandBus.execute({
-    type: "RequestPayment",
-    orderId: event.aggregateId as OrderId,
-    paymentId: event.payload.paymentId,
-    amount: event.payload.total,
-  });
-});
+const processCommandWriter = routeEventsToCommandOutbox(
+  commandOutbox,
+  checkoutCommandsFromProcessFact,
+);
+
+await withCommit(
+  {
+    scope,
+    outbox: processCommandWriter,
+    // Deliberately no bus: these process facts are private history.
+  },
+  async (tx, enrollment) => {
+    saga.advanceToShipping(shipmentId);
+    const recorded = recordPendingEvents(saga, () =>
+      domainEvents.createStamp({
+        metadata: {
+          correlationId: paymentReceived.metadata?.correlationId,
+          conversationId: paymentReceived.metadata?.conversationId,
+          causationId: paymentReceived.eventId,
+        },
+      }),
+    );
+
+    await makeCheckoutEventStore(tx).append(recorded);
+    return {
+      result: saga.id,
+      commits: [enrollment.enrollSaved(saga)],
+    };
+  },
+);
 ```
 
-If the converter crashes, the event redelivers and the command handler's
-own idempotency (or an inbox key, same pattern as above) absorbs the
-duplicate. Nothing is lost between the decision and the action, which is
-the property the whole outbox machinery exists to provide.
+The mapper runs before the transaction commits. The command-outbox adapter sees
+an origin receipt, not the private event or its payload, and stores the command
+with an explicit destination. If that write fails, the process-stream append
+rolls back with it. If the process dies immediately after commit, the command is
+already waiting for a dispatcher.
+
+The process facts also avoid claiming success too early. Shipping completion
+records `CheckoutOrderConfirmationStarted` and enqueues `ConfirmOrder`; the
+process stays at `awaiting-order-confirmation`. Only a later `OrderConfirmed`
+input records `CheckoutCompleted`, whose command batch is empty. Payment and
+shipping failures similarly move into `cancelling-*` or `compensating-*`
+states. Enqueuing a compensating command is not the same fact as completing the
+compensation.
+
+Each command receives a stable message id derived from the private event id and
+its order in the decision, for example
+`checkout-started-1:command:0`. Its `causationId` is the private process fact;
+its `conversationId` follows the long-running checkout. A participant's result
+event then names the command message as its direct cause. The chain is
+therefore visible rather than inferred:
+
+```text
+OrderPlaced
+  -> CheckoutStartedAwaitingPayment
+  -> RequestPayment
+  -> PaymentReceived
+```
+
+Delivery remains at least once. The participant scopes
+`withIdempotentCommit` by consumer and command `messageId`, persists the
+business result before acknowledging, and returns that stored result when the
+same command arrives again. A crash after executing the command but before
+acknowledging it therefore repeats delivery, not business work.
+
+One process fact may request several commands. Shipping failure maps to
+`RefundPayment` followed by `CancelOrder`; their array order is part of the
+command-outbox write. A dispatcher sends them in that order. If it sends the
+refund and crashes before the cancellation, the batch may start again, so the
+refund consumer still has to be idempotent.
+
+### Migrating command-shaped process events
+
+Do not rename rows already stored in an event stream and hope replay will sort
+it out. Treat old names as an event-schema migration:
+
+1. Teach the stream reader or upcaster to interpret
+   `CheckoutPaymentRequested` as `CheckoutStartedAwaitingPayment` and
+   `CheckoutShippingRequested` as `CheckoutAdvancedToShipping`. Keep replay
+   tests containing the old names.
+2. During the rollout, keep the legacy event-to-command route alive long enough
+   to drain already committed event-outbox rows. Derive the same stable command
+   message id from the old event id so the participant inbox absorbs overlap.
+3. Switch new writes to the private process facts and the transactional command
+   outbox. Do not also publish those facts on the EventBus.
+4. Remove the legacy route only after no old delivery rows remain. Keep the
+   upcaster for as long as old process streams can be loaded, unless the streams
+   themselves are migrated with an audited, reversible procedure.
+
+This is more machinery than an in-process subscriber, but every piece answers a
+different failure: the process stream explains and replays decisions, the
+command outbox closes the commit-before-send window, and the participant inbox
+absorbs send-before-ack duplicates.
 
 ## Timeouts are inputs
 

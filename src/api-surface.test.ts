@@ -4,6 +4,7 @@ import type {
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
+	DurableCommandMessage,
 	DomainErrorClass,
 	IAggregateRoot,
 	Id,
@@ -84,6 +85,9 @@ const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	causationId: "cause-1",
 };
 void publicIntegrationRelationships;
+void (undefined as unknown as DurableCommandMessage<{
+	type: "RebuildReadModel";
+}>);
 void (undefined as unknown as DomainErrorClass);
 
 /**
@@ -105,6 +109,7 @@ const INDEX_SURFACE = [
 	"ConcurrencyConflictError",
 	"DeadlineProcessor",
 	"DomainError",
+	"DomainEventValidationError",
 	"DomainStateMachine",
 	"DomainTransitionGuardRejectedError",
 	"DuplicateAggregateError",
@@ -154,6 +159,7 @@ const INDEX_SURFACE = [
 	"RollbackError",
 	"SnapshotCorruptedError",
 	"SnapshotSchemaMismatchError",
+	"SnapshotTimeValidationError",
 	"Specification",
 	"TransactionClosedError",
 	"UnenrolledChangesError",
@@ -171,6 +177,7 @@ const INDEX_SURFACE = [
 	"createDomainEventFromFacts",
 	"createInitialDomainMachineSnapshot",
 	"createIntegrationMessage",
+	"createUncommittedDomainEvent",
 	"decodeIntegrationMessage",
 	"deepEqual",
 	"deepEqualExcept",
@@ -191,8 +198,11 @@ const INDEX_SURFACE = [
 	"outboxWriterAcceptingEventLoss",
 	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
+	"recordDomainEvent",
+	"recordPendingEvents",
 	"removeEntityById",
 	"replaceEntityById",
+	"routeEventsToCommandOutbox",
 	"sameEntity",
 	"sameVersion",
 	"specification",

@@ -3,11 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
 import {
 	createDomainEventFactory,
-	type DomainEventFacts,
+	type DomainEventFactory,
 } from "../../src/aggregate/domain-event";
 import type { Command, CommandHandler } from "../../src/app/command";
 import { CommandBus } from "../../src/app/command-bus";
 import { withCommit } from "../../src/app/handler";
+import { recordPendingEvents } from "../../src/app/record-pending-events";
 import { AggregateNotFoundError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import { InvalidDomainTransitionError } from "../../src/domain-state-machine/domain-state-machine";
@@ -114,7 +115,8 @@ interface AppDeps {
 	paymentRepository: IRepository<Payment, PaymentId>;
 	shipmentRepository: IRepository<Shipment, ShipmentId>;
 	sagaRepository: IRepository<CheckoutSaga, OrderId>;
-	eventFacts: () => DomainEventFacts;
+	domainEvents: Pick<DomainEventFactory, "createStamp">;
+	clock: () => Date;
 }
 
 function registerCommandHandlers(deps: AppDeps): void {
@@ -122,12 +124,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 
 	const placeOrder: CommandHandler<PlaceOrderCommand, OrderId> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const order = Order.place(
-				cmd.orderId,
-				cmd.customerId,
-				cmd.total,
-				deps.eventFacts(),
-			);
+			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
+			recordPendingEvents(order, deps.domainEvents);
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(order.id),
@@ -140,12 +138,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		PaymentId
 	> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const payment = Payment.request(
-				cmd.paymentId,
-				cmd.orderId,
-				cmd.amount,
-				deps.eventFacts(),
-			);
+			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
+			recordPendingEvents(payment, deps.domainEvents);
 			await deps.paymentRepository.save(payment);
 			return {
 				result: ok(payment.id),
@@ -158,11 +152,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 		ShipmentId
 	> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const shipment = Shipment.request(
-				cmd.shipmentId,
-				cmd.orderId,
-				deps.eventFacts(),
-			);
+			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
+			recordPendingEvents(shipment, deps.domainEvents);
 			await deps.shipmentRepository.save(shipment);
 			return {
 				result: ok(shipment.id),
@@ -173,7 +164,11 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
-			order.confirm(deps.eventFacts());
+			const confirmedAt = deps.clock();
+			order.confirm(confirmedAt);
+			recordPendingEvents(order, () =>
+				deps.domainEvents.createStamp({ occurredAt: confirmedAt }),
+			);
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(undefined as void),
@@ -184,7 +179,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const cancelOrder: CommandHandler<CancelOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
-			order.cancel(cmd.reason, deps.eventFacts());
+			order.cancel(cmd.reason);
+			recordPendingEvents(order, deps.domainEvents);
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(undefined as void),
@@ -197,7 +193,8 @@ function registerCommandHandlers(deps: AppDeps): void {
 	) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
-			payment.refund(deps.eventFacts());
+			payment.refund();
+			recordPendingEvents(payment, deps.domainEvents);
 			await deps.paymentRepository.save(payment);
 			return {
 				result: ok(undefined as void),
@@ -323,8 +320,9 @@ async function simulatePaymentResult(
 		{ outbox, bus: eventBus, scope },
 		async (_tx, enrollment) => {
 			const payment = await paymentRepository.getById(paymentId);
-			if (outcome.kind === "received") payment.receive(deps.eventFacts());
-			else payment.fail(outcome.reason, deps.eventFacts());
+			if (outcome.kind === "received") payment.receive();
+			else payment.fail(outcome.reason);
+			recordPendingEvents(payment, deps.domainEvents);
 			await paymentRepository.save(payment);
 			return {
 				result: ok(undefined as void),
@@ -347,10 +345,11 @@ async function simulateShippingResult(
 		async (_tx, enrollment) => {
 			const shipment = await shipmentRepository.getById(shipmentId);
 			if (outcome.kind === "completed") {
-				shipment.complete(outcome.trackingId, deps.eventFacts());
+				shipment.complete(outcome.trackingId);
 			} else {
-				shipment.fail(outcome.reason, deps.eventFacts());
+				shipment.fail(outcome.reason);
 			}
+			recordPendingEvents(shipment, deps.domainEvents);
 			await shipmentRepository.save(shipment);
 			return {
 				result: ok(undefined as void),
@@ -371,9 +370,10 @@ function bootstrap() {
 	const paymentIdGen = (): PaymentId => `pay-${nextPaymentSeq++}` as PaymentId;
 	const shipmentIdGen = (): ShipmentId =>
 		`ship-${nextShipmentSeq++}` as ShipmentId;
+	const clock = () => new Date("2027-04-05T06:07:08.000Z");
 	const domainEvents = createDomainEventFactory({
 		eventIdFactory: () => `event-${nextEventSeq++}`,
-		clock: () => new Date("2027-04-05T06:07:08.000Z"),
+		clock,
 	});
 
 	const deps: AppDeps = {
@@ -390,7 +390,8 @@ function bootstrap() {
 		paymentRepository: inMemoryRepo<Payment, PaymentId>("Payment"),
 		shipmentRepository: inMemoryRepo<Shipment, ShipmentId>("Shipment"),
 		sagaRepository: inMemoryRepo<CheckoutSaga, OrderId>("CheckoutSaga"),
-		eventFacts: () => domainEvents.createFacts(),
+		domainEvents,
+		clock,
 	};
 
 	registerCommandHandlers(deps);

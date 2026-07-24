@@ -5,7 +5,7 @@ import {
 	assertRestoreTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import type { AnyDomainEvent } from "./domain-event";
+import type { AnyDomainEvent, PendingDomainEvent } from "./domain-event";
 import {
 	aggregatePersistenceCapabilityFor,
 	registerAggregatePersistenceCapability,
@@ -28,7 +28,10 @@ export type { IAggregateRoot } from "./aggregate";
  * version; the rare non-bumping mutation is the deliberately loud
  * `setStateWithoutVersionBump`.
  */
-export type { AggregateConfig } from "./base-aggregate";
+export type {
+	AggregateConfig,
+	AggregateEventConvenienceFactory,
+} from "./base-aggregate";
 
 /**
  * Base class for Aggregate Roots without Event Sourcing.
@@ -66,10 +69,10 @@ export type { AggregateConfig } from "./base-aggregate";
  *     super(id, initialState);
  *   }
  *
- *   confirm(facts: DomainEventFacts): void {
+ *   confirm(): void {
  *     this.commit(
  *       { ...this.state, status: "confirmed" },
- *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+ *       this.createEvent("OrderConfirmed", { orderId: this.id }),
  *     );
  *   }
  * }
@@ -186,6 +189,9 @@ export abstract class AggregateRoot<
 	 * a dirty collection key means "this child table changed", not which
 	 * rows. `EventSourcedAggregate` deliberately has no `changedKeys`;
 	 * its `pendingEvents` are the change record.
+	 *
+	 * This is an adapter-facing optimization signal. Domain methods must not
+	 * use it to decide whether a business transition is allowed.
 	 */
 	public get changedKeys(): ReadonlySet<Extract<keyof TState, string>> {
 		if (!this._hasBaseline) {
@@ -218,6 +224,8 @@ export abstract class AggregateRoot<
 	 * `hasChanges` must still route that misuse through the harvest guard
 	 * instead of silently skipping it. With all clauses included,
 	 * `hasChanges === false` genuinely means "skipping save is safe".
+	 * This is application/repository lifecycle information, not domain state;
+	 * business behavior must not branch on it.
 	 */
 	public get hasChanges(): boolean {
 		if (!this._hasBaseline) return true;
@@ -258,13 +266,13 @@ export abstract class AggregateRoot<
 	 *
 	 * @example
 	 * ```ts
-	 * confirm(facts: DomainEventFacts): void {
+	 * confirm(): void {
 	 *   if (this.state.status === "confirmed") {
 	 *     throw new OrderAlreadyConfirmedError(this.id);
 	 *   }
 	 *   this.commit(
 	 *     { ...this.state, status: "confirmed" },
-	 *     this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+	 *     this.createEvent("OrderConfirmed", { orderId: this.id }),
 	 *   );
 	 * }
 	 * ```
@@ -279,11 +287,13 @@ export abstract class AggregateRoot<
 	 */
 	protected commit(
 		newState: TState,
-		events: TEvent | readonly TEvent[] = [],
+		events:
+			| PendingDomainEvent<TEvent>
+			| readonly PendingDomainEvent<TEvent>[] = [],
 	): void {
-		const list: readonly TEvent[] = Array.isArray(events)
+		const list: readonly PendingDomainEvent<TEvent>[] = Array.isArray(events)
 			? events
-			: [events as TEvent];
+			: [events as PendingDomainEvent<TEvent>];
 		// Events are checked BEFORE the state moves: a rejected event must
 		// not leave a mutated aggregate without its recorded fact.
 		for (const ev of list) {

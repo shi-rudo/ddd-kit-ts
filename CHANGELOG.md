@@ -19,16 +19,32 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
-### Changed (breaking): aggregate event facts are explicit
+### Changed (breaking): aggregate decisions are recorded by the shell
 
-- `recordEvent(type, payload, facts)` now requires `DomainEventFacts` containing
-  `eventId` and `occurredAt`, plus optional event schema `version` and tracing
-  `metadata`. The strict path reads neither the platform clock nor Web Crypto;
-  it only adds the aggregate address and mints the immutable event.
-- `DomainEventFactory.createFacts(options?)` gives the application shell one
-  operation-scoped place to obtain those values. The new
-  `createDomainEventFromFacts(...)` provides the same strict construction path
-  for events created outside an aggregate.
+- Aggregate behavior now creates an immutable `UncommittedDomainEvent` with
+  `this.createEvent(type, payload, { version })`. The value contains only the
+  producer-owned fact and aggregate address; domain methods no longer accept
+  generic event identity, recording time, or trace metadata.
+- `recordPendingEvents(aggregate, factoryOrProvider)` is the application-shell
+  boundary that turns each new decision into a recorded `DomainEvent`. It
+  attaches a `DomainEventStamp` exactly once, so retries reuse the same event
+  identity and timestamp. `withCommit` rejects an unrecorded event before
+  outbox harvest.
+- `DomainEventFactory.createStamp(options?)` creates the shell-owned
+  `eventId`, `occurredAt`, and metadata. It cannot select the payload schema
+  version; that version stays beside the concrete event payload.
+- `DomainEventFacts` / `createFacts()` and `recordEvent(..., facts)` remain
+  deprecated migration aliases. New code should not pass them through a
+  domain operation. `createDomainEventFromFacts(...)` remains available for
+  strict construction outside aggregates.
+- Domain-event type, identity, address, occurrence time, and schema version are
+  validated centrally. `DomainEventValidationError` and
+  `SnapshotTimeValidationError` remain `TypeError`s while adding stable
+  machine-readable `code` and `field` properties.
+- Factory-owned stamps reuse their already immutable metadata and decision
+  payload during recording; hand-built stamps retain the full defensive-copy
+  path. The reproducible benchmark and ownership rationale live in
+  `docs/benchmarks/domain-event-stamping.md`.
 - `createSnapshot(snapshotAt)` now requires the snapshot policy or repository
   to supply the timestamp. Snapshot state and time are defensively copied.
 - `recordEventFromFactory(...)` and `createSnapshotFromFactory()` retain the
@@ -39,19 +55,7 @@ here, with a before and after.
 Migration for aggregate operations:
 
 ```ts
-// Before
-confirm(): void {
-  this.commit(
-    nextState,
-    this.recordEvent("OrderConfirmed", payload),
-  );
-}
-
-const order = await orders.getById(command.orderId);
-order.confirm();
-const snapshot = order.createSnapshot();
-
-// After: preferred deterministic path
+// Before: recording data leaked into the domain signature
 confirm(facts: DomainEventFacts): void {
   this.commit(
     nextState,
@@ -61,12 +65,79 @@ confirm(facts: DomainEventFacts): void {
 
 const order = await orders.getById(command.orderId);
 order.confirm(domainEvents.createFacts());
+
+// After: pure decision in the aggregate
+confirm(): void {
+  this.commit(
+    nextState,
+    this.createEvent("OrderConfirmed", payload),
+  );
+}
+
+const order = await orders.getById(command.orderId);
+order.confirm();
+recordPendingEvents(order, () =>
+  domainEvents.createStamp({
+    metadata: { correlationId: command.correlationId },
+  }),
+);
+await orders.save(order);
 const snapshot = order.createSnapshot(domainEvents.now());
 ```
 
 Aggregates that intentionally keep their injected factory can make the smaller
 compatibility migration by renaming calls to `recordEventFromFactory(...)` and
-`createSnapshotFromFactory()`.
+`createSnapshotFromFactory()`. `AggregateConfig` now depends only on the narrow
+`AggregateEventConvenienceFactory` role (`create` and `now`), so custom
+compatibility factories no longer need to implement shell stamping.
+
+### Added: transactional command-outbox routing for process managers
+
+- Add `CommandOutboxWriter`, `CommandOutboxCommitCandidate`, and
+  `DurableCommandMessage` as the write-side contract for a dedicated,
+  point-to-point command outbox. Every message has an explicit `destination`,
+  a stable `messageId`, and direct `causationId`; an origin receipt retains the
+  private event's source position without leaking that event or its payload.
+- Add `routeEventsToCommandOutbox(outbox, mapper)`. It adapts the
+  `OutboxWriter` expected by `withCommit`, maps private accepted process facts
+  to exact commands inside the aggregate transaction, and retains empty
+  command commits so source-cursor and retry semantics do not develop gaps.
+- Migrate the event-sourced checkout example from command-shaped facts such as
+  `CheckoutPaymentRequested` to private process facts such as
+  `CheckoutStartedAwaitingPayment`. These facts are not published on the
+  EventBus. An application mapper writes `RequestPayment`, `RequestShipping`,
+  `ConfirmOrder`, `RefundPayment`, and `CancelOrder` to explicit participant
+  destinations.
+- The process no longer records completion before its final participant acts:
+  `CheckoutOrderConfirmationStarted` enqueues `ConfirmOrder` and enters
+  `awaiting-order-confirmation`; a later `OrderConfirmed` input records the
+  command-free `CheckoutCompleted` fact. Cancellation and compensation states
+  likewise describe in-progress recovery rather than prematurely claiming it
+  finished.
+- The runnable example covers atomic process-stream/command persistence,
+  rollback, crash after commit, replay without command creation, stored-result
+  idempotency on redelivery, conversation and causation propagation, and
+  reverse-order compensation. The saga guide includes a staged migration for
+  already persisted command-shaped process events.
+
+### Documented: persistence tracking remains a tactical v3 boundary
+
+- Retain `persistedVersion`, `hasChanges`, and `changedKeys` on the tactical
+  aggregate base classes for v3. They are now explicitly documented as
+  adapter-facing persistence receipts that domain behavior must not use.
+- The design decision compares aggregate-owned baselines, `UnitOfWork` tracked
+  entries, opaque repository load receipts, and a split API. A real move would
+  require a new identity-bound repository protocol or mandatory `UnitOfWork`;
+  hiding the current fields behind another accessor would not move ownership.
+- The existing boundary remains strict: repositories can read lifecycle state,
+  but only `withCommit` and `UnitOfWork` can acknowledge a committed save,
+  clear pending events, and re-baseline dirty tracking. Snapshot time is already
+  supplied by the shell through `createSnapshot(snapshotAt)`.
+- Repository and event-sourced repository contract suites continue to pin OCC,
+  insert/update routing, rollback, identity-map behavior, partial-write safety,
+  event harvest, and stream-version semantics. A future major should revisit
+  the model only together with an opaque, identity-bound load receipt and an
+  explicit decision on direct repository support.
 
 ### Changed (breaking): shell operations carry cancellation and deadlines
 

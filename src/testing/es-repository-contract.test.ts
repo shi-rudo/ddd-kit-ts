@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type { DomainEvent } from "../aggregate/domain-event";
+import {
+	type DomainEvent,
+	isMintedEvent,
+	type UncommittedDomainEventOf,
+} from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
 import { ConcurrencyConflictError } from "../core/errors";
@@ -87,13 +91,16 @@ class ContractEsOrder extends EventSourcedAggregate<
 	protected readonly handlers = {
 		EsOrderCreated: (
 			state: EsOrderState,
-			event: EsOrderCreated,
+			event: UncommittedDomainEventOf<EsOrderCreated>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
 		EsOrderRenamed: (
 			state: EsOrderState,
-			event: EsOrderRenamed,
+			event: UncommittedDomainEventOf<EsOrderRenamed>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
-		EsItemAdded: (state: EsOrderState, event: EsItemAdded): EsOrderState => ({
+		EsItemAdded: (
+			state: EsOrderState,
+			event: UncommittedDomainEventOf<EsItemAdded>,
+		): EsOrderState => ({
 			...state,
 			items: [...state.items, event.payload.item],
 		}),
@@ -215,7 +222,11 @@ class InMemoryEsOrderRepository
 		}
 		// Appends the UNSTAMPED pendingEvents originals (the outbox gets
 		// committed envelopes from withCommit's harvest).
-		this.db.streams.set(key, [...stream, ...order.pendingEvents]);
+		const pending = order.pendingEvents;
+		if (!pending.every(isMintedEvent)) {
+			throw new Error("repository received an unrecorded domain event");
+		}
+		this.db.streams.set(key, [...stream, ...(pending as EsOrderEvent[])]);
 	}
 }
 
@@ -357,7 +368,11 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			// ❌ no expectedVersion check:
 			const key = streamMapKey(orderStream(order.id));
 			const stream = this.db.streams.get(key) ?? [];
-			this.db.streams.set(key, [...stream, ...order.pendingEvents]);
+			const pending = order.pendingEvents;
+			if (!pending.every(isMintedEvent)) {
+				throw new Error("repository received an unrecorded domain event");
+			}
+			this.db.streams.set(key, [...stream, ...(pending as EsOrderEvent[])]);
 		}
 	}
 

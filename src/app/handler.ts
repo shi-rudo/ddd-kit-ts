@@ -1,6 +1,6 @@
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
+import { type AnyDomainEvent, isMintedEvent } from "../aggregate/domain-event";
 import {
 	type AggregatePersistenceCapability,
 	aggregatePersistenceCapabilityFor,
@@ -459,26 +459,35 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					);
 				}
 				return agg.pendingEvents.map((event, index) => {
+					if (!isMintedEvent(event)) {
+						throw new EventHarvestError(
+							`withCommit: event "${event.type}" has not been recorded. ` +
+								"Call recordPendingEvents(aggregate, createStamp) in the " +
+								"application shell before persistence or outbox harvest.",
+							event.type,
+						);
+					}
+					const recordedEvent = event as Evt;
 					const commitSize = agg.pendingEvents.length;
-					const aggregateId = event.aggregateId;
-					const aggregateType = event.aggregateType;
+					const aggregateId = recordedEvent.aggregateId;
+					const aggregateType = recordedEvent.aggregateType;
 					const missing: string[] = [];
 					if (!aggregateId) missing.push("aggregateId");
 					if (!aggregateType) missing.push("aggregateType");
 					if (!aggregateId || !aggregateType) {
 						throw new EventHarvestError(
-							`withCommit: event "${event.type}" is missing ${missing.join(
+							`withCommit: event "${recordedEvent.type}" is missing ${missing.join(
 								" and ",
 							)}. ` +
-								`Use this.recordEvent(type, payload, facts) inside aggregate methods ` +
-								`instead of createDomainEvent(...); recordEvent auto-injects ` +
+								`Use this.createEvent(type, payload) inside aggregate methods ` +
+								`instead of createDomainEvent(...); createEvent auto-injects ` +
 								`aggregateId and aggregateType. Outbox dispatchers and ` +
 								`projection handlers rely on the envelope source.`,
-							event.type,
+							recordedEvent.type,
 						);
 					}
 					return Object.freeze({
-						event,
+						event: recordedEvent,
 						source: Object.freeze({ aggregateId, aggregateType }),
 						position: Object.freeze({
 							aggregateVersion: agg.version as number,

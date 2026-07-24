@@ -1,7 +1,7 @@
 import type { Result } from "@shirudo/result";
 import type { DomainError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { AnyDomainEvent } from "./domain-event";
+import type { AnyDomainEvent, PendingDomainEvent } from "./domain-event";
 
 // Re-export domain event types for convenience
 export * from "./domain-event";
@@ -61,11 +61,19 @@ export interface AggregateSnapshot<TState> {
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
  */
-export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
+export interface IAggregateRoot<
+	TId extends Id<string>,
+	TEvent extends AnyDomainEvent = never,
+> {
 	readonly id: TId;
 	readonly version: Version;
+	/**
+	 * Adapter-facing persistence baseline, not a domain fact. Domain behavior
+	 * must not branch on this value; repositories use it for insert/update
+	 * routing and optimistic-concurrency predicates.
+	 */
 	readonly persistedVersion: Version | undefined;
-	readonly pendingEvents: ReadonlyArray<TEvent>;
+	readonly pendingEvents: ReadonlyArray<PendingDomainEvent<TEvent>>;
 }
 
 /**

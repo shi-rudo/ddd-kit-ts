@@ -144,11 +144,13 @@ last caller. A synchronous scoped helper can restore a global with
 `try/finally`, but it cannot make that global request-local across overlapping
 async work. The correct fix is to remove the shared write location.
 
-### Aggregate operations receive facts, not generators
+### Aggregates decide; the application records
 
-The factory's `createFacts()` method reads the id generator and clock in the
-application shell. The resulting `DomainEventFacts` value then travels into the
-domain operation:
+An aggregate first produces an immutable, uncommitted domain event. That value
+is already a fact from the domain's point of view: the invariant was checked,
+state moved, and the event type and payload were accepted. It is not yet a
+technical event record because it has no generated id, recording time, or trace
+metadata.
 
 ```ts
 const domainEvents = createDomainEventFactory({
@@ -157,29 +159,90 @@ const domainEvents = createDomainEventFactory({
 });
 
 const order = await orders.getById(command.orderId);
-order.confirm(domainEvents.createFacts());
+order.confirm();
+recordPendingEvents(order, () =>
+  domainEvents.createStamp({
+    metadata: { correlationId: command.correlationId },
+  }),
+);
+await orders.save(order);
 ```
 
-Inside the aggregate, `recordEvent(type, payload, facts)` adds the aggregate
-address but does not read the factory, the clock, or Web Crypto. Equal aggregate
-state plus equal command data and facts therefore produce equal events.
+Inside the aggregate, `createEvent(type, payload, { version })` adds the
+aggregate address and payload schema version but does not read the factory,
+clock, or Web Crypto. Equal aggregate state and command data therefore produce
+equal decisions. `recordPendingEvents` is the application-shell step that
+attaches a `DomainEventStamp` exactly once. A retry sees the already recorded
+events and reuses their identities.
 
 Snapshot creation follows the same boundary:
 `createSnapshot(snapshotAt)` requires infrastructure to supply the time. A
 repository or snapshot policy can call `domainEvents.now()` and pass the value
 in; snapshot creation itself remains deterministic.
 
-`AggregateConfig.domainEventFactory` remains available for the clearly named
+`AggregateConfig.domainEventFactory` remains available through the narrow
+`AggregateEventConvenienceFactory` role for the clearly named
 `recordEventFromFactory(...)` and `createSnapshotFromFactory()` convenience
 methods. Those methods are useful in small applications, but they deliberately
 retain the implicit read. When no factory is injected, they use the platform
 clock and Web Crypto defaults.
 
-Event occurrence time is recording information, not a universal business
-clock. If a time such as `paymentDueAt` or `confirmedAt` changes a business
-decision or is needed to understand the event, pass it as domain input and put
-it in the payload. It may be the same instant as `occurredAt`, but that equality
-should be an application decision rather than an accident of a hidden clock.
+`occurredAt` is recording information, not a universal business clock. If a
+time such as `paymentDueAt` or `confirmedAt` changes a business decision or is
+needed to understand the event, pass it as a fachlich named domain input and
+put it in the payload. The application may intentionally use the same instant
+for both roles, but it supplies that value once as business input and once as
+the stamp's recording time. The equality is then a visible decision rather
+than an accident of a hidden clock.
+
+## Private process facts do not double as participant commands
+
+An event-sourced Process Manager needs durable history and durable outgoing
+work, but those are two different contracts. Its stream contains private facts
+such as `CheckoutAdvancedToShipping`: completed decisions that rebuild the
+coordinator's own state. A participant receives `RequestShipping`: an
+imperative request addressed to one handler. Publishing the first value to one
+subscriber and treating it as the second hides command semantics behind an
+event-shaped object.
+
+Three designs were considered:
+
+1. A dedicated command outbox stores addressed commands beside the process
+   commit.
+2. One generalized message outbox stores both publish/subscribe events and
+   point-to-point commands behind a common envelope.
+3. The process stream stores pending effects that a worker later claims and
+   executes.
+
+The kit chooses the first, narrow seam. The generalized envelope would make
+destination, subscriber cardinality, and acknowledgement rules conditional on
+a message-kind flag. Those differences are the boundary, so erasing them buys
+little. Persisted effects would put delivery lifecycle into the process model
+and make replay responsible for distinguishing history from unfinished work.
+A dedicated command outbox keeps both meanings honest without introducing a
+workflow engine.
+
+`routeEventsToCommandOutbox` adapts the event-candidate port used by
+`withCommit`. It runs the application's fact-to-command mapper inside the
+transaction and passes a `CommandOutboxWriter` only an origin receipt and the
+exact addressed messages. It never attaches the private fact or copies its
+payload automatically; the application mapper selects the fields that belong
+in each command contract. An empty command batch still retains its origin
+receipt, so the adapter can advance the process source cursor and distinguish
+an exact retry from a missing write.
+
+Command message ids are derived from the private event id and command order.
+That makes transaction retries stable and keeps several ordered compensations
+distinct. The private fact names the triggering input through its metadata,
+the command names that fact as its direct cause, and the participant's result
+event names the command message. `conversationId` follows the whole business
+interaction across those hops.
+
+The write seam deliberately stops at transactional handoff. A database-backed
+adapter or broker-native outbox owns polling, claiming, acknowledgements,
+retry, and dead letters. Because delivery is at least once, the receiving
+application still uses `withIdempotentCommit` with the command `messageId` and
+stores the handler result before acknowledging.
 
 ## Collection helpers practice structural sharing
 
@@ -249,6 +312,70 @@ If a child needs independent concurrent editing, it is probably not a child enti
 | conflict detection for one part of a large aggregate | reconsider the aggregate boundary |
 
 A generic `version` field on `Entity` would invite consumers to split work across what should be one consistency boundary. The kit leaves it out on purpose.
+
+### Persistence tracking stays on the tactical aggregate for v3
+
+`persistedVersion`, `hasChanges`, and `changedKeys` are not business facts. A
+domain method should never say "if this order was already inserted" or "if the
+menu table is dirty." They are read-only receipts used by repository adapters.
+Keeping them on the aggregate is therefore a coupling between the tactical
+aggregate implementation and its persistence lifecycle, even though it does
+not reverse a dependency: the aggregate package imports no repository, ORM, or
+database type.
+
+The v3 decision is to retain that coupling and name its boundary explicitly.
+This is not because aggregate-owned tracking is the purest possible model. It
+is because moving the fields honestly requires a different repository
+protocol; moving only the getters behind another function would hide the
+coupling without changing ownership.
+
+| Design | Benefit | Cost or unresolved problem |
+| --- | --- | --- |
+| Aggregate-owned baseline, current design | Direct repositories and `UnitOfWork` share one lifecycle; a loaded instance carries its OCC receipt; rollback leaves it untouched | Tactical aggregate objects retain storage baseline and shallow dirty-tracking state |
+| `UnitOfWork`-owned tracked entries | Domain object is cleaner; identity map and baseline naturally live together | Direct `IRepository` use loses its baseline; every load/save must be forced through one tracking session; detached aggregates need an explicit attach protocol |
+| Repository returns an aggregate plus expected-version receipt | Storage state is explicit and outside the aggregate | `findById`, `getById`, `save`, delete, factories, contract suites, and every adapter change shape; callers can lose or pair the receipt with the wrong instance unless it is opaque and identity-bound |
+| Split API retaining domain version/events only | Keeps event decisions readable while moving insert/update and dirty state outward | A public compatibility getter merely relocates access. A real split still needs either the tracked-entry or receipt protocol above |
+
+The lifecycle constraints make a half-migration dangerous:
+
+- OCC updates must predicate on the version that was loaded, while writing the
+  later in-memory version. New aggregates can already have version `1`, so
+  insert/update routing needs a separate never-persisted receipt.
+- `changedKeys` compares current state with the exact state reference captured
+  after load or successful commit. `hasChanges` also catches version-only
+  changes and pending events, preventing a partial-write optimization from
+  skipping a required OCC update or event-harvest guard.
+- `withCommit` acknowledges the aggregate only after the transaction commits.
+  A rollback must leave the baseline and pending events unchanged so the same
+  instance can retry with the same event identities.
+- The identity map guarantees one instance per aggregate address inside a
+  `UnitOfWork`. Moving the receipt into that map is coherent there, but cannot
+  cover the intentionally supported direct-repository path.
+- Event-sourced aggregates use the loaded stream version as the append
+  expectation. Replay establishes that baseline; applying a new event advances
+  only the in-memory version. The outbox cursor and event-store append must
+  observe the same distinction.
+- Snapshot recording time has already moved outward:
+  `createSnapshot(snapshotAt)` receives it from the repository or snapshot
+  policy. Snapshot state restoration still establishes the OCC and dirty
+  baseline atomically.
+
+For v3, the stability boundary is therefore:
+
+- domain behavior may read `version` when sequence itself is meaningful, but
+  must not branch on `persistedVersion`, `hasChanges`, or `changedKeys`
+- repositories may read those adapter-facing values but may not acknowledge,
+  clear events, or re-baseline an aggregate
+- only `withCommit` and `UnitOfWork` hold the internal post-commit capability
+- reconstitution owns the protected post-load marker
+- repository and event-sourced repository contract suites remain the
+  executable specification for insert/update routing, OCC, rollback, partial
+  writes, and retry behavior
+
+A future major version should revisit tracked entries only together with an
+opaque, identity-bound repository receipt and a decision about whether direct
+repository use remains supported. That is the point at which the separation
+can be real rather than cosmetic.
 
 ## TransactionScope stays minimal; the Unit of Work lives above it
 

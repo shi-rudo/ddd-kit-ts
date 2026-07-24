@@ -1,6 +1,9 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
+} from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
 import type { ReadStreamOptions, StreamReadResult } from "../repo/event-store";
@@ -197,8 +200,17 @@ export function createEsRepositoryContractTests<
 	// Ordered ids: streams are ordered, so stream assertions compare the
 	// exact sequence (unlike the outbox, whose read-back order is not
 	// part of the environment contract).
-	const orderedIds = (events: ReadonlyArray<Evt>): string[] =>
-		events.map((event) => event.eventId);
+	const orderedIds = (
+		events: ReadonlyArray<PendingDomainEvent<Evt>>,
+	): string[] =>
+		events.map((event) => {
+			if (!("eventId" in event)) {
+				throw new Error(
+					"ES repository contract: record pending events before persistence",
+				);
+			}
+			return event.eventId;
+		});
 	const sortedIds = (events: ReadonlyArray<Evt>): string[] =>
 		orderedIds(events).sort();
 

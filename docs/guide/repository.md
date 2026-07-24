@@ -189,7 +189,8 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.confirm(domainEvents.createFacts());
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
   await orders.save(order);
 
   const commit = enrollment.enrollSaved(order);
@@ -292,6 +293,21 @@ can commit as version `10`. That is correct.
 After the transaction commits, `withCommit` or `UnitOfWork` uses a non-exported
 capability to sync `persistedVersion`, clear pending events, and re-baseline
 dirty tracking.
+
+::: info Persistence receipt, not domain state
+`persistedVersion`, `hasChanges`, and `changedKeys` are deliberately
+adapter-facing lifecycle information on the kit's tactical aggregate base
+classes. Business methods must not branch on them. Repositories may read them,
+but cannot acknowledge a save or clear events; that authority stays inside
+`withCommit` and `UnitOfWork`.
+
+Moving the receipt completely outside the aggregate would require
+`findById`/`save` to exchange an opaque, identity-bound load receipt or would
+make `UnitOfWork` mandatory. v3 keeps direct repositories compatible and
+documents this boundary instead of hiding the same ownership behind a helper.
+The alternatives and the future-major trigger are recorded in
+[Design Decisions](/guide/design-decisions#persistence-tracking-stays-on-the-tactical-aggregate-for-v3).
+:::
 
 ## Event-Sourced Repositories
 
@@ -409,7 +425,6 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   archive(
     reason: string,
     archivedAt: Date,
-    facts: DomainEventFacts,
   ): void {
     if (this.state.status === "archived") {
       throw new OrderAlreadyArchivedError(this.id);
@@ -417,7 +432,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "archived", archivedAt },
-      this.recordEvent("OrderArchived", { reason, archivedAt }, facts),
+      this.createEvent("OrderArchived", { reason, archivedAt }),
     );
   }
 }
@@ -427,10 +442,9 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const order = await orders.getById(orderId);
 
   const archivedAt = clock();
-  order.archive(
-    reason,
-    archivedAt,
-    domainEvents.createFacts({ occurredAt: archivedAt }),
+  order.archive(reason, archivedAt);
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({ occurredAt: archivedAt }),
   );
   await orders.save(order);
 
@@ -455,11 +469,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   recordDeletion(
     reason: string,
     deletedAt: Date,
-    facts: DomainEventFacts,
   ): void {
     this.commit(
       { ...this.state },
-      this.recordEvent("OrderDeleted", { reason, deletedAt }, facts),
+      this.createEvent("OrderDeleted", { reason, deletedAt }),
     );
   }
 }
@@ -469,10 +482,9 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const order = await orders.getById(orderId);
 
   const deletedAt = clock();
-  order.recordDeletion(
-    reason,
-    deletedAt,
-    domainEvents.createFacts({ occurredAt: deletedAt }),
+  order.recordDeletion(reason, deletedAt);
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({ occurredAt: deletedAt }),
   );
   await orders.delete(order);
 

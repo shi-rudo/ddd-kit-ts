@@ -415,7 +415,6 @@ import {
   AggregateRoot,
   DomainError,
   type DomainEvent,
-  type DomainEventFacts,
   type Id,
   type Version,
 } from "@shirudo/ddd-kit";
@@ -485,13 +484,13 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
     });
   }
 
-  issue(facts: DomainEventFacts): void {
+  issue(): void {
     this.commit(
       { ...this.state, status: "issued" },
-      this.recordEvent("InvoiceIssued", {
+      this.createEvent("InvoiceIssued", {
         invoiceId: this.id,
         total: this.state.total,
-      }, facts),
+      }),
     );
   }
 

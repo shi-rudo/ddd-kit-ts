@@ -22,8 +22,8 @@ import {
   DomainError,
   EventSourcedAggregate,
   type DomainEvent,
-  type DomainEventFacts,
   type Id,
+  type UncommittedDomainEventOf,
 } from "@shirudo/ddd-kit";
 
 type OrderId = Id<"OrderId">;
@@ -86,11 +86,10 @@ class Order extends EventSourcedAggregate<
   static create(
     id: OrderId,
     customerId: string,
-    facts: DomainEventFacts,
   ): Order {
     const order = Order.reconstitute(id);
     order.apply(
-      order.recordEvent("OrderCreated", { customerId }, facts),
+      order.createEvent("OrderCreated", { customerId }),
     );
     return order;
   }
@@ -99,11 +98,11 @@ class Order extends EventSourcedAggregate<
     return new Order(id, { status: "empty" });
   }
 
-  confirm(facts: DomainEventFacts): void {
+  confirm(): void {
     this.apply(
-      this.recordEvent("OrderConfirmed", {
+      this.createEvent("OrderConfirmed", {
         orderId: this.id,
-      }, facts),
+      }),
     );
   }
 
@@ -116,7 +115,9 @@ class Order extends EventSourcedAggregate<
     });
   }
 
-  protected override validateEvent(event: OrderEvent): void {
+  protected override validateEvent(
+    event: UncommittedDomainEventOf<OrderEvent>,
+  ): void {
     if (event.type !== "OrderConfirmed") return;
 
     if (this.state.status === "empty") {
@@ -131,7 +132,7 @@ class Order extends EventSourcedAggregate<
   protected readonly handlers = {
     OrderCreated: (
       _state: OrderState,
-      event: OrderCreated,
+      event: UncommittedDomainEventOf<OrderCreated>,
     ): OrderState => ({
       customerId: event.payload.customerId,
       status: "pending",
@@ -150,7 +151,7 @@ is the only code that changes state for that fact.
 `apply(event)` runs in this order:
 
 1. The address discipline runs: missing `aggregateId` / `aggregateType`
-   fields are stamped from the aggregate (the `recordEvent` guarantee, by
+   fields are stamped from the aggregate (the `createEvent` guarantee, by
    construction), and a present-but-foreign address throws the wiring error
    `MisaddressedEventError` before anything is recorded. `ForeignEventError`
    is the replay-side counterpart for persisted rows.
@@ -178,14 +179,17 @@ commits.
 ```ts
 import type {
   AggregateAddress,
+  DomainEventFactory,
   EventStore,
   UnitOfWorkSession,
 } from "@shirudo/ddd-kit";
+import { recordPendingEvents } from "@shirudo/ddd-kit";
 
 class OrderRepository {
   constructor(
     private readonly eventStore: EventStore<OrderEvent>,
     private readonly session: UnitOfWorkSession<OrderEvent>,
+    private readonly domainEvents: Pick<DomainEventFactory, "createStamp">,
   ) {}
 
   private stream(id: OrderId): AggregateAddress<OrderId> {
@@ -196,8 +200,9 @@ class OrderRepository {
     if (order.pendingEvents.length === 0) return;
 
     this.session.enrollSaved(order);
+    const events = recordPendingEvents(order, this.domainEvents);
 
-    await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
+    await this.eventStore.append(this.stream(order.id), events, {
       expectedVersion: order.persistedVersion ?? 0,
     });
   }
@@ -225,8 +230,10 @@ That last step clears `pendingEvents` and aligns `persistedVersion`.
 
 ### Stream events and outbox events
 
-The event store receives the original pending events. The outbox receives
-envelopes that reference those same immutable events.
+The event store receives the recorded pending events. The outbox receives
+envelopes that reference those same immutable objects. Calling
+`recordPendingEvents` again during a retry does not generate another identity
+or timestamp.
 
 The outbox source finalizes those envelopes with the full cursor under `position`:
 `aggregateVersion`, `commitSequence`, `commitSize`, and
