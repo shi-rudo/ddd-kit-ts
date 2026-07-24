@@ -83,6 +83,25 @@ async function seeded(
 	return store;
 }
 
+function countingStore(
+	inner: DeadlineStore<Payload>,
+): DeadlineStore<Payload> & { readonly dueCalls: () => number } {
+	let dueCalls = 0;
+	return {
+		schedule: (deadline) => inner.schedule(deadline),
+		cancel: (scope, key) => inner.cancel(scope, key),
+		due: (now, limit, context) => {
+			dueCalls += 1;
+			return inner.due(now, limit, context);
+		},
+		markDelivered: (ids, context) => inner.markDelivered(ids, context),
+		markFailed: (id, error, context) =>
+			inner.markFailed(id, error, context),
+		deadLetters: () => inner.deadLetters(),
+		dueCalls: () => dueCalls,
+	};
+}
+
 describe("DeadlineProcessor", () => {
 	it("requires a complete observer bundle at type and runtime boundaries", () => {
 		const store = new InMemoryDeadlineStore<Payload>();
@@ -161,6 +180,88 @@ describe("DeadlineProcessor", () => {
 
 		expect(await processor.drainOnce()).toBe("drained");
 		expect(handled).toEqual(["now"]);
+	});
+
+	it("reports a throwing injected clock before reading the deadline store", async () => {
+		const inner = await seeded([{ key: "a" }]);
+		const store = countingStore(inner);
+		const clockError = new Error("clock unavailable");
+		const pollErrors: unknown[] = [];
+		const handled: string[] = [];
+		const processor = fastProcessor({
+			store,
+			handler: (deadline) => {
+				handled.push(deadline.key);
+			},
+			clock: () => {
+				throw clockError;
+			},
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			},
+		});
+
+		expect(await processor.drainOnce()).toBe("stopped");
+		expect(store.dueCalls()).toBe(0);
+		expect(handled).toEqual([]);
+		expect(pollErrors).toEqual([clockError]);
+	});
+
+	it("backs off repeated clock failures and recovers when the clock becomes valid", async () => {
+		vi.useFakeTimers();
+		const inner = await seeded([{ key: "a" }]);
+		const store = countingStore(inner);
+		const clockError = new Error("clock unavailable");
+		let clockReads = 0;
+		const pollErrors: unknown[] = [];
+		const handled: string[] = [];
+		const processor = fastProcessor({
+			store,
+			handler: (deadline) => {
+				handled.push(deadline.key);
+			},
+			baseDelayMs: 10,
+			maxDelayMs: 20,
+			pollIntervalMs: 1_000,
+			clock: () => {
+				clockReads += 1;
+				if (clockReads <= 2) throw clockError;
+				return at(T1);
+			},
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			},
+		});
+		const stop = new AbortController();
+		const loop = processor.run(stop.signal);
+
+		try {
+			await vi.advanceTimersByTimeAsync(0);
+			expect(clockReads).toBe(1);
+			expect(store.dueCalls()).toBe(0);
+			expect(pollErrors).toEqual([clockError]);
+
+			await vi.advanceTimersByTimeAsync(9);
+			expect(clockReads).toBe(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(clockReads).toBe(2);
+			expect(store.dueCalls()).toBe(0);
+			expect(pollErrors).toEqual([clockError, clockError]);
+
+			await vi.advanceTimersByTimeAsync(19);
+			expect(clockReads).toBe(2);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(handled).toEqual(["a"]);
+			expect(store.dueCalls()).toBe(2);
+		} finally {
+			stop.abort();
+			await loop;
+			vi.useRealTimers();
+		}
 	});
 
 	it("a failing deadline is reported to markFailed and does not block its neighbors", async () => {
@@ -658,7 +759,7 @@ describe("DeadlineProcessor", () => {
 		});
 	});
 
-	it("throwing observers, clock, and jitter source are neutralized", async () => {
+	it("throwing observers and jitter source are neutralized", async () => {
 		const store = await seeded([{ key: "poison" }, { key: "healthy" }], {
 			maxDeliveryAttempts: 1,
 		});
@@ -668,9 +769,6 @@ describe("DeadlineProcessor", () => {
 			handler: (deadline) => {
 				if (deadline.key === "poison") throw new Error("boom");
 				handled.push(deadline.key);
-			},
-			clock: () => {
-				throw new Error("clock bug"); // degrades to system time; T0 is past
 			},
 			random: () => {
 				throw new Error("jitter bug");
@@ -733,8 +831,32 @@ describe("DeadlineProcessor", () => {
 		expect(await inner.deadLetters()).toHaveLength(0);
 	});
 
-	it("a clock returning an Invalid Date degrades to system time instead of silently halting delivery", async () => {
-		const store = await seeded([{ key: "a" }]); // due in the past
+	it("reports a non-Date injected clock before reading the deadline store", async () => {
+		const inner = await seeded([{ key: "a" }]);
+		const store = countingStore(inner);
+		const pollErrors: unknown[] = [];
+		const processor = fastProcessor({
+			store,
+			handler: () => {},
+			clock: () => 1 as unknown as Date,
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			},
+		});
+
+		expect(await processor.drainOnce()).toBe("stopped");
+		expect(store.dueCalls()).toBe(0);
+		expect(pollErrors).toEqual([
+			new TypeError("DeadlineProcessor: clock must return a valid Date"),
+		]);
+	});
+
+	it("reports an invalid injected clock before reading the deadline store", async () => {
+		const inner = await seeded([{ key: "a" }]);
+		const store = countingStore(inner);
+		const pollErrors: unknown[] = [];
 		const handled: string[] = [];
 		const processor = fastProcessor({
 			store,
@@ -742,10 +864,20 @@ describe("DeadlineProcessor", () => {
 				handled.push(deadline.key);
 			},
 			clock: () => new Date(Number.NaN),
+			observers: {
+				onPollError: (error) => {
+					pollErrors.push(error);
+				},
+			},
 		});
 
-		expect(await processor.drainOnce()).toBe("drained");
-		expect(handled).toEqual(["a"]);
+		expect(await processor.drainOnce()).toBe("stopped");
+		expect(store.dueCalls()).toBe(0);
+		expect(handled).toEqual([]);
+		expect(pollErrors).toHaveLength(1);
+		expect(pollErrors[0]).toEqual(
+			new TypeError("DeadlineProcessor: clock must return a valid Date"),
+		);
 	});
 
 	it("rejects invalid numeric options at construction", () => {
