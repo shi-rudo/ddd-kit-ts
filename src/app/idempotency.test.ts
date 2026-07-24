@@ -18,8 +18,8 @@ import type {
 	CommitEnrollment,
 	WithCommitWorkResult,
 } from "./handler";
-import { withIdempotentCommit } from "./idempotency";
 import type { IdempotencyClaimHandle } from "./idempotency";
+import { withIdempotentCommit } from "./idempotency";
 import { InMemoryIdempotencyStore } from "./in-memory-idempotency-store";
 
 type OrderId = Id<"OrderId">;
@@ -36,7 +36,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	confirm(): void {
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			this.recordEvent("OrderConfirmed", { orderId: this.id }),
+			this.recordEventFromFactory("OrderConfirmed", { orderId: this.id }),
 		);
 	}
 }

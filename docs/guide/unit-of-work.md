@@ -57,7 +57,7 @@ const uow = new UnitOfWork(deps);
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
 
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
   await repositories.orders.save(order);
 
   return order.id;
@@ -184,7 +184,7 @@ The callback result is returned directly:
 ```ts
 const id = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(orderId);
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
   await repositories.orders.save(order);
   return order.id;
 });
@@ -309,7 +309,7 @@ const orderId = await uow.run(
   async ({ repositories, signal }) => {
     const order = await repositories.orders.getById(orderId);
 
-    order.confirm();
+    order.confirm(domainEvents.createFacts());
 
     if (signal?.aborted) {
       throw signal.reason;

@@ -1,6 +1,10 @@
 import { ok } from "@shirudo/result";
 import { describe, expect, it } from "vite-plus/test";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
+import {
+	createDomainEventFactory,
+	type DomainEventFacts,
+} from "../../src/aggregate/domain-event";
 import type { Command, CommandHandler } from "../../src/app/command";
 import { CommandBus } from "../../src/app/command-bus";
 import { withCommit } from "../../src/app/handler";
@@ -110,6 +114,7 @@ interface AppDeps {
 	paymentRepository: IRepository<Payment, PaymentId>;
 	shipmentRepository: IRepository<Shipment, ShipmentId>;
 	sagaRepository: IRepository<CheckoutSaga, OrderId>;
+	eventFacts: () => DomainEventFacts;
 }
 
 function registerCommandHandlers(deps: AppDeps): void {
@@ -117,7 +122,12 @@ function registerCommandHandlers(deps: AppDeps): void {
 
 	const placeOrder: CommandHandler<PlaceOrderCommand, OrderId> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
+			const order = Order.place(
+				cmd.orderId,
+				cmd.customerId,
+				cmd.total,
+				deps.eventFacts(),
+			);
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(order.id),
@@ -130,7 +140,12 @@ function registerCommandHandlers(deps: AppDeps): void {
 		PaymentId
 	> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
+			const payment = Payment.request(
+				cmd.paymentId,
+				cmd.orderId,
+				cmd.amount,
+				deps.eventFacts(),
+			);
 			await deps.paymentRepository.save(payment);
 			return {
 				result: ok(payment.id),
@@ -143,7 +158,11 @@ function registerCommandHandlers(deps: AppDeps): void {
 		ShipmentId
 	> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
-			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
+			const shipment = Shipment.request(
+				cmd.shipmentId,
+				cmd.orderId,
+				deps.eventFacts(),
+			);
 			await deps.shipmentRepository.save(shipment);
 			return {
 				result: ok(shipment.id),
@@ -154,7 +173,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const confirmOrder: CommandHandler<ConfirmOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
-			order.confirm();
+			order.confirm(deps.eventFacts());
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(undefined as void),
@@ -165,7 +184,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 	const cancelOrder: CommandHandler<CancelOrderCommand, void> = async (cmd) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = await deps.orderRepository.getById(cmd.orderId);
-			order.cancel(cmd.reason);
+			order.cancel(cmd.reason, deps.eventFacts());
 			await deps.orderRepository.save(order);
 			return {
 				result: ok(undefined as void),
@@ -178,7 +197,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 	) =>
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
-			payment.refund();
+			payment.refund(deps.eventFacts());
 			await deps.paymentRepository.save(payment);
 			return {
 				result: ok(undefined as void),
@@ -304,8 +323,8 @@ async function simulatePaymentResult(
 		{ outbox, bus: eventBus, scope },
 		async (_tx, enrollment) => {
 			const payment = await paymentRepository.getById(paymentId);
-			if (outcome.kind === "received") payment.receive();
-			else payment.fail(outcome.reason);
+			if (outcome.kind === "received") payment.receive(deps.eventFacts());
+			else payment.fail(outcome.reason, deps.eventFacts());
 			await paymentRepository.save(payment);
 			return {
 				result: ok(undefined as void),
@@ -327,8 +346,11 @@ async function simulateShippingResult(
 		{ outbox, bus: eventBus, scope },
 		async (_tx, enrollment) => {
 			const shipment = await shipmentRepository.getById(shipmentId);
-			if (outcome.kind === "completed") shipment.complete(outcome.trackingId);
-			else shipment.fail(outcome.reason);
+			if (outcome.kind === "completed") {
+				shipment.complete(outcome.trackingId, deps.eventFacts());
+			} else {
+				shipment.fail(outcome.reason, deps.eventFacts());
+			}
 			await shipmentRepository.save(shipment);
 			return {
 				result: ok(undefined as void),
@@ -345,9 +367,14 @@ async function simulateShippingResult(
 function bootstrap() {
 	let nextPaymentSeq = 1;
 	let nextShipmentSeq = 1;
+	let nextEventSeq = 1;
 	const paymentIdGen = (): PaymentId => `pay-${nextPaymentSeq++}` as PaymentId;
 	const shipmentIdGen = (): ShipmentId =>
 		`ship-${nextShipmentSeq++}` as ShipmentId;
+	const domainEvents = createDomainEventFactory({
+		eventIdFactory: () => `event-${nextEventSeq++}`,
+		clock: () => new Date("2027-04-05T06:07:08.000Z"),
+	});
 
 	const deps: AppDeps = {
 		commandBus: new CommandBus<AppCommands>(),
@@ -363,6 +390,7 @@ function bootstrap() {
 		paymentRepository: inMemoryRepo<Payment, PaymentId>("Payment"),
 		shipmentRepository: inMemoryRepo<Shipment, ShipmentId>("Shipment"),
 		sagaRepository: inMemoryRepo<CheckoutSaga, OrderId>("CheckoutSaga"),
+		eventFacts: () => domainEvents.createFacts(),
 	};
 
 	registerCommandHandlers(deps);

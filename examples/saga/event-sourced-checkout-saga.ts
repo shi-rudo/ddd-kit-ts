@@ -1,4 +1,7 @@
-import type { DomainEvent } from "../../src/aggregate/domain-event";
+import type {
+	DomainEvent,
+	DomainEventFacts,
+} from "../../src/aggregate/domain-event";
 import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
 import { DomainError } from "../../src/core/errors";
 import type { Money } from "../../src/money";
@@ -114,14 +117,19 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		orderId: OrderId,
 		total: Money,
 		paymentId: PaymentId,
+		facts: DomainEventFacts,
 	): EventSourcedCheckoutSaga {
 		const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
 		saga.assertCanRecord("not-started", "CheckoutPaymentRequested");
 		saga.apply(
-			saga.recordEvent<CheckoutPaymentRequested>("CheckoutPaymentRequested", {
-				total,
-				paymentId,
-			}),
+			saga.recordEvent<CheckoutPaymentRequested>(
+				"CheckoutPaymentRequested",
+				{
+					total,
+					paymentId,
+				},
+				facts,
+			),
 		);
 		return saga;
 	}
@@ -131,21 +139,25 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		return new EventSourcedCheckoutSaga(orderId);
 	}
 
-	requestShipping(shipmentId: ShipmentId): void {
+	requestShipping(shipmentId: ShipmentId, facts: DomainEventFacts): void {
 		this.assertCanRecord("awaiting-payment", "CheckoutShippingRequested");
 		this.apply(
-			this.recordEvent<CheckoutShippingRequested>("CheckoutShippingRequested", {
-				shipmentId,
-			}),
+			this.recordEvent<CheckoutShippingRequested>(
+				"CheckoutShippingRequested",
+				{ shipmentId },
+				facts,
+			),
 		);
 	}
 
-	complete(): void {
+	complete(facts: DomainEventFacts): void {
 		this.assertCanRecord("awaiting-shipping", "CheckoutCompleted");
-		this.apply(this.recordEvent<CheckoutCompleted>("CheckoutCompleted", {}));
+		this.apply(
+			this.recordEvent<CheckoutCompleted>("CheckoutCompleted", {}, facts),
+		);
 	}
 
-	cancelAfterPaymentFailure(reason: string): void {
+	cancelAfterPaymentFailure(reason: string, facts: DomainEventFacts): void {
 		this.assertCanRecord(
 			"awaiting-payment",
 			"CheckoutCancellationRequestedAfterPaymentFailure",
@@ -154,11 +166,15 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 			this.recordEvent<CheckoutCancellationRequestedAfterPaymentFailure>(
 				"CheckoutCancellationRequestedAfterPaymentFailure",
 				{ reason },
+				facts,
 			),
 		);
 	}
 
-	compensateAfterShippingFailure(reason: string): void {
+	compensateAfterShippingFailure(
+		reason: string,
+		facts: DomainEventFacts,
+	): void {
 		this.assertCanRecord(
 			"awaiting-shipping",
 			"CheckoutCompensationRequestedAfterShippingFailure",
@@ -175,6 +191,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 			this.recordEvent<CheckoutCompensationRequestedAfterShippingFailure>(
 				"CheckoutCompensationRequestedAfterShippingFailure",
 				{ paymentId, reason },
+				facts,
 			),
 		);
 	}

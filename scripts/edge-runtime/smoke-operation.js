@@ -1,4 +1,8 @@
-import { AggregateRoot, CommandBus } from "@shirudo/ddd-kit";
+import {
+	AggregateRoot,
+	CommandBus,
+	createDomainEventFactory,
+} from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
 import { ok } from "@shirudo/result";
 
@@ -9,10 +13,10 @@ class EdgeOrder extends AggregateRoot {
 		super("order-edge-1", { status: "draft" });
 	}
 
-	confirm() {
+	confirm(facts) {
 		this.commit(
 			{ status: "confirmed" },
-			this.recordEvent("EdgeOrderConfirmed", { orderId: this.id }),
+			this.recordEvent("EdgeOrderConfirmed", { orderId: this.id }, facts),
 		);
 	}
 
@@ -40,7 +44,8 @@ export async function runEdgeRuntimeSmoke(runtime) {
 	);
 
 	const order = new EdgeOrder();
-	order.confirm();
+	const domainEvents = createDomainEventFactory();
+	order.confirm(domainEvents.createFacts());
 	const orderView = order.toView();
 	assert(orderView.status === "confirmed", "aggregate state did not change");
 	assert(orderView.version === 1, "aggregate version did not advance");

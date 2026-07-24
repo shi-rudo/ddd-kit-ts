@@ -905,7 +905,7 @@ describe("EventSourcedAggregate", () => {
 			aggregate.updateValue(20);
 			aggregate.activate();
 
-			const snapshot = aggregate.createSnapshot();
+			const snapshot = aggregate.createSnapshotFromFactory();
 
 			expect(snapshot.state.value).toBe(20);
 			expect(snapshot.state.status).toBe("active");
@@ -921,7 +921,7 @@ describe("EventSourcedAggregate", () => {
 			aggregate1.updateValue(20);
 			aggregate1.activate();
 
-			const snapshot = aggregate1.createSnapshot();
+			const snapshot = aggregate1.createSnapshotFromFactory();
 
 			// Create new aggregate and restore from snapshot
 			const initialState: TestState = { value: 0, status: "inactive" };
@@ -954,7 +954,7 @@ describe("EventSourcedAggregate", () => {
 			);
 			aggregate1.updateValue(20);
 
-			const snapshot = aggregate1.createSnapshot();
+			const snapshot = aggregate1.createSnapshotFromFactory();
 
 			const initialState: TestState = { value: 0, status: "inactive" };
 			const aggregate2 = new TestEventSourcedAggregate(
@@ -1064,7 +1064,7 @@ describe("EventSourcedAggregate", () => {
 			// them with a version baseline they were never part of.
 			const source = TestEventSourcedAggregate.create("test-1" as TestId, 10);
 			acknowledgePersisted(source, source.version);
-			const snapshot = source.createSnapshot();
+			const snapshot = source.createSnapshotFromFactory();
 
 			const dirty = TestEventSourcedAggregate.create("test-1" as TestId, 0);
 			expect(dirty.pendingEvents).toHaveLength(1);
@@ -1150,7 +1150,7 @@ describe("EventSourcedAggregate", () => {
 			);
 			aggregate1.updateValue(20);
 			aggregate1.activate();
-			const snapshot = aggregate1.createSnapshot();
+			const snapshot = aggregate1.createSnapshotFromFactory();
 
 			// aggregate2 starts in a different state; the failed restore must leave it untouched
 			const originalState: TestState = { value: 555, status: "inactive" };
@@ -1238,7 +1238,7 @@ describe("EventSourcedAggregate", () => {
 			const cart = new Cart("agg-1" as TestId, {
 				items: [new LineItem("sku-a", 2)],
 			});
-			const snapshot = cart.createSnapshot();
+			const snapshot = cart.createSnapshotFromFactory();
 			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
 				Object.prototype,
 			);
@@ -1276,8 +1276,8 @@ describe("EventSourcedAggregate", () => {
 				pending: Promise.resolve(1),
 			});
 
-			expect(() => agg.createSnapshot()).toThrow(/Promise/);
-			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/Promise/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/toSnapshotState/);
 		});
 	});
 

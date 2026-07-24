@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../core/errors";
 import {
-	copyMetadata,
+	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
+	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
+	createDomainEventFromFacts,
 	type DomainEvent,
 	defaultDomainEventFactory,
 	type EventMetadata,
@@ -184,7 +186,132 @@ describe("DomainEvent", () => {
 		});
 	});
 
+	describe("explicit facts", () => {
+		it("creates identical events from identical inputs without hidden dependencies", () => {
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+			const options = {
+				eventId: "event-1",
+				occurredAt,
+				aggregateId: "order-1",
+				aggregateType: "Order",
+				version: 2,
+				metadata: { correlationId: "corr-1" },
+			};
+
+			const first = createDomainEventFromFacts(
+				"OrderConfirmed",
+				{ orderId: "order-1" },
+				options,
+			);
+			const second = createDomainEventFromFacts(
+				"OrderConfirmed",
+				{ orderId: "order-1" },
+				options,
+			);
+
+			expect(second).toEqual(first);
+			expect(first.occurredAt).not.toBe(occurredAt);
+			expect(second.occurredAt).not.toBe(first.occurredAt);
+			expect(first.metadata).not.toBe(options.metadata);
+		});
+
+		it("rejects an invalid explicit occurrence time", () => {
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+					occurredAt: new Date(Number.NaN),
+				}),
+			).toThrow(new TypeError("domain-event occurredAt must be a valid Date"));
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+					occurredAt: 0 as unknown as Date,
+				}),
+			).toThrow(new TypeError("domain-event occurredAt must be a valid Date"));
+		});
+
+		it("rejects missing facts at runtime instead of falling back", () => {
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					occurredAt,
+				} as CreateDomainEventFromFactsOptions),
+			).toThrow(
+				new TypeError(
+					"createDomainEventFromFacts requires an explicit eventId",
+				),
+			);
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+				} as CreateDomainEventFromFactsOptions),
+			).toThrow(
+				new TypeError(
+					"createDomainEventFromFacts requires an explicit occurredAt",
+				),
+			);
+		});
+
+		it("requires event identity and occurrence time at compile time", () => {
+			const missingFactsMustNotCompile = (): void => {
+				// @ts-expect-error explicit construction requires eventId
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					occurredAt: new Date(0),
+				});
+				// @ts-expect-error explicit construction requires occurredAt
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+				});
+			};
+
+			expect(missingFactsMustNotCompile).toBeTypeOf("function");
+		});
+	});
+
 	describe("immutable factory instances", () => {
+		it("creates explicit event facts from its captured dependencies", () => {
+			let sequence = 0;
+			const shared = new Date("2026-04-05T06:07:08.000Z");
+			const metadata: EventMetadata = { correlationId: "corr-1" };
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => `event-${++sequence}`,
+				clock: () => shared,
+			});
+
+			const facts = factory.createFacts({ metadata, version: 2 });
+
+			expect(facts).toEqual({
+				eventId: "event-1",
+				occurredAt: shared,
+				metadata,
+				version: 2,
+			});
+			expect(facts.occurredAt).not.toBe(shared);
+			expect(facts.metadata).not.toBe(metadata);
+			expect(Object.isFrozen(facts)).toBe(true);
+			expect(Object.isFrozen(facts.metadata)).toBe(true);
+		});
+
+		it("rejects an invalid explicit event-facts time", () => {
+			let generatedIds = 0;
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => `event-${++generatedIds}`,
+			});
+
+			expect(() =>
+				factory.createFacts({
+					occurredAt: new Date(Number.NaN),
+				}),
+			).toThrow(new TypeError("event facts occurredAt must be a valid Date"));
+			expect(() =>
+				factory.createFacts({
+					occurredAt: 0 as unknown as Date,
+				}),
+			).toThrow(new TypeError("event facts occurredAt must be a valid Date"));
+			expect(generatedIds).toBe(0);
+		});
+
 		it("keeps event-id and clock dependencies isolated across overlapping async work", async () => {
 			let firstSequence = 0;
 			let secondSequence = 0;
@@ -232,6 +359,11 @@ describe("DomainEvent", () => {
 				// @ts-expect-error immutable factory methods cannot be replaced
 				custom.create = createDomainEvent;
 				// @ts-expect-error immutable factory methods cannot be replaced
+				custom.createFacts = () => ({
+					eventId: "replacement",
+					occurredAt: new Date(),
+				});
+				// @ts-expect-error immutable factory methods cannot be replaced
 				custom.now = () => new Date();
 			};
 
@@ -268,11 +400,14 @@ describe("DomainEvent", () => {
 			});
 
 			const event = factory.create("Ticked");
+			const facts = factory.createFacts();
 			const reading = factory.now();
 
 			expect(event.occurredAt).not.toBe(shared);
+			expect(facts.occurredAt).not.toBe(shared);
 			expect(reading).not.toBe(shared);
 			expect(reading).not.toBe(event.occurredAt);
+			expect(reading).not.toBe(facts.occurredAt);
 			expect(reading.getTime()).toBe(shared.getTime());
 		});
 
@@ -286,6 +421,9 @@ describe("DomainEvent", () => {
 				new TypeError("domain-event clock must return a valid Date"),
 			);
 			expect(() => factory.create("Ticked")).toThrowError(
+				new TypeError("domain-event clock must return a valid Date"),
+			);
+			expect(() => factory.createFacts()).toThrowError(
 				new TypeError("domain-event clock must return a valid Date"),
 			);
 		});
@@ -472,11 +610,7 @@ describe("commit cursor boundary", () => {
 				// @ts-expect-error commit positions belong to CommittedDomainEvent
 				commitSize: 2,
 			};
-			createDomainEvent(
-				"Ticked",
-				{},
-				options,
-			);
+			createDomainEvent("Ticked", {}, options);
 		};
 
 		expect(invalidCreation).toBeTypeOf("function");

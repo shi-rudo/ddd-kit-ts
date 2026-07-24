@@ -185,7 +185,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
 	 * dirty tracking. Concrete entities should expose fachliche queries or
-	 * detached immutable DTOs. Aggregate roots can use `createSnapshot()`
+	 * detached immutable DTOs. Aggregate roots can use
+	 * `createSnapshot(snapshotAt)`
 	 * as their persistence memento.
 	 */
 	protected get state(): TState {

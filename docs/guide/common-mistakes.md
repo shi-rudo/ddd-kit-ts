@@ -140,12 +140,12 @@ These compile. Some even pass happy-path tests. They are more dangerous because 
 
 ### Calling `createDomainEvent` Inside an Aggregate
 
-Inside aggregate methods, prefer `this.recordEvent(type, payload)`.
+Inside aggregate methods, prefer `this.recordEvent(type, payload, facts)`.
 
 ```ts
 this.commit(
   { ...this.state, status: "confirmed" },
-  this.recordEvent("OrderConfirmed", { orderId: this.id }),
+  this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
 );
 ```
 
@@ -317,10 +317,14 @@ const domainEvents = createDomainEventFactory({
   clock: () => new Date("2026-01-01T00:00:00.000Z"),
 });
 
-const order = makeOrder({ domainEventFactory: domainEvents });
+const order = makeOrder();
+order.confirm(domainEvents.createFacts());
 ```
 
-No reset is needed, and awaited code keeps using the same value because nothing is installed globally. If a test needs deterministic ids or clocks, keep that dependency visible in the test setup and pass it through aggregate construction or reconstitution. See [Domain Events -> Instance-bound factories](./domain-events.md#instance-bound-factories).
+No reset is needed, and awaited code keeps using the same value because nothing
+is installed globally. If a test needs deterministic ids or clocks, keep that
+dependency visible in the test setup and pass the generated facts into the
+aggregate operation. See [Domain Events -> Instance-bound factories](./domain-events.md#instance-bound-factories).
 
 ### Storing Aggregates in Edge Runtime Globals
 
@@ -402,7 +406,7 @@ Senior review rule: mock across process or infrastructure boundaries, not across
 
 When reviewing code that uses the kit, scan for these signals:
 
-- aggregate events recorded with `this.recordEvent(...)` inside aggregates
+- aggregate events recorded with `this.recordEvent(..., facts)` inside aggregates
 - repositories created inside the transaction or unit-of-work scope
 - repositories that do not call aggregate lifecycle methods
 - insert/update branching on `persistedVersion`, not `version`

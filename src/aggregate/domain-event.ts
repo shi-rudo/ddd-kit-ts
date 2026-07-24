@@ -81,8 +81,8 @@ export interface DomainEvent<T extends string, P = void> {
 	/**
 	 * Unique identifier for this specific event instance. Used by idempotent
 	 * consumers, outbox dispatch tracking, and as the target of
-	 * `metadata.causationId`. Defaults to `crypto.randomUUID()` if not
-	 * supplied.
+	 * `metadata.causationId`. Convenience constructors default to
+	 * `crypto.randomUUID()`; strict construction requires the caller to supply it.
 	 */
 	readonly eventId: string;
 
@@ -178,6 +178,32 @@ export interface CreateDomainEventOptions {
 	metadata?: EventMetadata;
 }
 
+/** Explicit identity and occurrence data supplied to aggregate event recording. */
+export interface DomainEventFacts {
+	/** Stable identity for this event instance. */
+	readonly eventId: string;
+	/** Occurrence time recorded on the event; never a stream-ordering key. */
+	readonly occurredAt: Date;
+	/** Optional event schema version. Defaults to `1`. */
+	readonly version?: number;
+	/** Optional correlation, causation, actor, and source metadata. */
+	readonly metadata?: EventMetadata;
+}
+
+/** Full strict-construction options, including the producing aggregate address. */
+export interface CreateDomainEventFromFactsOptions extends DomainEventFacts {
+	readonly aggregateId?: string;
+	readonly aggregateType?: string;
+}
+
+/** Overrides accepted when an application-shell factory creates event facts. */
+export interface CreateDomainEventFactsOptions {
+	readonly eventId?: string;
+	readonly occurredAt?: Date;
+	readonly version?: number;
+	readonly metadata?: EventMetadata;
+}
+
 /** Dependencies captured by one immutable domain-event factory instance. */
 export interface DomainEventFactoryOptions {
 	/** Event-id generator. Defaults to Web Crypto `crypto.randomUUID()`. */
@@ -192,6 +218,14 @@ export interface DomainEventFactoryOptions {
  * overwrite one another through module state.
  */
 export interface DomainEventFactory {
+	/**
+	 * Creates immutable event facts for an aggregate operation. Calling this
+	 * method is an application-shell concern; pass its result into the domain
+	 * operation rather than letting aggregate behavior read time or randomness.
+	 */
+	readonly createFacts: (
+		options?: CreateDomainEventFactsOptions,
+	) => DomainEventFacts;
 	readonly create: {
 		<T extends string>(
 			type: T,
@@ -216,8 +250,11 @@ export interface DomainEventFactory {
  *
  * The supplied functions are read once and captured by value. The returned
  * object is frozen, so another request, test, or library cannot replace its
- * policy. Pass it through `AggregateConfig.domainEventFactory` when aggregate
- * `recordEvent` and snapshot timestamps must share the same scope.
+ * policy. Its {@link DomainEventFactory.createFacts} method is the preferred
+ * application-shell bridge: create facts once per domain event and pass them
+ * into the aggregate operation. Passing the factory through `AggregateConfig`
+ * enables the explicitly named convenience methods, whose defaults read time
+ * and randomness.
  *
  * @example
  * ```ts
@@ -225,7 +262,8 @@ export interface DomainEventFactory {
  *   eventIdFactory: () => uuidv7(),
  *   clock: () => new Date(),
  * });
- * const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
+ * const facts = domainEvents.createFacts();
+ * order.confirm(facts);
  * ```
  */
 export function createDomainEventFactory(
@@ -245,8 +283,24 @@ export function createDomainEventFactory(
 			eventIdFactory,
 			clock,
 		)) as DomainEventFactory["create"];
+	const createFacts = (
+		factsOptions: CreateDomainEventFactsOptions = {},
+	): DomainEventFacts => {
+		const explicitOccurredAt =
+			factsOptions.occurredAt === undefined
+				? undefined
+				: copyValidDate(factsOptions.occurredAt, "event facts occurredAt");
+		const metadata = guardedMetadataClone(factsOptions.metadata);
+		return deepFreeze({
+			eventId: factsOptions.eventId ?? eventIdFactory(),
+			occurredAt: explicitOccurredAt ?? readClock(clock),
+			version: factsOptions.version,
+			metadata,
+		});
+	};
 
 	return Object.freeze({
+		createFacts,
 		create,
 		now: () => readClock(clock),
 	});
@@ -272,7 +326,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * values throw a `TypeError`; symbol-keyed properties are not carried
  * over.
  *
- * **For aggregate-internal events, prefer `this.recordEvent(...)` on
+ * **For aggregate-internal events, prefer `this.recordEvent(..., facts)` on
  * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
@@ -383,6 +437,55 @@ export function createDomainEvent<T extends string, P>(
 	) as DomainEvent<T, P>;
 }
 
+/**
+ * Creates a domain event exclusively from explicit inputs. Unlike
+ * {@link createDomainEvent}, this function has no clock or event-id fallback.
+ * Aggregate behavior uses this path so identical domain inputs produce
+ * identical events.
+ */
+export function createDomainEventFromFacts<T extends string>(
+	type: T,
+	payload: undefined,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, void>;
+export function createDomainEventFromFacts<T extends string, P>(
+	type: T,
+	payload: P,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, P>;
+export function createDomainEventFromFacts<T extends string, P>(
+	type: T,
+	payload: P | undefined,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, P> {
+	if (options?.eventId === undefined) {
+		missingExplicitEventId();
+	}
+	if (options.occurredAt === undefined) {
+		missingExplicitOccurredAt();
+	}
+	assertValidDate(options.occurredAt, "domain-event occurredAt");
+	return mintDomainEvent(
+		type,
+		payload,
+		options,
+		missingExplicitEventId,
+		missingExplicitOccurredAt,
+	);
+}
+
+function missingExplicitEventId(): string {
+	throw new TypeError(
+		"createDomainEventFromFacts requires an explicit eventId",
+	);
+}
+
+function missingExplicitOccurredAt(): Date {
+	throw new TypeError(
+		"createDomainEventFromFacts requires an explicit occurredAt",
+	);
+}
+
 function mintDomainEvent<T extends string, P>(
 	type: T,
 	payload: P | undefined,
@@ -419,6 +522,17 @@ function mintDomainEvent<T extends string, P>(
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
 	MINTED_EVENTS.add(minted);
 	return minted;
+}
+
+function copyValidDate(value: Date, label: string): Date {
+	assertValidDate(value, label);
+	return new Date(value.getTime());
+}
+
+function assertValidDate(value: unknown, label: string): asserts value is Date {
+	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+		throw new TypeError(`${label} must be a valid Date`);
+	}
 }
 
 /**

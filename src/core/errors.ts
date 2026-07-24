@@ -458,7 +458,8 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 /**
  * Thrown when an event reaches the aggregate's recording paths
  * (`apply`, `commit`, `addDomainEvent`) without having been minted by
- * the kit's constructors: `createDomainEvent` / `recordEvent`
+ * the kit's constructors: `createDomainEvent`,
+ * `createDomainEventFromFacts`, or `recordEvent`
  * deep-freeze the event and defensively copy payload and metadata,
  * and register the result in an internal, unforgeable mint marker.
  * Anything else (a hand-rolled literal, a shallow-frozen copy with
@@ -472,7 +473,8 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 		super(
 			"UNMINTED_EVENT",
 			`Event "${eventType}" was not minted by createDomainEvent(...) or ` +
-				"this.recordEvent(...). Those constructors deep-freeze the event " +
+				"createDomainEventFromFacts(...) / this.recordEvent(...). Those " +
+				"constructors deep-freeze the event " +
 				"and defensively copy payload and metadata; a mutable event " +
 				"could diverge from the state change it records.",
 		);

@@ -20,6 +20,7 @@ import {
   AggregateRoot,
   DomainError,
   type DomainEvent,
+  type DomainEventFacts,
   type Id,
 } from "@shirudo/ddd-kit";
 import type { Money } from "@shirudo/ddd-kit/money";
@@ -55,14 +56,14 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return new Order(id, { customerId, items: [], status: "draft" });
   }
 
-  confirm(): void {
+  confirm(facts: DomainEventFacts): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
     );
   }
 }
@@ -71,7 +72,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 `aggregateType` and `recordEvent` are intentionally visible in every aggregate:
 
 - `aggregateType` tells event dispatchers, outbox processors, and projections what kind of aggregate produced an event.
-- `recordEvent(type, payload)` adds the aggregate id and aggregate type to event metadata, so event routing has the fields it needs.
+- `recordEvent(type, payload, facts)` adds the aggregate id and aggregate type to the explicit event facts, so event routing has the fields it needs without reading a hidden clock or id generator.
 
 Calling `createDomainEvent(...)` directly still works, but inside an aggregate `recordEvent(...)` is the safer default.
 
@@ -83,10 +84,16 @@ Prefer static factory methods over public constructors.
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  static place(id: OrderId, customerId: string): Order {
+  static place(
+    id: OrderId,
+    customerId: string,
+    facts: DomainEventFacts,
+  ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
 
-    order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
+    order.addDomainEvent(
+      order.recordEvent("OrderPlaced", { customerId }, facts),
+    );
 
     return order;
   }
@@ -123,9 +130,15 @@ import type { Version } from "@shirudo/ddd-kit";
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  static place(id: OrderId, customerId: string): Order {
+  static place(
+    id: OrderId,
+    customerId: string,
+    facts: DomainEventFacts,
+  ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
-    order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
+    order.addDomainEvent(
+      order.recordEvent("OrderPlaced", { customerId }, facts),
+    );
     return order;
   }
 
@@ -226,7 +239,7 @@ If state validation fails, no event is recorded and the version does not change.
 ```ts
 this.commit(
   { ...this.state, status: "confirmed" },
-  this.recordEvent("OrderConfirmed", { orderId: this.id }),
+  this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
 );
 
 this.commit(newState, [eventA, eventB]);
@@ -315,7 +328,7 @@ Most business rules live at the top of domain methods. The method checks whether
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  confirm(): void {
+  confirm(facts: DomainEventFacts): void {
     if (this.state.status === "shipped") {
       throw new CannotConfirmShippedOrderError(this.id);
     }
@@ -326,7 +339,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
     );
   }
 }
@@ -396,7 +409,8 @@ Snapshots capture aggregate state and version so an aggregate can be restored wi
 ```ts
 import type { AggregateSnapshot } from "@shirudo/ddd-kit";
 
-const snapshot = order.createSnapshot();
+const snapshotAt = new Date();
+const snapshot = order.createSnapshot(snapshotAt);
 // { state, version, snapshotAt: Date }
 
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
@@ -415,14 +429,14 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 const fresh = Order.fromSnapshot(id, snapshot);
 
 // fresh.version === snapshot.version
-// fresh.createSnapshot().state is detached from snapshot.state
+// fresh.createSnapshot(new Date()).state is detached from snapshot.state
 ```
 
 `createSnapshot` uses `structuredClone`, so later mutations do not alter the snapshot. `restoreFromSnapshot` validates the restored state before assigning it.
 
 Live aggregate state is `protected`. Use domain queries for application reads and
-`createSnapshot()` as the detached persistence memento; do not add a public getter
-that returns `this.state`.
+`createSnapshot(snapshotAt)` as the detached persistence memento; do not add a
+public getter that returns `this.state`.
 
 ::: warning Restore only into a clean aggregate
 `restoreFromSnapshot` throws `UnreplayableAggregateError` if the target aggregate has pending events.

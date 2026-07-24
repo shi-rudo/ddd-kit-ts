@@ -1,5 +1,8 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import type { DomainEvent } from "../../src/aggregate/domain-event";
+import type {
+	DomainEvent,
+	DomainEventFacts,
+} from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import type { Money } from "../../src/money";
@@ -58,7 +61,12 @@ export class Payment extends AggregateRoot<
 		return this.state.status;
 	}
 
-	static request(id: PaymentId, orderId: OrderId, amount: Money): Payment {
+	static request(
+		id: PaymentId,
+		orderId: OrderId,
+		amount: Money,
+		facts: DomainEventFacts,
+	): Payment {
 		const payment = new Payment(id, {
 			id,
 			orderId,
@@ -67,47 +75,59 @@ export class Payment extends AggregateRoot<
 		});
 		payment.commit(
 			{ id, orderId, amount, status: "requested" },
-			payment.recordEvent("PaymentRequested", { orderId, amount }),
+			payment.recordEvent("PaymentRequested", { orderId, amount }, facts),
 		);
 		return payment;
 	}
 
-	receive(): void {
+	receive(facts: DomainEventFacts): void {
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "receive");
 		}
 		this.commit(
 			{ ...this.state, status: "received" },
-			this.recordEvent("PaymentReceived", {
-				orderId: this.state.orderId,
-				amount: this.state.amount,
-			}),
+			this.recordEvent(
+				"PaymentReceived",
+				{
+					orderId: this.state.orderId,
+					amount: this.state.amount,
+				},
+				facts,
+			),
 		);
 	}
 
-	fail(reason: string): void {
+	fail(reason: string, facts: DomainEventFacts): void {
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "fail");
 		}
 		this.commit(
 			{ ...this.state, status: "failed", failureReason: reason },
-			this.recordEvent("PaymentFailed", {
-				orderId: this.state.orderId,
-				reason,
-			}),
+			this.recordEvent(
+				"PaymentFailed",
+				{
+					orderId: this.state.orderId,
+					reason,
+				},
+				facts,
+			),
 		);
 	}
 
-	refund(): void {
+	refund(facts: DomainEventFacts): void {
 		if (this.state.status !== "received") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "refund");
 		}
 		this.commit(
 			{ ...this.state, status: "refunded" },
-			this.recordEvent("PaymentRefunded", {
-				orderId: this.state.orderId,
-				amount: this.state.amount,
-			}),
+			this.recordEvent(
+				"PaymentRefunded",
+				{
+					orderId: this.state.orderId,
+					amount: this.state.amount,
+				},
+				facts,
+			),
 		);
 	}
 }

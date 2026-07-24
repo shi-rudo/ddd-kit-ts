@@ -7,14 +7,19 @@ import {
 import type { Id } from "../core/id";
 import {
 	type AggregateSnapshot,
-	type Version,
 	createDomainEventFactory,
+	type Version,
 } from "./aggregate";
 import {
 	type AggregateConfig,
 	AggregateRoot as ProductionAggregateRoot,
 } from "./aggregate-root";
-import type { AnyDomainEvent, DomainEvent } from "./domain-event";
+import type {
+	AnyDomainEvent,
+	DomainEvent,
+	DomainEventFactory,
+	DomainEventFacts,
+} from "./domain-event";
 import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
 
 function acknowledgePersisted(aggregate: object, version: Version): void {
@@ -305,6 +310,77 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("Snapshots", () => {
+		it("records events and snapshots without reading hidden time or randomness", () => {
+			type Updated = DomainEvent<"Updated", { value: number }>;
+			class StrictAggregate extends AggregateRoot<TestState, TestId, Updated> {
+				protected readonly aggregateType = "StrictAggregate";
+				constructor(config: AggregateConfig) {
+					super("strict" as TestId, { value: 0, status: "inactive" }, config);
+				}
+
+				update(value: number, facts: DomainEventFacts): Updated {
+					const event = this.recordEvent("Updated", { value }, facts);
+					this.commit({ ...this.state, value }, event);
+					return event;
+				}
+
+				recordWithoutFactsMustNotCompile(): Updated {
+					// @ts-expect-error event identity and occurrence time are required
+					return this.recordEvent("Updated", { value: 1 });
+				}
+			}
+
+			const hiddenFactoryMustNotBeRead: DomainEventFactory = {
+				create: (() => {
+					throw new Error("hidden event factory was read");
+				}) as DomainEventFactory["create"],
+				createFacts: () => {
+					throw new Error("hidden event-facts factory was read");
+				},
+				now: () => {
+					throw new Error("hidden clock dependency was read");
+				},
+			};
+			const aggregate = new StrictAggregate({
+				domainEventFactory: hiddenFactoryMustNotBeRead,
+			});
+			const twin = new StrictAggregate({
+				domainEventFactory: hiddenFactoryMustNotBeRead,
+			});
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+			const snapshotAt = new Date("2027-04-05T06:08:00.000Z");
+			const facts = {
+				eventId: "explicit-event-id",
+				occurredAt,
+			};
+
+			const event = aggregate.update(42, facts);
+			const snapshot = aggregate.createSnapshot(snapshotAt);
+			const twinEvent = twin.update(42, facts);
+			const twinSnapshot = twin.createSnapshot(snapshotAt);
+
+			expect(event.eventId).toBe("explicit-event-id");
+			expect(event.occurredAt).toEqual(occurredAt);
+			expect(snapshot.snapshotAt).toEqual(snapshotAt);
+			expect(twinEvent).toEqual(event);
+			expect(twinSnapshot).toEqual(snapshot);
+			expect(event.occurredAt).not.toBe(occurredAt);
+			expect(twinEvent.occurredAt).not.toBe(event.occurredAt);
+			expect(snapshot.snapshotAt).not.toBe(snapshotAt);
+			expect(twinSnapshot.snapshotAt).not.toBe(snapshot.snapshotAt);
+		});
+
+		it("rejects an invalid explicit snapshot time", () => {
+			const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+			expect(() => aggregate.createSnapshot(new Date(Number.NaN))).toThrow(
+				new TypeError("snapshotAt must be a valid Date"),
+			);
+			expect(() => aggregate.createSnapshot(0 as unknown as Date)).toThrow(
+				new TypeError("snapshotAt must be a valid Date"),
+			);
+		});
+
 		it("uses one instance-bound factory for recorded events and snapshots", () => {
 			type Updated = DomainEvent<"Updated", { value: number }>;
 			class FactoryBoundAggregate extends AggregateRoot<
@@ -322,7 +398,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 
 				update(value: number): Updated {
-					const event = this.recordEvent("Updated", { value });
+					const event = this.recordEventFromFactory("Updated", { value });
 					this.commit({ ...this.state, value }, event);
 					return event;
 				}
@@ -336,7 +412,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const aggregate = new FactoryBoundAggregate({ domainEventFactory });
 
 			const event = aggregate.update(42);
-			const snapshot = aggregate.createSnapshot();
+			const snapshot = aggregate.createSnapshotFromFactory();
 
 			expect(event.eventId).toBe("request-event-id");
 			expect(event.occurredAt.getTime()).toBe(shared.getTime());
@@ -351,7 +427,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			aggregate.updateValue(20);
 			aggregate.activate();
 
-			const snapshot = aggregate.createSnapshot();
+			const snapshot = aggregate.createSnapshotFromFactory();
 
 			expect(snapshot.state.value).toBe(20);
 			expect(snapshot.state.status).toBe("active");
@@ -361,7 +437,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("stamps schemaVersion 1 on snapshots by default", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-			expect(aggregate.createSnapshot().schemaVersion).toBe(1);
+			expect(aggregate.createSnapshotFromFactory().schemaVersion).toBe(1);
 		});
 
 		it("stamps an overridden snapshotSchemaVersion", () => {
@@ -377,7 +453,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				value: 1,
 				status: "inactive",
 			});
-			expect(aggregate.createSnapshot().schemaVersion).toBe(3);
+			expect(aggregate.createSnapshotFromFactory().schemaVersion).toBe(3);
 		});
 
 		it("rejects a restore target carrying pending events (UnreplayableAggregateError), same guard as the event-sourced path", () => {
@@ -393,7 +469,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				update(value: number): void {
 					this.commit(
 						{ ...this.state, value },
-						this.recordEvent("Updated", { value }),
+						this.recordEventFromFactory("Updated", { value }),
 					);
 				}
 			}
@@ -497,7 +573,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			aggregate1.updateValue(20);
 			aggregate1.activate();
 
-			const snapshot = aggregate1.createSnapshot();
+			const snapshot = aggregate1.createSnapshotFromFactory();
 
 			// Create new aggregate and restore from snapshot
 			const initialState: TestState = { value: 0, status: "inactive" };
@@ -513,7 +589,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should not mutate original state when creating snapshot", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
-			const snapshot = aggregate.createSnapshot();
+			const snapshot = aggregate.createSnapshotFromFactory();
 			(snapshot.state as any).value = 999; // Try to mutate snapshot
 
 			expect(aggregate.state.value).toBe(10); // Original unchanged
@@ -539,7 +615,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				items: [{ id: "i1", qty: 2 }],
 				status: "open",
 			});
-			const snapshot = agg.createSnapshot();
+			const snapshot = agg.createSnapshotFromFactory();
 
 			// Mutate aggregate after snapshot
 			agg.addItem({ id: "i2", qty: 5 });
@@ -642,11 +718,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			// Without the guard, structuredClone silently strips the prototype
 			// and the snapshot breaks on first method call after restore.
-			expect(() => cart.createSnapshot()).toThrow(
+			expect(() => cart.createSnapshotFromFactory()).toThrow(
 				/class instance \(LineItem\)/,
 			);
-			expect(() => cart.createSnapshot()).toThrow(/toSnapshotState/);
-			expect(() => cart.createSnapshot()).toThrow(/items\[0\]/);
+			expect(() => cart.createSnapshotFromFactory()).toThrow(/toSnapshotState/);
+			expect(() => cart.createSnapshotFromFactory()).toThrow(/items\[0\]/);
 		});
 
 		it("default createSnapshot fails fast on function-valued state members", () => {
@@ -660,8 +736,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const agg = new FnAggregate("agg-1" as TestId, { calc: () => 42 });
 
 			// Previously: cryptic DataCloneError from structuredClone.
-			expect(() => agg.createSnapshot()).toThrow(/function/);
-			expect(() => agg.createSnapshot()).toThrow(/calc/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/function/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/calc/);
 		});
 
 		it("overridden hooks produce a plain snapshot and revive class children on restore", () => {
@@ -669,7 +745,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				items: [new LineItem("sku-a", 2)],
 			});
 
-			const snapshot = cart.createSnapshot();
+			const snapshot = cart.createSnapshotFromFactory();
 			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
 				Object.prototype,
 			);
@@ -684,7 +760,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("plain-data states snapshot exactly as before (no behaviour change)", () => {
 			const aggregate = TestAggregate.create("agg-1" as TestId, 10);
-			const snapshot = aggregate.createSnapshot();
+			const snapshot = aggregate.createSnapshotFromFactory();
 
 			expect(snapshot.state).toEqual({ value: 10, status: "inactive" });
 			expect(snapshot.version).toBe(aggregate.version);
@@ -707,14 +783,20 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 			// structuredClone silently downgrades the subclass to a plain
 			// Error (instanceof broken, .code gone), so it must fail fast instead.
-			expect(() => withSubclass.createSnapshot()).toThrow(/Error/);
-			expect(() => withSubclass.createSnapshot()).toThrow(/lastError/);
-			expect(() => withSubclass.createSnapshot()).toThrow(/toSnapshotState/);
+			expect(() => withSubclass.createSnapshotFromFactory()).toThrow(/Error/);
+			expect(() => withSubclass.createSnapshotFromFactory()).toThrow(
+				/lastError/,
+			);
+			expect(() => withSubclass.createSnapshotFromFactory()).toThrow(
+				/toSnapshotState/,
+			);
 
 			const withPlainError = new ErrAggregate("agg-1" as TestId, {
 				lastError: Object.assign(new Error("boom"), { code: 42 }),
 			});
-			expect(() => withPlainError.createSnapshot()).toThrow(/lastError/);
+			expect(() => withPlainError.createSnapshotFromFactory()).toThrow(
+				/lastError/,
+			);
 		});
 
 		it("does not let a Symbol.toStringTag spoofer smuggle functions past the guard", () => {
@@ -735,8 +817,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// Previously the spoofed tag matched SNAPSHOT_SAFE_TAGS, the walk
 			// skipped the object, and structuredClone later threw a pathless
 			// DataCloneError. The guard must report the function with its path.
-			expect(() => agg.createSnapshot()).toThrow(/function/);
-			expect(() => agg.createSnapshot()).toThrow(/state\.d\.f/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/function/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/state\.d\.f/);
 		});
 
 		it("fails fast on enumerable symbol-keyed state (structuredClone silently drops symbol keys)", () => {
@@ -753,8 +835,8 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				[region]: { zone: "eu" },
 			});
 
-			expect(() => agg.createSnapshot()).toThrow(/symbol/i);
-			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/symbol/i);
+			expect(() => agg.createSnapshotFromFactory()).toThrow(/toSnapshotState/);
 		});
 
 		it("ignores non-enumerable props, exactly like structuredClone does", () => {
@@ -775,7 +857,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			// Non-enumerable members are deliberately excluded from
 			// serialization: structuredClone drops them, so the guard
 			// must not reject them.
-			expect(() => agg.createSnapshot()).not.toThrow();
+			expect(() => agg.createSnapshotFromFactory()).not.toThrow();
 		});
 	});
 
@@ -880,7 +962,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				items: [{ sku: "a", qty: 1 }],
 			});
 			source.addItem("b", 2);
-			const snapshot = source.createSnapshot();
+			const snapshot = source.createSnapshotFromFactory();
 
 			const restored = new DeepFrozenAggregate("test-1" as TestId, {
 				status: "open",
@@ -912,7 +994,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.addDomainEvent(ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return this.recordEvent("Updated", { value });
+				return this.recordEventFromFactory("Updated", { value });
 			}
 		}
 
@@ -930,7 +1012,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.commit({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return this.recordEvent("Updated", { value });
+				return this.recordEventFromFactory("Updated", { value });
 			}
 		}
 
@@ -1047,7 +1129,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			fire(v: number): Recorded {
-				return this.recordEvent("Recorded", { v });
+				return this.recordEventFromFactory("Recorded", { v });
 			}
 		}
 
@@ -1093,7 +1175,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				super(id, state);
 			}
 			addTestEvent(value: number): void {
-				this.addDomainEvent(this.recordEvent("TestRecorded", { value }));
+				this.addDomainEvent(
+					this.recordEventFromFactory("TestRecorded", { value }),
+				);
 			}
 		}
 
@@ -1214,7 +1298,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					super(id, initialState);
 				}
 				public doSomething() {
-					this.addDomainEvent(this.recordEvent("SomethingHappened", undefined));
+					this.addDomainEvent(
+						this.recordEventFromFactory("SomethingHappened", undefined),
+					);
 				}
 			}
 
@@ -1248,11 +1334,15 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 				public updateValue(newValue: number) {
 					this.setState({ ...this.state, value: newValue });
-					this.addDomainEvent(this.recordEvent("ValueUpdated", { newValue }));
+					this.addDomainEvent(
+						this.recordEventFromFactory("ValueUpdated", { newValue }),
+					);
 				}
 				public activate() {
 					this.setState({ ...this.state, status: "active" });
-					this.addDomainEvent(this.recordEvent("Activated", undefined));
+					this.addDomainEvent(
+						this.recordEventFromFactory("Activated", undefined),
+					);
 				}
 			}
 
@@ -1290,11 +1380,13 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					super(id, initialState);
 				}
 				public doCorrect() {
-					this.addDomainEvent(this.recordEvent("OnlyThis", { data: "hello" }));
+					this.addDomainEvent(
+						this.recordEventFromFactory("OnlyThis", { data: "hello" }),
+					);
 				}
 				public doWrong() {
 					// @ts-expect-error - wrong event type is rejected by TEvent constraint
-					this.recordEvent("WrongEvent", undefined);
+					this.recordEventFromFactory("WrongEvent", undefined);
 				}
 			}
 
@@ -1800,7 +1892,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					recordDeletion(reason: string): void {
 						// Sanctioned decoupled path: event only, no state change,
 						// no version bump (repository.md hard-delete pattern).
-						this.addDomainEvent(this.recordEvent("Deleted", { reason }));
+						this.addDomainEvent(
+							this.recordEventFromFactory("Deleted", { reason }),
+						);
 					}
 				}
 
@@ -1937,7 +2031,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 					renameWithEvent(name: string): void {
 						this.commit(
 							{ ...this.state, name },
-							this.recordEvent("Renamed", { name }),
+							this.recordEventFromFactory("Renamed", { name }),
 						);
 					}
 				}

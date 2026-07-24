@@ -168,6 +168,7 @@ const INDEX_SURFACE = [
 	"copyMetadata",
 	"createDomainEvent",
 	"createDomainEventFactory",
+	"createDomainEventFromFacts",
 	"createInitialDomainMachineSnapshot",
 	"createIntegrationMessage",
 	"decodeIntegrationMessage",

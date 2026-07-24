@@ -523,7 +523,7 @@ this.commit(
   this.recordEvent("CheckoutCancelled", {
     orderId: this.id,
     reason,
-  }),
+  }, facts),
 );
 
 return result.outputs;

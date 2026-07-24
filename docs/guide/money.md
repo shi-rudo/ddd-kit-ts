@@ -415,6 +415,7 @@ import {
   AggregateRoot,
   DomainError,
   type DomainEvent,
+  type DomainEventFacts,
   type Id,
   type Version,
 } from "@shirudo/ddd-kit";
@@ -484,13 +485,13 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
     });
   }
 
-  issue(): void {
+  issue(facts: DomainEventFacts): void {
     this.commit(
       { ...this.state, status: "issued" },
       this.recordEvent("InvoiceIssued", {
         invoiceId: this.id,
         total: this.state.total,
-      }),
+      }, facts),
     );
   }
 
@@ -541,7 +542,7 @@ class PgInvoiceRepository {
   }
 
   async save(invoice: Invoice): Promise<void> {
-    const memento = invoice.createSnapshot();
+    const memento = invoice.createSnapshot(new Date());
     const { status, total } = memento.state;
 
     await this.tx.query(

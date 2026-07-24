@@ -470,7 +470,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							`withCommit: event "${event.type}" is missing ${missing.join(
 								" and ",
 							)}. ` +
-								`Use this.recordEvent(type, payload) inside aggregate methods ` +
+								`Use this.recordEvent(type, payload, facts) inside aggregate methods ` +
 								`instead of createDomainEvent(...); recordEvent auto-injects ` +
 								`aggregateId and aggregateType. Outbox dispatchers and ` +
 								`projection handlers rely on the envelope source.`,

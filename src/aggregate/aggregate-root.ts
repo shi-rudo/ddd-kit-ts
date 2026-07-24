@@ -19,8 +19,11 @@ export type { IAggregateRoot } from "./aggregate";
 /**
  * Configuration options shared by aggregate roots: the instance-bound
  * `validateState` function and `deepFreezeState` from `EntityConfig`, plus an
- * optional instance-bound `domainEventFactory` used by `recordEvent` and
- * snapshots. The former `autoVersionBump` option was removed in v3: the OCC
+ * optional instance-bound `domainEventFactory` used only by the explicitly
+ * named convenience methods `recordEventFromFactory` and
+ * `createSnapshotFromFactory`. The strict `recordEvent` and `createSnapshot`
+ * paths take their event facts and time as arguments. The former
+ * `autoVersionBump` option was removed in v3: the OCC
  * decision lives in the method NAME instead. `setState` always bumps the
  * version; the rare non-bumping mutation is the deliberately loud
  * `setStateWithoutVersionBump`.
@@ -63,10 +66,10 @@ export type { AggregateConfig } from "./base-aggregate";
  *     super(id, initialState);
  *   }
  *
- *   confirm(): void {
+ *   confirm(facts: DomainEventFacts): void {
  *     this.commit(
  *       { ...this.state, status: "confirmed" },
- *       this.recordEvent("OrderConfirmed", { orderId: this.id }),
+ *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
  *     );
  *   }
  * }
@@ -255,13 +258,13 @@ export abstract class AggregateRoot<
 	 *
 	 * @example
 	 * ```ts
-	 * confirm(): void {
+	 * confirm(facts: DomainEventFacts): void {
 	 *   if (this.state.status === "confirmed") {
 	 *     throw new OrderAlreadyConfirmedError(this.id);
 	 *   }
 	 *   this.commit(
 	 *     { ...this.state, status: "confirmed" },
-	 *     this.recordEvent("OrderConfirmed", { orderId: this.id }),
+	 *     this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
 	 *   );
 	 * }
 	 * ```

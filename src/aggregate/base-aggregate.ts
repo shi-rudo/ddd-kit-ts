@@ -10,9 +10,11 @@ import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
 import {
 	type AnyDomainEvent,
 	type CreateDomainEventOptions,
-	defaultDomainEventFactory,
-	type DomainEventFactory,
+	createDomainEventFromFacts,
 	type DomainEvent,
+	type DomainEventFactory,
+	type DomainEventFacts,
+	defaultDomainEventFactory,
 	isMintedEvent,
 } from "./domain-event";
 import { registerAggregatePersistenceCapability } from "./persistence-lifecycle";
@@ -21,9 +23,10 @@ import { registerAggregatePersistenceCapability } from "./persistence-lifecycle"
 export interface AggregateConfig<TState = unknown>
 	extends EntityConfig<TState> {
 	/**
-	 * Immutable event factory captured by this aggregate instance. Its clock
-	 * also stamps snapshots, keeping request-local event and snapshot time
-	 * consistent without module-level mutation.
+	 * Immutable event factory captured for the explicitly named convenience
+	 * methods `recordEventFromFactory` and `createSnapshotFromFactory`. The
+	 * strict paths ignore it and require event facts or snapshot time from the
+	 * application operation.
 	 */
 	readonly domainEventFactory?: DomainEventFactory;
 }
@@ -34,8 +37,10 @@ export interface AggregateConfig<TState = unknown>
  * identical across the two flavours: version + persistedVersion
  * tracking, the kit-internal post-commit acknowledgement capability,
  * the `markRestored` post-load marker, and the
- * `recordEvent` helper that auto-injects `aggregateId` +
- * `aggregateType` on every event the aggregate emits.
+ * `recordEvent` helpers that auto-inject `aggregateId` +
+ * `aggregateType` on every event the aggregate emits. The strict helper takes
+ * identity and occurrence time explicitly; the factory-backed helper is an
+ * opt-in convenience path.
  *
  * Consumers do NOT extend this class directly; extend
  * `AggregateRoot` for state-stored aggregates or
@@ -215,7 +220,8 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Immutability gate for every recording path: only events minted by
-	 * the kit's constructors (`createDomainEvent`, `recordEvent`) pass,
+	 * the kit's constructors (`createDomainEvent`,
+	 * `createDomainEventFromFacts`, `recordEvent`) pass,
 	 * checked against the constructor's internal, unforgeable mint
 	 * marker. Minted implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can
@@ -236,21 +242,30 @@ export abstract class BaseAggregate<
 	 * The state is converted via {@link toSnapshotState}; the default
 	 * requires plain, serialisable data and fails fast otherwise.
 	 *
-	 * `snapshotAt` is read from this aggregate instance's immutable
-	 * `DomainEventFactory`, the same clock `recordEvent` stamps
-	 * `occurredAt` from. Injecting a factory through `AggregateConfig`
-	 * therefore pins both timestamps in deterministic tests.
+	 * `snapshotAt` is supplied by the caller so snapshot creation reads no
+	 * hidden clock. The application shell can use its operation clock, reuse an
+	 * event's `occurredAt`, or explicitly opt into
+	 * {@link createSnapshotFromFactory}.
 	 * `schemaVersion` is stamped from
 	 * {@link snapshotSchemaVersion} so a later restore can detect
 	 * snapshots written against an older `TSnapshotState` shape.
 	 */
-	public createSnapshot(): AggregateSnapshot<TSnapshotState> {
+	public createSnapshot(snapshotAt: Date): AggregateSnapshot<TSnapshotState> {
 		return {
 			state: this.toSnapshotState(this._state),
 			version: this.version,
-			snapshotAt: this.domainEventFactory.now(),
+			snapshotAt: copySnapshotAt(snapshotAt),
 			schemaVersion: this.snapshotSchemaVersion,
 		};
+	}
+
+	/**
+	 * Convenience snapshot path that reads this aggregate's configured event
+	 * factory clock. Prefer {@link createSnapshot} in the Functional Core and
+	 * pass the application operation's explicit time.
+	 */
+	public createSnapshotFromFactory(): AggregateSnapshot<TSnapshotState> {
+		return this.createSnapshot(this.domainEventFactory.now());
 	}
 
 	/**
@@ -337,10 +352,10 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Sugar for this aggregate's `DomainEventFactory` that auto-injects `aggregateId`
-	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
-	 * into the event's metadata fields. This is the canonical path for
-	 * recording events from inside aggregate domain methods.
+	 * Creates an aggregate event from explicit operation facts and injects
+	 * `aggregateId` (from `this.id`) and `aggregateType` (from
+	 * {@link aggregateType}). This is the canonical path for recording events
+	 * from deterministic aggregate behavior.
 	 *
 	 * Downstream consumers (outbox dispatchers, projection handlers,
 	 * audit logs) route by these two fields. Calling
@@ -354,10 +369,10 @@ export abstract class BaseAggregate<
 	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	 *   protected readonly aggregateType = "Order";
 	 *
-	 *   confirm(): void {
+	 *   confirm(facts: DomainEventFacts): void {
 	 *     this.commit(
 	 *       { ...this.state, status: "confirmed" },
-	 *       this.recordEvent("OrderConfirmed", { orderId: this.id }),
+	 *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
 	 *     );
 	 *   }
 	 * }
@@ -365,12 +380,29 @@ export abstract class BaseAggregate<
 	 *
 	 * @param type    - event type discriminator (must be one of `TEvent`'s tags)
 	 * @param payload - payload for that event subtype
-	 * @param options - any remaining `createDomainEvent` options
-	 *   (`eventId`, `occurredAt`, `metadata`, `version`); `aggregateId`
-	 *   and `aggregateType` are deliberately omitted, because the helper
-	 *   sets them.
+	 * @param facts - explicit event identity, occurrence time, schema version,
+	 *   and metadata supplied by the application operation
 	 */
 	protected recordEvent<E extends TEvent>(
+		type: E["type"],
+		payload: E["payload"],
+		facts: DomainEventFacts,
+	): E {
+		return createDomainEventFromFacts(type, payload, {
+			...facts,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		}) as DomainEvent<E["type"], E["payload"]> as E;
+	}
+
+	/**
+	 * Convenience event path that obtains omitted identity or time fields from
+	 * this aggregate's configured factory. Prefer {@link recordEvent} when the
+	 * domain operation should be deterministic from its explicit inputs. If no
+	 * factory was configured, omitted values come from Web Crypto and the
+	 * platform clock.
+	 */
+	protected recordEventFromFactory<E extends TEvent>(
 		type: E["type"],
 		payload: E["payload"],
 		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
@@ -381,6 +413,13 @@ export abstract class BaseAggregate<
 			aggregateType: this.aggregateType,
 		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
+}
+
+function copySnapshotAt(snapshotAt: Date): Date {
+	if (!(snapshotAt instanceof Date) || !Number.isFinite(snapshotAt.getTime())) {
+		throw new TypeError("snapshotAt must be a valid Date");
+	}
+	return new Date(snapshotAt.getTime());
 }
 
 /**

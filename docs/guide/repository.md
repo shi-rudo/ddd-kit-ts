@@ -189,7 +189,7 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
   await orders.save(order);
 
   const commit = enrollment.enrollSaved(order);
@@ -234,7 +234,7 @@ Route insert vs update on `persistedVersion`, not on `version`.
 async save(order: Order): Promise<void> {
   if (!order.hasChanges) return;
 
-  const memento = order.createSnapshot();
+  const memento = order.createSnapshot(this.clock());
 
   if (order.persistedVersion === undefined) {
     try {
@@ -406,14 +406,18 @@ a method and save the aggregate.
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  archive(reason: string, archivedAt: Date): void {
+  archive(
+    reason: string,
+    archivedAt: Date,
+    facts: DomainEventFacts,
+  ): void {
     if (this.state.status === "archived") {
       throw new OrderAlreadyArchivedError(this.id);
     }
 
     this.commit(
       { ...this.state, status: "archived", archivedAt },
-      this.recordEvent("OrderArchived", { reason, archivedAt }),
+      this.recordEvent("OrderArchived", { reason, archivedAt }, facts),
     );
   }
 }
@@ -422,7 +426,12 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.archive(reason, new Date());
+  const archivedAt = clock();
+  order.archive(
+    reason,
+    archivedAt,
+    domainEvents.createFacts({ occurredAt: archivedAt }),
+  );
   await orders.save(order);
 
   return {
@@ -443,10 +452,14 @@ then delete the aggregate in the same transaction.
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  recordDeletion(reason: string, deletedAt: Date): void {
-	this.commit(
-	  { ...this.state },
-      this.recordEvent("OrderDeleted", { reason, deletedAt }),
+  recordDeletion(
+    reason: string,
+    deletedAt: Date,
+    facts: DomainEventFacts,
+  ): void {
+    this.commit(
+      { ...this.state },
+      this.recordEvent("OrderDeleted", { reason, deletedAt }, facts),
     );
   }
 }
@@ -455,7 +468,12 @@ await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.recordDeletion(reason, new Date());
+  const deletedAt = clock();
+  order.recordDeletion(
+    reason,
+    deletedAt,
+    domainEvents.createFacts({ occurredAt: deletedAt }),
+  );
   await orders.delete(order);
 
   return {

@@ -223,7 +223,7 @@ export type RepositoryContractTest = ContractTest;
  *   mutate: (order) => order.changeNote(`note-${counter++}`), // ONE bump + event
  *   // provide every optional capability your adapter supports:
  *   createAggregateWithId: (id) => Order.draft(id),
- *   snapshotState: (order) => order.createSnapshot().state,
+ *   snapshotState: (order) => order.createSnapshot(testClock()).state,
  *   deletesAreVersionChecked: true,
  * };
  *

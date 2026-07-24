@@ -67,14 +67,14 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	rename(name: string): void {
 		this.commit(
 			{ ...this.state, name },
-			this.recordEvent("OrderRenamed", { name }),
+			this.recordEventFromFactory("OrderRenamed", { name }),
 		);
 	}
 
 	addItem(item: string): void {
 		this.commit(
 			{ ...this.state, items: [...this.state.items, item] },
-			this.recordEvent("ItemAdded", { item }),
+			this.recordEventFromFactory("ItemAdded", { item }),
 		);
 	}
 
@@ -115,7 +115,8 @@ class InMemoryDb {
 				previousEventfulAggregateVersion =
 					this.commitPredecessors.get(commitKey) ?? null;
 			} else {
-				previousEventfulAggregateVersion = this.sourceHeads.get(sourceKey) ?? null;
+				previousEventfulAggregateVersion =
+					this.sourceHeads.get(sourceKey) ?? null;
 				this.commitPredecessors.set(
 					commitKey,
 					previousEventfulAggregateVersion,
@@ -202,7 +203,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 				});
 			}
 			this.db.rows.set(order.id, {
-				state: order.createSnapshot().state,
+				state: order.createSnapshotFromFactory().state,
 				version: order.version,
 			});
 		} else {
@@ -218,7 +219,7 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 				});
 			}
 			this.db.rows.set(order.id, {
-				state: order.createSnapshot().state,
+				state: order.createSnapshotFromFactory().state,
 				version: order.version,
 			});
 		}
@@ -313,7 +314,7 @@ function createInMemoryHarness(
 		mutateVersionOnly: (order) => order.touch(),
 		mutateChildCollection: (order) =>
 			order.addItem(`item-${mutationCounter++}`),
-		snapshotState: (order) => order.createSnapshot().state,
+		snapshotState: (order) => order.createSnapshotFromFactory().state,
 		deletesAreVersionChecked: true,
 		insertsAreDuplicateChecked: true, // explicit; true is also the default
 	};
@@ -416,7 +417,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			// ❌ no `WHERE version = persistedVersion` equivalent and no
 			// unique-violation mapping:
 			this.db.rows.set(order.id, {
-				state: order.createSnapshot().state,
+				state: order.createSnapshotFromFactory().state,
 				version: order.version,
 			});
 		}

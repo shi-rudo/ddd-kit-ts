@@ -47,8 +47,10 @@ domain work; it should not mutate child state or event lists from the outside.
 ```ts
 import {
   AggregateRoot,
+  createDomainEventFactory,
   DomainError,
   type DomainEvent,
+  type DomainEventFacts,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -95,7 +97,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     return this.state.status;
   }
 
-  confirm(): void {
+  confirm(facts: DomainEventFacts): void {
     if (this.state.status === "confirmed") {
       throw new OrderAlreadyConfirmedError(this.id);
     }
@@ -105,16 +107,19 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
         ...this.state,
         status: "confirmed",
       },
-      this.recordEvent("OrderConfirmed", {
-        orderId: this.id,
-      }),
+      this.recordEvent(
+        "OrderConfirmed",
+        { orderId: this.id },
+        facts,
+      ),
     );
   }
 }
 
 const order = Order.draft("order-1" as OrderId, "customer-1");
+const domainEvents = createDomainEventFactory();
 
-order.confirm();
+order.confirm(domainEvents.createFacts());
 
 order.status; // "confirmed"
 order.version; // 1
@@ -125,8 +130,9 @@ This example shows the core conventions:
 
 - `aggregateType` is required on every concrete aggregate. It is written onto
   events so outbox dispatchers and projections know where the event came from.
-- `recordEvent(...)` is the safe way to create aggregate events. It fills
-  `aggregateId` and `aggregateType` automatically.
+- `recordEvent(..., facts)` fills `aggregateId` and `aggregateType`
+  automatically. The application creates event identity and occurrence time
+  before it enters the aggregate.
 - `commit(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
 - Domain rules throw `DomainError` subclasses. Application boundaries decide

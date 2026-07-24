@@ -1,5 +1,8 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import type { DomainEvent } from "../../src/aggregate/domain-event";
+import type {
+	DomainEvent,
+	DomainEventFacts,
+} from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import type { Money } from "../../src/money";
@@ -46,7 +49,12 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		return this.state.cancelReason;
 	}
 
-	static place(id: OrderId, customerId: string, total: Money): Order {
+	static place(
+		id: OrderId,
+		customerId: string,
+		total: Money,
+		facts: DomainEventFacts,
+	): Order {
 		const order = new Order(id, {
 			id,
 			customerId,
@@ -56,31 +64,33 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		// Bump version to 1 and record the placement event.
 		order.commit(
 			{ id, customerId, total, status: "placed" },
-			order.recordEvent("OrderPlaced", { customerId, total }),
+			order.recordEvent("OrderPlaced", { customerId, total }, facts),
 		);
 		return order;
 	}
 
-	confirm(): void {
+	confirm(facts: DomainEventFacts): void {
 		if (this.state.status !== "placed") {
 			throw new OrderInWrongStateError(this.id, this.state.status, "confirm");
 		}
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			this.recordEvent("OrderConfirmed", {
-				confirmedAt: new Date().toISOString(),
-			}),
+			this.recordEvent(
+				"OrderConfirmed",
+				{ confirmedAt: facts.occurredAt.toISOString() },
+				facts,
+			),
 		);
 	}
 
-	cancel(reason: string): void {
+	cancel(reason: string, facts: DomainEventFacts): void {
 		if (this.state.status === "cancelled") return; // idempotent
 		if (this.state.status === "confirmed") {
 			throw new OrderInWrongStateError(this.id, this.state.status, "cancel");
 		}
 		this.commit(
 			{ ...this.state, status: "cancelled", cancelReason: reason },
-			this.recordEvent("OrderCancelled", { reason }),
+			this.recordEvent("OrderCancelled", { reason }, facts),
 		);
 	}
 }

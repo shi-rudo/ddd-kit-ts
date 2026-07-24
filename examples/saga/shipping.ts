@@ -1,5 +1,8 @@
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import type { DomainEvent } from "../../src/aggregate/domain-event";
+import type {
+	DomainEvent,
+	DomainEventFacts,
+} from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
 import type { Id } from "../../src/core/id";
 import type { OrderId } from "./order";
@@ -56,16 +59,20 @@ export class Shipment extends AggregateRoot<
 		return this.state.trackingId;
 	}
 
-	static request(id: ShipmentId, orderId: OrderId): Shipment {
+	static request(
+		id: ShipmentId,
+		orderId: OrderId,
+		facts: DomainEventFacts,
+	): Shipment {
 		const shipment = new Shipment(id, { id, orderId, status: "requested" });
 		shipment.commit(
 			{ id, orderId, status: "requested" },
-			shipment.recordEvent("ShippingRequested", { orderId }),
+			shipment.recordEvent("ShippingRequested", { orderId }, facts),
 		);
 		return shipment;
 	}
 
-	complete(trackingId: string): void {
+	complete(trackingId: string, facts: DomainEventFacts): void {
 		if (this.state.status !== "requested") {
 			throw new ShipmentInWrongStateError(
 				this.id,
@@ -75,23 +82,31 @@ export class Shipment extends AggregateRoot<
 		}
 		this.commit(
 			{ ...this.state, status: "shipped", trackingId },
-			this.recordEvent("ShippingCompleted", {
-				orderId: this.state.orderId,
-				trackingId,
-			}),
+			this.recordEvent(
+				"ShippingCompleted",
+				{
+					orderId: this.state.orderId,
+					trackingId,
+				},
+				facts,
+			),
 		);
 	}
 
-	fail(reason: string): void {
+	fail(reason: string, facts: DomainEventFacts): void {
 		if (this.state.status !== "requested") {
 			throw new ShipmentInWrongStateError(this.id, this.state.status, "fail");
 		}
 		this.commit(
 			{ ...this.state, status: "failed", failureReason: reason },
-			this.recordEvent("ShippingFailed", {
-				orderId: this.state.orderId,
-				reason,
-			}),
+			this.recordEvent(
+				"ShippingFailed",
+				{
+					orderId: this.state.orderId,
+					reason,
+				},
+				facts,
+			),
 		);
 	}
 }

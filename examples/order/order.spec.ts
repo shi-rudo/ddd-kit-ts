@@ -87,12 +87,14 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		order.addItem("product-1", 2, eur(2000n));
 		order.confirm();
 
-		const snapshot = order.createSnapshot();
+		const snapshotAt = new Date("2027-04-05T06:07:08.000Z");
+		const snapshot = order.createSnapshot(snapshotAt);
 
 		expect(snapshot.state.status).toBe("confirmed");
 		expect(snapshot.state.total).toEqual(eur(2000n));
 		expect(snapshot.version).toBe(2);
-		expect(snapshot.snapshotAt).toBeInstanceOf(Date);
+		expect(snapshot.snapshotAt).toEqual(snapshotAt);
+		expect(snapshot.snapshotAt).not.toBe(snapshotAt);
 	});
 
 	it("should restore from snapshot", () => {
@@ -104,7 +106,9 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		order1.addItem("product-1", 2, eur(2000n));
 		order1.confirm();
 
-		const snapshot = order1.createSnapshot();
+		const snapshot = order1.createSnapshot(
+			new Date("2027-04-05T06:07:08.000Z"),
+		);
 
 		const order2 = Order.create(
 			"order-123" as OrderId,

@@ -36,7 +36,7 @@ The fields have different jobs:
 | `type` | Routing discriminator, such as `"OrderConfirmed"`. |
 | `aggregateId` / `aggregateType` | Source aggregate. `recordEvent` fills these in automatically. |
 | `payload` | Domain data for the fact that happened. |
-| `occurredAt` | Time the event was created. |
+| `occurredAt` | Time the event occurred. Supply it as an explicit fact when that distinction matters. |
 | `version` | Event schema version, used for payload evolution and upcasting. |
 | `metadata` | Correlation, causation, user, source, and custom tracing fields. |
 
@@ -45,10 +45,14 @@ stream position; those values live in `CommittedDomainEvent.position`.
 
 ## Creating Events
 
-Outside an aggregate, use `createDomainEvent`:
+Outside an aggregate, `createDomainEvent` is the short convenience form:
 
 ```ts
-import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
+import {
+  createDomainEvent,
+  createDomainEventFromFacts,
+  type DomainEvent,
+} from "@shirudo/ddd-kit";
 
 type OrderConfirmed = DomainEvent<
   "OrderConfirmed",
@@ -73,24 +77,49 @@ The returned event is deeply frozen. The payload and metadata are cloned before 
 
 Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records.
 
-## Inside Aggregates: Use `recordEvent`
-
-Inside aggregate methods, prefer `this.recordEvent(...)`:
+`createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
+or `eventId` is omitted. Use `createDomainEventFromFacts` when the caller must
+provide every nondeterministic value:
 
 ```ts
+const event = createDomainEventFromFacts(
+  "OrderConfirmed",
+  { orderId: "o-1" },
+  {
+    eventId: command.eventId,
+    occurredAt: command.receivedAt,
+    aggregateId: "o-1",
+    aggregateType: "Order",
+  },
+);
+```
+
+## Inside Aggregates: Pass Event Facts
+
+An aggregate should decide from values it can see. Time and randomness are not
+domain decisions, so the application operation creates them before calling the
+aggregate:
+
+```ts
+import type { DomainEventFacts } from "@shirudo/ddd-kit";
+
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  confirm(): void {
+  confirm(facts: DomainEventFacts): void {
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
     );
   }
 }
 ```
 
-`recordEvent` uses the aggregate's `DomainEventFactory` and fills in `aggregateId` and `aggregateType` from the aggregate. That metadata is how outbox dispatchers, projection handlers, audit logs, and process managers know which aggregate produced the event.
+`DomainEventFacts` contains the event's `eventId`, `occurredAt`, optional schema
+`version`, and optional tracing `metadata`. `recordEvent` uses only those
+explicit values and fills in `aggregateId` and `aggregateType` from the
+aggregate. That source address is how outbox dispatchers, projection handlers,
+audit logs, and process managers know which aggregate produced the event.
 
 Calling `createDomainEvent(...)` directly inside an aggregate is easy to get wrong because you must remember those routing fields by hand. `withCommit` validates harvested aggregate events and throws if the fields are missing, but the better path is to make the wrong event hard to create.
 
@@ -98,7 +127,7 @@ Use `createDomainEvent(...)` directly for events that do not come from an aggreg
 
 See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
-## Auto-Generated Fields
+## Convenience Defaults
 
 `createDomainEvent` uses the immutable `defaultDomainEventFactory` and fills in
 common fields when you omit them:
@@ -109,6 +138,11 @@ common fields when you omit them:
 | `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
 | `version` | `1` | `options.version` |
 | `metadata` | `undefined` | `options.metadata` |
+
+These defaults are intentionally convenient and nondeterministic. They are
+appropriate in an application shell or for a one-off system event. Aggregate
+behavior should normally receive `DomainEventFacts` instead, so repeating a
+decision with the same state, command, and facts produces the same event.
 
 The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
 
@@ -126,7 +160,11 @@ const domainEvents = createDomainEventFactory({
   clock: () => new Date(),
 });
 
-const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
+const facts = domainEvents.createFacts({
+  metadata: { correlationId: request.id },
+});
+
+order.confirm(facts);
 ```
 
 The returned `DomainEventFactory` is frozen and permanently captures those two
@@ -136,13 +174,33 @@ async requests and parallel tests; no restore hook or async context is needed.
 Every clock read is defensively copied and fails immediately with a `TypeError`
 if the injected clock does not return a valid `Date`.
 
-Per-event `eventId` and `occurredAt` options still win over the captured
-defaults.
+`createFacts()` is the bridge between the imperative shell and the domain. It
+reads the captured dependencies, returns an immutable value, and defensively
+copies its `Date` and metadata. The factory also exposes `create(...)` for
+non-aggregate convenience events and `now()` for infrastructure such as
+snapshot policies. Explicit options always win over captured defaults.
 
-## Supplying a factory to an aggregate
+## Factory-backed aggregate convenience
 
-Aggregate constructors opt in by forwarding the factory through
-`AggregateConfig`:
+The strict path does not inject a factory into the aggregate:
+
+```ts
+const facts = domainEvents.createFacts();
+const order = await loadOrder(orderId);
+order.confirm(facts);
+
+await snapshots.save(
+  orderAddress,
+  order.createSnapshot(domainEvents.now()),
+);
+```
+
+This keeps the aggregate's result a function of its visible inputs. Repositories
+do not need to forward a clock or id generator through every reconstitution
+path.
+
+For small applications that prefer less plumbing, aggregate constructors may
+still forward a factory through `AggregateConfig`:
 
 ```ts
 import {
@@ -163,28 +221,50 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`recordEvent(...)` now uses that aggregate instance's factory. `createSnapshot()`
-uses the same captured clock for `snapshotAt`, so event and snapshot timestamps
-cannot drift between two dependency scopes. Aggregates that omit the config use
-the immutable default and need no constructor change.
+That factory is used only when the aggregate deliberately calls
+`recordEventFromFactory(...)` or `createSnapshotFromFactory()`. If no factory is
+configured, those methods use the immutable default and therefore read Web
+Crypto and the platform clock. Their names make that trade-off visible at the
+call site.
 
-At a request boundary, construct or select the factory before constructing or
-reconstituting the aggregate:
+## Migrating existing aggregates
 
 ```ts
-export async function handle(request: Request): Promise<Response> {
-  const domainEvents = createDomainEventFactory({
-    eventIdFactory: requestEventIds(request),
-    clock: requestClock(request),
-  });
-  const order = await loadOrder(orderIdFrom(request), domainEvents);
-  order.confirm();
-  // persist order
+// Before
+confirm(): void {
+  this.commit(nextState, this.recordEvent("OrderConfirmed", payload));
+}
+
+// Preferred v3 path
+confirm(facts: DomainEventFacts): void {
+  this.commit(
+    nextState,
+    this.recordEvent("OrderConfirmed", payload, facts),
+  );
 }
 ```
 
-Repository factories should pass the same `DomainEventFactory` through every
-creation and reconstitution path for that operation.
+The application handler creates facts immediately before the decision:
+
+```ts
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: requestClock,
+});
+
+const order = await orders.getById(command.orderId);
+order.confirm(
+  domainEvents.createFacts({
+    metadata: { correlationId: command.correlationId },
+  }),
+);
+```
+
+Change `createSnapshot()` to `createSnapshot(snapshotAt)`, with the timestamp
+created by the repository or snapshot policy. Existing aggregates can make the
+smaller compatibility migration to `recordEventFromFactory(...)` and
+`createSnapshotFromFactory()`. That retains the old dependency posture while
+making the hidden read explicit in the method name.
 
 ## Deterministic tests
 
@@ -194,16 +274,19 @@ it("emits deterministic ids and timestamps", () => {
     eventIdFactory: () => "evt-1",
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
   });
-  const order = new Order(orderId, initialState, domainEvents);
+  const order = Order.reconstitute(orderId, initialState);
+  const facts = domainEvents.createFacts();
 
-  order.confirm();
+  order.confirm(facts);
 
   expect(order.pendingEvents[0]?.eventId).toBe("evt-1");
 });
 ```
 
 No `afterEach` reset is required because the test owns the factory instance and
-never changes module state. Async tests use the same pattern unchanged.
+never changes module state. More importantly, the aggregate itself never reads
+that factory: the test can pass the same facts to two equal aggregates and
+compare the complete event values.
 
 ## Custom id formats
 
@@ -387,7 +470,9 @@ The lower-level `setState` and `addDomainEvent` methods are still available for 
 
 ```ts
 this.setState(nextState);
-this.addDomainEvent(this.recordEvent("OrderConfirmed", { orderId: this.id }));
+this.addDomainEvent(
+  this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+);
 ```
 
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.

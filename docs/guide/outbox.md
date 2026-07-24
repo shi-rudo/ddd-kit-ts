@@ -25,7 +25,7 @@ const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(id);
 
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
   await orders.save(order);
 
   return {
@@ -132,7 +132,7 @@ await withCommit({ scope, outbox }, async (tx, enrollment) => {
   const orders = makeOrderRepository(tx);
   const order = await orders.getById(orderId);
 
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
   await orders.save(order);
 
   return {

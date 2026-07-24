@@ -124,7 +124,7 @@ Id generation belongs in the application, not in the repository. The repository 
 
 The kit provides event id and clock factories because events need ids and timestamps even when the consumer does not care about custom generation. Aggregate ids stay app-side.
 
-## `EventIdFactory` / `ClockFactory`: immutable defaults and explicit scope
+## Event identity and time cross the application boundary explicitly
 
 The top-level `createDomainEvent(...)` uses one immutable
 `defaultDomainEventFactory`: Web Crypto UUID v4 plus the platform clock. It is
@@ -134,7 +134,7 @@ factory object that permanently captures those dependencies.
 
 This draws a deliberate boundary:
 
-- the zero-configuration path is convenient and deterministic in its policy
+- the zero-configuration path is convenient but its values are nondeterministic
 - custom policy is an ordinary value owned by the application composition
 - request and test isolation follow object identity, not restore discipline
 - per-event options remain available for one exceptional id or timestamp
@@ -144,12 +144,11 @@ last caller. A synchronous scoped helper can restore a global with
 `try/finally`, but it cannot make that global request-local across overlapping
 async work. The correct fix is to remove the shared write location.
 
-### Aggregate injection
+### Aggregate operations receive facts, not generators
 
-`AggregateConfig.domainEventFactory` lets each aggregate instance capture the
-factory used by `recordEvent(...)`. The same factory supplies
-`createSnapshot().snapshotAt`, so one aggregate cannot mint events with a
-request clock and snapshots with a process clock.
+The factory's `createFacts()` method reads the id generator and clock in the
+application shell. The resulting `DomainEventFacts` value then travels into the
+domain operation:
 
 ```ts
 const domainEvents = createDomainEventFactory({
@@ -157,25 +156,30 @@ const domainEvents = createDomainEventFactory({
   clock: requestClock,
 });
 
-const order = new Order(orderId, state, { domainEventFactory: domainEvents });
+const order = await orders.getById(command.orderId);
+order.confirm(domainEvents.createFacts());
 ```
 
-The concrete aggregate decides how that dependency appears in its own factory
-or constructor. Repositories and reconstitution factories must forward it just
-like any other operation-scoped dependency. An aggregate that does not care
-uses the default by omitting the config, so the common constructor stays small.
+Inside the aggregate, `recordEvent(type, payload, facts)` adds the aggregate
+address but does not read the factory, the clock, or Web Crypto. Equal aggregate
+state plus equal command data and facts therefore produce equal events.
 
-### Why one object owns both dependencies
+Snapshot creation follows the same boundary:
+`createSnapshot(snapshotAt)` requires infrastructure to supply the time. A
+repository or snapshot policy can call `domainEvents.now()` and pass the value
+in; snapshot creation itself remains deterministic.
 
-Event ids and timestamps are both minting policy. Carrying them as one immutable
-object prevents partial wiring: a consumer cannot inject a deterministic event
-clock while accidentally leaving snapshots on wall-clock time. It also gives
-system-event producers and aggregate factories the same composition primitive.
+`AggregateConfig.domainEventFactory` remains available for the clearly named
+`recordEventFromFactory(...)` and `createSnapshotFromFactory()` convenience
+methods. Those methods are useful in small applications, but they deliberately
+retain the implicit read. When no factory is injected, they use the platform
+clock and Web Crypto defaults.
 
-The object exposes `create(...)` for events and a defensive `now()` reading for
-snapshot infrastructure. Domain behavior should still receive a domain-specific
-time concept when time participates in a business rule; the event clock records
-when a fact was minted and is not a universal replacement for domain time.
+Event occurrence time is recording information, not a universal business
+clock. If a time such as `paymentDueAt` or `confirmedAt` changes a business
+decision or is needed to understand the event, pass it as domain input and put
+it in the payload. It may be the same instant as `occurredAt`, but that equality
+should be an application decision rather than an accident of a hidden clock.
 
 ## Collection helpers practice structural sharing
 
@@ -209,7 +213,7 @@ The structural sharing gives the aggregate a cheap way to decide.
 `Entity.state` is `protected`. A generic public getter cannot safely return a live
 graph, and a generic clone would silently destroy prototypes for class-based child
 entities. Concrete models expose fachliche queries or detached read DTOs instead;
-aggregate persistence uses `createSnapshot()` as its memento.
+aggregate persistence uses `createSnapshot(snapshotAt)` as its memento.
 
 State is still shallowly frozen on assignment. Deep cloning or deep freezing on
 every internal read/write would make hot aggregate paths pay for a guarantee many

@@ -620,7 +620,7 @@ const result = await withCommit(
     const orders = makeOrderRepository(tx);
 
     const order = await orders.getById(orderId);
-    order.confirm();
+    order.confirm(domainEvents.createFacts());
 
     await orders.save(order);
 
@@ -711,7 +711,10 @@ const shipmentRequested = createDomainEvent(
 );
 ```
 
-Inside aggregate methods, prefer `this.recordEvent(...)`; pass metadata through its options when the event should carry correlation. Outside aggregates, `createDomainEvent(...)` is the right primitive.
+Inside aggregate methods, prefer `this.recordEvent(..., facts)`; put correlation
+metadata on the `DomainEventFacts` created by the application operation. Outside
+aggregates, `createDomainEvent(...)` is the convenient primitive, while
+`createDomainEventFromFacts(...)` is the deterministic one.
 
 ### Wrap Handlers for Ambient Context
 

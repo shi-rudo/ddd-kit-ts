@@ -89,7 +89,7 @@ Those values diverge as soon as a domain method changes the aggregate. That is w
 
 ```ts
 async function save(order: Order): Promise<void> {
-  const memento = order.createSnapshot();
+  const memento = order.createSnapshot(clock());
 
   if (order.persistedVersion === undefined) {
     await db.insert(orders).values({

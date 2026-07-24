@@ -42,12 +42,12 @@ this.apply(
       customerId,
       currency,
     },
-    { version: 2 },
+    { ...facts, version: 2 },
   ),
 );
 ```
 
-If you forget `{ version: 2 }`, the event is written with the default version
+If you forget to override `facts.version`, the event is written with the default version
 `1`, even though the payload has the new shape. That makes old and new events
 ambiguous and forces consumers to infer schema from fields. Do not do that.
 

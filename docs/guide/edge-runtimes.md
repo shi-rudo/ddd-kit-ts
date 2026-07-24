@@ -52,8 +52,8 @@ const domainEvents = createDomainEventFactory({
 
 The factory is frozen and has no setter. It may live at module scope when the
 policy is genuinely process-wide, or be created inside `fetch()` when the
-policy is request- or tenant-specific. In either case, pass that value into the
-aggregate or application factory that owns event creation.
+policy is request- or tenant-specific. In either case, call `createFacts()` in
+the application operation and pass that value into the aggregate method.
 
 ULID is the same shape:
 
@@ -87,9 +87,9 @@ it("emits deterministic event ids", () => {
     eventIdFactory: () => "evt-1",
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
   });
-  const order = makeOrder({ domainEventFactory: domainEvents });
+  const order = makeOrder();
 
-  order.confirm();
+  order.confirm(domainEvents.createFacts());
 });
 ```
 
@@ -553,7 +553,7 @@ const confirmOrder = async (command: ConfirmOrder) => {
         };
       }
 
-      order.confirm();
+      order.confirm(domainEvents.createFacts());
       await orders.save(order);
       return {
         result: {
@@ -582,7 +582,7 @@ boundary as the order repository and outbox. `withIdempotentCommit` claims the
 scoped key before touching the domain and stores the key, fingerprint,
 serializable outcome, aggregate write, and outbox record atomically. A retry
 with the same key and fingerprint receives the same stored outcome without
-running `order.confirm()` again—even if the first response was lost. Reusing the
+running the confirm command again—even if the first response was lost. Reusing the
 key for a different fingerprint is rejected rather than replayed. A separate
 idempotency store cannot prove this atomic boundary without the reconciliation
 protocol described in [Idempotent Commands](./idempotency.md).

@@ -60,7 +60,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
 		order.apply(
-			order.recordEvent("EsOrderCreated", {
+			order.recordEventFromFactory("EsOrderCreated", {
 				name: "initial",
 			}) as EsOrderCreated,
 		);
@@ -73,11 +73,15 @@ class ContractEsOrder extends EventSourcedAggregate<
 	}
 
 	rename(name: string): void {
-		this.apply(this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed);
+		this.apply(
+			this.recordEventFromFactory("EsOrderRenamed", { name }) as EsOrderRenamed,
+		);
 	}
 
 	addItem(item: string): void {
-		this.apply(this.recordEvent("EsItemAdded", { item }) as EsItemAdded);
+		this.apply(
+			this.recordEventFromFactory("EsItemAdded", { item }) as EsItemAdded,
+		);
 	}
 
 	protected readonly handlers = {
@@ -294,7 +298,7 @@ function createInMemoryEsHarness(
 			ContractEsOrder.create(`contract-es-order-${idCounter++}` as EsOrderId),
 		createAggregateWithId: (id) => ContractEsOrder.create(id),
 		mutate: (order) => order.rename(`renamed-${mutationCounter++}`),
-		snapshotState: (order) => order.createSnapshot().state,
+		snapshotState: (order) => order.createSnapshotFromFactory().state,
 	};
 }
 

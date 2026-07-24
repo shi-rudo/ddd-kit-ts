@@ -68,8 +68,10 @@ type Handler<TState, TEvent extends AnyDomainEvent> = (
  * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
  *   protected readonly aggregateType = "Order";
  *
- *   confirm(): void {
- *     this.apply(this.recordEvent("OrderConfirmed", { orderId: this.id }));
+ *   confirm(facts: DomainEventFacts): void {
+ *     this.apply(
+ *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
+ *     );
  *   }
  *
  *   protected validateEvent(event: OrderEvent): void {
@@ -216,13 +218,11 @@ export abstract class EventSourcedAggregate<
 		// the event's own wider type. `aggregateId`/`aggregateType` are
 		// `string | undefined` on DomainEvent; filling them in cannot
 		// leave the declared shape.
-		const stamped: AnyDomainEvent = adoptMintedEvent(
-			{
-				...event,
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			},
-		);
+		const stamped: AnyDomainEvent = adoptMintedEvent({
+			...event,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		});
 		return stamped as Extract<TEvent, { type: K }>;
 	}
 

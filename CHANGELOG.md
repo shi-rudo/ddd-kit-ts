@@ -19,6 +19,55 @@ opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
 in the sections below; every break is covered in the migration guide
 here, with a before and after.
 
+### Changed (breaking): aggregate event facts are explicit
+
+- `recordEvent(type, payload, facts)` now requires `DomainEventFacts` containing
+  `eventId` and `occurredAt`, plus optional event schema `version` and tracing
+  `metadata`. The strict path reads neither the platform clock nor Web Crypto;
+  it only adds the aggregate address and mints the immutable event.
+- `DomainEventFactory.createFacts(options?)` gives the application shell one
+  operation-scoped place to obtain those values. The new
+  `createDomainEventFromFacts(...)` provides the same strict construction path
+  for events created outside an aggregate.
+- `createSnapshot(snapshotAt)` now requires the snapshot policy or repository
+  to supply the timestamp. Snapshot state and time are defensively copied.
+- `recordEventFromFactory(...)` and `createSnapshotFromFactory()` retain the
+  former convenience behavior. When no `AggregateConfig.domainEventFactory` is
+  configured, they use the nondeterministic Web Crypto and platform-clock
+  defaults; their names now make that dependency read visible.
+
+Migration for aggregate operations:
+
+```ts
+// Before
+confirm(): void {
+  this.commit(
+    nextState,
+    this.recordEvent("OrderConfirmed", payload),
+  );
+}
+
+const order = await orders.getById(command.orderId);
+order.confirm();
+const snapshot = order.createSnapshot();
+
+// After: preferred deterministic path
+confirm(facts: DomainEventFacts): void {
+  this.commit(
+    nextState,
+    this.recordEvent("OrderConfirmed", payload, facts),
+  );
+}
+
+const order = await orders.getById(command.orderId);
+order.confirm(domainEvents.createFacts());
+const snapshot = order.createSnapshot(domainEvents.now());
+```
+
+Aggregates that intentionally keep their injected factory can make the smaller
+compatibility migration by renaming calls to `recordEventFromFactory(...)` and
+`createSnapshotFromFactory()`.
+
 ### Changed (breaking): shell operations carry cancellation and deadlines
 
 - Add the public `ExecutionContext` (`signal`, `deadlineAt`) and pass it to

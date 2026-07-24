@@ -22,6 +22,7 @@ import {
   DomainError,
   EventSourcedAggregate,
   type DomainEvent,
+  type DomainEventFacts,
   type Id,
 } from "@shirudo/ddd-kit";
 
@@ -82,9 +83,15 @@ class Order extends EventSourcedAggregate<
     super(id, state);
   }
 
-  static create(id: OrderId, customerId: string): Order {
+  static create(
+    id: OrderId,
+    customerId: string,
+    facts: DomainEventFacts,
+  ): Order {
     const order = Order.reconstitute(id);
-    order.apply(order.recordEvent("OrderCreated", { customerId }));
+    order.apply(
+      order.recordEvent("OrderCreated", { customerId }, facts),
+    );
     return order;
   }
 
@@ -92,11 +99,11 @@ class Order extends EventSourcedAggregate<
     return new Order(id, { status: "empty" });
   }
 
-  confirm(): void {
+  confirm(facts: DomainEventFacts): void {
     this.apply(
       this.recordEvent("OrderConfirmed", {
         orderId: this.id,
-      }),
+      }, facts),
     );
   }
 
@@ -639,7 +646,7 @@ Production adapters should pass `createSnapshotStoreContractTests` from
 ### Plain snapshot state
 
 Snapshots must round-trip through storage as plain data. The default
-`createSnapshot()` fails fast if aggregate state contains values that would not
+`createSnapshot(snapshotAt)` fails fast if aggregate state contains values that would not
 restore faithfully:
 
 - class instances
@@ -717,7 +724,10 @@ The most common starting point is every N events after commit:
 ```ts
 const SNAPSHOT_EVERY = 100;
 
-async function snapshotAfterCommit(order: Order): Promise<void> {
+async function snapshotAfterCommit(
+  order: Order,
+  snapshotAt: Date,
+): Promise<void> {
   const lastSnapshotVersion =
     (await snapshotVersions.lastVersion("Order", order.id)) ?? 0;
 
@@ -725,7 +735,7 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 
   await snapshots.save(
     { aggregateType: "Order", aggregateId: order.id },
-    order.createSnapshot(),
+    order.createSnapshot(snapshotAt),
   );
 }
 ```
@@ -733,7 +743,7 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 At scale, move the decision to a background worker:
 
 ```ts
-async function snapshotSweep(): Promise<void> {
+async function snapshotSweep(snapshotClock: () => Date): Promise<void> {
   const candidates = await snapshotVersions.findDue({
     aggregateType: "Order",
     minEventsSinceSnapshot: 100,
@@ -746,7 +756,7 @@ async function snapshotSweep(): Promise<void> {
 
     await snapshots.save(
       { aggregateType: "Order", aggregateId: order.id },
-      order.createSnapshot(),
+      order.createSnapshot(snapshotClock()),
     );
   }
 }
