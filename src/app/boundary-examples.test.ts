@@ -6,6 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 const exampleUrls = {
 	command: new URL("command.ts", import.meta.url),
 	query: new URL("query.ts", import.meta.url),
+	orderPlacement: new URL("order-placement-example.ts", import.meta.url),
 	cqrsGuide: new URL("../../docs/guide/cqrs-and-buses.md", import.meta.url),
 	edgeGuide: new URL("../../docs/guide/edge-runtimes.md", import.meta.url),
 };
@@ -61,17 +62,23 @@ describe("untrusted-boundary examples", () => {
 		expect(edgeGuide).toContain("readonly retryable: false;");
 	});
 
+	it("renders the executable order-placement example in the CQRS guide", () => {
+		const cqrsGuide = sourceOf("cqrsGuide");
+		expect(cqrsGuide).toContain(
+			"<<< ../../src/app/order-placement-example.ts#order-domain{ts}",
+		);
+		expect(cqrsGuide).toContain(
+			"<<< ../../src/app/order-placement-example.ts#place-order-handler{ts}",
+		);
+	});
+
 	it("shows atomic idempotency before settling an at-least-once command", () => {
 		const cqrsGuide = sourceOf("cqrsGuide");
+		const handler = sourceOf("orderPlacement");
 		const consumer = sectionBetween(
 			cqrsGuide,
 			"interface QueueDelivery",
 			"`QueueDelivery` is deliberately",
-		);
-		const handler = sectionBetween(
-			cqrsGuide,
-			"const placeOrderHandler",
-			"A command handler returns",
 		);
 
 		expect(consumer).toContain("readonly messageId: string;");
@@ -82,8 +89,8 @@ describe("untrusted-boundary examples", () => {
 		expect(consumer).toContain("const intention: PlaceOrderIntention = {");
 		expect(consumer).toContain('type: "PlaceOrder"');
 		expect(consumer).toContain("fingerprint: stableHash(intention)");
-		expect(handler).toContain("withIdempotentCommit(");
-		expect(handler).toContain("cmd.idempotency");
+		expect(handler).toContain("const outcome = await withIdempotentCommit<");
+		expect(handler).toContain("command.idempotency");
 		expectBefore(
 			consumer,
 			"await recordCommandOutcome(deliveryKey, outcome);",

@@ -107,35 +107,25 @@ allow-list decoder.
 
 ```ts
 import {
+  AggregateRoot,
+  type AnyDomainEvent,
   CommandBus,
+  DomainError,
   type Command,
   type CommandHandler,
   type Id,
   type IdempotentCommitRequest,
+  type WithIdempotentCommitDeps,
+  domainErrorToResult,
   withIdempotentCommit,
 } from "@shirudo/ddd-kit";
 import { err, ok, type Result } from "@shirudo/result";
 import { type Money, tryMoneyFromDto } from "@shirudo/ddd-kit/money";
+```
 
-type OrderId = Id<"OrderId">;
-type CustomerId = Id<"CustomerId">;
-type ProductId = Id<"ProductId">;
-type OrderQuantity = number & { readonly __brand: "OrderQuantity" };
+<<< ../../src/app/order-placement-example.ts#order-domain{ts}
 
-interface PlaceOrderItem {
-  readonly productId: ProductId;
-  readonly quantity: OrderQuantity;
-  readonly price: Money;
-}
-
-type PlaceOrderCommand = Command & {
-  readonly type: "PlaceOrder";
-  readonly customerId: CustomerId;
-  readonly correlationId: string;
-  readonly idempotency: IdempotentCommitRequest;
-  readonly items: ReadonlyArray<PlaceOrderItem>;
-};
-
+```ts
 type ConfirmOrderCommand = Command & {
   readonly type: "ConfirmOrder";
   readonly orderId: OrderId;
@@ -384,52 +374,40 @@ invariants. For example, whether an order may be empty is a business decision
 that the order model must still protect even when a trusted internal caller
 bypasses this transport adapter.
 
-The handler now receives values that have already crossed the untrusted
-boundary:
+`Order.place(...)` therefore receives every position needed for the decision and
+either creates one complete, placed order or rejects the operation. There is no
+public path that first creates a placed empty order and asks the application
+layer to repair it one position at a time. An empty array is structurally valid
+input—it is an array within the transport limits—but it violates the domain rule
+expressed by `EmptyOrderError`.
 
-```ts
-const placeOrderHandler: CommandHandler<
-  PlaceOrderCommand,
-  OrderId
-> = async (cmd) => {
-  if (cmd.items.length === 0) {
-    return err("EMPTY_ORDER");
-  }
+The handler receives values that have already crossed the untrusted boundary. It
+coordinates the transaction and persistence, while `domainErrorToResult`
+selectively turns the one expected domain rejection into an application
+outcome:
 
-  const outcome = await withIdempotentCommit(
-    { scope, outbox, idempotency, bus: eventBus },
-    cmd.idempotency,
-    async (tx, enrollment) => {
-      const orders = makeOrderRepository(tx);
-      const order = Order.place(newOrderId(), cmd.customerId);
+<<< ../../src/app/order-placement-example.ts#place-order-handler{ts}
 
-      for (const item of cmd.items) {
-        order.addItem({
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        });
-      }
-
-      await orders.save(order);
-
-      return {
-        result: order.id,
-        commits: [enrollment.enrollSaved(order)],
-      };
-    },
-  );
-
-  return ok(outcome.result);
-};
-```
-
-A command handler returns `Result<R, E>`. Use the success channel for the useful result, such as a new id. Use the error channel for expected application failures you want the caller to handle as values. Infrastructure failures and wiring bugs can still throw.
+The transaction stores a plain `PlaceOrderOutcome`, including a rejection, so a
+duplicate idempotency key replays the same logical answer instead of running the
+decision again. Only after that replay boundary does the handler expose the
+usual `Result<R, E>`: the success channel carries the new id and the error
+channel carries `EMPTY_ORDER`. `domainErrorToResult` lists the exact domain
+error it is allowed to translate. Infrastructure failures, cancellation, and
+wiring bugs remain throws rather than being mislabeled as business rejections.
 
 Wire the bus at bootstrap:
 
 ```ts
 const commandBus = new CommandBus<Commands>();
+const placeOrderHandler = createPlaceOrderHandler({
+  scope,
+  outbox,
+  idempotency,
+  bus: eventBus,
+  newOrderId,
+  makeOrderRepository,
+});
 
 commandBus.register("PlaceOrder", placeOrderHandler);
 commandBus.register("ConfirmOrder", confirmOrderHandler);
