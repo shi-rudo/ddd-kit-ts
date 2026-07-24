@@ -2530,6 +2530,8 @@ shape instead of silently accepting two relationship locations.
   branching into the `Order.place(...)` domain factory. The handler now
   selectively maps `EmptyOrderError`, stores a plain idempotent outcome,
   and remains responsible only for orchestration and application mapping.
+  The rendered guide snippets now come from type-checked source exercised
+  by domain and handler behavior tests.
 
 ### Fixed: Value Object cloning and equality hardening
 

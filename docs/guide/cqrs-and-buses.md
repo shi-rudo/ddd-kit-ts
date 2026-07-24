@@ -108,82 +108,24 @@ allow-list decoder.
 ```ts
 import {
   AggregateRoot,
+  type AnyDomainEvent,
   CommandBus,
   DomainError,
   type Command,
   type CommandHandler,
   type Id,
   type IdempotentCommitRequest,
+  type WithIdempotentCommitDeps,
   domainErrorToResult,
   withIdempotentCommit,
 } from "@shirudo/ddd-kit";
 import { err, ok, type Result } from "@shirudo/result";
 import { type Money, tryMoneyFromDto } from "@shirudo/ddd-kit/money";
+```
 
-type OrderId = Id<"OrderId">;
-type CustomerId = Id<"CustomerId">;
-type ProductId = Id<"ProductId">;
-type OrderQuantity = number & { readonly __brand: "OrderQuantity" };
+<<< ../../src/app/order-placement-example.ts#order-domain{ts}
 
-interface PlaceOrderItem {
-  readonly productId: ProductId;
-  readonly quantity: OrderQuantity;
-  readonly price: Money;
-}
-
-type OrderState = {
-  readonly customerId: CustomerId;
-  readonly items: ReadonlyArray<PlaceOrderItem>;
-  readonly status: "placed";
-};
-
-class EmptyOrderError extends DomainError<"EMPTY_ORDER"> {
-  constructor() {
-    super({
-      code: "EMPTY_ORDER",
-      message: "A placed order requires at least one item",
-    });
-  }
-}
-
-class Order extends AggregateRoot<OrderState, OrderId> {
-  protected readonly aggregateType = "Order";
-
-  static place(
-    id: OrderId,
-    customerId: CustomerId,
-    items: ReadonlyArray<PlaceOrderItem>,
-  ): Order {
-    if (items.length === 0) {
-      throw new EmptyOrderError();
-    }
-
-    return new Order(id, {
-      customerId,
-      items: [...items],
-      status: "placed",
-    });
-  }
-}
-
-type PlaceOrderOutcome =
-  | {
-      readonly status: "placed";
-      readonly orderId: OrderId;
-    }
-  | {
-      readonly status: "rejected";
-      readonly code: "EMPTY_ORDER";
-    };
-
-type PlaceOrderCommand = Command & {
-  readonly type: "PlaceOrder";
-  readonly customerId: CustomerId;
-  readonly correlationId: string;
-  readonly idempotency: IdempotentCommitRequest;
-  readonly items: ReadonlyArray<PlaceOrderItem>;
-};
-
+```ts
 type ConfirmOrderCommand = Command & {
   readonly type: "ConfirmOrder";
   readonly orderId: OrderId;
@@ -444,49 +386,7 @@ coordinates the transaction and persistence, while `domainErrorToResult`
 selectively turns the one expected domain rejection into an application
 outcome:
 
-```ts
-const placeOrderHandler: CommandHandler<
-  PlaceOrderCommand,
-  OrderId
-> = async (cmd) => {
-  const outcome = await withIdempotentCommit(
-    { scope, outbox, idempotency, bus: eventBus },
-    cmd.idempotency,
-    async (tx, enrollment) => {
-      const orders = makeOrderRepository(tx);
-      const placement = await domainErrorToResult(
-        () => Order.place(newOrderId(), cmd.customerId, cmd.items),
-        [EmptyOrderError],
-      );
-
-      if (placement.isErr()) {
-        return {
-          result: {
-            status: "rejected",
-            code: placement.error.code,
-          } satisfies PlaceOrderOutcome,
-          commits: [],
-        };
-      }
-
-      const order = placement.value;
-      await orders.save(order);
-
-      return {
-        result: {
-          status: "placed",
-          orderId: order.id,
-        } satisfies PlaceOrderOutcome,
-        commits: [enrollment.enrollSaved(order)],
-      };
-    },
-  );
-
-  return outcome.result.status === "rejected"
-    ? err(outcome.result.code)
-    : ok(outcome.result.orderId);
-};
-```
+<<< ../../src/app/order-placement-example.ts#place-order-handler{ts}
 
 The transaction stores a plain `PlaceOrderOutcome`, including a rejection, so a
 duplicate idempotency key replays the same logical answer instead of running the
@@ -500,6 +400,14 @@ Wire the bus at bootstrap:
 
 ```ts
 const commandBus = new CommandBus<Commands>();
+const placeOrderHandler = createPlaceOrderHandler({
+  scope,
+  outbox,
+  idempotency,
+  bus: eventBus,
+  newOrderId,
+  makeOrderRepository,
+});
 
 commandBus.register("PlaceOrder", placeOrderHandler);
 commandBus.register("ConfirmOrder", confirmOrderHandler);
