@@ -1,4 +1,5 @@
 import type { Result } from "@shirudo/result";
+import type { JsonValue } from "../events/json-value";
 
 /**
  * Marker interface for Commands.
@@ -76,6 +77,21 @@ import type { Result } from "@shirudo/result";
  */
 export interface Command {
 	readonly type: string;
+}
+
+/**
+ * Versioned Published Language for a command that crosses a process or
+ * Bounded-Context boundary. Unlike a local {@link Command}, its payload is
+ * JSON-safe data rather than a domain object graph. Map value objects to their
+ * wire DTOs at this boundary; for example, use `MoneyDto` instead of `Money`.
+ */
+export interface PublishedCommand<
+	TType extends string = string,
+	TPayload extends JsonValue = JsonValue,
+> extends Command {
+	readonly type: TType;
+	readonly version: number;
+	readonly payload: TPayload;
 }
 
 /**

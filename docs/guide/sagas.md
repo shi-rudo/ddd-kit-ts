@@ -310,9 +310,11 @@ The process facts also avoid claiming success too early. Shipping completion
 records `CheckoutOrderConfirmationStarted` and enqueues `ConfirmOrder`; the
 process stays at `awaiting-order-confirmation`. Only a later `OrderConfirmed`
 input records `CheckoutCompleted`, whose command batch is empty. Payment and
-shipping failures similarly move into `cancelling-*` or `compensating-*`
-states. Enqueuing a compensating command is not the same fact as completing the
-compensation.
+shipping failures use the same discipline. A payment failure enters
+`awaiting-cancellation-after-payment-failure`. A shipping failure first enters
+`awaiting-refund-after-shipping-failure`; only `PaymentRefunded` advances it to
+`awaiting-cancellation-after-shipping-failure`. Enqueuing a compensating command
+is not the same fact as completing the compensation.
 
 Each command receives a stable message id derived from the private event id and
 its order in the decision, for example
@@ -328,17 +330,32 @@ OrderPlaced
   -> PaymentReceived
 ```
 
+Commands that leave the process use a versioned Published Language:
+`{ type, version, payload }`. The payload is JSON-safe and contains wire DTOs,
+not participant-domain objects. The checkout mapper therefore emits
+`MoneyDto`, whose minor amount is a decimal string, instead of putting
+`Money.amountMinor: bigint` into a durable message. Explicit `traceparent` and
+`tracestate` fields carry technical W3C Trace Context without overloading the
+business correlation and conversation ids.
+
 Delivery remains at least once. The participant scopes
 `withIdempotentCommit` by consumer and command `messageId`, persists the
 business result before acknowledging, and returns that stored result when the
 same command arrives again. A crash after executing the command but before
 acknowledging it therefore repeats delivery, not business work.
 
-One process fact may request several commands. Shipping failure maps to
-`RefundPayment` followed by `CancelOrder`; their array order is part of the
-command-outbox write. A dispatcher sends them in that order. If it sends the
-refund and crashes before the cancellation, the batch may start again, so the
-refund consumer still has to be idempotent.
+Shipping compensation deliberately does not rely on dispatcher order.
+`CheckoutCompensationStartedAfterShippingFailure` requests only
+`RefundPayment`. The saga persists that wait state before dispatch. When the
+payment participant later reports `PaymentRefunded`, the process records
+`CheckoutPaymentRefundConfirmed` and only then requests `CancelOrder`. A later
+`OrderCancelled` input records the command-free terminal fact
+`CheckoutCompensationCompletedAfterShippingFailure`.
+
+If a refund or cancellation cannot complete automatically, the process records
+`CheckoutManualRepairRequired`, including the failed command. It never calls a
+queued compensation “complete,” and it never hides an infinite retry behind an
+in-progress state.
 
 ### Migrating command-shaped process events
 
@@ -397,24 +414,29 @@ proposal dies in the machine instead of cancelling a paid order.
 
 ## Compensation is business logic
 
-When the process fails past the point of simply stopping, the saga walks
-backward: cancel the order, refund the payment. Nothing about that is
-infrastructure. The compensating steps are commands like any others, the
-decision to compensate is a transition like any other, and which steps can
-be compensated at all is a design question `saga-design.md` walks you
-through (its step classification: compensatable, pivot, retryable). The
-example's failure path is exactly this: `PaymentFailed` transitions the
-saga to compensating, which emits `CancelOrder`, and done.
+When the process fails past the point of simply stopping, the saga resolves the
+completed work through business actions. Nothing about that is infrastructure.
+The compensating steps are commands like any others, the decision to compensate
+is a transition like any other, and which steps can be compensated at all is a
+design question `saga-design.md` walks you through (its step classification:
+compensatable, pivot, retryable).
+
+In the checkout example, `PaymentFailed` requests `CancelOrder` and waits for
+`OrderCancelled`. A later shipping failure means payment has already completed,
+so the process requests `RefundPayment`, waits for `PaymentRefunded`, then
+requests `CancelOrder` and waits again. Each confirmed result advances one
+persisted state. A delivery retry may repeat a command, but it cannot skip the
+wait or invert the business sequence.
 
 Three rules of thumb from the wider saga literature carry over directly.
 Compensate in reverse order, and only the steps that actually completed;
 if the very first step failed, there is nothing to unwind, and a state
-machine encodes that for free, since the compensating transitions simply
-do not exist in the early states. And when a compensating command itself
-fails, do not let it stop the remaining compensations or masquerade as the
-process outcome: the original failure stays the reported one, the stuck
-compensation retries through the normal delivery machinery, and past its
-dead-letter ceiling it becomes a repair case, never a silent success.
+machine encodes that for free, since the compensating transitions simply do
+not exist in the early states. And when a compensating command itself fails, do
+not pretend the next step is safe to start. Retry it through the normal
+delivery machinery; past its automatic recovery policy, move the process to
+explicit manual repair. The original failure stays visible, and incomplete
+compensation never masquerades as success.
 
 One warning for readers arriving from durable-execution engines like
 Temporal: their samples accumulate compensations in an in-memory array

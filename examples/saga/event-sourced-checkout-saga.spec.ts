@@ -10,8 +10,8 @@ import {
 	routeEventsToCommandOutbox,
 } from "../../src/app/command-outbox";
 import { withCommit } from "../../src/app/handler";
-import { InMemoryIdempotencyStore } from "../../src/app/in-memory-idempotency-store";
 import { withIdempotentCommit } from "../../src/app/idempotency";
+import { InMemoryIdempotencyStore } from "../../src/app/in-memory-idempotency-store";
 import { recordPendingEvents } from "../../src/app/record-pending-events";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import { moneyOfMinor } from "../../src/money";
@@ -97,6 +97,8 @@ async function commitProcessDecision(
 		readonly messageId: string;
 		readonly correlationId: string;
 		readonly conversationId: string;
+		readonly traceparent?: string;
+		readonly tracestate?: string;
 	},
 ): Promise<void> {
 	await withCommit(
@@ -114,6 +116,12 @@ async function commitProcessDecision(
 						correlationId: trigger.correlationId,
 						conversationId: trigger.conversationId,
 						causationId: trigger.messageId,
+						...(trigger.traceparent === undefined
+							? {}
+							: { traceparent: trigger.traceparent }),
+						...(trigger.tracestate === undefined
+							? {}
+							: { tracestate: trigger.tracestate }),
 					},
 				}),
 			);
@@ -174,7 +182,7 @@ describe("Event-sourced checkout saga", () => {
 
 		saga.beginCancellationAfterPaymentFailure("insufficient-funds");
 
-		expect(saga.step).toBe("cancelling-after-payment-failure");
+		expect(saga.step).toBe("awaiting-cancellation-after-payment-failure");
 		expect(saga.pendingEvents.at(-1)).toMatchObject({
 			type: "CheckoutCancellationStartedAfterPaymentFailure",
 			payload: { reason: "insufficient-funds" },
@@ -191,7 +199,7 @@ describe("Event-sourced checkout saga", () => {
 		const replayed = restored.loadFromHistory(history);
 
 		expect(replayed.isOk()).toBe(true);
-		expect(restored.step).toBe("compensating-after-shipping-failure");
+		expect(restored.step).toBe("awaiting-refund-after-shipping-failure");
 		expect(restored.paymentId).toBe(paymentId);
 		expect(restored.shipmentId).toBe(shipmentId);
 		expect(history.at(-1)).toMatchObject({
@@ -236,9 +244,16 @@ describe("Event-sourced checkout saga", () => {
 				destination: "payments.commands",
 				command: {
 					type: "RequestPayment",
-					orderId,
-					paymentId,
-					amount: total,
+					version: 1,
+					payload: {
+						orderId,
+						paymentId,
+						amount: {
+							amountMinor: "4200",
+							currency: "EUR",
+							scale: 2,
+						},
+					},
 				},
 				correlationId: "place-order-1",
 				conversationId: "checkout-order-1",
@@ -364,11 +379,12 @@ describe("Event-sourced checkout saga", () => {
 					key: `payments:${message.messageId}`,
 					fingerprint: [
 						message.command.type,
-						orderId,
-						paymentId,
-						total.amountMinor.toString(),
-						total.currency,
-						total.scale,
+						message.command.version,
+						message.command.payload.orderId,
+						message.command.payload.paymentId,
+						message.command.payload.amount.amountMinor,
+						message.command.payload.amount.currency,
+						message.command.payload.amount.scale,
 					].join(":"),
 				},
 				async () => {
@@ -396,7 +412,7 @@ describe("Event-sourced checkout saga", () => {
 		expect(executions).toBe(1);
 	});
 
-	it("propagates conversation and direct causation through the participant result", async () => {
+	it("propagates conversation, direct causation, and technical trace context", async () => {
 		const database = processDatabase();
 		const recorder = createDomainEventFactory({
 			eventIdFactory: () => "checkout-started-1",
@@ -410,6 +426,8 @@ describe("Event-sourced checkout saga", () => {
 				messageId: "order-placed-1",
 				correlationId: "place-order-1",
 				conversationId: "checkout-order-1",
+				traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+				tracestate: "vendor=opaque",
 			},
 		);
 		const command = firstMessageIn(database.snapshot());
@@ -433,6 +451,8 @@ describe("Event-sourced checkout saga", () => {
 		expect(command).toMatchObject({
 			causationId: "checkout-started-1",
 			conversationId: "checkout-order-1",
+			traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			tracestate: "vendor=opaque",
 		});
 		expect(paymentReceived.metadata).toMatchObject({
 			causationId: "checkout-started-1:command:0",
@@ -440,7 +460,24 @@ describe("Event-sourced checkout saga", () => {
 		});
 	});
 
-	it("persists shipping compensation in reverse completion order", async () => {
+	it("rejects a saga command when the process fact has no conversation id", () => {
+		const saga = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
+		const [event] = recordPendingEvents(saga, () =>
+			eventRecorder.createStamp({
+				metadata: {
+					correlationId: "place-order-1",
+					causationId: "order-placed-1",
+				},
+			}),
+		);
+		if (!event) throw new Error("expected one recorded process fact");
+
+		expect(() => checkoutCommandsFromProcessFact(event)).toThrow(
+			/conversationId/,
+		);
+	});
+
+	it("waits for the refund result before it requests order cancellation", async () => {
 		const database = processDatabase();
 		let sequence = 0;
 		const recorder = createDomainEventFactory({
@@ -466,15 +503,125 @@ describe("Event-sourced checkout saga", () => {
 			conversationId: "checkout-order-1",
 		});
 
-		const compensation = database.snapshot().commandCommits.at(-1)?.messages;
-		expect(compensation?.map((message) => message.command.type)).toEqual([
-			"RefundPayment",
-			"CancelOrder",
-		]);
-		expect(compensation?.map((message) => message.destination)).toEqual([
-			"payments.commands",
-			"orders.commands",
-		]);
+		expect(saga.step).toBe("awaiting-refund-after-shipping-failure");
+		expect(
+			database
+				.snapshot()
+				.commandCommits.at(-1)
+				?.messages.map((message) => message.command.type),
+		).toEqual(["RefundPayment"]);
+		expect(() => saga.confirmOrderCancelled()).toThrow(
+			CheckoutProcessInWrongStateError,
+		);
+
+		saga.confirmPaymentRefunded();
+		await commitProcessDecision(database, saga, recorder, {
+			messageId: "payment-refunded-1",
+			correlationId: "refund-payment-1",
+			conversationId: "checkout-order-1",
+		});
+
+		expect(saga.step).toBe("awaiting-cancellation-after-shipping-failure");
+		expect(database.snapshot().history.at(-1)).toMatchObject({
+			type: "CheckoutPaymentRefundConfirmed",
+			payload: { reason: "warehouse-unavailable" },
+		});
+		expect(
+			database
+				.snapshot()
+				.commandCommits.at(-1)
+				?.messages.map((message) => message.command.type),
+		).toEqual(["CancelOrder"]);
+
+		saga.confirmOrderCancelled();
+		await commitProcessDecision(database, saga, recorder, {
+			messageId: "order-cancelled-1",
+			correlationId: "cancel-order-1",
+			conversationId: "checkout-order-1",
+		});
+
+		expect(saga.step).toBe("compensated-after-shipping-failure");
+		expect(database.snapshot().history.at(-1)?.type).toBe(
+			"CheckoutCompensationCompletedAfterShippingFailure",
+		);
+		expect(database.snapshot().commandCommits.at(-1)?.messages).toEqual([]);
+	});
+
+	it("records a terminal cancellation after a payment failure", async () => {
+		const database = processDatabase();
+		let sequence = 0;
+		const recorder = createDomainEventFactory({
+			eventIdFactory: () => `process-event-${++sequence}`,
+			clock: () => new Date("2027-04-05T06:07:08.000Z"),
+		});
+		const saga = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
+		await commitProcessDecision(database, saga, recorder, {
+			messageId: "order-placed-1",
+			correlationId: "place-order-1",
+			conversationId: "checkout-order-1",
+		});
+
+		saga.beginCancellationAfterPaymentFailure("insufficient-funds");
+		await commitProcessDecision(database, saga, recorder, {
+			messageId: "payment-failed-1",
+			correlationId: "request-payment-1",
+			conversationId: "checkout-order-1",
+		});
+		expect(saga.step).toBe("awaiting-cancellation-after-payment-failure");
+		expect(
+			database
+				.snapshot()
+				.commandCommits.at(-1)
+				?.messages.map((message) => message.command.type),
+		).toEqual(["CancelOrder"]);
+
+		saga.confirmOrderCancelled();
+		await commitProcessDecision(database, saga, recorder, {
+			messageId: "order-cancelled-1",
+			correlationId: "cancel-order-1",
+			conversationId: "checkout-order-1",
+		});
+
+		expect(saga.step).toBe("cancelled-after-payment-failure");
+		expect(database.snapshot().history.at(-1)?.type).toBe(
+			"CheckoutCancellationCompletedAfterPaymentFailure",
+		);
+		expect(database.snapshot().commandCommits.at(-1)?.messages).toEqual([]);
+	});
+
+	it("moves a failed compensation to explicit manual repair", () => {
+		const saga = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
+		saga.advanceToShipping(shipmentId);
+		saga.beginCompensationAfterShippingFailure("warehouse-unavailable");
+
+		saga.requireManualRepair("refund-rejected-permanently");
+
+		expect(saga.step).toBe("manual-repair-required");
+		expect(saga.pendingEvents.at(-1)).toMatchObject({
+			type: "CheckoutManualRepairRequired",
+			payload: {
+				failedCommand: "RefundPayment",
+				reason: "refund-rejected-permanently",
+			},
+		});
+	});
+
+	it("moves a permanently failed cancellation to explicit manual repair", () => {
+		const saga = EventSourcedCheckoutSaga.start(orderId, total, paymentId);
+		saga.advanceToShipping(shipmentId);
+		saga.beginCompensationAfterShippingFailure("warehouse-unavailable");
+		saga.confirmPaymentRefunded();
+
+		saga.requireManualRepair("order-cancellation-rejected");
+
+		expect(saga.step).toBe("manual-repair-required");
+		expect(saga.pendingEvents.at(-1)).toMatchObject({
+			type: "CheckoutManualRepairRequired",
+			payload: {
+				failedCommand: "CancelOrder",
+				reason: "order-cancellation-rejected",
+			},
+		});
 	});
 
 	it("requests order confirmation before it records checkout completion", async () => {

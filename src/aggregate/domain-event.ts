@@ -31,35 +31,44 @@ export interface EventMetadata {
 	 * Correlation ID for tracing events across multiple services/components.
 	 * Typically used to group related events in a distributed system.
 	 */
-	correlationId?: string;
+	readonly correlationId?: string;
 
 	/**
 	 * Conversation ID shared by every message in one long-running business
 	 * interaction, even when that interaction spans several correlations.
 	 */
-	conversationId?: string;
+	readonly conversationId?: string;
 
 	/**
 	 * Causation ID referencing the event or command that caused this event.
 	 * Used to build event chains and understand causality.
 	 */
-	causationId?: string;
+	readonly causationId?: string;
+
+	/**
+	 * W3C Trace Context parent for technical tracing across process boundaries.
+	 * This is distinct from business correlation and conversation identifiers.
+	 */
+	readonly traceparent?: string;
+
+	/** Optional W3C vendor trace state associated with `traceparent`. */
+	readonly tracestate?: string;
 
 	/**
 	 * User ID of the person or system that triggered the event.
 	 */
-	userId?: string;
+	readonly userId?: string;
 
 	/**
 	 * Source service or component that produced the event.
 	 */
-	source?: string;
+	readonly source?: string;
 
 	/**
 	 * Additional custom metadata fields.
 	 * Allows extensibility for domain-specific metadata.
 	 */
-	[key: string]: unknown;
+	readonly [key: string]: unknown;
 }
 
 /**
@@ -622,10 +631,14 @@ export function createDomainEvent<T extends string, P>(
 }
 
 /**
- * Creates a domain event exclusively from explicit inputs. Unlike
- * {@link createDomainEvent}, this function has no clock or event-id fallback.
- * Aggregate behavior uses this path so identical domain inputs produce
- * identical events.
+ * Creates an already minted domain event exclusively from explicit envelope
+ * facts. Unlike {@link createDomainEvent}, it has no clock or event-id fallback
+ * and is useful when replay, migration, or a caller-owned boundary already has
+ * the final identity and occurrence time.
+ *
+ * Aggregate behavior normally creates an {@link UncommittedDomainEvent} through
+ * its protected `createEvent` helper. The application shell later records that
+ * pending fact with caller-owned time and identity.
  */
 export function createDomainEventFromFacts<T extends string>(
 	type: T,

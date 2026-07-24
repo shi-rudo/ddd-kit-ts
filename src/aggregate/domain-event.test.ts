@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../core/errors";
-import { DomainEventValidationError } from "./domain-event-errors";
 import {
 	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
@@ -15,6 +14,7 @@ import {
 	mergeMetadata,
 	recordDomainEvent,
 } from "./domain-event";
+import { DomainEventValidationError } from "./domain-event-errors";
 
 describe("DomainEvent", () => {
 	describe("uncommitted decisions", () => {
@@ -318,7 +318,10 @@ describe("DomainEvent", () => {
 		});
 
 		it("leaves a metadata object reusable across events", () => {
-			const metadata: EventMetadata = { correlationId: "corr-1" };
+			const metadata: {
+				correlationId: string;
+				causationId?: string;
+			} = { correlationId: "corr-1" };
 			const first = createDomainEvent("Demo", { x: 1 }, { metadata });
 
 			expect(Object.isFrozen(metadata)).toBe(false);

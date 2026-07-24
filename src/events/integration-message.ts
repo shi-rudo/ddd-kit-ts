@@ -7,17 +7,10 @@ import {
 } from "../aggregate/domain-event";
 import { InvalidIntegrationMessageError } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
+import { assertJsonValue, type JsonObject, type JsonValue } from "./json-value";
 import type { CommitPosition, CommittedDomainEvent } from "./ports";
 
-/** A primitive value represented without loss by JSON. */
-export type JsonPrimitive = boolean | null | number | string;
-/** A recursively JSON-safe value. Runtime codecs additionally reject lossy shapes. */
-export type JsonValue =
-	| JsonPrimitive
-	| ReadonlyArray<JsonValue>
-	| { readonly [key: string]: JsonValue };
-/** A JSON-safe object used for optional integration metadata. */
-export type JsonObject = { readonly [key: string]: JsonValue };
+export type { JsonObject, JsonPrimitive, JsonValue } from "./json-value";
 
 /** Standard relationship headers carried by the public message envelope. */
 export interface IntegrationMessageRelationships {
@@ -165,7 +158,7 @@ function assertIntegrationMessage(
 	value: unknown,
 	timestampFormat: "canonical" | "wire" = "canonical",
 ): asserts value is IntegrationMessage {
-	assertJsonValue(value, "$");
+	assertJsonValue(value, "$", invalid);
 	if (!isJsonObject(value)) {
 		invalid("$", "envelope must be a plain JSON object");
 	}
@@ -383,113 +376,4 @@ function daysInMonth(year: number, month: number): number {
 
 function invalid(path: string, reason: string): never {
 	throw new InvalidIntegrationMessageError(path, reason);
-}
-
-function assertJsonValue(
-	value: unknown,
-	path: string,
-	active = new WeakSet<object>(),
-): asserts value is JsonValue {
-	if (value === null) return;
-	switch (typeof value) {
-		case "string":
-		case "boolean":
-			return;
-		case "number":
-			if (Number.isFinite(value)) return;
-			throw new InvalidIntegrationMessageError(
-				path,
-				"numbers must be finite JSON numbers",
-			);
-		case "object":
-			break;
-		default:
-			throw new InvalidIntegrationMessageError(
-				path,
-				`value of type ${typeof value} is not JSON-safe`,
-			);
-	}
-
-	if (active.has(value)) {
-		throw new InvalidIntegrationMessageError(
-			path,
-			"cyclic references are not JSON-safe",
-		);
-	}
-	active.add(value);
-	if (Array.isArray(value)) {
-		for (const key of Reflect.ownKeys(value)) {
-			if (key === "length") continue;
-			if (typeof key === "symbol") {
-				throw new InvalidIntegrationMessageError(
-					path,
-					"symbol-keyed array properties would be dropped by JSON",
-				);
-			}
-			const index = Number(key);
-			if (
-				!Number.isInteger(index) ||
-				index < 0 ||
-				index >= value.length ||
-				String(index) !== key
-			) {
-				throw new InvalidIntegrationMessageError(
-					`${path}.${key}`,
-					"named array properties would be dropped by JSON",
-				);
-			}
-		}
-		for (let index = 0; index < value.length; index += 1) {
-			const descriptor = Object.getOwnPropertyDescriptor(value, index);
-			if (descriptor === undefined) {
-				throw new InvalidIntegrationMessageError(
-					`${path}[${index}]`,
-					"sparse array holes would change to null in JSON",
-				);
-			}
-			if (!("value" in descriptor) || !descriptor.enumerable) {
-				throw new InvalidIntegrationMessageError(
-					`${path}[${index}]`,
-					"accessor and non-enumerable array elements are not JSON-safe",
-				);
-			}
-			assertJsonValue(descriptor.value, `${path}[${index}]`, active);
-		}
-		active.delete(value);
-		return;
-	}
-
-	const prototype = Object.getPrototypeOf(value);
-	if (prototype !== Object.prototype && prototype !== null) {
-		throw new InvalidIntegrationMessageError(
-			path,
-			"Date, Map, Set, and class instances are not JSON-safe here; map " +
-				"them explicitly to strings, arrays, or plain objects",
-		);
-	}
-	for (const key of Reflect.ownKeys(value)) {
-		if (typeof key === "symbol") {
-			throw new InvalidIntegrationMessageError(
-				path,
-				"symbol-keyed properties would be dropped by JSON",
-			);
-		}
-		const descriptor = Object.getOwnPropertyDescriptor(value, key);
-		if (descriptor === undefined) continue;
-		const childPath = `${path}.${key}`;
-		if (key === "__proto__") {
-			throw new InvalidIntegrationMessageError(
-				childPath,
-				"hostile __proto__ keys are not accepted at integration boundaries",
-			);
-		}
-		if (!("value" in descriptor) || !descriptor.enumerable) {
-			throw new InvalidIntegrationMessageError(
-				childPath,
-				"accessor and non-enumerable properties are not JSON-safe",
-			);
-		}
-		assertJsonValue(descriptor.value, childPath, active);
-	}
-	active.delete(value);
 }

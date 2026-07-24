@@ -337,6 +337,21 @@ export class InvalidIntegrationMessageError extends InfrastructureError<"INVALID
 	}
 }
 
+/** A malformed or non-JSON-safe command selected for durable delivery. */
+export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COMMAND_MESSAGE"> {
+	constructor(
+		public readonly path: string,
+		public readonly reason: string,
+		cause?: unknown,
+	) {
+		super({
+			code: "INVALID_COMMAND_MESSAGE",
+			message: `Invalid command message at ${path}: ${reason}`,
+			cause,
+		});
+	}
+}
+
 /**
  * Thrown by `Entity` (constructor and `setState`) and by the event
  * metadata helpers (`createDomainEvent`'s `options.metadata`,
@@ -1146,6 +1161,7 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION"
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_COMMAND_MESSAGE"
 	| "INVALID_INTEGRATION_MESSAGE"
 	| "INVALID_MONEY"
 	| "MISADDRESSED_EVENT"

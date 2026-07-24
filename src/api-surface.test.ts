@@ -4,8 +4,8 @@ import type {
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
-	DurableCommandMessage,
 	DomainErrorClass,
+	DurableCommandMessage,
 	IAggregateRoot,
 	Id,
 	IntegrationMessageRelationships,
@@ -19,6 +19,7 @@ import * as testing from "./testing";
 import * as utils from "./utils";
 
 type PublicExecutionContext = import("./index").ExecutionContext;
+type PublicEventMetadata = import("./index").EventMetadata;
 // @ts-expect-error EffectContext was replaced by the runtime-oriented ExecutionContext name in v3
 type RemovedEffectContext = import("./index").EffectContext;
 
@@ -45,6 +46,14 @@ type RemovedFactoryMutationSurface =
 	| RemovedWithEventIdFactory;
 
 void (undefined as unknown as RemovedFactoryMutationSurface);
+
+function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
+	// @ts-expect-error event metadata is immutable at the TypeScript boundary
+	metadata.correlationId = "changed";
+	// @ts-expect-error custom event metadata is immutable too
+	metadata.custom = "changed";
+}
+void assertReadonlyEventMetadata;
 
 type LifecycleSurface = IAggregateRoot<Id<"ApiSurface">>;
 // @ts-expect-error persistence acknowledgement belongs to the application shell
@@ -87,6 +96,8 @@ const publicIntegrationRelationships: IntegrationMessageRelationships = {
 void publicIntegrationRelationships;
 void (undefined as unknown as DurableCommandMessage<{
 	type: "RebuildReadModel";
+	version: 1;
+	payload: null;
 }>);
 void (undefined as unknown as DomainErrorClass);
 
@@ -135,6 +146,7 @@ const INDEX_SURFACE = [
 	"InMemoryProjectionCheckpointStore",
 	"InMemorySnapshotStore",
 	"InfrastructureError",
+	"InvalidCommandMessageError",
 	"InvalidDomainMachineContextError",
 	"InvalidDomainMachineDefinitionError",
 	"InvalidDomainMachineInputError",
@@ -220,6 +232,7 @@ const INDEX_SURFACE = [
 const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
 
 const TESTING_SURFACE = [
+	"createCommandOutboxContractTests",
 	"createDeadlineStoreContractTests",
 	"createEsRepositoryContractTests",
 	"createEventStoreContractTests",

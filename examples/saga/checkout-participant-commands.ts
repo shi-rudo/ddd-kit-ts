@@ -1,14 +1,15 @@
-import type { Command } from "../../src/app/command";
+import type { PublishedCommand } from "../../src/app/command";
 import type {
 	CommandMessageContent,
 	CommandMessageRelationships,
 } from "../../src/app/command-outbox";
-import type { Money } from "../../src/money";
+import { type MoneyDto, moneyToDto } from "../../src/money";
 import type {
 	CheckoutAdvancedToShipping,
 	CheckoutCancellationStartedAfterPaymentFailure,
 	CheckoutCompensationStartedAfterShippingFailure,
 	CheckoutOrderConfirmationStarted,
+	CheckoutPaymentRefundConfirmed,
 	CheckoutStartedAwaitingPayment,
 	EventSourcedCheckoutSagaEvent,
 } from "./event-sourced-checkout-saga";
@@ -16,34 +17,40 @@ import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";
 import type { ShipmentId } from "./shipping";
 
-export type RequestPayment = Command & {
-	readonly type: "RequestPayment";
-	readonly orderId: OrderId;
-	readonly paymentId: PaymentId;
-	readonly amount: Money;
-};
+export type RequestPayment = PublishedCommand<
+	"RequestPayment",
+	{
+		readonly orderId: OrderId;
+		readonly paymentId: PaymentId;
+		readonly amount: MoneyDto;
+	}
+>;
 
-export type RequestShipping = Command & {
-	readonly type: "RequestShipping";
-	readonly orderId: OrderId;
-	readonly shipmentId: ShipmentId;
-};
+export type RequestShipping = PublishedCommand<
+	"RequestShipping",
+	{
+		readonly orderId: OrderId;
+		readonly shipmentId: ShipmentId;
+	}
+>;
 
-export type ConfirmOrder = Command & {
-	readonly type: "ConfirmOrder";
-	readonly orderId: OrderId;
-};
+export type ConfirmOrder = PublishedCommand<
+	"ConfirmOrder",
+	{ readonly orderId: OrderId }
+>;
 
-export type CancelOrder = Command & {
-	readonly type: "CancelOrder";
-	readonly orderId: OrderId;
-	readonly reason: string;
-};
+export type CancelOrder = PublishedCommand<
+	"CancelOrder",
+	{
+		readonly orderId: OrderId;
+		readonly reason: string;
+	}
+>;
 
-export type RefundPayment = Command & {
-	readonly type: "RefundPayment";
-	readonly paymentId: PaymentId;
-};
+export type RefundPayment = PublishedCommand<
+	"RefundPayment",
+	{ readonly paymentId: PaymentId }
+>;
 
 export type CheckoutParticipantCommand =
 	| RequestPayment
@@ -75,7 +82,13 @@ export function checkoutCommandsFromProcessFact(
 		case "CheckoutCancellationStartedAfterPaymentFailure":
 			return cancelAfterPaymentFailure(event, orderId, relationships);
 		case "CheckoutCompensationStartedAfterShippingFailure":
-			return compensateAfterShippingFailure(event, orderId, relationships);
+			return compensateAfterShippingFailure(event, relationships);
+		case "CheckoutPaymentRefundConfirmed":
+			return cancelAfterRefund(event, orderId, relationships);
+		case "CheckoutCancellationCompletedAfterPaymentFailure":
+		case "CheckoutCompensationCompletedAfterShippingFailure":
+		case "CheckoutManualRepairRequired":
+			return [];
 		default:
 			return assertNever(event);
 	}
@@ -91,9 +104,12 @@ function requestPayment(
 			destination: "payments.commands",
 			command: {
 				type: "RequestPayment",
-				orderId,
-				paymentId: event.payload.paymentId,
-				amount: event.payload.total,
+				version: 1,
+				payload: {
+					orderId,
+					paymentId: event.payload.paymentId,
+					amount: moneyToDto(event.payload.total),
+				},
 			},
 			...relationships,
 		},
@@ -110,8 +126,11 @@ function requestShipping(
 			destination: "shipping.commands",
 			command: {
 				type: "RequestShipping",
-				orderId,
-				shipmentId: event.payload.shipmentId,
+				version: 1,
+				payload: {
+					orderId,
+					shipmentId: event.payload.shipmentId,
+				},
 			},
 			...relationships,
 		},
@@ -126,7 +145,11 @@ function confirmOrder(
 	return [
 		{
 			destination: "orders.commands",
-			command: { type: "ConfirmOrder", orderId },
+			command: {
+				type: "ConfirmOrder",
+				version: 1,
+				payload: { orderId },
+			},
 			...relationships,
 		},
 	];
@@ -142,8 +165,11 @@ function cancelAfterPaymentFailure(
 			destination: "orders.commands",
 			command: {
 				type: "CancelOrder",
-				orderId,
-				reason: `payment-failed: ${event.payload.reason}`,
+				version: 1,
+				payload: {
+					orderId,
+					reason: `payment-failed: ${event.payload.reason}`,
+				},
 			},
 			...relationships,
 		},
@@ -152,24 +178,36 @@ function cancelAfterPaymentFailure(
 
 function compensateAfterShippingFailure(
 	event: CheckoutCompensationStartedAfterShippingFailure,
-	orderId: OrderId,
 	relationships: CommandMessageRelationships,
-): ReadonlyArray<CommandMessageContent<RefundPayment | CancelOrder>> {
+): ReadonlyArray<CommandMessageContent<RefundPayment>> {
 	return [
 		{
 			destination: "payments.commands",
 			command: {
 				type: "RefundPayment",
-				paymentId: event.payload.paymentId,
+				version: 1,
+				payload: { paymentId: event.payload.paymentId },
 			},
 			...relationships,
 		},
+	];
+}
+
+function cancelAfterRefund(
+	event: CheckoutPaymentRefundConfirmed,
+	orderId: OrderId,
+	relationships: CommandMessageRelationships,
+): ReadonlyArray<CommandMessageContent<CancelOrder>> {
+	return [
 		{
 			destination: "orders.commands",
 			command: {
 				type: "CancelOrder",
-				orderId,
-				reason: `shipping-failed: ${event.payload.reason}`,
+				version: 1,
+				payload: {
+					orderId,
+					reason: `shipping-failed: ${event.payload.reason}`,
+				},
 			},
 			...relationships,
 		},
@@ -188,14 +226,39 @@ function requiredOrderId(event: EventSourcedCheckoutSagaEvent): OrderId {
 function messageRelationships(
 	event: EventSourcedCheckoutSagaEvent,
 ): CommandMessageRelationships {
+	const conversationId = event.metadata?.conversationId;
+	if (
+		typeof conversationId !== "string" ||
+		conversationId.trim().length === 0
+	) {
+		throw new TypeError(
+			`Checkout process fact ${event.type} requires metadata.conversationId`,
+		);
+	}
+	const traceparent = optionalStringMetadata(event, "traceparent");
+	const tracestate = optionalStringMetadata(event, "tracestate");
 	return {
 		...(event.metadata?.correlationId === undefined
 			? {}
 			: { correlationId: event.metadata.correlationId }),
-		...(event.metadata?.conversationId === undefined
-			? {}
-			: { conversationId: event.metadata.conversationId }),
+		conversationId,
+		...(traceparent === undefined ? {} : { traceparent }),
+		...(tracestate === undefined ? {} : { tracestate }),
 	};
+}
+
+function optionalStringMetadata(
+	event: EventSourcedCheckoutSagaEvent,
+	field: "traceparent" | "tracestate",
+): string | undefined {
+	const value = event.metadata?.[field];
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") {
+		throw new TypeError(
+			`Checkout process fact ${event.type} metadata.${field} must be a string`,
+		);
+	}
+	return value;
 }
 
 function assertNever(value: never): never {

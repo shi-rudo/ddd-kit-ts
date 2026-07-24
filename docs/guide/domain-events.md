@@ -334,25 +334,36 @@ The kit only requires a string. Choose the id format that fits your storage and 
 
 ```ts
 interface EventMetadata {
-  correlationId?: string;
-  conversationId?: string;
-  causationId?: string;
-  userId?: string;
-  source?: string;
-  [key: string]: unknown;
+  readonly correlationId?: string;
+  readonly conversationId?: string;
+  readonly causationId?: string;
+  readonly userId?: string;
+  readonly source?: string;
+  readonly traceparent?: string;
+  readonly tracestate?: string;
+  readonly [key: string]: unknown;
 }
 ```
 
-Use metadata for tracing and operational context, not for core domain state. If a value is required to understand the event as a domain fact, put it in the payload.
+The readonly surface prevents a consumer from treating an already recorded
+event as a place to accumulate context. Constructors still make a defensive
+copy, so a caller may keep and change the mutable input object it used to
+create the event without changing the event itself.
+
+Use metadata for message relationships and operational context, not for core
+domain state. If a value is required to understand the event as a domain fact,
+put it in the payload.
 
 The usual meanings:
 
-- `correlationId` groups messages that belong to one operation or trace.
+- `correlationId` groups messages that belong to one business operation.
 - `conversationId` remains stable across a longer business interaction that may
   contain several correlations.
 - `causationId` points to the event or command that caused this event.
 - `userId` records the actor when known.
 - `source` names the producing component or bounded context.
+- `traceparent` and `tracestate` carry W3C Trace Context between technical
+  spans. They complement business correlation; they do not replace it.
 
 ### Copying Correlation
 

@@ -16,8 +16,8 @@ export {
 } from "./aggregate/aggregate";
 export type { AggregateAddress } from "./aggregate/aggregate-address";
 export {
-	type AggregateEventConvenienceFactory,
 	type AggregateConfig,
+	type AggregateEventConvenienceFactory,
 	AggregateRoot,
 } from "./aggregate/aggregate-root";
 export {
@@ -57,7 +57,7 @@ export {
 export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
 
 // CQRS: commands, queries, buses
-export type { Command, CommandHandler } from "./app/command";
+export type { Command, CommandHandler, PublishedCommand } from "./app/command";
 export {
 	CommandBus,
 	type CommandBusOptions,
@@ -86,11 +86,6 @@ export {
 	withCommit,
 } from "./app/handler";
 export {
-	type DomainEventStampFactory,
-	type DomainEventStampProvider,
-	recordPendingEvents,
-} from "./app/record-pending-events";
-export {
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,
 	type IdempotencyLease,
@@ -114,6 +109,11 @@ export {
 	QueryBus,
 	type QueryBusOptions,
 } from "./app/query-bus";
+export {
+	type DomainEventStampFactory,
+	type DomainEventStampProvider,
+	recordPendingEvents,
+} from "./app/record-pending-events";
 export {
 	CommitError,
 	NestedUnitOfWorkError,
@@ -155,6 +155,7 @@ export {
 	InfrastructureError,
 	InMemoryCapacityExceededError,
 	type InMemoryCapacityExceededErrorOptions,
+	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	type KitErrorOptions,

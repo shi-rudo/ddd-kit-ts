@@ -227,22 +227,43 @@ workflow engine.
 transaction and passes a `CommandOutboxWriter` only an origin receipt and the
 exact addressed messages. It never attaches the private fact or copies its
 payload automatically; the application mapper selects the fields that belong
-in each command contract. An empty command batch still retains its origin
-receipt, so the adapter can advance the process source cursor and distinguish
-an exact retry from a missing write.
+in each command contract.
+
+That mapper is also the Published-Language boundary. A local `Command` may use
+domain value objects because it never has to survive another runtime.
+`PublishedCommand`, by contrast, has the stable shape
+`{ type, version, payload }`, and its payload must be JSON-safe. A payment
+mapper therefore converts `Money` to `MoneyDto`; it does not hand `bigint` or a
+domain object to a database or broker adapter. The route validates and
+defensively copies the complete command before invoking the port, so values
+that JSON would discard or change fail inside the originating transaction.
+
+An empty command batch still retains its origin receipt, so the adapter can
+advance the process source cursor and distinguish an exact retry from a missing
+write.
 
 Command message ids are derived from the private event id and command order.
-That makes transaction retries stable and keeps several ordered compensations
-distinct. The private fact names the triggering input through its metadata,
-the command names that fact as its direct cause, and the participant's result
-event names the command message. `conversationId` follows the whole business
-interaction across those hops.
+That makes transaction retries stable and keeps several commands from the same
+decision distinct. It does not make their delivery order a workflow guarantee.
+When one compensating action depends on another, the process waits for the
+first participant's result before deciding the next command. The private fact
+names the triggering input through its metadata, the command names that fact
+as its direct cause, and the participant's result event names the command
+message. `conversationId` follows the whole business interaction across those
+hops. `traceparent` and `tracestate` are separate, explicit W3C Trace Context
+fields: business correlation explains which journey a message belongs to,
+while trace context connects the technical spans that carried it.
 
 The write seam deliberately stops at transactional handoff. A database-backed
 adapter or broker-native outbox owns polling, claiming, acknowledgements,
 retry, and dead letters. Because delivery is at least once, the receiving
 application still uses `withIdempotentCommit` with the command `messageId` and
 stores the handler result before acknowledging.
+
+The port's prose is backed by
+`createCommandOutboxContractTests`. Every adapter must prove atomic batches,
+stable order, exact-retry deduplication, rejection of conflicting origin reuse,
+empty-receipt cursor progress, and rollback participation.
 
 ## Collection helpers practice structural sharing
 

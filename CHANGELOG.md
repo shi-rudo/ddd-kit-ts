@@ -93,6 +93,11 @@ compatibility factories no longer need to implement shell stamping.
 
 ### Added: transactional command-outbox routing for process managers
 
+- Add `PublishedCommand` as the versioned Published Language for commands that
+  cross a process or Bounded-Context boundary. It has the stable
+  `{ type, version, payload }` shape, and the payload must be JSON-safe.
+  Domain values are translated explicitly at this boundary; the checkout
+  example maps `Money` to `MoneyDto`.
 - Add `CommandOutboxWriter`, `CommandOutboxCommitCandidate`, and
   `DurableCommandMessage` as the write-side contract for a dedicated,
   point-to-point command outbox. Every message has an explicit `destination`,
@@ -102,6 +107,12 @@ compatibility factories no longer need to implement shell stamping.
   `OutboxWriter` expected by `withCommit`, maps private accepted process facts
   to exact commands inside the aggregate transaction, and retains empty
   command commits so source-cursor and retry semantics do not develop gaps.
+  The route rejects malformed or lossy command data with
+  `InvalidCommandMessageError` before calling the adapter.
+- Add `createCommandOutboxContractTests` for adapter authors. The reusable
+  suite checks exact-retry deduplication, conflicting-origin rejection,
+  atomic batches, input order, empty receipts and source-cursor progression,
+  plus rollback when the harness declares that capability.
 - Migrate the event-sourced checkout example from command-shaped facts such as
   `CheckoutPaymentRequested` to private process facts such as
   `CheckoutStartedAwaitingPayment`. These facts are not published on the
@@ -113,12 +124,46 @@ compatibility factories no longer need to implement shell stamping.
   `awaiting-order-confirmation`; a later `OrderConfirmed` input records the
   command-free `CheckoutCompleted` fact. Cancellation and compensation states
   likewise describe in-progress recovery rather than prematurely claiming it
-  finished.
+  finished. Shipping recovery waits for `PaymentRefunded` before deciding
+  `CancelOrder`; a permanent refund or cancellation failure records
+  `CheckoutManualRepairRequired`.
 - The runnable example covers atomic process-stream/command persistence,
   rollback, crash after commit, replay without command creation, stored-result
-  idempotency on redelivery, conversation and causation propagation, and
-  reverse-order compensation. The saga guide includes a staged migration for
-  already persisted command-shaped process events.
+  idempotency on redelivery, business relationship and W3C Trace Context
+  propagation, and result-driven compensation. The saga guide includes a
+  staged migration for already persisted command-shaped process events.
+
+The command-outbox mapper is a breaking boundary change:
+
+```ts
+// Before: a local command shape and domain value object leak into transport
+{
+  destination: "payments.commands",
+  command: { type: "RequestPayment", orderId, paymentId, amount: total },
+}
+
+// After: a versioned Published Language made only of JSON-safe data
+{
+  destination: "payments.commands",
+  command: {
+    type: "RequestPayment",
+    version: 1,
+    payload: { orderId, paymentId, amount: moneyToDto(total) },
+  },
+}
+```
+
+Business correlation and technical tracing are now separate on durable command
+messages. Continue `correlationId` and `conversationId` to explain the business
+journey; copy validated W3C `traceparent` and `tracestate` when the next
+technical span belongs to the same trace.
+
+### Changed: event metadata is readonly
+
+- Mark every conventional `EventMetadata` field and its extension index
+  signature readonly, and add explicit `traceparent` and `tracestate` fields.
+  Event constructors still defensively copy metadata, so callers remain free
+  to reuse or mutate their input object without changing a recorded event.
 
 ### Documented: persistence tracking remains a tactical v3 boundary
 
