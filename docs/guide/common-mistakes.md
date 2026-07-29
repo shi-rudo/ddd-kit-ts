@@ -69,39 +69,33 @@ and there is deliberately no public clear method.
 The word "pending" matters. These events have happened in memory, but they
 have not been safely handed to the transaction/outbox boundary yet. Calling
 them `domainEvents` makes them sound like a historical event log. They are not.
-They are a short-lived queue owned by the aggregate until `withCommit`
-harvests them and acknowledges the committed aggregate through an internal
+They are a short-lived queue owned by the aggregate until `UnitOfWork`
+harvests and acknowledges the exact registered batch through an internal
 capability.
 
-Review signal: code that reads `pendingEvents` directly should be rare. Application code returns invocation-bound commit tokens and lets `withCommit` do the harvest. Direct reads are mostly for tests, custom orchestration, or diagnostics.
+Review signal: application code may call `recordPendingEvents`, but should not
+persist a hand-read `pendingEvents` array. Repository `flush` receives the
+immutable batch as `write.events`.
 
-### Passing a Transaction to `repo.save`
+### Calling a repository `save`
 
-`IRepository.save` takes the aggregate only:
-
-```ts
-await orderRepository.save(order);
-```
-
-Do not call `repo.save(tx, aggregate)`.
-
-In this kit, a repository instance is already bound to the transaction. You create it inside the transaction boundary:
+The v3 repository protocol has no ambiguous `save` method. Make the aggregate
+decision first and then register its lifecycle explicitly:
 
 ```ts
-await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orderRepository = makeOrderRepository(tx);
-  await orderRepository.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
 });
 ```
 
-That shape keeps the transaction out of the domain-facing repository API. Callers should not have to thread `tx` through every method. More importantly, it prevents accidental mixing: a repository created for transaction A should not be called with transaction B.
-
-This is a small version of dependency inversion. The application service asks for an order repository scoped to this operation; the adapter knows how to bind it to the database transaction. See [Repository](./repository.md).
+Use `add` for a new instance, `update` for the exact instance loaded by this
+unit of work, and `remove` only where the repository definition opted into
+physical deletion. Application code never receives the transaction handle;
+the definition binds its read adapter and `flush` implementation to it. See
+[Repository](./repository.md).
 
 ### Returning Naked Aggregates Or Events From `withCommit`
 
@@ -189,28 +183,32 @@ observer. The version argument is captured before any observer runs, so it
 remains an honest commit receipt even if application code still holds a mutable
 reference to a peer aggregate.
 
-### Trying To Manage Lifecycle From `Repository.save`
+### Trying To Manage Lifecycle From Repository `flush`
 
-`Repository.save` should persist data. It should not change the aggregate lifecycle.
+`flush` should persist the immutable write receipt. It should not change the
+aggregate lifecycle.
 
 Only `withCommit` and `UnitOfWork` hold the internal acknowledgement capability.
 If repository code uses a cast or other escape hatch to clear events earlier,
 pending events disappear before the transaction boundary can harvest them and
 the outbox receives nothing.
 
-This mistake usually comes from trying to make `save` feel complete: "I saved the row, so I should mark the aggregate saved." That is correct in a simple Active Record style model. It is wrong in an outbox-backed transaction model.
+This mistake usually comes from trying to make a database write feel complete:
+"I wrote the row, so I should clear the events." That is correct in a simple
+Active Record model. It is wrong in an outbox-backed transaction model.
 
 The database row save and the aggregate lifecycle marker happen at different moments:
 
 1. The domain method changes the aggregate and records pending events.
-2. The repository persists the aggregate state.
-3. `withCommit` harvests pending events.
-4. The outbox records are written in the same transaction.
-5. The transaction commits.
-6. The application boundary acknowledges the saved aggregate and clears its
+2. The use case registers `add`, `update`, or `remove`.
+3. The unit of work freezes the state change and event batch.
+4. The repository definition flushes that receipt.
+5. The outbox records are written in the same transaction.
+6. The transaction commits.
+7. The application boundary acknowledges the registered event batch and clears its
    pending events internally.
 
-If the transaction rolls back after `save`, the in-memory aggregate must not
+If the transaction rolls back after `flush`, the in-memory aggregate must not
 pretend its events were flushed. That is why `save` is pure persistence and the
 application boundary owns acknowledgement.
 
@@ -218,7 +216,7 @@ Review signal: repository implementations should not mutate aggregate lifecycle
 state through casts or hidden implementation details. See
 [Outbox & Transactions](./outbox.md).
 
-### Using `version === 0` for Insert vs Update
+### Inferring Insert vs Update From `version`
 
 Do not decide between insert and update with `aggregate.version === 0`.
 
@@ -226,12 +224,16 @@ A new aggregate can be mutated before its first save. A factory may record a cre
 
 That means `version` answers "how many version-worthy changes has this in-memory aggregate seen?" It does not answer "does this aggregate already exist in the database?"
 
-Use `aggregate.persistedVersion === undefined` as the insert marker. That field tracks the persistence baseline:
+Use the explicit lifecycle methods instead:
 
-- `undefined` means no successful load or save has established a database baseline.
-- a number means the aggregate was loaded from or saved to persistence at that version.
+```ts
+repositories.orders.add(newOrder);
+repositories.orders.update(loadedOrder);
+```
 
-The optimistic-concurrency predicate should also use `persistedVersion` as the expected database version:
+The unit of work captures the expected version when the read adapter calls
+`tracking.trackLoaded(aggregate)`. The flush receipt carries it as
+`write.expectedVersion`:
 
 ```sql
 UPDATE orders
@@ -239,9 +241,11 @@ SET state = ?, version = ?
 WHERE id = ? AND version = ?
 ```
 
-The last placeholder should be `aggregate.persistedVersion`, not `aggregate.version`. The current in-memory version is what you want to write. The persisted version is what you expect the database still to contain.
-
-Review signal: any insert/update branch based on `version === 0` is suspect. The repository should branch on `persistedVersion === undefined`. See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+The final placeholder is `write.expectedVersion`; the value written is
+`write.version`. Review signal: any insert/update branch based on an aggregate
+version is suspect. The use case should choose `add` or `update`, and the
+adapter should trust the corresponding receipt. See
+[Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 
 ### Keeping Unbounded In-Memory Stores Alive
 
@@ -279,29 +283,24 @@ Within one Unit of Work, repeated `findById(id)` calls should return the same in
 
 This is the Identity Map pattern from Fowler: one logical object, one in-memory object per unit of work. The reason is not memory optimization. The reason is correctness.
 
-Consider this sequence:
+The unit of work rejects this situation before it can become a write:
 
 ```ts
-const orderA = await orders.findById(orderId);
-const orderB = await orders.findById(orderId);
+const orderA = await repositories.orders.findById(orderId);
+const orderB = await repositories.orders.findById(orderId);
 
 orderA.confirm();
 orderB.ship("tracking-123");
-
-return {
-  result: orderId,
-  commits: [
-    enrollment.enrollSaved(orderA),
-    enrollment.enrollSaved(orderB),
-  ],
-};
+repositories.orders.update(orderA);
 ```
 
 If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can receive different commit tokens. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on save order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
 
 An identity map makes the second `findById` return the same object. Now the operation is forced to deal with one aggregate instance and one version history.
 
-Use the [`UnitOfWork` identity map](./unit-of-work.md#identity-map), or keep a per-operation identity map in repositories that use `withCommit` directly. The map must be scoped to one operation. A process-wide identity map would leak stale state across requests. See [Repository](./repository.md).
+Use the [`UnitOfWork` identity map](./unit-of-work.md#read-adapters-and-the-identity-map).
+The map is scoped to one `run`; a process-wide identity map would leak stale
+state across requests. See [Repository](./repository.md).
 
 ### Sharing One Mutable Factory Across Tests or Requests
 
@@ -411,7 +410,7 @@ When reviewing code that uses the kit, scan for these signals:
 - pending events recorded in the application shell before persistence
 - repositories created inside the transaction or unit-of-work scope
 - repositories that do not call aggregate lifecycle methods
-- insert/update branching on `persistedVersion`, not `version`
+- explicit `add` or `update`, never lifecycle inference from `version`
 - one aggregate instance per id inside one unit of work
 - event-sourced repositories continue bounded pages to a pinned stream head
 - scoped test factories instead of leaked global factories

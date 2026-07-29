@@ -16,7 +16,6 @@ import { EventBusImpl } from "../../src/events/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import type { EventBus, OutboxWriter } from "../../src/events/ports";
 import { type Money, moneyOfMinor } from "../../src/money";
-import type { IRepository } from "../../src/repo/repository";
 import type { TransactionScope } from "../../src/repo/scope";
 
 import { CheckoutSaga } from "./checkout-saga";
@@ -28,27 +27,47 @@ import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 // Tiny test helpers
 // ----------------------------------------------------------------------------
 
-function inMemoryRepo<TAgg extends IAggregateRoot<TId>, TId extends Id<string>>(
-	name: string,
-): IRepository<TAgg, TId> {
+interface ExampleAggregateStore<
+	TAgg extends IAggregateRoot<TId>,
+	TId extends Id<string>,
+> {
+	findById(id: TId): Promise<TAgg | undefined>;
+	getById(id: TId): Promise<TAgg>;
+	insert(aggregate: TAgg): Promise<void>;
+	update(aggregate: TAgg): Promise<void>;
+}
+
+function inMemoryStore<
+	TAgg extends IAggregateRoot<TId>,
+	TId extends Id<string>,
+>(name: string): ExampleAggregateStore<TAgg, TId> {
 	const store = new Map<TId, TAgg>();
 	return {
 		async findById(id) {
-			return store.get(id) ?? null;
+			return store.get(id);
 		},
 		async getById(id) {
 			const a = store.get(id);
-			if (!a) throw new AggregateNotFoundError({ aggregateType: name, id });
+			if (!a) {
+				throw new AggregateNotFoundError({
+					aggregateType: name,
+					aggregateId: id,
+				});
+			}
 			return a;
 		},
-		async exists(id) {
-			return store.has(id);
-		},
-		async save(agg) {
+		async insert(agg) {
+			if (store.has(agg.id)) throw new Error(`Duplicate ${name} ${agg.id}`);
 			store.set(agg.id, agg);
 		},
-		async delete(aggregate) {
-			store.delete(aggregate.id);
+		async update(agg) {
+			if (!store.has(agg.id)) {
+				throw new AggregateNotFoundError({
+					aggregateType: name,
+					aggregateId: agg.id,
+				});
+			}
+			store.set(agg.id, agg);
 		},
 	};
 }
@@ -111,10 +130,10 @@ interface AppDeps {
 	eventBus: EventBus<AppEvent>;
 	outbox: OutboxWriter<AppEvent>;
 	scope: TransactionScope<undefined>;
-	orderRepository: IRepository<Order, OrderId>;
-	paymentRepository: IRepository<Payment, PaymentId>;
-	shipmentRepository: IRepository<Shipment, ShipmentId>;
-	sagaRepository: IRepository<CheckoutSaga, OrderId>;
+	orderRepository: ExampleAggregateStore<Order, OrderId>;
+	paymentRepository: ExampleAggregateStore<Payment, PaymentId>;
+	shipmentRepository: ExampleAggregateStore<Shipment, ShipmentId>;
+	sagaRepository: ExampleAggregateStore<CheckoutSaga, OrderId>;
 	domainEvents: Pick<DomainEventFactory, "createStamp">;
 	clock: () => Date;
 }
@@ -126,7 +145,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const order = Order.place(cmd.orderId, cmd.customerId, cmd.total);
 			recordPendingEvents(order, deps.domainEvents);
-			await deps.orderRepository.save(order);
+			await deps.orderRepository.insert(order);
 			return {
 				result: ok(order.id),
 				commits: [enrollment.enrollSaved(order)],
@@ -140,7 +159,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const payment = Payment.request(cmd.paymentId, cmd.orderId, cmd.amount);
 			recordPendingEvents(payment, deps.domainEvents);
-			await deps.paymentRepository.save(payment);
+			await deps.paymentRepository.insert(payment);
 			return {
 				result: ok(payment.id),
 				commits: [enrollment.enrollSaved(payment)],
@@ -154,7 +173,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 		withCommit({ outbox, bus: eventBus, scope }, async (_tx, enrollment) => {
 			const shipment = Shipment.request(cmd.shipmentId, cmd.orderId);
 			recordPendingEvents(shipment, deps.domainEvents);
-			await deps.shipmentRepository.save(shipment);
+			await deps.shipmentRepository.insert(shipment);
 			return {
 				result: ok(shipment.id),
 				commits: [enrollment.enrollSaved(shipment)],
@@ -169,7 +188,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 			recordPendingEvents(order, () =>
 				deps.domainEvents.createStamp({ occurredAt: confirmedAt }),
 			);
-			await deps.orderRepository.save(order);
+			await deps.orderRepository.update(order);
 			return {
 				result: ok(undefined as void),
 				commits: [enrollment.enrollSaved(order)],
@@ -181,7 +200,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 			const order = await deps.orderRepository.getById(cmd.orderId);
 			order.cancel(cmd.reason);
 			recordPendingEvents(order, deps.domainEvents);
-			await deps.orderRepository.save(order);
+			await deps.orderRepository.update(order);
 			return {
 				result: ok(undefined as void),
 				commits: [enrollment.enrollSaved(order)],
@@ -195,7 +214,7 @@ function registerCommandHandlers(deps: AppDeps): void {
 			const payment = await deps.paymentRepository.getById(cmd.paymentId);
 			payment.refund();
 			recordPendingEvents(payment, deps.domainEvents);
-			await deps.paymentRepository.save(payment);
+			await deps.paymentRepository.update(payment);
 			return {
 				result: ok(undefined as void),
 				commits: [enrollment.enrollSaved(payment)],
@@ -234,7 +253,7 @@ function wireSaga(
 		const orderId = (event.aggregateId as OrderId) ?? null;
 		if (!orderId) return;
 		const saga = CheckoutSaga.start(orderId, event.payload.total);
-		await sagaRepository.save(saga);
+		await sagaRepository.insert(saga);
 		await commandBus.execute({
 			type: "RequestPayment",
 			orderId,
@@ -246,13 +265,13 @@ function wireSaga(
 	eventBus.subscribe("PaymentRequested", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.recordPaymentRequested(event.aggregateId as PaymentId);
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 	});
 
 	eventBus.subscribe("PaymentReceived", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.advanceToShipping();
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 		await commandBus.execute({
 			type: "RequestShipping",
 			orderId: event.payload.orderId,
@@ -263,7 +282,7 @@ function wireSaga(
 	eventBus.subscribe("PaymentFailed", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.cancelOnPaymentFailure();
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 		await commandBus.execute({
 			type: "CancelOrder",
 			orderId: event.payload.orderId,
@@ -274,13 +293,13 @@ function wireSaga(
 	eventBus.subscribe("ShippingRequested", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.recordShippingRequested(event.aggregateId as ShipmentId);
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 	});
 
 	eventBus.subscribe("ShippingCompleted", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.complete();
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 		await commandBus.execute({
 			type: "ConfirmOrder",
 			orderId: event.payload.orderId,
@@ -290,7 +309,7 @@ function wireSaga(
 	eventBus.subscribe("ShippingFailed", async (event) => {
 		const saga = await sagaRepository.getById(event.payload.orderId);
 		saga.cancelOnShippingFailure();
-		await sagaRepository.save(saga);
+		await sagaRepository.update(saga);
 		// Compensating sequence: refund payment first, then cancel order.
 		if (saga.paymentId) {
 			await commandBus.execute({
@@ -323,7 +342,7 @@ async function simulatePaymentResult(
 			if (outcome.kind === "received") payment.receive();
 			else payment.fail(outcome.reason);
 			recordPendingEvents(payment, deps.domainEvents);
-			await paymentRepository.save(payment);
+			await paymentRepository.update(payment);
 			return {
 				result: ok(undefined as void),
 				commits: [enrollment.enrollSaved(payment)],
@@ -350,7 +369,7 @@ async function simulateShippingResult(
 				shipment.fail(outcome.reason);
 			}
 			recordPendingEvents(shipment, deps.domainEvents);
-			await shipmentRepository.save(shipment);
+			await shipmentRepository.update(shipment);
 			return {
 				result: ok(undefined as void),
 				commits: [enrollment.enrollSaved(shipment)],
@@ -386,10 +405,10 @@ function bootstrap() {
 		// OutboxDispatcher into eventBusSink, is what the sagas guide shows.
 		outbox: outboxWriterAcceptingEventLoss<AppEvent>(),
 		scope: noTxScope,
-		orderRepository: inMemoryRepo<Order, OrderId>("Order"),
-		paymentRepository: inMemoryRepo<Payment, PaymentId>("Payment"),
-		shipmentRepository: inMemoryRepo<Shipment, ShipmentId>("Shipment"),
-		sagaRepository: inMemoryRepo<CheckoutSaga, OrderId>("CheckoutSaga"),
+		orderRepository: inMemoryStore<Order, OrderId>("Order"),
+		paymentRepository: inMemoryStore<Payment, PaymentId>("Payment"),
+		shipmentRepository: inMemoryStore<Shipment, ShipmentId>("Shipment"),
+		sagaRepository: inMemoryStore<CheckoutSaga, OrderId>("CheckoutSaga"),
 		domainEvents,
 		clock,
 	};

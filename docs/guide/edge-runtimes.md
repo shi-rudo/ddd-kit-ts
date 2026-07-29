@@ -542,8 +542,8 @@ const confirmOrder = async (command: ConfirmOrder) => {
     { scope, outbox, idempotency, bus: eventBus },
     command.idempotency,
     async (tx, enrollment) => {
-      const orders = makeOrderRepository(tx);
-      const order = await orders.getById(command.orderId);
+      const loaded = await loadOrderForDirectCommit(tx, command.orderId);
+      const order = loaded.aggregate;
       if (!order.canBeConfirmedBy(command.requestedBy)) {
         return {
           result: {
@@ -556,7 +556,7 @@ const confirmOrder = async (command: ConfirmOrder) => {
 
       order.confirm();
       recordPendingEvents(order, domainEvents);
-      await orders.save(order);
+      await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
       return {
         result: {
           status: "confirmed",

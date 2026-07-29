@@ -5,11 +5,14 @@ change that produced it. The transactional outbox is the pattern for that:
 write the aggregate and enqueue its events in one database transaction, then
 deliver the events after the commit.
 
-The kit gives you four pieces:
+The kit gives you five pieces:
 
 - `TransactionScope<TCtx>`: opens the storage transaction.
+- `UnitOfWork`: owns repository tracking, immutable write receipts, and the
+  standard aggregate write protocol.
 - `withCommit`: runs the use case, harvests aggregate events, writes the
-  outbox row, commits, then publishes optional in-process notifications.
+  outbox row, commits, then publishes optional in-process notifications. The
+  unit of work builds on it; custom infrastructure can also use it directly.
 - `OutboxWriter<Evt>` / `Outbox<Evt>`: the durable queue boundary.
 - `OutboxDispatcher`: a small poller for setups that do not already have CDC
   or broker-owned delivery.
@@ -20,54 +23,52 @@ The main path looks like this:
 import {
   InMemoryOutbox,
   recordPendingEvents,
-  withCommit,
+  UnitOfWork,
 } from "@shirudo/ddd-kit";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
-const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(id);
+const orderId = await new UnitOfWork({
+  scope,
+  outbox,
+  repositories: { orders: orderRepositoryDefinition },
+}).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(id);
 
   order.confirm();
   recordPendingEvents(order, domainEvents);
-  await orders.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  repositories.orders.update(order);
+  return order.id;
 });
 ```
 
-The important line is the return value. The use case returns opaque tokens for
-the repository writes it enrolled, not naked aggregates and not
-`order.pendingEvents`. A fresh but unsaved aggregate therefore cannot be
-harvested or acknowledged accidentally. `withCommit` owns event harvesting
-and persistence cleanup. Every issued token must be present in `commits`; an
-omission rejects inside the transaction rather than committing state without
-its events. Repositories save state; aggregate lifecycle acknowledgement is
-not part of their API.
+The important line is `repositories.orders.update(order)`. It registers an
+explicit persistence intent only after the domain decision and event recording
+are complete. The unit of work freezes the adapter change set and exact event
+batch, flushes them in the transaction, and lets `withCommit` own outbox and
+post-commit acknowledgement. A changed but unregistered aggregate rejects the
+operation rather than committing state without its events.
 
 ## What Happens On Commit
 
 `withCommit` does the same sequence every time:
 
 1. It calls `scope.transactional(...)`.
-2. Your callback loads aggregates, mutates them, and saves them through
-   repositories bound to the transaction handle.
-3. Still inside the transaction, `withCommit` validates the invocation-bound
-   commit tokens, harvests `pendingEvents` from their aggregates, and calls
-   `outbox.add(events)`.
-4. The transaction commits.
-5. After commit, `withCommit` acknowledges every saved aggregate through a
+2. The unit of work builds transaction-bound read adapters and tracking.
+3. Your callback loads aggregates, makes domain decisions, and registers
+   explicit writes.
+4. Still inside the transaction, the unit of work freezes and flushes the
+   registered receipts; `withCommit` validates their internal commit tokens
+   and calls `outbox.add(events)` with the exact batches.
+5. The transaction commits.
+6. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards harvested events for deleted rows.
-6. The optional application observer
+7. The optional application observer
    `onPersisted(aggregate, version, context)` runs for successfully acknowledged
    saved aggregates only, after every commit record has completed its
    acknowledgement attempt. Its version argument is the commit-time value
    captured before any observer ran.
-7. If a `bus` was supplied, it publishes the same committed events to
+8. If a `bus` was supplied, it publishes the same committed events to
    in-process subscribers.
 
 If the transaction rolls back, step 5 never happens. The aggregate still has
@@ -129,22 +130,17 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 }
 ```
 
-Repositories are usually created inside the callback from that transaction
-handle:
+Repository definitions bind their read adapter and flush callback to that
+transaction handle. Application code sees neither `tx` nor enrollment:
 
 ```ts
-await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(orderId);
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
 
   order.confirm();
   recordPendingEvents(order, domainEvents);
-  await orders.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  repositories.orders.update(order);
+  return order.id;
 });
 ```
 
@@ -161,8 +157,9 @@ await withCommit({ scope, outbox }, async () => ({
 }));
 ```
 
-`TransactionScope` does not track dirty objects, registered repositories, or
-deletes. That lives above it. Use `withCommit` for the commit lifecycle, and
+`TransactionScope` does not track aggregates, repository intent, or deletes.
+That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
+lifecycle for custom infrastructure compositions.
 use `UnitOfWork` when you want tx-bound repositories, enrollment, and an
 identity map.
 
@@ -277,8 +274,8 @@ the full cursor therefore survives JSON serialization. SQL adapters must map
 the nullable predecessor column to JavaScript `null` when hydrating an
 envelope; omitting the property produces an invalid legacy cursor.
 
-The predecessor cannot be inferred from `aggregate.persistedVersion`: that is
-the OCC baseline and advances on state-only saves. A durable adapter needs a
+The predecessor cannot be inferred from `write.expectedVersion`: that is the
+OCC baseline and also advances on state-only writes. A durable adapter needs a
 source-head record keyed by `(aggregate_type, aggregate_id)`. Lock that record,
 read its `last_eventful_aggregate_version`, insert every event in the commit
 with that predecessor, and advance the head to the candidate's

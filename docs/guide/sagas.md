@@ -74,7 +74,8 @@ on, it means the implementation shape, not the modeling claim.
 
 Concretely: the process state ("payment requested, waiting"; "shipping
 requested"; "compensating") is protected by optimistic concurrency. In the
-state-stored variant it lives behind an `IRepository`, and its allowed
+state-stored variant it lives behind an `AggregatePersistence` repository
+definition and `UnitOfWork`, and its allowed
 transitions sit well in a `DomainStateMachine`, which turns "a timeout arrived
 after the payment was already received" from a bug you have to remember to
 handle into a transition that simply does not exist.
@@ -183,11 +184,10 @@ async function reactToOrderPlaced(event: OrderPlaced): Promise<void> {
     // fingerprint is a tripwire (see below); any stable content hash works.
     { key: `checkout-saga:${event.eventId}`, fingerprint: stableHash(event.payload) },
     async (tx, enrollment) => {
-      const sagas = makeSagaRepository(tx);
       const deadlines = makeDeadlineStore(tx);
 
       const saga = CheckoutSaga.start(event.aggregateId as OrderId, event.payload.total);
-      await sagas.save(saga);
+      await insertSagaForDirectCommit(tx, saga);
 
       // The wait for the payment gets its wake-up call, in the same
       // transaction as the state that started waiting.
@@ -449,10 +449,11 @@ state machine, not a local variable, owns the process position.
 
 ## What the kit deliberately does not ship
 
-No `SagaStore`: the state-stored variant persists through `IRepository`, and
-the event-sourced variant through the same `EventStore` plus repository adapter
-as any other `EventSourcedAggregate`. A second persistence port for the same
-jobs would be a duplicate. No correlation machinery: finding a saga is a
+No `SagaStore`: the state-stored variant uses the same
+`AggregatePersistence` definition and `UnitOfWork` as another aggregate, and
+the event-sourced variant uses the same `EventStore` plus repository adapter as
+another `EventSourcedAggregate`. A second persistence port for the same jobs
+would be a duplicate. No correlation machinery: finding a saga is a
 lookup over ids you already have. No timeout scheduling beyond the
 `DeadlineStore`, and no step or workflow DSL: the moment step classification
 becomes kit configuration instead of state-machine transitions, the kit has

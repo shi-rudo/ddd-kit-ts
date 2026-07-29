@@ -1,378 +1,344 @@
-# Unit Of Work
+# Unit of Work
 
-`UnitOfWork` coordinates one application-level write operation. All
-repository writes inside one `run()` callback share one transaction. They
-commit together or roll back together.
+`UnitOfWork` is the write boundary for an application operation. It opens one
+transaction, gives the use case repositories bound to that transaction, and
+commits aggregate state and events together.
 
-It is built on top of `withCommit`. That means the same commit lifecycle
-applies:
+The important part is not the class name. It is the ownership rule: the use
+case makes domain decisions, then registers `add`, `update`, or `remove`. The
+repository adapter does not write early, and the aggregate does not carry a
+database baseline.
 
-1. Run the application work inside `TransactionScope.transactional(...)`.
-2. Harvest pending events into the outbox inside the transaction.
-3. Commit.
-4. Acknowledge persisted aggregates through an internal capability.
-5. Run the optional Application-Shell post-commit observer.
-6. Publish to the optional in-process bus last.
+## The commit sequence
 
-Event sourcing is not required. A normal state-stored `AggregateRoot` with
-`TEvent = never` uses the same enrollment and acknowledgement path; its outbox
-batch is simply empty. `EventSourcedAggregate` is an alternative persistence
-model, not a prerequisite for `UnitOfWork`.
+One successful `run()` follows this order:
 
-What `UnitOfWork` adds is repository wiring, enrollment, and an identity map.
-Use plain `withCommit` when the application service can return explicit,
-invocation-scoped commit tokens. Use `UnitOfWork` when you want repositories to
-enroll the aggregates they write and the session to retain those tokens
-automatically.
+1. Open `TransactionScope.transactional(...)`.
+2. Build the transaction-bound read adapters and a fresh identity map.
+3. Run the use case.
+4. Validate every tracked aggregate and freeze each registered write receipt.
+5. Call each repository definition's `flush` in registration order.
+6. Write the exact registered event batches to the outbox in the same
+   transaction.
+7. Commit the transaction.
+8. Acknowledge exactly those event batches on the aggregates.
+9. Run the optional post-commit observer and in-process event bus.
 
-## Wiring
+If any step through the outbox write fails, the transaction rolls back and no
+event is acknowledged. A retry starts a fresh unit of work, reloads the
+aggregate, and applies the command again.
 
-The shared dependency object contains the transaction scope, outbox, optional
-bus, and repository factories.
+## Wiring a repository
+
+A repository definition has four parts:
+
+- the aggregate class, used as the identity-map key;
+- a `PersistenceModel`, owned by the adapter;
+- `create`, which builds the transaction-bound read adapter;
+- `flush`, which performs the registered write.
+
+Physical removal is opt-in.
 
 ```ts
 import {
+  defineRepository,
+  type PersistenceModel,
+  type RepositoryTracking,
   UnitOfWork,
-  type UnitOfWorkSession,
 } from "@shirudo/ddd-kit";
+
+type OrderRow = {
+  readonly state: OrderState;
+  readonly version: number;
+};
+
+type OrderChange = OrderRow | undefined;
+
+const orderPersistence: PersistenceModel<
+  Order,
+  OrderRow,
+  OrderChange
+> = {
+  capture: (order) => ({
+    state: orderStateDto(order),
+    version: order.version,
+  }),
+  changes: (baseline, order, lifecycle) => {
+    const current = {
+      state: orderStateDto(order),
+      version: order.version,
+    };
+
+    return lifecycle === "loaded" && deepEqual(baseline, current)
+      ? undefined
+      : current;
+  },
+  isEmpty: (change) => change === undefined,
+};
+
+const orderRepositoryDefinition = defineRepository({
+  aggregate: Order,
+  persistence: orderPersistence,
+  physicalRemoval: true,
+  create: (tx: DrizzleTx, tracking: RepositoryTracking<Order>) =>
+    new DrizzleOrderReadAdapter(tx, tracking),
+  flush: async (tx: DrizzleTx, write) => {
+    switch (write.intent) {
+      case "add":
+        await insertOrder(tx, write);
+        return;
+      case "update":
+        await updateOrder(tx, write);
+        return;
+      case "remove":
+        await removeOrder(tx, write);
+        return;
+    }
+  },
+});
 
 const deps = {
   scope: drizzleScope,
   outbox: drizzleOutbox,
   bus: eventBus,
   repositories: {
-    orders: (tx: DrizzleTx, session: UnitOfWorkSession<AppEvent>) =>
-      new DrizzleOrderRepository(tx, session),
-    invoices: (tx: DrizzleTx, session: UnitOfWorkSession<AppEvent>) =>
-      new DrizzleInvoiceRepository(tx, session),
+    orders: orderRepositoryDefinition,
   },
 };
 ```
 
-Create a `UnitOfWork` for one operation and call `run`:
+The adapter returned by `create` owns reads only. `UnitOfWork` supplies the
+application-facing `add` and `update` methods. It adds `remove` only when the
+definition declares `physicalRemoval: true`. An adapter method with one of
+those names is never called through the facade.
+
+This is deliberate. A write method cannot accidentally issue SQL before the
+rest of the operation is ready, forget event harvesting, or use a different
+transaction.
+
+## Use cases: decide first, register last
+
+Creating and updating are intentionally different operations:
 
 ```ts
-const uow = new UnitOfWork(deps);
-
-const orderId = await uow.run(async ({ repositories }) => {
-  const order = await repositories.orders.getById(id);
-
-  order.confirm();
+const orderId = await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = Order.place(newOrderId(), customerId, items);
   recordPendingEvents(order, domainEvents);
-  await repositories.orders.save(order);
 
+  repositories.orders.add(order);
   return order.id;
 });
 ```
 
-Every repository factory is called once for that `run()` with the same
-transaction handle and the same session. The callback receives:
+```ts
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
 
-- `repositories`: ready-to-use repositories bound to the transaction.
-- `session`: enrollment and identity-map access.
-- `rawTransaction`: an escape hatch for writes no repository covers.
-- `signal`: optional cancellation signal.
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
 
-Prefer adding repository methods over using `rawTransaction`. A raw write
-bypasses enrollment and the identity map unless you do the missing work
-yourself.
+  repositories.orders.update(order);
+});
+```
 
-Read-only `run()` calls are fine when several reads need the same
-transactional snapshot. For one simple read, a direct query is lighter.
+`add` means, “this aggregate is new in this operation.” `update` means, “this
+exact instance was loaded in this operation.” The distinction is explicit at
+the call site; neither the adapter nor the aggregate guesses from `version`.
 
-## Repository Contract
+Call the registration method last. After a successful `add`, `update`, or
+`remove`, the aggregate is sealed for that run. A later version change, event
+change, or adapter-projection change throws `AggregateTrackingError` and rolls
+the transaction back. The guard runs once before flush and again afterward,
+because an asynchronous adapter can yield to other work while the transaction
+is still open.
 
-A Unit-of-Work repository receives both `tx` and `session`.
+## Read adapters and the identity map
+
+Every successful load calls `tracking.trackLoaded` before returning the
+aggregate:
 
 ```ts
-class DrizzleOrderRepository {
+class DrizzleOrderReadAdapter {
   constructor(
     private readonly tx: DrizzleTx,
-    private readonly session: UnitOfWorkSession<OrderEvent>,
+    private readonly tracking: RepositoryTracking<Order>,
   ) {}
-}
-```
 
-The read path uses the identity map:
+  async findById(id: OrderId): Promise<Order | undefined> {
+    const cached = this.tracking.identityMap.get(Order, id) as
+      | Order
+      | undefined;
+    if (cached) return cached;
 
-```ts
-async findById(id: OrderId): Promise<Order | null> {
-  const cached = this.session.identityMap.get(Order, id);
-  if (cached) return cached;
+    if (this.tracking.identityMap.isDeleted(Order, id)) {
+      return undefined;
+    }
 
-  if (this.session.identityMap.isDeleted(Order, id)) {
-    return null;
+    const row = await loadOrderRow(this.tx, id);
+    if (!row) return undefined;
+
+    const order = Order.reconstitute(id, row.state, row.version);
+    return this.tracking.trackLoaded(order);
   }
 
-  const row = await this.loadRow(id);
-  if (!row) return null;
-
-  const order = Order.reconstitute(row.id as OrderId, row.state, row.version);
-  this.session.identityMap.set(Order, id, order);
-  return order;
-}
-```
-
-The write path enrolls before the row write, and before no-op returns:
-
-```ts
-async save(order: Order): Promise<void> {
-  this.session.enrollSaved(order);
-
-  if (!order.hasChanges) {
-    return;
+  async getById(id: OrderId): Promise<Order> {
+    const order = await this.findById(id);
+    if (!order) {
+      throw new AggregateNotFoundError({
+        aggregateType: "Order",
+        aggregateId: id,
+      });
+    }
+    return order;
   }
-
-  await this.writeRows(order);
 }
 ```
 
-That ordering is intentional. If the aggregate was deleted earlier in the same
-unit of work, `enrollSaved` throws `AggregateDeletedError` before the save can
-quietly return.
+The map enforces one object per aggregate class and id for the duration of the
+operation. This is a correctness rule, not just a cache: event batches and
+write receipts are bound to object identity. The map is cleared when `run()`
+settles, and a removed identity remains tombstoned until then.
 
-Delete enrolls the aggregate as deleted:
+Application code cannot access the raw transaction or the tracking capability.
+The `UnitOfWorkContext` contains only `repositories` and the optional
+cooperative-cancellation `signal`. That keeps infrastructure details out of
+the use case and removes the old enrollment escape hatch.
+
+## What a flush receives
+
+`flush` receives an immutable `AggregatePersistenceWrite`:
 
 ```ts
-async delete(order: Order): Promise<void> {
-  await this.deleteRows(order);
-  this.session.enrollDeleted(order);
+interface AggregatePersistenceWrite<TAggregate, TChangeSet> {
+  readonly intent: "add" | "update" | "remove";
+  readonly aggregateId: TAggregate["id"];
+  readonly expectedVersion: Version | undefined;
+  readonly version: Version;
+  readonly changes: {
+    readonly value: TChangeSet;
+    readonly empty: boolean;
+  };
+  readonly events: ReadonlyArray<PendingDomainEvent>;
 }
 ```
 
-`enrollDeleted` removes the identity-map entry, records a tombstone, keeps the
-aggregate in the harvest set, and tells the post-commit lifecycle to discard
-its pending events without acknowledging a saved row.
+For `add`, `expectedVersion` is absent. For `update` and `remove`, it is the
+version captured when the adapter loaded the aggregate. `version`, `changes`,
+and `events` describe the exact moment the use case registered its intent.
 
-## Identity Map
+Do not read mutable state from the aggregate during flush. The aggregate is
+intentionally absent from the receipt. Use `write.changes` for state storage
+and `write.events` for an event stream. Use `write.expectedVersion` in the
+optimistic-concurrency predicate.
 
-`session.identityMap` gives one aggregate type and id one in-memory instance
-inside a `run()`.
+An empty state change does not imply an empty commit. An event-only decision
+still needs its outbox or event-stream write. Conversely, a state-only change
+may have an empty event batch.
 
-Why it matters: event harvest and post-commit acknowledgement dedupe by
-JavaScript object identity. If a repository hydrates the same aggregate twice, the unit of work
-can see two objects and harvest both. The identity map prevents that.
+## Atomicity and external effects
 
-Important behavior:
+Only persistence work belongs in `flush`. The aggregate row or stream append,
+physical removal, and outbox write share the transaction.
 
-- The key is the aggregate class plus id, not a string name.
-- `get` returns the current instance when it exists.
-- `set` accepts the same instance again but rejects a different instance for
-  the same type and id.
-- `isDeleted` lets the read path treat "deleted in this run" as not found.
-- `delete` tombstones the aggregate, so later re-registration throws
-  `AggregateDeletedError`.
-- The map is cleared when `run()` closes. Do not keep aggregate instances
-  across operations.
+Do not send email, capture a payment, upload a file, or call a webhook inside
+`run()`. A remote call cannot participate in the database transaction and may
+succeed even when the database rolls back.
 
-## What Run Guarantees
-
-Inside one `run()`:
-
-- All repository writes share one transaction.
-- Repositories enroll saved and deleted aggregates.
-- Before commit, newly recorded pending events on loaded aggregates must be
-  enrolled or `UnenrolledChangesError` is thrown.
-- Enrolled events are written to the outbox inside the same transaction.
-- After commit, saved aggregates are acknowledged through an internal
-  capability.
-- Deleted aggregates have pending events discarded without saved-row
-  acknowledgement.
-- Optional bus publishing happens after commit and is best-effort.
-
-The callback result is returned directly:
+Record the decision as a domain event and let the outbox trigger the external
+effect after commit:
 
 ```ts
-const id = await uow.run(async ({ repositories }) => {
-  const order = await repositories.orders.getById(orderId);
-  order.confirm();
-  recordPendingEvents(order, domainEvents);
-  await repositories.orders.save(order);
-  return order.id;
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const booking = await repositories.bookings.getById(bookingId);
+
+  booking.requestPayment(paymentId);
+  recordPendingEvents(booking, domainEvents);
+  repositories.bookings.update(booking);
 });
 ```
 
-`run()` does not return a `Result`. If you use it inside a `CommandHandler`,
-wrap success and failure at the command boundary.
+Here an effect means observable work outside the domain decision itself: a
+network request, database write, message delivery, timer, or file operation.
+The aggregate decides what should happen. The application shell executes the
+effect with timeouts, cancellation, retries, and observability.
 
-## Rules For Use Cases
-
-Keep these rules strict:
-
-- Use one `UnitOfWork` instance for one logical operation at a time.
-- Do not call `run()` inside another `run()` on the same instance.
-- Do not open separate transactions inside the callback.
-- Do not publish events inside the callback.
-- Do not send emails, call payment providers, upload files, or call webhooks
-  inside the transaction.
-- Mutate first, save last.
-- Do not mutate an aggregate after `save()` in the same callback.
-- If a repository write rejects, let the callback fail. Do not catch the error
-  and continue.
-- After rollback, discard loaded aggregate instances and retry in a fresh
-  `run()`.
-
-A never-persisted aggregate whose first save rolled back is the narrow
-exception to the last rule: there is no row to reload, and
-`persistedVersion` is still `undefined`, so retrying the first insert with the
-same instance can be valid.
-
-## No Side Effects Inside The Transaction
-
-This is wrong:
-
-```ts
-await uow.run(async ({ repositories }) => {
-  const booking = await repositories.bookings.getById(id);
-
-  booking.confirm();
-  await stripe.capturePayment(paymentId);
-  await repositories.bookings.save(booking);
-});
-```
-
-If Stripe succeeds and the database rolls back, the system is inconsistent. If
-Stripe is slow, the transaction holds locks while waiting for a network call.
-
-Record intent and let the outbox drive the external call:
-
-```ts
-await uow.run(async ({ repositories }) => {
-  const booking = await repositories.bookings.getById(id);
-
-  booking.confirm();
-  await repositories.bookings.save(booking);
-
-  return booking.id;
-});
-```
-
-`booking.confirm()` records a domain event such as `BookingConfirmed` or
-`PaymentCaptureRequested`. A dispatcher handles the external payment after the
-commit.
-
-## Errors
-
-Callback errors pass through unchanged in the normal case. A
-`ConcurrencyConflictError` thrown by a repository is still catchable as
-`ConcurrencyConflictError`.
-
-The unit of work wraps only failures the callback cannot see:
-
-| Error | Meaning |
-| --- | --- |
-| `CommitError` | callback completed, but outbox write or commit failed |
-| `RollbackError` | callback threw, and rollback failed with a different error |
-| `NestedUnitOfWorkError` | same instance entered `run()` while already running |
-| `TransactionClosedError` | context or session used after `run()` settled |
-| `AggregateDeletedError` | save or re-register after delete in the same run |
-| `EventHarvestError` | harvested event is missing required aggregate routing data or has an invalid pre-set stamp |
-| `UnenrolledChangesError` | loaded aggregate recorded new events but no repository enrolled it |
-
-`CommitError` and `RollbackError` are infrastructure errors. The others are
-wiring errors: fix the use case or repository implementation instead of
-retrying blindly.
-
-Retrying an optimistic concurrency conflict means a fresh operation:
-
-```txt
-reload aggregate
-re-apply command
-save
-commit
-```
-
-Do not catch `ConcurrencyConflictError` inside the same `run()` and continue.
-The failed aggregate was already enrolled, and the identity map still holds
-the stale instance.
-
-Use `RetryingTransactionScope` when you want automatic retry with backoff.
-
-## Closed Context Guard
-
-After `run()` settles, these throw `TransactionClosedError`:
-
-- `context.repositories`
-- `context.rawTransaction`
-- `session.identityMap`
-- `session.enrollSaved(...)`
-- `session.enrollDeleted(...)`
-
-This catches leaked contexts and un-awaited work. It cannot invalidate a raw
-repository or raw transaction handle you copied into an outer variable before
-close. Do not let those references escape the callback.
-
-## Cancellation And Deadlines
+## Cancellation
 
 Pass an `AbortSignal` as the second argument:
 
 ```ts
-const orderId = await uow.run(
+await new UnitOfWork(deps).run(
   async ({ repositories, signal }) => {
     const order = await repositories.orders.getById(orderId);
-
     order.confirm();
     recordPendingEvents(order, domainEvents);
 
-    if (signal?.aborted) {
-      throw signal.reason;
-    }
-
-    await repositories.orders.save(order);
-    return order.id;
+    if (signal?.aborted) throw signal.reason;
+    repositories.orders.update(order);
   },
   { signal: AbortSignal.timeout(5_000) },
 );
 ```
 
-The behavior is cooperative:
+An already-aborted signal prevents the transaction from opening. During the
+operation, cancellation is cooperative: the callback can poll the signal and
+the transaction scope receives it. A database query stops early only if the
+driver or scope honors the signal, so configure database statement and
+transaction timeouts as hard ceilings too.
 
-- If the signal is already aborted, `run()` rejects before opening a
-  transaction.
-- The signal is exposed on the context so your callback can poll it.
-- The signal is forwarded to `TransactionScope.transactional`.
+## Errors and retries
 
-The kit does not race the callback promise against the signal. Aborting a
-running query requires support from your transaction scope or driver. Pair
-this with database statement or transaction timeouts for hard ceilings.
+The most useful failures are intentionally specific:
 
-`withCommit` supports the same signal option.
+| Error | Meaning |
+| --- | --- |
+| `AggregateTrackingError` | invalid add/update/remove lifecycle or mutation after registration |
+| `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
+| `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
+| `DuplicateAggregateError` | an `add` collided with an existing identity |
+| `CommitError` | work completed, but the outbox write or transaction commit failed |
+| `RollbackError` | work failed and the scope reported a different rollback failure |
+| `NestedUnitOfWorkError` | one instance was entered while already running |
+| `TransactionClosedError` | a leaked context or tracking capability was used after close |
 
-## Contract Tests
+Do not catch a concurrency conflict and continue inside the same `run()`. The
+identity map still holds the stale instance. Retry the whole application
+operation with a new `UnitOfWork`, reload, and apply the command again.
 
-The unit of work relies on repository behavior that TypeScript cannot prove:
-identity map checks, enrollment, OCC predicates, rollback purity, duplicate
-insert mapping, delete finality, and outbox event harvest.
+Likewise, discard aggregate instances after rollback. Even a new instance is
+safer to recreate: a failed adapter may have partially consumed resources or a
+background task may still hold a reference.
 
-Run the repository contract suite against each real adapter:
+## Contract tests
+
+TypeScript can describe the protocol, but it cannot prove your SQL predicate
+or transaction wiring. Run the reusable suite against every real adapter:
 
 ```ts
 import { createRepositoryContractTests } from "@shirudo/ddd-kit/testing";
 
 describe("DrizzleOrderRepository", () => {
-  for (const test of createRepositoryContractTests(harness)) {
-    (test.skipped ? it.skip : it)(test.name, test.run);
+  for (const contract of createRepositoryContractTests(harness)) {
+    (contract.skipped ? it.skip : it)(contract.name, contract.run);
   }
 });
 ```
 
-For SQL and ORM adapters, run it against a real database, not only an in-memory
-fake. The point is to prove your real `WHERE version = ...` predicate and
-transaction behavior.
+The state-stored suite checks add/update routing, duplicate add, stale update
+and removal, identity mapping, no-op behavior, nested state, exact outbox
+harvest, and rollback. The event-sourced suite checks exact append batches,
+replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 
-Optional harness capabilities produce skipped tests when absent. Keep those
-skips visible; they are documented gaps, not green coverage.
+Optional capabilities produce visible skipped tests. A skip is an unproven
+guarantee, not a pass. Run SQL or ORM adapters against a real database; an
+in-memory fake cannot prove the actual `WHERE version = ...` clause.
 
-## What It Does Not Do
+## Deliberate limits
 
-`UnitOfWork` is explicit-save by design:
+`UnitOfWork` does not provide nested transaction joining, savepoints,
+distributed transactions, implicit dirty-object scanning, or an attach API for
+detached aggregates. One `run()` is one consistency transaction. Repository
+writes are explicit, and the compiler makes a forgotten migration site loud.
 
-- no auto-flush;
-- no savepoints;
-- no nested transaction joining;
-- no distributed transaction;
-- no automatic side-effect dispatch beyond the outbox and optional bus;
-- no repository magic for queries that should be projections.
-
-With `hasChanges`, a redundant save is cheap. A forgotten save should be found
-by tests, not hidden behind implicit flushing.
+For the v2.2 and release-candidate cutover, see
+[Migrating to v3](/guide/migrating-to-v3).

@@ -1,596 +1,496 @@
 # Repository
 
-A repository is the persistence boundary for an aggregate. It should feel like
-a collection of aggregate roots: load by id, save the aggregate, delete the
-aggregate.
+A repository is a persistence-oriented collection of aggregate roots. Its
+public contract says whether an aggregate is new, loaded, or physically
+removed. It does not publish events, expose ORM filters, or decide a business
+lifecycle transition.
 
-It is not a query service, not an event publisher, and not the owner of the
-aggregate lifecycle after commit. Those boundaries matter:
+In v3 repository writes run through `UnitOfWork`. The use case calls `add`,
+`update`, or `remove`; the adapter receives one immutable write receipt during
+the commit phase.
 
-- The repository writes rows and maps storage errors.
-- `withCommit` or `UnitOfWork` harvests events and acknowledges the aggregate
-  through an internal capability after the transaction commits.
-- Read-side queries that need lists, search, or denormalized data belong on
-  projections, not on write-side repositories.
+## Public contracts
 
-## Interfaces
-
-Every aggregate repository implements id-based access:
+Most aggregate repositories extend `AggregatePersistence`:
 
 ```ts
-interface IRepository<
-  TAgg extends IAggregateRoot<TId>,
-  TId extends Id<string>,
-> {
-  findById(id: TId): Promise<TAgg | null>;
-  getById(id: TId): Promise<TAgg>;
-  exists(id: TId): Promise<boolean>;
-  save(aggregate: TAgg): Promise<void>;
-  delete(aggregate: TAgg): Promise<void>;
+import type {
+  AggregatePersistence,
+  Id,
+  Repository,
+} from "@shirudo/ddd-kit";
+
+interface OrderPersistence
+  extends AggregatePersistence<Order, OrderId> {
+  findOpenByNumber(number: OrderNumber): Promise<Order | undefined>;
 }
 ```
 
-Use `findById` when absence is a valid outcome. Use `getById` when absence is
-a broken precondition for the use case:
+`AggregatePersistence` contains:
 
 ```ts
-async getById(id: OrderId): Promise<Order> {
-  const order = await this.findById(id);
-  if (!order) {
-    throw new AggregateNotFoundError({
-      aggregateType: "Order",
-      id,
-    });
-  }
-  return order;
+interface AggregatePersistence<TAggregate, TId> {
+  findById(id: TId): Promise<TAggregate | undefined>;
+  getById(id: TId): Promise<TAggregate>;
+  add(aggregate: TAggregate): void;
+  update(aggregate: TAggregate): void;
 }
 ```
 
-`exists` can be cheaper than loading the aggregate when the storage backend has
-an `exists` query.
-
-The return type is the aggregate itself, never a row shape, an ORM
-entity, or a DTO: the port belongs to the domain side, so its signature
-speaks domain types, and the mapping from storage shape to aggregate is
-the adapter's job. See
-[Ports speak the domain's language](/guide/design-decisions#ports-speak-the-domains-language)
-for how this rule plays out across the other port kinds.
-
-`UnitOfWork` repositories use the same shape without `exists` and receive a
-`UnitOfWorkSession` for enrollment and identity-map access.
-
-## Loading Means Reconstitution
-
-Loading an aggregate is not the same as creating one. A factory such as
-`Order.create(...)` records creation events. A repository must reconstitute
-the already-existing aggregate without producing new domain events.
-
-For state-stored aggregates, call a reconstitution factory:
+Use `Repository` when this persistence boundary genuinely supports physical
+removal:
 
 ```ts
-async findById(id: OrderId): Promise<Order | null> {
-  const cached = this.identityMap.get(Order, id);
-  if (cached) return cached;
-
-  const row = await this.tx.query.orders.findFirst({
-    where: eq(orders.id, id),
-  });
-  if (!row) return null;
-
-  const order = Order.reconstitute(
-    row.id as OrderId,
-    row.state as OrderState,
-    row.version as Version,
-  );
-
-  this.identityMap.set(Order, id, order);
-  return order;
-}
+interface TemporaryOrderRepository
+  extends Repository<Order, OrderId> {}
 ```
 
-For event-sourced aggregates, replay history into a fresh instance:
+`Repository` adds `remove(aggregate)`. It is the full collection contract.
+`AggregatePersistence` is the smaller contract for retained records and event
+streams, where physical removal is not part of normal operation.
+
+Absence is an expected outcome of `findById`, so the contract uses
+`undefined`. `getById` throws `AggregateNotFoundError`. A repository returns a
+domain aggregate, never an ORM entity or database row.
+
+Concrete ports belong to the consuming bounded context. Add only lookups that
+a command-side use case needs and name them in the ubiquitous language. A UI
+list, report, search result, or dashboard belongs on a projection instead.
+
+## Explicit lifecycle intent
+
+Creation and update are not synonyms:
 
 ```ts
-async findById(id: OrderId): Promise<Order | null> {
-  const cached = this.identityMap.get(Order, id);
-  if (cached) return cached;
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = Order.place(newOrderId(), customerId, items);
+  recordPendingEvents(order, domainEvents);
 
-  const address = { aggregateType: "Order", aggregateId: id };
-  const order = Order.reconstitute(id);
-  let fromVersion = 0;
-  let targetVersion: number | undefined;
-
-  for (;;) {
-    const page = await this.eventStore.readStream(address, {
-      fromVersion,
-      toVersion: targetVersion,
-      limit: 256,
-    });
-    if (!page.exists) return null;
-    targetVersion ??= page.lastVersion;
-    if (fromVersion === targetVersion) break;
-    if (page.events.length === 0) {
-      throw new NonProgressingEventStreamPageError({
-        ...address,
-        fromVersion,
-        targetVersion,
-      });
-    }
-    const result = order.loadFromHistory(page.events);
-    if (result.isErr()) throw result.error;
-    fromVersion += page.events.length;
-  }
-
-  this.identityMap.set(Order, id, order);
-  return order;
-}
+  repositories.orders.add(order);
+});
 ```
 
-The mandatory `limit` keeps each store allocation bounded. Pin the first
-page's `lastVersion` as `toVersion`, then advance `fromVersion` by the number of
-events actually returned. That gives the repository a stable append-only
-prefix even if a concurrent writer appends while replay is running. Never put
-the aggregate in the identity map until every page has replayed successfully.
+```ts
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
+  order.confirm();
+  recordPendingEvents(order, domainEvents);
 
-A correctly reconstituted aggregate has no pending events from the load path.
-If loading an aggregate records an event, the repository is using the wrong
-factory.
+  repositories.orders.update(order);
+});
+```
 
-## Identity Map
+`add` is valid only for an aggregate created in this unit of work. `update` is
+valid only for the same instance that the repository loaded and tracked. This
+removes the old guess based on `version === 0` and makes duplicate creation a
+separate failure from optimistic concurrency.
 
-Within one unit of work, loading the same aggregate twice must return the same
-JavaScript object.
+The application-facing methods only register intent. Durable I/O happens
+after the callback resolves, inside the active transaction. Make every domain
+decision first and call `add`, `update`, or `remove` last.
 
-That is not just an optimization. Commit enrollment is idempotent by object
-identity. If a repository returns two different instances for the same
-aggregate id, it can mint two different commit tokens and both instances can
-be harvested and marked independently.
+## Loading is reconstitution
 
-The map is per operation:
+A creation factory represents a new business decision. A repository must not
+call it while loading old facts.
+
+For a state-stored aggregate, provide an explicit reconstitution factory:
 
 ```ts
-class TxScopedOrderRepository implements IRepository<Order, OrderId> {
-  constructor(
-    private readonly tx: DrizzleTx,
-    private readonly identityMap: IdentityMap,
-  ) {}
+class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
 
-  async findById(id: OrderId): Promise<Order | null> {
-    const cached = this.identityMap.get(Order, id);
-    if (cached) return cached;
-
-    if (this.identityMap.isDeleted(Order, id)) return null;
-
-    const row = await loadOrderRow(this.tx, id);
-    if (!row) return null;
-
-    const order = Order.reconstitute(row.id, row.state, row.version);
-    this.identityMap.set(Order, id, order);
+  static reconstitute(
+    id: OrderId,
+    state: OrderState,
+    version: Version,
+  ): Order {
+    const order = new Order(id, state);
+    order.markRestored(version);
     return order;
   }
 }
 ```
 
-When you use `UnitOfWork`, use `session.identityMap`. It is created fresh for
-each `run()` and cleared when the run closes. Do not cache aggregate instances
-across operations; that bypasses optimistic concurrency.
+`markRestored` restores the current domain version. It does not create a
+persistence receipt on the aggregate and does not record events.
 
-## Save Is Pure Persistence
-
-`save(aggregate)` writes the aggregate and maps storage conflicts. It does not
-publish events or mutate aggregate lifecycle state.
-
-With plain `withCommit`, the callback receives an invocation-scoped enrollment
-capability. After the repository write succeeds, enroll the saved aggregate
-and return the opaque token. A naked aggregate is not commit evidence:
+The adapter tracks the result before returning it:
 
 ```ts
-await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(orderId);
+async findById(id: OrderId): Promise<Order | undefined> {
+  const cached = this.tracking.identityMap.get(Order, id) as
+    | Order
+    | undefined;
+  if (cached) return cached;
+  if (this.tracking.identityMap.isDeleted(Order, id)) return undefined;
 
-  order.confirm();
-  recordPendingEvents(order, domainEvents);
-  await orders.save(order);
+  const row = await loadOrderRow(this.tx, id);
+  if (!row) return undefined;
 
-  const commit = enrollment.enrollSaved(order);
-  return { result: order.id, commits: [commit] };
-});
-```
-
-The token proves that this invocation's enrollment capability issued it. It
-cannot prove what an arbitrary storage adapter did internally, so only the
-repository should attest its participating write. This is a crash-loud
-contract boundary against accidental smuggling, not a security boundary
-against application code deliberately claiming a write it never made. Return
-every token the callback obtains: omitting an enrolled write rejects the
-transaction. Throw instead when that write must roll back.
-
-With `UnitOfWork`, the repository enrolls the aggregate before the row write:
-
-```ts
-async save(order: Order): Promise<void> {
-  this.session.enrollSaved(order);
-
-  if (!order.hasChanges) return;
-  await this.writeOrder(order);
+  return this.tracking.trackLoaded(
+    Order.reconstitute(id, decodeOrderState(row.state), row.version),
+  );
 }
 ```
 
-Enroll before writing and before no-op returns. If the aggregate was deleted
-earlier in the same unit of work, `enrollSaved` throws
-`AggregateDeletedError` before the save can quietly return.
-
-## Insert, Update, And Versions {#insert-vs-update-the-persistedversion-convention}
-
-Every aggregate exposes two version values:
-
-- `aggregate.version` is the in-memory version after domain mutations.
-- `aggregate.persistedVersion` is the version currently known to be in
-  storage.
-
-Route insert vs update on `persistedVersion`, not on `version`.
+For event sourcing, construct a bare aggregate and replay a stable stream
+prefix:
 
 ```ts
-async save(order: Order): Promise<void> {
-  if (!order.hasChanges) return;
+const order = Order.bare(id);
+let fromVersion = 0;
+let toVersion: number | undefined;
 
-  const memento = order.createSnapshot(this.clock());
+for (;;) {
+  const page = await eventStore.readStream(address, {
+    fromVersion,
+    toVersion,
+    limit: 256,
+  });
 
-  if (order.persistedVersion === undefined) {
-    try {
-      await this.tx.insert(orders).values({
-        id: order.id,
-        state: memento.state,
-        version: memento.version,
-      });
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new DuplicateAggregateError({
-          aggregateType: "Order",
-          aggregateId: order.id,
-          cause: error,
-        });
-      }
-      throw error;
-    }
-    return;
-  }
+  if (!page.exists) return undefined;
+  toVersion ??= page.lastVersion;
+  if (fromVersion === toVersion) break;
 
-  const expected = order.persistedVersion;
-  const result = await this.tx
-    .update(orders)
-    .set({
-      state: memento.state,
-      version: memento.version,
-    })
-    .where(and(eq(orders.id, order.id), eq(orders.version, expected)));
-
-  if (result.rowsAffected === 0) {
-    const current = await loadOrderVersion(this.tx, order.id);
-    throw new ConcurrencyConflictError({
-      aggregateType: "Order",
-      aggregateId: order.id,
-      expectedVersion: expected,
-      actualVersion: current ?? -1,
+  if (page.events.length === 0) {
+    throw new NonProgressingEventStreamPageError({
+      ...address,
+      fromVersion,
+      targetVersion: toVersion,
     });
   }
+
+  const replay = order.loadFromHistory(page.events);
+  if (replay.isErr()) throw replay.error;
+  fromVersion += page.events.length;
+}
+
+return tracking.trackLoaded(order);
+```
+
+Pin the first page's `lastVersion` and page toward that fixed head. This gives
+the load one stable append-only prefix even if another writer appends while it
+is running. Never identity-map a partly replayed aggregate.
+
+## Adapter-owned persistence models
+
+Different adapters persist different shapes. A relational adapter may split
+one aggregate over several tables; a document adapter may replace one JSON
+document; an event store writes no current-state row at all. The aggregate
+should not carry one supposedly universal dirty-key model.
+
+Each repository definition therefore owns a `PersistenceModel`:
+
+```ts
+interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
+  capture(aggregate: TAggregate): TBaseline;
+  changes(
+    baseline: TBaseline | undefined,
+    aggregate: TAggregate,
+    lifecycle: "loaded" | "new",
+  ): TChangeSet;
+  isEmpty(changes: TChangeSet): boolean;
 }
 ```
 
-A new aggregate can have `version > 0` before its first save because factories
-and domain methods can record events before persistence. That aggregate still
-needs an insert. `persistedVersion === undefined` is the reliable marker.
+When an adapter loads an aggregate, `UnitOfWork` stores the model's baseline
+behind an opaque `PersistenceBaseline` token. The use case and aggregate
+cannot inspect it. At write registration, the same adapter capability derives
+and seals the exact change set.
 
-For updates, the row gets `aggregate.version`, while the `WHERE` predicate
-checks `aggregate.persistedVersion`. If the predicate affects zero rows,
-another writer won. Throw `ConcurrencyConflictError`.
-
-Version is a mutation sequence, not "plus one per transaction". If an
-aggregate is loaded at version `7` and three version-bumping methods run, it
-can commit as version `10`. That is correct.
-
-After the transaction commits, `withCommit` or `UnitOfWork` uses a non-exported
-capability to sync `persistedVersion`, clear pending events, and re-baseline
-dirty tracking.
-
-::: info Persistence receipt, not domain state
-`persistedVersion`, `hasChanges`, and `changedKeys` are deliberately
-adapter-facing lifecycle information on the kit's tactical aggregate base
-classes. Business methods must not branch on them. Repositories may read them,
-but cannot acknowledge a save or clear events; that authority stays inside
-`withCommit` and `UnitOfWork`.
-
-Moving the receipt completely outside the aggregate would require
-`findById`/`save` to exchange an opaque, identity-bound load receipt or would
-make `UnitOfWork` mandatory. v3 keeps direct repositories compatible and
-documents this boundary instead of hiding the same ownership behind a helper.
-The alternatives and the future-major trigger are recorded in
-[Design Decisions](/guide/design-decisions#persistence-tracking-stays-on-the-tactical-aggregate-for-v3).
-:::
-
-## Event-Sourced Repositories
-
-For event-sourced aggregates, pending events are the write model. The
-repository appends them with the stream version the aggregate was loaded from:
+A full-row model can be small:
 
 ```ts
-async save(order: Order): Promise<void> {
-  if (order.pendingEvents.length === 0) return;
+type OrderRow = {
+  readonly state: OrderStateDto;
+  readonly version: number;
+};
 
-  this.session.enrollSaved(order);
+const orderPersistence: PersistenceModel<
+  Order,
+  OrderRow,
+  OrderRow | undefined
+> = {
+  capture: (order) => ({
+    state: orderStateDto(order),
+    version: order.version,
+  }),
+  changes: (baseline, order, lifecycle) => {
+    const current = {
+      state: orderStateDto(order),
+      version: order.version,
+    };
 
-  await this.eventStore.append(
-    { aggregateType: "Order", aggregateId: order.id },
-    order.pendingEvents,
-    { expectedVersion: order.persistedVersion ?? 0 },
-  );
-}
+    return lifecycle === "loaded" && deepEqual(baseline, current)
+      ? undefined
+      : current;
+  },
+  isEmpty: (change) => change === undefined,
+};
 ```
 
-The event store saves the bare domain events. `withCommit` composes the same
-pending events into committed outbox envelopes. Do not clear
-`pendingEvents` in the repository.
-
-Save once per aggregate per unit of work, after all mutations. A second save
-of the same event-sourced instance before commit will try to append the same
-pending events again with a stale expected version.
-
-## Partial Writes {#partial-writes-for-multi-table-aggregates-changedkeys--haschanges}
-
-Some state-stored aggregates span several tables: a root row plus child
-collections. You still save the aggregate as one unit, but you do not have to
-rewrite every child table every time.
-
-`AggregateRoot` exposes two signals:
-
-- `changedKeys`: top-level state keys whose value or presence changed since
-  load or last persisted.
-- `hasChanges`: whether anything commit-relevant exists.
-
-Use them differently:
-
-- `hasChanges === false` means `save()` can return immediately.
-- `changedKeys` tells the repository which table-sized parts to write.
+For a multi-table aggregate, choose a table-aware change set instead:
 
 ```ts
-async save(restaurant: Restaurant): Promise<void> {
-  if (!restaurant.hasChanges) return;
+type RestaurantChanges = {
+  readonly root?: RestaurantRootRow;
+  readonly openingHours?: ReadonlyArray<OpeningHoursRow>;
+  readonly menu?: ReadonlyArray<MenuRowChange>;
+};
 
-  const { id, state, changedKeys } = restaurant;
-  const expected = restaurant.persistedVersion;
+const restaurantPersistence: PersistenceModel<
+  Restaurant,
+  RestaurantProjection,
+  RestaurantChanges
+> = {
+  capture: projectRestaurant,
+  changes: (baseline, restaurant, lifecycle) =>
+    diffRestaurant(baseline, projectRestaurant(restaurant), lifecycle),
+  isEmpty: (changes) =>
+    changes.root === undefined &&
+    changes.openingHours === undefined &&
+    changes.menu === undefined,
+};
+```
 
-  if (expected === undefined) {
-    await this.insertRootRow(restaurant);
-  } else {
-    const result = await this.tx
-      .update(restaurants)
-      .set({
-        ...rootColumns(state),
-        version: restaurant.version,
-      })
-      .where(and(eq(restaurants.id, id), eq(restaurants.version, expected)));
+The adapter chooses full replacement, partial columns, collection-aware row
+diffs, or a version-only write. `changes.empty` is only about stored state. An
+event-only commit may still have a non-empty `events` batch and must not be
+skipped.
+
+Projection functions should read meaningful aggregate queries and return
+detached persistence DTOs. Do not add setters, baseline fields, or dirty flags
+to the aggregate for the adapter's convenience.
+
+## Defining the adapter boundary
+
+`defineRepository` joins the read adapter, persistence model, and commit-time
+flush:
+
+```ts
+const orders = defineRepository({
+  aggregate: Order,
+  persistence: orderPersistence,
+  physicalRemoval: true,
+  create: (tx: DrizzleTx, tracking: RepositoryTracking<Order>) =>
+    new DrizzleOrderReadAdapter(tx, tracking),
+  flush: async (tx: DrizzleTx, write) => {
+    if (write.intent === "add") {
+      const row = requireOrderRow(write.changes);
+      try {
+        await tx.insert(orderTable).values({
+          id: write.aggregateId,
+          state: row.state,
+          version: write.version,
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new DuplicateAggregateError({
+            aggregateType: "Order",
+            aggregateId: write.aggregateId,
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      return;
+    }
+
+    if (write.intent === "update") {
+      const row = write.changes.value;
+      if (row === undefined) return;
+
+      const result = await tx
+        .update(orderTable)
+        .set({ state: row.state, version: write.version })
+        .where(and(
+          eq(orderTable.id, write.aggregateId),
+          eq(orderTable.version, write.expectedVersion),
+        ));
+
+      if (result.rowsAffected === 0) {
+        throw new ConcurrencyConflictError({
+          aggregateType: "Order",
+          aggregateId: write.aggregateId,
+          expectedVersion: write.expectedVersion ?? -1,
+          actualVersion: await loadOrderVersion(tx, write.aggregateId),
+        });
+      }
+      return;
+    }
+
+    const result = await tx
+      .delete(orderTable)
+      .where(and(
+        eq(orderTable.id, write.aggregateId),
+        eq(orderTable.version, write.expectedVersion),
+      ));
 
     if (result.rowsAffected === 0) {
-      throw new ConcurrencyConflictError({
-        aggregateType: "Restaurant",
-        aggregateId: id,
-        expectedVersion: expected,
-        actualVersion: -1,
-      });
+      throw staleRemoval(write);
     }
-  }
-
-  if (changedKeys.has("openingHours")) {
-    await this.replaceOpeningHours(id, state.openingHours);
-  }
-
-  if (changedKeys.has("menuSections")) {
-    await this.replaceMenuSections(id, state.menuSections);
-  }
-}
+  },
+});
 ```
 
-Keep these rules:
+The receipt's version relationship is the OCC contract:
 
-- The root row write with the OCC predicate runs on every save and runs first.
-- The whole save runs on the transaction handle.
-- `changedKeys` is table-granular, not row-granular. Diff rows inside the
-  branch if you need that.
-- `setStateWithoutVersionBump` can mark keys dirty without advancing OCC. Use
-  it only for data that a concurrent writer may safely overwrite.
-- Do not mutate an aggregate after `save()` inside the same `withCommit`
-  callback. Post-commit re-baselining would mark the later mutation clean.
+- `add`: no `expectedVersion`; insert a new identity and map a uniqueness
+  violation to `DuplicateAggregateError`;
+- `update`: write `version`, predicate on `expectedVersion`;
+- `remove`: delete the identity, predicate on `expectedVersion` when
+  delete-vs-update races matter.
 
-Dirty tracking is shallow by design. It assumes plain state records replaced
-through `setState` or `commit`. Mutating nested objects in place can bypass the
-diff. A class instance as `TState` is the wrong shape for this feature.
+Zero affected rows means the optimistic-concurrency assumption was false.
+Throw `ConcurrencyConflictError`; do not silently turn a stale update into an
+insert.
 
-`EventSourcedAggregate` has no `changedKeys`; its pending events are the
-change record.
+## Event-sourced flush
 
-## Delete Is A Domain Decision
-
-`delete(aggregate)` removes the row. It does not decide whether a user-facing
-"delete" should be modeled as row removal.
-
-Most user-facing deletes are domain transitions: cancel, archive, close,
-deactivate, terminate, expire. If the operation has a domain name, model it as
-a method and save the aggregate.
+For an event-sourced aggregate, the registered event batch is the write model:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
+const orderStreamPersistence: PersistenceModel<
+  Order,
+  number,
+  number | undefined
+> = {
+  capture: (order) => order.version,
+  changes: (baseline, order) =>
+    baseline === order.version ? undefined : order.version,
+  isEmpty: (version) => version === undefined,
+};
 
-  archive(
-    reason: string,
-    archivedAt: Date,
-  ): void {
-    if (this.state.status === "archived") {
-      throw new OrderAlreadyArchivedError(this.id);
-    }
-
-    this.commit(
-      { ...this.state, status: "archived", archivedAt },
-      this.createEvent("OrderArchived", { reason, archivedAt }),
+const eventSourcedOrders = defineRepository({
+  aggregate: Order,
+  persistence: orderStreamPersistence,
+  create: (tx: EventStoreTx, tracking: RepositoryTracking<Order>) =>
+    new EventSourcedOrderReadAdapter(tx, tracking),
+  flush: async (tx: EventStoreTx, write) => {
+    await tx.eventStore.append(
+      { aggregateType: "Order", aggregateId: write.aggregateId },
+      write.events,
+      { expectedVersion: write.expectedVersion ?? 0 },
     );
-  }
-}
-
-await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(orderId);
-
-  const archivedAt = clock();
-  order.archive(reason, archivedAt);
-  recordPendingEvents(order, () =>
-    domainEvents.createStamp({ occurredAt: archivedAt }),
-  );
-  await orders.save(order);
-
-  return {
-    result: undefined,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  },
 });
 ```
 
-Use hard delete only when the row really must vanish.
+Use `write.events`, not `aggregate.pendingEvents`. The receipt is the exact
+immutable batch registered by the use case. A retry rebuilds a fresh unit of
+work and records a fresh batch; one transaction attempt never re-reads a
+moving pending-event list.
 
-### Hard Delete With An Event
+The event-store append and outbox write must share the same transaction. A
+failed append or outbox write rolls both back, and the aggregate acknowledges
+nothing.
 
-If the row must disappear and subscribers must react, record the event first,
-then delete the aggregate in the same transaction.
+## Snapshots stay outside the aggregate
+
+A snapshot is derived persistence data, not domain behavior. Define its shape
+and migration next to the adapter:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
-
-  recordDeletion(
-    reason: string,
-    deletedAt: Date,
-  ): void {
-    this.commit(
-      { ...this.state },
-      this.createEvent("OrderDeleted", { reason, deletedAt }),
-    );
-  }
-}
-
-await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(orderId);
-
-  const deletedAt = clock();
-  order.recordDeletion(reason, deletedAt);
-  recordPendingEvents(order, () =>
-    domainEvents.createStamp({ occurredAt: deletedAt }),
-  );
-  await orders.delete(order);
-
-  return {
-    result: undefined,
-    commits: [enrollment.enrollDeleted(order)],
-  };
+const orderSnapshots = defineSnapshotModel({
+  aggregateType: "Order",
+  schemaVersion: 2,
+  capture: (order: Order): OrderSnapshotV2 => ({
+    status: order.status,
+    items: order.items.map(toItemSnapshot),
+  }),
+  migrate: (stored, storedVersion) =>
+    migrateOrderSnapshot(stored, storedVersion),
+  reconstitute: (id, state, version) =>
+    Order.reconstitute(id, fromOrderSnapshot(state), version),
 });
 ```
 
-The deleted commit token tells `withCommit` to harvest the event and discard it
-after commit without acknowledging a saved row, because that row no longer
-exists. In a `UnitOfWork`
-repository, `delete` should call `session.enrollDeleted(order)`, which also
-tombstones the identity map entry for the rest of the run.
-
-Use the same version predicate for deletes when delete-vs-update races matter:
-
-```sql
-delete from orders
-where id = $1 and version = $2
-```
-
-Zero affected rows should map to `ConcurrencyConflictError`.
-
-### Hard Delete Without An Event
-
-Use this only for data whose disappearance has no domain meaning: expired
-session rows, abandoned-cart cleanup, or infrastructure garbage collection.
+The application decides when to capture and store it:
 
 ```ts
-await scope.transactional(async (tx) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.findById(orderId);
+const snapshot = captureAggregateSnapshot(
+  orderSnapshots,
+  order,
+  clock(),
+);
 
-  if (order) {
-    await orders.delete(order);
-  }
+await snapshotStore.save(address, snapshot);
+```
+
+Loading creates a fresh aggregate. For event sourcing, replay the tail on that
+fresh instance:
+
+```ts
+const order = reconstituteAggregateFromSnapshot(
+  orderSnapshots,
+  orderId,
+  snapshot,
+);
+
+const tail = await eventStore.readStream(address, {
+  fromVersion: snapshot.version,
+  limit: 256,
+});
+
+const replay = order.loadFromHistory(tail.events);
+if (replay.isErr()) throw replay.error;
+```
+
+`captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
+detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,
+and class instances that would not round-trip safely. Map child entities and
+value objects to persistence DTOs explicitly.
+
+A missing stored schema version means schema `1`. A mismatch without a
+`migrate` function throws `SnapshotSchemaMismatchError`; the usual event-store
+fallback is to discard the derived snapshot and refold the stream from zero.
+
+## Domain deletion versus physical removal
+
+Most user-facing “delete” actions are domain transitions: cancel, archive,
+close, revoke, expire. Put that language on the aggregate and register an
+update:
+
+```ts
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
+
+  order.archive(reason, clock());
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
 });
 ```
 
-For bulk cleanup, do not load aggregates one by one. Infrastructure-owned
-cleanup belongs in an adapter-side maintenance component. If an application
-use case invokes it, define a separate consumer-owned port such as
-`ExpiredOrderPurger.purgeExpired(before)` and implement one predicated
-statement. The use case should not depend on the concrete repository class.
-
-In pure event-sourced systems, hard delete is rarely the aggregate lifecycle.
-End-of-life is usually an event in the stream; the identity remains in the
-log.
-
-## Consumer-Owned Query Ports
-
-`IRepository` deliberately stops at aggregate identity and lifecycle. When a
-command-side use case needs another lookup, define a port in the consumer's
-domain or application layer with a method named after that intent. Do not leak
-SQL, Prisma `WhereInput`, Mongo filters, or another adapter's query language
-through the port.
-
-A single-result method needs a real uniqueness law:
+Use `remove` only when the row, document, or stream really must disappear:
 
 ```ts
-interface OrderRepository extends IRepository<Order, OrderId> {
-  /** Customer email is unique among active orders. */
-  findActiveByCustomerEmail(email: EmailAddress): Promise<Order | null>;
-}
+await new UnitOfWork(deps).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
+
+  order.recordErasure(erasedAt);
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.remove(order);
+});
 ```
 
-State that uniqueness as a domain rule and enforce it with an authoritative
-consistency mechanism, typically a database uniqueness constraint. If several
-rows may match, a `findOne` method without an explicit stable order is not a
-valid substitute.
+The removal and its event/outbox batch commit atomically. After commit, the
+kit discards the exact pending batch because there is no saved row to observe.
+The identity map is tombstoned immediately, so the same identity cannot be
+loaded or re-registered later in that run.
 
-Multi-result aggregate selection must be bounded and ordered by contract. The
-page vocabulary belongs to the consumer too:
+Bulk retention cleanup is a different port. Do not hydrate thousands of
+aggregates only to delete rows with no business decision. Define an
+infrastructure capability such as `ExpiredOrderPurger.purgeExpired(before)`
+and keep its bounded, predicated statement outside the aggregate repository.
+
+## Query methods and specifications
+
+Keep adapter-native query languages out of the port:
 
 ```ts
-declare const dunningCursorBrand: unique symbol;
-declare const dunningPageSizeBrand: unique symbol;
-
-type DunningCursor = string & { readonly [dunningCursorBrand]: true };
-type DunningPageSize = number & { readonly [dunningPageSizeBrand]: true };
-
-function dunningPageSize(value: number): DunningPageSize {
-  if (!Number.isInteger(value) || value < 1 || value > 100) {
-    throw new RangeError("Dunning page size must be an integer from 1 to 100");
-  }
-  return value as DunningPageSize;
-}
-
-interface DunningCriteria {
-  readonly dueBefore: DueDate;
-  readonly maximumReminders: number;
-}
-
-interface DunningPageRequest {
-  readonly after?: DunningCursor;
-  readonly limit: DunningPageSize;
-}
-
-interface DunningCandidatePage {
-  readonly items: ReadonlyArray<Invoice>;
-  readonly nextCursor: DunningCursor | null;
-}
-
-interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
+interface InvoiceRepository
+  extends AggregatePersistence<Invoice, InvoiceId> {
   findDunningCandidates(
     criteria: DunningCriteria,
     page: DunningPageRequest,
@@ -598,317 +498,62 @@ interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
 }
 ```
 
-This port must define one stable total order, for example `dueDate ASC,
-invoiceId ASC`. Its cursor is tied to that order, and `nextCursor` continues
-strictly after the last returned item. For an unchanged source dataset,
-traversal returns each match exactly once. The validated page-size constructor
-makes the hard upper bound unavoidable at call sites. An adapter contract can
-then exercise empty, single-page, multi-page, and equal-sort-key fixtures
-through a consumer-supplied harness.
+A multi-result method needs a stable total order and a hard page bound. If the
+result serves a screen or report, use a read-model query instead of loading
+write-side aggregates.
 
-For high-volume command processing, consider selecting bounded IDs first and
-loading each aggregate in its own operation. If the query serves a UI list,
-search page, dashboard, or report, build a projection and a read-model query
-port instead of hydrating aggregates.
-
-## Specifications
-
-Sometimes the lookup criteria belong to the domain, not to the storage
-layer. "Which invoices qualify for dunning?" is a business question, and the
-answer changes when the business changes. For criteria like that, write a
-`Specification` and accept it through a consumer-owned, bounded port:
+When a criterion is genuinely domain language, a `Specification` can carry it:
 
 ```ts
-import { Specification, type SpecificationComposite, specification } from "@shirudo/ddd-kit";
-
 class OverdueInvoice extends Specification<Invoice> {
   readonly name = "overdue invoice";
-  constructor(readonly today: Date) { super(); } // readonly: adapters read it
-  isSatisfiedBy(invoice: Invoice): boolean {
-    return invoice.dueDate < this.today && invoice.status === "open";
-  }
-}
 
-const dunningCandidates = new OverdueInvoice(today).and(
-  specification("in dunning grace period", (i: Invoice) => i.remindersSent < 3),
-);
-
-interface InvoiceRepository extends IRepository<Invoice, InvoiceId> {
-  findSatisfying(
-    specification: Specification<Invoice>,
-    page: DunningPageRequest,
-  ): Promise<DunningCandidatePage>;
-}
-```
-
-What does this buy over an inline predicate? Three things.
-
-First, it runs in memory as-is. Domain logic can ask
-`spec.isSatisfiedBy(candidate)` directly, and an in-memory repository or
-test fake implements the criterion as a plain filter before applying the
-port's stable ordering and page bound:
-`rows.filter((r) => spec.isSatisfiedBy(r))`. Your tests never need a
-translation layer. `findSatisfying` is only an example name; prefer a more
-specific use-case name when the ubiquitous language provides one.
-
-Second, it composes. `and`, `or`, and `not` build rules that still read
-like the business rule, and the derived names, for example
-`"(overdue invoice and (not high value))"`, show up in error messages and
-test output.
-
-Third, a storage adapter can translate it. The adapter recurses through the
-`composite` structure for combinator nodes and translates each leaf
-explicitly. Note that there are two kinds of leaves: one without parameters,
-where the name alone tells the adapter what to emit, and one with parameters
-(the reference date above), where the adapter has to narrow to the class and
-read its fields, because the name cannot carry the data:
-
-```ts
-function toSql(spec: Specification<Invoice>): SQL {
-  const composite = spec.composite;
-  if (composite) {
-    switch (composite.operator) {
-      case "and": return and(toSql(composite.left), toSql(composite.right));
-      case "or":  return or(toSql(composite.left), toSql(composite.right));
-      case "not": return not(toSql(composite.inner));
-    }
-  }
-  // A parameterized leaf: narrow to the class, translate the whole
-  // predicate (both conditions), and take the date from the instance
-  // rather than substituting the adapter's own clock.
-  if (spec instanceof OverdueInvoice) {
-    return and(eq(invoices.status, "open"), lt(invoices.dueDate, spec.today));
-  }
-  // Parameterless leaves: the name alone identifies the translation.
-  switch (spec.name) {
-    case "in dunning grace period": return lt(invoices.remindersSent, 3);
-    default:
-      throw new Error(`No SQL translation for specification '${spec.name}'`);
-  }
-}
-```
-
-### A visitor layer on top (double dispatch)
-
-The recursive walker above is single dispatch plus type narrowing, which is
-how TypeScript usually replaces the classic visitor pattern, and for most
-codebases it is the right place to stop. It has one weakness worth knowing
-about. Leaves are matched by name or `instanceof` in a switch, so when
-someone adds a new specification, nothing forces the translator to handle
-it. The gap only shows up at runtime, as the `No SQL translation` error.
-With a single translation target and decent test coverage, that loud
-runtime error is a perfectly workable contract.
-
-The picture changes once several translators exist for the same
-specifications, say SQL for the write side, a Mongo filter for an archive,
-and a search-index query. Now a forgotten leaf means three places to hunt
-down. This is where classic double dispatch earns its ceremony: each new
-specification adds a method to a visitor interface, and every translator
-stops compiling until it handles the new leaf. The compiler does the
-hunting. The kit's combinators are deliberately overridable so that you can
-build this layer yourself when you reach that point:
-
-```ts
-interface InvoiceSpecVisitor<R> {
-  visitOverdue(spec: OverdueInvoice): R;
-  visitGracePeriod(spec: InGracePeriod): R;
-  visitAnd(left: TranslatableSpec, right: TranslatableSpec): R;
-  visitOr(left: TranslatableSpec, right: TranslatableSpec): R;
-  visitNot(inner: TranslatableSpec): R;
-}
-
-abstract class TranslatableSpec extends Specification<Invoice> {
-  abstract accept<R>(visitor: InvoiceSpecVisitor<R>): R;
-
-  // Override the combinators so composites are visitor-aware too. The
-  // overrides narrow the operand type: inside this hierarchy you can
-  // only combine translatable specifications, which is the point.
-  override and(other: TranslatableSpec): TranslatableSpec {
-    return new AndSpec(this, other);
-  }
-  override or(other: TranslatableSpec): TranslatableSpec {
-    return new OrSpec(this, other);
-  }
-  override not(): TranslatableSpec {
-    return new NotSpec(this);
-  }
-}
-
-class OverdueInvoice extends TranslatableSpec {
-  readonly name = "overdue invoice";
-  constructor(readonly today: Date) { super(); }
-  isSatisfiedBy(i: Invoice): boolean {
-    return i.dueDate < this.today && i.status === "open";
-  }
-  accept<R>(v: InvoiceSpecVisitor<R>): R {
-    return v.visitOverdue(this);
-  }
-}
-
-class AndSpec extends TranslatableSpec {
-  override readonly composite: SpecificationComposite<Invoice>;
-  constructor(readonly left: TranslatableSpec, readonly right: TranslatableSpec) {
+  constructor(readonly today: Date) {
     super();
-    // Set `composite` like the kit's own combinators do: walker-based
-    // tooling and adapters keep working unchanged, whoever built the tree.
-    this.composite = Object.freeze({ operator: "and" as const, left, right });
   }
-  get name(): string {
-    return `(${this.left.name} and ${this.right.name})`;
-  }
-  isSatisfiedBy(i: Invoice): boolean {
-    return this.left.isSatisfiedBy(i) && this.right.isSatisfiedBy(i);
-  }
-  accept<R>(v: InvoiceSpecVisitor<R>): R {
-    return v.visitAnd(this.left, this.right);
-  }
-}
-// OrSpec / NotSpec follow the same shape.
 
-// A translator is now a compile-time-complete implementation:
-class SqlVisitor implements InvoiceSpecVisitor<SQL> {
-  visitOverdue(s: OverdueInvoice) {
-    return and(eq(invoices.status, "open"), lt(invoices.dueDate, s.today));
+  isSatisfiedBy(invoice: Invoice): boolean {
+    return invoice.status === "open" && invoice.dueDate < this.today;
   }
-  visitGracePeriod() { return lt(invoices.remindersSent, 3); }
-  visitAnd(l: TranslatableSpec, r: TranslatableSpec) {
-    return and(l.accept(this), r.accept(this));
-  }
-  visitOr(l: TranslatableSpec, r: TranslatableSpec) {
-    return or(l.accept(this), r.accept(this));
-  }
-  visitNot(inner: TranslatableSpec) { return not(inner.accept(this)); }
 }
 ```
 
-Everything else keeps working as before. `isSatisfiedBy`, the derived
-names, and the `composite` introspection behave the same whether the kit's
-combinators or yours built the tree, so in-memory evaluation and any
-walker-based tooling don't care which hierarchy they are looking at.
+An in-memory adapter evaluates it directly. A database adapter translates
+known specification types to bounded SQL. Test both paths against the same
+fixtures so the predicate and translation cannot drift unnoticed.
 
-One caveat: mixed trees. A factory-built specification from
-`specification("...", ...)` has no `accept` method, so if one ends up inside
-a `TranslatableSpec` tree, the pure visitor path breaks on it. You can
-either keep the hierarchy closed, which the narrowed combinator overrides
-already enforce at compile time, or give your visitor a fallback that walks
-`composite` for nodes and matches leaves without `accept` by name. That
-fallback is exactly the walker from the previous section, so you lose
-nothing by having it around.
+## Identity and errors
 
-If you are unsure which to pick: start with the walker. It is less ceremony,
-and its runtime error is hard to miss. Reach for the visitor layer when a
-second translation target appears, or when new specifications arrive often
-enough that you would rather have the compiler find the untranslated leaf
-than production. The kit ships neither a visitor interface nor a base class
-for this, because both would have to enumerate your domain's specifications,
-and only you can do that. What the kit promises instead is that the layer
-stays buildable: the combinators can be overridden, `composite` can be set
-by subclasses, and nothing is sealed.
+Generate identities in the application before creating the aggregate. UUID
+v4/v7, ULID, KSUID, or another collision-resistant generator works across
+concurrent processes; `Date.now()` and process-local counters do not.
 
-Be aware of what dual use actually means: a specification that is both
-evaluated in memory and translated to SQL is one rule with two
-implementations, the predicate and the translation, and the two can drift
-apart without anything failing. The way to keep them honest is a shared
-fixture test, where the same set of candidates goes through `isSatisfiedBy`
-and through the translated query against a real store, and both must select
-the same rows. If that test is more than you want to maintain, use the
-specification on one side only. A specification that never leaves memory
-(domain logic, test fakes) needs no translation in the first place.
+Repository failures are specific infrastructure signals:
 
-A final word on scope. Specifications are for write-side lookups whose
-criteria live in the domain language. A UI list or a dashboard query still
-belongs in a projection, and a one-off lookup is usually better served by an
-intent-revealing method like `findByEmail` than by a specification nobody
-would ever name in conversation.
+- `AggregateNotFoundError`: `getById` found no aggregate;
+- `DuplicateAggregateError`: `add` collided with an existing identity;
+- `ConcurrencyConflictError`: a stale `update` or `remove` lost its OCC race.
 
-## Id Generation
+A concurrency conflict is retryable only as a new application operation:
+reload, reapply the command, and register the new write. A duplicate add is
+deterministic for that identity and should not be retried unchanged.
 
-Identity generation belongs in the application, not in the repository.
+## Certification
+
+Run `createRepositoryContractTests` or
+`createEsRepositoryContractTests` against the real adapter and database. The
+suites cover explicit lifecycle routing, identity maps, duplicate creation,
+stale writers, rollback, no-op writes, exact event batches, outbox atomicity,
+and physical removal where declared.
 
 ```ts
-import type { Id, IdGenerator } from "@shirudo/ddd-kit";
-import { ulid } from "ulid";
-
-type OrderId = Id<"OrderId">;
-
-const orderIds: IdGenerator<"OrderId"> = {
-  next: () => ulid() as OrderId,
-};
-
-const id = orderIds.next();
-```
-
-The generator binds the tag. An `IdGenerator<"OrderId">` does not produce a
-`UserId`.
-
-Use collision-resistant ids under concurrent calls: UUID v4, UUID v7, ULID,
-KSUID, or another generator designed for distributed creation. `Date.now()`
-and process-local counters are not enough.
-
-## Error Mapping
-
-Repository errors are infrastructure errors because the storage boundary
-detected them:
-
-- `AggregateNotFoundError`: `getById` did not find a row. Map to a 404-shaped
-  application response.
-- `ConcurrencyConflictError`: the OCC predicate failed. Retry by starting a
-  fresh unit of work, reloading, reapplying the command, and saving again; or
-  map to a 409-shaped response.
-- `DuplicateAggregateError`: insert hit an existing id. Map the driver unique
-  violation to this error instead of leaking raw SQL errors.
-
-```ts
-import {
-  AggregateNotFoundError,
-  ConcurrencyConflictError,
-  DuplicateAggregateError,
-} from "@shirudo/ddd-kit";
-import { someChainRetryable } from "@shirudo/base-error";
-
-try {
-  await orders.save(order);
-} catch (error) {
-  if (error instanceof AggregateNotFoundError) {
-    throw notFound();
-  }
-
-  if (error instanceof DuplicateAggregateError) {
-    throw conflict();
-  }
-
-  if (error instanceof ConcurrencyConflictError || someChainRetryable(error)) {
-    throw retryOrConflict();
-  }
-
-  throw error;
+for (const contract of createRepositoryContractTests(harness)) {
+  (contract.skipped ? it.skip : it)(contract.name, contract.run);
 }
 ```
 
-`ConcurrencyConflictError` is retryable. `DuplicateAggregateError` is not:
-running the same insert again cannot make it succeed.
+Keep capability skips visible. They record a guarantee the adapter does not
+yet prove.
 
-## Contract Tests
-
-Optimistic concurrency is not guaranteed by the interface. It is guaranteed by
-your repository's SQL and transaction wiring.
-
-Use `createRepositoryContractTests` from `@shirudo/ddd-kit/testing` against a
-real database adapter:
-
-```ts
-import { createRepositoryContractTests } from "@shirudo/ddd-kit/testing";
-
-describe("DrizzleOrderRepository", () => {
-  for (const test of createRepositoryContractTests(harness)) {
-    (test.skipped ? it.skip : it)(test.name, test.run);
-  }
-});
-```
-
-The suite checks the important failure modes: stale writers, insert routing,
-rollback purity, identity map behavior, delete finality, duplicate inserts,
-outbox event harvest, and optional delete version checks.
-
-For SQL adapters, do not run this only against an in-memory fake. The point is
-to prove the real `WHERE version = ...` predicate and transaction behavior.
+For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
+[Migrating to v3](/guide/migrating-to-v3).

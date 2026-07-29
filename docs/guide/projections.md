@@ -746,20 +746,15 @@ const stop = new AbortController();
 void dispatcher.run(stop.signal);
 
 commands.register("CreateOrder", async (command) => {
-  return withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
-    const orders = makeOrderRepository(tx);
+  return uow.run(async ({ repositories }) => {
     const order = Order.create(orderIds.next(), command.customerId);
 
     for (const line of command.lines) {
       order.addLine(line.sku, line.quantity, line.price);
     }
 
-    await orders.save(order);
-
-    return {
-      result: ok(order.id),
-      commits: [enrollment.enrollSaved(order)],
-    };
+    repositories.orders.add(order);
+    return ok(order.id);
   });
 });
 

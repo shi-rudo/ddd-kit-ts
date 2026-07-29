@@ -52,8 +52,9 @@ Per Vernon §12, a Process Manager has identity, durable state, and a lifecycle,
 so aggregate mechanics are a useful implementation shape. Conceptually it
 coordinates process invariants rather than owning the immediate business
 invariants of `Order`, `Payment`, or `Shipment`. `CheckoutSaga` extends
-`AggregateRoot<CheckoutSagaState, OrderId>` and is persisted through
-`IRepository`; saga id = `OrderId` (one saga per order).
+`AggregateRoot<CheckoutSagaState, OrderId>` and uses the same explicit
+aggregate persistence lifecycle as participant aggregates; saga id = `OrderId`
+(one saga per order).
 
 Its public methods stay in the ubiquitous language (`advanceToShipping()`,
 `cancelOnPaymentFailure()`), while an internal `DomainMachineDefinition` is the
@@ -126,9 +127,11 @@ live commit concern and never runs during replay.
 
 ```ts
 eventBus.subscribe("PaymentReceived", async (event) => {
-  const saga = await sagaRepository.getById(event.payload.orderId);
-  saga.advanceToShipping();
-  await sagaRepository.save(saga);
+  await uow.run(async ({ repositories }) => {
+    const saga = await repositories.sagas.getById(event.payload.orderId);
+    saga.advanceToShipping();
+    repositories.sagas.update(saga);
+  });
   await commandBus.execute({
     type: "RequestShipping",
     orderId: event.payload.orderId,
@@ -151,10 +154,10 @@ This example keeps the wiring as small as the saga logic allows: events reach th
 - Outgoing participant work uses the dedicated `CommandOutboxWriter` seam. `routeEventsToCommandOutbox` writes the process fact's origin receipt and its exact addressed commands in the same transaction as the process stream. A production adapter proves atomic batches, stable order, exact-retry deduplication, conflict rejection, empty receipts, and rollback with `createCommandOutboxContractTests`.
 - Compensation order comes from participant results, not queue order. The process does not enqueue `CancelOrder` until the confirmed refund fact has been committed.
 - `withIdempotentCommit` is the inbox that makes them survive: key the reaction on the event id and a redelivered event replays the stored outcome instead of double-firing the step. This also settles the compensation-retry question this README used to hand-wave: a retried `RefundPayment` never reaches `Payment.refund()` a second time, because the inbox absorbs it before the domain method runs. (Making compensation methods no-op on the target state is still good defense in depth; Sam Newman, *Building Microservices* 2nd ed. §4, covers both shapes.)
-- Saga state under concurrency needs a real repository whose `save` throws `ConcurrencyConflictError` on version mismatch, with a `RetryingTransactionScope` (or the dispatcher's redelivery) retrying the losing reaction against the new state.
+- Saga state under concurrency needs a real repository definition whose `flush` throws `ConcurrencyConflictError` on version mismatch, with a `RetryingTransactionScope` (or the dispatcher's redelivery) retrying the losing reaction against the new state.
 - Saga-step timeouts ("payment didn't arrive within 30 minutes") are inputs, not a scheduler problem: schedule a deadline in the same transaction as the wait via `DeadlineStore`, and let a `DeadlineProcessor` feed it back in. The [deadlines guide](../../docs/guide/deadlines.md) has the details, including why a delivered timeout is a proposal the state machine gets to veto.
 - Subscriber error handling stays worth knowing: `EventBusImpl.publish` collects subscriber errors and throws after the batch, so one failing saga step does not stop its peers; through the dispatcher, that surfaces as a delivery failure with bounded retries and dead-lettering.
 
 ## Why the library doesn't ship a `Saga` abstraction
 
-Sagas vary too much. Some are choreographies (each step subscribes independently, no central state). Some are orchestrations (a central state machine like the one here). State machines themselves come in many shapes: explicit machine, table-driven, hand-rolled `switch`. The kit ships the parts (`EventBus`, `CommandBus`, `withCommit`, `withIdempotentCommit`, `IRepository`, `DomainStateMachine`, `OutboxDispatcher`, `DeadlineStore`); the composition is yours. This example is the runnable half of that doc, and the [sagas guide](../../docs/guide/sagas.md) is the written half.
+Sagas vary too much. Some are choreographies (each step subscribes independently, no central state). Some are orchestrations (a central state machine like the one here). State machines themselves come in many shapes: explicit machine, table-driven, hand-rolled `switch`. The kit ships the parts (`EventBus`, `CommandBus`, `UnitOfWork`, `withCommit`, `withIdempotentCommit`, `AggregatePersistence`, `DomainStateMachine`, `OutboxDispatcher`, `DeadlineStore`); the composition is yours. This example is the runnable half of that doc, and the [sagas guide](../../docs/guide/sagas.md) is the written half.

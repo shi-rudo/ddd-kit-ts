@@ -25,12 +25,12 @@ instance:
 ```ts
 await withCommit({ scope, outbox }, async (tx, enrollment) => {
   // Both bound to THIS transaction, like every repository in the callback.
-  const sagas = makeSagaRepository(tx);
+  const loaded = await loadSagaForDirectCommit(tx, sagaId);
   const deadlines = makeDeadlineStore(tx);
 
-  const saga = await sagas.getById(sagaId);
+  const saga = loaded.aggregate;
   saga.awaitPayment(paymentId);
-  await sagas.save(saga);
+  await updateSagaForDirectCommit(tx, saga, loaded.expectedVersion);
 
   // Same transaction as the state change. This is the rule that matters:
   // a saga that committed "waiting for payment" without its deadline is a
@@ -60,9 +60,14 @@ cancels the wait:
 
 ```ts
 saga.paymentReceived(event);
-await sagas.save(saga);
+await updateSagaForDirectCommit(tx, saga, loaded.expectedVersion);
 await deadlines.cancel("checkout-saga", String(saga.id));
 ```
+
+This example uses the lower-level `withCommit` seam because the aggregate
+write and a second transaction-bound port must be coordinated manually. For
+ordinary aggregate-only application writes, prefer the standard
+[`UnitOfWork`](./unit-of-work.md) repository protocol.
 
 There is at most one pending deadline per address. Scheduling an occupied
 address replaces it, which is also how you reschedule: no separate operation,

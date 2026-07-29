@@ -602,33 +602,30 @@ As with commands, a concrete query type map owns the result of both execution st
 
 In a CQRS application, query handlers return DTOs shaped for their use case. They may read materialized projections, but a simple management or setup flow can query the authoritative write store on demand through a consumer-owned query port when a separate projection would add synchronization and rebuild cost without earning it. The query port may use the same database and tables as the write side; it still returns a detached DTO rather than a live aggregate. Load an aggregate through its repository when the application needs it for a command or domain decision, not merely to render display data. See [Read-Side Projections](./projections.md).
 
-## `withCommit`: The Write-Side Boundary
+## `UnitOfWork`: The Write-Side Boundary
 
-The bus dispatches the command. The command handler owns the use case. `withCommit` owns the transaction and event harvest.
+The bus dispatches the command. The command handler owns the use case.
+`UnitOfWork` owns repository tracking and delegates transaction, outbox, and
+post-commit orchestration to `withCommit`.
 
 ```ts
-import { recordPendingEvents, withCommit } from "@shirudo/ddd-kit";
+import { recordPendingEvents, UnitOfWork } from "@shirudo/ddd-kit";
 
-const result = await withCommit(
+const result = await new UnitOfWork(
   {
     scope,
     outbox,
     bus: eventBus,
     postCommitTimeoutMs: 5_000,
+    repositories: { orders: orderRepositoryDefinition },
   },
-  async (tx, enrollment) => {
-    const orders = makeOrderRepository(tx);
-
-    const order = await orders.getById(orderId);
+).run(
+  async ({ repositories }) => {
+    const order = await repositories.orders.getById(orderId);
     order.confirm();
     recordPendingEvents(order, domainEvents);
-
-    await orders.save(order);
-
-    return {
-      result: order.id,
-      commits: [enrollment.enrollSaved(order)],
-    };
+    repositories.orders.update(order);
+    return order.id;
   },
 );
 ```
@@ -637,12 +634,11 @@ The order matters:
 
 1. Open the persistence transaction through `scope`.
 2. Load and mutate aggregates inside the transaction.
-3. Persist aggregates through transaction-bound repositories.
-4. Validate the invocation-scoped commit tokens and harvest their pending
-   events.
+3. Register explicit aggregate writes through transaction-bound repositories.
+4. Freeze the adapter change sets and exact pending-event batches.
 5. Write those events to the outbox in the same transaction.
 6. Commit.
-7. Mark aggregates persisted.
+7. Acknowledge the exact committed event batches.
 8. Publish to the optional in-process `bus` after commit.
 
 Publishing after commit is important. Subscribers should never observe an event for a transaction that later rolls back.

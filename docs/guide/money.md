@@ -507,8 +507,11 @@ lossless. It records `Money` in the domain event too.
 The repository maps database columns at the adapter boundary:
 
 ```ts
-class PgInvoiceRepository {
-  constructor(private readonly tx: PgTx) {}
+class PgInvoiceReadAdapter {
+  constructor(
+    private readonly tx: PgTx,
+    private readonly tracking: RepositoryTracking<Invoice>,
+  ) {}
 
   async getById(id: InvoiceId): Promise<Invoice> {
     const row = await this.tx.one("select * from invoice where id = $1", [id]);
@@ -517,7 +520,7 @@ class PgInvoiceRepository {
       [id],
     );
 
-    return Invoice.reconstitute(
+    const invoice = Invoice.reconstitute(
       id,
       {
         customerId: row.customer_id,
@@ -538,13 +541,21 @@ class PgInvoiceRepository {
       },
       row.version,
     );
+
+    return this.tracking.trackLoaded(invoice);
   }
+}
 
-  async save(invoice: Invoice): Promise<void> {
-    const memento = invoice.createSnapshot(new Date());
-    const { status, total } = memento.state;
+const invoices = defineRepository({
+  aggregate: Invoice,
+  persistence: invoicePersistenceModel,
+  create: (tx: PgTx, tracking: RepositoryTracking<Invoice>) =>
+    new PgInvoiceReadAdapter(tx, tracking),
+  flush: async (tx: PgTx, write) => {
+    if (write.intent !== "update") return insertOrRemoveInvoice(tx, write);
 
-    await this.tx.query(
+    const { status, total } = write.changes.value;
+    const result = await tx.query(
       `update invoice
           set version = $2,
               status = $3,
@@ -553,17 +564,19 @@ class PgInvoiceRepository {
               total_scale = $6
         where id = $1 and version = $7`,
       [
-        invoice.id,
-        invoice.version,
+        write.aggregateId,
+        write.version,
         status,
         total.amountMinor.toString(),
         total.currency,
         total.scale,
-        invoice.persistedVersion,
+        write.expectedVersion,
       ],
     );
-  }
-}
+
+    if (result.rowCount === 0) throw staleInvoice(write);
+  },
+});
 ```
 
 The HTTP entry point parses raw input once and emits DTOs once:
@@ -572,21 +585,20 @@ The HTTP entry point parses raw input once and emits DTOs once:
 app.post("/invoices/:id/lines", async (req, res) => {
   const amount = money.parse(req.body.amount, "EUR");
 
-  const total = await withCommit(
-    { scope, outbox, bus },
-    async (tx, enrollment) => {
-      const invoices = new PgInvoiceRepository(tx);
-      const invoice = await invoices.getById(asInvoiceId(req.params.id));
+  const total = await new UnitOfWork({
+    scope,
+    outbox,
+    bus,
+    repositories: { invoices },
+  }).run(async ({ repositories }) => {
+    const invoice = await repositories.invoices.getById(
+      asInvoiceId(req.params.id),
+    );
 
-      invoice.addLine(String(req.body.sku), amount);
-      await invoices.save(invoice);
-
-      return {
-        result: invoice.total,
-        commits: [enrollment.enrollSaved(invoice)],
-      };
-    },
-  );
+    invoice.addLine(String(req.body.sku), amount);
+    repositories.invoices.update(invoice);
+    return invoice.total;
+  });
 
   res.status(200).json({ total: moneyToDto(total) });
 });

@@ -17,7 +17,8 @@ with a minimal dispatcher, command idempotency, projections, a snapshot
 store, durable deadlines, the specification primitive, adapter contract
 suites for all of it, and the opt-in `@shirudo/ddd-kit/money` entry point.
 Details and rationale live in the sections below; every break is covered in
-the migration guide here, with a before and after.
+the [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md),
+with a before and after.
 
 ### Changed (breaking): repository lifecycle intent is explicit
 
@@ -61,7 +62,7 @@ and revocation remain aggregate behavior followed by `update`.
 
 ### Changed (breaking): the Unit of Work owns aggregate write tracking
 
-- Repository read paths call `session.trackLoaded(AggregateClass, aggregate)`
+- Repository read paths call `tracking.trackLoaded(aggregate)`
   before returning a restored aggregate. The Unit of Work identity-maps the
   instance and captures its current version as the optimistic-concurrency
   expectation before application code can mutate it.
@@ -72,14 +73,14 @@ and revocation remain aggregate behavior followed by `update`.
   Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
   mixing write intents, or changing an aggregate after registration throws
   `AggregateTrackingError` and rolls the transaction back.
-- The application work context no longer exposes `rawTransaction` or
-  `session`. Repository factories still receive both as adapter wiring, but
-  use cases depend only on their consumer-owned repository ports and the
-  cancellation signal.
-- `UnitOfWorkSession.enrollSaved` and `enrollDeleted` are removed. Its identity
-  map is a read-only lookup view; adapters register hydration through
-  `trackLoaded`, while the Unit of Work owns insertion, update, removal,
-  tombstones, event harvest, and commit acknowledgement.
+- The application work context no longer exposes `rawTransaction` or a
+  tracking session. Repository definitions receive the transaction and a
+  narrow `RepositoryTracking` capability as adapter wiring, while use cases
+  depend only on their repositories and cancellation signal.
+- `UnitOfWorkSession`, `enrollSaved`, and `enrollDeleted` are removed.
+  Adapters register hydration through `trackLoaded`, while the Unit of Work
+  owns insertion, update, removal, tombstones, event harvest, and commit
+  acknowledgement.
 - Every transaction attempt receives fresh tracking state. Commit or rollback
   closes and clears the identity map, so an aggregate instance from a failed
   attempt cannot silently participate in a retry.
@@ -110,12 +111,14 @@ and revocation remain aggregate behavior followed by `update`.
   payload during recording; hand-built stamps retain the full defensive-copy
   path. The reproducible benchmark and ownership rationale live in
   `docs/benchmarks/domain-event-stamping.md`.
-- `createSnapshot(snapshotAt)` now requires the snapshot policy or repository
-  to supply the timestamp. Snapshot state and time are defensively copied.
-- `recordEventFromFactory(...)` and `createSnapshotFromFactory()` retain the
-  former convenience behavior. When no `AggregateConfig.domainEventFactory` is
-  configured, they use the nondeterministic Web Crypto and platform-clock
-  defaults; their names now make that dependency read visible.
+- Aggregate-owned snapshot capture and restore methods are removed.
+  Adapter-owned `SnapshotModel`s define DTO projection, schema migration, and
+  reconstitution. `captureAggregateSnapshot` receives application time and
+  returns a detached snapshot envelope.
+- `recordEventFromFactory(...)` retains the former event convenience behavior.
+  When no `AggregateConfig.domainEventFactory` is configured, it uses the
+  nondeterministic Web Crypto and platform-clock defaults; its name makes that
+  dependency read visible.
 
 Migration for aggregate operations:
 
@@ -139,22 +142,28 @@ confirm(): void {
   );
 }
 
-const order = await orders.getById(command.orderId);
-order.confirm();
-recordPendingEvents(order, () =>
-  domainEvents.createStamp({
-    metadata: { correlationId: command.correlationId },
-  }),
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
+  order.confirm();
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({
+      metadata: { correlationId: command.correlationId },
+    }),
+  );
+  repositories.orders.update(order);
+});
+
+const snapshot = captureAggregateSnapshot(
+  orderSnapshots,
+  order,
+  domainEvents.now(),
 );
-await orders.save(order);
-const snapshot = order.createSnapshot(domainEvents.now());
 ```
 
 Aggregates that intentionally keep their injected factory can make the smaller
-compatibility migration by renaming calls to `recordEventFromFactory(...)` and
-`createSnapshotFromFactory()`. `AggregateConfig` now depends only on the narrow
-`AggregateEventConvenienceFactory` role (`create` and `now`), so custom
-compatibility factories no longer need to implement shell stamping.
+event migration by renaming calls to `recordEventFromFactory(...)`.
+`AggregateConfig` depends only on the narrow event-convenience role; snapshot
+policy and schema remain outside the aggregate.
 
 ### Added: transactional command-outbox routing for process managers
 
@@ -230,24 +239,23 @@ technical span belongs to the same trace.
   Event constructors still defensively copy metadata, so callers remain free
   to reuse or mutate their input object without changing a recorded event.
 
-### Documented: persistence tracking remains a tactical v3 boundary
+### Changed (breaking): persistence tracking leaves tactical aggregates
 
-- Retain `persistedVersion`, `hasChanges`, and `changedKeys` on the tactical
-  aggregate base classes for v3. They are now explicitly documented as
-  adapter-facing persistence receipts that domain behavior must not use.
-- The design decision compares aggregate-owned baselines, `UnitOfWork` tracked
-  entries, opaque repository load receipts, and a split API. A real move would
-  require a new identity-bound repository protocol or mandatory `UnitOfWork`;
-  hiding the current fields behind another accessor would not move ownership.
-- The existing boundary remains strict: repositories can read lifecycle state,
-  but only `withCommit` and `UnitOfWork` can acknowledge a committed save,
-  clear pending events, and re-baseline dirty tracking. Snapshot time is already
-  supplied by the shell through `createSnapshot(snapshotAt)`.
-- Repository and event-sourced repository contract suites continue to pin OCC,
-  insert/update routing, rollback, identity-map behavior, partial-write safety,
-  event harvest, and stream-version semantics. A future major should revisit
-  the model only together with an opaque, identity-bound load receipt and an
-  explicit decision on direct repository support.
+- Remove `persistedVersion`, `hasChanges`, and `changedKeys` from both
+  aggregate base classes. Aggregates retain only the current domain version
+  and pending facts.
+- Make `UnitOfWork` the mandatory public write context for the standard
+  repository protocol. Its identity-bound entries own lifecycle intent and
+  the expected version captured during load.
+- Add adapter-owned `PersistenceModel`s with opaque baselines and typed change
+  sets. A document adapter may derive a full replacement; a relational adapter
+  may derive partial root and child-table changes.
+- Freeze version, changes, and the exact event batch when `add`, `update`, or
+  `remove` is registered. Mutation after registration rejects and rolls the
+  transaction back.
+- Replace the old contract suites with state-stored and event-sourced v3
+  suites covering explicit routing, OCC, atomic rollback, identity mapping,
+  exact event batches, no-op writes, and optional physical removal.
 
 ### Changed (breaking): shell operations carry cancellation and deadlines
 

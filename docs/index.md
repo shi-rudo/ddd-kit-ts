@@ -31,7 +31,7 @@ features:
     details: Zero Node-isms. Works on Cloudflare Workers, Vercel Edge, Deno, Bun. crypto.randomUUID() defaults with override hooks for ULID/KSUID or deterministic tests.
   - icon: 🔌
     title: Bring your own persistence
-    details: "IRepository for id-canonical aggregate lifecycle. Consumer applications own intent-revealing query ports, so SQL, ORM filters, bounds, ordering, and cursor semantics stay at the right boundary."
+    details: "Explicit add, update, and remove through a tracked Unit of Work. Adapter-owned persistence models keep SQL, ORM state, optimistic-concurrency baselines, and partial-write logic outside the domain."
   - icon: 📦
     title: Tiny, tree-shakable, ESM-only
     details: ~80KB of types, ~30KB of code, sideEffects false. Use only what you need. Result type comes from the @shirudo/result peer dep.

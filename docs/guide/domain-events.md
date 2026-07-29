@@ -204,7 +204,7 @@ recordPendingEvents(order, domainEvents);
 
 await snapshots.save(
   orderAddress,
-  order.createSnapshot(domainEvents.now()),
+  captureAggregateSnapshot(orderSnapshots, order, domainEvents.now()),
 );
 ```
 
@@ -232,10 +232,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 ```
 
 That factory is used only when the aggregate deliberately calls
-`recordEventFromFactory(...)` or `createSnapshotFromFactory()`. If no factory is
-configured, those methods use the immutable default and therefore read Web
-Crypto and the platform clock. Their names make that trade-off visible at the
-call site.
+`recordEventFromFactory(...)`. If no factory is configured, that method uses
+the immutable default and therefore reads Web Crypto and the platform clock.
+Its name makes that trade-off visible at the call site. Snapshot clocks and
+DTO mappings stay outside the aggregate in an adapter-owned `SnapshotModel`.
 
 ## Migrating from event facts
 
@@ -266,21 +266,23 @@ const domainEvents = createDomainEventFactory({
   clock: requestClock,
 });
 
-const order = await orders.getById(command.orderId);
-order.confirm();
-recordPendingEvents(order, () =>
-  domainEvents.createStamp({
-    metadata: { correlationId: command.correlationId },
-  }),
-);
-await orders.save(order);
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
+  order.confirm();
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({
+      metadata: { correlationId: command.correlationId },
+    }),
+  );
+  repositories.orders.update(order);
+});
 ```
 
-Change `createSnapshot()` to `createSnapshot(snapshotAt)`, with the timestamp
-created by the repository or snapshot policy. Existing aggregates can make the
-smaller compatibility migration to `recordEventFromFactory(...)` and
-`createSnapshotFromFactory()`. That retains the old dependency posture while
-making the hidden read explicit in the method name.
+Move aggregate snapshot methods to an adapter-owned `SnapshotModel`, then call
+`captureAggregateSnapshot(model, aggregate, snapshotAt)` with a timestamp from
+the application or snapshot policy. Existing aggregates can make the smaller
+event migration to `recordEventFromFactory(...)`; that retains the old event
+factory posture while making the hidden read explicit in the method name.
 
 `DomainEventFacts` and `createFacts()` remain deprecated aliases for
 `DomainEventStamp` and `createStamp()` during migration. A schema `version`

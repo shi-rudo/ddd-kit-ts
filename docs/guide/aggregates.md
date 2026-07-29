@@ -154,41 +154,40 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`markRestored(version)` tells the aggregate, "this state came from persistence at this version." It sets both `version` and `persistedVersion`, so the next save uses the loaded version as its optimistic-concurrency baseline.
-
-It does not call persistence hooks and it does not record events. Loading is not saving, and it is not a domain fact.
-
-`persistedVersion` is likewise not a business fact. It is a read-only receipt
-for repository adapters. Keep it, `hasChanges`, and `changedKeys` out of domain
-guards and decisions. Their v3 ownership trade-off is documented under
-[Persistence tracking stays on the tactical aggregate](/guide/design-decisions#persistence-tracking-stays-on-the-tactical-aggregate-for-v3).
+`markRestored(version)` tells the aggregate, "these are the domain facts at
+this version." It sets the aggregate's current version without recording an
+event. It does not remember a database baseline; that belongs to the
+operation-scoped `UnitOfWork`.
 
 A repository can then be straightforward:
 
 ```ts
-async findById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | undefined> {
   const row = await this.db
     .select()
     .from(orders)
     .where(eq(orders.id, id))
     .get();
 
-  if (!row) return null;
+  if (!row) return undefined;
 
-  return Order.reconstitute(
+  const order = Order.reconstitute(
     row.id as OrderId,
     row.state as OrderState,
     row.version as Version,
   );
+
+  return this.tracking.trackLoaded(order);
 }
 ```
 
-::: warning Use `persistedVersion` for insert vs update
-Do not decide between insert and update with `aggregate.version === 0`.
+::: warning Creation and update are explicit
+Call `repositories.orders.add(order)` for a new aggregate and
+`repositories.orders.update(order)` for the exact instance loaded by that
+unit of work. Never infer this lifecycle from `version`: a new aggregate may
+already have advanced its version before its first persistence operation.
 
-A new aggregate can already be at version 1 or 2 before its first save if factory methods or domain methods changed it in memory. `persistedVersion === undefined` is the reliable signal that no row exists yet.
-
-See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 :::
 
 ### Event-Sourced Aggregates
@@ -401,57 +400,61 @@ if (!sameVersion(before!, after!)) {
 }
 ```
 
-Repository implementations should throw `ConcurrencyConflictError` when the saved version no longer matches the expected version.
+Repository adapters should throw `ConcurrencyConflictError` when the row or
+stream no longer matches the version captured during load. The
+`UnitOfWork` owns that baseline and passes it to `flush` as
+`write.expectedVersion`; the aggregate does not carry persistence metadata.
 
-`save()` should only persist. It should not mutate the aggregate's in-memory state. The `withCommit` helper coordinates the full flow: save the aggregate, harvest pending events, commit the transaction, then mark the aggregate as persisted.
+The use case registers `add`, `update`, or `remove` only after its domain
+decisions are complete. The unit of work then persists the immutable change
+set and exact event batch atomically.
 
 See [Repository](./repository.md) and [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ## Snapshots
 
-Snapshots capture aggregate state and version so an aggregate can be restored without replaying or rebuilding everything from scratch.
+Snapshots capture aggregate state and version so an aggregate can be restored
+without replaying or rebuilding everything from scratch. Their stored shape is
+an adapter concern, so the mapping lives outside the aggregate.
 
 ```ts
-import type { AggregateSnapshot } from "@shirudo/ddd-kit";
+import {
+  captureAggregateSnapshot,
+  defineSnapshotModel,
+  reconstituteAggregateFromSnapshot,
+} from "@shirudo/ddd-kit";
 
-const snapshotAt = new Date();
-const snapshot = order.createSnapshot(snapshotAt);
-// { state, version, snapshotAt: Date }
+const orderSnapshots = defineSnapshotModel({
+  aggregateType: "Order",
+  schemaVersion: 2,
+  capture: (order: Order) => orderStateDto(order),
+  reconstitute: (id: OrderId, state: OrderStateDto, version: Version) =>
+    Order.reconstitute(id, stateFromDto(state), version),
+  migrate: (stored, storedSchemaVersion) =>
+    migrateOrderSnapshot(stored, storedSchemaVersion),
+});
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
-
-  static fromSnapshot(
-    id: OrderId,
-    snapshot: AggregateSnapshot<OrderState>,
-  ): Order {
-    const order = new Order(id, blankState);
-    order.restoreFromSnapshot(snapshot);
-    return order;
-  }
-}
-
-const fresh = Order.fromSnapshot(id, snapshot);
-
-// fresh.version === snapshot.version
-// fresh.createSnapshot(new Date()).state is detached from snapshot.state
+const snapshot = captureAggregateSnapshot(
+  orderSnapshots,
+  order,
+  clock(),
+);
+const fresh = reconstituteAggregateFromSnapshot(
+  orderSnapshots,
+  order.id,
+  snapshot,
+);
 ```
 
-`createSnapshot` uses `structuredClone`, so later mutations do not alter the snapshot. `restoreFromSnapshot` validates the restored state before assigning it.
+`captureAggregateSnapshot` validates the application-supplied time and detaches
+the persistence DTO, so later mutations cannot alter stored snapshot data.
+Reconstitution always creates a fresh aggregate through the model; it never
+mutates a live instance or records a new domain fact.
 
-Live aggregate state is `protected`. Use domain queries for application reads and
-`createSnapshot(snapshotAt)` as the detached persistence memento; do not add a
-public getter that returns `this.state`.
-
-::: warning Restore only into a clean aggregate
-`restoreFromSnapshot` throws `UnreplayableAggregateError` if the target aggregate has pending events.
-
-Take snapshots only from a clean aggregate, usually right after load or save.
-If an in-memory operation must be abandoned, discard that dirty aggregate
-instance and reconstitute a fresh one. Public event disposal would let callers
-erase facts without a committed persistence boundary, so the aggregate API
-does not expose it.
-:::
+Live aggregate state remains `protected`. Give the persistence adapter an
+explicit DTO projection such as `orderStateDto(order)` rather than exposing a
+generic public state getter. For event-sourced aggregates, restore the
+snapshot first and then call `loadFromHistory` with only the stream tail.
 
 ## When to Skip `commit`
 

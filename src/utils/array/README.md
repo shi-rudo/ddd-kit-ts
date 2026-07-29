@@ -377,22 +377,23 @@ deepEqualExcept(event1, event2, {
 }); // true (payloads match)
 ```
 
-### Repository Tests
+### Persistence Projection Tests
 
-When testing repositories, compare aggregates while ignoring persistence metadata:
+When testing an adapter projection, compare its domain data while ignoring
+adapter-owned metadata:
 
 ```ts
 import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
 
-describe("OrderRepository", () => {
-  it("should save and load aggregate correctly", async () => {
+describe("orderPersistence", () => {
+  it("projects and reconstitutes domain state", async () => {
     const order = new Order(orderId, initialState);
     order.confirm();
-    
-    await repository.save(order);
-    const loaded = await repository.findById(orderId);
-    
-    // Compare domain state, ignoring version changes from persistence
+
+    const row = orderRow(order);
+    const loaded = Order.reconstitute(order.id, stateFromRow(row), row.version);
+
+    // Compare domain state, ignoring adapter metadata
     expect(
       deepEqualExcept(order.getState(), loaded.getState(), {
         ignoreKeys: ["version", "updatedAt"]
@@ -554,4 +555,3 @@ deepEqual(map1, map2); // false (different key references)
 - [deepEqual tests](./deep-equal.test.ts)
 - [deepOmit tests](./deep-omit.test.ts)
 - [deepEqualExcept tests](./deep-equal-except.test.ts)
-
