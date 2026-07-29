@@ -736,13 +736,9 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 
 /**
  * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
- * loaded into the identity map during the operation carries unflushed
- * `pendingEvents` but was never enrolled (no `session.enrollSaved`, and
- * not deleted). The almost-certain cause is a repository `save()` that
- * forgot to call `enrollSaved`, or a use case that recorded events on a
- * loaded aggregate and never saved it. Without this guard those events
- * would be silently dropped: never harvested into the outbox, never
- * published.
+ * loaded into the identity map changed but no `update` intent was registered.
+ * Without this guard the changed state or pending events would be silently
+ * dropped.
  *
  * Deliberately **not** an `InfrastructureError` (same posture as
  * {@link MissingHandlerError}): a programming bug that must crash loud,
@@ -751,33 +747,27 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  * leaves no partial state.
  *
  * **Scope of the guard.** A best-effort runtime safety net, not a proof.
- * It only sees aggregates the identity map knows about (those loaded via
- * `findById`), and detects new events by comparing the pending-event COUNT
- * at load against commit, which assumes the kit's append-only event model
- * (so it cannot see events that were recorded and then cleared within the
- * same run). A freshly *created* aggregate that was never enrolled is
- * invisible to the kit. The repository contract test suite remains the
- * full mitigation. See the Unit of Work guide.
+ * It sees aggregates that repository adapters register through
+ * `session.trackLoaded` and detects ordinary state changes through the version
+ * captured at load. The pending-event count remains a second guard for an
+ * invalid event-only mutation that did not advance the version. A freshly
+ * created aggregate that is never passed to `add` is invisible to the kit.
  */
 export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
 	constructor(public readonly aggregateId: string) {
 		super(
 			"UNENROLLED_CHANGES",
-			`Aggregate ${aggregateId} was loaded in this unit of work and has ` +
-				"pending events, but was never enrolled (no save), so its events " +
-				"would be silently dropped. Call repository.save(aggregate), and " +
-				"ensure save() calls session.enrollSaved before the row write.",
+			`Aggregate ${aggregateId} was loaded and changed in this unit of work, ` +
+				"but no update intent was registered. Call repository.update(aggregate) " +
+				"after the final domain decision so state and events flush together.",
 		);
 	}
 }
 
 /**
- * Thrown when an aggregate that was deleted within the current unit of
- * work is saved or re-registered again in the same operation: by
- * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same
- * instance, and by `IdentityMap.set` for a type+id that was deleted.
- * Deletion is final within an operation; saving afterwards would write
- * a row the delete just removed (or resurrect it), which is always a
+ * Thrown when an aggregate removed within the current unit of work is added,
+ * updated, or tracked again in the same operation. Removal is final within an
+ * operation; writing afterwards would resurrect the row, which is always a
  * use-case bug.
  *
  * Carries the `WIRING` category (same reasoning as
@@ -788,9 +778,9 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 	constructor(public readonly aggregateId: string) {
 		super(
 			"AGGREGATE_DELETED",
-			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
-				"cannot be saved or registered again. Deletion is final within an " +
-				"operation; if the aggregate must live, do not delete it.",
+			`Aggregate ${aggregateId} was removed in this unit of work and ` +
+				"cannot be added, updated, or tracked again. Removal is final within " +
+				"an operation; if the aggregate must remain, do not remove it.",
 		);
 	}
 }
@@ -1139,6 +1129,7 @@ export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEM
 export type KitErrorCode =
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
+	| "AGGREGATE_TRACKING"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
 	| "DOMAIN_TRANSITION_GUARD_REJECTED"

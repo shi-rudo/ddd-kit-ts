@@ -180,18 +180,17 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			structuredClone(row.state),
 			row.version as Version,
 		);
-		this.session.identityMap.set(ContractOrder, id, order);
-		return order;
+		return this.session.trackLoaded(ContractOrder, order);
 	}
 
 	async save(order: ContractOrder): Promise<void> {
 		if (!order.hasChanges) {
 			return; // safe skip: hasChanges covers version delta + events
 		}
-		// Enroll FIRST: the deleted-gate (AggregateDeletedError) then fires
+		// Register FIRST: the deleted-gate (AggregateDeletedError) then fires
 		// before any row write. Enrollment is idempotent, and a failed
 		// write rolls the whole unit of work back anyway.
-		this.session.enrollSaved(order);
+		this.registerWrite(order);
 		if (order.persistedVersion === undefined) {
 			// INSERT path: routed on persistedVersion, never on version === 0.
 			// The in-memory equivalent of a unique-violation (Postgres 23505,
@@ -226,6 +225,10 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 	}
 
 	async delete(order: ContractOrder): Promise<void> {
+		// Legacy contract tests pass a previously loaded instance into a fresh
+		// UoW callback. The v3 replacement suite will load inside the callback.
+		this.session.trackLoaded(ContractOrder, order);
+		this.session.remove(order);
 		// OCC applies to deletes too: the in-memory equivalent of
 		// `DELETE FROM orders WHERE id = ? AND version = ?` affecting 0
 		// rows. An unpredicated delete would silently destroy a
@@ -243,8 +246,17 @@ class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
 			});
 		}
 		this.db.rows.delete(order.id);
-		// ONE call: enrollDeleted tombstones the identity map itself.
-		this.session.enrollDeleted(order);
+	}
+
+	protected registerWrite(order: ContractOrder): void {
+		if (order.persistedVersion === undefined) {
+			this.session.add(order);
+			return;
+		}
+		// Compatibility for this internal v2-shaped suite only; the public v3
+		// suite will require load and update to share one Unit of Work.
+		this.session.trackLoaded(ContractOrder, order);
+		this.session.update(order);
 	}
 }
 
@@ -413,7 +425,7 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 	class LastWriteWinsRepository extends InMemoryOrderRepository {
 		override async save(order: ContractOrder): Promise<void> {
 			if (!order.hasChanges) return;
-			this.session.enrollSaved(order);
+			this.registerWrite(order);
 			// ❌ no `WHERE version = persistedVersion` equivalent and no
 			// unique-violation mapping:
 			this.db.rows.set(order.id, {
@@ -434,9 +446,10 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 	it("the suite EXPOSES an unpredicated delete: a stale delete that succeeds fails the stale-delete test", async () => {
 		class UnpredicatedDeleteRepository extends InMemoryOrderRepository {
 			override async delete(order: ContractOrder): Promise<void> {
+				this.session.trackLoaded(ContractOrder, order);
+				this.session.remove(order);
 				// ❌ plain `DELETE FROM orders WHERE id = ?`:
 				this.db.rows.delete(order.id);
-				this.session.enrollDeleted(order);
 			}
 		}
 

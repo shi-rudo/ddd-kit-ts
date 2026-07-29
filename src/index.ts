@@ -115,6 +115,9 @@ export {
 	recordPendingEvents,
 } from "./app/record-pending-events";
 export {
+	AggregateTrackingError,
+	type AggregateTrackingFailure,
+	type AggregateWriteIntent,
 	CommitError,
 	NestedUnitOfWorkError,
 	type RepositoryFactories,
@@ -124,6 +127,7 @@ export {
 	UnitOfWork,
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
+	type UnitOfWorkIdentityMap,
 	type UnitOfWorkSession,
 } from "./app/unit-of-work";
 // Core: errors + branded ids

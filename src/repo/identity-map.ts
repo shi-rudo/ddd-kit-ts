@@ -30,7 +30,7 @@ export type AggregateClass<TAgg> =
  * [Repository guide](../../docs/guide/repository.md) places on
  * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
- * enrollment dedupes by JavaScript object identity. Two instances for
+ * write registration dedupes by JavaScript object identity. Two instances for
  * one logical aggregate can otherwise produce two tokens, two harvests,
  * and two post-commit lifecycle calls.
  *
@@ -51,8 +51,7 @@ export type AggregateClass<TAgg> =
  *   const row = await this.loadRow(id);
  *   if (!row) return null;
  *   const order = Order.reconstitute(row.id, row.state, row.version);
- *   this.session.identityMap.set(Order, id, order);
- *   return order;
+ *   return this.session.trackLoaded(Order, order);
  * }
  * ```
  *
@@ -186,8 +185,9 @@ export class IdentityMap {
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
 	 * {@link set} of the same type+id throws `AggregateDeletedError`.
-	 * Called by a repository's `delete(aggregate)` alongside
-	 * `session.enrollDeleted(aggregate)`.
+	 * The Unit-of-Work tracking session calls this as part of
+	 * `session.remove(aggregate)`; repository adapters receive only the read-only
+	 * identity-map view.
 	 */
 	public delete<TAgg>(type: AggregateClass<TAgg>, id: Id<string>): void {
 		this._stores.get(type)?.delete(id);

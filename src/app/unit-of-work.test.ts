@@ -11,8 +11,10 @@ import {
 } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
+import type { AggregateClass } from "../repo/identity-map";
 import type { TransactionScope } from "../repo/scope";
 import {
+	AggregateTrackingError,
 	CommitError,
 	NestedUnitOfWorkError,
 	RollbackError,
@@ -39,6 +41,10 @@ class MockAggregate extends AggregateRoot<
 
 	public get acknowledgementCount(): number {
 		return this.persistedVersion === this.version ? 1 : 0;
+	}
+
+	public change(event?: TestEvent): void {
+		this.commit(this.state, event);
 	}
 }
 
@@ -90,19 +96,27 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 	};
 }
 
-/** Minimal UoW-style repository: save/delete enroll with the session. */
+/** Minimal UoW-style repository: writes only register lifecycle intent. */
 class FakeOrderRepository {
 	constructor(
 		public readonly tx: unknown,
 		private readonly session: UnitOfWorkSession<TestEvent>,
 	) {}
 
-	async save(aggregate: MockAggregate): Promise<void> {
-		this.session.enrollSaved(aggregate);
+	trackLoaded(aggregate: MockAggregate): MockAggregate {
+		return this.session.trackLoaded(MockAggregate, aggregate);
 	}
 
-	async delete(aggregate: MockAggregate): Promise<void> {
-		this.session.enrollDeleted(aggregate);
+	add(aggregate: MockAggregate): void {
+		this.session.add(aggregate);
+	}
+
+	update(aggregate: MockAggregate): void {
+		this.session.update(aggregate);
+	}
+
+	remove(aggregate: MockAggregate): void {
+		this.session.remove(aggregate);
 	}
 }
 
@@ -110,6 +124,7 @@ function createUow(overrides?: {
 	scope?: TransactionScope<undefined>;
 	outbox?: Outbox<TestEvent>;
 	bus?: EventBus<TestEvent>;
+	onSession?: (session: UnitOfWorkSession<TestEvent>) => void;
 }) {
 	const outbox = overrides?.outbox ?? createMockOutbox();
 	const bus = overrides?.bus ?? createMockBus();
@@ -119,8 +134,10 @@ function createUow(overrides?: {
 		outbox,
 		bus,
 		repositories: {
-			orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) =>
-				new FakeOrderRepository(tx, session),
+			orders: (tx: undefined, session: UnitOfWorkSession<TestEvent>) => {
+				overrides?.onSession?.(session);
+				return new FakeOrderRepository(tx, session);
+			},
 		},
 	});
 	return { uow, outbox, bus, scope };
@@ -146,7 +163,180 @@ function stamped(
 	};
 }
 
+async function expectTrackingFailure(
+	execution: Promise<unknown>,
+	reason: AggregateTrackingError["reason"],
+): Promise<void> {
+	const rejection = await execution.then(
+		() => undefined,
+		(error: unknown) => error,
+	);
+	expect(rejection).toBeInstanceOf(AggregateTrackingError);
+	expect(rejection).toMatchObject({
+		code: "AGGREGATE_TRACKING",
+		category: "WIRING",
+		retryable: false,
+		reason,
+	});
+}
+
 describe("UnitOfWork", () => {
+	describe("v3 aggregate tracking", () => {
+		it("captures the expected version when an aggregate is loaded", async () => {
+			const { uow } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					return undefined;
+				}),
+			).rejects.toBeInstanceOf(UnenrolledChangesError);
+		});
+
+		it("registers add and update intent without performing durable I/O", async () => {
+			const { uow } = createUow();
+			const fresh = createMockAggregate("new-1");
+			const loaded = createMockAggregate("loaded-1");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.add(fresh);
+					repositories.orders.trackLoaded(loaded);
+					loaded.change();
+					repositories.orders.update(loaded);
+					return "registered";
+				}),
+			).resolves.toBe("registered");
+		});
+
+		it("owns standard write methods even when an adapter defines implementations", async () => {
+			const event = testEvent("o-1");
+			const aggregate = createMockAggregate("o-1", [event]);
+			const outbox = createMockOutbox();
+			let adapterAddCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					orders: () => ({
+						add: (_aggregate: MockAggregate) => {
+							adapterAddCalls += 1;
+						},
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.add(aggregate);
+			});
+
+			expect(adapterAddCalls).toBe(0);
+			expect(outbox.added).toEqual([[stamped(event)]]);
+			expect(aggregate.acknowledgementCount).toBe(1);
+		});
+
+		it("rejects update for an aggregate that was not loaded", async () => {
+			const { uow } = createUow();
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.update(createMockAggregate("o-1"));
+					return undefined;
+				}),
+				"not_loaded",
+			);
+		});
+
+		it("rejects add for an aggregate that was loaded", async () => {
+			const { uow } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					repositories.orders.add(aggregate);
+					return undefined;
+				}),
+				"loaded_as_new",
+			);
+		});
+
+		it("rejects conflicting write intents", async () => {
+			const { uow } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate);
+					repositories.orders.remove(aggregate);
+					return undefined;
+				}),
+				"conflicting_intent",
+			);
+		});
+
+		it("rejects domain mutation after write intent was registered", async () => {
+			const { uow, outbox } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change();
+					repositories.orders.update(aggregate);
+					aggregate.change(testEvent("o-1"));
+					return undefined;
+				}),
+				"mutated_after_registration",
+			);
+			expect(
+				(
+					outbox as Outbox<TestEvent> & {
+						added: EventCommitCandidate<TestEvent>[][];
+					}
+				).added,
+			).toHaveLength(0);
+		});
+
+		it("also seals a newly added aggregate against later mutation", async () => {
+			const { uow } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.add(aggregate);
+					aggregate.change();
+					return undefined;
+				}),
+				"mutated_after_registration",
+			);
+		});
+
+		it("discards loaded instances when an attempt rolls back", async () => {
+			const { uow } = createUow();
+			const first = createMockAggregate("o-1");
+			const second = createMockAggregate("o-1");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(first);
+					throw new Error("roll back");
+				}),
+			).rejects.toThrow("roll back");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(second);
+					return second;
+				}),
+			).resolves.toBe(second);
+		});
+	});
+
 	describe("transaction lifecycle", () => {
 		it("supports a state-stored AggregateRoot without event sourcing", async () => {
 			type PlainState = Readonly<{ name: string }>;
@@ -170,15 +360,15 @@ describe("UnitOfWork", () => {
 				outbox,
 				repositories: {
 					plain: (_tx: undefined, session: UnitOfWorkSession<TestEvent>) => ({
-						save: async (plain: PlainAggregate) => {
-							session.enrollSaved(plain);
+						add: (plain: PlainAggregate) => {
+							session.add(plain);
 						},
 					}),
 				},
 			});
 
 			await uow.run(async ({ repositories }) => {
-				await repositories.plain.save(aggregate);
+				repositories.plain.add(aggregate);
 			});
 
 			expect(aggregate.persistedVersion).toBe(aggregate.version);
@@ -214,7 +404,7 @@ describe("UnitOfWork", () => {
 
 			await expect(
 				uow.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					throw boom;
 				}),
 			).rejects.toBe(boom);
@@ -277,10 +467,9 @@ describe("UnitOfWork", () => {
 				},
 			});
 
-			await uow.run(async ({ repositories, rawTransaction }) => {
+			await uow.run(async ({ repositories }) => {
 				expect(repositories.a.handle).toBe(tx);
 				expect(repositories.b.handle).toBe(tx);
-				expect(rawTransaction).toBe(tx);
 				return undefined;
 			});
 
@@ -378,7 +567,7 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async ({ repositories }) => {
 				callOrder.push("work");
-				await repositories.orders.save(agg);
+				repositories.orders.add(agg);
 				return undefined;
 			});
 
@@ -417,7 +606,7 @@ describe("UnitOfWork", () => {
 			// The committed write resolves; the cleanup failure is observed.
 			await expect(
 				uow.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					return "ok";
 				}),
 			).resolves.toBe("ok");
@@ -452,7 +641,7 @@ describe("UnitOfWork", () => {
 			});
 
 			const execution = uow.run(async ({ repositories }) => {
-				await repositories.orders.save(agg);
+				repositories.orders.add(agg);
 				return "committed";
 			});
 
@@ -474,8 +663,8 @@ describe("UnitOfWork", () => {
 			const agg = createMockAggregate("o-1", [event]);
 
 			await uow.run(async ({ repositories }) => {
-				await repositories.orders.save(agg);
-				await repositories.orders.save(agg);
+				repositories.orders.add(agg);
+				repositories.orders.add(agg);
 				return undefined;
 			});
 
@@ -495,7 +684,8 @@ describe("UnitOfWork", () => {
 			const agg = createMockAggregate("o-1", [deletionEvent]);
 
 			await uow.run(async ({ repositories }) => {
-				await repositories.orders.delete(agg);
+				repositories.orders.trackLoaded(agg);
+				repositories.orders.remove(agg);
 				return undefined;
 			});
 
@@ -514,8 +704,9 @@ describe("UnitOfWork", () => {
 
 			await expect(
 				uow.run(async ({ repositories }) => {
-					await repositories.orders.delete(agg);
-					await repositories.orders.save(agg);
+					repositories.orders.trackLoaded(agg);
+					repositories.orders.remove(agg);
+					repositories.orders.update(agg);
 					return undefined;
 				}),
 			).rejects.toBeInstanceOf(AggregateDeletedError);
@@ -524,14 +715,13 @@ describe("UnitOfWork", () => {
 			expect(agg.acknowledgementCount).toBe(0);
 		});
 
-		it("the use case can enroll manually via context.session", async () => {
+		it("repository add registration stays inside the Unit of Work", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-1");
 			const agg = createMockAggregate("o-1", [event]);
 
-			await uow.run(async ({ session }) => {
-				// e.g. a write performed on the raw tx, no repository involved
-				session.enrollSaved(agg);
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.add(agg);
 				return undefined;
 			});
 
@@ -548,12 +738,9 @@ describe("UnitOfWork", () => {
 
 	describe("session seal + scope retries", () => {
 		it("an enrollment arriving AFTER the callback resolved throws instead of being silently dropped", async () => {
-			// The un-awaited-save footgun: `void repo.save(order)` inside the
-			// callback can execute its enrollSaved while withCommit is still
-			// writing the outbox. The harvest snapshot is already taken; a
-			// silently-accepted enrollment would never reach the outbox. The
-			// session is sealed the moment the callback resolves, so the late
-			// enrollment crashes loud instead.
+			// A leaked adapter session must not accept registration after the
+			// callback settled. The harvest snapshot is already taken, so the
+			// session is sealed at callback completion and fails loudly.
 			const lateAggregate = createMockAggregate("late-1", [
 				testEvent("late-1"),
 			]);
@@ -570,19 +757,22 @@ describe("UnitOfWork", () => {
 					// We are now past the callback (and past harvest), still
 					// inside the transaction - the window in question.
 					try {
-						leakedSession.enrollSaved(lateAggregate);
+						leakedSession.add(lateAggregate);
 					} catch (e) {
 						lateEnrollError = e;
 					}
 					return result;
 				},
 			};
-			const { uow } = createUow({ scope, outbox });
-
-			await uow.run(async ({ session }) => {
-				leakedSession = session;
-				return undefined;
+			const { uow } = createUow({
+				scope,
+				outbox,
+				onSession: (session) => {
+					leakedSession = session;
+				},
 			});
+
+			await uow.run(async () => undefined);
 
 			expect(lateEnrollError).toBeInstanceOf(TransactionClosedError);
 		});
@@ -616,10 +806,10 @@ describe("UnitOfWork", () => {
 			const result = await uow.run(async ({ repositories }) => {
 				attempt += 1;
 				if (attempt === 1) {
-					await repositories.orders.save(attempt1Aggregate);
+					repositories.orders.add(attempt1Aggregate);
 					throw retryableFailure; // attempt 1 rolls back
 				}
-				await repositories.orders.save(attempt2Aggregate);
+				repositories.orders.add(attempt2Aggregate);
 				return "second-attempt";
 			});
 
@@ -643,26 +833,28 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(() => leaked.repositories).toThrow(TransactionClosedError);
-			expect(() => leaked.rawTransaction).toThrow(TransactionClosedError);
 		});
 
-		it("session.enrollSaved after close throws TransactionClosedError (also after rollback)", async () => {
-			const { uow } = createUow();
+		it("session write registration after close throws TransactionClosedError (also after rollback)", async () => {
 			let leakedSession!: UnitOfWorkSession<TestEvent>;
+			const { uow } = createUow({
+				onSession: (session) => {
+					leakedSession = session;
+				},
+			});
 
 			await expect(
-				uow.run(async ({ session }) => {
-					leakedSession = session;
+				uow.run(async () => {
 					throw new Error("rolled back");
 				}),
 			).rejects.toThrow("rolled back");
 
-			expect(() =>
-				leakedSession.enrollSaved(createMockAggregate("o-1")),
-			).toThrow(TransactionClosedError);
-			expect(() =>
-				leakedSession.enrollDeleted(createMockAggregate("o-1")),
-			).toThrow(TransactionClosedError);
+			expect(() => leakedSession.add(createMockAggregate("o-1"))).toThrow(
+				TransactionClosedError,
+			);
+			expect(() => leakedSession.remove(createMockAggregate("o-1"))).toThrow(
+				TransactionClosedError,
+			);
 		});
 	});
 
@@ -673,7 +865,7 @@ describe("UnitOfWork", () => {
 
 			await expect(
 				uow.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					// A nested run would NOT join the outer transaction.
 					await uow.run(async () => undefined);
 					return undefined;
@@ -734,6 +926,10 @@ describe("UnitOfWork", () => {
 				private readonly session: UnitOfWorkSession<TestEvent>,
 			) {}
 
+			get trackedIdentities(): UnitOfWorkSession<TestEvent>["identityMap"] {
+				return this.session.identityMap;
+			}
+
 			async findById(id: TestId): Promise<OrderAggregate | null> {
 				const cached = this.session.identityMap.get(OrderAggregate, id);
 				if (cached) return cached;
@@ -748,19 +944,18 @@ describe("UnitOfWork", () => {
 				if (!row) return null;
 				this.hydrations += 1;
 				const order = new OrderAggregate(id, row);
-				this.session.identityMap.set(OrderAggregate, id, order);
-				return order;
+				return this.session.trackLoaded(OrderAggregate, order);
 			}
 
-			async save(order: OrderAggregate): Promise<void> {
-				this.session.enrollSaved(order);
+			update(order: OrderAggregate): void {
+				this.session.update(order);
 			}
 
-			async delete(order: OrderAggregate): Promise<void> {
-				// ONE call: enrollDeleted tombstones the identity map itself
+			remove(order: OrderAggregate): void {
+				// ONE call tombstones the identity map itself
 				// (keyed on the instance's concrete class) - no second manual
 				// identityMap.delete() leg to forget.
-				this.session.enrollDeleted(order);
+				this.session.remove(order);
 			}
 		}
 
@@ -793,8 +988,8 @@ describe("UnitOfWork", () => {
 				expect(a).not.toBeNull();
 				expect(b).toBe(a);
 
-				await repositories.orders.save(a as OrderAggregate);
-				await repositories.orders.save(b as OrderAggregate);
+				repositories.orders.update(a as OrderAggregate);
+				repositories.orders.update(b as OrderAggregate);
 				return undefined;
 			});
 
@@ -805,14 +1000,16 @@ describe("UnitOfWork", () => {
 
 		it("session.identityMap access after close throws TransactionClosedError", async () => {
 			const { uow } = createCachingUow(new Map());
-			let leakedSession!: UnitOfWorkSession<TestEvent>;
+			let repository!: CachingOrderRepository;
 
-			await uow.run(async ({ session }) => {
-				leakedSession = session;
+			await uow.run(async ({ repositories }) => {
+				repository = repositories.orders;
 				return undefined;
 			});
 
-			expect(() => leakedSession.identityMap).toThrow(TransactionClosedError);
+			expect(() => repository.trackedIdentities).toThrow(
+				TransactionClosedError,
+			);
 		});
 
 		it("a directly-leaked IdentityMap reference is cleared on close (no stale instances into a later operation)", async () => {
@@ -823,9 +1020,9 @@ describe("UnitOfWork", () => {
 				() => UnitOfWorkSession<TestEvent>["identityMap"]
 			>;
 
-			await uow.run(async ({ repositories, session }) => {
+			await uow.run(async ({ repositories }) => {
 				await repositories.orders.findById("o-1" as TestId);
-				leakedMap = session.identityMap; // captured while open
+				leakedMap = repositories.orders.trackedIdentities; // captured while open
 				expect(leakedMap.has(OrderAggregate, "o-1" as TestId)).toBe(true);
 				return undefined;
 			});
@@ -842,7 +1039,7 @@ describe("UnitOfWork", () => {
 
 			const probe = await uow.run(async ({ repositories }) => {
 				const order = await repositories.orders.findById("o-1" as TestId);
-				await repositories.orders.delete(order as OrderAggregate);
+				repositories.orders.remove(order as OrderAggregate);
 
 				// Row still visible in the tx; the isDeleted check makes a
 				// read-only probe behave like not-found instead of crashing
@@ -860,14 +1057,14 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async ({ repositories }) => {
 					const order = await repositories.orders.findById("o-1" as TestId);
-					await repositories.orders.delete(order as OrderAggregate);
+					repositories.orders.remove(order as OrderAggregate);
 
 					// A DIFFERENT instance with the same logical identity, e.g.
 					// re-created via a static factory after the delete. The
 					// instance-keyed gate cannot see it; the class+id tombstone
 					// (recorded automatically by enrollDeleted) must.
 					const resurrected = new OrderAggregate("o-1" as TestId);
-					await repositories.orders.save(resurrected);
+					repositories.orders.update(resurrected);
 					return undefined;
 				}),
 			).rejects.toBeInstanceOf(AggregateDeletedError);
@@ -883,7 +1080,7 @@ describe("UnitOfWork", () => {
 				deletedOrder = (await repositories.orders.findById(
 					"o-1" as TestId,
 				)) as OrderAggregate;
-				await repositories.orders.delete(deletedOrder);
+				repositories.orders.remove(deletedOrder);
 				return undefined;
 			});
 
@@ -913,7 +1110,7 @@ describe("UnitOfWork", () => {
 
 			const rejection = await uow
 				.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					return undefined;
 				})
 				.then(
@@ -964,7 +1161,7 @@ describe("UnitOfWork", () => {
 
 			const rejection = await uow
 				.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					return undefined;
 				})
 				.then(
@@ -1004,7 +1201,7 @@ describe("UnitOfWork", () => {
 
 			const rejection = await uow
 				.run(async ({ repositories }) => {
-					await repositories.orders.save(agg);
+					repositories.orders.add(agg);
 					return undefined;
 				})
 				.then(
@@ -1228,7 +1425,7 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(
 					async (ctx) => {
-						await ctx.repositories.orders.save(agg);
+						ctx.repositories.orders.add(agg);
 						ac.abort(new Error("deadline exceeded"));
 						if (ctx.signal?.aborted) throw ctx.signal.reason;
 						return "unreachable";
@@ -1249,10 +1446,6 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("enrollment guard: events recorded after load but never enrolled", () => {
-		// A dummy class token to register instances under, simulating a
-		// repository's findById path (identityMap.set after hydration).
-		class MockOrder {}
-
 		/** A loadable state-stored aggregate with a test-only event recorder. */
 		function loadable(id: string, initialEvents: TestEvent[] = []) {
 			class LoadableAggregate extends AggregateRoot<
@@ -1276,15 +1469,34 @@ describe("UnitOfWork", () => {
 			return new LoadableAggregate();
 		}
 
+		function createLoadableUow() {
+			type Loadable = ReturnType<typeof loadable>;
+			return new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: (_tx: undefined, session: UnitOfWorkSession<TestEvent>) => ({
+						trackLoaded: (aggregate: Loadable) =>
+							session.trackLoaded(
+								aggregate.constructor as AggregateClass<Loadable>,
+								aggregate,
+							),
+						update: (aggregate: Loadable) => session.update(aggregate),
+						remove: (aggregate: Loadable) => session.remove(aggregate),
+					}),
+				},
+			});
+		}
+
 		it("throws UnenrolledChangesError when events are recorded after load and never enrolled", async () => {
 			const agg = loadable("o-1"); // loaded clean
-			const { uow } = createUow();
+			const uow = createLoadableUow();
 
 			const rejection = await uow
-				.run(async ({ session }) => {
-					session.identityMap.set(MockOrder, agg.id, agg); // findById
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(agg); // findById
 					agg.record(testEvent("o-1")); // a domain method records an event
-					// ...but the repo's save (and thus enrollSaved) is never called
+					// ...but repository.update is never called
 					return undefined;
 				})
 				.then(
@@ -1298,12 +1510,12 @@ describe("UnitOfWork", () => {
 
 		it("does not throw when the mutated aggregate was enrolled", async () => {
 			const agg = loadable("o-1");
-			const { uow } = createUow();
+			const uow = createLoadableUow();
 
-			const result = await uow.run(async ({ session }) => {
-				session.identityMap.set(MockOrder, agg.id, agg);
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(agg);
 				agg.record(testEvent("o-1"));
-				session.enrollSaved(agg); // saved
+				repositories.orders.update(agg);
 				return "ok";
 			});
 
@@ -1312,10 +1524,10 @@ describe("UnitOfWork", () => {
 
 		it("does not throw on a read-only load (no events recorded)", async () => {
 			const agg = loadable("o-1");
-			const { uow } = createUow();
+			const uow = createLoadableUow();
 
-			const result = await uow.run(async ({ session }) => {
-				session.identityMap.set(MockOrder, agg.id, agg);
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(agg);
 				return "read-only";
 			});
 
@@ -1326,10 +1538,10 @@ describe("UnitOfWork", () => {
 			// Reconstituted with events already in pendingEvents; the use case
 			// only reads it. No NEW events after load, so no enrollment is owed.
 			const agg = loadable("o-1", [testEvent("o-1")]);
-			const { uow } = createUow();
+			const uow = createLoadableUow();
 
-			const result = await uow.run(async ({ session }) => {
-				session.identityMap.set(MockOrder, agg.id, agg);
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(agg);
 				return "read-only-dirty";
 			});
 
@@ -1338,12 +1550,12 @@ describe("UnitOfWork", () => {
 
 		it("does not throw when the mutated aggregate was deleted", async () => {
 			const agg = loadable("o-1");
-			const { uow } = createUow();
+			const uow = createLoadableUow();
 
-			const result = await uow.run(async ({ session }) => {
-				session.identityMap.set(MockOrder, agg.id, agg);
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(agg);
 				agg.record(testEvent("o-1"));
-				session.enrollDeleted(agg);
+				repositories.orders.remove(agg);
 				return "deleted";
 			});
 

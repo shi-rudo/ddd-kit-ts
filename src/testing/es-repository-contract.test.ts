@@ -196,17 +196,16 @@ class InMemoryEsOrderRepository
 		const order = ContractEsOrder.bare(id);
 		const result = order.loadFromHistory(history);
 		if (result.isErr()) throw result.error; // corrupt stream
-		this.session.identityMap.set(ContractEsOrder, id, order);
-		return order;
+		return this.session.trackLoaded(ContractEsOrder, order);
 	}
 
 	async save(order: ContractEsOrder): Promise<void> {
 		if (order.pendingEvents.length === 0) {
 			return; // nothing to append; skipping save is safe for ES
 		}
-		// Enroll FIRST (the deleted-gate and harvest rely on it); a failed
+		// Register FIRST (the deleted-gate and harvest rely on it); a failed
 		// append rolls the whole unit of work back anyway.
-		this.session.enrollSaved(order);
+		this.registerWrite(order);
 		// The REAL expectedVersion guard: the in-memory equivalent of an
 		// append predicated on the current stream version.
 		const expectedVersion = order.persistedVersion ?? 0;
@@ -227,6 +226,17 @@ class InMemoryEsOrderRepository
 			throw new Error("repository received an unrecorded domain event");
 		}
 		this.db.streams.set(key, [...stream, ...(pending as EsOrderEvent[])]);
+	}
+
+	protected registerWrite(order: ContractEsOrder): void {
+		if (order.persistedVersion === undefined) {
+			this.session.add(order);
+			return;
+		}
+		// Compatibility for this internal v2-shaped harness: the v3 contract
+		// suite will load and update inside the same Unit of Work callback.
+		this.session.trackLoaded(ContractEsOrder, order);
+		this.session.update(order);
 	}
 }
 
@@ -364,7 +374,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 	class BlindAppendRepository extends InMemoryEsOrderRepository {
 		override async save(order: ContractEsOrder): Promise<void> {
 			if (order.pendingEvents.length === 0) return;
-			this.session.enrollSaved(order);
+			this.registerWrite(order);
 			// ❌ no expectedVersion check:
 			const key = streamMapKey(orderStream(order.id));
 			const stream = this.db.streams.get(key) ?? [];
@@ -395,8 +405,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 				// ❌ folds newest-first (a SELECT without ORDER BY, unlucky):
 				const result = order.loadFromHistory([...history].reverse());
 				if (result.isErr()) throw result.error;
-				this.session.identityMap.set(ContractEsOrder, id, order);
-				return order;
+				return this.session.trackLoaded(ContractEsOrder, order);
 			}
 		}
 

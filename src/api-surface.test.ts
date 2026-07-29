@@ -13,6 +13,9 @@ import type {
 	OutboxDispatcherObservers,
 	Repository,
 	StateValidator,
+	UnitOfWorkContext,
+	UnitOfWorkIdentityMap,
+	UnitOfWorkSession,
 } from "./index";
 import * as index from "./index";
 import * as money from "./money";
@@ -113,6 +116,22 @@ type PublicRepositoryContracts =
 	  >;
 void (undefined as unknown as PublicRepositoryContracts);
 
+type PublicUnitOfWorkContext = UnitOfWorkContext<{
+	readonly orders: unknown;
+}>;
+// @ts-expect-error application work cannot access an adapter transaction
+type RemovedRawTransaction = PublicUnitOfWorkContext["rawTransaction"];
+// @ts-expect-error application work cannot access adapter tracking internals
+type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
+// @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
+type RemovedEnrollSaved = UnitOfWorkSession["enrollSaved"];
+// @ts-expect-error adapters cannot mutate the Unit-of-Work-owned identity map
+type RemovedIdentityMapSet = UnitOfWorkIdentityMap["set"];
+void (undefined as unknown as RemovedRawTransaction);
+void (undefined as unknown as RemovedTrackingSession);
+void (undefined as unknown as RemovedEnrollSaved);
+void (undefined as unknown as RemovedIdentityMapSet);
+
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	correlationId: "corr-1",
 	conversationId: "conversation-1",
@@ -140,6 +159,7 @@ const INDEX_SURFACE = [
 	"AggregateDeletedError",
 	"AggregateNotFoundError",
 	"AggregateRoot",
+	"AggregateTrackingError",
 	"CommandBus",
 	"CommitError",
 	"ConcurrencyConflictError",

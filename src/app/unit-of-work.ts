@@ -51,19 +51,19 @@ export class NestedUnitOfWorkError extends KitWiringError<"NESTED_UNIT_OF_WORK">
 
 /**
  * Thrown when the unit-of-work context is used after `run()` has
- * settled: reading `context.repositories` / `context.transaction`, or
- * calling `session.enrollSaved` / `session.enrollDeleted`, once the
- * transaction has committed or rolled back.
+ * settled: reading `context.repositories`, or calling an adapter-held
+ * `session.trackLoaded` / `add` / `update` / `remove`, once the transaction
+ * has committed or rolled back.
  *
  * Use-after-close is a programming bug (typically a leaked context
  * reference or a fire-and-forget promise outliving the callback), so
  * this carries the `WIRING` category and should crash loud.
  *
  * **Honest scope of this guard:** the kit can only invalidate what it
- * controls - the context getters and the session. A repository or raw
- * transaction handle captured into a variable BEFORE close keeps
- * working as far as the kit can see; whether the underlying tx handle
- * rejects is ORM-specific. Do not let references escape the callback.
+ * controls: the context getters and tracking session. An adapter that captures
+ * its raw transaction handle can still call it as far as the kit can see;
+ * whether the driver rejects after close is ORM-specific. Adapter factories
+ * must not let that handle escape into application code.
  */
 export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED"> {
 	constructor(public readonly operation: string) {
@@ -73,6 +73,71 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 				"transaction committed or rolled back. Do not use the context or " +
 				"session outside the run() callback.",
 		);
+	}
+}
+
+/** The explicit persistence intent registered for one tracked aggregate. */
+export type AggregateWriteIntent = "add" | "update" | "remove";
+
+/** Why an aggregate lifecycle registration was rejected. */
+export type AggregateTrackingFailure =
+	| "not_loaded"
+	| "loaded_as_new"
+	| "conflicting_intent"
+	| "mutated_after_registration";
+
+/**
+ * A deterministic violation of the Unit of Work's aggregate lifecycle.
+ *
+ * This is a wiring error rather than a domain or infrastructure failure: the
+ * application registered persistence intent in an order the Unit of Work
+ * cannot execute truthfully. Retrying the same callback cannot repair it.
+ */
+export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING"> {
+	constructor(
+		public readonly aggregateId: string,
+		public readonly operation: AggregateWriteIntent | "commit",
+		public readonly reason: AggregateTrackingFailure,
+		public readonly registeredIntent?: AggregateWriteIntent,
+	) {
+		super(
+			"AGGREGATE_TRACKING",
+			trackingFailureMessage(aggregateId, operation, reason, registeredIntent),
+		);
+	}
+}
+
+function trackingFailureMessage(
+	aggregateId: string,
+	operation: AggregateWriteIntent | "commit",
+	reason: AggregateTrackingFailure,
+	registeredIntent: AggregateWriteIntent | undefined,
+): string {
+	switch (reason) {
+		case "not_loaded":
+			return (
+				`Aggregate ${aggregateId} cannot be registered for ${operation}: ` +
+				"it was not loaded into this unit of work. Load it through the " +
+				"repository before updating or removing it."
+			);
+		case "loaded_as_new":
+			return (
+				`Aggregate ${aggregateId} cannot be added as new because it was ` +
+				"loaded by this unit of work. Use update for a loaded aggregate."
+			);
+		case "conflicting_intent":
+			return (
+				`Aggregate ${aggregateId} is already registered for ` +
+				`${registeredIntent ?? "another write"}; ${operation} would create ` +
+				"conflicting persistence intent in one unit of work. Decide the final " +
+				"lifecycle outcome before registering it."
+			);
+		case "mutated_after_registration":
+			return (
+				`Aggregate ${aggregateId} changed after ${registeredIntent ?? "write"} ` +
+				"was registered. Make domain decisions first and call add, update, or " +
+				"remove last so persisted state and recorded events cannot diverge."
+			);
 	}
 }
 
@@ -139,93 +204,72 @@ export class RollbackError extends InfrastructureError<"ROLLBACK_FAILED"> {
 	}
 }
 
+/** Read-only Identity Map operations available to repository adapters. */
+export type UnitOfWorkIdentityMap = Pick<
+	IdentityMap,
+	"get" | "has" | "isDeleted"
+>;
+
 /**
- * The enrollment handle a unit of work hands to its repositories.
+ * The tracking handle a Unit of Work hands only to repository adapters.
  *
- * Repositories enroll every aggregate they write so the unit of work
- * can harvest pending events into the outbox (inside the transaction)
- * and acknowledge them after the commit through the same internal lifecycle
- * `withCommit` runs for its opaque commit tokens. The session retains
- * tokens returned by repository enrollment, so "forgot to list the
- * aggregate" cannot happen per use-case call site; each repository
- * implements enrollment once and its tests pin it once.
+ * Read paths call {@link UnitOfWorkSession.trackLoaded} before returning a restored aggregate.
+ * Write methods exposed to application code are replaced by Unit-of-Work-owned
+ * `add`, `update`, and `remove` registrations, so an adapter implementation of
+ * those methods cannot perform durable I/O early or skip event harvesting.
  *
  * Contract for repository implementations:
  * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats
- *   `identityMap.isDeleted` as not-found (`null`), and registers the
- *   hydrated instance after - two loads of the same aggregate in one
- *   unit of work must return the same instance.
- * - `save(aggregate)` calls {@link enrollSaved} BEFORE the row write:
- *   the deleted-gate then throws `AggregateDeletedError` before any SQL
- *   runs (instead of the write surfacing as a confusing
- *   `ConcurrencyConflictError` against the deleted row). Enrollment is
- *   idempotent per instance, mirroring `withCommit`'s token dedupe,
- *   and a failed write rolls the whole unit of work back anyway.
- * - `delete(aggregate)` calls {@link enrollDeleted} - ONE call does all
- *   the deletion bookkeeping: the identity-map entry is removed and
- *   tombstoned automatically (keyed on the instance's concrete class),
- *   the recorded deletion events are still harvested into the outbox,
- *   and saving or re-registering the aggregate (same instance OR a
- *   re-created one with the same type+id) later in this unit of work
- *   throws `AggregateDeletedError`.
- *
- * The use case can also enroll manually via `context.session` for the
- * rare write that bypasses a repository.
+ *   `identityMap.isDeleted` as not-found (`undefined`), and returns
+ *   `trackLoaded(AggregateClass, aggregate)` after hydration. This captures the
+ *   expected version before application code can mutate the instance.
+ * - Adapter objects may declare `add`, `update`, and `remove` to satisfy their
+ *   consumer-owned port types, but the application-facing facade replaces
+ *   those implementations with this session's registrations.
+ * - Other repository methods are reads. A custom method that performs a write
+ *   would bypass the Unit of Work and violates the adapter contract.
  */
-export interface UnitOfWorkSession<Evt extends AnyDomainEvent = AnyDomainEvent>
-	extends CommitEnrollment<Evt> {
+export interface UnitOfWorkSession<
+	Evt extends AnyDomainEvent = AnyDomainEvent,
+> {
 	/**
-	 * The per-operation Identity Map (Fowler): one aggregate type+id,
+	 * Registers an aggregate restored by a repository before returning it to
+	 * application code. The Unit of Work identity-maps the instance and captures
+	 * its current version as the optimistic-concurrency expectation.
+	 */
+	trackLoaded<TAggregate extends IAggregateRoot<Id<string>, Evt>>(
+		type: AggregateClass<TAggregate>,
+		aggregate: TAggregate,
+	): TAggregate;
+
+	/** Registers a newly created aggregate for insertion at commit. */
+	add(aggregate: IAggregateRoot<Id<string>, Evt>): void;
+
+	/** Registers a loaded aggregate for an optimistic-concurrency update. */
+	update(aggregate: IAggregateRoot<Id<string>, Evt>): void;
+
+	/** Registers a loaded aggregate for physical removal at commit. */
+	remove(aggregate: IAggregateRoot<Id<string>, Evt>): void;
+
+	/**
+	 * Read-only view of the per-operation Identity Map (Fowler): one aggregate type+id,
 	 * one in-memory instance. Created fresh per `run()`, cleared on
 	 * close; accessing it after close throws
 	 * {@link TransactionClosedError}.
 	 */
-	readonly identityMap: IdentityMap;
-
-	/** Enroll an aggregate that was (or will be) written in this unit of work. */
-	enrollSaved(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
-	): AggregateCommitToken<Evt>;
-
-	/**
-	 * Enroll an aggregate whose row was (or will be) deleted in this
-	 * unit of work. Its pending events (e.g. a recorded deletion event)
-	 * are harvested like any other; re-saving the instance afterwards
-	 * throws `AggregateDeletedError`.
-	 */
-	enrollDeleted(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
-	): AggregateCommitToken<Evt>;
+	readonly identityMap: UnitOfWorkIdentityMap;
 }
 
 /**
- * What the work callback receives: repositories already bound to the
- * live transaction, the enrollment session, and, deliberately named to
- * look like the escape hatch it is, the raw transaction handle.
+ * What the application work callback receives: repositories already bound to
+ * the live Unit of Work plus cooperative cancellation.
  *
- * All members throw {@link TransactionClosedError} once `run()` has
- * settled; do not let the context escape the callback.
+ * The adapter-only transaction and tracking session are deliberately absent.
+ * Exposing either would let application code bypass repository lifecycle
+ * registration and would leak infrastructure types into the use case.
  */
-export interface UnitOfWorkContext<
-	TCtx,
-	TRepos,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
-> {
+export interface UnitOfWorkContext<TRepos> {
 	readonly repositories: TRepos;
-
-	/**
-	 * **Escape hatch: you are leaving the unit of work's guarantees.**
-	 * A write issued on the raw handle bypasses the repository contract,
-	 * enrollment (its aggregate's events are NOT harvested unless you
-	 * also call `session.enrollSaved`), and the identity map (a later
-	 * `findById` of the same aggregate hydrates a SECOND instance:
-	 * double harvest, double acknowledgement). Use it only for writes no
-	 * repository covers, pair it with manual enrollment, and prefer
-	 * adding a repository method whenever one could exist.
-	 */
-	readonly rawTransaction: TCtx;
-
-	readonly session: UnitOfWorkSession<Evt>;
 
 	/**
 	 * The cooperative-cancellation signal passed to {@link UnitOfWork.run},
@@ -251,8 +295,8 @@ export interface RunOptions {
 
 /**
  * Per-repository factory map: for each key of `TRepos`, a function
- * that constructs the repository bound to the live transaction handle
- * and the enrollment session. Called once per `run()`, so every
+ * that constructs the repository adapter bound to the live transaction handle
+ * and tracking session. Called once per `run()`, so every
  * repository of one unit of work shares the same transaction.
  *
  * ```ts
@@ -310,7 +354,7 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
 }
 
 /**
- * Explicit-save Unit of Work: one `run()` call is one application-level
+ * Explicit-intent Unit of Work: one `run()` call is one application-level
  * write operation. All repository writes inside the callback share one
  * transaction and either persist completely or not at all.
  *
@@ -319,26 +363,24 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
  * after the commit, best-effort in-process publish last) is inherited,
  * not reimplemented. What this layer adds:
  *
- * - **Tx-bound repositories via a registry.** The callback receives
- *   ready-made repositories instead of a raw transaction handle; the
- *   factory map is wired once at construction.
- * - **Repository-owned enrollment.** Repositories enroll what they write via
- *   {@link UnitOfWorkSession}; the session retains the invocation-scoped
- *   commit tokens, so the use case cannot forget to return one.
+ * - **Tx-bound repository adapters via a registry.** The callback receives
+ *   application-facing repository facades and never sees the raw transaction
+ *   or tracking session.
+ * - **Unit-of-Work-owned writes.** Standard `add`, `update`, and `remove`
+ *   methods register lifecycle intent. Adapter implementations with those
+ *   names are not invoked through the facade.
  * - **Lifecycle errors.** {@link NestedUnitOfWorkError},
  *   {@link TransactionClosedError}, {@link CommitError},
  *   {@link RollbackError}, {@link AggregateDeletedError}.
  *
- * - **A per-operation Identity Map** on the session: repositories
- *   check it before hydrating and register after, so one type+id maps
- *   to one in-memory instance per unit of work (the contract that makes
- *   reference-keyed commit-token enrollment sound, now shipped instead
- *   of merely documented).
+ * - **A per-operation Identity Map and expected-version receipt.** Read paths
+ *   call `trackLoaded` before returning an aggregate. The Unit of Work then
+ *   owns the one-instance rule and the optimistic-concurrency expectation.
+ * - **Persistence-last guard.** Once write intent is registered, a later
+ *   version or event-batch change rejects the operation before commit.
  *
- * What it deliberately does NOT do (v1): no auto-flush (explicit
- * `save()` only - `hasChanges` makes a redundant save a cheap no-op),
- * no savepoints, no nested-transaction joining. `withCommit` with
- * hand-rolled repos remains fully supported; this facade is opt-in.
+ * Nested transactions, savepoints, and transaction joining remain outside
+ * this boundary. One `run()` is one consistency transaction.
  *
  * **Instance discipline:** one instance owns one logical operation at
  * a time. `run()` while a run is active throws
@@ -362,7 +404,8 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
  *   outbox: drizzleOutbox,
  *   bus: eventBus,
  *   repositories: {
- *     restaurants: (tx, session) => new DrizzleRestaurantRepository(tx, session),
+ *     restaurants: (tx, tracking) =>
+ *       new DrizzleRestaurantRepository(tx, tracking),
  *   },
  * };
  *
@@ -370,7 +413,7 @@ export interface UnitOfWorkDeps<Evt extends AnyDomainEvent, TCtx, TRepos> {
  * const result = await uow.run(async ({ repositories }) => {
  *   const restaurant = await repositories.restaurants.getById(id);
  *   restaurant.changeOpeningHours(openingHours);
- *   await repositories.restaurants.save(restaurant); // save() enrolls
+ *   repositories.restaurants.update(restaurant);
  *   return restaurant.id;
  * });
  * ```
@@ -391,7 +434,7 @@ export class UnitOfWork<
 	 * enrolled aggregate. Returns the callback's result.
 	 */
 	public async run<R>(
-		work: (context: UnitOfWorkContext<TCtx, TRepos, Evt>) => Promise<R>,
+		work: (context: UnitOfWorkContext<TRepos>) => Promise<R>,
 		options?: RunOptions,
 	): Promise<R> {
 		// Pre-flight: an already-aborted caller rejects with the signal's
@@ -443,18 +486,18 @@ export class UnitOfWork<
 					workError = undefined;
 
 					const repositories = this.buildRepositories(tx, s);
-					const context = makeContext(repositories, tx, s, options?.signal);
+					const context = makeContext(repositories, s, options?.signal);
 					try {
 						const result = await work(context);
-						// Catch a forgotten enrollment before sealing: a loaded
-						// aggregate with pending events that was never enrolled
-						// would otherwise drop its events silently. Throws inside
+						// Validate tracking before sealing: a loaded aggregate that
+						// changed without update intent would otherwise be lost.
+						// Throws inside
 						// the transaction, so the unit of work rolls back.
-						s.assertAllChangesEnrolled();
+						s.assertReadyToCommit();
 						workCompleted = true;
 						// Seal immediately: the aggregates snapshot below is what
-						// gets harvested. A late enrollment (an un-awaited
-						// repo.save() promise still in flight) must throw
+						// gets harvested. A late registration from work still in
+						// flight must throw
 						// TransactionClosedError instead of being silently
 						// accepted-but-never-harvested.
 						const commits = s.commitTokens;
@@ -484,10 +527,73 @@ export class UnitOfWork<
 		for (const key of Object.keys(this.deps.repositories) as Array<
 			keyof TRepos
 		>) {
-			repositories[key] = this.deps.repositories[key](tx, session);
+			const adapter = this.deps.repositories[key](tx, session);
+			repositories[key] = bindRepositoryWrites(adapter, session);
 		}
 		return repositories;
 	}
+}
+
+/**
+ * Builds the application-facing repository facade. Standard lifecycle writes
+ * are always supplied by the Unit of Work; similarly named adapter methods are
+ * never invoked. Other methods are bound to the adapter so classes with private
+ * fields keep their normal receiver.
+ */
+function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
+	adapter: TRepository,
+	session: UnitOfWorkSession<Evt>,
+): TRepository {
+	if (
+		adapter === null ||
+		(typeof adapter !== "object" && typeof adapter !== "function")
+	) {
+		return adapter;
+	}
+
+	const source = adapter as object;
+	const facadeTarget = Object.create(Reflect.getPrototypeOf(source)) as object;
+	const methodCache = new Map<PropertyKey, unknown>();
+	const writes = new Map<PropertyKey, (aggregate: unknown) => void>();
+
+	for (const operation of ["add", "update", "remove"] as const) {
+		if (typeof Reflect.get(source, operation, source) !== "function") continue;
+		writes.set(operation, (aggregate) => {
+			session[operation](aggregate as IAggregateRoot<Id<string>, Evt>);
+		});
+	}
+
+	return new Proxy(facadeTarget, {
+		get: (_target, property) => {
+			const write = writes.get(property);
+			if (write) return write;
+			if (methodCache.has(property)) return methodCache.get(property);
+			const value = Reflect.get(source, property, source);
+			if (typeof value !== "function") return value;
+			const bound = value.bind(source);
+			methodCache.set(property, bound);
+			return bound;
+		},
+		set: (_target, property, value) =>
+			Reflect.set(source, property, value, source),
+		has: (_target, property) => Reflect.has(source, property),
+		ownKeys: () => Reflect.ownKeys(source),
+		getOwnPropertyDescriptor: (_target, property) => {
+			const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+			return descriptor ? { ...descriptor, configurable: true } : undefined;
+		},
+	}) as TRepository;
+}
+
+type AggregateLifecycle = "new" | "loaded";
+
+interface TrackedAggregate<Evt extends AnyDomainEvent> {
+	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	readonly lifecycle: AggregateLifecycle;
+	readonly expectedVersion: Version | undefined;
+	intent?: AggregateWriteIntent;
+	registeredVersion?: Version;
+	registeredEvents?: ReadonlyArray<unknown>;
 }
 
 /** Internal session implementation; closed by `run()`'s finally. */
@@ -498,6 +604,11 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	private readonly _deleted = new Set<IAggregateRoot<Id<string>, Evt>>();
 	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
+	private readonly _trackingByAggregate = new WeakMap<
+		IAggregateRoot<Id<string>, Evt>,
+		TrackedAggregate<Evt>
+	>();
+	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
 	private _closed = false;
 
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
@@ -507,10 +618,143 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		return this._identityMap;
 	}
 
-	public enrollSaved(
+	public trackLoaded<TAggregate extends IAggregateRoot<Id<string>, Evt>>(
+		type: AggregateClass<TAggregate>,
+		aggregate: TAggregate,
+	): TAggregate {
+		this.assertOpen("session.trackLoaded");
+		this._identityMap.set(type, aggregate.id, aggregate);
+
+		const existing = this._trackingByAggregate.get(aggregate);
+		if (existing) return aggregate;
+
+		const entry: TrackedAggregate<Evt> = {
+			aggregate,
+			lifecycle: "loaded",
+			expectedVersion: aggregate.version,
+		};
+		this._trackingByAggregate.set(aggregate, entry);
+		this._trackedAggregates.add(entry);
+		return aggregate;
+	}
+
+	public add(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+		this.assertOpen("session.add");
+		this.assertNotRemoved(aggregate);
+		const existing = this._trackingByAggregate.get(aggregate);
+		if (existing?.lifecycle === "loaded") {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				"add",
+				"loaded_as_new",
+				existing.intent,
+			);
+		}
+
+		let entry = existing;
+		if (!entry) {
+			this._identityMap.set(
+				aggregate.constructor as AggregateClass<unknown>,
+				aggregate.id,
+				aggregate,
+			);
+			entry = {
+				aggregate,
+				lifecycle: "new",
+				expectedVersion: undefined,
+			};
+			this._trackingByAggregate.set(aggregate, entry);
+			this._trackedAggregates.add(entry);
+		}
+
+		this.registerIntent(entry, "add");
+		this.registerSavedCommit(aggregate);
+	}
+
+	public update(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+		this.assertOpen("session.update");
+		const entry = this.loadedEntryFor(aggregate, "update");
+		this.registerIntent(entry, "update");
+		this.registerSavedCommit(aggregate);
+	}
+
+	public remove(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+		this.assertOpen("session.remove");
+		const entry = this.loadedEntryFor(aggregate, "remove");
+		this.registerIntent(entry, "remove");
+		this.registerRemovedCommit(aggregate);
+	}
+
+	private loadedEntryFor(
+		aggregate: IAggregateRoot<Id<string>, Evt>,
+		operation: "update" | "remove",
+	): TrackedAggregate<Evt> {
+		this.assertNotRemoved(aggregate);
+		const entry = this._trackingByAggregate.get(aggregate);
+		if (!entry || entry.lifecycle !== "loaded") {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				operation,
+				"not_loaded",
+				entry?.intent,
+			);
+		}
+		return entry;
+	}
+
+	private assertNotRemoved(aggregate: IAggregateRoot<Id<string>, Evt>): void {
+		if (
+			this._identityMap.isDeleted(
+				aggregate.constructor as AggregateClass<unknown>,
+				aggregate.id,
+			)
+		) {
+			throw new AggregateDeletedError(String(aggregate.id));
+		}
+	}
+
+	private registerIntent(
+		entry: TrackedAggregate<Evt>,
+		intent: AggregateWriteIntent,
+	): void {
+		if (entry.intent !== undefined) {
+			if (entry.intent !== intent) {
+				throw new AggregateTrackingError(
+					String(entry.aggregate.id),
+					intent,
+					"conflicting_intent",
+					entry.intent,
+				);
+			}
+			this.assertUnchangedAfterRegistration(entry);
+			return;
+		}
+
+		entry.intent = intent;
+		entry.registeredVersion = entry.aggregate.version;
+		entry.registeredEvents = entry.aggregate.pendingEvents.slice();
+	}
+
+	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
+		const currentEvents = entry.aggregate.pendingEvents;
+		const registeredEvents = entry.registeredEvents ?? [];
+		const sameEvents =
+			currentEvents.length === registeredEvents.length &&
+			currentEvents.every((event, index) => event === registeredEvents[index]);
+		if (entry.registeredVersion !== entry.aggregate.version || !sameEvents) {
+			throw new AggregateTrackingError(
+				String(entry.aggregate.id),
+				"commit",
+				"mutated_after_registration",
+				entry.intent,
+			);
+		}
+	}
+
+	private registerSavedCommit(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 	): AggregateCommitToken<Evt> {
-		this.assertOpen("session.enrollSaved");
+		this.assertOpen("session.add/update");
 		// Two gates, one invariant: the instance set catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
 		// concrete class) catches a DIFFERENT instance with the same
@@ -531,10 +775,10 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		return token;
 	}
 
-	public enrollDeleted(
+	private registerRemovedCommit(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 	): AggregateCommitToken<Evt> {
-		this.assertOpen("session.enrollDeleted");
+		this.assertOpen("session.remove");
 		const token = this.commitEnrollment.enrollDeleted(aggregate);
 		this._deleted.add(aggregate);
 		// One call does ALL the deletion bookkeeping: the identity-map
@@ -559,15 +803,26 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	}
 
 	/**
-	 * End-of-run safety net: a loaded aggregate (registered in the identity
-	 * map via `findById`) that carries pending events but was never enrolled
-	 * is almost certainly a forgotten `save()` / `enrollSaved`, whose events
-	 * would otherwise be silently dropped. Convert that silent loss into a
-	 * loud, rolling-back {@link UnenrolledChangesError}. Only sees loaded
-	 * aggregates; a freshly created one that was never enrolled is invisible
-	 * to the kit (the contract test suite remains the full mitigation).
+	 * End-of-run safety net. A loaded aggregate whose version or pending event
+	 * batch changed without `update` intent would otherwise be silently lost.
+	 * An aggregate that changed after registration could persist state and
+	 * events from different moments. Both violations reject inside the
+	 * transaction.
 	 */
-	public assertAllChangesEnrolled(): void {
+	public assertReadyToCommit(): void {
+		for (const entry of this._trackedAggregates) {
+			if (entry.intent !== undefined) {
+				this.assertUnchangedAfterRegistration(entry);
+				continue;
+			}
+			if (
+				entry.lifecycle === "loaded" &&
+				entry.aggregate.version !== entry.expectedVersion
+			) {
+				throw new UnenrolledChangesError(String(entry.aggregate.id));
+			}
+		}
+
 		for (const instance of this._identityMap.instancesWithNewPendingEvents()) {
 			if (
 				this._enrolled.has(instance as IAggregateRoot<Id<string>, Evt>) ||
@@ -576,7 +831,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 				continue;
 			}
 			// Events were recorded on a loaded aggregate after it was
-			// registered, yet it was never enrolled: a forgotten save whose
+			// registered, yet it has no write intent: a forgotten update whose
 			// events would be silently dropped.
 			const id = (instance as { id?: unknown }).id;
 			throw new UnenrolledChangesError(String(id));
@@ -594,6 +849,7 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 		// bypass OCC). The session getter already throws after close;
 		// clearing covers refs captured before.
 		this._identityMap.clear();
+		this._trackedAggregates.clear();
 	}
 
 	public assertOpen(operation: string): void {
@@ -603,22 +859,16 @@ class Session<Evt extends AnyDomainEvent> implements UnitOfWorkSession<Evt> {
 	}
 }
 
-function makeContext<TCtx, TRepos, Evt extends AnyDomainEvent>(
+function makeContext<TRepos, Evt extends AnyDomainEvent>(
 	repositories: TRepos,
-	transaction: TCtx,
 	session: Session<Evt>,
 	signal: AbortSignal | undefined,
-): UnitOfWorkContext<TCtx, TRepos, Evt> {
+): UnitOfWorkContext<TRepos> {
 	return {
 		get repositories(): TRepos {
 			session.assertOpen("context.repositories");
 			return repositories;
 		},
-		get rawTransaction(): TCtx {
-			session.assertOpen("context.rawTransaction");
-			return transaction;
-		},
-		session,
 		// The caller's own signal: exposed directly, not gated by
 		// assertOpen, so polling `aborted` after close stays harmless.
 		signal,

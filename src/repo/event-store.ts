@@ -118,13 +118,12 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *     if (result.isErr()) throw result.error; // corrupt stream
  *     fromVersion += page.events.length;
  *   }
- *   this.session.identityMap.set(Order, id, order);
- *   return order;
+ *   return this.session.trackLoaded(Order, order);
  * }
  *
  * async save(order: Order): Promise<void> {
  *   if (order.pendingEvents.length === 0) return;
- *   this.session.enrollSaved(order);
+ *   this.session.update(order);
  *   await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
  *     expectedVersion: order.persistedVersion ?? 0,
  *   });

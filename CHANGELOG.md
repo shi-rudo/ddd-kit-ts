@@ -59,6 +59,31 @@ commands that loaded an aggregate call `update`. Replace `delete` with `remove`
 only for genuine physical removal; business cancellation, archival, closure,
 and revocation remain aggregate behavior followed by `update`.
 
+### Changed (breaking): the Unit of Work owns aggregate write tracking
+
+- Repository read paths call `session.trackLoaded(AggregateClass, aggregate)`
+  before returning a restored aggregate. The Unit of Work identity-maps the
+  instance and captures its current version as the optimistic-concurrency
+  expectation before application code can mutate it.
+- Application-facing `add`, `update`, and `remove` methods are Unit-of-Work
+  registrations. The repository facade replaces same-named adapter methods,
+  so those calls cannot perform durable I/O early or omit event harvesting.
+- `update` and `remove` accept only the exact instance loaded by the active
+  Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
+  mixing write intents, or changing an aggregate after registration throws
+  `AggregateTrackingError` and rolls the transaction back.
+- The application work context no longer exposes `rawTransaction` or
+  `session`. Repository factories still receive both as adapter wiring, but
+  use cases depend only on their consumer-owned repository ports and the
+  cancellation signal.
+- `UnitOfWorkSession.enrollSaved` and `enrollDeleted` are removed. Its identity
+  map is a read-only lookup view; adapters register hydration through
+  `trackLoaded`, while the Unit of Work owns insertion, update, removal,
+  tombstones, event harvest, and commit acknowledgement.
+- Every transaction attempt receives fresh tracking state. Commit or rollback
+  closes and clears the identity map, so an aggregate instance from a failed
+  attempt cannot silently participate in a retry.
+
 ### Changed (breaking): aggregate decisions are recorded by the shell
 
 - Aggregate behavior now creates an immutable `UncommittedDomainEvent` with
