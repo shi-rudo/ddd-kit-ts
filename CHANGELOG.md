@@ -81,11 +81,18 @@ and revocation remain aggregate behavior followed by `update`.
 - A repository factory must return an adapter object. Invalid `null`, primitive,
   or callable results fail during wiring with
   `InvalidRepositoryAdapterError` instead of reaching application code as a
-  malformed facade.
+  malformed facade. `RepositoryDefinition` now rejects callable result types at
+  compile time, and a Unit of Work accepts only definitions whose transaction
+  context and event family match its scope and outbox.
 - `update` and `remove` accept only the exact instance loaded by the active
   Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
   mixing write intents, or changing an aggregate after registration throws
   `AggregateTrackingError` and rolls the transaction back.
+- One aggregate instance cannot be registered through two repository
+  definitions in the same operation. Repository facades also guard reads,
+  getters, and previously captured method references after close, while
+  ordinary reflection such as `Object.defineProperty` and `Object.freeze`
+  remains invariant-safe.
 - The application work context no longer exposes `rawTransaction` or a
   tracking session. Repository definitions receive the transaction and a
   narrow `RepositoryTracking` capability as adapter wiring, while use cases
@@ -197,9 +204,10 @@ policy and schema remain outside the aggregate.
   The route rejects malformed or lossy command data with
   `InvalidCommandMessageError` before calling the adapter.
 - Add `createCommandOutboxContractTests` for adapter authors. The reusable
-  suite checks exact-retry deduplication, conflicting-origin rejection,
-  atomic batches, input order, empty receipts and source-cursor progression,
-  plus rollback when the harness declares that capability.
+  suite checks exact-retry deduplication, conflicting message, source, and
+  position reuse, atomic batches, input order, multi-event commit positions,
+  empty receipts and source-cursor progression, plus rollback when the harness
+  declares that capability.
 - Migrate the event-sourced checkout example from command-shaped facts such as
   `CheckoutPaymentRequested` to private process facts such as
   `CheckoutStartedAwaitingPayment`. These facts are not published on the

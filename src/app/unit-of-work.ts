@@ -131,6 +131,7 @@ export type AggregateWriteIntent = "add" | "update" | "remove";
 export type AggregateTrackingFailure =
 	| "not_loaded"
 	| "loaded_as_new"
+	| "different_repository"
 	| "conflicting_intent"
 	| "mutated_after_registration";
 
@@ -172,6 +173,12 @@ function trackingFailureMessage(
 			return (
 				`Aggregate ${aggregateId} cannot be added as new because it was ` +
 				"loaded by this unit of work. Use update for a loaded aggregate."
+			);
+		case "different_repository":
+			return (
+				`Aggregate ${aggregateId} cannot be registered for ${operation} through ` +
+				"a different repository in the same unit of work. One aggregate instance " +
+				"must remain owned by the repository definition that first tracked it."
 			);
 		case "conflicting_intent":
 			return (
@@ -348,7 +355,7 @@ export interface RepositoryDefinition<
 	readonly create: (
 		transaction: TCtx,
 		tracking: RepositoryTracking<TAggregate>,
-	) => TRepository;
+	) => TRepository extends (...args: never[]) => unknown ? never : TRepository;
 	/**
 	 * Performs the registered write during the Unit of Work's commit phase.
 	 *
@@ -403,7 +410,8 @@ export function defineRepository<
 		TChangeSet,
 		Evt,
 		TRemoval
-	>,
+	> &
+		(TRepository extends (...args: never[]) => unknown ? never : unknown),
 ): RepositoryDefinition<
 	TCtx,
 	TRepository,
@@ -419,6 +427,33 @@ export function defineRepository<
 /** Application-facing repositories inferred from their adapter definitions. */
 export type RepositoriesOf<TDefinitions> = {
 	[K in keyof TDefinitions]: RepositoryFacadeOf<TDefinitions[K]>;
+};
+
+/**
+ * Preserves each concrete repository definition while rejecting entries whose
+ * transaction context or aggregate event family does not belong to the Unit
+ * of Work that owns them.
+ */
+export type CompatibleRepositoryDefinitions<
+	Evt extends AnyDomainEvent,
+	TCtx,
+	TDefinitions,
+> = {
+	[K in keyof TDefinitions]: TDefinitions[K] extends {
+		readonly create: (
+			transaction: infer TDefinitionContext,
+			tracking: infer _TTracking,
+		) => unknown;
+		readonly aggregate: AggregateClass<infer TAggregate>;
+	}
+		? TCtx extends TDefinitionContext
+			? TAggregate extends IAggregateRoot<Id<string>, infer TDefinitionEvent>
+				? [TDefinitionEvent] extends [Evt]
+					? TDefinitions[K]
+					: never
+				: never
+			: never
+		: never;
 };
 
 type RepositoryFacadeOf<TDefinition> = TDefinition extends {
@@ -457,7 +492,7 @@ export interface PhysicalRemovalRegistration<
 export interface UnitOfWorkDeps<
 	Evt extends AnyDomainEvent,
 	TCtx,
-	TDefinitions,
+	TDefinitions extends Record<string, unknown>,
 > {
 	scope: TransactionScope<TCtx>;
 	/**
@@ -493,7 +528,7 @@ export interface UnitOfWorkDeps<
 	 * application phase. Default `30000`ms.
 	 */
 	postCommitTimeoutMs?: number;
-	repositories: TDefinitions;
+	repositories: CompatibleRepositoryDefinitions<Evt, TCtx, TDefinitions>;
 }
 
 /**
@@ -715,53 +750,107 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 
 	const source = adapter as object;
 	const facadeTarget = Object.create(Reflect.getPrototypeOf(source)) as object;
-	const methodCache = new Map<PropertyKey, unknown>();
-	const writes = new Map<PropertyKey, (aggregate: unknown) => void>();
+	const methodCache = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+	const writes = new Set<PropertyKey>();
+	const lifecycleOperations = new Set<PropertyKey>(["add", "update", "remove"]);
+	const operationName = (property: PropertyKey): string =>
+		`repository.${typeof property === "symbol" ? (property.description ?? property.toString()) : property}`;
+	const readSource = (property: PropertyKey): unknown => {
+		session.assertOpen(operationName(property));
+		const value = Reflect.get(source, property, source);
+		if (typeof value !== "function") return value;
+		const cached = methodCache.get(property);
+		if (cached) return cached;
+		const guarded = (...args: unknown[]): unknown => {
+			session.assertOpen(operationName(property));
+			return Reflect.apply(value, source, args);
+		};
+		methodCache.set(property, guarded);
+		return guarded;
+	};
+	const defineForwardedOwnProperty = (
+		property: PropertyKey,
+		descriptor: PropertyDescriptor,
+	): void => {
+		Object.defineProperty(facadeTarget, property, {
+			configurable: true,
+			enumerable: descriptor.enumerable ?? false,
+			get: () => readSource(property),
+			set:
+				("value" in descriptor && descriptor.writable) || descriptor.set
+					? (value: unknown) => {
+							session.assertOpen(operationName(property));
+							if (!Reflect.set(source, property, value, source)) {
+								throw new TypeError(
+									`Cannot assign to repository property ${String(property)}`,
+								);
+							}
+						}
+					: undefined,
+		});
+	};
 
 	const operations = definition.physicalRemoval
 		? (["add", "update", "remove"] as const)
 		: (["add", "update"] as const);
 	for (const operation of operations) {
-		writes.set(operation, (aggregate) => {
-			session[operation](
-				aggregate as IAggregateRoot<Id<string>, Evt>,
-				definition,
-			);
+		writes.add(operation);
+		Object.defineProperty(facadeTarget, operation, {
+			configurable: false,
+			enumerable: false,
+			writable: false,
+			value: (aggregate: unknown) => {
+				session.assertOpen(operationName(operation));
+				session[operation](
+					aggregate as IAggregateRoot<Id<string>, Evt>,
+					definition,
+				);
+			},
 		});
+	}
+	for (const property of Reflect.ownKeys(source)) {
+		if (lifecycleOperations.has(property)) continue;
+		const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+		if (descriptor) defineForwardedOwnProperty(property, descriptor);
 	}
 
 	return new Proxy(facadeTarget, {
-		get: (_target, property) => {
-			const write = writes.get(property);
-			if (write) return write;
+		get: (target, property, receiver) => {
+			session.assertOpen(operationName(property));
+			const own = Reflect.getOwnPropertyDescriptor(target, property);
+			if (own) return Reflect.get(target, property, receiver);
 			if (property === "remove") return undefined;
-			if (methodCache.has(property)) return methodCache.get(property);
-			const value = Reflect.get(source, property, source);
-			if (typeof value !== "function") return value;
-			const bound = value.bind(source);
-			methodCache.set(property, bound);
-			return bound;
+			return readSource(property);
 		},
-		set: (_target, property, value) =>
-			Reflect.set(source, property, value, source),
-		has: (_target, property) =>
-			writes.has(property) ||
-			(property !== "remove" && Reflect.has(source, property)),
-		ownKeys: () =>
-			Reflect.ownKeys(source).filter(
-				(property) =>
-					property !== "add" && property !== "update" && property !== "remove",
-			),
-		getOwnPropertyDescriptor: (_target, property) => {
-			if (
-				property === "add" ||
-				property === "update" ||
-				property === "remove"
-			) {
-				return undefined;
+		set: (target, property, value, receiver) => {
+			session.assertOpen(operationName(property));
+			if (lifecycleOperations.has(property)) return false;
+			if (Reflect.getOwnPropertyDescriptor(target, property)) {
+				return Reflect.set(target, property, value, receiver);
 			}
+			if (!Reflect.isExtensible(target)) return false;
+			const set = Reflect.set(source, property, value, source);
 			const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
-			return descriptor ? { ...descriptor, configurable: true } : undefined;
+			if (set && descriptor) defineForwardedOwnProperty(property, descriptor);
+			return set;
+		},
+		has: (target, property) => {
+			session.assertOpen(operationName(property));
+			return (
+				writes.has(property) ||
+				(property !== "remove" &&
+					(Reflect.has(target, property) || Reflect.has(source, property)))
+			);
+		},
+		defineProperty: (target, property, descriptor) => {
+			session.assertOpen(operationName(property));
+			if (
+				lifecycleOperations.has(property) &&
+				!Reflect.getOwnPropertyDescriptor(target, property)
+			) {
+				return false;
+			}
+			return Reflect.defineProperty(target, property, descriptor);
 		},
 	}) as TRepository;
 }
@@ -865,6 +954,14 @@ class Session<Evt extends AnyDomainEvent> {
 		this.assertOpen("repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
+		if (existing && existing.definition !== definition) {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				"add",
+				"different_repository",
+				existing.intent,
+			);
+		}
 		if (existing?.lifecycle === "loaded") {
 			throw new AggregateTrackingError(
 				String(aggregate.id),

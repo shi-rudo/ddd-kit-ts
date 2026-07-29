@@ -29,6 +29,7 @@ import {
 	defineRepository,
 	InvalidRepositoryAdapterError,
 	NestedUnitOfWorkError,
+	type RepositoryDefinition,
 	type RepositoryTracking,
 	RollbackError,
 	TransactionClosedError,
@@ -521,6 +522,37 @@ describe("UnitOfWork", () => {
 			);
 		});
 
+		it("rejects adding one aggregate instance through two repository definitions", async () => {
+			const aggregate = createMockAggregate("o-1");
+			let flushCalls = 0;
+			const definition = () =>
+				defineRepository({
+					aggregate: MockAggregate,
+					persistence: versionPersistenceModel<MockAggregate>(),
+					create: () => ({}),
+					flush: async () => {
+						flushCalls += 1;
+					},
+				});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					primary: definition(),
+					secondary: definition(),
+				},
+			});
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.primary.add(aggregate);
+					repositories.secondary.add(aggregate);
+				}),
+				"different_repository",
+			);
+			expect(flushCalls).toBe(0);
+		});
+
 		it("rejects conflicting write intents", async () => {
 			const { uow } = createUow();
 			const aggregate = createMockAggregate("o-1");
@@ -797,6 +829,44 @@ describe("UnitOfWork", () => {
 			await uow.run(async () => undefined);
 
 			expect(constructed).toBe(2);
+		});
+
+		it("supports freezing and defining properties without breaking facade reflection", async () => {
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => ({ label: "orders" }),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				const repository = repositories.orders as typeof repositories.orders &
+					Record<string, unknown>;
+				Object.defineProperty(repository, "inspectionTag", {
+					value: "scoped",
+					enumerable: true,
+					configurable: false,
+				});
+				expect(repository.inspectionTag).toBe("scoped");
+				expect(Reflect.ownKeys(repository)).toContain("inspectionTag");
+				expect(() =>
+					Object.defineProperty(repository, "remove", {
+						value: () => undefined,
+						configurable: false,
+					}),
+				).toThrow(TypeError);
+				expect(Reflect.set(repository, "remove", () => undefined)).toBe(false);
+				expect("remove" in repository).toBe(false);
+
+				expect(() => Object.freeze(repository)).not.toThrow();
+				expect(Object.isFrozen(repository)).toBe(true);
+			});
 		});
 	});
 
@@ -1206,6 +1276,128 @@ describe("UnitOfWork", () => {
 			expect(() =>
 				leakedTracking.trackLoaded(createMockAggregate("o-1")),
 			).toThrow(TransactionClosedError);
+		});
+
+		it("invalidates repository reads, cached methods, and getters after close", async () => {
+			let getterCalls = 0;
+			class ReadRepository {
+				readonly #value = "transactional-read";
+
+				read(): string {
+					return this.#value;
+				}
+
+				get status(): string {
+					getterCalls += 1;
+					return this.#value;
+				}
+			}
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => new ReadRepository(),
+					}),
+				},
+			});
+			let leaked!: Pick<ReadRepository, "read" | "status">;
+			let cachedRead!: () => string;
+
+			await uow.run(async ({ repositories }) => {
+				leaked = repositories.orders;
+				cachedRead = repositories.orders.read;
+				expect(leaked.read()).toBe("transactional-read");
+				expect(leaked.status).toBe("transactional-read");
+			});
+
+			const callsWhileOpen = getterCalls;
+			expect(() => leaked.read()).toThrow(TransactionClosedError);
+			expect(() => cachedRead()).toThrow(TransactionClosedError);
+			expect(() => leaked.status).toThrow(TransactionClosedError);
+			expect(getterCalls).toBe(callsWhileOpen);
+		});
+	});
+
+	describe("static repository compatibility", () => {
+		it("rejects callable adapters and definitions from another context or event family", () => {
+			type CallableRepository = () => void;
+			const callableDefinition: RepositoryDefinition<
+				undefined,
+				CallableRepository,
+				MockAggregate,
+				Version,
+				Version | undefined,
+				TestEvent
+			> = {
+				aggregate: MockAggregate,
+				persistence: versionPersistenceModel<MockAggregate>(),
+				// @ts-expect-error RepositoryDefinition excludes callable adapter results
+				create: () => () => undefined,
+				flush: async () => {},
+			};
+
+			const wrongContext = defineRepository({
+				aggregate: MockAggregate,
+				persistence: versionPersistenceModel<MockAggregate>(),
+				create: (_tx: { readonly connection: string }) => ({}),
+				flush: async (_tx: { readonly connection: string }) => {},
+			});
+			const incompatibleDefinitionsMustFailToCompile = (): void => {
+				new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					// @ts-expect-error inferred repository context must match the Unit of Work scope
+					repositories: { orders: wrongContext },
+				});
+				new UnitOfWork<
+					TestEvent,
+					undefined,
+					{ readonly orders: typeof wrongContext }
+				>({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					// @ts-expect-error repository transaction context must accept the Unit of Work context
+					repositories: { orders: wrongContext },
+				});
+
+				type OtherEvent = DomainEvent<"PaymentCaptured", { paymentId: string }>;
+				class OtherAggregate extends AggregateRoot<
+					Readonly<Record<string, never>>,
+					TestId,
+					OtherEvent
+				> {
+					protected readonly aggregateType = "Payment";
+				}
+				const wrongEvent = defineRepository({
+					aggregate: OtherAggregate,
+					persistence: versionPersistenceModel<OtherAggregate>(),
+					create: (_tx: undefined) => ({}),
+					flush: async (_tx: undefined) => {},
+				});
+				new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					// @ts-expect-error inferred repository events must be accepted by the outbox
+					repositories: { payments: wrongEvent },
+				});
+				new UnitOfWork<
+					TestEvent,
+					undefined,
+					{ readonly payments: typeof wrongEvent }
+				>({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					// @ts-expect-error repository events must be accepted by the Unit of Work outbox
+					repositories: { payments: wrongEvent },
+				});
+			};
+
+			expect(callableDefinition).toBeDefined();
+			expect(incompatibleDefinitionsMustFailToCompile).toBeTypeOf("function");
 		});
 	});
 

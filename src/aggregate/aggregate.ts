@@ -55,8 +55,8 @@ export interface AggregateSnapshot<TState> {
  *
  * Full per-member documentation lives on the concrete `BaseAggregate`
  * class; the interface is intentionally terse to avoid drift. Persistence
- * Domain facts are readable, but acknowledgement and pending-event disposal are not
- * part of this surface. `withCommit` / `UnitOfWork` hold that authority.
+ * facts are readable, but acknowledgement and pending-event disposal are not
+ * part of this surface. `withCommit` and `UnitOfWork` hold that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`

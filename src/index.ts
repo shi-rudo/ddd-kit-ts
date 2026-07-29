@@ -121,6 +121,7 @@ export {
 	type AggregateTrackingFailure,
 	type AggregateWriteIntent,
 	type AggregateWriteRegistration,
+	type CompatibleRepositoryDefinitions,
 	CommitError,
 	defineRepository,
 	InvalidRepositoryAdapterError,

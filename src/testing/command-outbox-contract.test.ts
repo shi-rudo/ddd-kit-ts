@@ -95,8 +95,11 @@ describe("command outbox contract suite", () => {
 			expect.arrayContaining([
 				"deduplicates an exact retry by origin event id",
 				"rejects conflicting reuse of an origin event id",
+				"rejects an origin event id reused with a different source",
+				"rejects an origin event id reused with a different position",
 				"rejects a conflicting batch atomically",
 				"retains command and commit input order",
+				"retains every position in a multi-event aggregate commit",
 				"retains an empty command receipt and advances the source cursor",
 				"a rolled-back add leaves no receipt or command behind",
 			]),
@@ -129,5 +132,86 @@ describe("command outbox contract suite", () => {
 
 		expect(retryTest).toBeDefined();
 		await expect(retryTest?.run()).rejects.toThrow(/exact retry|one receipt/i);
+	});
+
+	it("exposes an adapter that compares messages but ignores origin facts", async () => {
+		const broken: CommandOutboxContractHarness<TestCommand> = {
+			...createInMemoryHarness(),
+			createEnvironment: async () => {
+				const rows = new Map<
+					string,
+					CommandOutboxCommitCandidate<TestCommand>
+				>();
+				const outbox: CommandOutboxWriter<TestCommand> = {
+					add: async (commits) => {
+						for (const commit of commits) {
+							const prior = rows.get(commit.origin.eventId);
+							if (prior && !same(prior.messages, commit.messages)) {
+								throw new Error("conflicting messages");
+							}
+							if (!prior) rows.set(commit.origin.eventId, clone(commit));
+						}
+					},
+				};
+				return {
+					outbox,
+					addCommitted: (commits) => outbox.add(commits),
+					readAll: async () => [...rows.values()].map(clone),
+				};
+			},
+			providesRolledBackAdds: false,
+		};
+		const contract = createCommandOutboxContractTests(broken);
+
+		for (const name of [
+			"rejects an origin event id reused with a different source",
+			"rejects an origin event id reused with a different position",
+		]) {
+			const test = contract.find((candidate) => candidate.name === name);
+			expect(test).toBeDefined();
+			await expect(test?.run()).rejects.toThrow(/origin|reject/i);
+		}
+	});
+
+	it("exposes an adapter that flattens multi-event commit positions", async () => {
+		const broken: CommandOutboxContractHarness<TestCommand> = {
+			...createInMemoryHarness(),
+			createEnvironment: async () => {
+				const rows: Array<CommandOutboxCommitCandidate<TestCommand>> = [];
+				const outbox: CommandOutboxWriter<TestCommand> = {
+					add: async (commits) => {
+						rows.push(
+							...commits.map((commit) =>
+								clone({
+									...commit,
+									origin: {
+										...commit.origin,
+										position: {
+											...commit.origin.position,
+											commitSequence: 0,
+											commitSize: 1,
+										},
+									},
+								}),
+							),
+						);
+					},
+				};
+				return {
+					outbox,
+					addCommitted: (commits) => outbox.add(commits),
+					readAll: async () => rows.map(clone),
+				};
+			},
+			providesRolledBackAdds: false,
+		};
+		const test = createCommandOutboxContractTests(broken).find(
+			(candidate) =>
+				candidate.name ===
+				"retains every position in a multi-event aggregate commit",
+		);
+
+		expect(test).toBeDefined();
+		await expect(test?.run()).rejects.toThrow(/position|multi-event/i);
 	});
 });

@@ -111,6 +111,60 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 			}),
 		},
 		{
+			name: "rejects an origin event id reused with a different source",
+			run: inEnv(async (env) => {
+				const original = commit(1);
+				await env.addCommitted([original]);
+				const conflict: CommandOutboxCommitCandidate<C> = {
+					...original,
+					origin: {
+						...original.origin,
+						source: {
+							...original.origin.source,
+							aggregateId: "order-2",
+						},
+					},
+				};
+				const rejection = await captureRejection(env.addCommitted([conflict]));
+				assert(
+					rejection !== undefined,
+					"a reused origin event id with a different aggregate source must reject",
+				);
+				const stored = await env.readAll();
+				assert(
+					deepEqual(stored, [original]),
+					"a source conflict must leave the original receipt unchanged",
+				);
+			}),
+		},
+		{
+			name: "rejects an origin event id reused with a different position",
+			run: inEnv(async (env) => {
+				const original = commit(1);
+				await env.addCommitted([original]);
+				const conflict: CommandOutboxCommitCandidate<C> = {
+					...original,
+					origin: {
+						...original.origin,
+						position: {
+							...original.origin.position,
+							aggregateVersion: 2,
+						},
+					},
+				};
+				const rejection = await captureRejection(env.addCommitted([conflict]));
+				assert(
+					rejection !== undefined,
+					"a reused origin event id with a different commit position must reject",
+				);
+				const stored = await env.readAll();
+				assert(
+					deepEqual(stored, [original]),
+					"a position conflict must leave the original receipt unchanged",
+				);
+			}),
+		},
+		{
 			name: "rejects a conflicting batch atomically",
 			run: inEnv(async (env) => {
 				const original = commit(1);
@@ -167,6 +221,46 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 						],
 					),
 					"commands inside each receipt must retain mapper order",
+				);
+			}),
+		},
+		{
+			name: "retains every position in a multi-event aggregate commit",
+			run: inEnv(async (env) => {
+				const first = commit(10);
+				const second = commit(11);
+				const commitSize = 2;
+				const aggregateVersion = 7;
+				const multiEventCommit: ReadonlyArray<CommandOutboxCommitCandidate<C>> =
+					[
+						{
+							...first,
+							origin: {
+								...first.origin,
+								position: {
+									aggregateVersion,
+									commitSequence: 0,
+									commitSize,
+								},
+							},
+						},
+						{
+							...second,
+							origin: {
+								...second.origin,
+								position: {
+									aggregateVersion,
+									commitSequence: 1,
+									commitSize,
+								},
+							},
+						},
+					];
+				await env.addCommitted(multiEventCommit);
+				const stored = await env.readAll();
+				assert(
+					deepEqual(stored, multiEventCommit),
+					"a multi-event commit must retain its shared version, sequence, and size for every receipt",
 				);
 			}),
 		},
