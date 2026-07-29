@@ -115,26 +115,42 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 			run: inEnv(async (env) => {
 				const original = commit(1);
 				await env.addCommitted([original]);
-				const conflict: CommandOutboxCommitCandidate<C> = {
-					...original,
-					origin: {
-						...original.origin,
-						source: {
-							...original.origin.source,
-							aggregateId: "order-2",
+				const conflicts: ReadonlyArray<CommandOutboxCommitCandidate<C>> = [
+					{
+						...original,
+						origin: {
+							...original.origin,
+							source: {
+								...original.origin.source,
+								aggregateId: "order-2",
+							},
 						},
 					},
-				};
-				const rejection = await captureRejection(env.addCommitted([conflict]));
-				assert(
-					rejection !== undefined,
-					"a reused origin event id with a different aggregate source must reject",
-				);
-				const stored = await env.readAll();
-				assert(
-					deepEqual(stored, [original]),
-					"a source conflict must leave the original receipt unchanged",
-				);
+					{
+						...original,
+						origin: {
+							...original.origin,
+							source: {
+								...original.origin.source,
+								aggregateType: "Order",
+							},
+						},
+					},
+				];
+				for (const conflict of conflicts) {
+					const rejection = await captureRejection(
+						env.addCommitted([conflict]),
+					);
+					assert(
+						rejection !== undefined,
+						"a reused origin event id with any different aggregate source fact must reject",
+					);
+					const stored = await env.readAll();
+					assert(
+						deepEqual(stored, [original]),
+						"a source conflict must leave the original receipt unchanged",
+					);
+				}
 			}),
 		},
 		{
@@ -142,26 +158,35 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 			run: inEnv(async (env) => {
 				const original = commit(1);
 				await env.addCommitted([original]);
-				const conflict: CommandOutboxCommitCandidate<C> = {
-					...original,
-					origin: {
-						...original.origin,
-						position: {
-							...original.origin.position,
-							aggregateVersion: 2,
+				const positions = [
+					{ aggregateVersion: 2 },
+					{ commitSequence: 1 },
+					{ commitSize: 2 },
+				] as const;
+				for (const position of positions) {
+					const conflict: CommandOutboxCommitCandidate<C> = {
+						...original,
+						origin: {
+							...original.origin,
+							position: {
+								...original.origin.position,
+								...position,
+							},
 						},
-					},
-				};
-				const rejection = await captureRejection(env.addCommitted([conflict]));
-				assert(
-					rejection !== undefined,
-					"a reused origin event id with a different commit position must reject",
-				);
-				const stored = await env.readAll();
-				assert(
-					deepEqual(stored, [original]),
-					"a position conflict must leave the original receipt unchanged",
-				);
+					};
+					const rejection = await captureRejection(
+						env.addCommitted([conflict]),
+					);
+					assert(
+						rejection !== undefined,
+						"a reused origin event id with any different commit position fact must reject",
+					);
+					const stored = await env.readAll();
+					assert(
+						deepEqual(stored, [original]),
+						"a position conflict must leave the original receipt unchanged",
+					);
+				}
 			}),
 		},
 		{

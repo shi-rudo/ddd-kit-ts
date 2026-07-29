@@ -751,7 +751,9 @@ describe("UnitOfWork", () => {
 							aggregate: MockAggregate,
 							persistence: versionPersistenceModel<MockAggregate>(),
 							flush: async () => {},
-							create: () => factoryResult,
+							// Deliberately defeat the static boundary to exercise the runtime
+							// guard for JavaScript consumers and dishonest assertions.
+							create: () => factoryResult as unknown as object,
 						},
 					},
 				});
@@ -832,6 +834,16 @@ describe("UnitOfWork", () => {
 		});
 
 		it("supports freezing and defining properties without breaking facade reflection", async () => {
+			const adapter = Object.defineProperties(
+				{ label: "orders" },
+				{
+					fixed: {
+						value: "fixed",
+						enumerable: true,
+						configurable: false,
+					},
+				},
+			);
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
@@ -840,7 +852,7 @@ describe("UnitOfWork", () => {
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
-						create: () => ({ label: "orders" }),
+						create: () => adapter,
 					}),
 				},
 			});
@@ -863,6 +875,22 @@ describe("UnitOfWork", () => {
 				).toThrow(TypeError);
 				expect(Reflect.set(repository, "remove", () => undefined)).toBe(false);
 				expect("remove" in repository).toBe(false);
+				Object.defineProperty(repository, "label", {
+					value: "facade label",
+					configurable: true,
+				});
+				expect(repository.label).toBe("facade label");
+				expect(adapter.label).toBe("orders");
+				expect(Reflect.deleteProperty(repository, "label")).toBe(true);
+				expect(repository.label).toBe("orders");
+				expect(Reflect.deleteProperty(repository, "label")).toBe(true);
+				expect(repository.label).toBeUndefined();
+				expect("label" in repository).toBe(false);
+				expect(Reflect.ownKeys(repository)).not.toContain("label");
+				expect("label" in adapter).toBe(false);
+				expect(Reflect.deleteProperty(repository, "fixed")).toBe(false);
+				expect(repository.fixed).toBe("fixed");
+				expect("fixed" in adapter).toBe(true);
 
 				expect(() => Object.freeze(repository)).not.toThrow();
 				expect(Object.isFrozen(repository)).toBe(true);
@@ -1324,6 +1352,15 @@ describe("UnitOfWork", () => {
 
 	describe("static repository compatibility", () => {
 		it("rejects callable adapters and definitions from another context or event family", () => {
+			const inferredCallableDefinitionMustFailToCompile = (): void => {
+				// @ts-expect-error inferred repository adapters must be non-callable objects
+				defineRepository({
+					aggregate: MockAggregate,
+					persistence: versionPersistenceModel<MockAggregate>(),
+					create: (_transaction: undefined) => (_required: string) => undefined,
+					flush: async (_transaction: undefined) => {},
+				});
+			};
 			type CallableRepository = () => void;
 			const callableDefinition: RepositoryDefinition<
 				undefined,
@@ -1347,6 +1384,45 @@ describe("UnitOfWork", () => {
 				flush: async (_tx: { readonly connection: string }) => {},
 			});
 			const incompatibleDefinitionsMustFailToCompile = (): void => {
+				new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						// @ts-expect-error repositories require a complete persistence definition
+						incomplete: {
+							aggregate: MockAggregate,
+							create: (_transaction: undefined) => ({}),
+						},
+					},
+				});
+				new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						// @ts-expect-error raw repository definitions must reject callable adapters
+						callable: {
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							create: (_transaction: undefined) => () => undefined,
+							flush: async (_transaction: undefined) => {},
+						},
+					},
+				});
+				new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						// @ts-expect-error flush must accept the Unit of Work transaction context
+						wrongFlushContext: {
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							create: (_transaction: undefined) => ({}),
+							flush: async (_transaction: {
+								readonly connection: string;
+							}) => {},
+						},
+					},
+				});
 				new UnitOfWork({
 					scope: createMockScope(),
 					outbox: createMockOutbox(),
@@ -1397,6 +1473,9 @@ describe("UnitOfWork", () => {
 			};
 
 			expect(callableDefinition).toBeDefined();
+			expect(inferredCallableDefinitionMustFailToCompile).toBeTypeOf(
+				"function",
+			);
 			expect(incompatibleDefinitionsMustFailToCompile).toBeTypeOf("function");
 		});
 	});

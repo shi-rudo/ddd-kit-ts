@@ -134,7 +134,7 @@ describe("command outbox contract suite", () => {
 		await expect(retryTest?.run()).rejects.toThrow(/exact retry|one receipt/i);
 	});
 
-	it("exposes an adapter that compares messages but ignores origin facts", async () => {
+	it("exposes an adapter that compares only selected origin facts", async () => {
 		const broken: CommandOutboxContractHarness<TestCommand> = {
 			...createInMemoryHarness(),
 			createEnvironment: async () => {
@@ -146,7 +146,14 @@ describe("command outbox contract suite", () => {
 					add: async (commits) => {
 						for (const commit of commits) {
 							const prior = rows.get(commit.origin.eventId);
-							if (prior && !same(prior.messages, commit.messages)) {
+							if (
+								prior &&
+								(!same(prior.messages, commit.messages) ||
+									prior.origin.source.aggregateId !==
+										commit.origin.source.aggregateId ||
+									prior.origin.position.aggregateVersion !==
+										commit.origin.position.aggregateVersion)
+							) {
 								throw new Error("conflicting messages");
 							}
 							if (!prior) rows.set(commit.origin.eventId, clone(commit));

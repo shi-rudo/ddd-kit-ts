@@ -94,8 +94,9 @@ interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
  * this carries the `WIRING` category and should crash loud.
  *
  * **Honest scope of this guard:** the kit can only invalidate what it
- * controls: the context getters and tracking capability. An adapter that captures
- * its raw transaction handle can still call it as far as the kit can see;
+ * controls: context getters, repository-facade operations, and the tracking
+ * capability. An adapter that captures its raw transaction handle can still call
+ * it as far as the kit can see;
  * whether the driver rejects after close is ORM-specific. Adapter factories
  * must not let that handle escape into application code.
  */
@@ -392,6 +393,9 @@ export interface AggregatePersistenceWrite<
 	readonly events: TAggregate["pendingEvents"];
 }
 
+/** @inline */
+type CallableValue = (...args: never[]) => unknown;
+
 /** Preserves inference while making a repository definition explicit. */
 export function defineRepository<
 	TCtx,
@@ -402,16 +406,19 @@ export function defineRepository<
 	Evt extends AnyDomainEvent = AnyDomainEvent,
 	TRemoval extends boolean = false,
 >(
-	definition: RepositoryDefinition<
-		TCtx,
-		TRepository,
-		TAggregate,
-		TBaseline,
-		TChangeSet,
-		Evt,
-		TRemoval
-	> &
-		(TRepository extends (...args: never[]) => unknown ? never : unknown),
+	definition: {
+		readonly aggregate: AggregateClass<TAggregate>;
+		readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
+		readonly create: (
+			transaction: TCtx,
+			tracking: RepositoryTracking<TAggregate>,
+		) => TRepository;
+		readonly flush: (
+			transaction: NoInfer<TCtx>,
+			write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
+		) => void | Promise<void>;
+		readonly physicalRemoval?: TRemoval;
+	} & (Extract<TRepository, CallableValue> extends never ? unknown : never),
 ): RepositoryDefinition<
 	TCtx,
 	TRepository,
@@ -421,7 +428,15 @@ export function defineRepository<
 	Evt,
 	TRemoval
 > {
-	return Object.freeze({ ...definition });
+	return Object.freeze({ ...definition }) as RepositoryDefinition<
+		TCtx,
+		TRepository,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		Evt,
+		TRemoval
+	>;
 }
 
 /** Application-facing repositories inferred from their adapter definitions. */
@@ -430,9 +445,9 @@ export type RepositoriesOf<TDefinitions> = {
 };
 
 /**
- * Preserves each concrete repository definition while rejecting entries whose
- * transaction context or aggregate event family does not belong to the Unit
- * of Work that owns them.
+ * Preserves each concrete repository definition while rejecting incomplete
+ * entries, callable adapter results, and definitions whose transaction context
+ * or aggregate event family does not belong to the Unit of Work that owns them.
  */
 export type CompatibleRepositoryDefinitions<
 	Evt extends AnyDomainEvent,
@@ -440,16 +455,28 @@ export type CompatibleRepositoryDefinitions<
 	TDefinitions,
 > = {
 	[K in keyof TDefinitions]: TDefinitions[K] extends {
-		readonly create: (
-			transaction: infer TDefinitionContext,
-			tracking: infer _TTracking,
-		) => unknown;
 		readonly aggregate: AggregateClass<infer TAggregate>;
 	}
-		? TCtx extends TDefinitionContext
-			? TAggregate extends IAggregateRoot<Id<string>, infer TDefinitionEvent>
-				? [TDefinitionEvent] extends [Evt]
-					? TDefinitions[K]
+		? TAggregate extends IAggregateRoot<Id<string>, infer TDefinitionEvent>
+			? [TDefinitionEvent] extends [Evt]
+				? TDefinitions[K] extends RepositoryDefinition<
+						infer TDefinitionContext,
+						infer _TRepository,
+						TAggregate,
+						infer _TBaseline,
+						infer _TChangeSet,
+						TDefinitionEvent,
+						infer _TRemoval
+					> & {
+						readonly create: (...args: never[]) => infer TActualRepository;
+					}
+					? TCtx extends TDefinitionContext
+						? [TActualRepository] extends [object]
+							? Extract<TActualRepository, CallableValue> extends never
+								? TDefinitions[K]
+								: never
+							: never
+						: never
 					: never
 				: never
 			: never
@@ -751,6 +778,7 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	const source = adapter as object;
 	const facadeTarget = Object.create(Reflect.getPrototypeOf(source)) as object;
 	const methodCache = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+	const forwardedOwnProperties = new Set<PropertyKey>();
 	const writes = new Set<PropertyKey>();
 	const lifecycleOperations = new Set<PropertyKey>(["add", "update", "remove"]);
 	const operationName = (property: PropertyKey): string =>
@@ -788,6 +816,7 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 						}
 					: undefined,
 		});
+		forwardedOwnProperties.add(property);
 	};
 
 	const operations = definition.physicalRemoval
@@ -850,7 +879,43 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 			) {
 				return false;
 			}
-			return Reflect.defineProperty(target, property, descriptor);
+			const current = Reflect.getOwnPropertyDescriptor(target, property);
+			if (!Reflect.defineProperty(target, property, descriptor)) return false;
+			const next = Reflect.getOwnPropertyDescriptor(target, property);
+			if (
+				forwardedOwnProperties.has(property) &&
+				(current?.get !== next?.get || current?.set !== next?.set)
+			) {
+				forwardedOwnProperties.delete(property);
+			}
+			return true;
+		},
+		deleteProperty: (target, property) => {
+			session.assertOpen(operationName(property));
+			if (lifecycleOperations.has(property)) return false;
+			const targetDescriptor = Reflect.getOwnPropertyDescriptor(
+				target,
+				property,
+			);
+			if (targetDescriptor && !forwardedOwnProperties.has(property)) {
+				return Reflect.deleteProperty(target, property);
+			}
+			const sourceDescriptor = Reflect.getOwnPropertyDescriptor(
+				source,
+				property,
+			);
+			if (
+				targetDescriptor?.configurable === false ||
+				sourceDescriptor?.configurable === false
+			) {
+				return false;
+			}
+			if (!Reflect.deleteProperty(source, property)) return false;
+			if (targetDescriptor && !Reflect.deleteProperty(target, property))
+				return false;
+			forwardedOwnProperties.delete(property);
+			methodCache.delete(property);
+			return true;
 		},
 	}) as TRepository;
 }
