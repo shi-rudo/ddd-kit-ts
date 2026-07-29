@@ -80,7 +80,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * contract suites (`createEventStoreContractTests` and
  * `createEsRepositoryContractTests` from `@shirudo/ddd-kit/testing`).
  * Your adapter implements this port against a real store and must pass
- * those suites. Like the state-stored `IRepository`, its optimistic
+ * those suites. Like the state-stored repository contract, its optimistic
  * concurrency and key isolation are testable adapter contracts, not kit
  * guarantees.
  *

@@ -1,9 +1,9 @@
 /**
  * Opt-in testing entry point (`@shirudo/ddd-kit/testing`).
  *
- * Ships the adapter contract test suites (state-stored and
- * event-sourced repositories, event stores, event and command outboxes,
- * idempotency store):
+ * Ships the adapter contract test suites (event-sourced repositories, event
+ * stores, event and command outboxes, idempotency stores, projections,
+ * snapshots, and deadlines):
  * the kit is ORM- and store-agnostic, so optimistic concurrency, outbox
  * semantics, and the idempotency lifecycle are adapter CONTRACTS the
  * consumer's implementation must prove; this entry provides the proof
@@ -54,13 +54,6 @@ export {
 	type ProjectionCheckpointStoreContractHarness,
 	type ProjectionCheckpointStoreContractTest,
 } from "./testing/projection-checkpoint-contract";
-export {
-	type ContractRepository,
-	createRepositoryContractTests,
-	type RepositoryContractEnvironment,
-	type RepositoryContractHarness,
-	type RepositoryContractTest,
-} from "./testing/repository-contract";
 export {
 	createSnapshotStoreContractTests,
 	type SnapshotStoreContractEnvironment,

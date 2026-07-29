@@ -365,8 +365,8 @@ function createCommitTokenScope<
  * If the transaction rolls back, no acknowledgement occurs: the aggregate
  * keeps its pending events, so the caller can retry or discard the instance.
  *
- * **Do not mutate an aggregate after `repository.save(...)` inside `fn`.**
- * `withCommit` cannot see what `save` wrote; the post-commit
+ * **Do not mutate an aggregate after registering it for persistence inside
+ * `fn`.** `withCommit` cannot see what the repository registered; post-commit
  * internal acknowledgement syncs `persistedVersion` to the CURRENT in-memory
  * version and (on `AggregateRoot`) re-baselines dirty tracking against
  * the CURRENT state. A mutation between `save` and the callback's return
@@ -386,7 +386,7 @@ function createCommitTokenScope<
  * at this layer; that is a Repository contract violation (failure to
  * maintain Fowler's Identity Map per Unit of Work). See
  * `docs/guide/repository.md` → "Identity Map: one instance per
- * aggregate per Unit of Work" for the requirement on `IRepository`
+ * aggregate per Unit of Work" for the requirement on repository
  * implementations that makes this dedupe sound.
  *
  * @example Tx-bound repos (Drizzle, Prisma, Mongo, …)

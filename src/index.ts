@@ -326,7 +326,7 @@ export {
 	InMemorySnapshotStore,
 	type InMemorySnapshotStoreOptions,
 } from "./repo/in-memory-snapshot-store";
-export type { IRepository, IUnitOfWorkRepository } from "./repo/repository";
+export type { AggregatePersistence, Repository } from "./repo/repository";
 // computeBackoffDelay is deliberately NOT exported: internal since 2.x
 // (unit-tested via direct source import), removed from the surface in v3.
 export {

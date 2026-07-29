@@ -28,7 +28,7 @@ export type AggregateClass<TAgg> =
  *
  * This is the shipped implementation of the contract the
  * [Repository guide](../../docs/guide/repository.md) places on
- * `IRepository` implementations: two `findById(id)` calls in the same
+ * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
  * enrollment dedupes by JavaScript object identity. Two instances for
  * one logical aggregate can otherwise produce two tokens, two harvests,

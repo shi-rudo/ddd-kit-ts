@@ -111,7 +111,8 @@ export abstract class BaseAggregate<
 	 * DB-baseline version. `undefined` until the aggregate has been
 	 * persisted or restored at least once. Repository implementations
 	 * route INSERT vs UPDATE on this field and use it as the OCC
-	 * baseline. See `IRepository.save` JSDoc.
+	 * baseline. The v3 Unit-of-Work redesign moves this receipt out of the
+	 * aggregate; it remains here only until that migration is complete.
 	 *
 	 * Distinct from {@link version}, which is the in-memory
 	 * post-mutation value. Mutations bump `_version` but never touch

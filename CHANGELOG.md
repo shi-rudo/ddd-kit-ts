@@ -10,14 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 3.0.0 carries everything since 2.2.0 in one breaking window. It has two
 halves. The first is a tightening pass over the core: structured errors
 with one identifier, a version bump on every `setState`, buses that
-map only explicitly expected failures, one delete contract, identity-based repository
-loads, and consumer-owned query ports. The second is the event-driven
-periphery around that core: the outbox seam with a minimal dispatcher,
-command idempotency, projections, a snapshot store, durable deadlines, the
-specification primitive, adapter contract suites for all of it, and the
-opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
-in the sections below; every break is covered in the migration guide
-here, with a before and after.
+map only explicitly expected failures, explicit repository lifecycle
+intent, identity-based repository loads, and consumer-owned query ports.
+The second is the event-driven periphery around that core: the outbox seam
+with a minimal dispatcher, command idempotency, projections, a snapshot
+store, durable deadlines, the specification primitive, adapter contract
+suites for all of it, and the opt-in `@shirudo/ddd-kit/money` entry point.
+Details and rationale live in the sections below; every break is covered in
+the migration guide here, with a before and after.
+
+### Changed (breaking): repository lifecycle intent is explicit
+
+- Replace `IRepository` and `IUnitOfWorkRepository` with
+  `AggregatePersistence<TAggregate, TId>` and `Repository<TAggregate, TId>`.
+  The old names are removed rather than retained as deprecated aliases.
+- Replace the overloaded asynchronous `save(aggregate)` operation with
+  synchronous `add(aggregate)` and `update(aggregate)` registrations. The
+  caller now states whether an aggregate is new or was loaded into the active
+  Unit of Work; durable I/O happens during its flush.
+- `Repository` extends `AggregatePersistence` with `remove(aggregate)` for
+  physical removal. Persistence strategies that retain aggregate identity,
+  including ordinary event-sourced repositories, can implement the smaller
+  contract without a meaningless delete operation.
+- `findById` now represents expected absence with `undefined`. `exists` is no
+  longer a universal method; concrete consumer-owned repository ports may add
+  an intent-revealing existence lookup when a command genuinely needs one.
+- Remove the old state-stored `createRepositoryContractTests` export from
+  `@shirudo/ddd-kit/testing`. A Unit-of-Work-based replacement is part of the
+  same unreleased persistence redesign; the legacy `save`/`delete` harness is
+  not a compatibility layer.
+
+Migration starts by choosing the truthful repository capability:
+
+```ts
+// Before
+interface OrderRepository extends IRepository<Order, OrderId> {}
+
+// After: retained aggregates
+interface OrderPersistence
+  extends AggregatePersistence<Order, OrderId> {}
+
+// After: persistence boundaries that support physical removal
+interface OrderRepository extends Repository<Order, OrderId> {}
+```
+
+Then replace each `save` call deliberately: creation paths call `add`, while
+commands that loaded an aggregate call `update`. Replace `delete` with `remove`
+only for genuine physical removal; business cancellation, archival, closure,
+and revocation remain aggregate behavior followed by `update`.
 
 ### Changed (breaking): aggregate decisions are recorded by the shell
 

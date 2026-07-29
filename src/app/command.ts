@@ -113,7 +113,7 @@ export interface PublishedCommand<
  * ```typescript
  * const handler: CommandHandler<CreateOrderCommand, OrderId> = async (cmd) => {
  *   const order = Order.create(cmd.customerId, cmd.items);
- *   await repository.save(order);
+ *   repository.add(order);
  *   return ok(order.id);
  * };
  * ```

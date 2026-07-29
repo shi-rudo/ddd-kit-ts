@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as http from "./http";
 import type {
+	AggregatePersistence,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
@@ -10,6 +11,7 @@ import type {
 	Id,
 	IntegrationMessageRelationships,
 	OutboxDispatcherObservers,
+	Repository,
 	StateValidator,
 } from "./index";
 import * as index from "./index";
@@ -22,6 +24,15 @@ type PublicExecutionContext = import("./index").ExecutionContext;
 type PublicEventMetadata = import("./index").EventMetadata;
 // @ts-expect-error EffectContext was replaced by the runtime-oriented ExecutionContext name in v3
 type RemovedEffectContext = import("./index").EffectContext;
+// @ts-expect-error IRepository was removed instead of retained as a deprecated alias
+type RemovedIRepository = import("./index").IRepository;
+// @ts-expect-error IUnitOfWorkRepository was removed with the legacy save/delete protocol
+type RemovedIUnitOfWorkRepository = import("./index").IUnitOfWorkRepository;
+// @ts-expect-error the state-stored save/delete contract suite is removed until
+// the v3 Unit-of-Work suite replaces it
+type RemovedContractRepository = import("./testing").ContractRepository<
+	IAggregateRoot<Id<"RemovedRepositoryContract">>
+>;
 
 type IndexModule = typeof import("./index");
 // @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
@@ -87,6 +98,20 @@ void publicDeliveryClassifier;
 void publicDeliveryAssessment;
 void (undefined as unknown as PublicExecutionContext);
 void (undefined as unknown as RemovedEffectContext);
+void (undefined as unknown as RemovedIRepository);
+void (undefined as unknown as RemovedIUnitOfWorkRepository);
+void (undefined as unknown as RemovedContractRepository);
+
+type PublicRepositoryContracts =
+	| AggregatePersistence<
+			IAggregateRoot<Id<"PersistenceSurface">>,
+			Id<"PersistenceSurface">
+	  >
+	| Repository<
+			IAggregateRoot<Id<"RepositorySurface">>,
+			Id<"RepositorySurface">
+	  >;
+void (undefined as unknown as PublicRepositoryContracts);
 
 const publicIntegrationRelationships: IntegrationMessageRelationships = {
 	correlationId: "corr-1",
@@ -239,7 +264,6 @@ const TESTING_SURFACE = [
 	"createIdempotencyStoreContractTests",
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",
-	"createRepositoryContractTests",
 	"createSnapshotStoreContractTests",
 ] as const;
 

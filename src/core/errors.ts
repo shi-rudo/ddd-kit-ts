@@ -796,13 +796,13 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 }
 
 /**
- * Thrown by `IRepository.getById()` when an aggregate with the
+ * Thrown by `AggregatePersistence.getById()` when an aggregate with the
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the
  * nullable variant `findById()` if "not found" is a valid outcome.
  *
- * Accepts an optional `cause` so a `Repository.save()` implementation
- * can wrap a lower-level "row not found" / driver-level error without
+ * Accepts an optional `cause` so a repository adapter can wrap a lower-level
+ * "row not found" or driver-level error without
  * losing context. Cause-chain helpers (`getRootCause`,
  * `findInCauseChain`) from `@shirudo/base-error` traverse the chain.
  *
@@ -919,8 +919,8 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 }
 
 /**
- * Thrown by `IRepository.save()` when the aggregate's expected version
- * does not match the version currently persisted: i.e. another writer
+ * Surfaced by a Unit-of-Work flush when the aggregate's expected version does
+ * not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-
  * concurrency signal; the App-Service typically reloads, re-applies
  * the use case, and retries, or surfaces HTTP 409 to the caller.

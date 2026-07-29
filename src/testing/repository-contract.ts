@@ -16,12 +16,13 @@ import {
 } from "./contract-assertions";
 
 /**
- * The repository surface the contract suite exercises: the minimal
- * structural subset of the canonical `IUnitOfWorkRepository` (exported
- * from the main entry) that the tests need. `findById` is typed over
- * the aggregate's own branded id (`TAgg["id"]`), so concrete adapters,
- * including arrow-function-property style repositories, which are
- * checked contravariantly, match without casts.
+ * Legacy state-stored repository surface retained internally while the v3
+ * Unit-of-Work contract suite is rebuilt. It is deliberately not exported from
+ * `@shirudo/ddd-kit/testing`: consumers must not adopt the old `save`/`delete`
+ * protocol as a compatibility layer. `findById` is typed over the aggregate's
+ * own branded id (`TAgg["id"]`), so concrete adapters, including
+ * arrow-function-property style repositories, which are checked
+ * contravariantly, match without casts.
  */
 export interface ContractRepository<
 	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
