@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The current `3.0.0-rc.2` candidate is deliberately source-breaking relative
+to `3.0.0-rc.1`. The rc.1 tag remains immutable; adopters of that candidate
+must follow the rc.1 appendix in the v3 migration guide rather than mixing the
+two persistence protocols.
+
 3.0.0 carries everything since 2.2.0 in one breaking window. It has two
 halves. The first is a tightening pass over the core: structured errors
 with one identifier, a version bump on every `setState`, buses that
@@ -36,10 +41,12 @@ with a before and after.
 - `findById` now represents expected absence with `undefined`. `exists` is no
   longer a universal method; concrete consumer-owned repository ports may add
   an intent-revealing existence lookup when a command genuinely needs one.
-- Remove the old state-stored `createRepositoryContractTests` export from
-  `@shirudo/ddd-kit/testing`. A Unit-of-Work-based replacement is part of the
-  same unreleased persistence redesign; the legacy `save`/`delete` harness is
-  not a compatibility layer.
+- Replace the old state-stored `createRepositoryContractTests` harness under
+  the same `@shirudo/ddd-kit/testing` export. The v3 suite exercises the public
+  Unit of Work, explicit `add`/`update`/optional `remove`, expected-version
+  conflicts, state-plus-outbox atomicity, rollback, identity mapping, nested
+  state, and exact post-commit event acknowledgement. It is not a compatibility
+  layer for the legacy `save`/`delete` protocol.
 
 Migration starts by choosing the truthful repository capability:
 
@@ -69,6 +76,12 @@ and revocation remain aggregate behavior followed by `update`.
 - Application-facing `add`, `update`, and `remove` methods are Unit-of-Work
   registrations. The repository facade replaces same-named adapter methods,
   so those calls cannot perform durable I/O early or omit event harvesting.
+  Adapter `remove` is absent both by type and at runtime unless the definition
+  sets `physicalRemoval: true`.
+- A repository factory must return an adapter object. Invalid `null`, primitive,
+  or callable results fail during wiring with
+  `InvalidRepositoryAdapterError` instead of reaching application code as a
+  malformed facade.
 - `update` and `remove` accept only the exact instance loaded by the active
   Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
   mixing write intents, or changing an aggregate after registration throws

@@ -583,7 +583,6 @@ describe("EventSourcedAggregate", () => {
 			// all-or-nothing contract as restoreFromSnapshotWithEvents.
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 			expect(aggregate.version).toBe(0);
-			// Never-persisted sentinel survives → follow-up save() routes to INSERT.
 		});
 
 		it("rolls back state when a mid-stream row propagates a non-domain error", () => {
@@ -632,9 +631,8 @@ describe("EventSourcedAggregate", () => {
 
 		it("throws UnreplayableAggregateError when the aggregate carries pending events", () => {
 			// A factory-created aggregate holds an unpersisted creation event.
-			// Replaying history onto it would markRestored a persistedVersion
-			// that counts the pending event, flipping repository routing to
-			// UPDATE against a row/stream that does not contain it.
+			// Replaying stored history onto the same object would mix an
+			// uncommitted decision with facts from a different stream baseline.
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
 				10,
@@ -688,7 +686,7 @@ describe("EventSourcedAggregate", () => {
 				10,
 			);
 			expect(aggregate.version).toBe(1); // created event
-			// Simulate the post-save lifecycle: the creation event is now
+			// Simulate the post-commit lifecycle: the creation event is now
 			// part of the persisted stream, so catching up is legitimate.
 			acknowledgePersisted(aggregate, aggregate.version);
 
@@ -720,7 +718,7 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(0);
 		});
 
-		it("keeps the never-persisted sentinel on empty history (save must still INSERT)", () => {
+		it("keeps version zero on empty history while persistence lifecycle stays external", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
 			const aggregate = new TestEventSourcedAggregate(
 				"test-1" as TestId,

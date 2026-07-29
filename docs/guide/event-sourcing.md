@@ -306,7 +306,7 @@ Separate pages are separate store reads. For a stable replay, record the first
 page's `lastVersion`, pass it as `toVersion` on every continuation, and advance
 `fromVersion` by the number of events actually returned. New appends can move
 the reported head while the load runs, but they cannot enter that pinned
-prefix. The next repository load sees them; a save from the older prefix still
+prefix. The next repository load sees them; an update from the older prefix still
 meets the normal OCC guard.
 
 A database adapter should also reject duplicate or non-contiguous persisted
@@ -437,7 +437,7 @@ The replay target must be clean. If it carries unflushed `pendingEvents`,
 `loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
 moves. If it has an in-memory version that was never persisted, it also throws.
 Replaying onto that object would mark unpersisted history as persisted and
-corrupt the next repository save.
+corrupt the next repository update.
 
 Use a fresh `Order.reconstitute(id)` target for normal loads.
 
@@ -445,7 +445,7 @@ Use a fresh `Order.reconstitute(id)` target for normal loads.
 
 An audit or debugging query can fold only the history that existed at stream
 position `N`. Keep that query outside the aggregate's normal write repository:
-it creates a historical view, not a live aggregate that may be saved.
+it creates a historical view, not a live aggregate that may be updated.
 
 ```ts
 async function findOrderAsOfVersion(

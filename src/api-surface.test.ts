@@ -224,6 +224,7 @@ const INDEX_SURFACE = [
 	"InvalidDomainTransitionGuardResultError",
 	"InvalidDomainTransitionResultError",
 	"InvalidIntegrationMessageError",
+	"InvalidRepositoryAdapterError",
 	"MisaddressedEventError",
 	"MissingHandlerError",
 	"NestedUnitOfWorkError",

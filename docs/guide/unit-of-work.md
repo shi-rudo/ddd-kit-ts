@@ -222,6 +222,12 @@ interface AggregatePersistenceWrite<TAggregate, TChangeSet> {
 }
 ```
 
+The receipt object, its `changes` envelope, and its event array are frozen.
+`TChangeSet` remains adapter-owned, so `PersistenceModel.changes` must return a
+detached or immutable value rather than a mutable reference into the
+aggregate. The Unit of Work cannot safely deep-freeze arbitrary database
+driver values.
+
 For `add`, `expectedVersion` is absent. For `update` and `remove`, it is the
 version captured when the adapter loaded the aggregate. `version`, `changes`,
 and `events` describe the exact moment the use case registered its intent.
@@ -296,6 +302,7 @@ The most useful failures are intentionally specific:
 | `UnenrolledChangesError` | a loaded aggregate changed but the use case never called `update` |
 | `ConcurrencyConflictError` | the adapter's expected-version predicate lost a race |
 | `DuplicateAggregateError` | an `add` collided with an existing identity |
+| `InvalidRepositoryAdapterError` | a repository factory returned no adapter object |
 | `CommitError` | work completed, but the outbox write or transaction commit failed |
 | `RollbackError` | work failed and the scope reported a different rollback failure |
 | `NestedUnitOfWorkError` | one instance was entered while already running |

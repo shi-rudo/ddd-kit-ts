@@ -391,7 +391,7 @@ import { sameVersion } from "@shirudo/ddd-kit";
 
 const before = await repo.findById(id);
 
-// Time passes. Another writer may save the same aggregate.
+// Time passes. Another writer may update the same aggregate.
 
 const after = await repo.findById(id);
 
@@ -471,7 +471,7 @@ already-persisted aggregate may not harvest events without advancing its
 version: `withCommit` rejects that cursor collision.
 
 ::: warning Un-bumped mutations can lose concurrent writes
-A mutation that does not bump the version is invisible to optimistic concurrency. Another writer can load the same version, save successfully, and overwrite your change without a `ConcurrencyConflictError`.
+A mutation that does not bump the version is invisible to optimistic concurrency. Another writer can load the same version, update successfully, and overwrite your change without a `ConcurrencyConflictError`.
 
 That is why the method is named `setStateWithoutVersionBump`. Use it only for data where a lost update is acceptable.
 :::

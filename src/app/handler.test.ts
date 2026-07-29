@@ -31,10 +31,10 @@ class MockAggregate extends AggregateRoot<
 	protected readonly aggregateType = "MockOrder";
 	private _acknowledgementCount = 0;
 
-	constructor(events: TestEvent[], version: number, persistedVersion?: number) {
+	constructor(events: TestEvent[], version: number, restoredVersion?: number) {
 		super("agg-1" as TestId, {});
-		if (persistedVersion !== undefined) {
-			this.markRestored(persistedVersion as Version);
+		if (restoredVersion !== undefined) {
+			this.markRestored(restoredVersion as Version);
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
@@ -67,9 +67,9 @@ class MockAggregate extends AggregateRoot<
 function createMockAggregate(
 	events: TestEvent[],
 	version = 1,
-	persistedVersion?: number,
+	restoredVersion?: number,
 ): MockAggregate {
-	return new MockAggregate(events, version, persistedVersion);
+	return new MockAggregate(events, version, restoredVersion);
 }
 
 function createMockScope(): TransactionScope<undefined> {
@@ -796,7 +796,7 @@ describe("withCommit", () => {
 
 	it("deleted aggregates: events are harvested and discarded without saved acknowledgement or observation", async () => {
 		// Deletion events must reach the outbox atomically with the row
-		// removal, but the post-save lifecycle is a semantic lie for a
+		// removal, but the saved-aggregate lifecycle is a semantic lie for a
 		// deleted row: an application observer doing cache-fill would
 		// resurrect the deleted aggregate in the cache.
 		const deletionEvent = createDomainEvent(
@@ -1687,7 +1687,7 @@ describe("commit enrollment lifecycle", () => {
 		expect(aggregate.acknowledgementCount).toBe(1);
 	});
 
-	it("rejects save enrollment after delete enrollment in one transaction", async () => {
+	it("rejects saved enrollment after delete enrollment in one transaction", async () => {
 		const outbox = createMockOutbox();
 		const deletionEvent = createDomainEvent(
 			"OrderCreated",

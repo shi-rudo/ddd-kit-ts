@@ -9,7 +9,11 @@ export type PersistenceLifecycle = "loaded" | "new";
  * whether a change set is a partial diff or a full replacement.
  */
 export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
-	/** Captures the adapter's persistence projection at the current moment. */
+	/**
+	 * Captures the adapter's persistence projection at the current moment.
+	 * Return a detached value or an immutable value object: the Unit of Work
+	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
+	 */
 	capture(aggregate: TAggregate): TBaseline;
 
 	/**
@@ -17,6 +21,8 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	 *
 	 * `baseline` is absent for a new aggregate. `lifecycle` disambiguates that
 	 * case from an adapter whose loaded baseline type itself admits `undefined`.
+	 * The returned payload must not share mutable references with the aggregate;
+	 * it is the exact value later handed to `flush`.
 	 */
 	changes(
 		baseline: TBaseline | undefined,

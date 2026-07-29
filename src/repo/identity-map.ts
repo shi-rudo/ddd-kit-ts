@@ -41,17 +41,17 @@ export type AggregateClass<TAgg> =
  * Repository read-path contract:
  *
  * ```ts
- * async findById(id: OrderId): Promise<Order | null> {
- *   const cached = this.session.identityMap.get(Order, id);
+ * async findById(id: OrderId): Promise<Order | undefined> {
+ *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   // Deleted in this unit of work = gone, even if the physical
  *   // delete is deferred and the row is still visible in the tx.
- *   if (this.session.identityMap.isDeleted(Order, id)) return null;
+ *   if (this.tracking.identityMap.isDeleted(Order, id)) return undefined;
  *
  *   const row = await this.loadRow(id);
- *   if (!row) return null;
+ *   if (!row) return undefined;
  *   const order = Order.reconstitute(row.id, row.state, row.version);
- *   return this.session.trackLoaded(Order, order);
+ *   return this.tracking.trackLoaded(order);
  * }
  * ```
  *
@@ -185,8 +185,8 @@ export class IdentityMap {
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
 	 * {@link set} of the same type+id throws `AggregateDeletedError`.
-	 * The Unit-of-Work tracking session calls this as part of
-	 * `session.remove(aggregate)`; repository adapters receive only the read-only
+	 * The Unit of Work calls this as part of `repository.remove(aggregate)`;
+	 * repository adapters receive only the read-only
 	 * identity-map view.
 	 */
 	public delete<TAgg>(type: AggregateClass<TAgg>, id: Id<string>): void {

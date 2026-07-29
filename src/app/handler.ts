@@ -325,7 +325,7 @@ function createCommitTokenScope<
  *
  * The use-case callback receives an invocation-scoped enrollment capability
  * and returns opaque commit tokens for the repository writes that completed
- * in the transaction. `withCommit` owns the post-save lifecycle (harvest,
+ * in the transaction. `withCommit` owns the post-commit lifecycle (harvest,
  * outbox, mark-persisted, publish). A naked aggregate is not commit evidence:
  * merely touching or constructing one must never make it look persisted.
  *

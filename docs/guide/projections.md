@@ -10,8 +10,8 @@ read a table shaped for the query.
 The normal flow is:
 
 1. A use case mutates an aggregate.
-2. The repository saves the aggregate; `withCommit` validates its commit
-   token and writes the domain events to the outbox in the same transaction.
+2. The use case registers `add` or `update`; the Unit of Work flushes that
+   write and places its domain events in the outbox in the same transaction.
 3. A dispatcher delivers those events to a `Projector`.
 4. The `Projector` updates one read-model table and advances its checkpoint
    in the same transaction.
@@ -287,7 +287,7 @@ event stamps are allowed because the committed envelope already supplies the
 address.
 `commitSize` proves that every event of the current commit was consumed;
 `previousEventfulAggregateVersion` links the next eventful commit to the
-checkpoint. State-only aggregate saves are intentionally absent from that
+checkpoint. State-only aggregate commits are intentionally absent from that
 chain. The projector rejects a missing
 sequence, an incomplete commit, a missing aggregate commit, and a first event
 that claims a predecessor. It never advances past an unknown hole.

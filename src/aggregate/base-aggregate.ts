@@ -190,7 +190,7 @@ export abstract class BaseAggregate<
 	 *
 	 * The Factory-vs-Reconstitution distinction (Vernon §11) is honoured
 	 * structurally: reconstitution stays inside the aggregate factory while
-	 * post-save acknowledgement belongs to application commit orchestration.
+	 * post-commit acknowledgement belongs to application commit orchestration.
 	 *
 	 * If you override this, call `super.markRestored(version)` so the current
 	 * domain version remains aligned with the reconstituted facts.

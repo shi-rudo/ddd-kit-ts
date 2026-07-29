@@ -128,7 +128,7 @@ const userIds: IdGenerator<"UserId"> = {
 
 The brand keeps ids from different concepts from being accidentally passed to the wrong API. A `UserId` and an `OrderId` are both strings at runtime, but they are not interchangeable in TypeScript.
 
-Id generation belongs in the application, not in the repository. The repository persists and loads aggregates; it does not decide their identity. That keeps creation workflows explicit and makes ids available before the first save, which is useful for domain events, child references, idempotency, and API responses.
+Id generation belongs in the application, not in the repository. The repository persists and loads aggregates; it does not decide their identity. That keeps creation workflows explicit and makes ids available before the first insert, which is useful for domain events, child references, idempotency, and API responses.
 
 The kit provides event id and clock factories because events need ids and timestamps even when the consumer does not care about custom generation. Aggregate ids stay app-side.
 

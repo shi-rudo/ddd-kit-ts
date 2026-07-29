@@ -280,7 +280,7 @@ export interface OutboxWriter<Evt extends AnyDomainEvent> {
 	 * advancement, read its last eventful aggregate version, write that value as
 	 * `previousEventfulAggregateVersion` on every event in the candidate's
 	 * commit, and advance the source head to `aggregateVersion` in the SAME
-	 * transaction. A state-only aggregate save does not call `add()` and must
+	 * transaction. A state-only aggregate commit does not call `add()` and must
 	 * therefore not advance this event-source head.
 	 *
 	 * A qualified source position `(aggregateType, aggregateId,

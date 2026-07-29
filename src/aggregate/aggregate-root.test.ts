@@ -367,7 +367,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 			// Without the opt-in this push would silently mutate aggregate
 			// internals, bypass validateState, the version bump AND the
-			// changedKeys dirty diff.
+			// adapter projection and Unit-of-Work mutation guards.
 			expect(() => {
 				(aggregate.state.items as Array<unknown>).push({
 					sku: "hacked",

@@ -27,6 +27,7 @@ import {
 	AggregateTrackingError,
 	CommitError,
 	defineRepository,
+	InvalidRepositoryAdapterError,
 	NestedUnitOfWorkError,
 	type RepositoryTracking,
 	RollbackError,
@@ -425,6 +426,7 @@ describe("UnitOfWork", () => {
 			const aggregate = createMockAggregate("o-1", [event]);
 			const outbox = createMockOutbox();
 			let adapterAddCalls = 0;
+			let adapterRemoveCalls = 0;
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
 				outbox,
@@ -434,8 +436,11 @@ describe("UnitOfWork", () => {
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
 						create: () => ({
-							add: (_aggregate: MockAggregate) => {
+							add: async (_aggregate: MockAggregate) => {
 								adapterAddCalls += 1;
+							},
+							remove: (_aggregate: MockAggregate) => {
+								adapterRemoveCalls += 1;
 							},
 						}),
 					}),
@@ -443,12 +448,51 @@ describe("UnitOfWork", () => {
 			});
 
 			await uow.run(async ({ repositories }) => {
-				repositories.orders.add(aggregate);
+				const registration: void = repositories.orders.add(aggregate);
+				expect(registration).toBeUndefined();
+				expect("remove" in repositories.orders).toBe(false);
+				// @ts-expect-error physical removal stays absent without an explicit opt-in
+				expect(repositories.orders.remove).toBeUndefined();
 			});
 
 			expect(adapterAddCalls).toBe(0);
+			expect(adapterRemoveCalls).toBe(0);
 			expect(outbox.added).toEqual([[stamped(event)]]);
 			expect(aggregate.acknowledgementCount).toBe(1);
+		});
+
+		it("does not flush when commit enrollment rejects and the caller catches it", async () => {
+			const lookalike = {
+				id: "lookalike-1" as TestId,
+				version: 1 as Version,
+				pendingEvents: [],
+			} as unknown as MockAggregate;
+			let flushCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						create: () => ({}),
+						flush: async () => {
+							flushCalls += 1;
+						},
+					}),
+				},
+			});
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					expect(() => repositories.orders.add(lookalike)).toThrow(
+						EventHarvestError,
+					);
+					return "continued";
+				}),
+			).resolves.toBe("continued");
+
+			expect(flushCalls).toBe(0);
 		});
 
 		it("rejects update for an aggregate that was not loaded", async () => {
@@ -661,6 +705,35 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("repository context", () => {
+		it.each([
+			[null, "null"],
+			[() => undefined, "function"],
+		] as const)(
+			"rejects the non-adapter factory result %s",
+			async (factoryResult, receivedType) => {
+				const uow = new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						orders: {
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							flush: async () => {},
+							create: () => factoryResult,
+						},
+					},
+				});
+
+				await expect(uow.run(async () => undefined)).rejects.toMatchObject({
+					constructor: InvalidRepositoryAdapterError,
+					code: "INVALID_REPOSITORY_ADAPTER",
+					category: "WIRING",
+					repository: "orders",
+					receivedType,
+				});
+			},
+		);
+
 		it("every repository factory receives the same transaction handle", async () => {
 			type FakeTx = { id: string };
 			const tx: FakeTx = { id: "tx-42" };
@@ -728,7 +801,7 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("enrollment + post-commit lifecycle", () => {
-		it("does not harvest or acknowledge a fresh aggregate that was never saved", async () => {
+		it("does not harvest or acknowledge a fresh aggregate that was never added", async () => {
 			const { uow, outbox } = createUow();
 			const event = testEvent("o-unsaved");
 			const aggregate = createMockAggregate("o-unsaved", [event]);
@@ -736,7 +809,7 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async () => {
 					// Constructing and mutating an aggregate is not persistence proof.
-					// No repository save means no session enrollment token.
+					// No repository add means no Unit-of-Work-owned commit token.
 					return aggregate.id;
 				}),
 			).resolves.toBe("o-unsaved");
@@ -1280,9 +1353,9 @@ describe("UnitOfWork", () => {
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 		});
 
-		it("session.identityMap access after close throws TransactionClosedError", async () => {
+		it("tracking.identityMap access after close throws TransactionClosedError", async () => {
 			const { uow } = createCachingUow(new Map());
-			let repository!: CachingOrderRepository;
+			let repository!: Pick<CachingOrderRepository, "trackedIdentities">;
 
 			await uow.run(async ({ repositories }) => {
 				repository = repositories.orders;
@@ -1369,7 +1442,7 @@ describe("UnitOfWork", () => {
 
 			// Deletion event reached the outbox...
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
-			// ...but the post-save lifecycle did NOT run for the deleted
+			// ...but the saved-aggregate lifecycle did NOT run for the deleted
 			// aggregate: no saved acknowledgement or cache-fill observer lie.
 			expect(deletedOrder.acknowledgementCount).toBe(0);
 			// Pending events are still cleared so a later commit cannot

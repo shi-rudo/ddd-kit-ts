@@ -260,8 +260,12 @@ event-only commit may still have a non-empty `events` batch and must not be
 skipped.
 
 Projection functions should read meaningful aggregate queries and return
-detached persistence DTOs. Do not add setters, baseline fields, or dirty flags
-to the aggregate for the adapter's convenience.
+detached persistence DTOs. Both `capture` and `changes` must avoid mutable
+references into the aggregate: the Unit of Work cannot safely clone or freeze
+an arbitrary adapter-native type. A baseline that aliases aggregate state can
+move when the aggregate moves; a change set that aliases it can change after
+registration. Do not add setters, baseline fields, or dirty flags to the
+aggregate for the adapter's convenience.
 
 ## Defining the adapter boundary
 

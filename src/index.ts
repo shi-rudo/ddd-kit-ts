@@ -123,6 +123,7 @@ export {
 	type AggregateWriteRegistration,
 	CommitError,
 	defineRepository,
+	InvalidRepositoryAdapterError,
 	NestedUnitOfWorkError,
 	type PhysicalRemovalRegistration,
 	type RepositoriesOf,

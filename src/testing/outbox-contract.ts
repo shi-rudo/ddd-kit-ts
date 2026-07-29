@@ -176,7 +176,7 @@ export function createOutboxContractTests<Evt extends AnyDomainEvent>(
 				await env.addCommitted(
 					commit([harness.createEvent(1), harness.createEvent(2)], 1),
 				);
-				// Version 2 may have been a state-only save; the event-source
+				// Version 2 may have been a state-only commit; the event-source
 				// predecessor is still the previous EVENTFUL version 1.
 				await env.addCommitted(commit([harness.createEvent(3)], 3));
 				const records = await takeAndAck(env, 3);

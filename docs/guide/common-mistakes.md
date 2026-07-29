@@ -117,10 +117,10 @@ return {
 
 The callback's job is to provide commit evidence for repository writes that participated in this invocation. Tokens are opaque and invocation-scoped, so a forged token or one retained from an earlier call is rejected inside the transaction. Every token issued during the callback must be returned in `commits`; omitting one also rejects inside the transaction. If an enrolled write should not commit, throw so the transaction rolls back. `withCommit` then harvests events from those enrolled aggregates at the correct point in the lifecycle.
 
-Manual harvesting is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will harvest before save, some after save, and some after an error. The whole point of `withCommit` is to centralize that order:
+Manual harvesting is tempting because it looks explicit. The problem is timing. If every caller decides when to read events, clear events, or publish events, the transaction boundary stops being a boundary. Some callers will harvest before the repository flush, some after it, and some after an error. The whole point of `withCommit` is to centralize that order:
 
 1. Run the application work.
-2. Persist the aggregates.
+2. Flush every registered aggregate write.
 3. Harvest pending events.
 4. Write the outbox in the same transaction.
 5. Commit.
@@ -197,7 +197,7 @@ This mistake usually comes from trying to make a database write feel complete:
 "I wrote the row, so I should clear the events." That is correct in a simple
 Active Record model. It is wrong in an outbox-backed transaction model.
 
-The database row save and the aggregate lifecycle marker happen at different moments:
+The database write and the aggregate acknowledgement happen at different moments:
 
 1. The domain method changes the aggregate and records pending events.
 2. The use case registers `add`, `update`, or `remove`.
@@ -209,7 +209,7 @@ The database row save and the aggregate lifecycle marker happen at different mom
    pending events internally.
 
 If the transaction rolls back after `flush`, the in-memory aggregate must not
-pretend its events were flushed. That is why `save` is pure persistence and the
+pretend its events were flushed. That is why `flush` is pure persistence and the
 application boundary owns acknowledgement.
 
 Review signal: repository implementations should not mutate aggregate lifecycle
@@ -220,7 +220,7 @@ state through casts or hidden implementation details. See
 
 Do not decide between insert and update with `aggregate.version === 0`.
 
-A new aggregate can be mutated before its first save. A factory may record a creation event and bump the version to 1. A setup method may bump it again. The database row still does not exist.
+A new aggregate can be mutated before its first `add`. A factory may record a creation event and bump the version to 1. A setup method may bump it again. The database row still does not exist.
 
 That means `version` answers "how many version-worthy changes has this in-memory aggregate seen?" It does not answer "does this aggregate already exist in the database?"
 
@@ -294,7 +294,7 @@ orderB.ship("tracking-123");
 repositories.orders.update(orderA);
 ```
 
-If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can receive different commit tokens. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on save order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
+If `orderA` and `orderB` are different objects with the same id, both can carry pending events and both can receive different commit tokens. Object-identity dedupe cannot help, because these are genuinely two JavaScript objects. Depending on flush order, you can get duplicate events, stale state, or a concurrency conflict that looks random.
 
 An identity map makes the second `findById` return the same object. Now the operation is forced to deal with one aggregate instance and one version history.
 

@@ -742,7 +742,7 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  *
  * **Scope of the guard.** A best-effort runtime safety net, not a proof.
  * It sees aggregates that repository adapters register through
- * `session.trackLoaded` and detects ordinary state changes through the version
+ * `tracking.trackLoaded` and detects ordinary state changes through the version
  * captured at load. The pending-event count remains a second guard for an
  * invalid event-only mutation that did not advance the version. A freshly
  * created aggregate that is never passed to `add` is invisible to the kit.
@@ -815,7 +815,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 }
 
 /**
- * Thrown by a repository's `save()` INSERT path when a row with the
+ * Thrown by a repository's `add()` flush when a row with the
  * aggregate's id already exists (unique-constraint violation): two
  * concurrent creators raced on the same business-derived id, or the
  * id generator collided. Same delegation model as
@@ -908,7 +908,7 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
  * the use case, and retries, or surfaces HTTP 409 to the caller.
  *
  * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
- * `withCommit` invocation): reload, re-apply, save. Do NOT catch this
+ * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
  * inside the same `run()` callback and continue: the failed aggregate
  * is already enrolled (its events would be committed for a write that
  * never happened) and the identity map still serves the same stale

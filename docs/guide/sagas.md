@@ -226,7 +226,7 @@ Notice also what the transaction does NOT contain: a second aggregate. The
 outbox record, the deadline, and the inbox claim are infrastructure riding
 along; the saga is the only aggregate in its commit. When a reaction wants
 to change the `Order` too, that is a command through the outbox, never an
-`orderRepository.save` inside the saga's transaction.
+`orderRepository.update` inside the saga's transaction.
 `aggregate-design.md`'s rule, one aggregate instance per transaction,
 applies here unchanged, and `saga-design.md` says the same from the other
 side: a saga calls aggregates through commands, it never owns them.

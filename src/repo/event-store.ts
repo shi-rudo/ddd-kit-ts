@@ -91,8 +91,8 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   return { aggregateType: "Order", aggregateId: id };
  * }
  *
- * async findById(id: OrderId): Promise<Order | null> {
- *   const cached = this.session.identityMap.get(Order, id);
+ * async findById(id: OrderId): Promise<Order | undefined> {
+ *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   const address = this.stream(id);
  *   const order = Order.reconstitute(id); // bare instance, no events
@@ -104,7 +104,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *       toVersion: targetVersion,
  *       limit: 256,
  *     });
- *     if (!page.exists) return null;
+ *     if (!page.exists) return undefined;
  *     targetVersion ??= page.lastVersion; // pin the first observed head
  *     if (fromVersion === targetVersion) break;
  *     if (page.events.length === 0) {
@@ -118,7 +118,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *     if (result.isErr()) throw result.error; // corrupt stream
  *     fromVersion += page.events.length;
  *   }
- *   return this.session.trackLoaded(Order, order);
+ *   return this.tracking.trackLoaded(order);
  * }
  *
  * flush(write: AggregatePersistenceWrite<Order, number | undefined>) {
@@ -128,7 +128,8 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * }
  * ```
  *
- * `save` appends the bare `pendingEvents` originals; `withCommit`
+ * `flush` appends the exact event batch registered by `add` or `update`;
+ * `withCommit`
  * separately composes them into outbox envelopes. The event store's own
  * stream position remains the ordering authority for replay.
  *
@@ -177,7 +178,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     aggregate type or id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
-	 * touching the store (an ES repository skips `save` for aggregates
+	 * touching the store (an ES repository skips `append` for aggregates
 	 * without pending events anyway).
 	 *
 	 * Treat `aggregateType` as a stable technical stream category. If two

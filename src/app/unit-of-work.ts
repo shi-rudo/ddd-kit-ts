@@ -85,8 +85,8 @@ interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
 
 /**
  * Thrown when the unit-of-work context is used after `run()` has
- * settled: reading `context.repositories`, or calling an adapter-held
- * `session.trackLoaded` / `add` / `update` / `remove`, once the transaction
+ * settled: reading `context.repositories`, calling an adapter-held
+ * `tracking.trackLoaded`, or using a repository facade after the transaction
  * has committed or rolled back.
  *
  * Use-after-close is a programming bug (typically a leaked context
@@ -94,7 +94,7 @@ interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
  * this carries the `WIRING` category and should crash loud.
  *
  * **Honest scope of this guard:** the kit can only invalidate what it
- * controls: the context getters and tracking session. An adapter that captures
+ * controls: the context getters and tracking capability. An adapter that captures
  * its raw transaction handle can still call it as far as the kit can see;
  * whether the driver rejects after close is ORM-specific. Adapter factories
  * must not let that handle escape into application code.
@@ -105,7 +105,21 @@ export class TransactionClosedError extends KitWiringError<"TRANSACTION_CLOSED">
 			"TRANSACTION_CLOSED",
 			`Unit of work is closed: ${operation} was called after the ` +
 				"transaction committed or rolled back. Do not use the context or " +
-				"session outside the run() callback.",
+				"repository facade or tracking capability outside the run() callback.",
+		);
+	}
+}
+
+/** A repository factory returned a value that cannot be wrapped as a facade. */
+export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOSITORY_ADAPTER"> {
+	constructor(
+		public readonly repository: string,
+		public readonly receivedType: string,
+	) {
+		super(
+			"INVALID_REPOSITORY_ADAPTER",
+			`Repository factory "${repository}" returned ${receivedType}; ` +
+				"it must return an adapter object.",
 		);
 	}
 }
@@ -256,11 +270,11 @@ export type UnitOfWorkIdentityMap = Pick<
  * Contract for repository implementations:
  * - `findById(id)` checks `identityMap.get` BEFORE hydrating, treats
  *   `identityMap.isDeleted` as not-found (`undefined`), and returns
- *   `trackLoaded(AggregateClass, aggregate)` after hydration. This captures the
+ *   `tracking.trackLoaded(aggregate)` after hydration. This captures the
  *   expected version before application code can mutate the instance.
  * - Adapter objects may declare `add`, `update`, and `remove` to satisfy their
  *   consumer-owned port types, but the application-facing facade replaces
- *   those implementations with this session's registrations.
+ *   those implementations with Unit-of-Work-owned registrations.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */
@@ -287,7 +301,7 @@ export interface RepositoryTracking<
  * What the application work callback receives: repositories already bound to
  * the live Unit of Work plus cooperative cancellation.
  *
- * The adapter-only transaction and tracking session are deliberately absent.
+ * The adapter-only transaction and tracking capability are deliberately absent.
  * Exposing either would let application code bypass repository lifecycle
  * registration and would leak infrastructure types into the use case.
  */
@@ -319,7 +333,7 @@ export interface RunOptions {
 /** Complete adapter definition for one Unit-of-Work repository. */
 export interface RepositoryDefinition<
 	TCtx,
-	TRepository,
+	TRepository extends object,
 	TAggregate extends IAggregateRoot<Id<string>, Evt>,
 	TBaseline,
 	TChangeSet,
@@ -374,7 +388,7 @@ export interface AggregatePersistenceWrite<
 /** Preserves inference while making a repository definition explicit. */
 export function defineRepository<
 	TCtx,
-	TRepository,
+	TRepository extends object,
 	TAggregate extends IAggregateRoot<Id<string>, Evt>,
 	TBaseline,
 	TChangeSet,
@@ -412,7 +426,7 @@ type RepositoryFacadeOf<TDefinition> = TDefinition extends {
 	readonly create: (...args: infer _Args) => infer TReadRepository;
 }
 	? TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>
-		? TReadRepository &
+		? Omit<TReadRepository, "add" | "update" | "remove"> &
 				AggregateWriteRegistration<TAggregate> &
 				(TDefinition extends {
 					readonly physicalRemoval?: infer TRemoval;
@@ -494,7 +508,7 @@ export interface UnitOfWorkDeps<
  *
  * - **Tx-bound repository adapters via a registry.** The callback receives
  *   application-facing repository facades and never sees the raw transaction
- *   or tracking session.
+ *   or tracking capability.
  * - **Unit-of-Work-owned writes.** Standard `add`, `update`, and `remove`
  *   methods register lifecycle intent. Adapter implementations with those
  *   names are not invoked through the facade.
@@ -673,6 +687,7 @@ export class UnitOfWork<
 				adapter,
 				session,
 				definition,
+				String(key),
 			) as RepositoriesOf<TDefinitions>[typeof key];
 		}
 		return repositories;
@@ -689,12 +704,13 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 	adapter: TRepository,
 	session: Session<Evt>,
 	definition: RuntimePersistenceDefinition<Evt>,
+	repository: string,
 ): TRepository {
-	if (
-		adapter === null ||
-		(typeof adapter !== "object" && typeof adapter !== "function")
-	) {
-		return adapter;
+	if (adapter === null || typeof adapter !== "object") {
+		throw new InvalidRepositoryAdapterError(
+			repository,
+			adapter === null ? "null" : typeof adapter,
+		);
 	}
 
 	const source = adapter as object;
@@ -718,6 +734,7 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 		get: (_target, property) => {
 			const write = writes.get(property);
 			if (write) return write;
+			if (property === "remove") return undefined;
 			if (methodCache.has(property)) return methodCache.get(property);
 			const value = Reflect.get(source, property, source);
 			if (typeof value !== "function") return value;
@@ -728,9 +745,21 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 		set: (_target, property, value) =>
 			Reflect.set(source, property, value, source),
 		has: (_target, property) =>
-			writes.has(property) || Reflect.has(source, property),
-		ownKeys: () => Reflect.ownKeys(source),
+			writes.has(property) ||
+			(property !== "remove" && Reflect.has(source, property)),
+		ownKeys: () =>
+			Reflect.ownKeys(source).filter(
+				(property) =>
+					property !== "add" && property !== "update" && property !== "remove",
+			),
 		getOwnPropertyDescriptor: (_target, property) => {
+			if (
+				property === "add" ||
+				property === "update" ||
+				property === "remove"
+			) {
+				return undefined;
+			}
 			const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
 			return descriptor ? { ...descriptor, configurable: true } : undefined;
 		},
@@ -780,7 +809,7 @@ class Session<Evt extends AnyDomainEvent> {
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
 
 	public get identityMap(): IdentityMap {
-		this.assertOpen("session.identityMap");
+		this.assertOpen("tracking.identityMap");
 		return this._identityMap;
 	}
 
@@ -801,7 +830,7 @@ class Session<Evt extends AnyDomainEvent> {
 		aggregate: TAggregate,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TAggregate {
-		this.assertOpen("session.trackLoaded");
+		this.assertOpen("tracking.trackLoaded");
 		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
 
 		const existing = this._trackingByAggregate.get(aggregate);
@@ -833,7 +862,7 @@ class Session<Evt extends AnyDomainEvent> {
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("session.add");
+		this.assertOpen("repository.add");
 		this.assertNotRemoved(aggregate, definition);
 		const existing = this._trackingByAggregate.get(aggregate);
 		if (existing?.lifecycle === "loaded") {
@@ -859,28 +888,52 @@ class Session<Evt extends AnyDomainEvent> {
 			this._trackedAggregates.add(entry);
 		}
 
-		this.registerIntent(entry, "add");
-		this.registerSavedCommit(aggregate, definition, entry.expectedVersion);
+		this.registerWrite(entry, "add", definition);
 	}
 
 	public update(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("session.update");
+		this.assertOpen("repository.update");
 		const entry = this.loadedEntryFor(aggregate, "update", definition);
-		this.registerIntent(entry, "update");
-		this.registerSavedCommit(aggregate, definition, entry.expectedVersion);
+		this.registerWrite(entry, "update", definition);
 	}
 
 	public remove(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
-		this.assertOpen("session.remove");
+		this.assertOpen("repository.remove");
 		const entry = this.loadedEntryFor(aggregate, "remove", definition);
-		this.registerIntent(entry, "remove");
-		this.registerRemovedCommit(aggregate, definition, entry.expectedVersion);
+		this.registerWrite(entry, "remove", definition);
+	}
+
+	/** Registers persistence intent and commit enrollment as one operation. */
+	private registerWrite(
+		entry: TrackedAggregate<Evt>,
+		intent: AggregateWriteIntent,
+		definition: RuntimePersistenceDefinition<Evt>,
+	): void {
+		const newlyRegistered = this.registerIntent(entry, intent);
+		try {
+			if (intent === "remove") {
+				this.registerRemovedCommit(
+					entry.aggregate,
+					definition,
+					entry.expectedVersion,
+				);
+			} else {
+				this.registerSavedCommit(
+					entry.aggregate,
+					definition,
+					entry.expectedVersion,
+				);
+			}
+		} catch (error) {
+			if (newlyRegistered) this.rollbackIntentRegistration(entry);
+			throw error;
+		}
 	}
 
 	private loadedEntryFor(
@@ -917,7 +970,7 @@ class Session<Evt extends AnyDomainEvent> {
 	private registerIntent(
 		entry: TrackedAggregate<Evt>,
 		intent: AggregateWriteIntent,
-	): void {
+	): boolean {
 		if (entry.intent !== undefined) {
 			if (entry.intent !== intent) {
 				throw new AggregateTrackingError(
@@ -928,7 +981,7 @@ class Session<Evt extends AnyDomainEvent> {
 				);
 			}
 			this.assertUnchangedAfterRegistration(entry);
-			return;
+			return false;
 		}
 
 		entry.intent = intent;
@@ -940,6 +993,18 @@ class Session<Evt extends AnyDomainEvent> {
 			entry.aggregate,
 		);
 		entry.changes = derivePersistenceChanges(entry.baseline, entry.aggregate);
+		return true;
+	}
+
+	/** Restores the pre-registration state when commit enrollment rejects. */
+	private rollbackIntentRegistration(entry: TrackedAggregate<Evt>): void {
+		const index = this._registeredWrites.lastIndexOf(entry);
+		if (index >= 0) this._registeredWrites.splice(index, 1);
+		delete entry.intent;
+		delete entry.registeredVersion;
+		delete entry.registeredEvents;
+		delete entry.registeredBaseline;
+		delete entry.changes;
 	}
 
 	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
@@ -971,7 +1036,7 @@ class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
-		this.assertOpen("session.add/update");
+		this.assertOpen("repository.add/update");
 		// Two gates, one invariant: the instance set catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
 		// concrete class) catches a DIFFERENT instance with the same
@@ -983,10 +1048,10 @@ class Session<Evt extends AnyDomainEvent> {
 		) {
 			throw new AggregateDeletedError(String(aggregate.id));
 		}
-		this._enrolled.add(aggregate);
 		const token = this.commitEnrollment.enrollSaved(aggregate, {
 			expectedVersion,
 		});
+		this._enrolled.add(aggregate);
 		this._commitTokens.add(token);
 		return token;
 	}
@@ -996,7 +1061,7 @@ class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
-		this.assertOpen("session.remove");
+		this.assertOpen("repository.remove");
 		const token = this.commitEnrollment.enrollDeleted(aggregate, {
 			expectedVersion,
 		});
@@ -1062,7 +1127,7 @@ class Session<Evt extends AnyDomainEvent> {
 
 	/** Flushes every registered receipt in deterministic registration order. */
 	public async flush(transaction: unknown): Promise<void> {
-		this.assertOpen("session.flush");
+		this.assertOpen("unitOfWork.flush");
 		for (const entry of this._registeredWrites) {
 			const changes = entry.changes;
 			const events = entry.registeredEvents;
