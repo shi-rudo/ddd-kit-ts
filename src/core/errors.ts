@@ -176,8 +176,8 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
- * replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`)
- * also let it propagate uncaught instead of wrapping it in `Result.Err`.
+ * replay through `loadFromHistory` also lets it propagate uncaught instead
+ * of wrapping it in `Result.Err`.
  *
  * Use `isBaseError(e)` from `@shirudo/base-error` to detect
  * "any structured error from the kit or any other BaseError-using
@@ -386,15 +386,10 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory`,
- * `restoreFromSnapshotWithEvents`, and `AggregateRoot.restoreFromSnapshot`
- * when the restore/replay target is not fresh: the aggregate carries
- * unflushed `pendingEvents`, or (for `loadFromHistory`) an in-memory
- * version that was never persisted. Restoring onto such an instance
- * would `markRestored` a version baseline the unflushed events were
- * never part of: repository routing flips from INSERT to UPDATE (or
- * appends with a wrong expected version) and harvested events would
- * claim history the stream does not carry.
+ * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
+ * carries unflushed `pendingEvents`. Replaying persisted facts onto that
+ * instance would advance the version underneath decisions made against an
+ * older state and could later claim history the stream does not carry.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): a deterministic programming
@@ -416,7 +411,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 	) {
 		super(
 			"UNREPLAYABLE_AGGREGATE",
-			`Cannot restore or replay onto aggregate ${aggregateId}: ${reason}. ` +
+			`Cannot replay onto aggregate ${aggregateId}: ${reason}. ` +
 				"Reconstitute on a fresh instance (no factory-recorded events, " +
 				"no unpersisted mutations).",
 		);
@@ -454,15 +449,14 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 }
 
 /**
- * The structural-integrity rejection for a restored snapshot: thrown
- * by a consumer's `validateRestoredState` override when the stored
- * blob could not have been produced by any version of the model
+ * The structural-integrity rejection for a stored snapshot. A consumer's
+ * adapter-owned `SnapshotModel` may throw it from migration or reconstitution
+ * when the blob could not have been produced by any version of the model
  * (missing fields, impossible types, truncated data). An
  * `InfrastructureError`, because corrupted persistence is a storage
  * problem, never a business rejection; it is nevertheless RECOVERABLE
- * by design: `restoreFromSnapshotWithEvents` catches it into its
- * `Result` channel, and the documented load recipe answers an `Err`
- * by discarding the snapshot and refolding from the stream.
+ * by design: the repository catches it, discards the derived snapshot, and
+ * refolds from the authoritative event stream.
  */
 export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUPTED"> {
 	constructor(message: string, cause?: unknown) {
@@ -498,8 +492,8 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 }
 
 /**
- * Thrown by persisted-event consumers (including `loadFromHistory`,
- * `restoreFromSnapshotWithEvents`, and `Projector`) when an event carries an
+ * Thrown by persisted-event consumers (including `loadFromHistory` and
+ * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
@@ -862,21 +856,19 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 }
 
 /**
- * Thrown on snapshot restore (`restoreFromSnapshot`,
- * `restoreFromSnapshotWithEvents`) when the stored snapshot carries a
- * different schema version than the aggregate's declared
- * `snapshotSchemaVersion` and no `migrateSnapshotState` override handles
- * the upgrade. Without the check, a snapshot written against an older
- * `TSnapshotState` shape would surface as an undefined-field crash on
+ * Thrown by `reconstituteAggregateFromSnapshot` when the stored snapshot
+ * carries a different schema version than its adapter-owned `SnapshotModel`
+ * and the model declares no `migrate` function. Without the check, a snapshot
+ * written against an older DTO shape would surface as an undefined-field crash on
  * the first method call after a much later restore.
  *
  * `InfrastructureError` because the storage boundary served outdated
  * data; the schema evolving past stored snapshots is an expected
  * lifecycle event, not a programming bug. NOT retryable: the recovery
- * is a code path, not a repeat. Either override `migrateSnapshotState`
- * on the aggregate (upgrade old shapes in place), or catch this error
- * in the repository, discard the snapshot, and refold from the full
- * event stream / reload from the source of truth.
+ * is a code path, not a repeat. Add `migrate` to the snapshot model (upgrade
+ * old DTOs in place), or catch this error in the repository, discard the
+ * snapshot, and refold from the full event stream / reload from the source of
+ * truth.
  */
 export interface SnapshotSchemaMismatchErrorOptions {
 	readonly aggregateType: string;
@@ -896,9 +888,9 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 			code: "SNAPSHOT_SCHEMA_MISMATCH",
 			message:
 				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
-				`the aggregate expects snapshot schema ${options.expectedSchemaVersion}, ` +
+				`the snapshot model expects schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
-				`migrateSnapshotState to upgrade old snapshots, or discard the snapshot ` +
+				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
 		this.aggregateType = options.aggregateType;

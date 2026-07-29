@@ -12,10 +12,10 @@ import type {
 	IntegrationMessageRelationships,
 	OutboxDispatcherObservers,
 	Repository,
+	RepositoryTracking,
 	StateValidator,
 	UnitOfWorkContext,
 	UnitOfWorkIdentityMap,
-	UnitOfWorkSession,
 } from "./index";
 import * as index from "./index";
 import * as money from "./money";
@@ -31,9 +31,9 @@ type RemovedEffectContext = import("./index").EffectContext;
 type RemovedIRepository = import("./index").IRepository;
 // @ts-expect-error IUnitOfWorkRepository was removed with the legacy save/delete protocol
 type RemovedIUnitOfWorkRepository = import("./index").IUnitOfWorkRepository;
-// @ts-expect-error the state-stored save/delete contract suite is removed until
-// the v3 Unit-of-Work suite replaces it
-type RemovedContractRepository = import("./testing").ContractRepository<
+// @ts-expect-error the unscoped write-capable session was replaced by read-only RepositoryTracking
+type RemovedUnitOfWorkSession = import("./index").UnitOfWorkSession;
+type PublicContractRepository = import("./testing").ContractRepository<
 	IAggregateRoot<Id<"RemovedRepositoryContract">>
 >;
 
@@ -78,6 +78,26 @@ type RemovedClearPendingEvents = LifecycleSurface["clearPendingEvents"];
 void (undefined as unknown as RemovedMarkPersisted);
 void (undefined as unknown as RemovedClearPendingEvents);
 
+type StateAggregateSurface = import("./index").AggregateRoot<
+	unknown,
+	Id<"StateAggregateSurface">
+>;
+// @ts-expect-error snapshot envelope construction belongs to the adapter model
+type RemovedCreateSnapshot = StateAggregateSurface["createSnapshot"];
+// @ts-expect-error snapshot reconstitution creates a fresh aggregate through the adapter model
+type RemovedRestoreFromSnapshot = StateAggregateSurface["restoreFromSnapshot"];
+type EventSourcedAggregateSurface = import("./index").EventSourcedAggregate<
+	unknown,
+	never,
+	Id<"EventSourcedAggregateSurface">
+>;
+type RemovedRestoreFromSnapshotWithEvents =
+	// @ts-expect-error snapshot-plus-tail loading is composed by the repository adapter
+	EventSourcedAggregateSurface["restoreFromSnapshotWithEvents"];
+void (undefined as unknown as RemovedCreateSnapshot);
+void (undefined as unknown as RemovedRestoreFromSnapshot);
+void (undefined as unknown as RemovedRestoreFromSnapshotWithEvents);
+
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;
 };
@@ -103,7 +123,8 @@ void (undefined as unknown as PublicExecutionContext);
 void (undefined as unknown as RemovedEffectContext);
 void (undefined as unknown as RemovedIRepository);
 void (undefined as unknown as RemovedIUnitOfWorkRepository);
-void (undefined as unknown as RemovedContractRepository);
+void (undefined as unknown as RemovedUnitOfWorkSession);
+void (undefined as unknown as PublicContractRepository);
 
 type PublicRepositoryContracts =
 	| AggregatePersistence<
@@ -123,8 +144,11 @@ type PublicUnitOfWorkContext = UnitOfWorkContext<{
 type RemovedRawTransaction = PublicUnitOfWorkContext["rawTransaction"];
 // @ts-expect-error application work cannot access adapter tracking internals
 type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
+type PublicRepositoryTracking = RepositoryTracking<
+	IAggregateRoot<Id<"TrackingSurface">>
+>;
 // @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
-type RemovedEnrollSaved = UnitOfWorkSession["enrollSaved"];
+type RemovedEnrollSaved = PublicRepositoryTracking["enrollSaved"];
 // @ts-expect-error adapters cannot mutate the Unit-of-Work-owned identity map
 type RemovedIdentityMapSet = UnitOfWorkIdentityMap["set"];
 void (undefined as unknown as RemovedRawTransaction);
@@ -228,6 +252,8 @@ const INDEX_SURFACE = [
 	"ValueObject",
 	"analyzeDomainMachineDefinition",
 	"canTransitionDomainState",
+	"captureAggregateSnapshot",
+	"capturePersistenceBaseline",
 	"copyMetadata",
 	"createDomainEvent",
 	"createDomainEventFactory",
@@ -241,6 +267,9 @@ const INDEX_SURFACE = [
 	"deepFreeze",
 	"deepOmit",
 	"defaultDomainEventFactory",
+	"defineRepository",
+	"defineSnapshotModel",
+	"derivePersistenceChanges",
 	"domainErrorToResult",
 	"encodeIntegrationMessage",
 	"entityIds",
@@ -249,12 +278,15 @@ const INDEX_SURFACE = [
 	"freezeShallow",
 	"hasEntityId",
 	"ignoreProjectionEvent",
+	"insertPersistenceBaseline",
 	"integrationMessageToCommittedEvent",
 	"isPositionAfter",
 	"mergeMetadata",
 	"outboxWriterAcceptingEventLoss",
 	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
+	"recapturePersistenceBaseline",
+	"reconstituteAggregateFromSnapshot",
 	"recordDomainEvent",
 	"recordPendingEvents",
 	"removeEntityById",
@@ -284,6 +316,7 @@ const TESTING_SURFACE = [
 	"createIdempotencyStoreContractTests",
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",
+	"createRepositoryContractTests",
 	"createSnapshotStoreContractTests",
 ] as const;
 

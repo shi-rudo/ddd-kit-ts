@@ -93,14 +93,14 @@ type PlaceOrderOutcome =
 			readonly code: "EMPTY_ORDER";
 	  };
 
-interface OrderRepository {
-	save(order: Order): Promise<void>;
+interface OrderWriter {
+	insert(order: Order): Promise<void>;
 }
 
 export interface PlaceOrderHandlerDeps<TContext>
 	extends WithIdempotentCommitDeps<AnyDomainEvent, TContext> {
 	readonly newOrderId: () => OrderId;
-	readonly makeOrderRepository: (context: TContext) => OrderRepository;
+	readonly makeOrderWriter: (context: TContext) => OrderWriter;
 }
 
 export function createPlaceOrderHandler<TContext>(
@@ -112,7 +112,7 @@ export function createPlaceOrderHandler<TContext>(
 			PlaceOrderOutcome,
 			TContext
 		>(deps, command.idempotency, async (context, enrollment) => {
-			const orders = deps.makeOrderRepository(context);
+			const orders = deps.makeOrderWriter(context);
 			const placement = await domainErrorToResult(
 				() => Order.place(deps.newOrderId(), command.customerId, command.items),
 				[EmptyOrderError],
@@ -129,7 +129,7 @@ export function createPlaceOrderHandler<TContext>(
 			}
 
 			const order = placement.value;
-			await orders.save(order);
+			await orders.insert(order);
 
 			return {
 				result: {

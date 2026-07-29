@@ -454,10 +454,10 @@ export function removeEntityById<
 /**
  * Updates an entity with the given ID in the collection.
  * Returns a new array with the updated entity.
- * Structural sharing for the kit's reference-based dirty tracking: returns
+ * Structural sharing for adapter-owned persistence projections: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
- * its reference), so `changedKeys` stays clean and partial-write
- * repositories skip the untouched collection; a new array only when an
+ * its reference), so a partial-write adapter can skip the untouched
+ * collection; a new array only when an
  * element reference actually changed. The result is `ReadonlyArray<T>`:
  * it may BE the (possibly frozen) input; spread it if you need a mutable
  * copy.
@@ -501,10 +501,10 @@ export function updateEntityById<
 /**
  * Replaces an entity with the given ID in the collection.
  * Returns a new array with the replaced entity.
- * Structural sharing for the kit's reference-based dirty tracking: returns
+ * Structural sharing for adapter-owned persistence projections: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
- * its reference), so `changedKeys` stays clean and partial-write
- * repositories skip the untouched collection; a new array only when an
+ * its reference), so a partial-write adapter can skip the untouched
+ * collection; a new array only when an
  * element reference actually changed. The result is `ReadonlyArray<T>`:
  * it may BE the (possibly frozen) input; spread it if you need a mutable
  * copy.

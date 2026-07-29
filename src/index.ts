@@ -81,6 +81,7 @@ export {
 export {
 	type AggregateCommitToken,
 	type CommitEnrollment,
+	type CommitEnrollmentOptions,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
@@ -115,12 +116,18 @@ export {
 	recordPendingEvents,
 } from "./app/record-pending-events";
 export {
+	type AggregatePersistenceWrite,
 	AggregateTrackingError,
 	type AggregateTrackingFailure,
 	type AggregateWriteIntent,
+	type AggregateWriteRegistration,
 	CommitError,
+	defineRepository,
 	NestedUnitOfWorkError,
-	type RepositoryFactories,
+	type PhysicalRemovalRegistration,
+	type RepositoriesOf,
+	type RepositoryDefinition,
+	type RepositoryTracking,
 	RollbackError,
 	type RunOptions,
 	TransactionClosedError,
@@ -128,7 +135,6 @@ export {
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
 	type UnitOfWorkIdentityMap,
-	type UnitOfWorkSession,
 } from "./app/unit-of-work";
 // Core: errors + branded ids
 export {
@@ -330,6 +336,16 @@ export {
 	InMemorySnapshotStore,
 	type InMemorySnapshotStoreOptions,
 } from "./repo/in-memory-snapshot-store";
+export {
+	capturePersistenceBaseline,
+	derivePersistenceChanges,
+	insertPersistenceBaseline,
+	type PersistenceBaseline,
+	type PersistenceChanges,
+	type PersistenceLifecycle,
+	type PersistenceModel,
+	recapturePersistenceBaseline,
+} from "./repo/persistence-model";
 export type { AggregatePersistence, Repository } from "./repo/repository";
 // computeBackoffDelay is deliberately NOT exported: internal since 2.x
 // (unit-tested via direct source import), removed from the surface in v3.
@@ -341,6 +357,12 @@ export type {
 	TransactionalOptions,
 	TransactionScope,
 } from "./repo/scope";
+export {
+	captureAggregateSnapshot,
+	defineSnapshotModel,
+	reconstituteAggregateFromSnapshot,
+	type SnapshotModel,
+} from "./repo/snapshot-model";
 export type { SnapshotStore } from "./repo/snapshot-store";
 // Specifications
 export {

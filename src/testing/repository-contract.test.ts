@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Version } from "../aggregate/aggregate";
 import { AggregateRoot } from "../aggregate/aggregate-root";
 import type { DomainEvent } from "../aggregate/domain-event";
-import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
+import {
+	type AggregatePersistenceWrite,
+	defineRepository,
+	type RepositoryTracking,
+	UnitOfWork,
+} from "../app/unit-of-work";
 import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
@@ -13,7 +18,9 @@ import type {
 	EventCommitCandidate,
 	Outbox,
 } from "../events/ports";
+import type { PersistenceModel } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
+import { deepEqual } from "../utils/array/deep-equal";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,
@@ -23,11 +30,11 @@ import {
 /**
  * The in-memory REFERENCE adapter: the example consumers copy when
  * wiring their own harness (linked from docs/guide/unit-of-work.md).
- * It follows every documented repository pattern (identity-map read
- * path with the isDeleted probe, hasChanges skip, enroll-before-write,
- * persistedVersion insert/update routing, and REAL version predicates
- * on update AND delete, the affectedRows-0 equivalent) against a
- * store with genuine transactional rollback (snapshot/restore).
+ * It follows every documented v3 repository pattern: identity-mapped loads,
+ * adapter-owned baselines, explicit add/update/remove registration, exact
+ * commit receipts, and real version predicates on update and removal (the
+ * affected-rows-zero equivalent). The fake store provides genuine
+ * transactional rollback through snapshot/restore of its own state.
  *
  * It is an EXAMPLE, not a proof: passing the suite in memory proves
  * the reference, not your adapter. SQL/ORM adapters must run the same
@@ -64,6 +71,14 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		return order;
 	}
 
+	get name(): string {
+		return this.state.name;
+	}
+
+	get items(): readonly string[] {
+		return [...this.state.items];
+	}
+
 	rename(name: string): void {
 		this.commit(
 			{ ...this.state, name },
@@ -85,6 +100,29 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 
 type Row = { state: OrderState; version: number };
+type RowChange = Readonly<Row> | undefined;
+
+function rowFor(order: ContractOrder): Readonly<Row> {
+	return Object.freeze({
+		state: { name: order.name, items: [...order.items] },
+		version: order.version,
+	});
+}
+
+const orderPersistence: PersistenceModel<
+	ContractOrder,
+	Readonly<Row>,
+	RowChange
+> = {
+	capture: rowFor,
+	changes: (baseline, aggregate, lifecycle) => {
+		const current = rowFor(aggregate);
+		return lifecycle === "loaded" && deepEqual(baseline, current)
+			? undefined
+			: current;
+	},
+	isEmpty: (change) => change === undefined,
+};
 
 /**
  * In-memory storage with genuine transactional semantics via
@@ -162,108 +200,44 @@ class InMemoryDb {
 	}
 }
 
-class InMemoryOrderRepository implements ContractRepository<ContractOrder> {
+class InMemoryOrderRepository {
 	constructor(
 		protected readonly db: InMemoryDb,
-		protected readonly session: UnitOfWorkSession<OrderEvent>,
+		protected readonly tracking: RepositoryTracking<ContractOrder>,
 	) {}
 
-	async findById(id: OrderId): Promise<ContractOrder | null> {
-		const cached = this.session.identityMap.get(ContractOrder, id);
+	async findById(id: OrderId): Promise<ContractOrder | undefined> {
+		const cached = this.tracking.identityMap.get(ContractOrder, id);
 		if (cached) return cached;
-		if (this.session.identityMap.isDeleted(ContractOrder, id)) return null;
+		if (this.tracking.identityMap.isDeleted(ContractOrder, id))
+			return undefined;
 
 		const row = this.db.rows.get(id);
-		if (!row) return null;
+		if (!row) return undefined;
 		const order = ContractOrder.reconstitute(
 			id,
 			structuredClone(row.state),
 			row.version as Version,
 		);
-		return this.session.trackLoaded(ContractOrder, order);
-	}
-
-	async save(order: ContractOrder): Promise<void> {
-		if (!order.hasChanges) {
-			return; // safe skip: hasChanges covers version delta + events
-		}
-		// Register FIRST: the deleted-gate (AggregateDeletedError) then fires
-		// before any row write. Enrollment is idempotent, and a failed
-		// write rolls the whole unit of work back anyway.
-		this.registerWrite(order);
-		if (order.persistedVersion === undefined) {
-			// INSERT path: routed on persistedVersion, never on version === 0.
-			// The in-memory equivalent of a unique-violation (Postgres 23505,
-			// MySQL 1062): a row with this id already exists.
-			if (this.db.rows.has(order.id)) {
-				throw new DuplicateAggregateError({
-					aggregateType: "ContractOrder",
-					aggregateId: order.id,
-				});
-			}
-			this.db.rows.set(order.id, {
-				state: order.createSnapshotFromFactory().state,
-				version: order.version,
-			});
-		} else {
-			// UPDATE path with the REAL OCC predicate: the in-memory
-			// equivalent of `WHERE id = ? AND version = ?` affecting 0 rows.
-			const row = this.db.rows.get(order.id);
-			if (!row || row.version !== order.persistedVersion) {
-				throw new ConcurrencyConflictError({
-					aggregateType: "ContractOrder",
-					aggregateId: order.id,
-					expectedVersion: order.persistedVersion,
-					actualVersion: row?.version ?? -1,
-				});
-			}
-			this.db.rows.set(order.id, {
-				state: order.createSnapshotFromFactory().state,
-				version: order.version,
-			});
-		}
-	}
-
-	async delete(order: ContractOrder): Promise<void> {
-		// Legacy contract tests pass a previously loaded instance into a fresh
-		// UoW callback. The v3 replacement suite will load inside the callback.
-		this.session.trackLoaded(ContractOrder, order);
-		this.session.remove(order);
-		// OCC applies to deletes too: the in-memory equivalent of
-		// `DELETE FROM orders WHERE id = ? AND version = ?` affecting 0
-		// rows. An unpredicated delete would silently destroy a
-		// concurrent writer's update (last-write-wins).
-		const row = this.db.rows.get(order.id);
-		if (
-			order.persistedVersion !== undefined &&
-			(!row || row.version !== order.persistedVersion)
-		) {
-			throw new ConcurrencyConflictError({
-				aggregateType: "ContractOrder",
-				aggregateId: order.id,
-				expectedVersion: order.persistedVersion,
-				actualVersion: row?.version ?? -1,
-			});
-		}
-		this.db.rows.delete(order.id);
-	}
-
-	protected registerWrite(order: ContractOrder): void {
-		if (order.persistedVersion === undefined) {
-			this.session.add(order);
-			return;
-		}
-		// Compatibility for this internal v2-shaped suite only; the public v3
-		// suite will require load and update to share one Unit of Work.
-		this.session.trackLoaded(ContractOrder, order);
-		this.session.update(order);
+		return this.tracking.trackLoaded(order);
 	}
 }
 
+type OrderReadAdapter = Pick<ContractRepository<ContractOrder>, "findById">;
 type RepoFactory = (
 	db: InMemoryDb,
-	session: UnitOfWorkSession<OrderEvent>,
-) => ContractRepository<ContractOrder>;
+	tracking: RepositoryTracking<ContractOrder>,
+) => OrderReadAdapter;
+type OrderFlusher = (
+	db: InMemoryDb,
+	transaction: InMemoryTransaction,
+	write: AggregatePersistenceWrite<ContractOrder, RowChange>,
+) => void | Promise<void>;
+
+interface InMemoryTransaction {
+	readonly snapshot: ReturnType<InMemoryDb["snapshot"]>;
+	mutated: boolean;
+}
 
 /**
  * The harness consumers copy. `repoFactory` is parameterized only so
@@ -273,6 +247,7 @@ type RepoFactory = (
 function createInMemoryHarness(
 	repoFactory: RepoFactory = (db, session) =>
 		new InMemoryOrderRepository(db, session),
+	flush: OrderFlusher = flushOrder,
 ): RepositoryContractHarness<ContractOrder, OrderEvent> {
 	let mutationCounter = 0;
 	let idCounter = 0;
@@ -280,42 +255,66 @@ function createInMemoryHarness(
 	return {
 		createEnvironment: async () => {
 			const db = new InMemoryDb();
-			const scope: TransactionScope<undefined> = {
-				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
-					const snapshot = db.snapshot();
-					try {
-						return await fn(undefined);
-					} catch (error) {
-						db.restore(snapshot);
-						throw error;
-					}
-				},
-			};
-			const outbox: Outbox<OrderEvent> = {
-				add: async (events) => {
-					db.addToOutbox(events);
-				},
-				getPending: async () =>
-					db.outbox.map((message, i) => ({
-						...message,
-						dispatchId: String(i),
-					})),
-				markDispatched: async () => {},
-			};
+			let nextOutboxFailure: Error | undefined;
 			return {
-				run: (work) =>
-					new UnitOfWork({
+				run: (work) => {
+					let activeTransaction: InMemoryTransaction | undefined;
+					const scope: TransactionScope<InMemoryTransaction> = {
+						transactional: async <T>(
+							fn: (context: InMemoryTransaction) => Promise<T>,
+						) => {
+							const transaction: InMemoryTransaction = {
+								snapshot: db.snapshot(),
+								mutated: false,
+							};
+							activeTransaction = transaction;
+							try {
+								return await fn(transaction);
+							} catch (error) {
+								if (transaction.mutated) db.restore(transaction.snapshot);
+								throw error;
+							} finally {
+								activeTransaction = undefined;
+							}
+						},
+					};
+					const outbox: Outbox<OrderEvent> = {
+						add: async (events) => {
+							if (!activeTransaction) {
+								throw new Error("outbox write outside transaction");
+							}
+							activeTransaction.mutated = true;
+							if (nextOutboxFailure) {
+								const failure = nextOutboxFailure;
+								nextOutboxFailure = undefined;
+								throw failure;
+							}
+							db.addToOutbox(events);
+						},
+						getPending: async () => [],
+						markDispatched: async () => {},
+					};
+					return new UnitOfWork({
 						scope,
 						outbox,
 						repositories: {
-							orders: (
-								_tx: undefined,
-								session: UnitOfWorkSession<OrderEvent>,
-							) => repoFactory(db, session),
+							orders: defineRepository({
+								aggregate: ContractOrder,
+								persistence: orderPersistence,
+								physicalRemoval: true,
+								create: (_tx: InMemoryTransaction, tracking) =>
+									repoFactory(db, tracking),
+								flush: (transaction: InMemoryTransaction, write) =>
+									flush(db, transaction, write),
+							}),
 						},
 					}).run(({ repositories }) =>
 						work({ repository: repositories.orders }),
-					),
+					);
+				},
+				failNextOutboxWrite: (error) => {
+					nextOutboxFailure = error;
+				},
 				committedOutboxEvents: async () => [...db.outbox],
 			};
 		},
@@ -326,10 +325,48 @@ function createInMemoryHarness(
 		mutateVersionOnly: (order) => order.touch(),
 		mutateChildCollection: (order) =>
 			order.addItem(`item-${mutationCounter++}`),
-		snapshotState: (order) => order.createSnapshotFromFactory().state,
-		deletesAreVersionChecked: true,
+		snapshotState: (order) => ({ name: order.name, items: [...order.items] }),
+		removesAreSupported: true,
+		removesAreVersionChecked: true,
 		insertsAreDuplicateChecked: true, // explicit; true is also the default
 	};
+}
+
+function flushOrder(
+	db: InMemoryDb,
+	transaction: InMemoryTransaction,
+	write: AggregatePersistenceWrite<ContractOrder, RowChange>,
+): void {
+	const row = db.rows.get(write.aggregateId);
+	if (write.intent === "add") {
+		if (row) {
+			throw new DuplicateAggregateError({
+				aggregateType: "ContractOrder",
+				aggregateId: write.aggregateId,
+			});
+		}
+		const inserted = write.changes.value;
+		if (!inserted) throw new Error("add produced an empty change set");
+		transaction.mutated = true;
+		db.rows.set(write.aggregateId, structuredClone(inserted));
+		return;
+	}
+	if (!row || row.version !== write.expectedVersion) {
+		throw new ConcurrencyConflictError({
+			aggregateType: "ContractOrder",
+			aggregateId: write.aggregateId,
+			expectedVersion: write.expectedVersion ?? -1,
+			actualVersion: row?.version ?? -1,
+		});
+	}
+	transaction.mutated = true;
+	if (write.intent === "remove") {
+		db.rows.delete(write.aggregateId);
+		return;
+	}
+	if (!write.changes.empty && write.changes.value) {
+		db.rows.set(write.aggregateId, structuredClone(write.changes.value));
+	}
 }
 
 describe("repository contract test suite (in-memory reference adapter)", () => {
@@ -349,7 +386,8 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		minimal.mutateChildCollection = undefined;
 		minimal.createAggregateWithId = undefined;
 		minimal.snapshotState = undefined;
-		minimal.deletesAreVersionChecked = false;
+		minimal.removesAreSupported = false;
+		minimal.removesAreVersionChecked = false;
 
 		const minimalTests = createRepositoryContractTests(minimal);
 
@@ -359,18 +397,17 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		const skipped = minimalTests.filter((t) => t.skipped);
 		expect(skipped.map((t) => t.skipped?.capability).sort()).toEqual([
 			"createAggregateWithId",
-			"createAggregateWithId", // deletion-finality AND duplicate-insert
-			"deletesAreVersionChecked",
 			"mutateChildCollection",
 			"mutateVersionOnly",
-			"mutateVersionOnly",
+			"removesAreSupported",
+			"removesAreVersionChecked",
 		]);
 		// snapshotState widens the MANDATORY test, it does not gate one.
 
 		// A binding that ignores `skipped` must fail loud, never pass as
 		// a green no-op.
 		await expect(skipped[0]?.run()).rejects.toThrow(
-			/capability 'mutateVersionOnly' is not provided/,
+			/capability '.+' is not provided/,
 		);
 	});
 
@@ -381,16 +418,10 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		const upsertingTests = createRepositoryContractTests(upserting);
 		const skipped = upsertingTests.filter((t) => t.skipped);
 
-		// Exactly ONE skip, named after the SEMANTIC capability - and the
-		// deletion-finality test (gated on the same mechanical
-		// createAggregateWithId) still runs.
+		// Exactly one skip, named after the semantic capability.
 		expect(skipped.map((t) => t.skipped?.capability)).toEqual([
 			"insertsAreDuplicateChecked",
 		]);
-		expect(
-			upsertingTests.find((t) => t.name.startsWith("deletion is final across"))
-				?.skipped,
-		).toBeUndefined();
 	});
 
 	it("capabilities are captured at suite creation: mutating the harness afterwards does not flip tests", () => {
@@ -407,64 +438,52 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 	 * SPECIFIC assertion (not for any incidental reason).
 	 */
 	async function expectMutantFails(
-		repoFactory: RepoFactory,
+		flush: OrderFlusher,
 		testNamePrefix: string,
 		expectedFailure: RegExp,
 	): Promise<void> {
 		const mutantTest = createRepositoryContractTests(
-			createInMemoryHarness(repoFactory),
+			createInMemoryHarness(undefined, flush),
 		).find((t) => t.name.startsWith(testNamePrefix));
 		expect(mutantTest).toBeDefined();
 		expect(mutantTest?.skipped).toBeUndefined();
 		await expect(mutantTest?.run()).rejects.toThrow(expectedFailure);
 	}
 
-	// Mutant adapter: identical to the reference EXCEPT save() has no
-	// OCC predicate and no duplicate check (last-write-wins upsert).
-	// Enrollment stays enroll-before-write per the contract.
-	class LastWriteWinsRepository extends InMemoryOrderRepository {
-		override async save(order: ContractOrder): Promise<void> {
-			if (!order.hasChanges) return;
-			this.registerWrite(order);
-			// ❌ no `WHERE version = persistedVersion` equivalent and no
-			// unique-violation mapping:
-			this.db.rows.set(order.id, {
-				state: order.createSnapshotFromFactory().state,
-				version: order.version,
-			});
-		}
-	}
+	const lastWriteWins: OrderFlusher = (db, transaction, write) => {
+		const change = write.changes.value;
+		if (!change) return;
+		transaction.mutated = true;
+		db.rows.set(write.aggregateId, structuredClone(change));
+	};
 
 	it("the suite EXPOSES a broken adapter: a repository without the version predicate fails the mandatory test", async () => {
 		await expectMutantFails(
-			(db, session) => new LastWriteWinsRepository(db, session),
+			lastWriteWins,
 			"MANDATORY",
-			/the second writer's commit must reject/,
+			/stale update must reject/,
 		);
 	});
 
 	it("the suite EXPOSES an unpredicated delete: a stale delete that succeeds fails the stale-delete test", async () => {
-		class UnpredicatedDeleteRepository extends InMemoryOrderRepository {
-			override async delete(order: ContractOrder): Promise<void> {
-				this.session.trackLoaded(ContractOrder, order);
-				this.session.remove(order);
-				// ❌ plain `DELETE FROM orders WHERE id = ?`:
-				this.db.rows.delete(order.id);
-			}
-		}
-
 		await expectMutantFails(
-			(db, session) => new UnpredicatedDeleteRepository(db, session),
-			"stale delete conflicts",
-			/a stale delete must reject/,
+			(db, transaction, write) => {
+				if (write.intent !== "remove") {
+					return flushOrder(db, transaction, write);
+				}
+				transaction.mutated = true;
+				db.rows.delete(write.aggregateId);
+			},
+			"stale remove conflicts",
+			/stale remove must reject/,
 		);
 	});
 
 	it("the suite EXPOSES a missing unique-violation mapping: an upserting insert fails the duplicate-insert test", async () => {
 		await expectMutantFails(
-			(db, session) => new LastWriteWinsRepository(db, session),
-			"duplicate insert",
-			/must reject with \(or wrap\) DuplicateAggregateError/,
+			lastWriteWins,
+			"duplicate add rejects",
+			/duplicate add must reject/,
 		);
 	});
 });

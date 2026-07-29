@@ -1,10 +1,14 @@
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
-import { type AnyDomainEvent, isMintedEvent } from "../aggregate/domain-event";
 import {
-	type AggregatePersistenceCapability,
-	aggregatePersistenceCapabilityFor,
-} from "../aggregate/persistence-lifecycle";
+	type AnyDomainEvent,
+	isMintedEvent,
+	type PendingDomainEvent,
+} from "../aggregate/domain-event";
+import {
+	type PendingEventLifecycleCapability,
+	pendingEventLifecycleCapabilityFor,
+} from "../aggregate/pending-event-lifecycle";
 import { EventHarvestError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
@@ -121,6 +125,7 @@ export interface AggregateCommitToken<
 export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	enrollSaved(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
+		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
 	/**
 	 * Enroll an aggregate whose row is deleted by the current transaction.
@@ -129,7 +134,14 @@ export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	 */
 	enrollDeleted(
 		aggregate: IAggregateRoot<Id<string>, Evt>,
+		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
+}
+
+/** OCC baseline associated with one exact commit enrollment. */
+export interface CommitEnrollmentOptions {
+	/** Absent for a new aggregate; captured at load for update or removal. */
+	readonly expectedVersion?: Version;
 }
 
 /** The resolved value of a {@link withCommit} work callback. */
@@ -148,7 +160,10 @@ type CommitDisposition = "saved" | "deleted";
 
 interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
-	readonly persistence: AggregatePersistenceCapability;
+	readonly eventLifecycle: PendingEventLifecycleCapability;
+	readonly version: Version;
+	readonly expectedVersion: Version | undefined;
+	readonly events: ReadonlyArray<PendingDomainEvent<Evt>>;
 	disposition: CommitDisposition;
 }
 
@@ -173,6 +188,7 @@ function createCommitTokenScope<
 	const enroll = (
 		aggregate: IAggregateRoot<Id<string>, Evt>,
 		disposition: CommitDisposition,
+		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt> => {
 		if (!open) {
 			throw new EventHarvestError(
@@ -199,11 +215,25 @@ function createCommitTokenScope<
 			if (disposition === "deleted") {
 				record.disposition = "deleted";
 			}
+			const pending = aggregate.pendingEvents;
+			const sameEvents =
+				pending.length === record.events.length &&
+				pending.every((event, index) => event === record.events[index]);
+			if (
+				aggregate.version !== record.version ||
+				options?.expectedVersion !== record.expectedVersion ||
+				!sameEvents
+			) {
+				throw new EventHarvestError(
+					`withCommit: aggregate ${String(aggregate.id)} changed after its ` +
+						"commit batch was enrolled. Register persistence intent last.",
+				);
+			}
 			return existing;
 		}
 
-		const persistence = aggregatePersistenceCapabilityFor(aggregate);
-		if (!persistence) {
+		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		if (!eventLifecycle) {
 			throw new EventHarvestError(
 				`withCommit: aggregate ${String(aggregate.id)} has no kit-managed ` +
 					"persistence lifecycle. Extend AggregateRoot or " +
@@ -215,18 +245,32 @@ function createCommitTokenScope<
 		const token = Object.freeze(
 			Object.create(null),
 		) as AggregateCommitToken<Evt>;
+		const events = Object.freeze([...aggregate.pendingEvents]) as ReadonlyArray<
+			PendingDomainEvent<Evt>
+		>;
 		tokensByAggregate.set(aggregate, token);
-		recordsByToken.set(token, { aggregate, persistence, disposition });
+		recordsByToken.set(token, {
+			aggregate,
+			eventLifecycle,
+			disposition,
+			version: aggregate.version,
+			expectedVersion: options?.expectedVersion,
+			events,
+		});
 		mintedTokenCount += 1;
 		return token;
 	};
 
 	return {
 		enrollment: Object.freeze({
-			enrollSaved: (aggregate: IAggregateRoot<Id<string>, Evt>) =>
-				enroll(aggregate, "saved"),
-			enrollDeleted: (aggregate: IAggregateRoot<Id<string>, Evt>) =>
-				enroll(aggregate, "deleted"),
+			enrollSaved: (
+				aggregate: IAggregateRoot<Id<string>, Evt>,
+				options?: CommitEnrollmentOptions,
+			) => enroll(aggregate, "saved", options),
+			enrollDeleted: (
+				aggregate: IAggregateRoot<Id<string>, Evt>,
+				options?: CommitEnrollmentOptions,
+			) => enroll(aggregate, "deleted", options),
 		}),
 		close: () => {
 			open = false;
@@ -365,18 +409,10 @@ function createCommitTokenScope<
  * If the transaction rolls back, no acknowledgement occurs: the aggregate
  * keeps its pending events, so the caller can retry or discard the instance.
  *
- * **Do not mutate an aggregate after registering it for persistence inside
- * `fn`.** `withCommit` cannot see what the repository registered; post-commit
- * internal acknowledgement syncs `persistedVersion` to the CURRENT in-memory
- * version and (on `AggregateRoot`) re-baselines dirty tracking against
- * the CURRENT state. A mutation between `save` and the callback's return
- * therefore desyncs OCC (next save throws a false
- * `ConcurrencyConflictError`); and under a partial-write repository
- * using `changedKeys`, an un-bumped mutation is silently marked clean
- * and never written. The commit envelope widens the blast radius further:
- * it would claim a position the committed row does not carry, poisoning
- * every consumer's ordering and idempotency watermarks. Mutate first,
- * save last.
+ * Enrollment captures an exact version and event batch. Re-enrolling the same
+ * aggregate after it changes rejects. `UnitOfWork` additionally seals the
+ * adapter persistence projection and rejects later mutation before flush. For
+ * direct `withCommit` use, make domain decisions first, write, and enroll last.
  *
  * **Duplicate enrollment is idempotent by reference.** Enrolling the same
  * instance repeatedly returns the same token, and a repeated token in
@@ -395,7 +431,7 @@ function createCommitTokenScope<
  *   const orderRepository = makeOrderRepository(tx); // your factory binds tx to the repo
  *   const order = await orderRepository.getById(orderId);
  *   order.confirm();
- *   await orderRepository.save(order);             // pure persistence; no lifecycle mutation
+ *   await persistOrder(tx, order);                 // low-level adapter write
  *   const commit = enrollment.enrollSaved(order);   // attest the repository write
  *   return { result: order.id, commits: [commit] };
  * });
@@ -440,25 +476,25 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				tokenScope.close();
 			}
 			const commitRecords = tokenScope.resolve(fnResult.commits);
-			const uniqueAggregates = commitRecords.map(({ aggregate }) => aggregate);
 			// Prepare each bare domain event for source finalization in the outbox.
 			// The aggregate's event remains untouched and is what the in-process
 			// domain bus receives.
-			const candidates = uniqueAggregates.flatMap((agg) => {
+			const candidates = commitRecords.flatMap((record) => {
+				const agg = record.aggregate;
 				if (
-					agg.pendingEvents.length > 0 &&
-					agg.persistedVersion !== undefined &&
-					(agg.version as number) <= (agg.persistedVersion as number)
+					record.events.length > 0 &&
+					(record.version as number) <=
+						((record.expectedVersion as number | undefined) ?? 0)
 				) {
 					throw new EventHarvestError(
 						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
-							`did not advance its version beyond persistedVersion ` +
-							`(${agg.persistedVersion}). An eventful commit needs a unique ` +
+							`did not advance its version beyond the expected version ` +
+							`(${String(record.expectedVersion ?? 0)}). An eventful commit needs a unique ` +
 							`cursor; use AggregateRoot.commit(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}
-				return agg.pendingEvents.map((event, index) => {
+				return record.events.map((event, index) => {
 					if (!isMintedEvent(event)) {
 						throw new EventHarvestError(
 							`withCommit: event "${event.type}" has not been recorded. ` +
@@ -468,7 +504,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						);
 					}
 					const recordedEvent = event as Evt;
-					const commitSize = agg.pendingEvents.length;
+					const commitSize = record.events.length;
 					const aggregateId = recordedEvent.aggregateId;
 					const aggregateType = recordedEvent.aggregateType;
 					const missing: string[] = [];
@@ -490,7 +526,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						event: recordedEvent,
 						source: Object.freeze({ aggregateId, aggregateType }),
 						position: Object.freeze({
-							aggregateVersion: agg.version as number,
+							aggregateVersion: record.version as number,
 							commitSequence: index,
 							commitSize,
 						}),
@@ -519,13 +555,18 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		readonly aggregate: IAggregateRoot<Id<string>, Evt>;
 		readonly version: Version;
 	}> = [];
-	for (const { aggregate, persistence, disposition } of commitRecords) {
+	for (const {
+		aggregate,
+		eventLifecycle,
+		disposition,
+		version,
+		events: committedEvents,
+	} of commitRecords) {
 		try {
 			if (disposition === "deleted") {
-				persistence.discardPendingEvents();
+				eventLifecycle.discardPendingEvents(committedEvents);
 			} else {
-				const version = aggregate.version;
-				persistence.acknowledge(version);
+				eventLifecycle.acknowledge(committedEvents);
 				persistedObservations.push({ aggregate, version });
 			}
 		} catch (error) {

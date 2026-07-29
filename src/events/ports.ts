@@ -190,7 +190,8 @@ export interface CommitPosition {
 	 *
 	 * The outbox/event-store adapter owns this value. It must read and advance
 	 * the source head atomically with inserting the committed event envelope;
-	 * application orchestration cannot derive it from `persistedVersion`.
+	 * application orchestration cannot derive it from the Unit of Work's OCC
+	 * receipt because state-only commits are intentionally absent here.
 	 */
 	readonly previousEventfulAggregateVersion: number | null;
 }

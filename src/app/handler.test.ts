@@ -5,6 +5,10 @@ import {
 	type IAggregateRoot,
 } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import {
+	pendingEventLifecycleCapabilityFor,
+	registerPendingEventLifecycleCapability,
+} from "../aggregate/pending-event-lifecycle";
 import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
@@ -25,6 +29,7 @@ class MockAggregate extends AggregateRoot<
 	TestEvent
 > {
 	protected readonly aggregateType = "MockOrder";
+	private _acknowledgementCount = 0;
 
 	constructor(events: TestEvent[], version: number, persistedVersion?: number) {
 		super("agg-1" as TestId, {});
@@ -33,14 +38,29 @@ class MockAggregate extends AggregateRoot<
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
+		const lifecycle = pendingEventLifecycleCapabilityFor(this);
+		if (!lifecycle) throw new Error("missing aggregate event lifecycle");
+		registerPendingEventLifecycleCapability(this, {
+			acknowledge: (committedEvents) => {
+				lifecycle.acknowledge(committedEvents);
+				this._acknowledgementCount += 1;
+			},
+			discardPendingEvents: (committedEvents) =>
+				lifecycle.discardPendingEvents(committedEvents),
+		});
 	}
 
 	public get acknowledgementCount(): number {
-		return this.persistedVersion === this.version ? 1 : 0;
+		return this._acknowledgementCount;
 	}
 
 	public advanceForObserverTest(): void {
 		this.setVersion((this.version + 1) as Version);
+	}
+
+	public recordAfterEnrollmentForTest(event: TestEvent): void {
+		this.setVersion((this.version + 1) as Version);
+		this.addDomainEvent(event);
 	}
 }
 
@@ -212,7 +232,6 @@ describe("withCommit", () => {
 		const lookalike: IAggregateRoot<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
 			version: 1 as Version,
-			persistedVersion: undefined,
 			pendingEvents: [],
 		};
 		const outbox = createMockOutbox();
@@ -993,8 +1012,14 @@ describe("withCommit", () => {
 		await expect(
 			withCommit(
 				{ outbox, scope: createMockScope() },
-				async (_ctx, enrollment) =>
-					enrolledResult(enrollment, "r", [aggregate]),
+				async (_ctx, enrollment) => ({
+					result: "r",
+					commits: [
+						enrollment.enrollSaved(aggregate, {
+							expectedVersion: 5 as Version,
+						}),
+					],
+				}),
 			),
 		).rejects.toThrow(/did not advance/i);
 		expect(outbox.added).toHaveLength(0);
@@ -1634,6 +1659,34 @@ describe("withCommit", () => {
 });
 
 describe("commit enrollment lifecycle", () => {
+	it("acknowledges exactly the enrolled batch and leaves later events pending", async () => {
+		const first = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "first" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const later = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "later" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([first]);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				const token = enrollment.enrollSaved(aggregate);
+				aggregate.recordAfterEnrollmentForTest(later);
+				return { result: undefined, commits: [token] };
+			},
+		);
+
+		expect(outbox.added[0]?.map(({ event }) => event)).toEqual([first]);
+		expect(aggregate.pendingEvents).toEqual([later]);
+		expect(aggregate.acknowledgementCount).toBe(1);
+	});
+
 	it("rejects save enrollment after delete enrollment in one transaction", async () => {
 		const outbox = createMockOutbox();
 		const deletionEvent = createDomainEvent(

@@ -55,6 +55,13 @@ export {
 	type ProjectionCheckpointStoreContractTest,
 } from "./testing/projection-checkpoint-contract";
 export {
+	type ContractRepository,
+	createRepositoryContractTests,
+	type RepositoryContractEnvironment,
+	type RepositoryContractHarness,
+	type RepositoryContractTest,
+} from "./testing/repository-contract";
+export {
 	createSnapshotStoreContractTests,
 	type SnapshotStoreContractEnvironment,
 	type SnapshotStoreContractHarness,

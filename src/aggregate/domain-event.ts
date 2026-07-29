@@ -264,7 +264,7 @@ export type CreateDomainEventFactsOptions = CreateDomainEventStampOptions;
 export interface DomainEventFactoryOptions {
 	/** Event-id generator. Defaults to Web Crypto `crypto.randomUUID()`. */
 	readonly eventIdFactory?: EventIdFactory;
-	/** Event and snapshot clock. Defaults to `() => new Date()`. */
+	/** Event-recording clock. Defaults to `() => new Date()`. */
 	readonly clock?: ClockFactory;
 }
 

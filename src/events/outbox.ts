@@ -150,20 +150,17 @@ type DispatchedEventReceipt = {
  *
  * @example
  * ```ts
- * import { InMemoryOutbox, EventBusImpl, withCommit } from "@shirudo/ddd-kit";
+ * import { InMemoryOutbox, EventBusImpl } from "@shirudo/ddd-kit";
  *
  * const outbox = new InMemoryOutbox<OrderEvent>();
  * const bus = new EventBusImpl<OrderEvent>();
  *
- * await withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
- *   const orderRepository = makeOrderRepository(tx);
- *   const order = await orderRepository.getById(id);
+ * const uow = makeOrderUnitOfWork({ outbox, bus });
+ * await uow.run(async ({ repositories }) => {
+ *   const order = await repositories.orders.getById(id);
  *   order.confirm();
- *   await orderRepository.save(order);
- *   return {
- *     result: order.id,
- *     commits: [enrollment.enrollSaved(order)],
- *   };
+ *   repositories.orders.update(order);
+ *   return order.id;
  * });
  * ```
  */

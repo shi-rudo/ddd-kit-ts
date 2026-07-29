@@ -4,17 +4,11 @@ import {
 	ForeignEventError,
 	MisaddressedEventError,
 	MissingHandlerError,
-	SnapshotCorruptedError,
-	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type {
-	AggregateSnapshot,
-	IEventSourcedAggregate,
-	Version,
-} from "./aggregate";
+import type { IEventSourcedAggregate, Version } from "./aggregate";
 import {
-	assertRestoreTargetHasNoPendingEvents,
+	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
 import {
@@ -49,14 +43,13 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
  * on invariant violations. Subclasses override `validateEvent()` to
  * throw their own concrete subclasses (e.g. `OrderAlreadyConfirmedError`).
- * Validation guards NEW facts only: replay (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`) never runs `validateEvent`, because
- * history is already accepted fact and decision rules change over time;
+ * Validation guards NEW facts only. Replay through `loadFromHistory` never
+ * runs `validateEvent`, because history is already accepted fact and decision
+ * rules change over time;
  * a stream that was valid when written must stay loadable under
- * tomorrow's rules. Only the infrastructure-boundary methods
- * (`loadFromHistory`, `restoreFromSnapshotWithEvents`) return `Result`:
- * they catch `DomainError` during replay so callers can react to
- * corrupted event streams without try/catch.
+ * tomorrow's rules. The infrastructure-boundary method `loadFromHistory`
+ * returns `Result`: it catches `DomainError` during replay so callers can
+ * react to corrupted event streams without try/catch.
  *
  * @template TState - The aggregate state (contains child entities and value objects)
  * @template TEvent - The union type of all domain events
@@ -98,9 +91,8 @@ export abstract class EventSourcedAggregate<
 		TState,
 		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
-		TSnapshotState = TState,
 	>
-	extends BaseAggregate<TState, TId, TEvent, TSnapshotState>
+	extends BaseAggregate<TState, TId, TEvent>
 	implements IEventSourcedAggregate<TId, TEvent>
 {
 	/**
@@ -118,29 +110,6 @@ export abstract class EventSourcedAggregate<
 	 * and replay always receive the current event shape.
 	 */
 	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
-
-	/**
-	 * Structural integrity check for a state restored from a SNAPSHOT.
-	 * Default is no-op. Override to reject states that no version of
-	 * the model could have produced (missing fields, impossible types,
-	 * truncated data): a snapshot is DERIVED data read back from
-	 * storage, so unlike replay (where every state is built by the
-	 * handlers from accepted facts) the restored blob deserves a
-	 * structural gate. Throw {@link SnapshotCorruptedError} (an
-	 * `InfrastructureError`: corrupted persistence is a storage
-	 * problem, not a business rejection) and
-	 * `restoreFromSnapshotWithEvents` returns it as `Err`, which the
-	 * documented load recipe answers by discarding the snapshot and
-	 * refolding from the stream.
-	 *
-	 * Deliberately NOT today's decision rules: a snapshot persisted
-	 * under yesterday's rules must keep loading after a rule change
-	 * ("replay from zero equals snapshot plus tail"). Rules stay in
-	 * `validateState` / `validateEvent` on the live paths; schema
-	 * DRIFT belongs in `snapshotSchemaVersion`; decode belongs in
-	 * `fromSnapshotState` / `migrateSnapshotState`.
-	 */
-	protected validateRestoredState(_state: TState): void {}
 
 	/**
 	 * Applies an event: validates, locates the handler, computes the next
@@ -163,7 +132,7 @@ export abstract class EventSourcedAggregate<
 	 * `apply()` is exclusively for NEW facts: it always records the event
 	 * and bumps the version (the former `isNew` flag argument is gone).
 	 * Replaying history is a different operation with its own entry
-	 * points, `loadFromHistory` and `restoreFromSnapshotWithEvents`.
+	 * point, `loadFromHistory`.
 	 *
 	 * @param event - The domain event to apply
 	 */
@@ -237,8 +206,8 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Internal state-transition path shared by `apply()` and the replay
-	 * methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`):
+	 * Internal state-transition path shared by `apply()` and
+	 * `loadFromHistory`:
 	 * locate the handler, commit the next state. It deliberately does
 	 * NOT record the event, bump the version, or run `validateEvent`;
 	 * `apply()` layers all three on for new facts, while replay must not
@@ -248,8 +217,7 @@ export abstract class EventSourcedAggregate<
 	 * supply a narrowed `K` generic, so this helper accepts `TEvent`
 	 * and the discriminator is resolved via the (statically-sound)
 	 * `handlers` map.
-	 */
-	/**
+	 *
 	 * Replay address check: a history event that names a DIFFERENT
 	 * aggregate id or type is a persisted row that belongs to someone
 	 * else (a miswired stream read, colliding ids across types, a
@@ -307,37 +275,24 @@ export abstract class EventSourcedAggregate<
 	 *
 	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
 	 * is rolled back to its pre-call value, the same contract as
-	 * `restoreFromSnapshotWithEvents`. Partial replay is never observable.
+	 * every replay path. Partial replay is never observable.
 	 * (Version needs no rollback: replay goes through `dispatch`, which
 	 * never bumps it; only the final `markRestored` advances it.)
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
-	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at
-	 * v=3; a PERSISTED aggregate at v=P (`persistedVersion === P`) catching
-	 * up on M newer events ends at v=P+M.
+	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
+	 * a reconstituted aggregate at v=P catching up on M newer events ends at
+	 * v=P+M.
 	 *
-	 * **The replay target must be fresh or persisted.** An aggregate with
-	 * unflushed `pendingEvents`, or with an in-memory version that was
-	 * never persisted (a factory-created instance), throws
-	 * {@link UnreplayableAggregateError} BEFORE anything moves: replaying
-	 * onto it would `markRestored` a `persistedVersion` that counts
-	 * unpersisted history, flipping repository routing from INSERT to
-	 * UPDATE (or appending with a wrong expected version). The throw is
-	 * deliberate (crash-loud programming bug), never a `Result` `Err`, and
-	 * runs before the empty-history fast path so the misuse is caught
-	 * deterministically rather than only when the stream happens to be
-	 * non-empty.
+	 * The replay target must not carry pending decisions. Factory-vs-load
+	 * lifecycle is owned by the Unit of Work rather than inferred from an
+	 * aggregate persistence flag.
 	 */
 	public loadFromHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		assertRestoreTargetHasNoPendingEvents(this);
-		this.assertReplayTargetHasNoUnpersistedVersion();
-		// Empty stream: nothing was loaded, so leave the lifecycle markers
-		// alone. markRestored(version) here would replace the
-		// never-persisted sentinel (persistedVersion === undefined) on a
-		// fresh aggregate, flipping repository routing from INSERT to
-		// UPDATE against a row that does not exist.
+		assertReplayTargetHasNoPendingEvents(this);
+		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 
 		const previousState = this._state;
@@ -354,95 +309,6 @@ export abstract class EventSourcedAggregate<
 		}
 		this.markRestored((startVersion + history.length) as Version);
 		return ok();
-	}
-
-	/**
-	 * Restores the aggregate from a snapshot and applies events that occurred
-	 * after. Same infrastructure-boundary semantics as `loadFromHistory`:
-	 * catches `DomainError` and returns it as an `Err`; non-domain throws
-	 * propagate.
-	 *
-	 * All-or-nothing: if any event mid-stream throws a `DomainError`, the
-	 * aggregate is rolled back to its pre-call state + version. Partial
-	 * restoration is never observable to the caller.
-	 *
-	 * **The restore target must not carry pending events**: such a target
-	 * throws {@link UnreplayableAggregateError} before anything moves
-	 * (crash-loud programming bug, never a `Result` `Err`; see that
-	 * error's docs for the rationale and remedies). Unlike
-	 * `loadFromHistory`, a never-persisted in-memory version is fine
-	 * here: the snapshot overwrites state and version entirely instead
-	 * of adding to them.
-	 */
-	public restoreFromSnapshotWithEvents(
-		snapshot: AggregateSnapshot<TSnapshotState>,
-		eventsAfterSnapshot: ReadonlyArray<TEvent>,
-	): Result<void, DomainError | SnapshotCorruptedError> {
-		assertRestoreTargetHasNoPendingEvents(this);
-		const previousState = this._state;
-		const previousVersion = this.version;
-		// `persistedVersion` is invariant during the loop; no rollback needed.
-
-		// Resolve, convert, and structurally check BEFORE anything is
-		// assigned, under the method's documented Result contract: a
-		// DomainError from migrateSnapshotState / fromSnapshotState and a
-		// SnapshotCorruptedError from validateRestoredState map to Err
-		// (the repository's discard-and-refold branch must see both),
-		// while SnapshotSchemaMismatchError (a configuration gap, not
-		// corruption) and other throws propagate. Deliberately NOT validated with
-		// `validateState`: those are today's decision rules, and a
-		// snapshot persisted under yesterday's rules must keep loading
-		// ("replay from zero equals snapshot plus tail").
-		// `validateRestoredState` is the separate STRUCTURAL gate for the
-		// stored blob.
-		let restored: TState;
-		try {
-			restored = this.fromSnapshotState(this.resolveSnapshotState(snapshot));
-			this.validateRestoredState(restored);
-		} catch (e) {
-			if (e instanceof DomainError || e instanceof SnapshotCorruptedError) {
-				return err(e);
-			}
-			throw e;
-		}
-
-		this._state = this.freezeState(restored);
-		this.setVersion(snapshot.version);
-
-		for (const event of eventsAfterSnapshot) {
-			try {
-				this.assertReplayedEventBelongsHere(event);
-				this.dispatch(event);
-			} catch (e) {
-				this._state = previousState;
-				this.setVersion(previousVersion);
-				if (e instanceof DomainError) return err(e);
-				throw e;
-			}
-		}
-
-		this.markRestored(
-			(snapshot.version + eventsAfterSnapshot.length) as Version,
-		);
-		return ok();
-	}
-
-	/**
-	 * Additive-replay guard for `loadFromHistory` only: the snapshot
-	 * restore overwrites version wholesale, so a never-persisted in-memory
-	 * version is harmless there and `restoreFromSnapshotWithEvents`
-	 * deliberately does not call this.
-	 */
-	private assertReplayTargetHasNoUnpersistedVersion(): void {
-		if (this.version > 0 && this.persistedVersion === undefined) {
-			throw new UnreplayableAggregateError(
-				String(this.id),
-				`its in-memory version (${this.version}) was never persisted ` +
-					"(persistedVersion is undefined), so additive replay would " +
-					"mark unpersisted history as persisted; save it through " +
-					"withCommit or UnitOfWork first, then catch-up replay",
-			);
-		}
 	}
 
 	/**

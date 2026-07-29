@@ -34,11 +34,11 @@ export interface AggregateSnapshot<TState> {
 	readonly snapshotAt: Date;
 
 	/**
-	 * Schema version of the SHAPE of `state` (the aggregate's declared
-	 * `snapshotSchemaVersion`), stamped by `createSnapshot`. Distinct from
+	 * Schema version of the stored `state` shape, declared by its adapter-owned
+	 * `SnapshotModel` and stamped by `captureAggregateSnapshot`. Distinct from
 	 * {@link version}, which counts mutations: this field says "which
 	 * shape does the stored state have", so a restore can detect a
-	 * snapshot written against an older `TSnapshotState` and migrate or
+	 * snapshot written against an older DTO shape and migrate or
 	 * discard it instead of crashing later. Optional: absent on snapshots
 	 * written by older kit versions, which restore treats as schema `1`.
 	 */
@@ -50,12 +50,12 @@ export interface AggregateSnapshot<TState> {
  * `BaseAggregate` and inherited by both `AggregateRoot` and
  * `EventSourcedAggregate`. Repository implementations type their
  * `save(aggregate)` parameter against this interface rather than the
- * concrete classes, so the repo layer does not take a compile-time
+ * concrete classes, so persistence orchestration does not take a compile-time
  * dependency on the aggregate hierarchy.
  *
  * Full per-member documentation lives on the concrete `BaseAggregate`
  * class; the interface is intentionally terse to avoid drift. Persistence
- * facts are readable, but acknowledgement and pending-event disposal are not
+ * Domain facts are readable, but acknowledgement and pending-event disposal are not
  * part of this surface. `withCommit` / `UnitOfWork` hold that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
@@ -67,12 +67,6 @@ export interface IAggregateRoot<
 > {
 	readonly id: TId;
 	readonly version: Version;
-	/**
-	 * Adapter-facing persistence baseline, not a domain fact. Domain behavior
-	 * must not branch on this value; repositories use it for insert/update
-	 * routing and optimistic-concurrency predicates.
-	 */
-	readonly persistedVersion: Version | undefined;
 	readonly pendingEvents: ReadonlyArray<PendingDomainEvent<TEvent>>;
 }
 

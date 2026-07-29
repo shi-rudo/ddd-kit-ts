@@ -33,10 +33,9 @@ export interface TransactionalOptions {
  * `unknown` fallback.
  *
  * Intentionally minimal: the scope itself does no change tracking and
- * no commit-time flush. Those concerns live in the layers above - the
- * aggregate detects its own changes (`changedKeys` / `hasChanges`),
- * `withCommit` orchestrates the commit lifecycle, and the opt-in
- * `UnitOfWork` facade adds tx-bound repositories and enrollment. See
+ * no commit-time flush. Those concerns live in the layers above: a
+ * repository adapter derives its change set, `withCommit` orchestrates the
+ * event lifecycle, and `UnitOfWork` owns tracking and atomic flush. See
  * "TransactionScope stays minimal; the Unit of Work lives above it" in
  * docs/guide/design-decisions.md.
  *

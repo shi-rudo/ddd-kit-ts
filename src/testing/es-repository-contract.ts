@@ -1,8 +1,9 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type {
-	AnyDomainEvent,
-	PendingDomainEvent,
+import {
+	type AnyDomainEvent,
+	isMintedEvent,
+	type PendingDomainEvent,
 } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
@@ -20,379 +21,228 @@ import {
 	loadAggregateOrFail,
 } from "./contract-assertions";
 
-/**
- * The repository surface the event-sourced contract suite exercises.
- * Deliberately smaller than the state-stored `ContractRepository`: pure
- * event-sourced aggregates rarely have a meaningful `delete` (the
- * lifecycle ends with a `Closed` / `Terminated` event in the stream),
- * so the suite does not require one.
- */
+/** Event-sourced repositories normally expose no physical removal. */
 export interface EsContractRepository<
-	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 > {
-	findById(id: TAgg["id"]): Promise<TAgg | null>;
-	save(aggregate: TAgg): Promise<void>;
+	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
+	add(aggregate: TAggregate): void;
+	update(aggregate: TAggregate): void;
 }
 
-/**
- * One isolated test environment: fresh event store, fresh outbox. The
- * suite creates one per test and tears it down afterwards.
- */
 export interface EsRepositoryContractEnvironment<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
-	/**
-	 * Execute one unit of work against the adapter under test. Wire this
-	 * through your real `UnitOfWork` / `withCommit` setup: the commit
-	 * boundary IS part of what the suite proves (outbox harvest,
-	 * post-commit acknowledgement, rollback purity).
-	 */
 	run<R>(
-		work: (ctx: { repository: EsContractRepository<TAgg> }) => Promise<R>,
+		work: (context: {
+			repository: EsContractRepository<TAggregate>;
+		}) => Promise<R>,
 	): Promise<R>;
-
-	/**
-	 * All events currently persisted in the outbox (committed writes
-	 * only; a rolled-back transaction's events must not appear here).
-	 */
-	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
-
-	/**
-	 * The COMMITTED stream page for the qualified aggregate key and required
-	 * bounded `(fromVersion, toVersion]` window. Implement this through your
-	 * adapter's `EventStore.readStream` so the suite exercises the real
-	 * missing/existing state, actual stream head, ordering, snapshot catch-up,
-	 * and point-in-time slicing. A rolled-back transaction's stream must remain
-	 * absent.
-	 */
+	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<TEvent>>>;
+	failNextOutboxWrite(error: Error): void;
 	committedStreamEvents(
-		stream: AggregateAddress<TAgg["id"]>,
+		stream: AggregateAddress<TAggregate["id"]>,
 		options: ReadStreamOptions,
-	): Promise<StreamReadResult<Evt>>;
-
-	/** Release connections, drop schemas, etc. Called in a finally. */
+	): Promise<StreamReadResult<TEvent>>;
 	teardown?(): Promise<void>;
 }
 
-/**
- * What an adapter supplies to run the event-sourced contract suite.
- *
- * The harness MUST provide isolation per environment. **For SQL-backed
- * event stores this must run against a real database** (testcontainers
- * or equivalent): the mandatory two-writer test proves YOUR
- * expectedVersion guard, and an in-memory stand-in proves only itself.
- *
- * Aggregate arithmetic the suite relies on:
- * - `createAggregate()` returns a fresh aggregate with exactly ONE
- *   applied creation event (version 1, `persistedVersion === undefined`).
- * - `mutate()` applies exactly ONE event (+1 version).
- */
 export interface EsRepositoryContractHarness<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
-	createEnvironment(): Promise<EsRepositoryContractEnvironment<TAgg, Evt>>;
-
-	/**
-	 * A brand-new aggregate: exactly one applied creation event, unique
-	 * id, version 1, `persistedVersion === undefined`.
-	 */
-	createAggregate(): TAgg;
-
-	/**
-	 * Qualified persistence key for this aggregate type. Repositories expose
-	 * id-only domain lookup, but their EventStore adapter must address the
-	 * underlying stream by both stable aggregate type and id.
-	 */
-	streamKeyFor(id: TAgg["id"]): AggregateAddress<TAgg["id"]>;
-
-	/** Apply exactly ONE domain event via `apply()` (+1 version). */
-	mutate(aggregate: TAgg): void;
-
-	/**
-	 * Optional: construct a NEW (never-persisted) aggregate carrying a
-	 * SPECIFIC id, with its creation event applied. Enables the
-	 * duplicate-create conflict test (two creators racing on one stream).
-	 */
-	createAggregateWithId?(id: TAgg["id"]): TAgg;
-
-	/**
-	 * Optional: a plain-data projection of the aggregate's state,
-	 * compared with deep equality. Enables the state assertions in the
-	 * mandatory and replay-equality tests. Must be roundtrip-stable
-	 * across your store (see the state-stored harness JSDoc for the
-	 * normalization checklist).
-	 */
-	snapshotState?(aggregate: TAgg): unknown;
+	createEnvironment(): Promise<
+		EsRepositoryContractEnvironment<TAggregate, TEvent>
+	>;
+	/** Fresh aggregate with exactly one recorded creation event. */
+	createAggregate(): TAggregate;
+	createAggregateWithId?(id: TAggregate["id"]): TAggregate;
+	streamKeyFor(id: TAggregate["id"]): AggregateAddress<TAggregate["id"]>;
+	/** Applies exactly one event and advances the aggregate version by one. */
+	mutate(aggregate: TAggregate): void;
+	snapshotState?(aggregate: TAggregate): unknown;
 }
 
-/** One named contract test; see the state-stored suite for the binding pattern. */
 export type EsRepositoryContractTest = ContractTest;
 
 /**
- * The event-sourced repository contract test suite: the proof that an
- * adapter delivers what the kit's `EventStore` port and Unit of Work
- * document. The kit is store-agnostic: the expectedVersion guard lives
- * in YOUR adapter's append. That makes stream OCC a **repository
- * contract, not a kit guarantee**; an adapter that has not passed this
- * suite (against a real store, for SQL-backed adapters) has not
- * demonstrated it.
+ * Contract suite for event-stream adapters using v3 Unit-of-Work receipts.
  *
- * What each test proves:
- * - The MANDATORY two-writer test proves your append's expectedVersion
- *   guard and its atomicity.
- * - The replay/lifecycle tests prove your read path (fold order,
- *   identity map wiring) and the commit lifecycle (outbox harvest,
- *   post-commit acknowledgement, rollback purity).
- * - The duplicate-create and stream-read tests prove the create race,
- *   missing-vs-empty distinction, actual head, snapshot catch-up, and
- *   point-in-time reads.
- *
- * Error matching is by NAME along the `cause` chain, not `instanceof`
- * (same rationale as the state-stored suite). Binding:
- *
- * ```ts
- * for (const test of createEsRepositoryContractTests(harness)) {
- *   (test.skipped ? it.skip : it)(test.name, test.run);
- * }
- * ```
- *
- * **Known limitation:** like the state-stored suite, the two-writer
- * test is sequential-deterministic; lock interaction and raw
- * serialization failures (Postgres 40001) need adapter-specific tests
- * on top.
+ * `add` and `update` register intent only. At commit, the adapter appends the
+ * receipt's exact event batch with the Unit of Work's expected version, in the
+ * same transaction as the outbox. `run` must support overlapping calls so the
+ * mandatory stale-writer proof exercises a real stream OCC predicate.
  */
 export function createEsRepositoryContractTests<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
->(harness: EsRepositoryContractHarness<TAgg, Evt>): EsRepositoryContractTest[] {
-	type Env = EsRepositoryContractEnvironment<TAgg, Evt>;
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
+>(
+	harness: EsRepositoryContractHarness<TAggregate, TEvent>,
+): EsRepositoryContractTest[] {
+	type Environment = EsRepositoryContractEnvironment<TAggregate, TEvent>;
+	const inEnvironment = bindContractEnvironment(() =>
+		harness.createEnvironment(),
+	);
+	const readAll = { limit: 100 } as const;
+	const createAggregateWithId = harness.createAggregateWithId;
+	const snapshotState = harness.snapshotState;
 
-	// Runner plumbing shared with the state-stored suite; see
-	// ./contract-assertions for the teardown-never-masks rule.
-	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
-	const fixtureRead = { limit: 100 } as const;
-
-	const loadOrFail = (
-		repository: EsContractRepository<TAgg>,
-		id: TAgg["id"],
-	): Promise<TAgg> =>
+	const load = (
+		repository: EsContractRepository<TAggregate>,
+		id: TAggregate["id"],
+	): Promise<TAggregate> =>
 		loadAggregateOrFail(
 			repository,
 			id,
-			"broken replay read or a write that did not commit",
+			"the stream was not appended or replayed correctly",
 		);
+	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
+	const ids = (events: ReadonlyArray<PendingDomainEvent<TEvent>>): string[] =>
+		events.map((event) => {
+			assert(
+				isMintedEvent(event),
+				"pending events must be recorded before flush",
+			);
+			return event.eventId;
+		});
+	const outboxIds = (
+		events: ReadonlyArray<CommittedDomainEvent<TEvent>>,
+	): string[] => events.map(({ event }) => event.eventId).sort();
 
-	/** Seed one aggregate (creation event only, committed). */
-	async function seed(env: Env): Promise<TAgg> {
+	async function seed(environment: Environment): Promise<TAggregate> {
 		const aggregate = harness.createAggregate();
-		await env.run(async ({ repository }) => {
-			await repository.save(aggregate);
+		await environment.run(async ({ repository }) => {
+			repository.add(aggregate);
 		});
 		return aggregate;
 	}
 
-	async function reload(env: Env, id: TAgg["id"]): Promise<TAgg> {
-		return env.run(({ repository }) => loadOrFail(repository, id));
-	}
-
-	// Ordered ids: streams are ordered, so stream assertions compare the
-	// exact sequence (unlike the outbox, whose read-back order is not
-	// part of the environment contract).
-	const orderedIds = (
-		events: ReadonlyArray<PendingDomainEvent<Evt>>,
-	): string[] =>
-		events.map((event) => {
-			if (!("eventId" in event)) {
-				throw new Error(
-					"ES repository contract: record pending events before persistence",
-				);
-			}
-			return event.eventId;
-		});
-	const sortedIds = (events: ReadonlyArray<Evt>): string[] =>
-		orderedIds(events).sort();
-
-	// Capabilities are captured ONCE at suite creation.
-	const snapshotState = harness.snapshotState;
-	const createAggregateWithId = harness.createAggregateWithId;
-	const streamKeyFor = (id: TAgg["id"]): AggregateAddress<TAgg["id"]> =>
-		harness.streamKeyFor(id);
-
 	const tests: EsRepositoryContractTest[] = [
 		{
-			name: "MANDATORY two-writer conflict: the stale writer's append throws ConcurrencyConflictError and the stream is untouched",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-				const seedStream = await env.committedStreamEvents(
-					streamKeyFor(seeded.id),
-					fixtureRead,
-				);
-				assert(
-					seedStream.exists && seedStream.events.length > 0,
-					"seeding must have appended the creation event to the stream",
-				);
-
-				// Writer B loads first: its persistedVersion baseline is
-				// now fixed at the pre-conflict stream version.
-				const staleB = await reload(env, seeded.id);
-
-				// Writer A loads the same version, mutates, commits.
-				const committedA = await env.run(async ({ repository }) => {
-					const a = await loadOrFail(repository, seeded.id);
-					harness.mutate(a);
-					await repository.save(a);
-					return a;
-				});
-				const streamAfterA = await env.committedStreamEvents(
-					streamKeyFor(seeded.id),
-					fixtureRead,
-				);
-				assert(
-					streamAfterA.exists &&
-						streamAfterA.events.length === seedStream.events.length + 1,
-					"writer A's event must reach the stream on commit",
-				);
-
-				// Writer B appends a TWO-event batch from its stale baseline:
-				// the exact-ids assertion below then also proves the rejected
-				// append was atomic (no prefix of the batch landed), port
-				// contract point 2.
-				harness.mutate(staleB);
-				harness.mutate(staleB);
-				const rejection = await captureRejection(
-					env.run(async ({ repository }) => {
-						await repository.save(staleB);
-					}),
-				);
-				assert(
-					rejection !== undefined,
-					"the second writer's commit must reject; it appended on a stale expectedVersion instead (append guard missing?)",
-				);
-				assertChainContainsKitError(
-					rejection,
-					["CONCURRENCY_CONFLICT"],
-					`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
-				);
-
-				// The stream contains exactly writer A's history, in order:
-				// nothing from the stale writer, nothing reordered.
-				const finalStream = await env.committedStreamEvents(
-					streamKeyFor(seeded.id),
-					fixtureRead,
-				);
-				assert(
-					finalStream.exists &&
-						deepEqual(
-							orderedIds(finalStream.events),
-							orderedIds(streamAfterA.events),
-						),
-					"the stream must contain exactly the winning writer's events in order: a rejected append must leave the stream untouched",
-				);
-
-				// The reloaded fold equals writer A's aggregate.
-				const final = await reload(env, seeded.id);
+			name: "add appends the exact creation batch to stream and outbox",
+			run: inEnvironment(async (environment) => {
+				const aggregate = harness.createAggregate();
+				const expectedIds = ids(aggregate.pendingEvents);
 				assertEqual(
-					final.version,
-					committedA.version,
-					"the reloaded version must equal writer A's committed version (version IS the event count)",
+					expectedIds.length,
+					1,
+					"createAggregate must record exactly one creation event",
 				);
-				if (snapshotState) {
-					assert(
-						deepEqual(
-							snapshotState.call(harness, final),
-							snapshotState.call(harness, committedA),
-						),
-						"the reloaded state must fold to writer A's state. Suspects: a partial append survived the rejection, or your snapshotState projection is not roundtrip-stable",
-					);
-				}
-
-				// The outbox carries the same committed events (as stamped
-				// copies with identical eventIds); nothing from B.
-				const outbox = await env.committedOutboxEvents();
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
+				});
+				const stream = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					readAll,
+				);
+				assert(
+					stream.exists && deepEqual(ids(stream.events), expectedIds),
+					"the stream must contain exactly the registered creation batch",
+				);
 				assert(
 					deepEqual(
-						outbox.map(({ event }) => event.eventId).sort(),
-						sortedIds(streamAfterA.events),
+						outboxIds(await environment.committedOutboxEvents()),
+						[...expectedIds].sort(),
 					),
-					"the outbox must contain exactly the committed events (compared by eventId); nothing from the stale writer",
+					"the outbox must contain the same exact creation batch",
 				);
-				const seedEventIds = new Set(
-					seedStream.events.map((event) => event.eventId),
-				);
-				const writerAOutbox = outbox.filter(
-					({ event }) => !seedEventIds.has(event.eventId),
-				);
-				assert(
-					writerAOutbox.length > 0 &&
-						writerAOutbox.every(
-							(message) =>
-								message.position.aggregateVersion === committedA.version &&
-								message.position.previousEventfulAggregateVersion ===
-									seeded.version,
-						),
-					`the event-sourced outbox must finalize writer A's eventful commit at aggregateVersion ${String(
-						committedA.version,
-					)} with previousEventfulAggregateVersion ${String(seeded.version)}`,
+				assertEqual(
+					aggregate.pendingEvents.length,
+					0,
+					"successful commit must acknowledge the creation batch",
 				);
 			}),
 		},
 		{
-			name: "replay equality: a reloaded aggregate folds the committed stream in emission order",
-			run: inEnv(async (env) => {
+			name: "MANDATORY stale append: writer B conflicts after writer A commits and appends no prefix",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				let loaded!: () => void;
+				const bLoaded = new Promise<void>((resolve) => {
+					loaded = resolve;
+				});
+				let release!: () => void;
+				const mayAppend = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				const writerB = environment.run(async ({ repository }) => {
+					const stale = await load(repository, seeded.id);
+					loaded();
+					await mayAppend;
+					harness.mutate(stale);
+					harness.mutate(stale);
+					repository.update(stale);
+				});
+				await bLoaded;
+
+				const winner = await environment.run(async ({ repository }) => {
+					const current = await load(repository, seeded.id);
+					harness.mutate(current);
+					repository.update(current);
+					return current;
+				});
+				const streamAfterWinner = await environment.committedStreamEvents(
+					streamFor(seeded.id),
+					readAll,
+				);
+				release();
+				const rejection = await captureRejection(writerB);
+				assertChainContainsKitError(
+					rejection,
+					["CONCURRENCY_CONFLICT"],
+					`stale append must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
+				);
+				const finalStream = await environment.committedStreamEvents(
+					streamFor(seeded.id),
+					readAll,
+				);
+				assert(
+					finalStream.exists &&
+						deepEqual(ids(finalStream.events), ids(streamAfterWinner.events)),
+					"a rejected multi-event append must leave no prefix in the stream",
+				);
+				const reloaded = await environment.run(({ repository }) =>
+					load(repository, seeded.id),
+				);
+				assertEqual(
+					reloaded.version,
+					winner.version,
+					"replay must end at the winning stream version",
+				);
+				if (snapshotState) {
+					assert(
+						deepEqual(
+							snapshotState.call(harness, reloaded),
+							snapshotState.call(harness, winner),
+						),
+						"replay must fold to writer A's state",
+					);
+				}
+			}),
+		},
+		{
+			name: "replay preserves emission order and returns no pending events",
+			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
 				harness.mutate(aggregate);
-				const emittedIds = orderedIds(aggregate.pendingEvents);
-				assertEqual(
-					emittedIds.length,
-					3,
-					"harness contract: createAggregate applies ONE creation event and mutate applies ONE event each",
-				);
-
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
+				const expectedIds = ids(aggregate.pendingEvents);
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
 				});
-
-				// The stream holds the UNSTAMPED originals in emission order.
-				const stream = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					fixtureRead,
+				const reloaded = await environment.run(({ repository }) =>
+					load(repository, aggregate.id),
 				);
-				assert(
-					stream.exists && deepEqual(orderedIds(stream.events), emittedIds),
-					"the committed stream must contain exactly the emitted events in emission order; reordering breaks every consumer's fold",
-				);
-
-				// Post-commit lifecycle on the saved instance.
-				assertEqual(
-					aggregate.pendingEvents.length,
-					0,
-					"pending events must be cleared after a successful commit (acknowledgement ran)",
-				);
-				assertEqual(
-					aggregate.persistedVersion,
-					aggregate.version,
-					"after a successful commit, persistedVersion must equal version",
-				);
-
-				// The reload folds to the same aggregate.
-				const reloaded = await reload(env, aggregate.id);
 				assertEqual(
 					reloaded.version,
-					aggregate.version,
-					"the reloaded version must equal the event count",
-				);
-				assertEqual(
-					reloaded.persistedVersion,
-					reloaded.version,
-					"a reloaded aggregate's persistedVersion must equal its version",
+					expectedIds.length,
+					"event-sourced version must equal the folded event count",
 				);
 				assertEqual(
 					reloaded.pendingEvents.length,
 					0,
-					"a reloaded aggregate must not carry pending events (replay is not re-recording)",
+					"replay must not re-record historical events",
 				);
 				if (snapshotState) {
 					assert(
@@ -400,204 +250,127 @@ export function createEsRepositoryContractTests<
 							snapshotState.call(harness, reloaded),
 							snapshotState.call(harness, aggregate),
 						),
-						"the reloaded aggregate must fold to the same state as the in-memory instance. Suspects: fold order (readStream must return emission order), or a snapshotState projection that is not roundtrip-stable",
+						"replay must fold to the same state in emission order",
 					);
 				}
-			}),
-		},
-		{
-			name: "findById returns null for a stream that does not exist",
-			run: inEnv(async (env) => {
-				const never = harness.createAggregate();
-				const probe = await env.run(({ repository }) =>
-					repository.findById(never.id),
+				const stream = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					readAll,
 				);
 				assert(
-					probe === null,
-					"findById of a never-persisted id must return null (empty stream = no aggregate)",
+					stream.exists && deepEqual(ids(stream.events), expectedIds),
+					"the committed stream must preserve emission order",
 				);
 			}),
 		},
 		{
-			name: "stream read state distinguishes absence from an empty snapshot catch-up window",
-			run: inEnv(async (env) => {
-				const neverPersisted = harness.createAggregate();
-				const missing = await env.committedStreamEvents(
-					streamKeyFor(neverPersisted.id),
-					fixtureRead,
-				);
-				assert(
-					missing.exists === false &&
-						missing.lastVersion === 0 &&
-						missing.events.length === 0,
-					"a missing stream must report exists=false, lastVersion=0, and no events",
-				);
-
+			name: "rollback leaves stream and outbox absent and acknowledges nothing",
+			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
-				});
-				const emptyTail = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					{ ...fixtureRead, fromVersion: aggregate.version },
-				);
-				assert(
-					emptyTail.exists === true &&
-						emptyTail.lastVersion === aggregate.version &&
-						emptyTail.events.length === 0,
-					"an empty catch-up window must retain exists=true and the actual stream head",
-				);
-			}),
-		},
-		{
-			name: "identity map: two findById calls in one unit of work return the same instance",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-
-				await env.run(async ({ repository }) => {
-					const first = await repository.findById(seeded.id);
-					const second = await repository.findById(seeded.id);
-					assert(
-						first !== null && first === second,
-						"repeated loads within one unit of work must return the SAME instance (identity map); distinct instances double-harvest events",
-					);
-				});
-			}),
-		},
-		{
-			name: "rollback persists nothing: stream and outbox untouched, pending events survive, first save can be retried",
-			run: inEnv(async (env) => {
-				const aggregate = harness.createAggregate();
-				harness.mutate(aggregate);
-				const pendingBefore = aggregate.pendingEvents.length;
-
+				const pending = [...aggregate.pendingEvents];
 				await captureRejection(
-					env.run(async ({ repository }) => {
-						await repository.save(aggregate);
-						throw new Error("contract rollback probe");
+					environment.run(async ({ repository }) => {
+						repository.add(aggregate);
+						throw new Error("rollback probe");
 					}),
 				);
-
-				const rolledBackStream = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					fixtureRead,
+				const stream = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					readAll,
 				);
-				assert(
-					!rolledBackStream.exists && rolledBackStream.events.length === 0,
-					"a rolled-back first save must leave the stream absent",
-				);
+				assert(!stream.exists, "rollback must leave the stream absent");
 				assertEqual(
-					(await env.committedOutboxEvents()).length,
+					(await environment.committedOutboxEvents()).length,
 					0,
-					"a rolled-back transaction must not leave events in the outbox",
-				);
-				assertEqual(
-					aggregate.pendingEvents.length,
-					pendingBefore,
-					"pending events must survive a rollback (so the first save can be retried)",
+					"rollback must leave the outbox empty",
 				);
 				assert(
-					aggregate.persistedVersion === undefined,
-					"a rolled-back first save must leave persistedVersion undefined (the stream does not exist)",
-				);
-
-				// Retrying the SAME never-persisted instance is the
-				// documented carve-out: there is no row/stream to reload.
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
-				});
-				const retriedStream = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					fixtureRead,
-				);
-				assert(
-					retriedStream.exists &&
-						retriedStream.lastVersion === pendingBefore &&
-						retriedStream.events.length === pendingBefore,
-					"the retried first save must create the stream with the full pending history",
-				);
-				assertEqual(
-					aggregate.persistedVersion,
-					aggregate.version,
-					"after the successful retry, persistedVersion must equal version",
+					deepEqual(aggregate.pendingEvents, pending),
+					"rollback must retain the exact pending batch",
 				);
 			}),
 		},
 		{
-			name: "readStream honors fromVersion: the snapshot catch-up read returns exactly the events after the position",
-			run: inEnv(async (env) => {
+			name: "outbox failure rolls the already-appended stream batch back",
+			run: inEnvironment(async (environment) => {
+				const aggregate = harness.createAggregate();
+				const pending = [...aggregate.pendingEvents];
+				environment.failNextOutboxWrite(new Error("outbox failure probe"));
+				const rejection = await captureRejection(
+					environment.run(async ({ repository }) => {
+						repository.add(aggregate);
+					}),
+				);
+				assert(rejection !== undefined, "the outbox failure must reject");
+				const stream = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					readAll,
+				);
+				assert(!stream.exists, "stream append must roll back with the outbox");
+				assertEqual(
+					(await environment.committedOutboxEvents()).length,
+					0,
+					"failed outbox write must commit no envelope",
+				);
+				assert(
+					deepEqual(aggregate.pendingEvents, pending),
+					"failed commit must acknowledge none of the event batch",
+				);
+			}),
+		},
+		{
+			name: "read windows preserve absence, actual head, and point-in-time bounds",
+			run: inEnvironment(async (environment) => {
+				const missingAggregate = harness.createAggregate();
+				const missing = await environment.committedStreamEvents(
+					streamFor(missingAggregate.id),
+					readAll,
+				);
+				assert(
+					!missing.exists && missing.lastVersion === 0,
+					"a missing stream must report exists=false and head 0",
+				);
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
 				harness.mutate(aggregate);
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
 				});
-
-				const full = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					fixtureRead,
+				const afterOne = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					{ limit: 100, fromVersion: 1 },
 				);
-				assert(
-					full.exists && full.lastVersion === 3 && full.events.length === 3,
-					"seeding must have committed an existing stream of 3 events",
-				);
-
-				const afterOne = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					{ ...fixtureRead, fromVersion: 1 },
+				const asOfTwo = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					{ limit: 100, toVersion: 2 },
 				);
 				assert(
 					afterOne.exists &&
 						afterOne.lastVersion === 3 &&
-						deepEqual(
-							orderedIds(afterOne.events),
-							orderedIds(full.events.slice(1)),
-						),
-					"fromVersion=1 must return exactly the events after stream position 1, in order; restoreFromSnapshotWithEvents replays exactly this window",
-				);
-
-				const afterAll = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					{ ...fixtureRead, fromVersion: full.lastVersion },
+						afterOne.events.length === 2,
+					"fromVersion is exclusive and preserves the actual stream head",
 				);
 				assert(
-					afterAll.exists &&
-						afterAll.lastVersion === full.lastVersion &&
-						afterAll.events.length === 0,
-					"fromVersion at the stream head must return an existing empty window with the actual head",
+					asOfTwo.exists &&
+						asOfTwo.lastVersion === 3 &&
+						asOfTwo.events.length === 2,
+					"toVersion is inclusive and preserves the actual stream head",
 				);
 			}),
 		},
 		{
-			name: "readStream honors toVersion: point-in-time reads stop at the inclusive upper position",
-			run: inEnv(async (env) => {
-				const aggregate = harness.createAggregate();
-				harness.mutate(aggregate);
-				harness.mutate(aggregate);
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
+			name: "identity map returns one replayed instance per Unit of Work",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				await environment.run(async ({ repository }) => {
+					const first = await repository.findById(seeded.id);
+					const second = await repository.findById(seeded.id);
+					assert(
+						first !== undefined && first === second,
+						"repeated stream loads must return the same tracked instance",
+					);
 				});
-
-				const full = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					fixtureRead,
-				);
-				const asOfTwo = await env.committedStreamEvents(
-					streamKeyFor(aggregate.id),
-					{ ...fixtureRead, toVersion: 2 },
-				);
-
-				assert(
-					full.exists &&
-						asOfTwo.exists &&
-						asOfTwo.lastVersion === 3 &&
-						deepEqual(
-							orderedIds(asOfTwo.events),
-							orderedIds(full.events.slice(0, 2)),
-						),
-					"toVersion=2 must return positions 1 and 2 while preserving the actual stream head at 3",
-				);
 			}),
 		},
 	];
@@ -609,42 +382,32 @@ export function createEsRepositoryContractTests<
 				satisfiedBy: Boolean(createAggregateWithId),
 			},
 			{
-				name: "duplicate create: two creators racing on one stream; the second append conflicts and the stream is untouched",
-				run: inEnv(async (env) => {
-					// The gate above guarantees the capability; narrow for TS.
-					assert(
-						createAggregateWithId !== undefined,
-						"gate guarantees createAggregateWithId",
+				name: "duplicate add conflicts and leaves the existing stream untouched",
+				run: inEnvironment(async (environment) => {
+					assert(createAggregateWithId !== undefined, "capability gate");
+					const seeded = await seed(environment);
+					const before = await environment.committedStreamEvents(
+						streamFor(seeded.id),
+						readAll,
 					);
-					const seeded = await seed(env);
-					const seedStream = await env.committedStreamEvents(
-						streamKeyFor(seeded.id),
-						fixtureRead,
-					);
-
 					const duplicate = createAggregateWithId.call(harness, seeded.id);
 					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.save(duplicate);
+						environment.run(async ({ repository }) => {
+							repository.add(duplicate);
 						}),
 					);
 					assertChainContainsKitError(
 						rejection,
 						["CONCURRENCY_CONFLICT", "DUPLICATE_AGGREGATE"],
-						`the duplicate creator's append (expectedVersion 0 on an existing stream) must reject with (or wrap) ConcurrencyConflictError or DuplicateAggregateError; got: ${describeError(rejection)}`,
+						`duplicate stream creation must reject with a mapped kit error; got ${describeError(rejection)}`,
 					);
-
-					const finalStream = await env.committedStreamEvents(
-						streamKeyFor(seeded.id),
-						fixtureRead,
+					const after = await environment.committedStreamEvents(
+						streamFor(seeded.id),
+						readAll,
 					);
 					assert(
-						finalStream.exists &&
-							deepEqual(
-								orderedIds(finalStream.events),
-								orderedIds(seedStream.events),
-							),
-						"the existing stream must be untouched by the rejected duplicate create",
+						deepEqual(ids(after.events), ids(before.events)),
+						"duplicate add must not modify the existing stream",
 					);
 				}),
 			},

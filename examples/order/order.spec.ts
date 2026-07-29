@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { type Money, moneyOfMinor } from "../../src/money";
+import {
+	captureAggregateSnapshot,
+	reconstituteAggregateFromSnapshot,
+} from "../../src/repo/snapshot-model";
 import { Order, type OrderId } from "./order";
+import { orderSnapshotModel } from "./order-snapshot-model";
 
 const eur = (minor: bigint): Money => moneyOfMinor(minor, "EUR", 2);
 
@@ -88,7 +93,11 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		order.confirm();
 
 		const snapshotAt = new Date("2027-04-05T06:07:08.000Z");
-		const snapshot = order.createSnapshot(snapshotAt);
+		const snapshot = captureAggregateSnapshot(
+			orderSnapshotModel,
+			order,
+			snapshotAt,
+		);
 
 		expect(snapshot.state.status).toBe("confirmed");
 		expect(snapshot.state.total).toEqual(eur(2000n));
@@ -106,16 +115,17 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		order1.addItem("product-1", 2, eur(2000n));
 		order1.confirm();
 
-		const snapshot = order1.createSnapshot(
+		const snapshot = captureAggregateSnapshot(
+			orderSnapshotModel,
+			order1,
 			new Date("2027-04-05T06:07:08.000Z"),
 		);
 
-		const order2 = Order.create(
+		const order2 = reconstituteAggregateFromSnapshot(
+			orderSnapshotModel,
 			"order-123" as OrderId,
-			"customer-456",
-			eur(0n),
+			snapshot,
 		);
-		order2.restoreFromSnapshot(snapshot);
 
 		expect(order2.status).toBe("confirmed");
 		expect(order2.total).toEqual(eur(2000n));

@@ -1,34 +1,32 @@
-import type { Version } from "./aggregate";
-
 /**
- * Kit-internal authority for advancing an aggregate's persistence baseline.
+ * Kit-internal authority for acknowledging one exact pending-event batch.
  *
  * Kept out of every package entry point: repositories may inspect aggregate
  * state and pending events, but only application commit orchestration may
  * acknowledge or discard them after the surrounding transaction commits.
  */
-export interface AggregatePersistenceCapability {
-	acknowledge(version: Version): void;
-	discardPendingEvents(): void;
+export interface PendingEventLifecycleCapability {
+	acknowledge(events: ReadonlyArray<unknown>): void;
+	discardPendingEvents(events: ReadonlyArray<unknown>): void;
 }
 
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/aggregate-persistence-capability-registry/v3",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v3",
 );
 
 function createCapabilityRegistry(): WeakMap<
 	object,
-	AggregatePersistenceCapability
+	PendingEventLifecycleCapability
 > {
 	const existing = Object.getOwnPropertyDescriptor(
 		globalThis,
 		persistenceCapabilityRegistryKey,
 	)?.value;
 	if (existing instanceof WeakMap) {
-		return existing as WeakMap<object, AggregatePersistenceCapability>;
+		return existing as WeakMap<object, PendingEventLifecycleCapability>;
 	}
 
-	const registry = new WeakMap<object, AggregatePersistenceCapability>();
+	const registry = new WeakMap<object, PendingEventLifecycleCapability>();
 	try {
 		Object.defineProperty(globalThis, persistenceCapabilityRegistryKey, {
 			value: registry,
@@ -51,16 +49,16 @@ function createCapabilityRegistry(): WeakMap<
 // kept out of package exports and public aggregate types.
 const capabilities = createCapabilityRegistry();
 
-export function registerAggregatePersistenceCapability(
+export function registerPendingEventLifecycleCapability(
 	aggregate: object,
-	capability: AggregatePersistenceCapability,
+	capability: PendingEventLifecycleCapability,
 ): void {
 	const frozen = Object.freeze(capability);
 	capabilities.set(aggregate, frozen);
 }
 
-export function aggregatePersistenceCapabilityFor(
+export function pendingEventLifecycleCapabilityFor(
 	aggregate: object,
-): AggregatePersistenceCapability | undefined {
+): PendingEventLifecycleCapability | undefined {
 	return capabilities.get(aggregate);
 }

@@ -1,5 +1,9 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
+import {
+	type AnyDomainEvent,
+	isMintedEvent,
+	type PendingDomainEvent,
+} from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
 import { deepEqual } from "../utils/array/deep-equal";
@@ -15,417 +19,213 @@ import {
 	loadAggregateOrFail,
 } from "./contract-assertions";
 
-/**
- * Legacy state-stored repository surface retained internally while the v3
- * Unit-of-Work contract suite is rebuilt. It is deliberately not exported from
- * `@shirudo/ddd-kit/testing`: consumers must not adopt the old `save`/`delete`
- * protocol as a compatibility layer. `findById` is typed over the aggregate's
- * own branded id (`TAgg["id"]`), so concrete adapters, including
- * arrow-function-property style repositories, which are checked
- * contravariantly, match without casts.
- */
+/** Application-facing state-stored repository exercised by the suite. */
 export interface ContractRepository<
-	TAgg extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 > {
-	findById(id: TAgg["id"]): Promise<TAgg | null>;
-	save(aggregate: TAgg): Promise<void>;
-	delete(aggregate: TAgg): Promise<void>;
+	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
+	add(aggregate: TAggregate): void;
+	update(aggregate: TAggregate): void;
+	/** Physical removal is an optional persistence capability. */
+	remove?(aggregate: TAggregate): void;
 }
 
-/**
- * One isolated test environment: fresh storage, fresh outbox. The
- * suite creates one per test via {@link RepositoryContractHarness} and
- * tears it down afterwards (a teardown failure never masks an
- * in-flight contract violation).
- */
+/** One isolated real-adapter environment. `run` must permit overlapping calls. */
 export interface RepositoryContractEnvironment<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
-	/**
-	 * Execute one unit of work against the adapter under test: open the
-	 * transaction, hand the suite a tx-bound repository, commit on
-	 * resolve, roll back on throw, and run the post-commit lifecycle
-	 * (event harvest into the outbox, post-commit acknowledgement). Wire this
-	 * through your real `UnitOfWork` / `withCommit` setup: the commit
-	 * boundary IS part of what the suite proves.
-	 */
 	run<R>(
-		work: (ctx: { repository: ContractRepository<TAgg> }) => Promise<R>,
+		work: (context: {
+			repository: ContractRepository<TAggregate>;
+		}) => Promise<R>,
 	): Promise<R>;
-
-	/**
-	 * All events currently persisted in the outbox (committed writes
-	 * only; a rolled-back transaction's events must not appear here).
-	 */
-	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<Evt>>>;
-
-	/** Release connections, drop schemas, etc. Called in a finally. */
+	committedOutboxEvents(): Promise<ReadonlyArray<CommittedDomainEvent<TEvent>>>;
+	/** Makes the next transactional outbox write fail for atomicity proof. */
+	failNextOutboxWrite(error: Error): void;
 	teardown?(): Promise<void>;
 }
 
-/**
- * What an adapter supplies to run the contract suite.
- *
- * The harness MUST provide isolation per environment (fresh
- * tables/keyspace or a truncate); tests assume they see only their
- * own writes. **For SQL/ORM adapters this must run against a real
- * database** (testcontainers or equivalent), not an in-memory fake:
- * the mandatory two-writer test proves YOUR `WHERE version = ?`
- * predicate, and an in-memory stand-in proves only itself.
- *
- * Optional capabilities widen the suite: tests for an absent
- * capability come back **marked `skipped`** with a `run()` that
- * rejects loudly: bind them with `it.skip` so the gap stays visible
- * in every report (see {@link RepositoryContractTest}); a naive
- * binding fails instead of green-no-op'ing. Capabilities are captured
- * once at suite creation. Provide every capability your adapter can
- * support; each one closes a real OCC hole.
- */
+/** Fixtures and observable projections supplied by an adapter package. */
 export interface RepositoryContractHarness<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
-	createEnvironment(): Promise<RepositoryContractEnvironment<TAgg, Evt>>;
-
-	/**
-	 * A brand-new aggregate (never persisted, unique id,
-	 * `persistedVersion === undefined`).
-	 */
-	createAggregate(): TAgg;
-
-	/**
-	 * Apply exactly ONE version-bumping domain mutation that records at
-	 * least one domain event (a `commit()`-style state change). The
-	 * suite relies on the +1-per-call arithmetic and on the event for
-	 * its outbox assertions.
-	 */
-	mutate(aggregate: TAgg): void;
-
-	/**
-	 * Optional: a version-bumping mutation whose state is deep-equal to
-	 * the previous state (`setState({...state})`). Enables the
-	 * version-only-change-still-persists test: the skip-save/OCC-desync
-	 * trap.
-	 */
-	mutateVersionOnly?(aggregate: TAgg): void;
-
-	/**
-	 * Optional: a mutation that changes ONLY a child collection (a
-	 * non-root-row `changedKeys` entry). Enables the
-	 * child-change-bumps-root-version test for partial-write
-	 * repositories.
-	 */
-	mutateChildCollection?(aggregate: TAgg): void;
-
-	/**
-	 * Optional: construct a NEW (never-persisted) aggregate instance
-	 * carrying a SPECIFIC id. Enables TWO tests: deletion-is-final-
-	 * across-instances (resurrection via a factory after delete) and
-	 * the duplicate-insert test (see
-	 * {@link insertsAreDuplicateChecked} to opt out of the latter
-	 * independently).
-	 */
-	createAggregateWithId?(id: TAgg["id"]): TAgg;
-
-	/**
-	 * Semantic opt-OUT (default `true`): whether `save()`'s INSERT path
-	 * rejects an existing id with `DuplicateAggregateError` (mapping the
-	 * driver's unique-violation: Postgres `23505`, MySQL `1062`, SQLite
-	 * `SQLITE_CONSTRAINT_UNIQUE`). This is the near-mandatory contract:
-	 * `save()` is insert-or-update, never upsert. Create-idempotency
-	 * belongs in the USE CASE (load, then decide), not in the save path.
-	 * Set `false` ONLY for a deliberately upserting adapter
-	 * (idempotent-create design); the duplicate-insert test is then
-	 * reported as skipped under this capability name, without costing
-	 * the deletion-finality coverage that `createAggregateWithId` also
-	 * gates.
-	 */
+	createEnvironment(): Promise<
+		RepositoryContractEnvironment<TAggregate, TEvent>
+	>;
+	/** A fresh aggregate with a unique id. */
+	createAggregate(): TAggregate;
+	/** One version-bumping decision that records at least one event. */
+	mutate(aggregate: TAggregate): void;
+	/** Required for duplicate-add and same-UoW deletion-finality proofs. */
+	createAggregateWithId?(id: TAggregate["id"]): TAggregate;
+	/** A version-bumping decision with no event. */
+	mutateVersionOnly?(aggregate: TAggregate): void;
+	/** A decision that changes a nested collection. */
+	mutateChildCollection?(aggregate: TAggregate): void;
+	/** Round-trip-stable adapter persistence projection. */
+	snapshotState?(aggregate: TAggregate): unknown;
+	/** Opt out only for an intentionally upserting add implementation. */
 	insertsAreDuplicateChecked?: boolean;
-
-	/**
-	 * Optional: a plain-data projection of the aggregate's persisted
-	 * state, compared with deep equality. Enables the mandatory test's
-	 * state assertion (without it, only the version and the outbox are
-	 * compared, and an adapter whose predicate guards the version write
-	 * but not the state write would slip through).
-	 *
-	 * **The projection must be roundtrip-stable**: it compares a
-	 * DB-reloaded aggregate against an in-memory one, so normalize
-	 * anything your store changes in transit: dates to ISO strings at
-	 * your store's precision (MySQL DATETIME truncates millis), no
-	 * `undefined`-valued keys (JSON columns drop them), decimals/bigints
-	 * to one consistent representation. A mismatch here fails the
-	 * mandatory test; the message names the projection as a suspect.
-	 */
-	snapshotState?(aggregate: TAgg): unknown;
-
-	/**
-	 * Optional flag: declare it when your `delete(aggregate)` runs an
-	 * OCC predicate (`DELETE … WHERE id = ? AND version = ?`). Enables
-	 * the stale-delete conflict test. Unpredicated deletes are
-	 * last-write-wins by construction: acceptable for GC-style
-	 * cleanup, rarely for user-initiated deletion of contended
-	 * aggregates (see the repository guide).
-	 */
-	deletesAreVersionChecked?: boolean;
+	/** Enables physical-remove behavior and stale-remove OCC tests. */
+	removesAreSupported?: boolean;
+	/** The remove flush predicates on the version captured at load. */
+	removesAreVersionChecked?: boolean;
 }
 
-/**
- * One named contract test; `run` rejects with a descriptive Error on
- * violation. When the harness lacks the capability a test needs, the
- * entry is still returned with {@link skipped} set and a `run` that
- * REJECTS with an explanatory error: bind it with your runner's skip
- * (`(test.skipped ? it.skip : it)(test.name, test.run)`) so the gap is
- * visible in every test report: a missing capability must never look
- * like green coverage, and a naive binding that ignores `skipped`
- * fails loud instead of passing silently.
- */
 export type RepositoryContractTest = ContractTest;
 
 /**
- * The repository contract test suite: the proof that an adapter
- * actually delivers the guarantees the kit's Unit of Work documents.
+ * Contract suite for the v3 explicit-intent, commit-time-flush protocol.
  *
- * The kit is ORM-agnostic: the OCC version predicate lives in YOUR
- * repository's SQL. That makes optimistic concurrency a **repository
- * contract, not a kit guarantee**: the kit ships the boundary, the
- * `persistedVersion` baseline, `ConcurrencyConflictError`, and this
- * suite; your adapter must pass it. An adapter that has not passed the
- * suite (against a real database, for SQL adapters) has not
- * demonstrated OCC.
+ * The harness must use the public `UnitOfWork` with a real adapter. In
+ * particular, `run` must create a fresh Unit of Work and transaction for each
+ * call and allow two calls to overlap; the mandatory stale-writer proof keeps
+ * writer B open while writer A commits. SQL/ORM adapters therefore need a
+ * real database and connection pool. An in-memory harness proves only itself.
  *
- * Framework-agnostic: assertions throw plain `Error`s, so the suite
- * binds to vitest, jest, or `node:test` the same way:
- *
- * ```ts
- * import { describe, it } from "vitest";
- * import { createRepositoryContractTests } from "@shirudo/ddd-kit/testing";
- *
- * const harness: RepositoryContractHarness<Order, OrderEvent> = {
- *   createEnvironment: async () => {
- *     const schema = await provisionTestSchema(); // testcontainers etc.
- *     const uowDeps = {
- *       scope: schema.scope,
- *       outbox: schema.outbox,
- *       repositories: {
- *         orders: (tx, session) => new DrizzleOrderRepository(tx, session),
- *       },
- *     };
- *     return {
- *       run: (work) =>
- *         new UnitOfWork(uowDeps).run(({ repositories }) =>
- *           work({ repository: repositories.orders })),
- *       committedOutboxEvents: () => schema.readOutboxEvents(),
- *       teardown: () => schema.drop(),
- *     };
- *   },
- *   createAggregate: () => Order.draft(orderIds.next()),
- *   mutate: (order) => order.changeNote(`note-${counter++}`), // ONE bump + event
- *   // provide every optional capability your adapter supports:
- *   createAggregateWithId: (id) => Order.draft(id),
- *   snapshotState: (order) => order.createSnapshot(testClock()).state,
- *   deletesAreVersionChecked: true,
- * };
- *
- * describe("DrizzleOrderRepository: repository contract", () => {
- *   for (const test of createRepositoryContractTests(harness)) {
- *     (test.skipped ? it.skip : it)(test.name, test.run);
- *   }
- * });
- * ```
- *
- * **`env.run` must provide unit-of-work semantics.** Three core tests
- * (identity-map sameness, findById-null-after-delete, deletion
- * finality) exercise the session machinery: `session.identityMap`,
- * the `isDeleted` probe, the deleted-gate. Wiring `run` through the
- * kit's `UnitOfWork` gives you all of it; a hand-rolled `withCommit`
- * wiring must provide equivalents or those tests will fail. A
- * `withCommit`-only setup that deliberately makes no identity-map /
- * deletion-finality claims is outside this suite's scope; the suite
- * is the compliance bar for unit-of-work repositories.
- *
- * **Error matching is by NAME along the `cause` chain, not by
- * `instanceof`.** The suite ships in its own bundle entry; comparing
- * class identity would spuriously fail whenever the adapter's errors
- * come from a different copy of the kit (the main entry's bundle, or a
- * second installed version). `error.name === "CONCURRENCY_CONFLICT"`
- * anywhere in the chain is the contract.
- *
- * **What each test proves.** The OCC, routing, rollback, and outbox
- * tests prove YOUR adapter's SQL and transaction wiring. The
- * identity-map, deletion-finality, and event-lifecycle tests prove
- * your READ-PATH and unit-of-work WIRING (they exercise kit-provided
- * machinery, namely `session.identityMap`, the deleted-gate, and
- * `withCommit`'s harvest, and fail when your repository bypasses or
- * mis-wires it).
- * A deletion-finality failure usually means a missing
- * `identityMap.isDeleted` check or an `enrollSaved` placed after the
- * row write, not a broken DELETE statement.
- *
- * **Known limitation: no truly concurrent runs.** The mandatory
- * two-writer test is deliberately sequential-deterministic: writer B
- * loads, writer A loads/mutates/commits, then B commits its stale
- * instance. The stale `persistedVersion` baseline travels with B's
- * instance, so the version predicate is exercised exactly as in a true
- * race, without depending on lock timing, pool sizes, or
- * engine-specific blocking. The flip side: lock interaction is NOT
- * covered. A `SELECT … FOR UPDATE`-style repository that blocks
- * instead of conflicting, or a SERIALIZABLE engine surfacing raw
- * serialization failures (Postgres 40001) your adapter must map to
- * `ConcurrencyConflictError`, needs adapter-specific tests on top of
- * this suite.
+ * Writes are synchronous registrations. Durable adapter I/O happens after the
+ * callback returns, while the transaction is still open. A test that passes
+ * because `add` or `update` writes early is not a conforming implementation.
  */
 export function createRepositoryContractTests<
-	TAgg extends IAggregateRoot<Id<string>, Evt>,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
->(harness: RepositoryContractHarness<TAgg, Evt>): RepositoryContractTest[] {
-	type Env = RepositoryContractEnvironment<TAgg, Evt>;
+	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
+>(
+	harness: RepositoryContractHarness<TAggregate, TEvent>,
+): RepositoryContractTest[] {
+	type Environment = RepositoryContractEnvironment<TAggregate, TEvent>;
+	const inEnvironment = bindContractEnvironment(() =>
+		harness.createEnvironment(),
+	);
+	const snapshotState = harness.snapshotState;
+	const createAggregateWithId = harness.createAggregateWithId;
+	const mutateVersionOnly = harness.mutateVersionOnly;
+	const mutateChildCollection = harness.mutateChildCollection;
+	const insertsAreDuplicateChecked =
+		harness.insertsAreDuplicateChecked !== false;
+	const removesAreSupported = harness.removesAreSupported === true;
+	const removesAreVersionChecked =
+		removesAreSupported && harness.removesAreVersionChecked === true;
 
-	// Runner plumbing shared with the event-sourced suite; see
-	// ./contract-assertions for the teardown-never-masks rule.
-	const inEnv = bindContractEnvironment(() => harness.createEnvironment());
-
-	const loadOrFail = (
-		repository: ContractRepository<TAgg>,
-		id: TAgg["id"],
-	): Promise<TAgg> =>
+	const load = (
+		repository: ContractRepository<TAggregate>,
+		id: TAggregate["id"],
+	): Promise<TAggregate> =>
 		loadAggregateOrFail(
 			repository,
 			id,
-			"broken hydration or a write that did not commit",
+			"the adapter did not commit or reconstitute the aggregate",
 		);
 
-	/** Seed one aggregate with a single committed mutation; returns it persisted. */
-	async function seed(env: Env): Promise<TAgg> {
+	async function seed(environment: Environment): Promise<TAggregate> {
 		const aggregate = harness.createAggregate();
 		harness.mutate(aggregate);
-		await env.run(async ({ repository }) => {
-			await repository.save(aggregate);
+		await environment.run(async ({ repository }) => {
+			repository.add(aggregate);
 		});
 		return aggregate;
 	}
 
-	async function reload(env: Env, id: TAgg["id"]): Promise<TAgg> {
-		return env.run(({ repository }) => loadOrFail(repository, id));
-	}
+	const reload = (environment: Environment, id: TAggregate["id"]) =>
+		environment.run(({ repository }) => load(repository, id));
 
-	// Sorted: eventIds are unique, so this is a multiset comparison. The
-	// environment contract guarantees WHICH events are persisted, not the
-	// order a `SELECT` without `ORDER BY` happens to return them in.
 	const eventIds = (
-		events: ReadonlyArray<CommittedDomainEvent<Evt>>,
+		events: ReadonlyArray<CommittedDomainEvent<TEvent>>,
 	): string[] => events.map(({ event }) => event.eventId).sort();
-
-	// Capabilities are captured ONCE at suite creation: a harness mutated
-	// between createRepositoryContractTests() and the run must not flip a
-	// test's behavior mid-flight.
-	const snapshotState = harness.snapshotState;
-	const mutateVersionOnly = harness.mutateVersionOnly;
-	const mutateChildCollection = harness.mutateChildCollection;
-	const createAggregateWithId = harness.createAggregateWithId;
-	const deletesAreVersionChecked = harness.deletesAreVersionChecked === true;
-	// Semantic opt-OUT, default true (the contract is near-mandatory).
-	const insertsAreDuplicateChecked =
-		harness.insertsAreDuplicateChecked !== false;
+	const pendingEventIds = (
+		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
+	): string[] =>
+		events.map((event) => {
+			assert(
+				isMintedEvent(event),
+				"the harness must record pending events before persistence",
+			);
+			return event.eventId;
+		});
 
 	const tests: RepositoryContractTest[] = [
 		{
-			name: "MANDATORY two-writer conflict: the stale writer throws ConcurrencyConflictError and persists nothing",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-				const seedEvents = await env.committedOutboxEvents();
-				const seedEventIds = new Set(
-					seedEvents.map(({ event }) => event.eventId),
-				);
+			name: "add flushes a new aggregate and its exact event batch atomically",
+			run: inEnvironment(async (environment) => {
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
+				const registeredEvents = [...aggregate.pendingEvents];
 
-				// Writer B loads first - its persistedVersion baseline is
-				// now fixed at the pre-conflict version.
-				const staleB = await reload(env, seeded.id);
-
-				// Writer A loads the same version, mutates, commits.
-				const committedA = await env.run(async ({ repository }) => {
-					const a = await loadOrFail(repository, seeded.id);
-					harness.mutate(a);
-					await repository.save(a);
-					return a;
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
 				});
-				const outboxAfterA = await env.committedOutboxEvents();
-				assert(
-					outboxAfterA.length > seedEvents.length,
-					"writer A's events must reach the outbox on commit",
-				);
-				// Writer A's NEW events must carry A's ACTUAL committed
-				// version - not merely some number. A wrong value here
-				// (hardcoded, schema version, persistedVersion) would
-				// poison every consumer's ordering/idempotency watermark.
-				const newSinceSeed = outboxAfterA.filter(
-					({ event }) => !seedEventIds.has(event.eventId),
-				);
-				assert(
-					newSinceSeed.length > 0 &&
-						newSinceSeed.every(
-							(message) =>
-								message.position.aggregateVersion === committedA.version,
-						),
-					`writer A's committed outbox events must carry aggregateVersion === ${committedA.version} (A's commit version). ` +
-						`Suspect #1: your outbox read-back (committedOutboxEvents) reconstructs events from an explicit column list ` +
-						`and drops or string-types the aggregateVersion field. Suspect #2: a hand-rolled orchestration that does not ` +
-						`stamp aggregateVersion = aggregate.version at harvest (withCommit does this automatically).`,
-				);
-				// ...and the complete gap-proof commit cursor. An adapter
-				// dropping any one column turns a missing event back into a
-				// silent watermark advance.
-				const sequences = newSinceSeed
-					.map((message) => message.position.commitSequence)
-					.sort((a, b) => (a ?? -1) - (b ?? -1));
-				assert(
-					sequences.every((sequence, index) => sequence === index),
-					`writer A's committed outbox events must carry a gapless zero-based commitSequence (got: ${sequences.join(", ")}). ` +
-						`Same suspects as the aggregateVersion assertion above: a column list dropping the field, or a hand-rolled ` +
-						`orchestration that does not stamp the harvest index (withCommit does this automatically).`,
-				);
-				assert(
-					newSinceSeed.every(
-						(message) => message.position.commitSize === newSinceSeed.length,
-					),
-					`writer A's committed outbox events must carry commitSize === ${newSinceSeed.length}. ` +
-						"Suspect an outbox column list that drops/string-types commitSize, or orchestration outside withCommit.",
-				);
-				assert(
-					newSinceSeed.every(
-						(message) =>
-							message.position.previousEventfulAggregateVersion ===
-							staleB.persistedVersion,
-					),
-					`writer A's committed outbox events must link previousEventfulAggregateVersion to ${String(
-						staleB.persistedVersion,
-					)}. Suspect an outbox column list that drops/string-types the predecessor, or orchestration outside withCommit.`,
-				);
 
-				// Writer B mutates its stale instance and tries to commit.
-				harness.mutate(staleB);
-				const rejection = await captureRejection(
-					env.run(async ({ repository }) => {
-						await repository.save(staleB);
-					}),
+				const reloaded = await reload(environment, aggregate.id);
+				assertEqual(
+					reloaded.version,
+					aggregate.version,
+					"add must store the version registered by the Unit of Work",
 				);
+				if (snapshotState) {
+					assert(
+						deepEqual(
+							snapshotState.call(harness, reloaded),
+							snapshotState.call(harness, aggregate),
+						),
+						"add must store the adapter's complete persistence projection",
+					);
+				}
+				const outbox = await environment.committedOutboxEvents();
 				assert(
-					rejection !== undefined,
-					"the second writer's commit must reject - it committed on a stale version instead (OCC predicate missing?)",
+					deepEqual(eventIds(outbox), pendingEventIds(registeredEvents).sort()),
+					"the outbox must contain exactly the batch registered by add",
 				);
+				assertEqual(
+					aggregate.pendingEvents.length,
+					0,
+					"only a committed add acknowledges its registered event batch",
+				);
+			}),
+		},
+		{
+			name: "MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				let loadedB!: () => void;
+				const bLoaded = new Promise<void>((resolve) => {
+					loadedB = resolve;
+				});
+				let releaseB!: () => void;
+				const bMayFlush = new Promise<void>((resolve) => {
+					releaseB = resolve;
+				});
+
+				const writerB = environment.run(async ({ repository }) => {
+					const stale = await load(repository, seeded.id);
+					loadedB();
+					await bMayFlush;
+					harness.mutate(stale);
+					repository.update(stale);
+				});
+				await bLoaded;
+
+				const committedA = await environment.run(async ({ repository }) => {
+					const current = await load(repository, seeded.id);
+					harness.mutate(current);
+					repository.update(current);
+					return current;
+				});
+				const outboxAfterA = await environment.committedOutboxEvents();
+				releaseB();
+				const rejection = await captureRejection(writerB);
 				assertChainContainsKitError(
 					rejection,
 					["CONCURRENCY_CONFLICT"],
-					`the second writer's rejection must be (or wrap, via the cause chain) ConcurrencyConflictError; got: ${describeError(rejection)}`,
+					`stale update must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
 				);
 
-				// Final persisted state equals writer A's.
-				const final = await reload(env, seeded.id);
+				const final = await reload(environment, seeded.id);
 				assertEqual(
 					final.version,
 					committedA.version,
-					"the persisted version must equal writer A's committed version",
+					"the stale writer must not replace writer A's version",
 				);
 				if (snapshotState) {
 					assert(
@@ -433,236 +233,141 @@ export function createRepositoryContractTests<
 							snapshotState.call(harness, final),
 							snapshotState.call(harness, committedA),
 						),
-						"the persisted STATE must equal writer A's. Two suspects: " +
-							"(a) a predicate that guards only the version write lets the stale writer's state survive; " +
-							"(b) your snapshotState projection is not roundtrip-stable (date precision, undefined-valued keys, decimal representation) - see its JSDoc",
+						"the stale writer must not replace writer A's state",
 					);
 				}
-
-				// Outbox contains exactly the events it contained after A's
-				// commit - same records, not merely the same count.
-				const outboxFinal = await env.committedOutboxEvents();
 				assert(
-					deepEqual(eventIds(outboxFinal), eventIds(outboxAfterA)),
-					"the outbox must contain exactly the winning writer's events (compared by eventId) - nothing from the stale writer, nothing replaced",
+					deepEqual(
+						eventIds(await environment.committedOutboxEvents()),
+						eventIds(outboxAfterA),
+					),
+					"a rejected stale flush must add no outbox records",
 				);
 			}),
 		},
 		{
-			name: "insert routing: a never-persisted aggregate INSERTs even after pre-save mutations",
-			run: inEnv(async (env) => {
+			name: "rollback acknowledges nothing and commits neither state nor outbox",
+			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
-				assert(
-					aggregate.persistedVersion === undefined,
-					"harness contract: createAggregate() must return a never-persisted aggregate (persistedVersion === undefined)",
-				);
-				// Mutate BEFORE the first save: version moves past zero in
-				// memory while no row exists. Routing on version === 0
-				// would attempt an UPDATE that affects zero rows.
 				harness.mutate(aggregate);
-				harness.mutate(aggregate);
-
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
-				});
-
-				const loaded = await reload(env, aggregate.id);
-				assertEqual(
-					loaded.version,
-					aggregate.version,
-					"the INSERT must persist the in-memory version (route on persistedVersion === undefined, not version === 0)",
-				);
-			}),
-		},
-		{
-			name: "update writes the in-memory version and predicates on persistedVersion",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-				const baseline = seeded.version;
-
-				await env.run(async ({ repository }) => {
-					const loaded = await loadOrFail(repository, seeded.id);
-					harness.mutate(loaded);
-					harness.mutate(loaded);
-					await repository.save(loaded);
-				});
-
-				const final = await reload(env, seeded.id);
-				assertEqual(
-					final.version,
-					baseline + 2,
-					"two mutations must persist as baseline + 2 (version is a mutation sequence)",
-				);
-				assertEqual(
-					final.persistedVersion,
-					final.version,
-					"a reloaded aggregate's persistedVersion must equal its version",
-				);
-			}),
-		},
-		{
-			name: "rollback persists nothing: state, version, and outbox untouched",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-				const versionBefore = seeded.version;
-				const outboxBefore = (await env.committedOutboxEvents()).length;
-				const probe = new Error("contract rollback probe");
-
-				const rejection = await captureRejection(
-					env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						harness.mutate(loaded);
-						await repository.save(loaded);
-						throw probe;
+				const pending = [...aggregate.pendingEvents];
+				await captureRejection(
+					environment.run(async ({ repository }) => {
+						repository.add(aggregate);
+						throw new Error("rollback probe");
 					}),
 				);
-				assert(rejection !== undefined, "a throwing unit of work must reject");
-
-				const final = await reload(env, seeded.id);
-				assertEqual(
-					final.version,
-					versionBefore,
-					"a rolled-back write must not change the persisted version",
+				const absent = await environment.run(({ repository }) =>
+					repository.findById(aggregate.id),
 				);
+				assert(absent === undefined, "a rolled-back add must leave no row");
 				assertEqual(
-					(await env.committedOutboxEvents()).length,
-					outboxBefore,
-					"a rolled-back transaction must not leave events in the outbox",
+					(await environment.committedOutboxEvents()).length,
+					0,
+					"a rolled-back add must leave no outbox record",
+				);
+				assert(
+					deepEqual(aggregate.pendingEvents, pending),
+					"rollback must acknowledge none of the registered event batch",
 				);
 			}),
 		},
 		{
-			name: "identity map: two findById calls in one unit of work return the same instance",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-
-				await env.run(async ({ repository }) => {
+			name: "outbox failure rolls the already-flushed aggregate write back",
+			run: inEnvironment(async (environment) => {
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
+				const pending = [...aggregate.pendingEvents];
+				environment.failNextOutboxWrite(new Error("outbox failure probe"));
+				const rejection = await captureRejection(
+					environment.run(async ({ repository }) => {
+						repository.add(aggregate);
+					}),
+				);
+				assert(rejection !== undefined, "the outbox failure must reject");
+				const absent = await environment.run(({ repository }) =>
+					repository.findById(aggregate.id),
+				);
+				assert(
+					absent === undefined,
+					"state flush must roll back when the outbox write fails",
+				);
+				assertEqual(
+					(await environment.committedOutboxEvents()).length,
+					0,
+					"failed outbox write must commit no envelope",
+				);
+				assert(
+					deepEqual(aggregate.pendingEvents, pending),
+					"failed commit must acknowledge none of the event batch",
+				);
+			}),
+		},
+		{
+			name: "identity map returns one instance for repeated loads in one Unit of Work",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				await environment.run(async ({ repository }) => {
 					const first = await repository.findById(seeded.id);
 					const second = await repository.findById(seeded.id);
 					assert(
-						first !== null && first === second,
-						"repeated loads within one unit of work must return the SAME instance (identity map) - distinct instances double-harvest events",
+						first !== undefined && first === second,
+						"repeated reads must return the same tracked aggregate instance",
 					);
 				});
 			}),
 		},
 		{
-			name: "delete: findById returns null in the same unit of work and after the commit",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-
-				await env.run(async ({ repository }) => {
-					const loaded = await loadOrFail(repository, seeded.id);
-					await repository.delete(loaded);
-					const probe = await repository.findById(seeded.id);
-					assert(
-						probe === null,
-						"after delete, findById in the SAME unit of work must return null (isDeleted check), even if the physical delete is deferred",
-					);
+			name: "an unchanged explicit update is safe and emits no event",
+			run: inEnvironment(async (environment) => {
+				const seeded = await seed(environment);
+				const before = await environment.committedOutboxEvents();
+				await environment.run(async ({ repository }) => {
+					const aggregate = await load(repository, seeded.id);
+					repository.update(aggregate);
 				});
-
-				await env.run(async ({ repository }) => {
-					const probe = await repository.findById(seeded.id);
-					assert(
-						probe === null,
-						"after the deleting unit of work committed, the aggregate must be gone",
-					);
-				});
-			}),
-		},
-		{
-			name: "deletion is final: saving the deleted aggregate in the same unit of work throws AggregateDeletedError",
-			run: inEnv(async (env) => {
-				const seeded = await seed(env);
-
-				const rejection = await captureRejection(
-					env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						harness.mutate(loaded);
-						await repository.delete(loaded);
-						await repository.save(loaded);
-					}),
-				);
-				assertChainContainsKitError(
-					rejection,
-					["AGGREGATE_DELETED"],
-					`save-after-delete must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}. ` +
-						`If you see ConcurrencyConflictError here instead, your save() probably enrolls AFTER the row write - enroll first.`,
-				);
-			}),
-		},
-		{
-			name: "events are cleared after a committed unit of work and kept after a rollback",
-			run: inEnv(async (env) => {
-				const committed = harness.createAggregate();
-				harness.mutate(committed);
 				assert(
-					committed.pendingEvents.length > 0,
-					"harness contract: mutate() must record at least one domain event",
-				);
-				await env.run(async ({ repository }) => {
-					await repository.save(committed);
-				});
-				assertEqual(
-					committed.pendingEvents.length,
-					0,
-					"pending events must be cleared after a successful commit",
-				);
-
-				const rolledBack = harness.createAggregate();
-				harness.mutate(rolledBack);
-				const pendingBefore = rolledBack.pendingEvents.length;
-				await captureRejection(
-					env.run(async ({ repository }) => {
-						await repository.save(rolledBack);
-						throw new Error("contract rollback probe");
-					}),
-				);
-				assertEqual(
-					rolledBack.pendingEvents.length,
-					pendingBefore,
-					"pending events must survive a rollback (so a fresh load + retry can re-emit them)",
-				);
-			}),
-		},
-		{
-			name: "persistedVersion syncs only after a successful commit",
-			run: inEnv(async (env) => {
-				// Re-saving the SAME instance after the rollback is the
-				// documented carve-out from "don't reuse aggregates after a
-				// rollback": a NEVER-persisted aggregate has no row and its
-				// baseline is still undefined, so there is nothing to
-				// reload - retrying its first save is the only path.
-				const aggregate = harness.createAggregate();
-				harness.mutate(aggregate);
-
-				await captureRejection(
-					env.run(async ({ repository }) => {
-						await repository.save(aggregate);
-						throw new Error("contract rollback probe");
-					}),
-				);
-				assert(
-					aggregate.persistedVersion === undefined,
-					"a rolled-back first save must leave persistedVersion undefined (the aggregate is still unpersisted)",
-				);
-
-				await env.run(async ({ repository }) => {
-					await repository.save(aggregate);
-				});
-				assertEqual(
-					aggregate.persistedVersion,
-					aggregate.version,
-					"after a successful commit, persistedVersion must equal version (acknowledgement ran)",
+					deepEqual(
+						eventIds(await environment.committedOutboxEvents()),
+						eventIds(before),
+					),
+					"an unchanged update must not manufacture an outbox event",
 				);
 			}),
 		},
 	];
 
-	// Capability-gated tests: when the harness lacks the capability, the
-	// entry is returned WITH `skipped` set and a loudly-rejecting run() -
-	// the gap stays visible in every test report (it.skip) and a naive
-	// binding fails instead of green-no-op'ing.
+	tests.push(
+		gatedContractTest(
+			{
+				capability: createAggregateWithId
+					? "insertsAreDuplicateChecked"
+					: "createAggregateWithId",
+				satisfiedBy:
+					Boolean(createAggregateWithId) && insertsAreDuplicateChecked,
+			},
+			{
+				name: "duplicate add rejects and preserves the existing aggregate",
+				run: inEnvironment(async (environment) => {
+					assert(createAggregateWithId !== undefined, "capability gate");
+					const seeded = await seed(environment);
+					const duplicate = createAggregateWithId.call(harness, seeded.id);
+					harness.mutate(duplicate);
+					const rejection = await captureRejection(
+						environment.run(async ({ repository }) => {
+							repository.add(duplicate);
+						}),
+					);
+					assertChainContainsKitError(
+						rejection,
+						["DUPLICATE_AGGREGATE", "CONCURRENCY_CONFLICT"],
+						`duplicate add must reject with a mapped kit error; got ${describeError(rejection)}`,
+					);
+				}),
+			},
+		),
+	);
+
 	tests.push(
 		gatedContractTest(
 			{
@@ -670,90 +375,34 @@ export function createRepositoryContractTests<
 				satisfiedBy: Boolean(mutateVersionOnly),
 			},
 			{
-				name: "version-only change still persists (skip-save must not desync the OCC baseline)",
-				run: inEnv(async (env) => {
-					// The gate above guarantees the capability; narrow for TS.
-					assert(
-						mutateVersionOnly !== undefined,
-						"gate guarantees mutateVersionOnly",
-					);
-					const seeded = await seed(env);
-					const baseline = seeded.version;
-
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						mutateVersionOnly.call(harness, loaded);
-						await repository.save(loaded);
+				name: "state-only update persists without advancing the outbox source",
+				run: inEnvironment(async (environment) => {
+					assert(mutateVersionOnly !== undefined, "capability gate");
+					const seeded = await seed(environment);
+					const outboxBefore = await environment.committedOutboxEvents();
+					await environment.run(async ({ repository }) => {
+						const aggregate = await load(repository, seeded.id);
+						mutateVersionOnly.call(harness, aggregate);
+						repository.update(aggregate);
 					});
-
-					const final = await reload(env, seeded.id);
+					const reloaded = await reload(environment, seeded.id);
 					assertEqual(
-						final.version,
-						baseline + 1,
-						"a version-only change (empty changedKeys, bumped version) must still be persisted - skipping it desyncs persistedVersion and produces false ConcurrencyConflictErrors later",
+						reloaded.version,
+						seeded.version + 1,
+						"state-only update must persist its new version",
+					);
+					assert(
+						deepEqual(
+							eventIds(await environment.committedOutboxEvents()),
+							eventIds(outboxBefore),
+						),
+						"state-only update must not create an outbox event",
 					);
 				}),
 			},
 		),
 	);
-	tests.push(
-		gatedContractTest(
-			{
-				capability: "mutateVersionOnly",
-				satisfiedBy: Boolean(mutateVersionOnly),
-			},
-			{
-				name: "state-only saves do not advance the outbox event-source cursor",
-				run: inEnv(async (env) => {
-					assert(
-						mutateVersionOnly !== undefined,
-						"gate guarantees mutateVersionOnly",
-					);
-					const seeded = await seed(env);
-					const lastEventfulVersion = seeded.version;
-					const beforeStateOnly = await env.committedOutboxEvents();
-					const existingIds = new Set(
-						beforeStateOnly.map(({ event }) => event.eventId),
-					);
 
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						mutateVersionOnly.call(harness, loaded);
-						await repository.save(loaded);
-					});
-
-					const afterStateOnly = await env.committedOutboxEvents();
-					assertEqual(
-						afterStateOnly.length,
-						beforeStateOnly.length,
-						"a state-only save must not create an outbox event or advance the event-source head",
-					);
-
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						harness.mutate(loaded);
-						await repository.save(loaded);
-					});
-
-					const afterEventful = await env.committedOutboxEvents();
-					const newlyEventful = afterEventful.filter(
-						({ event }) => !existingIds.has(event.eventId),
-					);
-					assert(
-						newlyEventful.length > 0 &&
-							newlyEventful.every(
-								(message) =>
-									message.position.previousEventfulAggregateVersion ===
-									lastEventfulVersion,
-							),
-						`the next eventful commit must link to eventful aggregate version ${String(
-							lastEventfulVersion,
-						)}, not to the intervening state-only OCC version`,
-					);
-				}),
-			},
-		),
-	);
 	tests.push(
 		gatedContractTest(
 			{
@@ -761,182 +410,97 @@ export function createRepositoryContractTests<
 				satisfiedBy: Boolean(mutateChildCollection),
 			},
 			{
-				name: "a child-collection-only change bumps the persisted root version",
-				run: inEnv(async (env) => {
-					// The gate above guarantees the capability; narrow for TS.
-					assert(
-						mutateChildCollection !== undefined,
-						"gate guarantees mutateChildCollection",
-					);
-					const seeded = await seed(env);
-					const baseline = seeded.version;
-
-					await env.run(async ({ repository }) => {
-						const loaded = await loadOrFail(repository, seeded.id);
-						mutateChildCollection.call(harness, loaded);
-						await repository.save(loaded);
+				name: "nested collection changes survive the adapter change-set projection",
+				run: inEnvironment(async (environment) => {
+					assert(mutateChildCollection !== undefined, "capability gate");
+					const seeded = await seed(environment);
+					await environment.run(async ({ repository }) => {
+						const aggregate = await load(repository, seeded.id);
+						mutateChildCollection.call(harness, aggregate);
+						repository.update(aggregate);
 					});
-
-					const final = await reload(env, seeded.id);
-					assert(
-						final.version > baseline,
-						"a child-collection-only change must advance the persisted ROOT version - otherwise concurrent writers interleave with collection writes undetected",
-					);
-				}),
-			},
-		),
-	);
-	tests.push(
-		gatedContractTest(
-			{
-				capability: "createAggregateWithId",
-				satisfiedBy: Boolean(createAggregateWithId),
-			},
-			{
-				name: "deletion is final across instances: a re-created aggregate with the same id cannot be saved",
-				run: inEnv(async (env) => {
-					// The gate above guarantees the capability; narrow for TS.
-					assert(
-						createAggregateWithId !== undefined,
-						"gate guarantees createAggregateWithId",
-					);
-					const seeded = await seed(env);
-
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							const loaded = await loadOrFail(repository, seeded.id);
-							await repository.delete(loaded);
-							const resurrected = createAggregateWithId.call(
-								harness,
-								seeded.id,
-							);
-							harness.mutate(resurrected);
-							await repository.save(resurrected);
-						}),
-					);
-					assertChainContainsKitError(
-						rejection,
-						["AGGREGATE_DELETED"],
-						`saving a re-created instance of a deleted aggregate must reject with (or wrap) AggregateDeletedError; got: ${describeError(rejection)}`,
-					);
-				}),
-			},
-		),
-	);
-	tests.push(
-		gatedContractTest(
-			{
-				// Name the capability that is actually missing: the mechanical
-				// one (cannot build the duplicate) or the semantic opt-out
-				// (deliberately upserting adapter).
-				capability: createAggregateWithId
-					? "insertsAreDuplicateChecked"
-					: "createAggregateWithId",
-				satisfiedBy: Boolean(
-					createAggregateWithId && insertsAreDuplicateChecked,
-				),
-			},
-			{
-				name: "duplicate insert: a second never-persisted aggregate with an existing id throws DuplicateAggregateError",
-				run: inEnv(async (env) => {
-					// The gate above guarantees the capability; narrow for TS.
-					assert(
-						createAggregateWithId !== undefined,
-						"gate guarantees createAggregateWithId",
-					);
-					const seeded = await seed(env);
-
-					// A second NEVER-persisted instance with the same id:
-					// two concurrent creators racing on a business-derived
-					// id, or an id-generator collision. The INSERT must
-					// surface as the kit's error class, not a raw driver
-					// error. Mutated TWICE so its version differs from the
-					// seeded row's - a clobbering insert is then visible
-					// in the version check below even without a state
-					// snapshot.
-					const duplicate = createAggregateWithId.call(harness, seeded.id);
-					harness.mutate(duplicate);
-					harness.mutate(duplicate);
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.save(duplicate);
-						}),
-					);
-					assertChainContainsKitError(
-						rejection,
-						["DUPLICATE_AGGREGATE"],
-						`inserting a second aggregate with an existing id must reject with (or wrap) DuplicateAggregateError - ` +
-							`map your driver's unique-violation signal (Postgres 23505, MySQL 1062, SQLite SQLITE_CONSTRAINT_UNIQUE) ` +
-							`instead of letting the raw driver error escape; got: ${describeError(rejection)}`,
-					);
-
-					// The existing row is untouched by the rejected insert:
-					// version AND (capability permitting) state.
-					const final = await reload(env, seeded.id);
+					const reloaded = await reload(environment, seeded.id);
 					assertEqual(
-						final.version,
-						seeded.version,
-						"the existing row must be untouched by the rejected duplicate insert - a duplicate check that fires AFTER the write (or outside the transaction) clobbers the existing row",
+						reloaded.version,
+						seeded.version + 1,
+						"nested collection update must advance the persisted root version",
 					);
-					if (snapshotState) {
-						assert(
-							deepEqual(
-								snapshotState.call(harness, final),
-								snapshotState.call(harness, seeded),
-							),
-							"the existing row's STATE must be untouched by the rejected duplicate insert",
-						);
-					}
 				}),
 			},
 		),
 	);
+
 	tests.push(
 		gatedContractTest(
 			{
-				capability: "deletesAreVersionChecked",
-				satisfiedBy: Boolean(deletesAreVersionChecked),
+				capability: "removesAreSupported",
+				satisfiedBy: removesAreSupported,
 			},
 			{
-				name: "stale delete conflicts: deleting from a stale instance throws ConcurrencyConflictError",
-				run: inEnv(async (env) => {
-					const seeded = await seed(env);
-
-					// Writer B loads, writer A commits an update, B deletes
-					// from its stale baseline - the predicated DELETE must
-					// affect zero rows and conflict, not destroy A's write.
-					const staleB = await reload(env, seeded.id);
-					const versionAfterA = await env.run(async ({ repository }) => {
-						const a = await loadOrFail(repository, seeded.id);
-						harness.mutate(a);
-						await repository.save(a);
-						return a.version;
+				name: "remove tombstones the identity and physically removes at commit",
+				run: inEnvironment(async (environment) => {
+					const seeded = await seed(environment);
+					await environment.run(async ({ repository }) => {
+						assert(repository.remove !== undefined, "remove capability gate");
+						const aggregate = await load(repository, seeded.id);
+						repository.remove(aggregate);
+						assert(
+							(await repository.findById(seeded.id)) === undefined,
+							"a removed aggregate is immediately absent from the Unit of Work",
+						);
 					});
-
-					const rejection = await captureRejection(
-						env.run(async ({ repository }) => {
-							await repository.delete(staleB);
-						}),
+					assert(
+						(await environment.run(({ repository }) =>
+							repository.findById(seeded.id),
+						)) === undefined,
+						"remove must physically remove the aggregate after commit",
 					);
+				}),
+			},
+		),
+	);
+
+	tests.push(
+		gatedContractTest(
+			{
+				capability: "removesAreVersionChecked",
+				satisfiedBy: removesAreVersionChecked,
+			},
+			{
+				name: "stale remove conflicts and cannot delete a concurrent update",
+				run: inEnvironment(async (environment) => {
+					const seeded = await seed(environment);
+					let loaded!: () => void;
+					const staleLoaded = new Promise<void>((resolve) => {
+						loaded = resolve;
+					});
+					let release!: () => void;
+					const mayRemove = new Promise<void>((resolve) => {
+						release = resolve;
+					});
+					const staleRemove = environment.run(async ({ repository }) => {
+						assert(repository.remove !== undefined, "remove capability gate");
+						const stale = await load(repository, seeded.id);
+						loaded();
+						await mayRemove;
+						repository.remove(stale);
+					});
+					await staleLoaded;
+					await environment.run(async ({ repository }) => {
+						const current = await load(repository, seeded.id);
+						harness.mutate(current);
+						repository.update(current);
+					});
+					release();
+					const rejection = await captureRejection(staleRemove);
 					assertChainContainsKitError(
 						rejection,
 						["CONCURRENCY_CONFLICT"],
-						`a stale delete must reject with (or wrap) ConcurrencyConflictError; got: ${describeError(rejection)} - an unpredicated DELETE silently destroys the concurrent writer's update`,
-					);
-
-					// A's write survived - load nullable on purpose: the
-					// rejected delete must not have destroyed the row.
-					const final = await env.run(({ repository }) =>
-						repository.findById(seeded.id),
+						`stale remove must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
 					);
 					assert(
-						final !== null,
-						"the row must still exist after the stale delete was rejected - the predicate must PREVENT the destructive delete, not merely report it",
-					);
-					assertEqual(
-						final.version,
-						versionAfterA,
-						"the surviving row must carry writer A's version",
+						(await reload(environment, seeded.id)) !== undefined,
+						"stale remove must not delete the concurrent winner",
 					);
 				}),
 			},
@@ -945,6 +509,3 @@ export function createRepositoryContractTests<
 
 	return tests;
 }
-
-// assert / assertEqual / chainContainsErrorNamed / describeError live in
-// ./contract-assertions, shared with the event-sourced contract suite.

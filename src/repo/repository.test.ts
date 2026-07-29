@@ -1,8 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-// @ts-expect-error IQueryableRepository was removed from the public API;
-// consumer applications own domain-specific query repository ports instead.
-import type { IQueryableRepository as RemovedQueryableRepository } from "../index";
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import {
@@ -12,6 +9,9 @@ import {
 	InfrastructureError,
 } from "../core/errors";
 import type { Id } from "../core/id";
+// @ts-expect-error IQueryableRepository was removed from the public API;
+// consumer applications own domain-specific query repository ports instead.
+import type { IQueryableRepository as RemovedQueryableRepository } from "../index";
 import type { AggregatePersistence, Repository } from "./repository";
 
 // @ts-expect-error IRepository was removed in favour of the explicit
@@ -41,10 +41,9 @@ describe("IAggregateRoot interface contract", () => {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
 			pendingEvents: [],
-			persistedVersion: undefined,
 		};
 
-		expect(stub.persistedVersion).toBeUndefined();
+		expect(stub.version).toBe(0);
 		expect(stub.pendingEvents).toEqual([]);
 	});
 });
@@ -80,7 +79,6 @@ describe("Repository contract", () => {
 				customerId: "c-1",
 				total: 100,
 				pendingEvents: [],
-				persistedVersion: undefined,
 			};
 
 			const addResult = persistence.add(order);
@@ -153,7 +151,6 @@ describe("Repository contract", () => {
 				customerId: "c-1",
 				total: 100,
 				pendingEvents: [],
-				persistedVersion: undefined,
 			};
 
 			const removeResult = repository.remove(order);
