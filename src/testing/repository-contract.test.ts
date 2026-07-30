@@ -11,6 +11,7 @@ import {
 import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
+	InfrastructureError,
 } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
@@ -224,10 +225,29 @@ class InMemoryOrderRepository {
 }
 
 type OrderReadAdapter = Pick<ContractRepository<ContractOrder>, "findById">;
+interface OrderRepositoryPort extends ContractRepository<ContractOrder> {
+	remove(aggregate: ContractOrder): void;
+}
 type RepoFactory = (
 	db: InMemoryDb,
 	tracking: RepositoryTracking<ContractOrder>,
 ) => OrderReadAdapter;
+
+class ContractRepositoryPersistenceError extends InfrastructureError<"CONTRACT_REPOSITORY_PERSISTENCE"> {
+	constructor(cause: unknown) {
+		super({
+			code: "CONTRACT_REPOSITORY_PERSISTENCE",
+			message: "The contract repository failed",
+			cause,
+		});
+	}
+}
+
+function mapRepositoryError(error: unknown): InfrastructureError {
+	return error instanceof InfrastructureError
+		? error
+		: new ContractRepositoryPersistenceError(error);
+}
 type OrderFlusher = (
 	db: InMemoryDb,
 	transaction: InMemoryTransaction,
@@ -298,7 +318,7 @@ function createInMemoryHarness(
 						scope,
 						outbox,
 						repositories: {
-							orders: defineRepository({
+							orders: defineRepository<OrderRepositoryPort>()({
 								aggregate: ContractOrder,
 								persistence: orderPersistence,
 								physicalRemoval: true,
@@ -306,6 +326,7 @@ function createInMemoryHarness(
 									repoFactory(db, tracking),
 								flush: (transaction: InMemoryTransaction, write) =>
 									flush(db, transaction, write),
+								mapError: mapRepositoryError,
 							}),
 						},
 					}).run(({ repositories }) =>

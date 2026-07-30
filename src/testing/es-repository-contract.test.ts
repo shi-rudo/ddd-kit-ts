@@ -12,7 +12,7 @@ import {
 	type RepositoryTracking,
 	UnitOfWork,
 } from "../app/unit-of-work";
-import { ConcurrencyConflictError } from "../core/errors";
+import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
 	CommittedDomainEvent,
@@ -224,6 +224,22 @@ type EsRepoFactory = (
 	tracking: RepositoryTracking<ContractEsOrder>,
 ) => EsOrderReadAdapter;
 
+class ContractEsRepositoryPersistenceError extends InfrastructureError<"CONTRACT_ES_REPOSITORY_PERSISTENCE"> {
+	constructor(cause: unknown) {
+		super({
+			code: "CONTRACT_ES_REPOSITORY_PERSISTENCE",
+			message: "The event-stream contract repository failed",
+			cause,
+		});
+	}
+}
+
+function mapRepositoryError(error: unknown): InfrastructureError {
+	return error instanceof InfrastructureError
+		? error
+		: new ContractEsRepositoryPersistenceError(error);
+}
+
 const esPersistence: PersistenceModel<
 	ContractEsOrder,
 	number,
@@ -303,14 +319,17 @@ function createInMemoryEsHarness(
 						scope,
 						outbox,
 						repositories: {
-							orders: defineRepository({
-								aggregate: ContractEsOrder,
-								persistence: esPersistence,
-								create: (_tx: InMemoryEsTransaction, tracking) =>
-									repoFactory(db, tracking),
-								flush: (transaction: InMemoryEsTransaction, write) =>
-									flush(db, transaction, write),
-							}),
+							orders: defineRepository<EsContractRepository<ContractEsOrder>>()(
+								{
+									aggregate: ContractEsOrder,
+									persistence: esPersistence,
+									create: (_tx: InMemoryEsTransaction, tracking) =>
+										repoFactory(db, tracking),
+									flush: (transaction: InMemoryEsTransaction, write) =>
+										flush(db, transaction, write),
+									mapError: mapRepositoryError,
+								},
+							),
 						},
 					}).run(({ repositories }) =>
 						work({ repository: repositories.orders }),

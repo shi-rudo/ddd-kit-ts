@@ -187,7 +187,10 @@ The event-store adapter receives an immutable write receipt. Append its exact
 event batch and use the version captured by the unit of work during load:
 
 ```ts
-const eventSourcedOrders = defineRepository({
+interface ForStoringOrders
+  extends AggregatePersistence<Order, OrderId> {}
+
+const eventSourcedOrders = defineRepository<ForStoringOrders>()({
   aggregate: Order,
   persistence: orderStreamPersistence,
   create: (tx: EventStoreTx, tracking: RepositoryTracking<Order>) =>
@@ -199,6 +202,7 @@ const eventSourcedOrders = defineRepository({
       { expectedVersion: write.expectedVersion ?? 0 },
     );
   },
+  mapError: mapOrderPersistenceError,
 });
 ```
 

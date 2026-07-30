@@ -25,11 +25,14 @@ import type { TransactionScope } from "../repo/scope";
 import {
 	type AggregatePersistenceWrite,
 	AggregateTrackingError,
+	type AggregateWriteRegistration,
 	CommitError,
-	defineRepository,
+	defineRepository as defineExplicitRepository,
 	InvalidRepositoryAdapterError,
 	NestedUnitOfWorkError,
+	type PhysicalRemovalRegistration,
 	type RepositoryDefinition,
+	type RepositoryDefinitionOptions,
 	type RepositoryTracking,
 	RollbackError,
 	TransactionClosedError,
@@ -151,6 +154,112 @@ function versionPersistenceModel<
 	};
 }
 
+class TestRepositoryError extends InfrastructureError<"TEST_REPOSITORY_ERROR"> {
+	constructor(cause: unknown) {
+		super({
+			code: "TEST_REPOSITORY_ERROR",
+			message: "The test repository failed",
+			cause,
+		});
+	}
+}
+
+function mapTestRepositoryError(error: unknown): InfrastructureError {
+	return error instanceof InfrastructureError
+		? error
+		: new TestRepositoryError(error);
+}
+
+type TestRepositoryPort<
+	TRepository extends object,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TRemoval extends boolean,
+> = Omit<TRepository, "add" | "update" | "remove"> &
+	AggregateWriteRegistration<TAggregate> &
+	(TRemoval extends true ? PhysicalRemovalRegistration<TAggregate> : object);
+
+type TestRepositoryDefinitionOptions<
+	TCtx,
+	TRepository extends object,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TBaseline,
+	TChangeSet,
+	TRemoval extends boolean,
+> = Omit<
+	RepositoryDefinitionOptions<
+		TCtx,
+		TestRepositoryPort<TRepository, TAggregate, TRemoval>,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		TRemoval
+	>,
+	"mapError"
+> & {
+	readonly mapError?: RepositoryDefinitionOptions<
+		TCtx,
+		TestRepositoryPort<TRepository, TAggregate, TRemoval>,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		TRemoval
+	>["mapError"];
+	readonly create: (
+		transaction: TCtx,
+		tracking: RepositoryTracking<TAggregate>,
+	) => TRepository;
+};
+
+/** Keeps behavior-focused fixtures terse; the public port contract has its own tests. */
+function defineTestRepository<
+	TCtx,
+	TRepository extends object,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TBaseline,
+	TChangeSet,
+	TRemoval extends boolean = false,
+>(
+	definition: TestRepositoryDefinitionOptions<
+		TCtx,
+		TRepository,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		TRemoval
+	>,
+): RepositoryDefinition<
+	TCtx,
+	TestRepositoryPort<TRepository, TAggregate, TRemoval>,
+	TAggregate,
+	TBaseline,
+	TChangeSet,
+	TRemoval
+> {
+	const build = defineExplicitRepository<
+		TestRepositoryPort<TRepository, TAggregate, TRemoval>
+	>() as unknown as (
+		options: RepositoryDefinitionOptions<
+			TCtx,
+			TestRepositoryPort<TRepository, TAggregate, TRemoval>,
+			TAggregate,
+			TBaseline,
+			TChangeSet,
+			TRemoval
+		>,
+	) => RepositoryDefinition<
+		TCtx,
+		TestRepositoryPort<TRepository, TAggregate, TRemoval>,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		TRemoval
+	>;
+	return build({
+		...definition,
+		mapError: definition.mapError ?? mapTestRepositoryError,
+	});
+}
+
 function createUow(overrides?: {
 	scope?: TransactionScope<undefined>;
 	outbox?: Outbox<TestEvent>;
@@ -165,7 +274,7 @@ function createUow(overrides?: {
 		outbox,
 		bus,
 		repositories: {
-			orders: defineRepository({
+			orders: defineTestRepository({
 				aggregate: MockAggregate,
 				persistence: versionPersistenceModel<MockAggregate>(),
 				physicalRemoval: true,
@@ -274,7 +383,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox,
 				repositories: {
-					projected: defineRepository({
+					projected: defineTestRepository({
 						aggregate: ProjectedAggregate,
 						persistence: model,
 						flush: async (_tx: undefined, write) => {
@@ -340,7 +449,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						create: (_tx: undefined, tracking) =>
@@ -371,7 +480,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox,
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						create: (_tx: undefined, tracking) =>
@@ -432,7 +541,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox,
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -473,7 +582,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						create: () => ({}),
@@ -526,7 +635,7 @@ describe("UnitOfWork", () => {
 			const aggregate = createMockAggregate("o-1");
 			let flushCalls = 0;
 			const definition = () =>
-				defineRepository({
+				defineTestRepository({
 					aggregate: MockAggregate,
 					persistence: versionPersistenceModel<MockAggregate>(),
 					create: () => ({}),
@@ -649,7 +758,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox,
 				repositories: {
-					plain: defineRepository({
+					plain: defineTestRepository({
 						aggregate: PlainAggregate,
 						persistence: versionPersistenceModel<PlainAggregate>(),
 						flush: async () => {},
@@ -747,14 +856,14 @@ describe("UnitOfWork", () => {
 					scope: createMockScope(),
 					outbox: createMockOutbox(),
 					repositories: {
-						orders: {
+						orders: defineTestRepository({
 							aggregate: MockAggregate,
 							persistence: versionPersistenceModel<MockAggregate>(),
 							flush: async () => {},
 							// Deliberately defeat the static boundary to exercise the runtime
 							// guard for JavaScript consumers and dishonest assertions.
 							create: () => factoryResult as unknown as object,
-						},
+						}),
 					},
 				});
 
@@ -779,7 +888,7 @@ describe("UnitOfWork", () => {
 				scope,
 				outbox: createMockOutbox(),
 				repositories: {
-					a: defineRepository({
+					a: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -788,7 +897,7 @@ describe("UnitOfWork", () => {
 							return { handle };
 						},
 					}),
-					b: defineRepository({
+					b: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -815,7 +924,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -833,31 +942,33 @@ describe("UnitOfWork", () => {
 			expect(constructed).toBe(2);
 		});
 
-		it("supports freezing and defining properties without breaking facade reflection", async () => {
-			const adapter = Object.defineProperties(
-				{ label: "orders" },
-				{
-					fixed: {
-						value: "fixed",
-						enumerable: true,
-						configurable: false,
-					},
-				},
-			);
-			const uow = new UnitOfWork({
+		function createReflectiveUow() {
+			return new UnitOfWork({
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
-						create: () => adapter,
+						create: () =>
+							Object.defineProperties(
+								{ label: "orders", read: (): string => "initial" },
+								{
+									fixed: {
+										value: "fixed",
+										enumerable: true,
+										configurable: false,
+									},
+								},
+							),
 					}),
 				},
 			});
+		}
 
-			await uow.run(async ({ repositories }) => {
+		it("allows application-local facade properties", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
 				const repository = repositories.orders as typeof repositories.orders &
 					Record<string, unknown>;
 				Object.defineProperty(repository, "inspectionTag", {
@@ -865,8 +976,17 @@ describe("UnitOfWork", () => {
 					enumerable: true,
 					configurable: false,
 				});
+
 				expect(repository.inspectionTag).toBe("scoped");
 				expect(Reflect.ownKeys(repository)).toContain("inspectionTag");
+			});
+		});
+
+		it("protects Unit-of-Work lifecycle operations from reflection", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				const repository = repositories.orders as typeof repositories.orders &
+					Record<string, unknown>;
+
 				expect(() =>
 					Object.defineProperty(repository, "remove", {
 						value: () => undefined,
@@ -875,23 +995,46 @@ describe("UnitOfWork", () => {
 				).toThrow(TypeError);
 				expect(Reflect.set(repository, "remove", () => undefined)).toBe(false);
 				expect("remove" in repository).toBe(false);
+			});
+		});
+
+		it("deletes facade shadows before forwarded adapter properties", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				const repository = repositories.orders as typeof repositories.orders &
+					Record<string, unknown>;
 				Object.defineProperty(repository, "label", {
 					value: "facade label",
 					configurable: true,
 				});
+
 				expect(repository.label).toBe("facade label");
-				expect(adapter.label).toBe("orders");
 				expect(Reflect.deleteProperty(repository, "label")).toBe(true);
 				expect(repository.label).toBe("orders");
 				expect(Reflect.deleteProperty(repository, "label")).toBe(true);
 				expect(repository.label).toBeUndefined();
 				expect("label" in repository).toBe(false);
 				expect(Reflect.ownKeys(repository)).not.toContain("label");
-				expect("label" in adapter).toBe(false);
+			});
+		});
+
+		it("uses a replacement method after a forwarded method was cached", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				const cachedRead = repositories.orders.read;
+				expect(cachedRead()).toBe("initial");
+
+				repositories.orders.read = () => "replacement";
+
+				expect(repositories.orders.read()).toBe("replacement");
+			});
+		});
+
+		it("preserves non-configurable adapter properties while freezing", async () => {
+			await createReflectiveUow().run(async ({ repositories }) => {
+				const repository = repositories.orders as typeof repositories.orders &
+					Record<string, unknown>;
+
 				expect(Reflect.deleteProperty(repository, "fixed")).toBe(false);
 				expect(repository.fixed).toBe("fixed");
-				expect("fixed" in adapter).toBe(true);
-
 				expect(() => Object.freeze(repository)).not.toThrow();
 				expect(Object.isFrozen(repository)).toBe(true);
 			});
@@ -962,7 +1105,7 @@ describe("UnitOfWork", () => {
 					callOrder.push("onPersisted");
 				},
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {
@@ -1008,7 +1151,7 @@ describe("UnitOfWork", () => {
 					reported.push({ error, aggregate });
 				},
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -1050,7 +1193,7 @@ describe("UnitOfWork", () => {
 				},
 				onPersistError: (error) => reported.push(error),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -1324,7 +1467,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: MockAggregate,
 						persistence: versionPersistenceModel<MockAggregate>(),
 						flush: async () => {},
@@ -1347,136 +1490,6 @@ describe("UnitOfWork", () => {
 			expect(() => cachedRead()).toThrow(TransactionClosedError);
 			expect(() => leaked.status).toThrow(TransactionClosedError);
 			expect(getterCalls).toBe(callsWhileOpen);
-		});
-	});
-
-	describe("static repository compatibility", () => {
-		it("rejects callable adapters and definitions from another context or event family", () => {
-			const inferredCallableDefinitionMustFailToCompile = (): void => {
-				// @ts-expect-error inferred repository adapters must be non-callable objects
-				defineRepository({
-					aggregate: MockAggregate,
-					persistence: versionPersistenceModel<MockAggregate>(),
-					create: (_transaction: undefined) => (_required: string) => undefined,
-					flush: async (_transaction: undefined) => {},
-				});
-			};
-			type CallableRepository = () => void;
-			const callableDefinition: RepositoryDefinition<
-				undefined,
-				CallableRepository,
-				MockAggregate,
-				Version,
-				Version | undefined,
-				TestEvent
-			> = {
-				aggregate: MockAggregate,
-				persistence: versionPersistenceModel<MockAggregate>(),
-				// @ts-expect-error RepositoryDefinition excludes callable adapter results
-				create: () => () => undefined,
-				flush: async () => {},
-			};
-
-			const wrongContext = defineRepository({
-				aggregate: MockAggregate,
-				persistence: versionPersistenceModel<MockAggregate>(),
-				create: (_tx: { readonly connection: string }) => ({}),
-				flush: async (_tx: { readonly connection: string }) => {},
-			});
-			const incompatibleDefinitionsMustFailToCompile = (): void => {
-				new UnitOfWork({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					repositories: {
-						// @ts-expect-error repositories require a complete persistence definition
-						incomplete: {
-							aggregate: MockAggregate,
-							create: (_transaction: undefined) => ({}),
-						},
-					},
-				});
-				new UnitOfWork({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					repositories: {
-						// @ts-expect-error raw repository definitions must reject callable adapters
-						callable: {
-							aggregate: MockAggregate,
-							persistence: versionPersistenceModel<MockAggregate>(),
-							create: (_transaction: undefined) => () => undefined,
-							flush: async (_transaction: undefined) => {},
-						},
-					},
-				});
-				new UnitOfWork({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					repositories: {
-						// @ts-expect-error flush must accept the Unit of Work transaction context
-						wrongFlushContext: {
-							aggregate: MockAggregate,
-							persistence: versionPersistenceModel<MockAggregate>(),
-							create: (_transaction: undefined) => ({}),
-							flush: async (_transaction: {
-								readonly connection: string;
-							}) => {},
-						},
-					},
-				});
-				new UnitOfWork({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					// @ts-expect-error inferred repository context must match the Unit of Work scope
-					repositories: { orders: wrongContext },
-				});
-				new UnitOfWork<
-					TestEvent,
-					undefined,
-					{ readonly orders: typeof wrongContext }
-				>({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					// @ts-expect-error repository transaction context must accept the Unit of Work context
-					repositories: { orders: wrongContext },
-				});
-
-				type OtherEvent = DomainEvent<"PaymentCaptured", { paymentId: string }>;
-				class OtherAggregate extends AggregateRoot<
-					Readonly<Record<string, never>>,
-					TestId,
-					OtherEvent
-				> {
-					protected readonly aggregateType = "Payment";
-				}
-				const wrongEvent = defineRepository({
-					aggregate: OtherAggregate,
-					persistence: versionPersistenceModel<OtherAggregate>(),
-					create: (_tx: undefined) => ({}),
-					flush: async (_tx: undefined) => {},
-				});
-				new UnitOfWork({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					// @ts-expect-error inferred repository events must be accepted by the outbox
-					repositories: { payments: wrongEvent },
-				});
-				new UnitOfWork<
-					TestEvent,
-					undefined,
-					{ readonly payments: typeof wrongEvent }
-				>({
-					scope: createMockScope(),
-					outbox: createMockOutbox(),
-					// @ts-expect-error repository events must be accepted by the Unit of Work outbox
-					repositories: { payments: wrongEvent },
-				});
-			};
-
-			expect(callableDefinition).toBeDefined();
-			expect(inferredCallableDefinitionMustFailToCompile).toBeTypeOf(
-				"function",
-			);
-			expect(incompatibleDefinitionsMustFailToCompile).toBeTypeOf("function");
 		});
 	});
 
@@ -1585,7 +1598,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox,
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: OrderAggregate,
 						persistence: versionPersistenceModel<OrderAggregate>(),
 						physicalRemoval: true,
@@ -2102,7 +2115,7 @@ describe("UnitOfWork", () => {
 				scope: createMockScope(),
 				outbox: createMockOutbox(),
 				repositories: {
-					orders: defineRepository({
+					orders: defineTestRepository({
 						aggregate: aggregate.constructor as AggregateClass<Loadable>,
 						persistence: versionPersistenceModel<Loadable>(),
 						physicalRemoval: true,

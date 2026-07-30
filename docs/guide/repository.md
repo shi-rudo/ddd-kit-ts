@@ -269,11 +269,14 @@ aggregate for the adapter's convenience.
 
 ## Defining the adapter boundary
 
-`defineRepository` joins the read adapter, persistence model, and commit-time
-flush:
+`defineRepository` joins an application-owned repository port, its adapter,
+persistence model, and commit-time flush. Name the port after the capability
+the use case needs; do not expose the concrete ORM adapter as the contract.
 
 ```ts
-const orders = defineRepository({
+interface ForStoringOrders extends Repository<Order, OrderId> {}
+
+const orders = defineRepository<ForStoringOrders>()({
   aggregate: Order,
   persistence: orderPersistence,
   physicalRemoval: true,
@@ -335,8 +338,26 @@ const orders = defineRepository({
       throw staleRemoval(write);
     }
   },
+  mapError: (error, write) => {
+    if (error instanceof InfrastructureError) return error;
+    return new OrderStoreUnavailableError(write.aggregateId, error);
+  },
 });
 ```
+
+The type argument is deliberately explicit. `ForStoringOrders` is the full
+application port; `DrizzleOrderReadAdapter` implements only its read methods
+because the Unit of Work installs `add`, `update`, and `remove`. The concrete
+adapter may have diagnostics or ORM-specific helpers, but those do not become
+application API. It can change without silently widening the port.
+
+`mapError` is the storage boundary's last translation step. Known failures
+such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through;
+an unknown driver failure becomes an application-defined
+`InfrastructureError`, here `OrderStoreUnavailableError`. If the mapper throws
+or returns a raw value, the Unit of Work raises
+`RepositoryErrorMappingFailedError` and preserves both failures for diagnosis.
+That keeps ORM error types out of use cases without hiding the original cause.
 
 The receipt's version relationship is the OCC contract:
 
@@ -366,7 +387,10 @@ const orderStreamPersistence: PersistenceModel<
   isEmpty: (version) => version === undefined,
 };
 
-const eventSourcedOrders = defineRepository({
+interface ForAppendingOrderEvents
+  extends AggregatePersistence<Order, OrderId> {}
+
+const eventSourcedOrders = defineRepository<ForAppendingOrderEvents>()({
   aggregate: Order,
   persistence: orderStreamPersistence,
   create: (tx: EventStoreTx, tracking: RepositoryTracking<Order>) =>
@@ -378,6 +402,7 @@ const eventSourcedOrders = defineRepository({
       { expectedVersion: write.expectedVersion ?? 0 },
     );
   },
+  mapError: mapOrderPersistenceError,
 });
 ```
 

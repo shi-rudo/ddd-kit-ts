@@ -158,11 +158,16 @@ error.
 An adapter definition creates a transaction-bound read adapter:
 
 ```ts
-const orders = defineRepository({
+interface ForStoringOrders
+  extends AggregatePersistence<Order, OrderId> {}
+
+const orders = defineRepository<ForStoringOrders>()({
   aggregate: Order,
   persistence: orderPersistence,
-  create: (tx, tracking) => new OrderReadAdapter(tx, tracking),
-  flush: (tx, write) => flushOrder(tx, write),
+  create: (tx: DrizzleTx, tracking: RepositoryTracking<Order>) =>
+    new OrderReadAdapter(tx, tracking),
+  flush: (tx: DrizzleTx, write) => flushOrder(tx, write),
+  mapError: mapOrderPersistenceError,
 });
 ```
 
@@ -362,8 +367,12 @@ the source break is broader than the v2.2 repository rename:
   `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
   `migrateSnapshotState` overrides;
 - replace `UnitOfWorkSession` factories with `defineRepository` definitions;
+- declare a capability-named application repository port and pass it explicitly
+  as `defineRepository<ForStoringOrders>()`;
 - make adapter `create` paths read-only and call `tracking.trackLoaded`;
 - move insert/update/remove SQL into `flush`;
+- add `mapError` to every definition so ORM and driver errors cannot cross the
+  application boundary;
 - replace manual `enrollSaved`/`enrollDeleted` calls in unit-of-work
   repositories with application-facing `add`/`update`/`remove`;
 - move dirty detection to `PersistenceModel`;

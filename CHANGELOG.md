@@ -84,6 +84,18 @@ and revocation remain aggregate behavior followed by `update`.
   malformed facade. `RepositoryDefinition` now rejects callable result types at
   compile time, and a Unit of Work accepts only definitions whose transaction
   context and event family match its scope and outbox.
+- `defineRepository` now takes the complete application-owned repository port
+  explicitly: `defineRepository<ForStoringOrders>()({...})`. Its adapter
+  implements only non-lifecycle methods; the Unit of Work supplies
+  `add`/`update`/optional `remove`. Concrete adapter-only methods no longer leak
+  into the use-case facade, and helper-created definitions carry a nominal
+  marker so raw adapter-shaped objects cannot bypass that boundary.
+  JavaScript or asserted TypeScript that supplies an unbranded definition fails
+  at runtime with `InvalidRepositoryDefinitionError`.
+- Every repository definition supplies `mapError`. A failed `flush` must become
+  an application-facing `InfrastructureError`; a mapper that throws or returns
+  a raw driver value fails with `RepositoryErrorMappingFailedError` while
+  preserving the original persistence failure as its cause.
 - `update` and `remove` accept only the exact instance loaded by the active
   Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
   mixing write intents, or changing an aggregate after registration throws

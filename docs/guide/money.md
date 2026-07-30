@@ -546,7 +546,10 @@ class PgInvoiceReadAdapter {
   }
 }
 
-const invoices = defineRepository({
+interface ForStoringInvoices
+  extends AggregatePersistence<Invoice, InvoiceId> {}
+
+const invoices = defineRepository<ForStoringInvoices>()({
   aggregate: Invoice,
   persistence: invoicePersistenceModel,
   create: (tx: PgTx, tracking: RepositoryTracking<Invoice>) =>
@@ -576,6 +579,7 @@ const invoices = defineRepository({
 
     if (result.rowCount === 0) throw staleInvoice(write);
   },
+  mapError: mapInvoicePersistenceError,
 });
 ```
 

@@ -72,6 +72,10 @@ interface RuntimePersistenceDefinition<Evt extends AnyDomainEvent> {
 		transaction: unknown,
 		write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
 	) => void | Promise<void>;
+	readonly mapError: (
+		error: unknown,
+		write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
+	) => InfrastructureError;
 	readonly physicalRemoval?: boolean;
 }
 
@@ -122,6 +126,43 @@ export class InvalidRepositoryAdapterError extends KitWiringError<"INVALID_REPOS
 			`Repository factory "${repository}" returned ${receivedType}; ` +
 				"it must return an adapter object.",
 		);
+	}
+}
+
+/** A Unit of Work received repository wiring that bypassed {@link defineRepository}. */
+export class InvalidRepositoryDefinitionError extends KitWiringError<"INVALID_REPOSITORY_DEFINITION"> {
+	constructor(public readonly repository: string) {
+		super(
+			"INVALID_REPOSITORY_DEFINITION",
+			`Repository "${repository}" was not created by defineRepository. ` +
+				"Declare the application port explicitly and pass the helper-created " +
+				"definition to UnitOfWork.",
+		);
+	}
+}
+
+/** A repository's persistence-error policy threw or returned a non-kit error. */
+export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITORY_ERROR_MAPPING_FAILED"> {
+	readonly aggregateId: string;
+	readonly intent: AggregateWriteIntent;
+	readonly mapperCause: unknown;
+
+	constructor(options: {
+		readonly aggregateId: string;
+		readonly intent: AggregateWriteIntent;
+		readonly persistenceError: unknown;
+		readonly mapperError: unknown;
+	}) {
+		super(
+			"REPOSITORY_ERROR_MAPPING_FAILED",
+			`The repository error mapper failed for ${options.intent} of aggregate ` +
+				`${options.aggregateId}. The original persistence failure is preserved ` +
+				"as cause; the mapper failure is available as mapperCause.",
+			options.persistenceError,
+		);
+		this.aggregateId = options.aggregateId;
+		this.intent = options.intent;
+		this.mapperCause = options.mapperError;
 	}
 }
 
@@ -280,9 +321,9 @@ export type UnitOfWorkIdentityMap = Pick<
  *   `identityMap.isDeleted` as not-found (`undefined`), and returns
  *   `tracking.trackLoaded(aggregate)` after hydration. This captures the
  *   expected version before application code can mutate the instance.
- * - Adapter objects may declare `add`, `update`, and `remove` to satisfy their
- *   consumer-owned port types, but the application-facing facade replaces
- *   those implementations with Unit-of-Work-owned registrations.
+ * - Adapter objects do not need lifecycle methods; the facade installs the
+ *   Unit-of-Work-owned `add`, `update`, and optional `remove`. If a concrete
+ *   adapter has same-named methods anyway, the facade masks them.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */
@@ -338,25 +379,29 @@ export interface RunOptions {
 	readonly signal?: AbortSignal;
 }
 
-/** Complete adapter definition for one Unit-of-Work repository. */
-export interface RepositoryDefinition<
+const repositoryDefinitionBrand: unique symbol = Symbol("RepositoryDefinition");
+
+/** Adapter wiring accepted by {@link defineRepository}. */
+export interface RepositoryDefinitionOptions<
 	TCtx,
-	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, Evt>,
+	TRepositoryPort extends object,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
 	TRemoval extends boolean = false,
 > {
 	/** Concrete aggregate class used as the Identity Map key. */
 	readonly aggregate: AggregateClass<TAggregate>;
 	/** Adapter-owned projection, baseline, and change-set policy. */
 	readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
-	/** Creates the transaction-bound read adapter for one attempt. */
+	/**
+	 * Creates the transaction-bound adapter for the port's non-lifecycle
+	 * methods. The Unit of Work supplies `add`, `update`, and optional `remove`.
+	 */
 	readonly create: (
 		transaction: TCtx,
 		tracking: RepositoryTracking<TAggregate>,
-	) => TRepository extends (...args: never[]) => unknown ? never : TRepository;
+	) => Omit<TRepositoryPort, "add" | "update" | "remove">;
 	/**
 	 * Performs the registered write during the Unit of Work's commit phase.
 	 *
@@ -368,8 +413,37 @@ export interface RepositoryDefinition<
 		transaction: NoInfer<TCtx>,
 		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 	) => void | Promise<void>;
+	/**
+	 * Translates every adapter/driver failure from `flush` into an explicit
+	 * application-facing infrastructure error. Returning or throwing a raw
+	 * driver error is a wiring failure and is rejected by the Unit of Work.
+	 */
+	readonly mapError: (
+		error: unknown,
+		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
+	) => InfrastructureError;
 	/** Adds Unit-of-Work-owned `remove` to the application-facing repository. */
 	readonly physicalRemoval?: TRemoval;
+}
+
+/** Complete, helper-created definition for one Unit-of-Work repository. */
+export interface RepositoryDefinition<
+	TCtx,
+	TRepositoryPort extends object,
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TBaseline,
+	TChangeSet,
+	TRemoval extends boolean = false,
+> extends RepositoryDefinitionOptions<
+		TCtx,
+		TRepositoryPort,
+		TAggregate,
+		TBaseline,
+		TChangeSet,
+		TRemoval
+	> {
+	/** Nominal marker installed by {@link defineRepository}. */
+	readonly [repositoryDefinitionBrand]: true;
 }
 
 /**
@@ -396,47 +470,79 @@ export interface AggregatePersistenceWrite<
 /** @inline */
 type CallableValue = (...args: never[]) => unknown;
 
-/** Preserves inference while making a repository definition explicit. */
-export function defineRepository<
-	TCtx,
-	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, Evt>,
+/** @inline */
+type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
+	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TCreate extends (
+		transaction: never,
+		tracking: RepositoryTracking<TAggregate>,
+	) => Omit<TRepositoryPort, "add" | "update" | "remove">,
 	TBaseline,
 	TChangeSet,
-	Evt extends AnyDomainEvent = AnyDomainEvent,
 	TRemoval extends boolean = false,
 >(
-	definition: {
-		readonly aggregate: AggregateClass<TAggregate>;
-		readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
-		readonly create: (
-			transaction: TCtx,
-			tracking: RepositoryTracking<TAggregate>,
-		) => TRepository;
-		readonly flush: (
-			transaction: NoInfer<TCtx>,
-			write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-		) => void | Promise<void>;
-		readonly physicalRemoval?: TRemoval;
-	} & (Extract<TRepository, CallableValue> extends never ? unknown : never),
-): RepositoryDefinition<
-	TCtx,
-	TRepository,
-	TAggregate,
-	TBaseline,
-	TChangeSet,
-	Evt,
-	TRemoval
-> {
-	return Object.freeze({ ...definition }) as RepositoryDefinition<
-		TCtx,
-		TRepository,
+	definition: RepositoryDefinitionOptions<
+		Parameters<TCreate>[0],
+		TRepositoryPort,
 		TAggregate,
 		TBaseline,
 		TChangeSet,
-		Evt,
 		TRemoval
-	>;
+	> & {
+		readonly create: TCreate;
+	} & (TRepositoryPort extends AggregateWriteRegistration<TAggregate>
+			? TRemoval extends true
+				? TRepositoryPort extends PhysicalRemovalRegistration<TAggregate>
+					? unknown
+					: never
+				: TRepositoryPort extends PhysicalRemovalRegistration<TAggregate>
+					? never
+					: unknown
+			: never),
+) => RepositoryDefinition<
+	Parameters<TCreate>[0],
+	TRepositoryPort,
+	TAggregate,
+	TBaseline,
+	TChangeSet,
+	TRemoval
+>;
+
+/**
+ * Defines repository wiring for an application-owned driven port.
+ *
+ * The first call makes the port explicit; the second infers the transaction,
+ * aggregate, persistence, event, and removal types from the adapter wiring.
+ * The port must declare `add` and `update`; if it declares `remove`, the
+ * definition must set `physicalRemoval: true`. The adapter created by the
+ * definition implements only the remaining methods because lifecycle writes
+ * are installed by the Unit of Work.
+ * The returned definition is the only form accepted by {@link UnitOfWork}; a
+ * raw adapter-shaped object cannot silently turn its concrete surface into the
+ * application contract.
+ */
+export function defineRepository<TRepositoryPort extends object>(): Extract<
+	TRepositoryPort,
+	CallableValue
+> extends never
+	? RepositoryDefinitionBuilder<TRepositoryPort>
+	: never {
+	const builder = (definition: object): object => {
+		const branded = { ...definition };
+		Object.defineProperty(branded, repositoryDefinitionBrand, {
+			configurable: false,
+			enumerable: false,
+			value: true,
+			writable: false,
+		});
+		return Object.freeze(branded);
+	};
+	return builder as unknown as Extract<
+		TRepositoryPort,
+		CallableValue
+	> extends never
+		? RepositoryDefinitionBuilder<TRepositoryPort>
+		: never;
 }
 
 /** Application-facing repositories inferred from their adapter definitions. */
@@ -454,50 +560,34 @@ export type CompatibleRepositoryDefinitions<
 	TCtx,
 	TDefinitions,
 > = {
-	[K in keyof TDefinitions]: TDefinitions[K] extends {
-		readonly aggregate: AggregateClass<infer TAggregate>;
-	}
+	[K in keyof TDefinitions]: TDefinitions[K] extends RepositoryDefinition<
+		infer TDefinitionContext,
+		infer _TRepositoryPort,
+		infer TAggregate,
+		infer _TBaseline,
+		infer _TChangeSet,
+		infer _TRemoval
+	>
 		? TAggregate extends IAggregateRoot<Id<string>, infer TDefinitionEvent>
 			? [TDefinitionEvent] extends [Evt]
-				? TDefinitions[K] extends RepositoryDefinition<
-						infer TDefinitionContext,
-						infer _TRepository,
-						TAggregate,
-						infer _TBaseline,
-						infer _TChangeSet,
-						TDefinitionEvent,
-						infer _TRemoval
-					> & {
-						readonly create: (...args: never[]) => infer TActualRepository;
-					}
-					? TCtx extends TDefinitionContext
-						? [TActualRepository] extends [object]
-							? Extract<TActualRepository, CallableValue> extends never
-								? TDefinitions[K]
-								: never
-							: never
-						: never
+				? TCtx extends TDefinitionContext
+					? TDefinitions[K]
 					: never
 				: never
 			: never
 		: never;
 };
 
-type RepositoryFacadeOf<TDefinition> = TDefinition extends {
-	readonly aggregate: AggregateClass<infer TAggregate>;
-	readonly create: (...args: infer _Args) => infer TReadRepository;
-}
-	? TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>
-		? Omit<TReadRepository, "add" | "update" | "remove"> &
-				AggregateWriteRegistration<TAggregate> &
-				(TDefinition extends {
-					readonly physicalRemoval?: infer TRemoval;
-				}
-					? TRemoval extends true
-						? PhysicalRemovalRegistration<TAggregate>
-						: object
-					: object)
-		: never
+/** @inline */
+type RepositoryFacadeOf<TDefinition> = TDefinition extends RepositoryDefinition<
+	infer _TCtx,
+	infer TRepositoryPort,
+	infer _TAggregate,
+	infer _TBaseline,
+	infer _TChangeSet,
+	infer _TRemoval
+>
+	? TRepositoryPort
 	: never;
 
 /** Unit-of-Work-owned writes added to every application repository facade. */
@@ -741,9 +831,11 @@ export class UnitOfWork<
 		for (const key of Object.keys(this.deps.repositories) as Array<
 			keyof TDefinitions
 		>) {
-			const definition = this.deps.repositories[
-				key
-			] as unknown as RuntimeRepositoryDefinition<Evt, TCtx>;
+			const candidate = this.deps.repositories[key] as unknown;
+			if (!isRepositoryDefinition(candidate)) {
+				throw new InvalidRepositoryDefinitionError(String(key));
+			}
+			const definition = candidate as RuntimeRepositoryDefinition<Evt, TCtx>;
 			const adapter = definition.create(tx, session.trackingFor(definition));
 			repositories[key] = bindRepositoryWrites(
 				adapter,
@@ -753,6 +845,25 @@ export class UnitOfWork<
 			) as RepositoriesOf<TDefinitions>[typeof key];
 		}
 		return repositories;
+	}
+}
+
+function isRepositoryDefinition(value: unknown): value is object {
+	if (value === null || typeof value !== "object") return false;
+	try {
+		const marker = Reflect.getOwnPropertyDescriptor(
+			value,
+			repositoryDefinitionBrand,
+		);
+		return (
+			marker?.value === true &&
+			marker.configurable === false &&
+			marker.enumerable === false &&
+			marker.writable === false &&
+			Object.isFrozen(value)
+		);
+	} catch {
+		return false;
 	}
 }
 
@@ -775,149 +886,241 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 		);
 	}
 
-	const source = adapter as object;
-	const facadeTarget = Object.create(Reflect.getPrototypeOf(source)) as object;
-	const methodCache = new Map<PropertyKey, (...args: unknown[]) => unknown>();
-	const forwardedOwnProperties = new Set<PropertyKey>();
-	const writes = new Set<PropertyKey>();
-	const lifecycleOperations = new Set<PropertyKey>(["add", "update", "remove"]);
-	const operationName = (property: PropertyKey): string =>
-		`repository.${typeof property === "symbol" ? (property.description ?? property.toString()) : property}`;
-	const readSource = (property: PropertyKey): unknown => {
-		session.assertOpen(operationName(property));
-		const value = Reflect.get(source, property, source);
-		if (typeof value !== "function") return value;
-		const cached = methodCache.get(property);
-		if (cached) return cached;
-		const guarded = (...args: unknown[]): unknown => {
-			session.assertOpen(operationName(property));
-			return Reflect.apply(value, source, args);
-		};
-		methodCache.set(property, guarded);
-		return guarded;
-	};
-	const defineForwardedOwnProperty = (
-		property: PropertyKey,
-		descriptor: PropertyDescriptor,
-	): void => {
-		Object.defineProperty(facadeTarget, property, {
-			configurable: true,
-			enumerable: descriptor.enumerable ?? false,
-			get: () => readSource(property),
-			set:
-				("value" in descriptor && descriptor.writable) || descriptor.set
-					? (value: unknown) => {
-							session.assertOpen(operationName(property));
-							if (!Reflect.set(source, property, value, source)) {
-								throw new TypeError(
-									`Cannot assign to repository property ${String(property)}`,
-								);
-							}
-						}
-					: undefined,
-		});
-		forwardedOwnProperties.add(property);
-	};
+	const state = createRepositoryFacadeState(
+		adapter as object,
+		session,
+		definition,
+	);
+	installRepositoryLifecycleOperations(state);
+	forwardAdapterOwnProperties(state);
+	return new Proxy(
+		state.target,
+		createRepositoryFacadeHandler(state),
+	) as TRepository;
+}
 
-	const operations = definition.physicalRemoval
-		? (["add", "update", "remove"] as const)
-		: (["add", "update"] as const);
+const REPOSITORY_LIFECYCLE_OPERATIONS = ["add", "update", "remove"] as const;
+
+interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
+	readonly source: object;
+	readonly target: object;
+	readonly session: Session<Evt>;
+	readonly definition: RuntimePersistenceDefinition<Evt>;
+	readonly methodCache: Map<PropertyKey, (...args: unknown[]) => unknown>;
+	readonly forwardedOwnProperties: Set<PropertyKey>;
+	readonly writes: Set<PropertyKey>;
+}
+
+function createRepositoryFacadeState<Evt extends AnyDomainEvent>(
+	source: object,
+	session: Session<Evt>,
+	definition: RuntimePersistenceDefinition<Evt>,
+): RepositoryFacadeState<Evt> {
+	return {
+		source,
+		target: Object.create(Reflect.getPrototypeOf(source)) as object,
+		session,
+		definition,
+		methodCache: new Map(),
+		forwardedOwnProperties: new Set(),
+		writes: new Set(),
+	};
+}
+
+function repositoryOperationName(property: PropertyKey): string {
+	const name =
+		typeof property === "symbol"
+			? (property.description ?? property.toString())
+			: property;
+	return `repository.${name}`;
+}
+
+function isRepositoryLifecycleOperation(property: PropertyKey): boolean {
+	return REPOSITORY_LIFECYCLE_OPERATIONS.includes(
+		property as (typeof REPOSITORY_LIFECYCLE_OPERATIONS)[number],
+	);
+}
+
+function readRepositorySource<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	property: PropertyKey,
+): unknown {
+	state.session.assertOpen(repositoryOperationName(property));
+	const value = Reflect.get(state.source, property, state.source);
+	if (typeof value !== "function") return value;
+	const cached = state.methodCache.get(property);
+	if (cached) return cached;
+	const guarded = (...args: unknown[]): unknown => {
+		state.session.assertOpen(repositoryOperationName(property));
+		return Reflect.apply(value, state.source, args);
+	};
+	state.methodCache.set(property, guarded);
+	return guarded;
+}
+
+function defineForwardedRepositoryProperty<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	property: PropertyKey,
+	descriptor: PropertyDescriptor,
+): void {
+	Object.defineProperty(state.target, property, {
+		configurable: true,
+		enumerable: descriptor.enumerable ?? false,
+		get: () => readRepositorySource(state, property),
+		set:
+			("value" in descriptor && descriptor.writable) || descriptor.set
+				? (value: unknown) => {
+						state.session.assertOpen(repositoryOperationName(property));
+						if (!Reflect.set(state.source, property, value, state.source)) {
+							throw new TypeError(
+								`Cannot assign to repository property ${String(property)}`,
+							);
+						}
+					}
+				: undefined,
+	});
+	state.forwardedOwnProperties.add(property);
+}
+
+function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+): void {
+	const operations = state.definition.physicalRemoval
+		? REPOSITORY_LIFECYCLE_OPERATIONS
+		: REPOSITORY_LIFECYCLE_OPERATIONS.slice(0, 2);
 	for (const operation of operations) {
-		writes.add(operation);
-		Object.defineProperty(facadeTarget, operation, {
+		state.writes.add(operation);
+		Object.defineProperty(state.target, operation, {
 			configurable: false,
 			enumerable: false,
 			writable: false,
 			value: (aggregate: unknown) => {
-				session.assertOpen(operationName(operation));
-				session[operation](
+				state.session.assertOpen(repositoryOperationName(operation));
+				state.session[operation](
 					aggregate as IAggregateRoot<Id<string>, Evt>,
-					definition,
+					state.definition,
 				);
 			},
 		});
 	}
-	for (const property of Reflect.ownKeys(source)) {
-		if (lifecycleOperations.has(property)) continue;
-		const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
-		if (descriptor) defineForwardedOwnProperty(property, descriptor);
-	}
+}
 
-	return new Proxy(facadeTarget, {
+function forwardAdapterOwnProperties<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+): void {
+	for (const property of Reflect.ownKeys(state.source)) {
+		if (isRepositoryLifecycleOperation(property)) continue;
+		const descriptor = Reflect.getOwnPropertyDescriptor(state.source, property);
+		if (descriptor) {
+			defineForwardedRepositoryProperty(state, property, descriptor);
+		}
+	}
+}
+
+function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+): ProxyHandler<object> {
+	return {
 		get: (target, property, receiver) => {
-			session.assertOpen(operationName(property));
+			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
 			if (own) return Reflect.get(target, property, receiver);
 			if (property === "remove") return undefined;
-			return readSource(property);
+			return readRepositorySource(state, property);
 		},
-		set: (target, property, value, receiver) => {
-			session.assertOpen(operationName(property));
-			if (lifecycleOperations.has(property)) return false;
-			if (Reflect.getOwnPropertyDescriptor(target, property)) {
-				return Reflect.set(target, property, value, receiver);
-			}
-			if (!Reflect.isExtensible(target)) return false;
-			const set = Reflect.set(source, property, value, source);
-			const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
-			if (set && descriptor) defineForwardedOwnProperty(property, descriptor);
-			return set;
-		},
+		set: (target, property, value, receiver) =>
+			setRepositoryFacadeProperty(state, target, property, value, receiver),
 		has: (target, property) => {
-			session.assertOpen(operationName(property));
+			state.session.assertOpen(repositoryOperationName(property));
 			return (
-				writes.has(property) ||
+				state.writes.has(property) ||
 				(property !== "remove" &&
-					(Reflect.has(target, property) || Reflect.has(source, property)))
+					(Reflect.has(target, property) ||
+						Reflect.has(state.source, property)))
 			);
 		},
-		defineProperty: (target, property, descriptor) => {
-			session.assertOpen(operationName(property));
-			if (
-				lifecycleOperations.has(property) &&
-				!Reflect.getOwnPropertyDescriptor(target, property)
-			) {
-				return false;
-			}
-			const current = Reflect.getOwnPropertyDescriptor(target, property);
-			if (!Reflect.defineProperty(target, property, descriptor)) return false;
-			const next = Reflect.getOwnPropertyDescriptor(target, property);
-			if (
-				forwardedOwnProperties.has(property) &&
-				(current?.get !== next?.get || current?.set !== next?.set)
-			) {
-				forwardedOwnProperties.delete(property);
-			}
-			return true;
-		},
-		deleteProperty: (target, property) => {
-			session.assertOpen(operationName(property));
-			if (lifecycleOperations.has(property)) return false;
-			const targetDescriptor = Reflect.getOwnPropertyDescriptor(
-				target,
-				property,
-			);
-			if (targetDescriptor && !forwardedOwnProperties.has(property)) {
-				return Reflect.deleteProperty(target, property);
-			}
-			const sourceDescriptor = Reflect.getOwnPropertyDescriptor(
-				source,
-				property,
-			);
-			if (
-				targetDescriptor?.configurable === false ||
-				sourceDescriptor?.configurable === false
-			) {
-				return false;
-			}
-			if (!Reflect.deleteProperty(source, property)) return false;
-			if (targetDescriptor && !Reflect.deleteProperty(target, property))
-				return false;
-			forwardedOwnProperties.delete(property);
-			methodCache.delete(property);
-			return true;
-		},
-	}) as TRepository;
+		defineProperty: (target, property, descriptor) =>
+			defineRepositoryFacadeProperty(state, target, property, descriptor),
+		deleteProperty: (target, property) =>
+			deleteRepositoryFacadeProperty(state, target, property),
+	};
+}
+
+function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	target: object,
+	property: PropertyKey,
+	value: unknown,
+	receiver: unknown,
+): boolean {
+	state.session.assertOpen(repositoryOperationName(property));
+	if (isRepositoryLifecycleOperation(property)) return false;
+	if (Reflect.getOwnPropertyDescriptor(target, property)) {
+		const set = Reflect.set(target, property, value, receiver);
+		if (set) state.methodCache.delete(property);
+		return set;
+	}
+	if (!Reflect.isExtensible(target)) return false;
+	const set = Reflect.set(state.source, property, value, state.source);
+	const descriptor = Reflect.getOwnPropertyDescriptor(state.source, property);
+	if (set && descriptor) {
+		defineForwardedRepositoryProperty(state, property, descriptor);
+	}
+	return set;
+}
+
+function defineRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	target: object,
+	property: PropertyKey,
+	descriptor: PropertyDescriptor,
+): boolean {
+	state.session.assertOpen(repositoryOperationName(property));
+	if (
+		isRepositoryLifecycleOperation(property) &&
+		!Reflect.getOwnPropertyDescriptor(target, property)
+	) {
+		return false;
+	}
+	const current = Reflect.getOwnPropertyDescriptor(target, property);
+	if (!Reflect.defineProperty(target, property, descriptor)) return false;
+	const next = Reflect.getOwnPropertyDescriptor(target, property);
+	if (
+		state.forwardedOwnProperties.has(property) &&
+		(current?.get !== next?.get || current?.set !== next?.set)
+	) {
+		state.forwardedOwnProperties.delete(property);
+	}
+	return true;
+}
+
+function deleteRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
+	state: RepositoryFacadeState<Evt>,
+	target: object,
+	property: PropertyKey,
+): boolean {
+	state.session.assertOpen(repositoryOperationName(property));
+	if (isRepositoryLifecycleOperation(property)) return false;
+	const targetDescriptor = Reflect.getOwnPropertyDescriptor(target, property);
+	if (targetDescriptor && !state.forwardedOwnProperties.has(property)) {
+		return Reflect.deleteProperty(target, property);
+	}
+	const sourceDescriptor = Reflect.getOwnPropertyDescriptor(
+		state.source,
+		property,
+	);
+	if (
+		targetDescriptor?.configurable === false ||
+		sourceDescriptor?.configurable === false
+	) {
+		return false;
+	}
+	if (!Reflect.deleteProperty(state.source, property)) return false;
+	if (targetDescriptor && !Reflect.deleteProperty(target, property))
+		return false;
+	state.forwardedOwnProperties.delete(property);
+	state.methodCache.delete(property);
+	return true;
 }
 
 type AggregateLifecycle = "new" | "loaded";
@@ -1310,7 +1513,11 @@ class Session<Evt extends AnyDomainEvent> {
 				changes,
 				events,
 			}) as AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>;
-			await entry.definition.flush(transaction, write);
+			try {
+				await entry.definition.flush(transaction, write);
+			} catch (error) {
+				throw mapRepositoryPersistenceError(entry.definition, error, write);
+			}
 		}
 	}
 
@@ -1334,6 +1541,33 @@ class Session<Evt extends AnyDomainEvent> {
 			throw new TransactionClosedError(operation);
 		}
 	}
+}
+
+function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
+	definition: RuntimePersistenceDefinition<Evt>,
+	error: unknown,
+	write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
+): InfrastructureError {
+	let mapped: unknown;
+	try {
+		mapped = definition.mapError(error, write);
+	} catch (mapperError) {
+		throw new RepositoryErrorMappingFailedError({
+			aggregateId: String(write.aggregateId),
+			intent: write.intent,
+			persistenceError: error,
+			mapperError,
+		});
+	}
+	if (mapped instanceof InfrastructureError) return mapped;
+	throw new RepositoryErrorMappingFailedError({
+		aggregateId: String(write.aggregateId),
+		intent: write.intent,
+		persistenceError: error,
+		mapperError: new TypeError(
+			"Repository mapError must return an InfrastructureError instance",
+		),
+	});
 }
 
 function makeContext<TRepos, Evt extends AnyDomainEvent>(

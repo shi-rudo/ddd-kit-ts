@@ -170,13 +170,19 @@ describe("command outbox contract suite", () => {
 		};
 		const contract = createCommandOutboxContractTests(broken);
 
-		for (const name of [
-			"rejects an origin event id reused with a different source",
-			"rejects an origin event id reused with a different position",
-		]) {
+		for (const [name, missingFact] of [
+			[
+				"rejects an origin event id reused with a different source",
+				"aggregateType",
+			],
+			[
+				"rejects an origin event id reused with a different position",
+				"commitSequence",
+			],
+		] as const) {
 			const test = contract.find((candidate) => candidate.name === name);
 			expect(test).toBeDefined();
-			await expect(test?.run()).rejects.toThrow(/origin|reject/i);
+			await expect(test?.run()).rejects.toThrow(missingFact);
 		}
 	});
 

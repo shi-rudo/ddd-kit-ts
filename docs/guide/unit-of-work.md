@@ -30,19 +30,25 @@ aggregate, and applies the command again.
 
 ## Wiring a repository
 
-A repository definition has four parts:
+A repository definition has five parts:
 
+- an application-owned repository port, supplied explicitly to
+  `defineRepository`;
 - the aggregate class, used as the identity-map key;
 - a `PersistenceModel`, owned by the adapter;
 - `create`, which builds the transaction-bound read adapter;
-- `flush`, which performs the registered write.
+- `flush`, which performs the registered write;
+- `mapError`, which translates a failed flush into an application-facing
+  `InfrastructureError`.
 
 Physical removal is opt-in.
 
 ```ts
 import {
   defineRepository,
+  InfrastructureError,
   type PersistenceModel,
+  type Repository,
   type RepositoryTracking,
   UnitOfWork,
 } from "@shirudo/ddd-kit";
@@ -53,6 +59,8 @@ type OrderRow = {
 };
 
 type OrderChange = OrderRow | undefined;
+
+interface ForStoringOrders extends Repository<Order, OrderId> {}
 
 const orderPersistence: PersistenceModel<
   Order,
@@ -76,7 +84,7 @@ const orderPersistence: PersistenceModel<
   isEmpty: (change) => change === undefined,
 };
 
-const orderRepositoryDefinition = defineRepository({
+const orderRepositoryDefinition = defineRepository<ForStoringOrders>()({
   aggregate: Order,
   persistence: orderPersistence,
   physicalRemoval: true,
@@ -95,6 +103,10 @@ const orderRepositoryDefinition = defineRepository({
         return;
     }
   },
+  mapError: (error, write) => {
+    if (error instanceof InfrastructureError) return error;
+    return new OrderStoreUnavailableError(write.aggregateId, error);
+  },
 });
 
 const deps = {
@@ -107,14 +119,23 @@ const deps = {
 };
 ```
 
-The adapter returned by `create` owns reads only. `UnitOfWork` supplies the
-application-facing `add` and `update` methods. It adds `remove` only when the
-definition declares `physicalRemoval: true`. An adapter method with one of
-those names is never called through the facade.
+The explicit type is the full application port. The adapter returned by
+`create` implements only its non-lifecycle methods and may be a larger concrete
+class; its extra methods do not become application API. `UnitOfWork` supplies
+`add` and `update`, and supplies `remove` when both the port and definition opt
+into physical removal. An adapter method with one of those names is never
+called through the facade.
+Only the helper-created definition is accepted; an unbranded object fails with
+`InvalidRepositoryDefinitionError`, including for JavaScript callers.
 
 This is deliberate. A write method cannot accidentally issue SQL before the
 rest of the operation is ready, forget event harvesting, or use a different
 transaction.
+
+`mapError` runs only when `flush` fails. It should preserve a deliberate kit
+`InfrastructureError` and translate every database-specific error into one of
+the application's infrastructure errors. The mapper is part of the adapter
+contract, not a catch-all in the use case.
 
 ## Use cases: decide first, register last
 
