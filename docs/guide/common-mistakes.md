@@ -73,8 +73,8 @@ They are a short-lived queue owned by the aggregate until `UnitOfWork`
 harvests and acknowledges the exact registered batch through an internal
 capability.
 
-Review signal: application code may call `recordPendingEvents`, but should not
-persist a hand-read `pendingEvents` array. Repository `flush` receives the
+Review signal: application code can call `recordPendingEvents`. It must not
+persist a manually read `pendingEvents` array. Repository `flush` receives the
 immutable batch as `write.events`.
 
 ### Calling a repository `save`
@@ -91,15 +91,16 @@ await uow.run(async ({ repositories }) => {
 });
 ```
 
-Use `add` for a new instance, `update` for the exact instance loaded by this
-unit of work, and `remove` only where the repository definition opted into
-physical deletion. Application code never receives the transaction handle;
-the definition binds its read adapter and `flush` implementation to it. See
-[Repository](./repository.md).
+Use `add` for a new instance. Use `update` for the exact instance that this
+unit of work loaded. Use `remove` only for a repository that supports physical
+deletion. Application code never receives the transaction handle. The
+definition binds its read adapter and `flush` implementation to that handle.
+See [Repository](./repository.md).
 
 ### Returning Naked Aggregates Or Events From `withCommit`
 
-The `withCommit` callback should return opaque commit tokens, not naked aggregates or manually harvested events.
+The `withCommit` callback must return opaque commit tokens. It must not return
+naked aggregates or manually collected events.
 
 ```ts
 // Wrong
@@ -185,7 +186,7 @@ reference to a peer aggregate.
 
 ### Trying To Manage Lifecycle From Repository `flush`
 
-`flush` should persist the immutable write receipt. It should not change the
+`flush` must persist the immutable write receipt. It must not change the
 aggregate lifecycle.
 
 Only `withCommit` and `UnitOfWork` hold the internal acknowledgement capability.
@@ -193,8 +194,10 @@ If repository code uses a cast or other escape hatch to clear events earlier,
 pending events disappear before the transaction boundary can harvest them and
 the outbox receives nothing.
 
-This mistake usually comes from trying to make a database write feel complete:
-"I wrote the row, so I should clear the events." That is correct in a simple
+This mistake usually comes from the following assumption. The assumption is
+incorrect.
+
+"I wrote the row, so I can clear the events." That is correct in a simple
 Active Record model. It is wrong in an outbox-backed transaction model.
 
 The database write and the aggregate acknowledgement happen at different moments:
@@ -212,7 +215,7 @@ If the transaction rolls back after `flush`, the in-memory aggregate must not
 pretend its events were flushed. That is why `flush` is pure persistence and the
 application boundary owns acknowledgement.
 
-Review signal: repository implementations should not mutate aggregate lifecycle
+Review signal: repository implementations must not mutate aggregate lifecycle
 state through casts or hidden implementation details. See
 [Outbox & Transactions](./outbox.md).
 
@@ -220,7 +223,9 @@ state through casts or hidden implementation details. See
 
 Do not decide between insert and update with `aggregate.version === 0`.
 
-A new aggregate can be mutated before its first `add`. A factory may record a creation event and bump the version to 1. A setup method may bump it again. The database row still does not exist.
+A new aggregate can change before its first `add`. A factory can record a
+creation event and increase the version to 1. A setup method can increase it
+again. The database row still does not exist.
 
 That means `version` answers "how many version-worthy changes has this in-memory aggregate seen?" It does not answer "does this aggregate already exist in the database?"
 
@@ -241,10 +246,10 @@ SET state = ?, version = ?
 WHERE id = ? AND version = ?
 ```
 
-The final placeholder is `write.expectedVersion`; the value written is
+The final placeholder is `write.expectedVersion`. The new value is
 `write.version`. Review signal: any insert/update branch based on an aggregate
-version is suspect. The use case should choose `add` or `update`, and the
-adapter should trust the corresponding receipt. See
+version is suspect. The use case chooses `add` or `update`. The adapter uses
+the corresponding receipt. See
 [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 
 ### Keeping Unbounded In-Memory Stores Alive
@@ -299,7 +304,7 @@ If `orderA` and `orderB` are different objects with the same id, both can carry 
 An identity map makes the second `findById` return the same object. Now the operation is forced to deal with one aggregate instance and one version history.
 
 Use the [`UnitOfWork` identity map](./unit-of-work.md#read-adapters-and-the-identity-map).
-The map is scoped to one `run`; a process-wide identity map would leak stale
+The map is scoped to one `run`. A process-wide identity map leaks stale
 state across requests. See [Repository](./repository.md).
 
 ### Sharing One Mutable Factory Across Tests or Requests
@@ -404,17 +409,18 @@ Senior review rule: mock across process or infrastructure boundaries, not across
 
 ## Review Checklist
 
-When reviewing code that uses the kit, scan for these signals:
+When you review code that uses the kit, make sure that these rules apply:
 
-- aggregate decisions created with `this.createEvent(...)` inside aggregates
-- pending events recorded in the application shell before persistence
-- repositories created inside the transaction or unit-of-work scope
-- repositories that do not call aggregate lifecycle methods
-- explicit `add` or `update`, never lifecycle inference from `version`
-- one aggregate instance per id inside one unit of work
-- event-sourced repositories continue bounded pages to a pinned stream head
-- scoped test factories instead of leaked global factories
-- edge/runtime code that loads aggregates per request
-- structured errors preserved until the boundary that maps them
+- Create aggregate decisions with `this.createEvent(...)` inside aggregates.
+- Record pending events in the application shell before persistence.
+- Create repositories inside the transaction or Unit-of-Work scope.
+- Keep aggregate lifecycle methods out of repository adapters.
+- Use explicit `add` or `update` calls. Do not infer lifecycle from `version`.
+- Use one aggregate instance for each identifier in one unit of work.
+- Read bounded event-stream pages. When the cursor reaches the pinned head,
+  stop.
+- Use a separate test factory for each test scope.
+- Load aggregates separately for each edge-runtime request.
+- Preserve structured errors until the mapping boundary.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

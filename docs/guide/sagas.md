@@ -59,26 +59,22 @@ follow. Those are the signals to come back here.
 
 ## Implemented as an aggregate
 
-One distinction first, because the skill documents draw it and this page
-must not blur it: conceptually, a saga is not an aggregate.
-`saga-design.md` says so in as many words; a saga guards no immediate
-business invariant the way an `Order` guards its total. What it guards are
-process invariants: steps fire in a legal order, each step fires at most
-once, a failed process compensates completely or lands in repair. Those
-are real invariants over durable state under concurrent access, and that
-is precisely the job the aggregate machinery was built for. So the saga
-REUSES that machinery, identity, optimistic concurrency, a repository, an
-event-emitting state core, without claiming to be a domain aggregate in
-Evans's sense. When this page says "aggregate" about the saga from here
-on, it means the implementation shape, not the modeling claim.
+Conceptually, a saga is not an aggregate. A saga does not protect an immediate
+business invariant like an `Order` total. It protects process invariants across
+durable state and concurrent access.
 
-Concretely: the process state ("payment requested, waiting"; "shipping
-requested"; "compensating") is protected by optimistic concurrency. In the
-state-stored variant it lives behind an `AggregatePersistence` repository
-definition and `UnitOfWork`, and its allowed
-transitions sit well in a `DomainStateMachine`, which turns "a timeout arrived
-after the payment was already received" from a bug you have to remember to
-handle into a transition that simply does not exist.
+For example, steps must use a legal order. Each step must run at most once. A
+failed process must complete compensation or enter manual repair.
+
+The implementation reuses aggregate machinery for these rules. It uses
+identity, optimistic concurrency, a repository, and an event-producing state
+core. This reuse does not make the saga a domain aggregate in the Evans sense.
+On this page, "aggregate" describes only the implementation shape.
+
+Optimistic concurrency protects the process state. The state-stored variant
+uses an `AggregatePersistence` definition and `UnitOfWork`. A
+`DomainStateMachine` defines its allowed transitions. Thus, a late timeout has
+no transition after the payment arrives.
 
 ```ts
 class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
@@ -127,14 +123,14 @@ The compact event-sourced variant deliberately records completed changes to the
 process itself: `CheckoutStartedAwaitingPayment`,
 `CheckoutAdvancedToShipping`, and
 `CheckoutCompensationStartedAfterShippingFailure`. These names matter. They say
-what the coordinator decided and where its own state moved; they do not pretend
+what the coordinator decided and where its own state moved. They do not pretend
 that `Payment` or `Shipping` has already done anything.
 
 Those private facts rebuild the process position. They are not collaboration
-events and they are not sent to a participant. While the live decision is
-committing, an application-boundary mapper creates a separate imperative
-command such as `RequestPayment` or `RequestShipping` and writes it to a
-dedicated command outbox. Replay only invokes the process-event handlers, so it
+events and they are not sent to a participant. During the live transaction, an
+application mapper creates a separate command. It writes commands such as
+`RequestPayment` or `RequestShipping` to a dedicated command outbox. Replay
+only calls the process-event handlers, so it
 does not run that mapper:
 
 ```ts
@@ -213,36 +209,33 @@ the outbox records, the deadline, and the inbox claim all commit in one
 transaction, which is the entire trick: there is no window in which the
 saga believes something the database does not.
 
-A word on that fingerprint. With the event id in the key, a true duplicate
-always carries the same content, so the fingerprint can never fire on
-honest redelivery; what it catches is the dishonest case, a different
-payload arriving under the same event id, which means an id collision or a
-serialization bug upstream, surfaced as a loud `IdempotencyKeyReuseError`
-instead of a silently replayed wrong outcome. Hash the payload for that
-tripwire to mean something; a constant like the event type would compare
-equal every time and catch nothing.
+The event id is part of the fingerprint key. Therefore, a true duplicate always
+has the same content. The fingerprint detects a different payload with the same
+event id. This result indicates an id collision or an upstream serialization
+error. The handler throws `IdempotencyKeyReuseError` instead of returning an
+incorrect stored outcome.
 
-Notice also what the transaction does NOT contain: a second aggregate. The
-outbox record, the deadline, and the inbox claim are infrastructure riding
-along; the saga is the only aggregate in its commit. When a reaction wants
-to change the `Order` too, that is a command through the outbox, never an
-`orderRepository.update` inside the saga's transaction.
-`aggregate-design.md`'s rule, one aggregate instance per transaction,
-applies here unchanged, and `saga-design.md` says the same from the other
-side: a saga calls aggregates through commands, it never owns them.
+Hash the payload to make this test effective. A constant value, such as the
+event type, always compares as equal and detects nothing.
+
+The transaction does not contain a second aggregate. The saga is the only
+aggregate in its commit. The outbox record, deadline, and inbox claim are
+infrastructure.
+
+If a reaction must change the `Order` too, it sends a command through the
+outbox. It never calls `orderRepository.update` inside the saga transaction.
+The one-aggregate rule applies here without change. A saga calls aggregates
+through commands. It never owns them.
 
 ## Commands out, through the same door
 
-The saga's decisions leave as commands: request the payment, request the
-shipping, cancel, refund. How those commands leave is the single biggest
-difference between a saga that works in a demo and one that works in
-production, and it is where most hand-rolled implementations quietly have a
-hole. The obvious wiring, dispatching the command on the bus right inside
-the subscriber (the state-stored demo does this, to stay readable), has a crash
-window: the process dies after the saga's transaction committed and before
-the dispatch went out, and now the decision is durably recorded and never
-acted on. No retry fixes it, because nothing knows there is anything to
-retry.
+The saga decisions leave as commands. Examples include request payment,
+request shipping, cancel, and refund. The delivery path determines whether the
+saga survives a crash.
+
+Direct dispatch from the subscriber creates a crash window. The process can
+stop after the saga commits but before command dispatch. The decision then
+remains stored without its action. No retry can find the missing command.
 
 Before the wiring, keep three meanings separate:
 
@@ -250,15 +243,15 @@ Before the wiring, keep three meanings separate:
   "which decision moved this process here?" and is replayed to rebuild process
   state.
 - A collaboration event tells any interested consumer that something happened
-  across a bounded-context boundary. It is past tense and may have zero, one, or
+  across a bounded-context boundary. It is past tense and can have zero, one, or
   many subscribers.
 - A command asks one named receiver to try to do something. It is imperative,
-  has one destination, and may be rejected.
+  has one destination, and can be rejected.
 
 Calling a private fact `CheckoutPaymentRequested` and publishing it to exactly
 one payment handler blurs all three. It looks like history, but behaves as a
 command. This is sometimes called a passive-aggressive event. The failure is
-not the past-tense spelling by itself; the failure is hiding point-to-point
+not the past-tense spelling by itself. The failure is hidden point-to-point
 intent behind publish/subscribe semantics.
 
 The event-sourced example uses a dedicated command outbox. The aggregate first
@@ -307,19 +300,21 @@ rolls back with it. If the process dies immediately after commit, the command is
 already waiting for a dispatcher.
 
 The process facts also avoid claiming success too early. Shipping completion
-records `CheckoutOrderConfirmationStarted` and enqueues `ConfirmOrder`; the
+records `CheckoutOrderConfirmationStarted` and enqueues `ConfirmOrder`. The
 process stays at `awaiting-order-confirmation`. Only a later `OrderConfirmed`
 input records `CheckoutCompleted`, whose command batch is empty. Payment and
 shipping failures use the same discipline. A payment failure enters
-`awaiting-cancellation-after-payment-failure`. A shipping failure first enters
-`awaiting-refund-after-shipping-failure`; only `PaymentRefunded` advances it to
+`awaiting-cancellation-after-payment-failure`.
+
+A shipping failure first enters
+`awaiting-refund-after-shipping-failure`. Only `PaymentRefunded` advances it to
 `awaiting-cancellation-after-shipping-failure`. Enqueuing a compensating command
 is not the same fact as completing the compensation.
 
 Each command receives a stable message id derived from the private event id and
 its order in the decision, for example
-`checkout-started-1:command:0`. Its `causationId` is the private process fact;
-its `conversationId` follows the long-running checkout. A participant's result
+`checkout-started-1:command:0`. Its `causationId` is the private process fact.
+Its `conversationId` follows the long-running checkout. A participant's result
 event then names the command message as its direct cause. The chain is
 therefore visible rather than inferred:
 
@@ -339,10 +334,10 @@ not participant-domain objects. The checkout mapper therefore emits
 business correlation and conversation ids.
 
 Delivery remains at least once. The participant scopes
-`withIdempotentCommit` by consumer and command `messageId`, persists the
-business result before acknowledging, and returns that stored result when the
-same command arrives again. A crash after executing the command but before
-acknowledging it therefore repeats delivery, not business work.
+`withIdempotentCommit` by consumer and command `messageId`. It stores the
+business result before acknowledgement. A repeated command returns that stored
+result. If a crash occurs after command execution but before acknowledgement,
+delivery repeats. The business work does not repeat.
 
 Shipping compensation deliberately does not rely on dispatcher order.
 `CheckoutCompensationStartedAfterShippingFailure` requests only
@@ -371,22 +366,22 @@ it out. Treat old names as an event-schema migration:
    message id from the old event id so the participant inbox absorbs overlap.
 3. Switch new writes to the private process facts and the transactional command
    outbox. Do not also publish those facts on the EventBus.
-4. Remove the legacy route only after no old delivery rows remain. Keep the
-   upcaster for as long as old process streams can be loaded, unless the streams
-   themselves are migrated with an audited, reversible procedure.
+4. Remove the legacy route only after no old delivery rows remain.
+5. If old process streams can still load, keep the upcaster.
+6. If you migrate those streams with an audited and reversible procedure,
+   remove the upcaster.
 
-This is more machinery than an in-process subscriber, but every piece answers a
-different failure: the process stream explains and replays decisions, the
-command outbox closes the commit-before-send window, and the participant inbox
-absorbs send-before-ack duplicates.
+This design has more parts than an in-process subscriber. Each part handles a
+different failure. The process stream explains and replays decisions. The
+command outbox closes the commit-before-send window. The participant inbox
+absorbs duplicates after send and before acknowledgement.
 
 ## Timeouts are inputs
 
-A saga that waits needs to hear about nothing happening, and the
-[deadlines page](./deadlines.md) covers the mechanics: schedule the
-deadline in the same transaction as the state that starts waiting (the
-inbox snippet above already does), cancel it in the reaction that ends the
-wait, and let a `DeadlineProcessor` feed due deadlines back in as inputs:
+A waiting saga needs a timeout input. Store the deadline in the transaction
+that starts the wait. Cancel it in the reaction that ends the wait. A
+`DeadlineProcessor` returns each due deadline as an input. The
+[deadlines page](./deadlines.md) explains this process.
 
 ```ts
 const processor = new DeadlineProcessor({
@@ -414,49 +409,50 @@ proposal dies in the machine instead of cancelling a paid order.
 
 ## Compensation is business logic
 
-When the process fails past the point of simply stopping, the saga resolves the
-completed work through business actions. Nothing about that is infrastructure.
-The compensating steps are commands like any others, the decision to compensate
-is a transition like any other, and which steps can be compensated at all is a
-design question `saga-design.md` walks you through (its step classification:
-compensatable, pivot, retryable).
+When a process cannot stop safely, the saga uses business actions to reverse
+completed work. This behavior is not infrastructure. Each compensation is a
+command. The decision to compensate is a state transition. Step classification
+remains a domain design decision.
 
 In the checkout example, `PaymentFailed` requests `CancelOrder` and waits for
 `OrderCancelled`. A later shipping failure means payment has already completed,
 so the process requests `RefundPayment`, waits for `PaymentRefunded`, then
 requests `CancelOrder` and waits again. Each confirmed result advances one
-persisted state. A delivery retry may repeat a command, but it cannot skip the
+persisted state. A delivery retry can repeat a command, but it cannot skip the
 wait or invert the business sequence.
 
-Three rules of thumb from the wider saga literature carry over directly.
-Compensate in reverse order, and only the steps that actually completed;
-if the very first step failed, there is nothing to unwind, and a state
-machine encodes that for free, since the compensating transitions simply do
-not exist in the early states. And when a compensating command itself fails, do
-not pretend the next step is safe to start. Retry it through the normal
-delivery machinery; past its automatic recovery policy, move the process to
-explicit manual repair. The original failure stays visible, and incomplete
-compensation never masquerades as success.
+Use these compensation rules:
 
-One warning for readers arriving from durable-execution engines like
-Temporal: their samples accumulate compensations in an in-memory array
-inside the workflow function and unwind it in a catch block. That works
-there because the engine replays the function deterministically after a
-crash, so the array is reconstructed. In the event-driven model on this
-page, nothing replays your call stack; what needs compensating must be
-derivable from the saga's persisted state, which is one more reason the
-state machine, not a local variable, owns the process position.
+1. Compensate in reverse order.
+2. Compensate only steps that completed.
+3. If the first step failed, do not start compensation.
+4. If a compensation fails, do not start the next step.
+5. Retry the failed compensation through the normal delivery path.
+6. If automatic recovery stops, move the process to manual repair.
+
+The original failure stays visible. Incomplete compensation never appears as
+success.
+
+Durable-execution engines use a different model. For example, Temporal samples
+keep compensations in an in-memory array. The workflow function unwinds this
+array in a catch block. After a crash, the engine replays the function and
+reconstructs the array.
+
+The event-driven model does not replay the call stack. Persisted saga state
+must identify the work that needs compensation. Thus, the state machine owns
+the process position instead of a local variable.
 
 ## What the kit deliberately does not ship
 
-No `SagaStore`: the state-stored variant uses the same
-`AggregatePersistence` definition and `UnitOfWork` as another aggregate, and
-the event-sourced variant uses the same `EventStore` plus repository adapter as
-another `EventSourcedAggregate`. A second persistence port for the same jobs
-would be a duplicate. No correlation machinery: finding a saga is a
-lookup over ids you already have. No timeout scheduling beyond the
-`DeadlineStore`, and no step or workflow DSL: the moment step classification
-becomes kit configuration instead of state-machine transitions, the kit has
-become a workflow engine, and there are dedicated tools for that (and a
-dedicated warning about them in `saga-design.md`). The pieces above compose;
-that is the feature.
+The kit does not supply a `SagaStore`. The state-stored variant uses
+`AggregatePersistence` and `UnitOfWork`. The event-sourced variant uses
+`EventStore` and an event-sourced repository. A second persistence port
+duplicates these roles.
+
+The kit does not supply correlation machinery. Finding a saga is a lookup by a
+known identifier. `DeadlineStore` and `DeadlineProcessor` supply the deadline
+mechanism.
+
+The kit does not supply a workflow DSL. Step classification belongs in
+state-machine transitions. A configuration model for these steps turns the kit
+into a workflow engine. Dedicated tools already provide that function.

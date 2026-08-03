@@ -7,9 +7,9 @@ and change the same aggregate.
 
 The kit therefore combines four rules:
 
-- aggregate instances live for one application operation;
-- a `UnitOfWork` returns one instance per aggregate id inside that operation;
-- repository adapters use optimistic concurrency control;
+- Aggregate instances live for one application operation.
+- A `UnitOfWork` returns one instance per aggregate identifier in that operation.
+- Repository adapters use optimistic concurrency control.
 - domain events become durable in the same transaction as aggregate state.
 
 ## One operation, one object graph
@@ -38,8 +38,8 @@ async function updateQuantity(
 ```
 
 Inside `run`, repeated loads of the same aggregate class and id return the same
-object from the identity map. This is more than a cache: two instances would
-allow two incompatible decisions and two event batches to claim the same
+object from the identity map. This behavior is more than a cache. Two instances
+can let incompatible decisions and event batches claim the same
 identity in one transaction.
 
 ## What the `await` race looks like
@@ -59,7 +59,7 @@ class OrderService {
 ```
 
 While the method waits, another operation can commit a newer order. An
-in-process mutex would protect only one process; it cannot coordinate another
+in-process mutex protects only one process. It cannot coordinate another
 Node worker, serverless isolate, queue consumer, or deployment replica. The
 reliable boundary is a database version predicate.
 
@@ -90,7 +90,7 @@ repositories.orders.add(newOrder);       // no expected version
 repositories.orders.update(loadedOrder); // expected version from the load
 ```
 
-A new aggregate may already be at version 1 or 2 because its factory recorded
+A new aggregate can already be at version 1 or 2 because its factory recorded
 facts. Conversely, an existing aggregate can legitimately be at version 0.
 Explicit `add` and `update` make the lifecycle unambiguous.
 
@@ -135,10 +135,9 @@ For `add`, use an insert protected by the aggregate id's unique constraint. For
 an event stream, append `write.events` with `write.expectedVersion ?? 0`.
 
 The receipt is immutable. The adapter must not inspect mutable aggregate state
-during flush. `UnitOfWork` checks the registered aggregate before and after an
-asynchronous flush; if application code changed its version, pending event
-batch, or persistence projection after registration, the transaction rolls
-back with `AggregateTrackingError`.
+during the flush. `UnitOfWork` compares the registered version, event batch,
+and persistence projection before and after the asynchronous flush. If one
+value changes, the transaction rolls back with `AggregateTrackingError`.
 
 ## Multi-table aggregates
 
@@ -146,7 +145,7 @@ When one aggregate spans several tables, the root row still owns the OCC
 version. The adapter's `PersistenceModel` captures a baseline at load and
 derives an explicit change set when the use case registers `update`.
 
-That change set may identify changed child collections or contain a complete
+That change set can identify changed child collections or contain a complete
 replacement DTO. Either strategy is valid. What matters is that the root-row
 version predicate still participates in the same transaction. Updating only a
 child table while leaving the root version unchanged permits a later writer to
@@ -158,13 +157,13 @@ Do not use it for domain-meaningful state.
 
 ## Handling conflicts
 
-When an adapter throws `ConcurrencyConflictError`, the application can retry
-the whole operation, return a conflict such as HTTP 409, or deliberately accept
-last-write-wins for that particular path.
+When an adapter throws `ConcurrencyConflictError`, the application has three
+choices. It can retry the operation, return HTTP 409, or accept
+last-write-wins for that path.
 
 Do not catch the conflict inside the same `run` callback and continue using the
 aggregate. Its decision was made from stale facts. A retry must start a fresh
-unit of work, open a fresh transaction, reload fresh instances, and execute the
+unit of work, open a fresh transaction, reload fresh instances, and run the
 command again.
 
 ## Retrying the operation
@@ -188,8 +187,8 @@ const uow = new UnitOfWork({
 Each attempt receives a new transaction, new repository adapters, and a new
 identity map. By default, the scope recognizes wrapped
 `ConcurrencyConflictError` instances and uses exponential backoff with jitter.
-Configure `isRetryable` when a driver exposes serialization failures directly,
-for example PostgreSQL `40001` or SQLite `SQLITE_BUSY`.
+If a driver exposes serialization failures directly, configure `isRetryable`.
+Examples include PostgreSQL `40001` and SQLite `SQLITE_BUSY`.
 
 Keep non-transactional effects out of the callback. A rolled-back attempt must
 not already have sent email, called a webhook, or published to a broker. Put
@@ -212,9 +211,9 @@ WHERE id = ? AND version = ?
 ```
 
 The final placeholder is the version captured during load. If another writer
-committed first, the predicate matches no row. Stronger isolation levels may
-abort the transaction earlier with a serialization failure; map that error to
-the same whole-operation retry policy.
+commits first, the predicate matches no row. Stronger isolation levels can
+abort the transaction earlier. Map the serialization error to the same retry
+policy for the whole operation.
 
 Pessimistic locking is not part of the repository contract. If a genuinely hot
 path needs `SELECT ... FOR UPDATE`, keep it inside an intent-revealing adapter
@@ -224,7 +223,7 @@ operation and document why OCC is insufficient there.
 
 `UnitOfWork` writes the registered event batches to the outbox before the
 database transaction commits. Only after commit does it acknowledge exactly
-those batches and invoke optional in-process observers or the `EventBus`.
+those batches and run optional in-process observers or the `EventBus`.
 
 The bus remains an in-process dispatcher. It gives deterministic event order,
 but it is not a durability, cross-process delivery, or retry boundary. The
@@ -235,8 +234,8 @@ transaction and outbox provide durability.
 - Use one aggregate instance per class and id inside an operation.
 - Register `add`, `update`, or `remove` only after domain decisions finish.
 - Compare updates and deletes with `write.expectedVersion`.
-- Advance the root version even when only child tables changed.
-- Persist `write.changes` and `write.events`; do not reread the aggregate.
+- If only child tables changed, advance the root version.
+- Persist `write.changes` and `write.events`. Do not read the aggregate again.
 - Retry conflicts by rerunning the whole operation with fresh state.
 - Keep external effects outside retryable transactions or behind the outbox.
 

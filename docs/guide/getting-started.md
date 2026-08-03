@@ -136,13 +136,13 @@ This example shows the core conventions:
   whether to turn selected errors into `Result` with `domainErrorToResult`, map
   them to HTTP responses, or let unknown failures propagate.
 - `pendingEvents` are not historical events yet. Before recording they are
-  immutable domain decisions; after recording they carry their stable event id
+  immutable domain decisions. After recording they carry their stable event id
   and recording time. They remain unflushed until the transaction/outbox
   boundary harvests them.
 
-At this point nothing has been persisted. Persistence is an adapter concern.
-The aggregate has done domain work; a repository and `withCommit` still need to
-store the state and events.
+At this point, persistence has not occurred. Persistence is an adapter concern.
+The aggregate completed its domain work. A repository and `withCommit` still
+need to store the state and events.
 
 ## What to read next
 

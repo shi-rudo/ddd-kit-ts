@@ -3,9 +3,9 @@
 This benchmark measures the complete in-memory path from an aggregate decision
 to a recorded event:
 
-1. create and freeze an `UncommittedDomainEvent`;
-2. create a factory-owned or hand-built `DomainEventStamp`;
-3. record the final `DomainEvent`.
+1. Create and freeze an `UncommittedDomainEvent`.
+2. Create a factory-owned or hand-built `DomainEventStamp`.
+3. Record the final `DomainEvent`.
 
 Run it with:
 
@@ -16,23 +16,22 @@ pnpm benchmark:event-stamping
 The command builds the package and runs
 `benchmarks/domain-event-stamping.mjs` with `--expose-gc`. Each case warms the
 runtime first. Throughput includes transient cloning and freezing work.
-Retained bytes are the heap delta after a forced collection while every final
-event remains reachable; they are useful for comparing final graph size, not
-as a count of temporary allocations.
+Retained bytes are the heap delta after forced garbage collection. Every final
+event remains reachable during this measurement. Use this value to compare the
+final graph size, not temporary allocations.
 
 ## Optimization threshold
 
-The factory path is the normal production path. Additional internal ownership
-machinery is justified only when duplicate defensive copying makes that path at
-least 15% slower than a hand-built stamp for the medium or deeply nested case.
-A difference below that threshold is too sensitive to runtime noise to warrant
-more lifecycle complexity.
+The factory path is the normal production path. If duplicate defensive copies
+make this path at least 15% slower, add internal ownership logic. Use the medium
+or deeply nested case for this comparison. A smaller difference can result from
+runtime noise and does not justify more lifecycle logic.
 
-The initial measurement crossed the threshold: factory stamps performed about
-22% fewer operations per second for medium data and 28% fewer for deeply
-nested data. The cause was visible in the implementation: the factory cloned
-and froze owned metadata, after which final recording cloned the same metadata
-again and also recloned the already owned decision payload.
+The initial measurement crossed the threshold. Factory stamps performed about
+22% fewer operations per second for medium data. They performed 28% fewer
+operations for deeply nested data. The factory copied and froze its metadata.
+Final recording then copied the owned metadata and decision payload a second
+time.
 
 Factory-created stamps now carry a non-enumerable internal ownership brand.
 Recording can share their already immutable metadata and the decision's already
@@ -57,5 +56,5 @@ The optimization removes the material medium/deep penalty without changing the
 retained event graph. The small factory case remains slower because creating a
 separate immutable stamp has fixed overhead that dominates a tiny payload. At
 roughly 77,000 complete records per second on this machine, that case does not
-justify a second special path. Consumers should rerun the benchmark on their
-deployment runtime before treating these absolute numbers as capacity limits.
+justify a second special path. Run the benchmark on the deployment runtime
+before you use these numbers as capacity limits.

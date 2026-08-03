@@ -16,7 +16,7 @@ One successful `run()` follows this order:
 1. Open `TransactionScope.transactional(...)`.
 2. Build the transaction-bound read adapters and a fresh identity map.
 3. Run the use case.
-4. Validate every tracked aggregate and freeze each registered write receipt.
+4. Make sure that every tracked aggregate is valid. Freeze each write receipt.
 5. Call each repository definition's `flush` in registration order.
 6. Write the exact registered event batches to the outbox in the same
    transaction.
@@ -30,15 +30,14 @@ aggregate, and applies the command again.
 
 ## Wiring a repository
 
-A repository definition has five parts:
+A repository definition has six parts:
 
-- an application-owned repository port, supplied explicitly to
-  `defineRepository`;
-- the aggregate class, used as the identity-map key;
-- a `PersistenceModel`, owned by the adapter;
-- `create`, which builds the transaction-bound read adapter;
-- `flush`, which performs the registered write;
-- `mapError`, which translates a failed flush into an application-facing
+- The application supplies a repository port to `defineRepository`.
+- The aggregate class is the identity-map key.
+- The adapter owns a `PersistenceModel`.
+- `create` builds the transaction-bound read adapter.
+- `flush` performs the registered write.
+- `mapError` translates a failed flush into an application-facing
   `InfrastructureError`.
 
 Physical removal is opt-in.
@@ -120,19 +119,20 @@ const deps = {
 ```
 
 The explicit type is the full application port. The adapter returned by
-`create` implements only its non-lifecycle methods and may be a larger concrete
-class; its extra methods do not become application API. `UnitOfWork` supplies
+`create` implements only its non-lifecycle methods. It can be a larger concrete
+class, but its extra methods do not become application API. `UnitOfWork` supplies
 `add` and `update`, and supplies `remove` when both the port and definition opt
 into physical removal. An adapter method with one of those names is never
 called through the facade.
-Only the helper-created definition is accepted; an unbranded object fails with
+
+Only the helper-created definition is accepted. An unbranded object fails with
 `InvalidRepositoryDefinitionError`, including for JavaScript callers.
 
 This is deliberate. A write method cannot accidentally issue SQL before the
 rest of the operation is ready, forget event harvesting, or use a different
 transaction.
 
-`mapError` runs only when `flush` fails. It should preserve a deliberate kit
+`mapError` runs only when `flush` fails. It must preserve a deliberate kit
 `InfrastructureError` and translate every database-specific error into one of
 the application's infrastructure errors. The mapper is part of the adapter
 contract, not a catch-all in the use case.
@@ -162,9 +162,9 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 });
 ```
 
-`add` means, “this aggregate is new in this operation.” `update` means, “this
-exact instance was loaded in this operation.” The distinction is explicit at
-the call site; neither the adapter nor the aggregate guesses from `version`.
+`add` means that the aggregate is new in this operation. `update` means that
+this operation loaded the exact instance. The call site shows this distinction.
+The adapter and aggregate do not infer it from `version`.
 
 Call the registration method last. After a successful `add`, `update`, or
 `remove`, the aggregate is sealed for that run. A later version change, event
@@ -260,7 +260,7 @@ optimistic-concurrency predicate.
 
 An empty state change does not imply an empty commit. An event-only decision
 still needs its outbox or event-stream write. Conversely, a state-only change
-may have an empty event batch.
+can have an empty event batch.
 
 ## Atomicity and external effects
 
@@ -268,7 +268,7 @@ Only persistence work belongs in `flush`. The aggregate row or stream append,
 physical removal, and outbox write share the transaction.
 
 Do not send email, capture a payment, upload a file, or call a webhook inside
-`run()`. A remote call cannot participate in the database transaction and may
+`run()`. A remote call cannot participate in the database transaction and can
 succeed even when the database rolls back.
 
 Record the decision as a domain event and let the outbox trigger the external
@@ -284,10 +284,10 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 });
 ```
 
-Here an effect means observable work outside the domain decision itself: a
-network request, database write, message delivery, timer, or file operation.
-The aggregate decides what should happen. The application shell executes the
-effect with timeouts, cancellation, retries, and observability.
+Here, an effect is observable work outside the domain decision. Examples
+include a network request, database write, message delivery, timer, or file
+operation. The aggregate decides the required action. The application shell
+runs the effect with timeouts, cancellation, retries, and observability.
 
 ## Cancellation
 
@@ -309,9 +309,9 @@ await new UnitOfWork(deps).run(
 
 An already-aborted signal prevents the transaction from opening. During the
 operation, cancellation is cooperative: the callback can poll the signal and
-the transaction scope receives it. A database query stops early only if the
-driver or scope honors the signal, so configure database statement and
-transaction timeouts as hard ceilings too.
+the transaction scope receives it. If the driver or scope honors the signal, a
+database query stops early. Also configure database statement and transaction
+timeouts as hard ceilings.
 
 ## Errors and retries
 
@@ -333,9 +333,9 @@ Do not catch a concurrency conflict and continue inside the same `run()`. The
 identity map still holds the stale instance. Retry the whole application
 operation with a new `UnitOfWork`, reload, and apply the command again.
 
-Likewise, discard aggregate instances after rollback. Even a new instance is
-safer to recreate: a failed adapter may have partially consumed resources or a
-background task may still hold a reference.
+Also discard aggregate instances after rollback. Recreate even a new instance.
+A failed adapter can leave resources in an uncertain state. A background task
+can also keep a reference.
 
 ## Contract tests
 
@@ -358,7 +358,7 @@ harvest, and rollback. The event-sourced suite checks exact append batches,
 replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 
 Optional capabilities produce visible skipped tests. A skip is an unproven
-guarantee, not a pass. Run SQL or ORM adapters against a real database; an
+guarantee, not a pass. Run SQL or ORM adapters against a real database. An
 in-memory fake cannot prove the actual `WHERE version = ...` clause.
 
 ## Deliberate limits

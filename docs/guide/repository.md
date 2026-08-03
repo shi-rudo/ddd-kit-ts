@@ -6,7 +6,7 @@ removed. It does not publish events, expose ORM filters, or decide a business
 lifecycle transition.
 
 In v3 repository writes run through `UnitOfWork`. The use case calls `add`,
-`update`, or `remove`; the adapter receives one immutable write receipt during
+`update`, or `remove`. The adapter receives one immutable write receipt during
 the commit phase.
 
 ## Public contracts
@@ -37,8 +37,7 @@ interface AggregatePersistence<TAggregate, TId> {
 }
 ```
 
-Use `Repository` when this persistence boundary genuinely supports physical
-removal:
+If this persistence boundary supports physical removal, use `Repository`:
 
 ```ts
 interface TemporaryOrderRepository
@@ -175,10 +174,10 @@ is running. Never identity-map a partly replayed aggregate.
 
 ## Adapter-owned persistence models
 
-Different adapters persist different shapes. A relational adapter may split
-one aggregate over several tables; a document adapter may replace one JSON
-document; an event store writes no current-state row at all. The aggregate
-should not carry one supposedly universal dirty-key model.
+Different adapters persist different shapes. A relational adapter can split
+one aggregate over several tables. A document adapter can replace one JSON
+document. An event store writes no current-state row. The aggregate must not
+carry a universal dirty-key model.
 
 Each repository definition therefore owns a `PersistenceModel`:
 
@@ -256,14 +255,14 @@ const restaurantPersistence: PersistenceModel<
 
 The adapter chooses full replacement, partial columns, collection-aware row
 diffs, or a version-only write. `changes.empty` is only about stored state. An
-event-only commit may still have a non-empty `events` batch and must not be
+event-only commit can still have a non-empty `events` batch and must not be
 skipped.
 
-Projection functions should read meaningful aggregate queries and return
+Projection functions must use meaningful aggregate queries and return
 detached persistence DTOs. Both `capture` and `changes` must avoid mutable
-references into the aggregate: the Unit of Work cannot safely clone or freeze
+references into the aggregate. The Unit of Work cannot safely clone or freeze
 an arbitrary adapter-native type. A baseline that aliases aggregate state can
-move when the aggregate moves; a change set that aliases it can change after
+move when the aggregate moves. A change set that aliases it can change after
 registration. Do not add setters, baseline fields, or dirty flags to the
 aggregate for the adapter's convenience.
 
@@ -271,7 +270,7 @@ aggregate for the adapter's convenience.
 
 `defineRepository` joins an application-owned repository port, its adapter,
 persistence model, and commit-time flush. Name the port after the capability
-the use case needs; do not expose the concrete ORM adapter as the contract.
+that the use case needs. Do not expose the concrete ORM adapter as the contract.
 
 ```ts
 interface ForStoringOrders extends Repository<Order, OrderId> {}
@@ -346,14 +345,14 @@ const orders = defineRepository<ForStoringOrders>()({
 ```
 
 The type argument is deliberately explicit. `ForStoringOrders` is the full
-application port; `DrizzleOrderReadAdapter` implements only its read methods
+application port. `DrizzleOrderReadAdapter` implements only its read methods
 because the Unit of Work installs `add`, `update`, and `remove`. The concrete
-adapter may have diagnostics or ORM-specific helpers, but those do not become
+adapter can have diagnostics or ORM-specific helpers, but those do not become
 application API. It can change without silently widening the port.
 
 `mapError` is the storage boundary's last translation step. Known failures
-such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through;
-an unknown driver failure becomes an application-defined
+such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
+An unknown driver failure becomes an application-defined
 `InfrastructureError`, here `OrderStoreUnavailableError`. If the mapper throws
 or returns a raw value, the Unit of Work raises
 `RepositoryErrorMappingFailedError` and preserves both failures for diagnosis.
@@ -361,14 +360,14 @@ That keeps ORM error types out of use cases without hiding the original cause.
 
 The receipt's version relationship is the OCC contract:
 
-- `add`: no `expectedVersion`; insert a new identity and map a uniqueness
-  violation to `DuplicateAggregateError`;
-- `update`: write `version`, predicate on `expectedVersion`;
-- `remove`: delete the identity, predicate on `expectedVersion` when
+- `add` has no `expectedVersion`. Insert a new identity and map a uniqueness
+  violation to `DuplicateAggregateError`.
+- `update` writes `version` and uses `expectedVersion` in the predicate.
+- `remove` deletes the identity and uses `expectedVersion` when
   delete-vs-update races matter.
 
 Zero affected rows means the optimistic-concurrency assumption was false.
-Throw `ConcurrencyConflictError`; do not silently turn a stale update into an
+Throw `ConcurrencyConflictError`. Do not turn a stale update into an
 insert.
 
 ## Event-sourced flush
@@ -408,7 +407,7 @@ const eventSourcedOrders = defineRepository<ForAppendingOrderEvents>()({
 
 Use `write.events`, not `aggregate.pendingEvents`. The receipt is the exact
 immutable batch registered by the use case. A retry rebuilds a fresh unit of
-work and records a fresh batch; one transaction attempt never re-reads a
+work and records a fresh batch. One transaction attempt never reads a
 moving pending-event list.
 
 The event-store append and outbox write must share the same transaction. A
@@ -468,11 +467,11 @@ if (replay.isErr()) throw replay.error;
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
 detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,
-and class instances that would not round-trip safely. Map child entities and
+and class instances that cannot round-trip safely. Map child entities and
 value objects to persistence DTOs explicitly.
 
 A missing stored schema version means schema `1`. A mismatch without a
-`migrate` function throws `SnapshotSchemaMismatchError`; the usual event-store
+`migrate` function throws `SnapshotSchemaMismatchError`. The usual event-store
 fallback is to discard the derived snapshot and refold the stream from zero.
 
 ## Domain deletion versus physical removal
@@ -491,7 +490,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 });
 ```
 
-Use `remove` only when the row, document, or stream really must disappear:
+If the row, document, or stream must disappear, use `remove`:
 
 ```ts
 await new UnitOfWork(deps).run(async ({ repositories }) => {
@@ -555,17 +554,17 @@ fixtures so the predicate and translation cannot drift unnoticed.
 
 Generate identities in the application before creating the aggregate. UUID
 v4/v7, ULID, KSUID, or another collision-resistant generator works across
-concurrent processes; `Date.now()` and process-local counters do not.
+concurrent processes. `Date.now()` and process-local counters do not.
 
 Repository failures are specific infrastructure signals:
 
-- `AggregateNotFoundError`: `getById` found no aggregate;
-- `DuplicateAggregateError`: `add` collided with an existing identity;
+- `AggregateNotFoundError`: `getById` found no aggregate.
+- `DuplicateAggregateError`: `add` collided with an existing identity.
 - `ConcurrencyConflictError`: a stale `update` or `remove` lost its OCC race.
 
 A concurrency conflict is retryable only as a new application operation:
 reload, reapply the command, and register the new write. A duplicate add is
-deterministic for that identity and should not be retried unchanged.
+deterministic for that identity and must not be retried unchanged.
 
 ## Certification
 

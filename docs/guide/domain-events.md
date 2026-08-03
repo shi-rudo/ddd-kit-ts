@@ -86,8 +86,8 @@ The returned event is deeply frozen. The payload and metadata are cloned before 
 Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
-or `eventId` is omitted. Use `createDomainEventFromFacts` when the caller must
-provide every nondeterministic value:
+or `eventId` is omitted. If the caller must provide every nondeterministic
+value, use `createDomainEventFromFacts`:
 
 ```ts
 const event = createDomainEventFromFacts(
@@ -104,7 +104,7 @@ const event = createDomainEventFromFacts(
 
 ## Inside aggregates: create the fact, not its envelope
 
-An aggregate method should speak the domain's language. Event ids, tracing
+An aggregate method speaks the domain language. Event identifiers, tracing
 headers, and recording timestamps do not help an order decide whether it can be
 confirmed, so they do not belong in `confirm(...)`.
 
@@ -151,7 +151,7 @@ common fields when you omit them:
 
 These defaults are intentionally convenient and nondeterministic. They are
 appropriate in an application shell or for a one-off system event. Aggregate
-behavior should use `createEvent`, whose result depends only on visible domain
+behavior must use `createEvent`. Its result depends only on visible domain
 inputs and current aggregate state.
 
 The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
@@ -182,14 +182,14 @@ recordPendingEvents(order, () =>
 The returned `DomainEventFactory` is frozen and permanently captures those two
 functions. Creating another factory cannot change this one or the
 `defaultDomainEventFactory`. This makes the same API safe across overlapping
-async requests and parallel tests; no restore hook or async context is needed.
+async requests and parallel tests. No restore hook or async context is needed.
 Every clock read is defensively copied and fails immediately with a `TypeError`
 if the injected clock does not return a valid `Date`.
 
 `createStamp()` is the bridge from an accepted domain decision to its technical
 record. It reads the captured dependencies and returns an immutable
 `DomainEventStamp`. A stamp contains only `eventId`, `occurredAt`, and optional
-metadata; it cannot select the payload schema version. The factory also exposes
+metadata. It cannot select the payload schema version. The factory also exposes
 `create(...)` for non-aggregate convenience events and `now()` for
 infrastructure such as snapshot policies.
 
@@ -212,7 +212,7 @@ This keeps the aggregate's result a function of its visible inputs. Repositories
 do not need to forward a clock or id generator through every reconstitution
 path.
 
-For small applications that prefer less plumbing, aggregate constructors may
+For small applications that prefer less plumbing, aggregate constructors can
 still forward a factory through `AggregateConfig`:
 
 ```ts
@@ -281,7 +281,7 @@ await uow.run(async ({ repositories }) => {
 Move aggregate snapshot methods to an adapter-owned `SnapshotModel`, then call
 `captureAggregateSnapshot(model, aggregate, snapshotAt)` with a timestamp from
 the application or snapshot policy. Existing aggregates can make the smaller
-event migration to `recordEventFromFactory(...)`; that retains the old event
+event migration to `recordEventFromFactory(...)`. That retains the old event
 factory posture while making the hidden read explicit in the method name.
 
 `DomainEventFacts` and `createFacts()` remain deprecated aliases for
@@ -347,10 +347,9 @@ interface EventMetadata {
 }
 ```
 
-The readonly surface prevents a consumer from treating an already recorded
-event as a place to accumulate context. Constructors still make a defensive
-copy, so a caller may keep and change the mutable input object it used to
-create the event without changing the event itself.
+The readonly surface prevents context changes in a recorded event. Constructors
+still make a defensive copy. A caller can change the original input object
+without changing the event.
 
 Use metadata for message relationships and operational context, not for core
 domain state. If a value is required to understand the event as a domain fact,
@@ -359,13 +358,13 @@ put it in the payload.
 The usual meanings:
 
 - `correlationId` groups messages that belong to one business operation.
-- `conversationId` remains stable across a longer business interaction that may
+- `conversationId` remains stable across a longer business interaction that can
   contain several correlations.
 - `causationId` points to the event or command that caused this event.
 - `userId` records the actor when known.
 - `source` names the producing component or bounded context.
 - `traceparent` and `tracestate` carry W3C Trace Context between technical
-  spans. They complement business correlation; they do not replace it.
+  spans. They complement business correlation. They do not replace it.
 
 ### Copying Correlation
 

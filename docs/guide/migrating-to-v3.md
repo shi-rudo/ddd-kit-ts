@@ -6,11 +6,9 @@ no longer guess whether to insert or update. One `UnitOfWork` owns the load
 receipt, the explicit write intent, the exact state change, and the exact event
 batch for an application operation.
 
-That is why this migration has no automatic codemod and no deprecated
-compatibility aliases. A tool can rename `save` to something, but it cannot
-know whether that call means “insert this new aggregate” or “update the
-instance loaded by this operation.” The compiler should make every such
-decision visible to you.
+This migration has no automatic codemod or deprecated compatibility aliases. A
+tool can rename `save`. It cannot select `add` or `update` from the use-case
+intent. The compiler makes each decision visible.
 
 ## What remains reusable
 
@@ -20,11 +18,11 @@ snapshot DTOs remain valid unless your own persistence schema changes.
 
 The redesign does not require renaming tables, rewriting event history, or
 resetting versions. It changes who holds the expected version and when a write
-is allowed to execute.
+can occur.
 
 Snapshots need special attention because their policy moved out of aggregate
 methods. If the stored DTO is still compatible, describe its existing shape
-with a `SnapshotModel`; do not rewrite it merely because the API moved.
+with a `SnapshotModel`. Do not rewrite it only because the API moved.
 
 ## The new ownership model
 
@@ -37,7 +35,7 @@ await orders.save(order);
 ```
 
 The repository inspected aggregate persistence metadata to choose insert or
-update. It might also enroll events manually.
+update. Some repositories also enrolled events manually.
 
 The v3 flow is explicit:
 
@@ -86,10 +84,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 Reconstitution restores valid domain state and the current version without
 recording a new decision. Remove domain code that reads `persistedVersion`,
-`hasChanges`, or `changedKeys`; those members no longer exist.
+`hasChanges`, or `changedKeys`. Those members no longer exist.
 
 For event-sourced aggregates, keep a bare factory and load accepted history
-with `loadFromHistory`. A clean reconstituted aggregate may load a later tail
+with `loadFromHistory`. A clean reconstituted aggregate can load a later tail
 additively.
 
 ### 2. Replace repository contracts
@@ -104,8 +102,8 @@ interface OrderRepository
 }
 ```
 
-Use `Repository<Order, OrderId>` only when physical removal is part of this
-persistence boundary. It extends `AggregatePersistence` with `remove`.
+If physical removal is part of this persistence boundary, use
+`Repository<Order, OrderId>`. It extends `AggregatePersistence` with `remove`.
 
 The public method changes are:
 
@@ -117,8 +115,8 @@ The public method changes are:
 
 Do not convert a business action named “delete” mechanically to `remove`.
 Most such actions are `cancel`, `archive`, `close`, `revoke`, or `expire` on
-the aggregate, followed by `update`. Use `remove` only when persistence really
-loses the identity.
+the aggregate, followed by `update`. If persistence really loses the identity,
+use `remove`.
 
 ### 3. Move every write use case into `UnitOfWork.run`
 
@@ -146,7 +144,7 @@ await new UnitOfWork(deps).run(async ({ repositories }) => {
 
 Let TypeScript find every removed `save` and `delete` call. Decide each site
 from the use case's lifecycle. Do not add a temporary wrapper that restores a
-single `save` method; it hides precisely the decision this migration needs to
+single `save` method. It hides the decision that this migration must
 surface.
 
 Make all domain decisions before the final registration call. Mutating the
@@ -173,10 +171,10 @@ const orders = defineRepository<ForStoringOrders>()({
 
 On every successful load:
 
-1. check `tracking.identityMap`;
-2. honor its removal tombstone;
-3. reconstitute the aggregate;
-4. return `tracking.trackLoaded(aggregate)`.
+1. Read `tracking.identityMap` before storage.
+2. Honor its removal tombstone.
+3. Reconstitute the aggregate.
+4. Return `tracking.trackLoaded(aggregate)`.
 
 Delete adapter-side manual enrollment. Application code cannot see the
 tracking capability or raw transaction, and adapter `add`/`update`/`remove`
@@ -217,22 +215,22 @@ back on the aggregate under new names.
 
 For `add`:
 
-- insert unconditionally for that identity;
-- map a uniqueness violation to `DuplicateAggregateError`;
-- never turn the insert into an upsert.
+- Insert unconditionally for that identity.
+- Map a uniqueness violation to `DuplicateAggregateError`.
+- Do not turn the insert into an upsert.
 
 For `update`:
 
-- write `write.version`;
-- predicate on `write.expectedVersion`;
-- map zero affected rows to `ConcurrencyConflictError`;
-- never fall back to insert.
+- Write `write.version`.
+- Use `write.expectedVersion` in the predicate.
+- Map zero affected rows to `ConcurrencyConflictError`.
+- Do not use insert as a fallback.
 
 For `remove`:
 
-- predicate on `write.expectedVersion` when removal races matter;
-- map zero affected rows to `ConcurrencyConflictError`;
-- keep removal and its event/outbox batch in the same transaction.
+- If removal races matter, use `write.expectedVersion` in the predicate.
+- Map zero affected rows to `ConcurrencyConflictError`.
+- Keep removal and its event/outbox batch in the same transaction.
 
 For event sourcing, append `write.events` with
 `expectedVersion: write.expectedVersion ?? 0`. Do not re-read
@@ -286,15 +284,15 @@ for (const contract of createRepositoryContractTests(harness)) {
 ```
 
 Do this against the database and transaction wiring used in production. The
-suite must prove:
+suite must prove these properties:
 
-- duplicate add does not overwrite;
-- stale update and stale removal do not commit;
-- aggregate state or stream append and outbox write roll back together;
-- identity mapping returns one instance;
-- event batches are exact and ordered;
-- no-op, state-only, event-only, and nested-state changes behave honestly;
-- unsupported optional capabilities remain visible as skips.
+- A duplicate add does not overwrite data.
+- A stale update or removal does not commit.
+- The state write or stream append rolls back with the outbox write.
+- The identity map returns one instance.
+- Event batches are exact and ordered.
+- No-op, state-only, event-only, and nested changes use their correct paths.
+- A test skip identifies each unsupported optional capability.
 
 Then run the package typecheck, lint, tests, build, and documentation build.
 
@@ -306,37 +304,40 @@ unclear which process owns the expected version and exact event batch.
 
 Use a Big-Bang writer cutover per bounded context:
 
-1. Deploy and verify any schema changes that are backward-compatible with the
-   current readers. The kit redesign itself requires none.
-2. Confirm all applicable repository contract suites pass against a staging
-   copy of the real infrastructure.
-3. Take a database and event-store backup and verify the restore procedure,
-   not only the backup command.
+1. Deploy backward-compatible schema changes. The kit redesign requires no
+   schema change.
+2. Make sure that all repository contract suites pass against the staging
+   infrastructure.
+3. Make a database and event-store backup. Make sure that the restore procedure
+   works.
 4. Pause incoming commands and message consumers that can write the bounded
    context.
 5. Let active transactions finish. Stop all v2 and earlier-RC writers.
 6. Record the current database, stream, and outbox health: pending counts,
    latest versions, dead letters, and replication lag.
 7. Deploy the v3 writers.
-8. Start one controlled canary writer and exercise create, update, conflict,
-   event dispatch, and physical removal where supported.
-9. Validate row and stream versions, outbox continuity, projection progress,
-   duplicate protection, and error rates.
-10. Start the remaining writers and reopen traffic.
+8. Start one controlled canary writer.
+9. Exercise creation, update, conflict, event dispatch, and supported physical
+   removal.
+10. Make sure that row and stream versions are correct.
+11. Make sure that the outbox, projections, duplicate protection, and error
+    rates are correct.
+12. Start the remaining writers.
+13. Reopen traffic.
 
-Read-only v2 processes may overlap only if their data decoding remains
-compatible and they perform no acknowledgements or writes. Treat any process
+If their data decoding remains compatible, read-only v2 processes can overlap.
+They must perform no acknowledgements or writes. Treat any process
 that updates a checkpoint, lease, outbox record, or aggregate as a writer.
 
 ## Rollback boundary
 
-Before the first v3 write, rollback is operationally simple: keep writers
-stopped and redeploy the previous version.
+Before the first v3 write, keep writers stopped and deploy the previous
+version. This rollback does not require data recovery.
 
 After the first v3 write, there is no supported in-place downgrade to v2 or an
 earlier release candidate. Restore the pre-cutover backup and reconcile any
-accepted commands, or fix forward on v3. This boundary is intentional: the
-new code may have committed event and outbox batches under guarantees the old
+accepted commands, or fix forward on v3. This boundary is intentional. The
+new code can commit event and outbox batches under guarantees that the old
 writer does not understand.
 
 Plan the cutover so the backup, command pause, and fix-forward ownership are
@@ -346,12 +347,12 @@ explicit. “We can always roll back the binary” is not a data rollback plan.
 
 The following are deliberately unsupported:
 
-- an automatic codemod for `save`;
-- deprecated aliases for removed repository or aggregate persistence APIs;
-- a compatibility repository that accepts both `save` and `add`/`update`;
-- mixed v2/v3 writers for one bounded context;
-- attaching detached aggregates to a unit of work without a fresh load;
-- in-place downgrade after the first v3 write.
+- An automatic codemod for `save`.
+- Deprecated aliases for removed persistence APIs.
+- A repository that accepts both `save` and `add`/`update`.
+- Mixed v2 and v3 writers for one bounded context.
+- Attachment of detached aggregates without a fresh load.
+- In-place downgrade after the first v3 write.
 
 These restrictions keep one persistence model in the codebase. They also make
 mistakes compiler-visible instead of preserving ambiguous behavior behind a
@@ -362,23 +363,23 @@ shim.
 If you adopted `3.0.0-rc.1`, the stored business data is still reusable, but
 the source break is broader than the v2.2 repository rename:
 
-- remove `persistedVersion`, `hasChanges`, and `changedKeys` reads;
-- remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
+- Remove `persistedVersion`, `hasChanges`, and `changedKeys` reads.
+- Remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
   `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
-  `migrateSnapshotState` overrides;
-- replace `UnitOfWorkSession` factories with `defineRepository` definitions;
-- declare a capability-named application repository port and pass it explicitly
-  as `defineRepository<ForStoringOrders>()`;
-- make adapter `create` paths read-only and call `tracking.trackLoaded`;
-- move insert/update/remove SQL into `flush`;
-- add `mapError` to every definition so ORM and driver errors cannot cross the
-  application boundary;
-- replace manual `enrollSaved`/`enrollDeleted` calls in unit-of-work
-  repositories with application-facing `add`/`update`/`remove`;
-- move dirty detection to `PersistenceModel`;
-- move snapshot DTOs and migration to `SnapshotModel`;
-- use the new state-stored and event-sourced repository contract harnesses.
+  `migrateSnapshotState` overrides.
+- Replace `UnitOfWorkSession` factories with `defineRepository` definitions.
+- Declare a capability-named application repository port. Pass it explicitly
+  as `defineRepository<ForStoringOrders>()`.
+- Make adapter `create` paths read-only. Call `tracking.trackLoaded`.
+- Move insert, update, and removal SQL into `flush`.
+- Add `mapError` to every definition. Do not expose ORM or driver errors to the
+  application.
+- Replace manual `enrollSaved` and `enrollDeleted` calls with
+  application-facing `add`, `update`, and `remove`.
+- Move dirty detection to `PersistenceModel`.
+- Move snapshot DTOs and migration to `SnapshotModel`.
+- Use the new repository contract harnesses.
 
 Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
-writers for the bounded context together, run the same cutover checklist, and
-keep the pre-cutover backup until post-deployment validation is complete.
+writers for the bounded context together. Use the same cutover procedure. Keep
+the backup until the post-deployment checks are complete.

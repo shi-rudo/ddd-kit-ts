@@ -7,46 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The current `3.0.0-rc.2` candidate is deliberately source-breaking relative
-to `3.0.0-rc.1`. The rc.1 tag remains immutable; adopters of that candidate
-must follow the rc.1 appendix in the v3 migration guide rather than mixing the
-two persistence protocols.
+The current `3.0.0-rc.2` candidate breaks source compatibility with
+`3.0.0-rc.1`. The rc.1 tag remains immutable. Users of rc.1 must use its
+appendix in the v3 migration guide. Do not mix the two persistence protocols.
 
-3.0.0 carries everything since 2.2.0 in one breaking window. It has two
-halves. The first is a tightening pass over the core: structured errors
-with one identifier, a version bump on every `setState`, buses that
-map only explicitly expected failures, explicit repository lifecycle
-intent, identity-based repository loads, and consumer-owned query ports.
-The second is the event-driven periphery around that core: the outbox seam
-with a minimal dispatcher, command idempotency, projections, a snapshot
-store, durable deadlines, the specification primitive, adapter contract
-suites for all of it, and the opt-in `@shirudo/ddd-kit/money` entry point.
-Details and rationale live in the sections below; every break is covered in
-the [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md),
-with a before and after.
+Version 3.0.0 contains all changes since 2.2.0 in one breaking window. The
+release changes the core and its event-driven components.
+
+Core changes include structured errors with one identifier and explicit
+repository lifecycle intent. They also include identity-based repository loads
+and consumer-owned query ports. Each `setState` call increases the version.
+Buses map only expected failures.
+
+Event-driven changes include an outbox port and a minimal dispatcher. They also
+include command idempotency, projections, a snapshot store, durable deadlines,
+and a specification primitive. Adapter contract suites cover these parts. The
+release also adds the optional `@shirudo/ddd-kit/money` entry point.
+
+The sections below explain each change. The
+[v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
+gives a before-and-after example for each breaking change.
 
 ### Changed (breaking): repository lifecycle intent is explicit
 
-- Replace `IRepository` and `IUnitOfWorkRepository` with
-  `AggregatePersistence<TAggregate, TId>` and `Repository<TAggregate, TId>`.
-  The old names are removed rather than retained as deprecated aliases.
+- Remove `IRepository` and `IUnitOfWorkRepository`.
+- Add `AggregatePersistence<TAggregate, TId>` and
+  `Repository<TAggregate, TId>`.
+- Do not keep the old names as deprecated aliases.
 - Replace the overloaded asynchronous `save(aggregate)` operation with
-  synchronous `add(aggregate)` and `update(aggregate)` registrations. The
-  caller now states whether an aggregate is new or was loaded into the active
-  Unit of Work; durable I/O happens during its flush.
+  `add(aggregate)` and `update(aggregate)`. These methods register write intent
+  synchronously. Durable I/O occurs during the Unit-of-Work flush.
 - `Repository` extends `AggregatePersistence` with `remove(aggregate)` for
   physical removal. Persistence strategies that retain aggregate identity,
   including ordinary event-sourced repositories, can implement the smaller
   contract without a meaningless delete operation.
 - `findById` now represents expected absence with `undefined`. `exists` is no
-  longer a universal method; concrete consumer-owned repository ports may add
-  an intent-revealing existence lookup when a command genuinely needs one.
+  longer a universal method. A consumer-owned repository port can add a
+  specific existence query when a command needs one.
 - Replace the old state-stored `createRepositoryContractTests` harness under
-  the same `@shirudo/ddd-kit/testing` export. The v3 suite exercises the public
-  Unit of Work, explicit `add`/`update`/optional `remove`, expected-version
-  conflicts, state-plus-outbox atomicity, rollback, identity mapping, nested
-  state, and exact post-commit event acknowledgement. It is not a compatibility
-  layer for the legacy `save`/`delete` protocol.
+  the same `@shirudo/ddd-kit/testing` export. The v3 suite covers explicit
+  lifecycle intent, expected-version conflicts, and state-plus-outbox
+  atomicity. It also covers rollback, identity mapping, nested state, and exact
+  event acknowledgement. It is not a compatibility layer for the legacy
+  `save`/`delete` protocol.
 
 Migration starts by choosing the truthful repository capability:
 
@@ -62,10 +65,10 @@ interface OrderPersistence
 interface OrderRepository extends Repository<Order, OrderId> {}
 ```
 
-Then replace each `save` call deliberately: creation paths call `add`, while
-commands that loaded an aggregate call `update`. Replace `delete` with `remove`
-only for genuine physical removal; business cancellation, archival, closure,
-and revocation remain aggregate behavior followed by `update`.
+Then replace each `save` call deliberately. Creation paths call `add`.
+Commands that loaded an aggregate call `update`. Replace `delete` with
+`remove` only for physical removal. Cancellation, archival, closure, and
+revocation remain aggregate behavior followed by `update`.
 
 ### Changed (breaking): the Unit of Work owns aggregate write tracking
 
@@ -81,21 +84,21 @@ and revocation remain aggregate behavior followed by `update`.
 - A repository factory must return an adapter object. Invalid `null`, primitive,
   or callable results fail during wiring with
   `InvalidRepositoryAdapterError` instead of reaching application code as a
-  malformed facade. `RepositoryDefinition` now rejects callable result types at
-  compile time, and a Unit of Work accepts only definitions whose transaction
-  context and event family match its scope and outbox.
+  malformed facade. `RepositoryDefinition` now rejects callable result types
+  at compile time. The transaction context and event family must match the
+  Unit-of-Work scope and outbox.
 - `defineRepository` now takes the complete application-owned repository port
   explicitly: `defineRepository<ForStoringOrders>()({...})`. Its adapter
-  implements only non-lifecycle methods; the Unit of Work supplies
+  implements only non-lifecycle methods. The Unit of Work supplies
   `add`/`update`/optional `remove`. Concrete adapter-only methods no longer leak
   into the use-case facade, and helper-created definitions carry a nominal
   marker so raw adapter-shaped objects cannot bypass that boundary.
   JavaScript or asserted TypeScript that supplies an unbranded definition fails
   at runtime with `InvalidRepositoryDefinitionError`.
 - Every repository definition supplies `mapError`. A failed `flush` must become
-  an application-facing `InfrastructureError`; a mapper that throws or returns
-  a raw driver value fails with `RepositoryErrorMappingFailedError` while
-  preserving the original persistence failure as its cause.
+  an application-facing `InfrastructureError`. A mapper failure causes
+  `RepositoryErrorMappingFailedError`. This error preserves the original
+  persistence failure as its cause.
 - `update` and `remove` accept only the exact instance loaded by the active
   Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
   mixing write intents, or changing an aggregate after registration throws
@@ -121,7 +124,7 @@ and revocation remain aggregate behavior followed by `update`.
 
 - Aggregate behavior now creates an immutable `UncommittedDomainEvent` with
   `this.createEvent(type, payload, { version })`. The value contains only the
-  producer-owned fact and aggregate address; domain methods no longer accept
+  producer-owned fact and aggregate address. Domain methods no longer accept
   generic event identity, recording time, or trace metadata.
 - `recordPendingEvents(aggregate, factoryOrProvider)` is the application-shell
   boundary that turns each new decision into a recorded `DomainEvent`. It
@@ -130,17 +133,17 @@ and revocation remain aggregate behavior followed by `update`.
   outbox harvest.
 - `DomainEventFactory.createStamp(options?)` creates the shell-owned
   `eventId`, `occurredAt`, and metadata. It cannot select the payload schema
-  version; that version stays beside the concrete event payload.
+  version. That version stays beside the concrete event payload.
 - `DomainEventFacts` / `createFacts()` and `recordEvent(..., facts)` remain
-  deprecated migration aliases. New code should not pass them through a
-  domain operation. `createDomainEventFromFacts(...)` remains available for
+  deprecated migration aliases. Do not pass them through a new domain
+  operation. `createDomainEventFromFacts(...)` remains available for
   strict construction outside aggregates.
-- Domain-event type, identity, address, occurrence time, and schema version are
-  validated centrally. `DomainEventValidationError` and
+- Central validation covers domain-event type, identity, address, occurrence
+  time, and schema version. `DomainEventValidationError` and
   `SnapshotTimeValidationError` remain `TypeError`s while adding stable
   machine-readable `code` and `field` properties.
 - Factory-owned stamps reuse their already immutable metadata and decision
-  payload during recording; hand-built stamps retain the full defensive-copy
+  payload during recording. Hand-built stamps retain the full defensive-copy
   path. The reproducible benchmark and ownership rationale live in
   `docs/benchmarks/domain-event-stamping.md`.
 - Aggregate-owned snapshot capture and restore methods are removed.
@@ -149,8 +152,8 @@ and revocation remain aggregate behavior followed by `update`.
   returns a detached snapshot envelope.
 - `recordEventFromFactory(...)` retains the former event convenience behavior.
   When no `AggregateConfig.domainEventFactory` is configured, it uses the
-  nondeterministic Web Crypto and platform-clock defaults; its name makes that
-  dependency read visible.
+  nondeterministic Web Crypto and platform-clock defaults. The method name
+  makes that dependency visible.
 
 Migration for aggregate operations:
 
@@ -194,7 +197,7 @@ const snapshot = captureAggregateSnapshot(
 
 Aggregates that intentionally keep their injected factory can make the smaller
 event migration by renaming calls to `recordEventFromFactory(...)`.
-`AggregateConfig` depends only on the narrow event-convenience role; snapshot
+`AggregateConfig` depends only on the narrow event-convenience role. Snapshot
 policy and schema remain outside the aggregate.
 
 ### Added: transactional command-outbox routing for process managers
@@ -202,24 +205,24 @@ policy and schema remain outside the aggregate.
 - Add `PublishedCommand` as the versioned Published Language for commands that
   cross a process or Bounded-Context boundary. It has the stable
   `{ type, version, payload }` shape, and the payload must be JSON-safe.
-  Domain values are translated explicitly at this boundary; the checkout
+  Domain values are translated explicitly at this boundary. The checkout
   example maps `Money` to `MoneyDto`.
 - Add `CommandOutboxWriter`, `CommandOutboxCommitCandidate`, and
   `DurableCommandMessage` as the write-side contract for a dedicated,
-  point-to-point command outbox. Every message has an explicit `destination`,
-  a stable `messageId`, and direct `causationId`; an origin receipt retains the
-  private event's source position without leaking that event or its payload.
+  point-to-point command outbox. Every message has a `destination`, a stable
+  `messageId`, and direct `causationId`. An origin receipt retains the private
+  event source position without exposing the event or its payload.
 - Add `routeEventsToCommandOutbox(outbox, mapper)`. It adapts the
-  `OutboxWriter` expected by `withCommit`, maps private accepted process facts
-  to exact commands inside the aggregate transaction, and retains empty
-  command commits so source-cursor and retry semantics do not develop gaps.
+  `OutboxWriter` that `withCommit` requires. It maps private process facts to
+  exact commands inside the aggregate transaction. It retains empty command
+  commits to prevent gaps in the source cursor.
   The route rejects malformed or lossy command data with
   `InvalidCommandMessageError` before calling the adapter.
-- Add `createCommandOutboxContractTests` for adapter authors. The reusable
-  suite checks exact-retry deduplication, conflicting message, source, and
-  position reuse, atomic batches, input order, multi-event commit positions,
-  empty receipts and source-cursor progression, plus rollback when the harness
-  declares that capability.
+- Add `createCommandOutboxContractTests` for adapter authors. The suite covers
+  exact-retry deduplication and conflicting message, source, and position reuse.
+  It also covers atomic batches, input order, multi-event commit positions,
+  empty receipts, and source-cursor progression. It covers rollback when the
+  harness declares that capability.
 - Migrate the event-sourced checkout example from command-shaped facts such as
   `CheckoutPaymentRequested` to private process facts such as
   `CheckoutStartedAwaitingPayment`. These facts are not published on the
@@ -228,17 +231,18 @@ policy and schema remain outside the aggregate.
   destinations.
 - The process no longer records completion before its final participant acts:
   `CheckoutOrderConfirmationStarted` enqueues `ConfirmOrder` and enters
-  `awaiting-order-confirmation`; a later `OrderConfirmed` input records the
+  `awaiting-order-confirmation`. A later `OrderConfirmed` input records the
   command-free `CheckoutCompleted` fact. Cancellation and compensation states
   likewise describe in-progress recovery rather than prematurely claiming it
   finished. Shipping recovery waits for `PaymentRefunded` before deciding
-  `CancelOrder`; a permanent refund or cancellation failure records
+  `CancelOrder`. A permanent refund or cancellation failure records
   `CheckoutManualRepairRequired`.
-- The runnable example covers atomic process-stream/command persistence,
-  rollback, crash after commit, replay without command creation, stored-result
-  idempotency on redelivery, business relationship and W3C Trace Context
-  propagation, and result-driven compensation. The saga guide includes a
-  staged migration for already persisted command-shaped process events.
+- The runnable example covers atomic process-stream and command persistence. It
+  covers rollback, recovery after a post-commit crash, and replay without
+  command creation. It also covers stored-result idempotency, business and W3C
+  trace relationships, result-driven compensation, and manual repair. The saga
+  guide includes a staged migration for persisted command-shaped process
+  events.
 
 The command-outbox mapper is a breaking boundary change:
 
@@ -262,8 +266,8 @@ The command-outbox mapper is a breaking boundary change:
 
 Business correlation and technical tracing are now separate on durable command
 messages. Continue `correlationId` and `conversationId` to explain the business
-journey; copy validated W3C `traceparent` and `tracestate` when the next
-technical span belongs to the same trace.
+journey. If the next technical span belongs to the same trace, copy valid W3C
+`traceparent` and `tracestate` values.
 
 ### Changed: event metadata is readonly
 
@@ -281,14 +285,14 @@ technical span belongs to the same trace.
   repository protocol. Its identity-bound entries own lifecycle intent and
   the expected version captured during load.
 - Add adapter-owned `PersistenceModel`s with opaque baselines and typed change
-  sets. A document adapter may derive a full replacement; a relational adapter
-  may derive partial root and child-table changes.
-- Freeze version, changes, and the exact event batch when `add`, `update`, or
-  `remove` is registered. Mutation after registration rejects and rolls the
+  sets. A document adapter can derive a full replacement. A relational adapter
+  can derive changes for roots and child tables.
+- When `add`, `update`, or `remove` is registered, freeze the version, changes,
+  and exact event batch. Mutation after registration rejects and rolls the
   transaction back.
 - Replace the old contract suites with state-stored and event-sourced v3
-  suites covering explicit routing, OCC, atomic rollback, identity mapping,
-  exact event batches, no-op writes, and optional physical removal.
+  suites. They cover routing, OCC, atomic rollback, identity mapping, exact
+  event batches, no-op writes, and optional physical removal.
 
 ### Changed (breaking): shell operations carry cancellation and deadlines
 
@@ -334,8 +338,8 @@ technical span belongs to the same trace.
 - An explicitly configured `DeadlineProcessor.clock` is now strict. If it
   throws or returns an invalid `Date`, the cycle stops before
   `DeadlineStore.due`, reports the failure through `onPollError`, and uses the
-  existing failure backoff. Omit `clock` to retain the system-time default;
-  the processor no longer hides a broken injected dependency by switching time
+  existing failure backoff. Omit `clock` to retain the system-time default.
+  The processor no longer hides a broken injected dependency by switching time
   sources.
 
 Migration for shell adapters:
@@ -367,8 +371,8 @@ const processor = new DeadlineProcessor({
 
 Existing one-argument callback implementations remain assignable in
 TypeScript, but direct calls to `OutboxSink.publish` must now provide an
-`ExecutionContext`. Custom `EventBus` implementations should accept and propagate
-the optional `PublishOptions`; custom transaction scopes already accept the
+`ExecutionContext`. Custom `EventBus` implementations must accept and propagate
+the optional `PublishOptions`. Custom transaction scopes already accept the
 optional signal through `TransactionalOptions`.
 
 Migration for delivery classification and poll-store cancellation:
@@ -402,10 +406,12 @@ async function markDispatched(ids, { signal, deadlineAt } = {}) {
 ```
 
 `countsTowardCeiling` is removed in v3. Map its `false` result to
-`"transient"`, its `true` result to `"permanent"`, and use `"unknown"` when an
-adapter cannot classify safely. Existing poll-store adapters remain structurally
-assignable because the new context parameter is optional, but production
-adapters should adopt it to avoid work continuing after the shell has timed out.
+`"transient"`. Map its `true` result to `"permanent"`. If an adapter cannot
+classify safely, use `"unknown"`.
+
+Existing poll-store adapters remain structurally assignable because the new
+context parameter is optional. Production adapters must adopt it to stop work
+after the shell timeout.
 
 ### Changed: Vite+ test and package toolchain
 

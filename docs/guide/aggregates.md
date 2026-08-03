@@ -156,8 +156,8 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 `markRestored(version)` tells the aggregate, "these are the domain facts at
 this version." It sets the aggregate's current version without recording an
-event. It does not remember a database baseline; that belongs to the
-operation-scoped `UnitOfWork`.
+event. It does not remember a database baseline. The operation-scoped
+`UnitOfWork` owns that baseline.
 
 A repository can then be straightforward:
 
@@ -182,10 +182,10 @@ async findById(id: OrderId): Promise<Order | undefined> {
 ```
 
 ::: warning Creation and update are explicit
-Call `repositories.orders.add(order)` for a new aggregate and
-`repositories.orders.update(order)` for the exact instance loaded by that
-unit of work. Never infer this lifecycle from `version`: a new aggregate may
-already have advanced its version before its first persistence operation.
+Call `repositories.orders.add(order)` for a new aggregate. For a loaded
+aggregate, call `repositories.orders.update(order)` with the exact instance
+that this unit of work loaded. Do not infer this lifecycle from `version`. A new
+aggregate can increase its version before persistence.
 
 See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 :::
@@ -400,10 +400,10 @@ if (!sameVersion(before!, after!)) {
 }
 ```
 
-Repository adapters should throw `ConcurrencyConflictError` when the row or
+Repository adapters must throw `ConcurrencyConflictError` when the row or
 stream no longer matches the version captured during load. The
 `UnitOfWork` owns that baseline and passes it to `flush` as
-`write.expectedVersion`; the aggregate does not carry persistence metadata.
+`write.expectedVersion`. The aggregate does not carry persistence metadata.
 
 The use case registers `add`, `update`, or `remove` only after its domain
 decisions are complete. The unit of work then persists the immutable change
@@ -446,9 +446,10 @@ const fresh = reconstituteAggregateFromSnapshot(
 );
 ```
 
-`captureAggregateSnapshot` validates the application-supplied time and detaches
-the persistence DTO, so later mutations cannot alter stored snapshot data.
-Reconstitution always creates a fresh aggregate through the model; it never
+`captureAggregateSnapshot` rejects an invalid application-supplied time. It also
+detaches the persistence DTO, so later mutations cannot alter stored snapshot
+data.
+Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact.
 
 Live aggregate state remains `protected`. Give the persistence adapter an

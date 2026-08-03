@@ -151,12 +151,10 @@ is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
 
-1. The address discipline runs: missing `aggregateId` / `aggregateType`
-   fields are stamped from the aggregate (the `createEvent` guarantee, by
-   construction), and a present-but-foreign address throws the wiring error
-   `MisaddressedEventError` before anything is recorded. `ForeignEventError`
-   is the replay-side counterpart for persisted rows.
-2. `validateEvent(event)` checks whether this event is allowed in the current
+1. The address check runs. The aggregate supplies a missing `aggregateId` or
+   `aggregateType`. A foreign address throws `MisaddressedEventError` before
+   recording. `ForeignEventError` is the replay error for persisted rows.
+2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
 3. The handler for `event.type` is found.
 4. The handler computes the next state.
@@ -164,8 +162,8 @@ is the only code that changes state for that fact.
    bumps the version.
 
 If validation, handler lookup, or state computation throws, the aggregate does
-not record the event. That is the event-sourcing safety rule in code form: the
-aggregate should not publish a fact that did not successfully change state.
+not record the event. This behavior is the event-sourcing safety rule. The
+aggregate must not publish a fact that did not change state.
 
 There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
@@ -291,29 +289,39 @@ event so continuation makes progress.
 A missing stream is
 `{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
 `exists: true` even when its requested window is empty. An existing stream has
-at least one event, so `exists: true` implies `lastVersion >= 1`; metadata or
-tombstones without events must be reported as absent. `lastVersion` always
-reports the actual head (the event count); `fromVersion` is the exclusive lower
-bound and `toVersion` is the inclusive upper bound, both expressed as 1-based
-stream positions. Together they select `(fromVersion, toVersion]` without
-changing `lastVersion`. `toVersion: 0` returns an empty window, a value beyond
-the head clamps to the head, and `fromVersion >= toVersion` describes an empty
-interval rather than an error. This is how a snapshot-backed repository
-distinguishes "aggregate is gone" from "snapshot is already at the head", and
-how a point-in-time reader verifies the requested historical position against
-the actual head. `limit` must be a positive safe integer; present stream bounds
-must be non-negative safe integers. Invalid options reject with `RangeError`.
-Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
-view of the page; do not assemble the result from racing reads.
+at least one event. Thus, `exists: true` implies `lastVersion >= 1`. Report
+metadata or tombstones without events as absent.
 
-Separate pages are separate store reads. For a stable replay, record the first
-page's `lastVersion`, pass it as `toVersion` on every continuation, and advance
-`fromVersion` by the number of events actually returned. New appends can move
+`lastVersion` always reports the actual head (the event count). `fromVersion`
+is the exclusive lower bound. `toVersion` is the inclusive upper bound. Both
+values use 1-based stream positions. Together they select
+`(fromVersion, toVersion]` without changing `lastVersion`.
+
+`toVersion: 0` returns an empty window. A value beyond the head clamps to the
+head. `fromVersion >= toVersion` describes an empty interval, not an error.
+These rules distinguish an absent aggregate from a snapshot at the head. They
+also make sure that the requested historical position does not exceed the
+actual head.
+
+`limit` must be a positive safe integer. Present stream bounds must be
+non-negative safe integers.
+
+Invalid options reject with `RangeError`.
+Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
+view of the page. Do not assemble the result from racing reads.
+
+Separate pages are separate store reads. For a stable replay:
+
+1. Record the first page's `lastVersion`.
+2. Pass it as `toVersion` on every continuation.
+3. Advance `fromVersion` by the number of returned events.
+
+New appends can move
 the reported head while the load runs, but they cannot enter that pinned
-prefix. The next repository load sees them; an update from the older prefix still
+prefix. The next repository load sees them. An update from the older prefix still
 meets the normal OCC guard.
 
-A database adapter should also reject duplicate or non-contiguous persisted
+A database adapter must also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
@@ -440,16 +448,16 @@ Version advances additively:
 The replay target must be clean. If it carries unflushed `pendingEvents`,
 `loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
 moves. If it has an in-memory version that was never persisted, it also throws.
-Replaying onto that object would mark unpersisted history as persisted and
-corrupt the next repository update.
+If replay uses that object, it marks unpersisted history as persisted. This
+corrupts the next repository update.
 
 Use a fresh `Order.reconstitute(id)` target for normal loads.
 
 ### Point-in-time reconstruction
 
 An audit or debugging query can fold only the history that existed at stream
-position `N`. Keep that query outside the aggregate's normal write repository:
-it creates a historical view, not a live aggregate that may be updated.
+position `N`. Keep that query outside the normal write repository. It creates a
+historical view, not a live aggregate for updates.
 
 ```ts
 async function findOrderAsOfVersion(
@@ -589,16 +597,18 @@ The page checks are deliberate. A missing stream means the snapshot cannot
 establish aggregate existence. A head behind the snapshot or behind the pinned
 target means the authoritative stream was truncated or replaced. A zero-length
 page before the cursor reaches the target cannot make progress and violates the
-EventStore contract. All three discard the derived snapshot and refold from the
-stream; none may return the partially restored aggregate. Reaching the target
+EventStore contract.
+
+All three discard the derived snapshot and refold from the stream. None can
+return the partially restored aggregate. Reaching the target
 cursor proves every page bridged the snapshot to the pinned head without
 materializing the whole tail.
 
 `loadFromHistory(...)` keeps its `Result<void, DomainError>` boundary for
 invalid historical facts. Snapshot DTO validation, migration, and
 reconstitution belong to the adapter model and throw when stored data cannot
-be interpreted. The repository may discard that derived snapshot and replay
-from zero; non-snapshot infrastructure failures should still escape.
+be interpreted. The repository can discard that derived snapshot and replay
+from zero. Other infrastructure failures must still escape.
 
 A schema mismatch throws `SnapshotSchemaMismatchError` unless the model
 provides `migrate(stored, storedSchemaVersion)`. A missing schema version means
@@ -636,18 +646,20 @@ transaction context.
 
 `InMemorySnapshotStore` is the reference implementation. Without retention
 options it is unbounded and intended only for finite-lifetime tests and demos.
-Snapshots are rebuildable derived data, so this is the one in-memory store that
-may forget state safely: `maxEntries` enables least-recently-used eviction, and
-`ttlMs` expires entries relative to an optional instance-bound `clock`. Loading
-a snapshot updates LRU recency but does not extend its TTL; saving it does.
-Production adapters should pass `createSnapshotStoreContractTests` from
+Snapshots are rebuildable derived data. Thus, this in-memory store can forget
+state safely.
+
+`maxEntries` enables least-recently-used eviction. `ttlMs` expires
+entries relative to an optional instance-bound `clock`. Loading a snapshot
+updates LRU recency but does not extend its TTL. Saving a snapshot extends it.
+Production adapters must pass `createSnapshotStoreContractTests` from
 `@shirudo/ddd-kit/testing`.
 
 ### Plain snapshot state
 
 Snapshots must round-trip through storage as plain data.
 `captureAggregateSnapshot(model, aggregate, snapshotAt)` fails fast if the
-model's DTO contains values that would not restore faithfully:
+model's DTO contains values that cannot restore faithfully:
 
 - class instances
 - functions
@@ -708,7 +720,7 @@ shapes:
 
 | Policy | When it fits | Trade-off |
 | --- | --- | --- |
-| Every N events | aggregates have similar event volume | simple, but hot streams may snapshot too often |
+| Every N events | aggregates have similar event volume | simple, but hot streams can snapshot too often |
 | Max snapshot age | traffic varies widely | quiet streams eventually get snapshots, but every save checks time |
 | Background sweep | write-path latency matters | operationally heavier, but snapshot cost leaves the hot path |
 
@@ -759,7 +771,7 @@ There is no `SnapshotPolicy` port, no default frequency, and no built-in
 sweeper. Different stores have different native snapshot facilities, and the
 right policy depends on stream length, latency budget, and operational tooling.
 
-When event schemas change, snapshots may need attention too. A snapshot is
+When event schemas change, snapshots can need attention too. A snapshot is
 state derived from historical events and old handler code. Increment the
 model's `schemaVersion` and provide a migration, discard incompatible
 snapshots, or rebuild them during the event-schema migration.

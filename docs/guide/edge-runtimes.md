@@ -50,7 +50,7 @@ const domainEvents = createDomainEventFactory({
 });
 ```
 
-The factory is frozen and has no setter. It may live at module scope when the
+The factory is frozen and has no setter. It can live at module scope when the
 policy is genuinely process-wide, or be created inside `fetch()` when the
 policy is request- or tenant-specific. In either case, call `createStamp()` in
 the application shell after the aggregate accepts the domain operation.
@@ -581,13 +581,15 @@ const confirmOrder = async (command: ConfirmOrder) => {
 
 This guarantee requires a transactional idempotency store in the same commit
 boundary as the order repository and outbox. `withIdempotentCommit` claims the
-scoped key before touching the domain and stores the key, fingerprint,
-serializable outcome, aggregate write, and outbox record atomically. A retry
-with the same key and fingerprint receives the same stored outcome without
-running the confirm command again—even if the first response was lost. Reusing the
-key for a different fingerprint is rejected rather than replayed. A separate
-idempotency store cannot prove this atomic boundary without the reconciliation
-protocol described in [Idempotent Commands](./idempotency.md).
+scoped key before it calls the domain. It stores the key, fingerprint, outcome,
+aggregate write, and outbox record atomically.
+
+A retry with the same key and fingerprint receives the stored outcome without
+another `ConfirmOrder` command.
+This also applies when the first response is lost. A different fingerprint
+rejects the reused key. A separate idempotency store cannot prove this atomic
+boundary without the reconciliation protocol in
+[Idempotent Commands](./idempotency.md).
 
 `ConfirmOrderOutcome` is deliberately plain data. The application maps that
 stored receipt back to `Result` only after `withIdempotentCommit` returns, so a

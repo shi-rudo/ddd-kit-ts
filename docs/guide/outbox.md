@@ -12,7 +12,7 @@ The kit gives you five pieces:
   standard aggregate write protocol.
 - `withCommit`: runs the use case, harvests aggregate events, writes the
   outbox row, commits, then publishes optional in-process notifications. The
-  unit of work builds on it; custom infrastructure can also use it directly.
+  unit of work builds on it. Custom infrastructure can also use it directly.
 - `OutboxWriter<Evt>` / `Outbox<Evt>`: the durable queue boundary.
 - `OutboxDispatcher`: a small poller for setups that do not already have CDC
   or broker-owned delivery.
@@ -42,12 +42,13 @@ const orderId = await new UnitOfWork({
 });
 ```
 
-The important line is `repositories.orders.update(order)`. It registers an
-explicit persistence intent only after the domain decision and event recording
-are complete. The unit of work freezes the adapter change set and exact event
-batch, flushes them in the transaction, and lets `withCommit` own outbox and
-post-commit acknowledgement. A changed but unregistered aggregate rejects the
-operation rather than committing state without its events.
+The important line is `repositories.orders.update(order)`. It registers the
+persistence intent after the domain decision and event recording. The unit of
+work freezes the change set and exact event batch. It flushes both values in
+the transaction. `withCommit` owns the outbox and post-commit acknowledgement.
+
+An unregistered change rejects the operation. It cannot commit state without
+its events.
 
 ## What Happens On Commit
 
@@ -58,7 +59,7 @@ operation rather than committing state without its events.
 3. Your callback loads aggregates, makes domain decisions, and registers
    explicit writes.
 4. Still inside the transaction, the unit of work freezes and flushes the
-   registered receipts; `withCommit` validates their internal commit tokens
+   registered receipts. `withCommit` rejects invalid internal commit tokens
    and calls `outbox.add(events)` with the exact batches.
 5. The transaction commits.
 6. After commit, `withCommit` acknowledges every saved aggregate through a
@@ -74,17 +75,20 @@ operation rather than committing state without its events.
 If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
 
-`onPersisted` may be asynchronous and is awaited, but it is not a delivery
-guarantee. All invocations and the optional bus publication share one absolute
-`postCommitTimeoutMs` budget (30 seconds by default), rather than receiving a
-fresh budget each. Every invocation receives an `ExecutionContext` with the
-corresponding `signal` and shared absolute `deadlineAt`; observers and bus work
-that have not started when it expires are skipped. A throw, timeout, or request abort is reported to
-`onPersistError` and never rejects the already committed result. Use the outbox
-for side effects that must survive a process crash. The same failure observer
-reports a runtime failure in the internal acknowledgement step; peer
-aggregates are still processed, and only successfully acknowledged aggregates
-reach `onPersisted`.
+`onPersisted` can run asynchronously. `withCommit` waits for it, but it is not a
+delivery guarantee. All invocations and the optional bus publication share one
+absolute `postCommitTimeoutMs` budget (30 seconds by default), rather than
+receiving a fresh budget each. Every invocation receives an `ExecutionContext`
+with the corresponding `signal` and shared absolute `deadlineAt`. If the
+deadline expires, observers and bus work that did not start are skipped.
+
+A throw, timeout, or request abort is reported to `onPersistError`. It never
+rejects the committed result.
+
+Use the outbox for side effects that must survive a process crash. The same
+failure observer reports a runtime failure in the internal acknowledgement
+step. Peer aggregates are still processed. Only successfully acknowledged
+aggregates reach `onPersisted`.
 
 If `bus.publish` fails, times out, or is aborted after the commit, `withCommit`
 does not reject. The write already succeeded, and returning an error would make
@@ -160,8 +164,8 @@ await withCommit({ scope, outbox }, async () => ({
 `TransactionScope` does not track aggregates, repository intent, or deletes.
 That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
 lifecycle for custom infrastructure compositions.
-use `UnitOfWork` when you want tx-bound repositories, enrollment, and an
-identity map.
+If you need transaction-bound repositories, enrollment, and an identity map,
+use `UnitOfWork`.
 
 ## The Outbox Ports
 
@@ -274,19 +278,22 @@ the full cursor therefore survives JSON serialization. SQL adapters must map
 the nullable predecessor column to JavaScript `null` when hydrating an
 envelope; omitting the property produces an invalid legacy cursor.
 
-The predecessor cannot be inferred from `write.expectedVersion`: that is the
+Do not infer the predecessor from `write.expectedVersion`. That value is the
 OCC baseline and also advances on state-only writes. A durable adapter needs a
-source-head record keyed by `(aggregate_type, aggregate_id)`. Lock that record,
-read its `last_eventful_aggregate_version`, insert every event in the commit
-with that predecessor, and advance the head to the candidate's
-`aggregateVersion` in the same transaction. A unique commit-position key such
-as `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` keeps
-the event identity stable under retries; all rows of that aggregate version
-must also agree on `commit_size`. Validate those invariants before advancing
-the source head. Creation of the first source-head row also
-needs race-safe insert-or-lock semantics: rely on the primary key and retry the
-losing transaction; do not let two concurrent "genesis" writers proceed from
-separate missing-row reads.
+source-head record for `(aggregate_type, aggregate_id)`.
+
+Lock the source-head record. Read its `last_eventful_aggregate_version`. Insert
+each event with that predecessor. Then advance the head to the candidate
+`aggregateVersion` in the same transaction.
+
+Use `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` as the
+unique key for the commit position. All rows for one aggregate version must use
+the same `commit_size`. Make sure that these invariants hold before you advance
+the source head.
+
+The first source-head row also needs race-safe insert-or-lock behavior. Use the
+primary key and retry the losing transaction. Do not continue two concurrent
+genesis writes from separate missing-row reads.
 
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all
