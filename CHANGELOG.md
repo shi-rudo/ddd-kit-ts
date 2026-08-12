@@ -279,8 +279,9 @@ journey. If the next technical span belongs to the same trace, copy valid W3C
 ### Changed (breaking): persistence tracking leaves tactical aggregates
 
 - Remove `persistedVersion`, `hasChanges`, and `changedKeys` from both
-  aggregate base classes. Aggregates retain only the current domain version
-  and pending facts.
+  aggregate base classes. Aggregates retain the current domain version,
+  pending facts, and a kit-internal persisted-version marker that only the
+  commit boundary can read; domain and adapter code cannot branch on it.
 - Make `UnitOfWork` the mandatory public write context for the standard
   repository protocol. Its identity-bound entries own lifecycle intent and
   the expected version captured during load.
@@ -523,6 +524,54 @@ after the shell timeout.
   authoritative model and replay value outweighs event upcasting, bounded
   stream reads, stream OCC, and snapshot-policy costs. Both variants keep
   participant rules in their owning aggregates.
+
+### Fixed: commit boundary guards and repository facade integrity
+
+Code review of the v3 persistence redesign found gaps where guards had
+weakened or misfired. All of them are closed inside the same breaking window.
+
+- `withCommit` rechecks every enrollment snapshot at harvest time. An event
+  recorded after `enrollSaved` but before the callback returned was silently
+  excluded from the outbox and the in-process bus; it now rejects the
+  transaction with `EventHarvestError`.
+- The unique-cursor guard for eventful commits is grounded in a kit-internal
+  persisted-version marker again instead of the enrollment-supplied
+  `expectedVersion`. Direct `withCommit` callers using the documented
+  `enrollSaved(aggregate)` style regain the deterministic rejection when a
+  persisted aggregate records events without advancing its version. A
+  never-persisted aggregate can still make an eventful version-0 commit.
+  The shared lifecycle-capability registry key changed with the capability
+  shape, so aggregates constructed by a package copy from an earlier 3.0.0
+  release candidate now fail enrollment with the generic "no kit-managed
+  persistence lifecycle" error instead of half-working; run one kit version
+  per process during the cutover.
+- `recordPendingEvents` throws the new `ReentrantEventRecordingError` when a
+  stamp provider triggers a new decision on the aggregate being recorded.
+  The re-entrant decision was silently discarded before; recording stays
+  atomic when the guard fires.
+- `reconstituteAggregateFromSnapshot` surfaces a `DomainError` thrown during
+  migration or reconstitution as `SnapshotCorruptedError`. A tightened
+  `validateState` rule no longer makes aggregates with old snapshots
+  unloadable; the documented load recipe catches the corruption channel,
+  discards the snapshot, and refolds from the stream.
+- Mutation-after-registration detection compares persistence captures
+  through the new `persistenceProjectionDrifted` helper instead of
+  misreading `changes()`/`isEmpty()` as a no-change detector. Persistence
+  models that derive a full-replacement change set (permitted by the
+  contract) no longer fail every commit; `capture` must be deterministic for
+  an unchanged aggregate. The default comparison is structural deep
+  equality, which matches Set members and Map keys by reference; a model
+  whose capture re-materializes such values supplies the optional
+  `captureEquals` for adapter-owned comparison.
+- Assigning a replacement method through the repository facade invalidates
+  the guarded-method cache on the write-through path too. A test spy or
+  strategy swap for an inherited adapter method no longer keeps serving the
+  original implementation.
+- The facade exempts language-level probes (`then`, absent well-known
+  symbols) from the session-open assertion. Returning the facade from
+  `run()` no longer converts a committed transaction into a false retryable
+  `CommitError`; real property access after close still throws
+  `TransactionClosedError`.
 
 ### Migration guide: 2.2.0 to 3.0.0
 

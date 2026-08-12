@@ -7,7 +7,11 @@ import {
 } from "../aggregate/domain-event";
 import { SnapshotTimeValidationError } from "../aggregate/domain-event-errors";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
-import type { SnapshotSchemaMismatchError } from "../core/errors";
+import {
+	DomainError,
+	SnapshotCorruptedError,
+	type SnapshotSchemaMismatchError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import {
 	captureAggregateSnapshot,
@@ -102,6 +106,43 @@ describe("adapter-owned snapshot models", () => {
 			version: 7,
 		});
 		expect(restored.state).not.toBe(storedState);
+	});
+
+	it("surfaces a domain rejection during reconstitution as snapshot corruption", () => {
+		class StatusNoLongerAllowedError extends DomainError<"STATUS_NOT_ALLOWED"> {
+			constructor() {
+				super({
+					code: "STATUS_NOT_ALLOWED",
+					message: "status 'placed' is no longer a valid order status",
+				});
+			}
+		}
+		// A factory running TODAY'S validateState rules against yesterday's
+		// stored blob: the load recipe must be able to catch one corruption
+		// channel and refold from the stream instead of failing getById.
+		const validatingModel = defineSnapshotModel({
+			...model,
+			reconstitute: (): Order => {
+				throw new StatusNoLongerAllowedError();
+			},
+		});
+
+		let caught: unknown;
+		try {
+			reconstituteAggregateFromSnapshot(validatingModel, "order-1" as OrderId, {
+				state: { status: "placed" },
+				version: 7 as Version,
+				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
+				schemaVersion: 2,
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
+		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
+			StatusNoLongerAllowedError,
+		);
 	});
 
 	it("detaches nested data on capture and reconstitution", () => {

@@ -238,7 +238,7 @@ describe("untrusted-boundary examples", () => {
 		);
 		expect(useCase).toContain('outcome.result.status === "confirmed"');
 		expect(useCase).toContain("return ok(outcome.result.orderId)");
-		expect(edgeGuide).toContain("same stored outcome");
+		expect(edgeGuide).toContain("receives the stored outcome");
 		expect(edgeGuide).toContain("atomically");
 		expect(edgeGuide).toContain(
 			"Retryability is a property of the failure, not permission to retry blindly",

@@ -1,4 +1,8 @@
-import { UnmintedEventError, UnreplayableAggregateError } from "../core/errors";
+import {
+	ReentrantEventRecordingError,
+	UnmintedEventError,
+	UnreplayableAggregateError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import { Entity, type EntityConfig } from "../entity/entity";
 import type { IAggregateRoot, Version } from "./aggregate";
@@ -95,6 +99,15 @@ export abstract class BaseAggregate<
 
 	private _version: Version = 0 as Version;
 
+	/**
+	 * Version the persistence layer last confirmed for this instance:
+	 * `undefined` until the aggregate is reconstituted (`markRestored`) or a
+	 * commit is acknowledged. Kit-internal via the lifecycle capability; it
+	 * grounds the `withCommit` unique-cursor guard so an eventful commit that
+	 * did not advance beyond the persisted row is rejected deterministically.
+	 */
+	private _persistedVersion: Version | undefined;
+
 	private _pendingEvents: PendingDomainEvent<TEvent>[] = [];
 
 	private readonly domainEventFactory: AggregateEventConvenienceFactory;
@@ -114,10 +127,13 @@ export abstract class BaseAggregate<
 			discardPendingEvents: (events) => {
 				this.acknowledgePendingEvents(events);
 			},
+			persistedVersion: () => this._persistedVersion,
 		});
 		registerPendingEventRecordingCapability(this, {
 			record: (createStamp) => {
-				const recorded: TEvent[] = this._pendingEvents.map((event, index) => {
+				const stamped = this._pendingEvents;
+				const stampedCount = stamped.length;
+				const recorded: TEvent[] = stamped.map((event, index) => {
 					const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
 					if (isMintedEvent(candidate)) return candidate as TEvent;
 					if (!isUncommittedDomainEvent(candidate)) {
@@ -130,6 +146,16 @@ export abstract class BaseAggregate<
 						createStamp(candidate, index),
 					) as TEvent;
 				});
+				// A stamp provider that triggers a new decision on this aggregate
+				// grows or replaces the pending list mid-map; assigning `recorded`
+				// would silently discard that decision. Checked BEFORE the
+				// assignment, so recording stays atomic when the guard fires.
+				if (
+					this._pendingEvents !== stamped ||
+					this._pendingEvents.length !== stampedCount
+				) {
+					throw new ReentrantEventRecordingError(String(this.id));
+				}
 				this._pendingEvents = recorded;
 				return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
 			},
@@ -146,6 +172,9 @@ export abstract class BaseAggregate<
 			);
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);
+		// The commit that is being acknowledged persisted the aggregate at its
+		// current version, so the next eventful commit needs a cursor beyond it.
+		this._persistedVersion = this._version;
 	}
 
 	public get version(): Version {
@@ -208,6 +237,7 @@ export abstract class BaseAggregate<
 	 */
 	protected markRestored(version: Version): void {
 		this.setVersion(version);
+		this._persistedVersion = version;
 	}
 
 	/**

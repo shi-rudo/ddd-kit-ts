@@ -163,8 +163,31 @@ interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
 	readonly eventLifecycle: PendingEventLifecycleCapability;
 	readonly version: Version;
 	readonly expectedVersion: Version | undefined;
+	/**
+	 * Version the persistence layer last confirmed for the aggregate at
+	 * enrollment time (kit-maintained). `undefined` means the aggregate was
+	 * never persisted, so any single eventful commit cursor is unique.
+	 */
+	readonly persistedVersion: Version | undefined;
 	readonly events: ReadonlyArray<PendingDomainEvent<Evt>>;
 	disposition: CommitDisposition;
+}
+
+/**
+ * True when the aggregate's live version or pending-event batch no longer
+ * matches its enrollment-time snapshot. Shared by the duplicate-enrollment
+ * gate and the harvest-time recheck: both must reject the same divergence,
+ * or events recorded after enrollment would be silently dropped.
+ */
+function enrollmentDiverged<Evt extends AnyDomainEvent>(
+	record: AggregateCommitRecord<Evt>,
+): boolean {
+	const pending = record.aggregate.pendingEvents;
+	return (
+		record.aggregate.version !== record.version ||
+		pending.length !== record.events.length ||
+		record.events.some((event, index) => event !== pending[index])
+	);
 }
 
 interface CommitTokenScope<Evt extends AnyDomainEvent> {
@@ -215,14 +238,9 @@ function createCommitTokenScope<
 			if (disposition === "deleted") {
 				record.disposition = "deleted";
 			}
-			const pending = aggregate.pendingEvents;
-			const sameEvents =
-				pending.length === record.events.length &&
-				pending.every((event, index) => event === record.events[index]);
 			if (
-				aggregate.version !== record.version ||
 				options?.expectedVersion !== record.expectedVersion ||
-				!sameEvents
+				enrollmentDiverged(record)
 			) {
 				throw new EventHarvestError(
 					`withCommit: aggregate ${String(aggregate.id)} changed after its ` +
@@ -248,6 +266,14 @@ function createCommitTokenScope<
 		const events = Object.freeze([...aggregate.pendingEvents]) as ReadonlyArray<
 			PendingDomainEvent<Evt>
 		>;
+		// The kit-maintained marker, not the enrollment-supplied
+		// expectedVersion, grounds the unique-cursor guard: it survives
+		// callers who omit enrollment options (the documented
+		// direct-withCommit style), and grounding the guard in data supplied
+		// by the very caller it checks would be circular.
+		const persistedVersion = eventLifecycle.persistedVersion() as
+			| Version
+			| undefined;
 		tokensByAggregate.set(aggregate, token);
 		recordsByToken.set(token, {
 			aggregate,
@@ -255,6 +281,7 @@ function createCommitTokenScope<
 			disposition,
 			version: aggregate.version,
 			expectedVersion: options?.expectedVersion,
+			persistedVersion,
 			events,
 		});
 		mintedTokenCount += 1;
@@ -306,6 +333,20 @@ function createCommitTokenScope<
 				}
 				if (seen.has(tokenObject)) continue;
 				seen.add(tokenObject);
+				// Harvest-time recheck of the enrollment snapshot: an event
+				// recorded after enrollSaved but before the callback returned
+				// would be excluded from the harvest and silently lost by the
+				// post-commit prefix acknowledgement. Divergence fails loudly
+				// inside the transaction instead.
+				if (enrollmentDiverged(record)) {
+					throw new EventHarvestError(
+						`withCommit: aggregate ${String(record.aggregate.id)} changed ` +
+							"after its commit batch was enrolled; events recorded after " +
+							"enrollment are not part of the attested write and would be " +
+							"silently dropped. Make domain decisions first, write, and " +
+							"enroll last.",
+					);
+				}
 				records.push(record);
 			}
 			if (seen.size !== mintedTokenCount) {
@@ -483,13 +524,13 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 				const agg = record.aggregate;
 				if (
 					record.events.length > 0 &&
-					(record.version as number) <=
-						((record.expectedVersion as number | undefined) ?? 0)
+					record.persistedVersion !== undefined &&
+					(record.version as number) <= (record.persistedVersion as number)
 				) {
 					throw new EventHarvestError(
 						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
-							`did not advance its version beyond the expected version ` +
-							`(${String(record.expectedVersion ?? 0)}). An eventful commit needs a unique ` +
+							`did not advance its version beyond the persisted version ` +
+							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
 							`cursor; use AggregateRoot.commit(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);

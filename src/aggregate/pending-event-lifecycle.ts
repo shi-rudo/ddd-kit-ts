@@ -8,10 +8,21 @@
 export interface PendingEventLifecycleCapability {
 	acknowledge(events: ReadonlyArray<unknown>): void;
 	discardPendingEvents(events: ReadonlyArray<unknown>): void;
+	/**
+	 * Version the persistence layer last confirmed for the aggregate, or
+	 * `undefined` for a never-persisted instance. Grounds the `withCommit`
+	 * unique-cursor guard.
+	 */
+	persistedVersion(): number | undefined;
 }
 
+// The key version stamps the capability SHAPE. Bump it whenever the
+// interface above changes: registrations made under another key stay
+// invisible, so an aggregate constructed by an incompatible package copy
+// fails the generic "no kit-managed persistence lifecycle" check instead of
+// half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v3",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v4",
 );
 
 function createCapabilityRegistry(): WeakMap<

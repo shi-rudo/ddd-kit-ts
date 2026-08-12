@@ -492,6 +492,28 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 }
 
 /**
+ * Thrown by `recordPendingEvents` when the aggregate's pending-event list
+ * changes while its events are being stamped: a stamp provider that
+ * directly or transitively triggers a new decision on the same aggregate
+ * would otherwise have that decision silently discarded when recording
+ * replaces the pending list. Recording is atomic: when this guard fires,
+ * every decision (including the re-entrant one) remains unrecorded. A
+ * wiring error: deterministic bug at the call site, the remedy is keeping
+ * stamp providers free of domain decisions.
+ */
+export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVENT_RECORDING"> {
+	constructor(aggregateId: string) {
+		super(
+			"REENTRANT_EVENT_RECORDING",
+			`Pending events of aggregate ${aggregateId} changed while ` +
+				"recordPendingEvents was stamping them. A stamp provider must not " +
+				"trigger new decisions on the aggregate being recorded; make every " +
+				"domain decision first, then record.",
+		);
+	}
+}
+
+/**
  * Thrown by persisted-event consumers (including `loadFromHistory` and
  * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:

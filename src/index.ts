@@ -182,6 +182,7 @@ export {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	ReentrantEventRecordingError,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
@@ -349,6 +350,7 @@ export {
 	type PersistenceChanges,
 	type PersistenceLifecycle,
 	type PersistenceModel,
+	persistenceProjectionDrifted,
 	recapturePersistenceBaseline,
 } from "./repo/persistence-model";
 export type { AggregatePersistence, Repository } from "./repo/repository";

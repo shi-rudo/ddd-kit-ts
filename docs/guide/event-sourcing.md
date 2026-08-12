@@ -422,14 +422,17 @@ stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
 the current event shape. The same principle covers snapshots: restoring from
-a snapshot does not re-check the historical state against today's
+a snapshot should not re-check the historical state against today's
 `validateState` rules, so a stream loads identically whether it is replayed
 from zero or restored from a snapshot plus tail. Snapshots do get their own
-STRUCTURAL gate: override `validateRestoredState(state)` to reject blobs no
-version of the model could have produced (missing fields, wrong types); a
-`DomainError` from it comes back as `Err`, and the load recipe answers by
-discarding the snapshot and refolding from the stream. Rules and structure
-are different questions, and only the first one is frozen in history.
+STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
+of the model could have produced (missing fields, wrong types) by throwing
+`SnapshotCorruptedError` from `migrate` or `reconstitute`. When a
+reconstitution factory does run current rules and throws a `DomainError`,
+`reconstituteAggregateFromSnapshot` surfaces it as `SnapshotCorruptedError`
+too, and the load recipe answers both the same way: discard the snapshot and
+refold from the stream. Rules and structure are different questions, and only
+the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code
@@ -582,7 +585,10 @@ async function findById(id: OrderId): Promise<Order | null> {
       fromVersion += tail.events.length;
     }
   } catch (error) {
-    if (error instanceof SnapshotSchemaMismatchError) {
+    if (
+      error instanceof SnapshotSchemaMismatchError ||
+      error instanceof SnapshotCorruptedError
+    ) {
       return discardSnapshotAndRefold();
     }
 

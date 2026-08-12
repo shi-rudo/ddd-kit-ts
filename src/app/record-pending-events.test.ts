@@ -4,6 +4,7 @@ import {
 	createDomainEventFactory,
 	type DomainEvent,
 } from "../aggregate/domain-event";
+import { ReentrantEventRecordingError } from "../core/errors";
 import type { Id } from "../core/id";
 import { recordPendingEvents } from "./record-pending-events";
 
@@ -75,6 +76,30 @@ describe("recordPendingEvents", () => {
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");
 			expect(event).not.toHaveProperty("occurredAt");
+		}
+	});
+
+	it("rejects a stamp provider that triggers a new decision on the aggregate", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+
+		expect(() =>
+			recordPendingEvents(aggregate, (_event, index) => {
+				// A decision made mid-recording grows the pending list the map
+				// never visits; silently replacing the list would discard it.
+				aggregate.change(99);
+				return {
+					eventId: `event-${index}`,
+					occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+				};
+			}),
+		).toThrow(ReentrantEventRecordingError);
+
+		// Recording stayed atomic: every decision, including the re-entrant
+		// one, remains pending and unrecorded.
+		expect(aggregate.pendingEvents).toHaveLength(2);
+		for (const event of aggregate.pendingEvents) {
+			expect(event).not.toHaveProperty("eventId");
 		}
 	});
 });

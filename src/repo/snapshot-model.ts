@@ -1,6 +1,10 @@
 import type { AggregateSnapshot, Version } from "../aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../aggregate/domain-event-errors";
-import { SnapshotSchemaMismatchError } from "../core/errors";
+import {
+	DomainError,
+	SnapshotCorruptedError,
+	SnapshotSchemaMismatchError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import { isBuiltInObject } from "../utils/array/is-built-in";
 
@@ -32,6 +36,15 @@ export interface SnapshotModel<
 	/**
 	 * Reconstitutes a fresh, valid aggregate without recording a new decision.
 	 * This is normally a call to a static aggregate factory.
+	 *
+	 * A snapshot persisted under yesterday's decision rules must keep loading
+	 * after a rule change ("replay from zero equals snapshot plus tail"), so
+	 * prefer a factory path that does not re-run current `validateState`
+	 * rules against the stored blob. When the factory does validate and
+	 * throws a `DomainError`, `reconstituteAggregateFromSnapshot` surfaces it
+	 * as a {@link SnapshotCorruptedError} so the documented load recipe can
+	 * discard the derived snapshot and refold from the stream; the load then
+	 * still succeeds, at the cost of a full replay on every hit.
 	 */
 	reconstitute(
 		id: TAggregate["id"],
@@ -84,6 +97,14 @@ export function captureAggregateSnapshot<
 /**
  * Reconstitutes a fresh aggregate from a stored snapshot through the owning
  * adapter model. A missing schema version denotes the original schema `1`.
+ *
+ * A `DomainError` thrown while interpreting the stored blob (the model's
+ * `migrate`, or current `validateState` rules running inside the model's
+ * reconstitution factory) is surfaced as a {@link SnapshotCorruptedError}:
+ * a snapshot is DERIVED data, so the caller's discard-and-refold branch must
+ * see one catchable corruption channel instead of a raw domain rejection
+ * escaping `getById` after a rule change. `SnapshotSchemaMismatchError`
+ * (a configuration gap, not corruption) and non-domain throws propagate.
  */
 export function reconstituteAggregateFromSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -95,23 +116,35 @@ export function reconstituteAggregateFromSnapshot<
 ): TAggregate {
 	assertSnapshotModel(model);
 	const storedSchemaVersion = snapshot.schemaVersion ?? 1;
-	let state: TSnapshotState;
-	if (storedSchemaVersion === model.schemaVersion) {
-		state = detachSnapshotState(snapshot.state) as TSnapshotState;
-	} else if (model.migrate) {
-		state = detachSnapshotState(
-			model.migrate(detachSnapshotState(snapshot.state), storedSchemaVersion),
-		);
-	} else {
-		throw new SnapshotSchemaMismatchError({
-			aggregateType: model.aggregateType,
-			aggregateId: String(id),
-			expectedSchemaVersion: model.schemaVersion,
-			actualSchemaVersion: storedSchemaVersion,
-		});
+	try {
+		let state: TSnapshotState;
+		if (storedSchemaVersion === model.schemaVersion) {
+			state = detachSnapshotState(snapshot.state) as TSnapshotState;
+		} else if (model.migrate) {
+			state = detachSnapshotState(
+				model.migrate(detachSnapshotState(snapshot.state), storedSchemaVersion),
+			);
+		} else {
+			throw new SnapshotSchemaMismatchError({
+				aggregateType: model.aggregateType,
+				aggregateId: String(id),
+				expectedSchemaVersion: model.schemaVersion,
+				actualSchemaVersion: storedSchemaVersion,
+			});
+		}
+		return model.reconstitute(id, state, snapshot.version);
+	} catch (error) {
+		if (error instanceof DomainError) {
+			throw new SnapshotCorruptedError(
+				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
+					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +
+					"rejected during reconstitution. Discard the derived snapshot and " +
+					"refold from the stream.",
+				error,
+			);
+		}
+		throw error;
 	}
-
-	return model.reconstitute(id, state, snapshot.version);
 }
 
 function assertSnapshotModel(model: {

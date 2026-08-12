@@ -54,6 +54,7 @@ function observeAcknowledgements(
 			onAcknowledge();
 		},
 		discardPendingEvents: (events) => lifecycle.discardPendingEvents(events),
+		persistedVersion: () => lifecycle.persistedVersion(),
 	});
 }
 
@@ -1028,6 +1029,37 @@ describe("UnitOfWork", () => {
 			});
 		});
 
+		it("uses a replacement for an inherited method after it was cached", async () => {
+			// A class method lives on the prototype, so the assignment takes the
+			// write-through-to-source path instead of the own-descriptor path;
+			// both must invalidate the guarded-method cache.
+			class PrototypeRepository {
+				read(): string {
+					return "initial";
+				}
+			}
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => new PrototypeRepository(),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				expect(repositories.orders.read()).toBe("initial");
+
+				repositories.orders.read = () => "replacement";
+
+				expect(repositories.orders.read()).toBe("replacement");
+			});
+		});
+
 		it("preserves non-configurable adapter properties while freezing", async () => {
 			await createReflectiveUow().run(async ({ repositories }) => {
 				const repository = repositories.orders as typeof repositories.orders &
@@ -1428,6 +1460,20 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(() => leaked.repositories).toThrow(TransactionClosedError);
+		});
+
+		it("returning the facade from run() resolves the committed result instead of a retryable CommitError", async () => {
+			const { uow } = createUow();
+
+			// Promise resolution probes `then` on the returned value after the
+			// session closed; that language-level probe must not trip the
+			// session-open guard and get misclassified as a commit failure.
+			const facade = await uow.run(async ({ repositories }) => {
+				return repositories.orders;
+			});
+
+			// Real use of the leaked facade after close still fails loudly.
+			expect(() => facade.tx).toThrow(TransactionClosedError);
 		});
 
 		it("adapter tracking after rollback throws TransactionClosedError", async () => {
@@ -2200,6 +2246,99 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("deleted");
+		});
+	});
+
+	describe("full-replacement persistence models", () => {
+		interface OrderRow {
+			readonly version: number;
+			readonly pending: number;
+		}
+
+		// The PersistenceModel contract explicitly permits a change set that is
+		// the whole row and never empty; mutation detection must not lean on
+		// isEmpty().
+		function fullReplacementModel(): PersistenceModel<
+			MockAggregate,
+			OrderRow,
+			OrderRow
+		> {
+			const row = (aggregate: MockAggregate): OrderRow => ({
+				version: aggregate.version as number,
+				pending: aggregate.pendingEvents.length,
+			});
+			return {
+				capture: row,
+				changes: (_baseline, aggregate) => row(aggregate),
+				isEmpty: () => false,
+			};
+		}
+
+		function createFullReplacementUow() {
+			const flushed: unknown[] = [];
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: fullReplacementModel(),
+						flush: async (_tx: undefined, write) => {
+							flushed.push(write.changes);
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (aggregate: MockAggregate) =>
+								tracking.trackLoaded(aggregate),
+						}),
+					}),
+				},
+			});
+			return { uow, flushed };
+		}
+
+		it("commits an update through a model whose change set is never empty", async () => {
+			const { uow, flushed } = createFullReplacementUow();
+			const aggregate = createMockAggregate("o-1");
+
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				aggregate.change(testEvent("o-1"));
+				repositories.orders.update(aggregate);
+				return "ok";
+			});
+
+			expect(result).toBe("ok");
+			expect(flushed).toEqual([
+				{ value: { version: 2, pending: 1 }, empty: false },
+			]);
+		});
+
+		it("tolerates a merely-loaded aggregate under a never-empty change set", async () => {
+			const { uow } = createFullReplacementUow();
+			const aggregate = createMockAggregate("o-1");
+
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				return "read-only";
+			});
+
+			expect(result).toBe("read-only");
+		});
+
+		it("still rejects mutation after registration under a full-replacement model", async () => {
+			const { uow } = createFullReplacementUow();
+			const aggregate = createMockAggregate("o-1");
+
+			await expectTrackingFailure(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change(testEvent("o-1"));
+					repositories.orders.update(aggregate);
+					aggregate.change(testEvent("o-1"));
+					return undefined;
+				}),
+				"mutated_after_registration",
+			);
 		});
 	});
 });

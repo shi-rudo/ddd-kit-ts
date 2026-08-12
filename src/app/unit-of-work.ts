@@ -20,6 +20,7 @@ import {
 	type PersistenceBaseline,
 	type PersistenceChanges,
 	type PersistenceModel,
+	persistenceProjectionDrifted,
 	recapturePersistenceBaseline,
 } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
@@ -1022,6 +1023,21 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 ): ProxyHandler<object> {
 	return {
 		get: (target, property, receiver) => {
+			// Language-level probes are not repository operations: promise
+			// resolution reads `then` on any value returned from run(), and
+			// inspection utilities read well-known symbols. Asserting
+			// session-open here would turn a facade returned from a COMMITTED
+			// run() into a TransactionClosedError during promise resolution,
+			// which classifyRunError then misreports as a retryable
+			// CommitError. Only absent properties are exempt; a repository
+			// that genuinely defines them still goes through the guard.
+			if (
+				(property === "then" || typeof property === "symbol") &&
+				!Reflect.has(target, property) &&
+				!Reflect.has(state.source, property)
+			) {
+				return undefined;
+			}
 			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
 			if (own) return Reflect.get(target, property, receiver);
@@ -1066,6 +1082,11 @@ function setRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 	if (set && descriptor) {
 		defineForwardedRepositoryProperty(state, property, descriptor);
 	}
+	// Every successful set invalidates the guarded-method cache, matching the
+	// own-descriptor and delete paths: a cached wrapper closed over the
+	// replaced function must not outlive the override (test spies, strategy
+	// swaps).
+	if (set) state.methodCache.delete(property);
 	return set;
 }
 
@@ -1375,9 +1396,12 @@ class Session<Evt extends AnyDomainEvent> {
 	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
 		const currentEvents = entry.aggregate.pendingEvents;
 		const registeredEvents = entry.registeredEvents ?? [];
+		// Capture-to-capture drift, NOT changes().isEmpty(): the
+		// PersistenceModel contract permits full-replacement change sets that
+		// are never empty, so a non-empty change set proves nothing about
+		// mutation after registration.
 		const persistenceChanged = entry.registeredBaseline
-			? !derivePersistenceChanges(entry.registeredBaseline, entry.aggregate)
-					.empty
+			? persistenceProjectionDrifted(entry.registeredBaseline, entry.aggregate)
 			: false;
 		const sameEvents =
 			currentEvents.length === registeredEvents.length &&
@@ -1462,14 +1486,13 @@ class Session<Evt extends AnyDomainEvent> {
 				this.assertUnchangedAfterRegistration(entry);
 				continue;
 			}
-			const persistenceChanged = !derivePersistenceChanges(
-				entry.baseline,
-				entry.aggregate,
-			).empty;
+			// Capture-to-capture drift against the load-time baseline: a
+			// full-replacement model's changes() is never empty, which would
+			// misreport every merely-loaded aggregate as unenrolled changes.
 			if (
 				entry.lifecycle === "loaded" &&
 				(entry.aggregate.version !== entry.expectedVersion ||
-					persistenceChanged)
+					persistenceProjectionDrifted(entry.baseline, entry.aggregate))
 			) {
 				throw new UnenrolledChangesError(String(entry.aggregate.id));
 			}

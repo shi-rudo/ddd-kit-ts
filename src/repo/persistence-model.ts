@@ -1,3 +1,5 @@
+import { deepEqual } from "../utils/array/deep-equal";
+
 /** Whether a baseline represents an existing row or a pending insert. */
 export type PersistenceLifecycle = "loaded" | "new";
 
@@ -13,8 +15,26 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	 * Captures the adapter's persistence projection at the current moment.
 	 * Return a detached value or an immutable value object: the Unit of Work
 	 * retains it as a baseline and cannot make an arbitrary adapter type safe.
+	 *
+	 * Capture must be deterministic for an unchanged aggregate: the Unit of
+	 * Work compares successive captures to detect mutation after write
+	 * registration. A capture that embeds ambient values (clock reads,
+	 * random ids) would make every commit look mutated. The default
+	 * comparison is the package's structural deep equality, which matches
+	 * `Set` members and `Map` keys by reference (JS `SameValueZero`
+	 * semantics): a capture that re-materializes object Set members or Map
+	 * keys on every call must supply {@link captureEquals}.
 	 */
 	capture(aggregate: TAggregate): TBaseline;
+
+	/**
+	 * Adapter-owned equality for two captures of the persistence projection.
+	 * Optional: the default is the package's structural deep equality (Set
+	 * members and Map keys by reference). Supply it when the capture shape
+	 * needs domain-specific comparison, for example rebuilt value-object Set
+	 * members compared by value.
+	 */
+	readonly captureEquals?: (a: TBaseline, b: TBaseline) => boolean;
 
 	/**
 	 * Derives the adapter's write payload from its own baseline.
@@ -57,6 +77,7 @@ interface BaselineCapability {
 	readonly baseline: unknown;
 	readonly lifecycle: PersistenceLifecycle;
 	capture(aggregate: unknown): unknown;
+	captureEquals(a: unknown, b: unknown): boolean;
 	changes(
 		baseline: unknown,
 		aggregate: unknown,
@@ -98,6 +119,30 @@ export function recapturePersistenceBaseline<TAggregate, TChangeSet>(
 	});
 }
 
+/**
+ * Recaptures the adapter projection and reports whether it drifted from the
+ * baseline's stored capture, using the model's `captureEquals` when supplied
+ * and structural deep equality otherwise.
+ *
+ * This, not `changes()`/`isEmpty()`, is the mutation detector: the
+ * `PersistenceModel` contract explicitly permits a full-replacement change
+ * set whose `isEmpty` is never true, so a non-empty change set proves
+ * nothing about mutation. Comparing capture to capture asks the honest
+ * question independent of the model's diffing strategy. A `"new"` lifecycle
+ * baseline has no stored capture and never reports drift.
+ */
+export function persistenceProjectionDrifted<TAggregate, TChangeSet>(
+	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
+	aggregate: TAggregate,
+): boolean {
+	const capability = capabilityFor(baseline);
+	if (capability.lifecycle === "new") return false;
+	return !capability.captureEquals(
+		capability.baseline,
+		capability.capture(aggregate),
+	);
+}
+
 /** Derives a typed adapter change set without exposing the stored baseline. */
 export function derivePersistenceChanges<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
@@ -121,6 +166,10 @@ function createBaselineToken<TAggregate, TBaseline, TChangeSet>(
 		baseline,
 		lifecycle,
 		capture: (aggregate) => model.capture(aggregate as TAggregate),
+		captureEquals: (a, b) =>
+			model.captureEquals
+				? model.captureEquals(a as TBaseline, b as TBaseline)
+				: deepEqual(a, b),
 		changes: (stored, aggregate, currentLifecycle) =>
 			model.changes(
 				stored as TBaseline | undefined,

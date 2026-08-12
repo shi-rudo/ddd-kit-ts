@@ -47,6 +47,7 @@ class MockAggregate extends AggregateRoot<
 			},
 			discardPendingEvents: (committedEvents) =>
 				lifecycle.discardPendingEvents(committedEvents),
+			persistedVersion: () => lifecycle.persistedVersion(),
 		});
 	}
 
@@ -1025,6 +1026,53 @@ describe("withCommit", () => {
 		expect(outbox.added).toHaveLength(0);
 	});
 
+	it("rejects a stalled eventful commit even when enrollment omits options", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		// Restored at 5, recorded an event without advancing beyond 5, and
+		// enrolled in the documented no-options style: the kit-maintained
+		// persisted version must ground the unique-cursor guard, or the
+		// envelope claims an aggregateVersion an earlier commit already used.
+		const aggregate = createMockAggregate([event], 5, 5);
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => ({
+					result: "r",
+					commits: [enrollment.enrollSaved(aggregate)],
+				}),
+			),
+		).rejects.toThrow(/did not advance/i);
+		expect(outbox.added).toHaveLength(0);
+	});
+
+	it("admits an eventful version-0 commit of a never-persisted aggregate", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		// Construction-time decision without a version bump: with no persisted
+		// row there is no cursor to collide with, so the commit is unique.
+		const aggregate = createMockAggregate([event], 0);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollSaved(aggregate)],
+			}),
+		);
+
+		expect(outbox.added[0]?.[0]?.position.aggregateVersion).toBe(0);
+	});
+
 	describe("post-commit application observer isolation", () => {
 		it("contains an internal acknowledgement failure and continues with peer aggregates", async () => {
 			const frozen = createMockAggregate([
@@ -1659,7 +1707,7 @@ describe("withCommit", () => {
 });
 
 describe("commit enrollment lifecycle", () => {
-	it("acknowledges exactly the enrolled batch and leaves later events pending", async () => {
+	it("rejects events recorded after enrollment instead of dropping them", async () => {
 		const first = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "first" },
@@ -1673,18 +1721,24 @@ describe("commit enrollment lifecycle", () => {
 		const aggregate = createMockAggregate([first]);
 		const outbox = createMockOutbox();
 
-		await withCommit(
-			{ outbox, scope: createMockScope() },
-			async (_ctx, enrollment) => {
-				const token = enrollment.enrollSaved(aggregate);
-				aggregate.recordAfterEnrollmentForTest(later);
-				return { result: undefined, commits: [token] };
-			},
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => {
+					const token = enrollment.enrollSaved(aggregate);
+					aggregate.recordAfterEnrollmentForTest(later);
+					return { result: undefined, commits: [token] };
+				},
+			),
+		).rejects.toThrow(
+			/changed after its commit batch was enrolled.*enroll last/s,
 		);
 
-		expect(outbox.added[0]?.map(({ event }) => event)).toEqual([first]);
-		expect(aggregate.pendingEvents).toEqual([later]);
-		expect(aggregate.acknowledgementCount).toBe(1);
+		// Rolled back: nothing harvested, nothing acknowledged; the late
+		// event was never part of the attested write.
+		expect(outbox.added).toHaveLength(0);
+		expect(aggregate.pendingEvents).toEqual([first, later]);
+		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 
 	it("rejects saved enrollment after delete enrollment in one transaction", async () => {
