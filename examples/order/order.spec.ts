@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { type Money, moneyOfMinor } from "../../src/money";
+import { type Money, moneyOfMinor, moneyToSnapshot } from "../../src/money";
 import {
 	captureAggregateSnapshot,
 	reconstituteAggregateFromSnapshot,
@@ -100,10 +100,13 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		);
 
 		expect(snapshot.state.status).toBe("confirmed");
-		expect(snapshot.state.total).toEqual(eur(2000n));
+		expect(snapshot.state.total).toEqual(moneyToSnapshot(eur(2000n)));
 		expect(snapshot.version).toBe(2);
 		expect(snapshot.snapshotAt).toEqual(snapshotAt);
 		expect(snapshot.snapshotAt).not.toBe(snapshotAt);
+		// The stored DTO must survive a JSON-backed snapshot store: raw Money
+		// carries a bigint and would throw here.
+		expect(JSON.parse(JSON.stringify(snapshot.state))).toEqual(snapshot.state);
 	});
 
 	it("should restore from snapshot", () => {

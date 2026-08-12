@@ -98,11 +98,27 @@ export function createEsRepositoryContractTests<
 			"the stream was not appended or replayed correctly",
 		);
 	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
-	const ids = (events: ReadonlyArray<PendingDomainEvent<TEvent>>): string[] =>
+	// Pre-flush identities: the in-memory batch must be recorded (minted)
+	// before the adapter may flush it.
+	const recordedIds = (
+		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
+	): string[] =>
 		events.map((event) => {
 			assert(
 				isMintedEvent(event),
 				"pending events must be recorded before flush",
+			);
+			return event.eventId;
+		});
+	// Read-back identities: adapters may serialize committed events to rows
+	// and decode them on read. A decoded event does not carry the in-memory
+	// mint brand, and no contract demands re-minting on read, so only the
+	// persisted identity is asserted here.
+	const ids = (events: ReadonlyArray<TEvent>): string[] =>
+		events.map((event) => {
+			assert(
+				typeof event.eventId === "string" && event.eventId.length > 0,
+				"committed events must carry their persisted eventId",
 			);
 			return event.eventId;
 		});
@@ -123,7 +139,7 @@ export function createEsRepositoryContractTests<
 			name: "add appends the exact creation batch to stream and outbox",
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();
-				const expectedIds = ids(aggregate.pendingEvents);
+				const expectedIds = recordedIds(aggregate.pendingEvents);
 				assertEqual(
 					expectedIds.length,
 					1,
@@ -227,7 +243,7 @@ export function createEsRepositoryContractTests<
 				const aggregate = harness.createAggregate();
 				harness.mutate(aggregate);
 				harness.mutate(aggregate);
-				const expectedIds = ids(aggregate.pendingEvents);
+				const expectedIds = recordedIds(aggregate.pendingEvents);
 				await environment.run(async ({ repository }) => {
 					repository.add(aggregate);
 				});

@@ -663,6 +663,101 @@ describe("UnitOfWork", () => {
 			expect(flushCalls).toBe(0);
 		});
 
+		it("rejects loading one instance through two repository definitions as different_repository", async () => {
+			const aggregate = createMockAggregate("o-1");
+			const definition = () =>
+				defineTestRepository({
+					aggregate: MockAggregate,
+					persistence: versionPersistenceModel<MockAggregate>(),
+					create: (_tx: undefined, tracking) => ({
+						trackLoaded: (loaded: MockAggregate) => tracking.trackLoaded(loaded),
+					}),
+					flush: async () => {},
+				});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					primary: definition(),
+					secondary: definition(),
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.primary.trackLoaded(aggregate);
+					repositories.secondary.trackLoaded(aggregate);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			// The violation is repository ownership during a LOAD, not a
+			// write registration of an unloaded aggregate.
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({
+				reason: "different_repository",
+				operation: "load",
+			});
+		});
+
+		it("a failed add leaves no phantom in the identity map", async () => {
+			let tracking!: RepositoryTracking<MockAggregate>;
+			const { uow } = createUow({
+				onTracking: (captured) => {
+					tracking = captured;
+				},
+			});
+			// A structural lookalike without the kit lifecycle: enrollment
+			// rejects it after the identity map already registered it.
+			const impostor = {
+				id: "o-1",
+				version: 1,
+				pendingEvents: [],
+			} as unknown as MockAggregate;
+
+			await uow.run(async ({ repositories }) => {
+				expect(() => repositories.orders.add(impostor)).toThrow(
+					EventHarvestError,
+				);
+				// Rolled back: findById must not serve the failed instance.
+				expect(
+					tracking.identityMap.get(MockAggregate, "o-1" as TestId),
+				).toBeUndefined();
+				// No tombstone either: the id stays usable for a real aggregate.
+				repositories.orders.add(createMockAggregate("o-1"));
+				return undefined;
+			});
+		});
+
+		it("hands adapters a frozen read-only identity-map view", async () => {
+			let tracking!: RepositoryTracking<MockAggregate>;
+			const { uow } = createUow({
+				onTracking: (captured) => {
+					tracking = captured;
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				const view = tracking.identityMap as unknown as Record<
+					string,
+					unknown
+				>;
+				expect(view.set).toBeUndefined();
+				expect(view.delete).toBeUndefined();
+				expect(view.clear).toBeUndefined();
+				expect(Object.isFrozen(tracking.identityMap)).toBe(true);
+				expect(tracking.identityMap.get(MockAggregate, "o-1" as TestId)).toBe(
+					aggregate,
+				);
+				return undefined;
+			});
+		});
+
 		it("rejects conflicting write intents", async () => {
 			const { uow } = createUow();
 			const aggregate = createMockAggregate("o-1");

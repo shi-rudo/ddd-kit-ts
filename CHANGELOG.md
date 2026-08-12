@@ -572,6 +572,33 @@ weakened or misfired. All of them are closed inside the same breaking window.
   `run()` no longer converts a committed transaction into a false retryable
   `CommitError`; real property access after close still throws
   `TransactionClosedError`.
+- Duplicate enrollment of an unchanged aggregate accepts a repeat call that
+  omits `expectedVersion`: an omitted option is no assertion. Only a
+  supplied value that contradicts the enrollment-time baseline rejects,
+  with a message that names both values.
+- A failed `repository.add` rolls its identity-map and tracking
+  registration back. Before this fix, `findById` served the never-persisted
+  instance while the transaction committed without a write for it. The new
+  `IdentityMap.discard` removes an entry without a deletion tombstone.
+- Loading one aggregate instance through two repository definitions now
+  rejects with reason `different_repository` and operation `load`, and the
+  ownership check runs before identity-map registration. The
+  `AggregateTrackingError.operation` union gained `"load"`.
+- Repository adapters receive a frozen identity-map view with only `get`,
+  `has`, and `isDeleted`. The full map exposed `set`, `delete`, and `clear`
+  at runtime, and a stray `clear()` erased deletion tombstones and the
+  baselines behind `UnenrolledChangesError`.
+- The pending-event recording registry is shared across package copies
+  through a `Symbol.for` global key, like the lifecycle registry. With two
+  loaded copies of the kit, `recordPendingEvents` no longer throws for
+  aggregates that the other copy constructed.
+- The event-sourced repository contract suite no longer asserts the
+  in-memory mint brand on events read back from the adapter's store. An
+  adapter that serializes committed events to rows and decodes them on read
+  now passes; only the persisted `eventId` is asserted on read-back events.
+- The example order snapshot model stores `MoneySnapshot` DTOs instead of
+  raw `Money` values. A JSON-backed snapshot store crashed on the first
+  save because raw `Money` carries a bigint amount.
 
 ### Migration guide: 2.2.0 to 3.0.0
 

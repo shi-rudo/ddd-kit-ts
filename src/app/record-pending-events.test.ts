@@ -102,4 +102,19 @@ describe("recordPendingEvents", () => {
 			expect(event).not.toHaveProperty("eventId");
 		}
 	});
+
+	it("shares the recording capability registry across package copies", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+
+		// The registry lives behind a Symbol.for key on globalThis, like the
+		// lifecycle registry: a second loaded copy of the kit resolves the
+		// same WeakMap instead of a module-local one it cannot see into.
+		const registry = Object.getOwnPropertyDescriptor(
+			globalThis,
+			Symbol.for("@shirudo/ddd-kit/pending-event-recording-registry/v1"),
+		)?.value as WeakMap<object, unknown> | undefined;
+
+		expect(registry).toBeInstanceOf(WeakMap);
+		expect(registry?.has(aggregate)).toBe(true);
+	});
 });

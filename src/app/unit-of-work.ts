@@ -188,7 +188,7 @@ export type AggregateTrackingFailure =
 export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING"> {
 	constructor(
 		public readonly aggregateId: string,
-		public readonly operation: AggregateWriteIntent | "commit",
+		public readonly operation: AggregateWriteIntent | "load" | "commit",
 		public readonly reason: AggregateTrackingFailure,
 		public readonly registeredIntent?: AggregateWriteIntent,
 	) {
@@ -201,7 +201,7 @@ export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING">
 
 function trackingFailureMessage(
 	aggregateId: string,
-	operation: AggregateWriteIntent | "commit",
+	operation: AggregateWriteIntent | "load" | "commit",
 	reason: AggregateTrackingFailure,
 	registeredIntent: AggregateWriteIntent | undefined,
 ): string {
@@ -1177,6 +1177,15 @@ class Session<Evt extends AnyDomainEvent> {
 	private readonly _deleted = new Set<IAggregateRoot<Id<string>, Evt>>();
 	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
+	// What adapters receive: the typed read-only view, enforced at runtime.
+	// Handing out the map itself would expose set/delete/clear to JavaScript
+	// callers, and a stray clear() erases deletion tombstones and the
+	// pending-event baselines behind UnenrolledChangesError.
+	private readonly _identityMapView = Object.freeze({
+		get: this._identityMap.get.bind(this._identityMap),
+		has: this._identityMap.has.bind(this._identityMap),
+		isDeleted: this._identityMap.isDeleted.bind(this._identityMap),
+	}) as UnitOfWorkIdentityMap;
 	private readonly _trackingByAggregate = new WeakMap<
 		IAggregateRoot<Id<string>, Evt>,
 		TrackedAggregate<Evt>
@@ -1186,9 +1195,9 @@ class Session<Evt extends AnyDomainEvent> {
 
 	constructor(private readonly commitEnrollment: CommitEnrollment<Evt>) {}
 
-	public get identityMap(): IdentityMap {
+	public get identityMap(): UnitOfWorkIdentityMap {
 		this.assertOpen("tracking.identityMap");
-		return this._identityMap;
+		return this._identityMapView;
 	}
 
 	public trackingFor(
@@ -1209,20 +1218,20 @@ class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TAggregate {
 		this.assertOpen("tracking.trackLoaded");
-		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
-
+		// Ownership is checked BEFORE identity-map registration: a rejected
+		// instance must not stay registered under the second definition's
+		// class key with no tracking entry behind it.
 		const existing = this._trackingByAggregate.get(aggregate);
-		if (existing) {
-			if (existing.definition !== definition) {
-				throw new AggregateTrackingError(
-					String(aggregate.id),
-					"update",
-					"not_loaded",
-					existing.intent,
-				);
-			}
-			return aggregate;
+		if (existing && existing.definition !== definition) {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				"load",
+				"different_repository",
+				existing.intent,
+			);
 		}
+		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
+		if (existing) return aggregate;
 
 		const entry: TrackedAggregate<Evt> = {
 			aggregate,
@@ -1261,6 +1270,7 @@ class Session<Evt extends AnyDomainEvent> {
 		}
 
 		let entry = existing;
+		const newlyTracked = !entry;
 		if (!entry) {
 			this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
 			entry = {
@@ -1274,7 +1284,21 @@ class Session<Evt extends AnyDomainEvent> {
 			this._trackedAggregates.add(entry);
 		}
 
-		this.registerWrite(entry, "add", definition);
+		try {
+			this.registerWrite(entry, "add", definition);
+		} catch (error) {
+			// A failed add must not leave a phantom: without this rollback,
+			// findById would serve the never-persisted instance from the
+			// identity map while the commit-readiness guard ignores "new"
+			// lifecycle entries, so the transaction would commit without a
+			// write for it.
+			if (newlyTracked) {
+				this._trackingByAggregate.delete(aggregate);
+				this._trackedAggregates.delete(entry);
+				this._identityMap.discard(definition.aggregate, aggregate.id, aggregate);
+			}
+			throw error;
+		}
 	}
 
 	public update(

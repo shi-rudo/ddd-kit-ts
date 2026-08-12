@@ -1741,6 +1741,57 @@ describe("commit enrollment lifecycle", () => {
 		expect(aggregate.acknowledgementCount).toBe(0);
 	});
 
+	it("treats an omitted expectedVersion on re-enrollment as no assertion", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				const first = enrollment.enrollSaved(aggregate, {
+					expectedVersion: 5 as Version,
+				});
+				// Duplicate enrollment is idempotent by reference; a repeat
+				// call without options makes no OCC assertion.
+				const second = enrollment.enrollSaved(aggregate);
+				expect(second).toBe(first);
+				return { result: "r", commits: [first] };
+			},
+		);
+
+		expect(outbox.added).toHaveLength(1);
+		expect(aggregate.acknowledgementCount).toBe(1);
+	});
+
+	it("rejects re-enrollment that asserts a different expectedVersion", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => {
+					const first = enrollment.enrollSaved(aggregate, {
+						expectedVersion: 5 as Version,
+					});
+					enrollment.enrollSaved(aggregate, { expectedVersion: 6 as Version });
+					return { result: "r", commits: [first] };
+				},
+			),
+		).rejects.toThrow(/re-enrolled with expectedVersion/);
+		expect(outbox.added).toHaveLength(0);
+	});
+
 	it("rejects saved enrollment after delete enrollment in one transaction", async () => {
 		const outbox = createMockOutbox();
 		const deletionEvent = createDomainEvent(

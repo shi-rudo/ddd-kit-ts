@@ -238,10 +238,21 @@ function createCommitTokenScope<
 			if (disposition === "deleted") {
 				record.disposition = "deleted";
 			}
+			// Duplicate enrollment is idempotent by reference. An omitted
+			// expectedVersion is no assertion, not an assertion of "absent":
+			// only a supplied value is compared against the recorded baseline.
 			if (
-				options?.expectedVersion !== record.expectedVersion ||
-				enrollmentDiverged(record)
+				options?.expectedVersion !== undefined &&
+				options.expectedVersion !== record.expectedVersion
 			) {
+				throw new EventHarvestError(
+					`withCommit: aggregate ${String(aggregate.id)} was re-enrolled ` +
+						`with expectedVersion ${String(options.expectedVersion)}, but its ` +
+						`enrollment recorded ${String(record.expectedVersion)}. Duplicate ` +
+						"enrollment must assert the same OCC baseline or none.",
+				);
+			}
+			if (enrollmentDiverged(record)) {
 				throw new EventHarvestError(
 					`withCommit: aggregate ${String(aggregate.id)} changed after its ` +
 						"commit batch was enrolled. Register persistence intent last.",
@@ -457,7 +468,9 @@ function createCommitTokenScope<
  *
  * **Duplicate enrollment is idempotent by reference.** Enrolling the same
  * instance repeatedly returns the same token, and a repeated token in
- * `commits` is harvested once. Each event lands in the outbox exactly once
+ * `commits` is harvested once. A repeat call that omits `expectedVersion`
+ * makes no OCC assertion; only a supplied value that contradicts the
+ * enrollment-time baseline rejects. Each event lands in the outbox exactly once
  * and post-commit acknowledgement runs exactly once. Two
  * *different* instances with the same logical id cannot be detected
  * at this layer; that is a Repository contract violation (failure to

@@ -182,6 +182,26 @@ export class IdentityMap {
 	}
 
 	/**
+	 * Takes back a registration WITHOUT a tombstone: the entry is removed
+	 * only when the stored instance IS the given one, and a later
+	 * {@link set} of the same type+id stays legal. The Unit of Work calls
+	 * this when a registration step fails after {@link set} already ran, so
+	 * the failed instance cannot be served by `findById` as a phantom.
+	 * This is rollback, not deletion; deletion finality belongs to
+	 * {@link delete}.
+	 */
+	public discard<TAgg>(
+		type: AggregateClass<TAgg>,
+		id: Id<string>,
+		aggregate: TAgg,
+	): void {
+		const store = this._stores.get(type);
+		if (store?.get(id) === aggregate) {
+			store.delete(id);
+		}
+	}
+
+	/**
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
 	 * {@link set} of the same type+id throws `AggregateDeletedError`.
