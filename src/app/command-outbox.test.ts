@@ -278,6 +278,34 @@ describe("routeEventsToCommandOutbox", () => {
 		expect(addCalls).toBe(0);
 	});
 
+	it("rejects negative zero instead of silently storing it as 0", async () => {
+		let addCalls = 0;
+		const writer = routeEventsToCommandOutbox(
+			{
+				add: async () => {
+					addCalls += 1;
+				},
+			},
+			() => [
+				{
+					destination: "shipping.commands",
+					command: {
+						type: "AdjustBalance",
+						version: 1,
+						// JSON.stringify(-0) produces "0"; the exactness contract
+						// must reject the payload instead of mutating it.
+						payload: { delta: -0 },
+					},
+				},
+			],
+		);
+
+		await expect(writer.add([processEventCandidate()])).rejects.toThrow(
+			/negative zero/,
+		);
+		expect(addCalls).toBe(0);
+	});
+
 	it("rejects a command without an explicit positive schema version", async () => {
 		let addCalls = 0;
 		const writer = routeEventsToCommandOutbox(

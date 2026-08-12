@@ -103,6 +103,22 @@ describe("recordPendingEvents", () => {
 		}
 	});
 
+	it("shares the frozen payload instead of re-cloning it when recording", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+		const pendingPayload = aggregate.pendingEvents[0]?.payload;
+
+		const [recorded] = recordPendingEvents(aggregate, (_event, index) => ({
+			eventId: `event-${index}`,
+			occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+		}));
+
+		// The uncommitted constructor already cloned and deep-froze the
+		// payload; recording must not pay a second deep copy per event.
+		expect(recorded?.payload).toBe(pendingPayload);
+		expect(Object.isFrozen(recorded?.payload)).toBe(true);
+	});
+
 	it("shares the recording capability registry across package copies", () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
 

@@ -108,6 +108,28 @@ describe("adapter-owned snapshot models", () => {
 		expect(restored.state).not.toBe(storedState);
 	});
 
+	it("rejects a reconstitution that does not restore the snapshot version", () => {
+		// A factory that ignores the version parameter (a forgotten
+		// markRestored) is a wiring bug, not corruption: it must throw raw
+		// instead of feeding the discard-and-refold recovery forever.
+		const forgetfulModel = defineSnapshotModel({
+			...model,
+			reconstitute: (
+				id: OrderId,
+				state: { readonly status: string },
+			): Order => ({ id, state, version: 0 as Version }),
+		});
+
+		expect(() =>
+			reconstituteAggregateFromSnapshot(forgetfulModel, "order-1" as OrderId, {
+				state: { status: "placed" },
+				version: 7 as Version,
+				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
+				schemaVersion: 2,
+			}),
+		).toThrow(/must restore the persisted version/);
+	});
+
 	it("surfaces a domain rejection during reconstitution as snapshot corruption", () => {
 		class StatusNoLongerAllowedError extends DomainError<"STATUS_NOT_ALLOWED"> {
 			constructor() {

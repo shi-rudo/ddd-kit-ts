@@ -168,6 +168,16 @@ aggregate must not publish a fact that did not change state.
 There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
+Handlers must fold state from `type` and `payload` only. A live `apply(...)`
+dispatches the event before the shell records it, so `eventId` and
+`occurredAt` do not exist yet. Replay dispatches recorded events through the
+same handlers, so those fields are present there at runtime. The handler
+parameter type declares the uncommitted shape to keep them out of reach, but
+TypeScript cannot protect an `as any` cast or plain JavaScript. A handler
+that reads a stamp field folds `undefined` into live state and a value into
+every replayed instance, and the two silently diverge. When a time changes a
+business decision, pass it in the payload as a domain input.
+
 ## Persisting new events
 
 After `apply(...)`, new events sit in `pendingEvents`. The use case makes all

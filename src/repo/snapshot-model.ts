@@ -116,6 +116,7 @@ export function reconstituteAggregateFromSnapshot<
 ): TAggregate {
 	assertSnapshotModel(model);
 	const storedSchemaVersion = snapshot.schemaVersion ?? 1;
+	let aggregate: TAggregate;
 	try {
 		let state: TSnapshotState;
 		if (storedSchemaVersion === model.schemaVersion) {
@@ -132,7 +133,7 @@ export function reconstituteAggregateFromSnapshot<
 				actualSchemaVersion: storedSchemaVersion,
 			});
 		}
-		return model.reconstitute(id, state, snapshot.version);
+		aggregate = model.reconstitute(id, state, snapshot.version);
 	} catch (error) {
 		if (error instanceof DomainError) {
 			throw new SnapshotCorruptedError(
@@ -145,6 +146,20 @@ export function reconstituteAggregateFromSnapshot<
 		}
 		throw error;
 	}
+	// Post-condition, not corruption: a factory that ignores the version
+	// parameter (a forgotten markRestored) is a deterministic model wiring
+	// bug. Routing it into the discard-and-refold channel would mask it as
+	// perpetual silent refolding, so it throws raw instead.
+	if (aggregate.version !== snapshot.version) {
+		throw new TypeError(
+			`SnapshotModel.reconstitute for ${model.aggregateType} ${String(id)} ` +
+				`returned an aggregate at version ${String(aggregate.version)} for a ` +
+				`snapshot at version ${String(snapshot.version)}. Reconstitution must ` +
+				"restore the persisted version; call markRestored(version) inside " +
+				"the aggregate factory.",
+		);
+	}
+	return aggregate;
 }
 
 function assertSnapshotModel(model: {

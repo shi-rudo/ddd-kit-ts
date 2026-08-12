@@ -600,6 +600,48 @@ weakened or misfired. All of them are closed inside the same breaking window.
   raw `Money` values. A JSON-backed snapshot store crashed on the first
   save because raw `Money` carries a bigint amount.
 
+### Fixed: second review round on the commit path, contract coverage, and diagnostics
+
+A second branch-wide review confirmed ten more findings. All are closed
+inside the same breaking window.
+
+- `withCommit` asserts recorded (minted) events at commit enrollment, before
+  any adapter flush. The harvest guard alone fired after flush, so a
+  non-transactional event store kept a durably appended unstamped batch when
+  the shell forgot `recordPendingEvents`. The harvest check stays as a
+  backstop.
+- The event-sourcing guide and the `handlers` JSDoc document the
+  live-versus-replay shape difference: a live `apply()` dispatches the event
+  before recording, so `eventId` and `occurredAt` do not exist yet, while
+  replay dispatches recorded events through the same handlers. Handlers must
+  fold state from `type` and `payload` only.
+- `reconstituteAggregateFromSnapshot` enforces a post-condition: the
+  reconstituted aggregate must carry `snapshot.version`. A factory that
+  forgets `markRestored` now fails loudly instead of feeding the
+  discard-and-refold recovery forever.
+- The repository facade method cache keys validity on the current source
+  function. Adapter methods run with `this` bound to the raw source, so a
+  lazy-init self-assignment bypassed the proxy traps and the cache served
+  the replaced implementation for the rest of the run.
+- `assertJsonValue` rejects negative zero: `JSON.stringify(-0)` produces
+  `"0"`, which broke the exactness contract silently.
+- The state-stored contract suite restored the deep-equal requirement on
+  `mutateVersionOnly`, so it again forces the version-only, empty-change-set
+  write that a skip-empty adapter would drop. The repository guide states
+  the duty explicitly: an empty change set with a bumped version must still
+  persist the version.
+- The event-sourced contract suite restored the retry-after-rollback test:
+  re-adding the same never-persisted instance after a rollback must create
+  the stream with the full pending history.
+- `update` after `add` on the same aggregate reports `conflicting_intent`
+  with the registered `add` intent instead of `not_loaded` with impossible
+  load advice.
+- The saga example's wrong-state error names both candidate completion
+  events instead of hard-coding the shipping-failure event for every caller.
+- `recordDomainEvent` shares the already-frozen payload when a stamp
+  provider callback records an event, instead of paying a second deep copy
+  per event; only the caller-owned stamp fields are validated and copied.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

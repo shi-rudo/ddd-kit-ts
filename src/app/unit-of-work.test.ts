@@ -82,6 +82,14 @@ class MockAggregate extends AggregateRoot<
 	public change(event?: TestEvent): void {
 		this.commit(this.state, event);
 	}
+
+	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
+	public changeWithUnrecordedEvent(orderId: string): void {
+		this.commit(
+			this.state,
+			this.createEvent("OrderCreated", { orderId }),
+		);
+	}
 }
 
 function createMockAggregate(
@@ -758,6 +766,32 @@ describe("UnitOfWork", () => {
 			});
 		});
 
+		it("reports add-then-update as conflicting intent, not not_loaded", async () => {
+			const { uow } = createUow();
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.add(aggregate);
+					repositories.orders.update(aggregate);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			// The aggregate IS registered (via add); "load it through the
+			// repository" would be impossible advice for a row that does not
+			// exist yet.
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({
+				reason: "conflicting_intent",
+				operation: "update",
+				registeredIntent: "add",
+			});
+		});
+
 		it("rejects conflicting write intents", async () => {
 			const { uow } = createUow();
 			const aggregate = createMockAggregate("o-1");
@@ -772,6 +806,43 @@ describe("UnitOfWork", () => {
 				}),
 				"conflicting_intent",
 			);
+		});
+
+		it("rejects unrecorded events at write registration, before any flush", async () => {
+			let flushCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {
+							flushCalls += 1;
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					// A decision the shell forgot to stamp with
+					// recordPendingEvents: the rejection must land at update()
+					// registration. Waiting for the harvest guard would be too
+					// late for a non-transactional event store, whose flush
+					// append is already durable by then.
+					aggregate.changeWithUnrecordedEvent("o-1");
+					repositories.orders.update(aggregate);
+					return undefined;
+				}),
+			).rejects.toThrow(/has not been recorded/);
+			expect(flushCalls).toBe(0);
 		});
 
 		it("rejects domain mutation after write intent was registered", async () => {
@@ -1121,6 +1192,34 @@ describe("UnitOfWork", () => {
 				repositories.orders.read = () => "replacement";
 
 				expect(repositories.orders.read()).toBe("replacement");
+			});
+		});
+
+		it("rebuilds the guarded wrapper after an adapter method self-mutates", async () => {
+			// Adapter methods run with `this` bound to the raw source, so a
+			// lazy-init self-assignment bypasses every proxy trap. The cache
+			// must key on the current function identity, not the name alone.
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => ({
+							read(): string {
+								this.read = (): string => "swapped";
+								return "first";
+							},
+						}),
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				expect(repositories.orders.read()).toBe("first");
+				expect(repositories.orders.read()).toBe("swapped");
 			});
 		});
 

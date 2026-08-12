@@ -553,20 +553,43 @@ export function recordDomainEvent<T extends string, P>(
 	if (isFactoryOwnedDomainEventStamp(stamp)) {
 		return mintDomainEventFromOwnedData(event, stamp);
 	}
-	return mintDomainEvent(
-		event.type,
-		event.payload,
-		{
-			eventId: stamp.eventId,
-			occurredAt: stamp.occurredAt,
-			metadata: stamp.metadata,
-			aggregateId: event.aggregateId,
-			aggregateType: event.aggregateType,
-			version: event.version,
-		},
-		missingExplicitEventId,
-		missingExplicitOccurredAt,
-	);
+	return mintDomainEventFromCallerStamp(event, stamp);
+}
+
+/**
+ * Mints a recorded event from a caller-built stamp (a stamp-provider
+ * callback rather than a factory `createStamp`). The uncommitted event's
+ * payload is already defensively cloned and deeply frozen by its
+ * constructor, so it is shared instead of paying a second deep copy per
+ * event; only the caller-owned stamp fields are validated and copied.
+ */
+function mintDomainEventFromCallerStamp<T extends string, P>(
+	event: UncommittedDomainEvent<T, P>,
+	stamp: DomainEventStamp,
+): DomainEvent<T, P> {
+	assertProducerOwnedEventFields(event.type, event);
+	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
+	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
+	// The stamp fields are caller-owned and copied; the fresh metadata clone
+	// still needs its own deep freeze. The shared payload is already frozen.
+	const metadata = guardedMetadataClone(stamp.metadata);
+	const recorded: DomainEvent<T, P> = {
+		eventId: stamp.eventId,
+		type: event.type,
+		aggregateId: event.aggregateId,
+		aggregateType: event.aggregateType,
+		payload: event.payload,
+		occurredAt,
+		version: event.version,
+		metadata:
+			metadata === undefined
+				? undefined
+				: (deepFreeze(metadata) as EventMetadata),
+	};
+	stampMintBrand(recorded);
+	Object.freeze(recorded);
+	MINTED_EVENTS.add(recorded);
+	return recorded;
 }
 
 function mintDomainEventFromOwnedData<T extends string, P>(

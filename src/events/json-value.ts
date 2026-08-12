@@ -29,8 +29,15 @@ export function assertJsonValue(
 		case "boolean":
 			return;
 		case "number":
-			if (Number.isFinite(value)) return;
-			return invalid(path, "numbers must be finite JSON numbers");
+			if (!Number.isFinite(value)) {
+				return invalid(path, "numbers must be finite JSON numbers");
+			}
+			// JSON.stringify(-0) produces "0", so negative zero does not
+			// round-trip; rejecting it keeps the exactness contract honest.
+			if (Object.is(value, -0)) {
+				return invalid(path, "negative zero changes to 0 in JSON");
+			}
+			return;
 		case "object":
 			break;
 		default:

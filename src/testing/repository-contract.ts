@@ -60,7 +60,15 @@ export interface RepositoryContractHarness<
 	mutate(aggregate: TAggregate): void;
 	/** Required for duplicate-add and same-UoW deletion-finality proofs. */
 	createAggregateWithId?(id: TAggregate["id"]): TAggregate;
-	/** A version-bumping decision with no event. */
+	/**
+	 * A version-bumping decision with no event whose resulting state is
+	 * deep-equal to the previous state (`setState({ ...state })`). The
+	 * deep-equal requirement is load-bearing: it forces a diff-based
+	 * `PersistenceModel` to derive an EMPTY change set, so the suite proves
+	 * that an adapter persists the bumped version even when
+	 * `changes.empty` is true. Skipping that write desyncs the persisted
+	 * version and produces false concurrency conflicts later.
+	 */
 	mutateVersionOnly?(aggregate: TAggregate): void;
 	/** A decision that changes a nested collection. */
 	mutateChildCollection?(aggregate: TAggregate): void;
@@ -375,7 +383,7 @@ export function createRepositoryContractTests<
 				satisfiedBy: Boolean(mutateVersionOnly),
 			},
 			{
-				name: "state-only update persists without advancing the outbox source",
+				name: "version-only change still persists (skip-save must not desync the OCC baseline)",
 				run: inEnvironment(async (environment) => {
 					assert(mutateVersionOnly !== undefined, "capability gate");
 					const seeded = await seed(environment);
@@ -386,10 +394,16 @@ export function createRepositoryContractTests<
 						repository.update(aggregate);
 					});
 					const reloaded = await reload(environment, seeded.id);
+					// The harness contract keeps the projection deep-equal, so a
+					// diff-based model derives an EMPTY change set here: an
+					// adapter that skips empty writes fails this reload.
 					assertEqual(
 						reloaded.version,
 						seeded.version + 1,
-						"state-only update must persist its new version",
+						"a version-only change (empty change set, bumped version) " +
+							"must still be persisted; skipping it desyncs the " +
+							"persisted version and produces false concurrency " +
+							"conflicts later",
 					);
 					assert(
 						deepEqual(

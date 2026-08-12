@@ -314,6 +314,16 @@ export abstract class EventSourcedAggregate<
 	/**
 	 * A map of event types to their corresponding handlers.
 	 * Subclasses MUST implement this property.
+	 *
+	 * Handlers MUST fold state from `type` and `payload` only. The
+	 * parameter is typed as the uncommitted shape because a live `apply()`
+	 * dispatches the event BEFORE the shell records it: `eventId` and
+	 * `occurredAt` do not exist yet. Replay dispatches recorded events
+	 * through the same handlers, so those fields ARE present at runtime
+	 * there. A handler that reads them through an escape hatch (`as any`,
+	 * plain JavaScript) folds `undefined` live and a value on replay,
+	 * producing silently divergent state. When a time or identity changes a
+	 * business decision, pass it in the payload.
 	 */
 	protected abstract readonly handlers: {
 		[K in TEvent["type"]]: Handler<

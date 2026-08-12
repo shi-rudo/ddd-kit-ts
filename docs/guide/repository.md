@@ -256,7 +256,10 @@ const restaurantPersistence: PersistenceModel<
 The adapter chooses full replacement, partial columns, collection-aware row
 diffs, or a version-only write. `changes.empty` is only about stored state. An
 event-only commit can still have a non-empty `events` batch and must not be
-skipped.
+skipped. The reverse also holds: an empty change set with a bumped
+`write.version` and no events is a version-only decision, and the adapter
+must still persist the new version. Skipping the write desyncs the stored
+version and produces false concurrency conflicts on later updates.
 
 Projection functions must use meaningful aggregate queries and return
 detached persistence DTOs. Both `capture` and `changes` must avoid mutable

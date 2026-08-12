@@ -277,6 +277,22 @@ function createCommitTokenScope<
 		const events = Object.freeze([...aggregate.pendingEvents]) as ReadonlyArray<
 			PendingDomainEvent<Evt>
 		>;
+		// Recorded-before-persistence is checked HERE, not only at harvest:
+		// the UnitOfWork enrolls at write registration, so this rejection
+		// lands before any adapter flush. The harvest guard alone fires after
+		// flush, and a non-transactional event store would already have
+		// appended the unstamped batch durably.
+		for (const event of events) {
+			if (!isMintedEvent(event)) {
+				throw new EventHarvestError(
+					`withCommit: event "${(event as { readonly type: string }).type}" ` +
+						"has not been recorded. Call recordPendingEvents(aggregate, " +
+						"createStamp) in the application shell before persistence or " +
+						"outbox harvest.",
+					(event as { readonly type: string }).type,
+				);
+			}
+		}
 		// The kit-maintained marker, not the enrollment-supplied
 		// expectedVersion, grounds the unique-cursor guard: it survives
 		// callers who omit enrollment options (the documented

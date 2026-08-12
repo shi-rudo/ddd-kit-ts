@@ -308,6 +308,39 @@ export function createEsRepositoryContractTests<
 			}),
 		},
 		{
+			name: "retrying the same never-persisted instance after rollback creates the full stream",
+			run: inEnvironment(async (environment) => {
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
+				const expectedIds = recordedIds(aggregate.pendingEvents);
+				await captureRejection(
+					environment.run(async ({ repository }) => {
+						repository.add(aggregate);
+						throw new Error("rollback probe");
+					}),
+				);
+				// The documented retry carve-out: a never-persisted instance has
+				// no row or stream to reload, so the caller re-adds the SAME
+				// instance with its retained pending batch.
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
+				});
+				const stream = await environment.committedStreamEvents(
+					streamFor(aggregate.id),
+					readAll,
+				);
+				assert(
+					stream.exists && deepEqual(ids(stream.events), expectedIds),
+					"the retried add must create the stream with the full pending history",
+				);
+				assertEqual(
+					aggregate.pendingEvents.length,
+					0,
+					"the successful retry must acknowledge the whole batch",
+				);
+			}),
+		},
+		{
 			name: "outbox failure rolls the already-appended stream batch back",
 			run: inEnvironment(async (environment) => {
 				const aggregate = harness.createAggregate();

@@ -124,11 +124,19 @@ export class CheckoutProcessInWrongStateError extends DomainError<"CHECKOUT_PROC
 	constructor(
 		orderId: OrderId,
 		current: EventSourcedCheckoutSagaStep,
-		attempted: EventSourcedCheckoutSagaEvent["type"],
+		attempted:
+			| EventSourcedCheckoutSagaEvent["type"]
+			| ReadonlyArray<EventSourcedCheckoutSagaEvent["type"]>,
 	) {
+		// A method that serves several flows cannot know which event the
+		// caller intended when the state fits none of them; naming only one
+		// would point half the callers at the wrong flow.
+		const attemptedNames = Array.isArray(attempted)
+			? attempted.join(" or ")
+			: attempted;
 		super({
 			code: "CHECKOUT_PROCESS_IN_WRONG_STATE",
-			message: `Checkout process ${orderId} is ${current}; cannot record ${attempted}`,
+			message: `Checkout process ${orderId} is ${current}; cannot record ${attemptedNames}`,
 		});
 	}
 }
@@ -283,11 +291,10 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 				);
 				return;
 			default:
-				throw new CheckoutProcessInWrongStateError(
-					this.id,
-					this.state.step,
+				throw new CheckoutProcessInWrongStateError(this.id, this.state.step, [
+					"CheckoutCancellationCompletedAfterPaymentFailure",
 					"CheckoutCompensationCompletedAfterShippingFailure",
-				);
+				]);
 		}
 	}
 

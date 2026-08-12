@@ -902,12 +902,19 @@ function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 
 const REPOSITORY_LIFECYCLE_OPERATIONS = ["add", "update", "remove"] as const;
 
+interface GuardedMethodCacheEntry {
+	/** The source function the wrapper was built over; identity-checked on
+	 * every read so a self-mutated adapter method cannot serve stale. */
+	readonly sourceMethod: (...args: unknown[]) => unknown;
+	readonly guarded: (...args: unknown[]) => unknown;
+}
+
 interface RepositoryFacadeState<Evt extends AnyDomainEvent> {
 	readonly source: object;
 	readonly target: object;
 	readonly session: Session<Evt>;
 	readonly definition: RuntimePersistenceDefinition<Evt>;
-	readonly methodCache: Map<PropertyKey, (...args: unknown[]) => unknown>;
+	readonly methodCache: Map<PropertyKey, GuardedMethodCacheEntry>;
 	readonly forwardedOwnProperties: Set<PropertyKey>;
 	readonly writes: Set<PropertyKey>;
 }
@@ -949,13 +956,19 @@ function readRepositorySource<Evt extends AnyDomainEvent>(
 	state.session.assertOpen(repositoryOperationName(property));
 	const value = Reflect.get(state.source, property, state.source);
 	if (typeof value !== "function") return value;
+	// Cache validity is keyed on the CURRENT source function, not the
+	// property name alone: adapter methods run with `this` bound to the raw
+	// source, so a lazy-init self-assignment replaces the method without any
+	// proxy trap firing. A name-only cache would keep serving the wrapper
+	// closed over the replaced function for the rest of the run.
 	const cached = state.methodCache.get(property);
-	if (cached) return cached;
+	if (cached && cached.sourceMethod === value) return cached.guarded;
+	const sourceMethod = value as (...args: unknown[]) => unknown;
 	const guarded = (...args: unknown[]): unknown => {
 		state.session.assertOpen(repositoryOperationName(property));
-		return Reflect.apply(value, state.source, args);
+		return Reflect.apply(sourceMethod, state.source, args);
 	};
-	state.methodCache.set(property, guarded);
+	state.methodCache.set(property, { sourceMethod, guarded });
 	return guarded;
 }
 
@@ -1353,6 +1366,22 @@ class Session<Evt extends AnyDomainEvent> {
 	): TrackedAggregate<Evt> {
 		this.assertNotRemoved(aggregate, definition);
 		const entry = this._trackingByAggregate.get(aggregate);
+		// An add()-registered aggregate IS tracked, just not "loaded": report
+		// the real conflict with the registered intent. The not_loaded advice
+		// ("load it through the repository") is impossible for an aggregate
+		// that has no row yet and would actively mislead.
+		if (
+			entry &&
+			entry.lifecycle === "new" &&
+			entry.definition === definition
+		) {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				operation,
+				"conflicting_intent",
+				entry.intent,
+			);
+		}
 		if (
 			!entry ||
 			entry.lifecycle !== "loaded" ||
