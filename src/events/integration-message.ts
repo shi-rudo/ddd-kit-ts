@@ -7,7 +7,12 @@ import {
 } from "../aggregate/domain-event";
 import { InvalidIntegrationMessageError } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
-import { assertJsonValue, type JsonObject, type JsonValue } from "./json-value";
+import {
+	assertJsonValue,
+	isJsonObject,
+	type JsonObject,
+	type JsonValue,
+} from "./json-value";
 import type { CommitPosition, CommittedDomainEvent } from "./ports";
 
 export type { JsonObject, JsonPrimitive, JsonValue } from "./json-value";
@@ -311,10 +316,6 @@ function localEventMetadata(
 		return undefined;
 	}
 	return { ...message.metadata, ...relationships };
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isCanonicalIsoTimestamp(value: string): boolean {

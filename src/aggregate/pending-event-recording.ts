@@ -1,3 +1,4 @@
+import { createGlobalCapabilityRegistry } from "./global-capability-registry";
 import type {
 	AnyDomainEvent,
 	AnyUncommittedDomainEvent,
@@ -24,40 +25,9 @@ const recordingCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-recording-registry/v1",
 );
 
-function createCapabilityRegistry(): WeakMap<
-	object,
-	PendingEventRecordingCapability
-> {
-	const existing = Object.getOwnPropertyDescriptor(
-		globalThis,
-		recordingCapabilityRegistryKey,
-	)?.value;
-	if (existing instanceof WeakMap) {
-		return existing as WeakMap<object, PendingEventRecordingCapability>;
-	}
-
-	const registry = new WeakMap<object, PendingEventRecordingCapability>();
-	try {
-		Object.defineProperty(globalThis, recordingCapabilityRegistryKey, {
-			value: registry,
-			enumerable: false,
-			writable: false,
-			configurable: false,
-		});
-	} catch {
-		// A hardened host may reject global registration. The local registry
-		// still preserves the recording boundary; only duplicate-package
-		// cooperation is unavailable in that host.
-	}
-	return registry;
-}
-
-// A shared WeakMap lets aggregates constructed by a bundled plugin copy be
-// recorded by the host package copy, exactly like the lifecycle registry in
-// pending-event-lifecycle.ts. The registry is not a security boundary
-// against code already running in the same process; it is an architectural
-// boundary kept out of package exports and public aggregate types.
-const capabilities = createCapabilityRegistry();
+const capabilities = createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
+	recordingCapabilityRegistryKey,
+);
 
 export function registerPendingEventRecordingCapability(
 	aggregate: object,

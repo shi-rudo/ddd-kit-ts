@@ -55,6 +55,7 @@ function observeAcknowledgements(
 		},
 		discardPendingEvents: (events) => lifecycle.discardPendingEvents(events),
 		persistedVersion: () => lifecycle.persistedVersion(),
+		pendingEventCount: () => lifecycle.pendingEventCount(),
 	});
 }
 

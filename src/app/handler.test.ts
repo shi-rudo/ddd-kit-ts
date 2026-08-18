@@ -48,6 +48,7 @@ class MockAggregate extends AggregateRoot<
 			discardPendingEvents: (committedEvents) =>
 				lifecycle.discardPendingEvents(committedEvents),
 			persistedVersion: () => lifecycle.persistedVersion(),
+			pendingEventCount: () => lifecycle.pendingEventCount(),
 		});
 	}
 

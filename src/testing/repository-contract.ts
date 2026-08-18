@@ -1,8 +1,7 @@
 import type { IAggregateRoot } from "../aggregate/aggregate";
-import {
-	type AnyDomainEvent,
-	isMintedEvent,
-	type PendingDomainEvent,
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
 } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import type { CommittedDomainEvent } from "../events/ports";
@@ -17,6 +16,8 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
+	mintedPendingEventIds,
+	sortedCommittedEventIds,
 } from "./contract-assertions";
 
 /** Application-facing state-stored repository exercised by the suite. */
@@ -141,17 +142,14 @@ export function createRepositoryContractTests<
 
 	const eventIds = (
 		events: ReadonlyArray<CommittedDomainEvent<TEvent>>,
-	): string[] => events.map(({ event }) => event.eventId).sort();
+	): string[] => sortedCommittedEventIds(events);
 	const pendingEventIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		events.map((event) => {
-			assert(
-				isMintedEvent(event),
-				"the harness must record pending events before persistence",
-			);
-			return event.eventId;
-		});
+		mintedPendingEventIds(
+			events,
+			"the harness must record pending events before persistence",
+		);
 
 	const tests: RepositoryContractTest[] = [
 		{

@@ -1,3 +1,5 @@
+import { createGlobalCapabilityRegistry } from "./global-capability-registry";
+
 /**
  * Kit-internal authority for acknowledging one exact pending-event batch.
  *
@@ -21,6 +23,12 @@ export interface PendingEventLifecycleCapability {
 	 * unique-cursor guard.
 	 */
 	persistedVersion(): number | undefined;
+	/**
+	 * Count of unflushed pending events. The public `pendingEvents` getter
+	 * allocates and freezes a defensive copy per read, which count-only
+	 * consumers (the identity map's end-of-run scan) do not need.
+	 */
+	pendingEventCount(): number;
 }
 
 // The key version stamps the capability SHAPE. Bump it whenever the
@@ -32,40 +40,9 @@ const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v4",
 );
 
-function createCapabilityRegistry(): WeakMap<
-	object,
-	PendingEventLifecycleCapability
-> {
-	const existing = Object.getOwnPropertyDescriptor(
-		globalThis,
-		persistenceCapabilityRegistryKey,
-	)?.value;
-	if (existing instanceof WeakMap) {
-		return existing as WeakMap<object, PendingEventLifecycleCapability>;
-	}
-
-	const registry = new WeakMap<object, PendingEventLifecycleCapability>();
-	try {
-		Object.defineProperty(globalThis, persistenceCapabilityRegistryKey, {
-			value: registry,
-			enumerable: false,
-			writable: false,
-			configurable: false,
-		});
-	} catch {
-		// A hardened host may reject global registration. The local registry
-		// still preserves the lifecycle boundary; only duplicate-package
-		// cooperation is unavailable in that host.
-	}
-	return registry;
-}
-
-// A shared WeakMap lets aggregates constructed by a bundled plugin copy be
-// acknowledged by the host package copy without attaching callable authority
-// to the aggregate itself. The registry is not a security boundary against
-// code already running in the same process; it is an architectural boundary
-// kept out of package exports and public aggregate types.
-const capabilities = createCapabilityRegistry();
+const capabilities = createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
+	persistenceCapabilityRegistryKey,
+);
 
 export function registerPendingEventLifecycleCapability(
 	aggregate: object,

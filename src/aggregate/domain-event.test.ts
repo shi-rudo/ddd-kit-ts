@@ -108,7 +108,8 @@ describe("DomainEvent", () => {
 				for (const action of actions) {
 					expect(action).toThrowError(
 						expect.objectContaining({
-							name: "DomainEventValidationError",
+							// The kit identity model: name === code.
+							name: "EVENT_ID_INVALID",
 							code: "EVENT_ID_INVALID",
 							field: "eventId",
 						}),

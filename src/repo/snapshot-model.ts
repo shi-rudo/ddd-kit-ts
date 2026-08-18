@@ -7,6 +7,7 @@ import {
 } from "../core/errors";
 import type { Id } from "../core/id";
 import { isBuiltInObject } from "../utils/array/is-built-in";
+import { assertPositiveSafeInteger } from "../utils/validate";
 
 interface SnapshotAggregate {
 	readonly id: Id<string>;
@@ -177,11 +178,7 @@ function assertSnapshotModel(model: {
 			"SnapshotModel.aggregateType must be a non-empty string",
 		);
 	}
-	if (!Number.isSafeInteger(model.schemaVersion) || model.schemaVersion < 1) {
-		throw new TypeError(
-			"SnapshotModel.schemaVersion must be a positive safe integer",
-		);
-	}
+	assertPositiveSafeInteger("SnapshotModel", "schemaVersion", model.schemaVersion);
 }
 
 function copySnapshotAt(snapshotAt: Date): Date {

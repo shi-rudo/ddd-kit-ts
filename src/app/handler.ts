@@ -278,9 +278,9 @@ function createCommitTokenScope<
 		const token = Object.freeze(
 			Object.create(null),
 		) as AggregateCommitToken<Evt>;
-		const events = Object.freeze([...aggregate.pendingEvents]) as ReadonlyArray<
-			PendingDomainEvent<Evt>
-		>;
+		// The pendingEvents getter already returns a frozen detached copy;
+		// re-copying and re-freezing it here would only duplicate the work.
+		const events = aggregate.pendingEvents;
 		// Recorded-before-persistence is checked HERE, not only at harvest:
 		// the UnitOfWork enrolls at write registration, so this rejection
 		// lands before any adapter flush. The harvest guard alone fires after

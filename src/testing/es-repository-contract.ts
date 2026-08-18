@@ -2,7 +2,6 @@ import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import {
 	type AnyDomainEvent,
-	isMintedEvent,
 	type PendingDomainEvent,
 } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
@@ -19,6 +18,8 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
+	mintedPendingEventIds,
+	sortedCommittedEventIds,
 } from "./contract-assertions";
 
 /** Event-sourced repositories normally expose no physical removal. */
@@ -103,13 +104,7 @@ export function createEsRepositoryContractTests<
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		events.map((event) => {
-			assert(
-				isMintedEvent(event),
-				"pending events must be recorded before flush",
-			);
-			return event.eventId;
-		});
+		mintedPendingEventIds(events, "pending events must be recorded before flush");
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
 	// mint brand, and no contract demands re-minting on read, so only the
@@ -124,7 +119,7 @@ export function createEsRepositoryContractTests<
 		});
 	const outboxIds = (
 		events: ReadonlyArray<CommittedDomainEvent<TEvent>>,
-	): string[] => events.map(({ event }) => event.eventId).sort();
+	): string[] => sortedCommittedEventIds(events);
 
 	async function seed(environment: Environment): Promise<TAggregate> {
 		const aggregate = harness.createAggregate();

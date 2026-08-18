@@ -1,7 +1,11 @@
 import type { AggregateAddress } from "../aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { InvalidCommandMessageError } from "../core/errors";
-import { assertJsonValue, type JsonObject } from "../events/json-value";
+import {
+	assertJsonValue,
+	isJsonObject,
+	type JsonObject,
+} from "../events/json-value";
 import type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
@@ -248,10 +252,6 @@ function assertPublishedCommand(
 	if (!Object.hasOwn(value, "payload")) {
 		invalid("$.command.payload", "is required (use null for an empty payload)");
 	}
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const TRACEPARENT =

@@ -22,7 +22,9 @@ export type DomainEventValidationField =
  * field that do not depend on the wording of the human-readable message.
  */
 export class DomainEventValidationError extends TypeError {
-	readonly name = "DomainEventValidationError";
+	// The kit's error identity model applies here too: name === code, so
+	// there is no second identifier to keep in sync.
+	override readonly name: string;
 
 	constructor(
 		readonly code: DomainEventValidationCode,
@@ -30,12 +32,13 @@ export class DomainEventValidationError extends TypeError {
 		message: string,
 	) {
 		super(message);
+		this.name = code;
 		Object.setPrototypeOf(this, new.target.prototype);
 	}
 }
 
 export class SnapshotTimeValidationError extends TypeError {
-	readonly name = "SnapshotTimeValidationError";
+	override readonly name = "SNAPSHOT_TIME_INVALID";
 	readonly code = "SNAPSHOT_TIME_INVALID" as const;
 	readonly field = "snapshotAt" as const;
 

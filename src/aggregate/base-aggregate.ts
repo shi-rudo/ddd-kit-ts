@@ -104,6 +104,7 @@ export abstract class BaseAggregate<
 				this.discardPendingEventsAfterDeletion(events);
 			},
 			persistedVersion: () => this._persistedVersion,
+			pendingEventCount: () => this._pendingEvents.length,
 		});
 		registerPendingEventRecordingCapability(this, {
 			record: (createStamp) => {

@@ -10,6 +10,11 @@ export type JsonValue =
 /** A JSON-safe object. */
 export type JsonObject = { readonly [key: string]: JsonValue };
 
+/** Non-null, non-array object shape check shared by the message boundaries. */
+export function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 type InvalidJsonValue = (path: string, reason: string) => never;
 
 /**

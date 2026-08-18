@@ -739,6 +739,24 @@ design question. All are closed.
   persistence flag, because the Unit of Work owns the factory-versus-load
   lifecycle.
 
+### Changed: internal consolidation from the review backlog
+
+- `DomainEventValidationError` and `SnapshotTimeValidationError` set `name`
+  equal to `code`, like every other kit error. `KitErrorCode` now lists
+  every code the kit produces, including the event-validation codes, the
+  repository wiring codes, and the new recording codes.
+- One mint tail serves both stamp provenances. A factory-owned stamp is not
+  validated or copied a second time; a caller-built stamp still is.
+- The two capability registries share one `createGlobalCapabilityRegistry`
+  bootstrap. `isJsonObject` lives in `json-value.ts`. The snapshot model
+  reuses `assertPositiveSafeInteger`. The contract suites share their
+  event-identity helpers. One cause-chain walker serves both error
+  classification checks, and each check has its own doc comment.
+- Enrollment and write registration reuse the frozen copy that the
+  `pendingEvents` getter already returns. The identity map reads a
+  pending-event count through the kit-internal capability instead of one
+  array allocation per instance per scan.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

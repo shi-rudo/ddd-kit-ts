@@ -1,3 +1,4 @@
+import { pendingEventLifecycleCapabilityFor } from "../aggregate/pending-event-lifecycle";
 import { AggregateDeletedError } from "../core/errors";
 import type { Id } from "../core/id";
 
@@ -150,9 +151,9 @@ export class IdentityMap {
 			typeof aggregate === "object" &&
 			!this._pendingAtRegistration.has(aggregate as object)
 		) {
-			const pending = pendingEventsOf(aggregate);
-			if (pending) {
-				this._pendingAtRegistration.set(aggregate as object, pending.length);
+			const pending = pendingEventCountOf(aggregate);
+			if (pending !== undefined) {
+				this._pendingAtRegistration.set(aggregate as object, pending);
 			}
 		}
 	}
@@ -169,11 +170,11 @@ export class IdentityMap {
 		const result: unknown[] = [];
 		for (const store of this._stores.values()) {
 			for (const instance of store.values()) {
-				const pending = pendingEventsOf(instance);
-				if (!pending) continue;
+				const pending = pendingEventCountOf(instance);
+				if (pending === undefined) continue;
 				const atRegistration =
 					this._pendingAtRegistration.get(instance as object) ?? 0;
-				if (pending.length > atRegistration) {
+				if (pending > atRegistration) {
 					result.push(instance);
 				}
 			}
@@ -232,14 +233,18 @@ export class IdentityMap {
 }
 
 /**
- * Duck-types a stored value as an aggregate and returns its `pendingEvents`
- * array, or `undefined` for anything that is not aggregate-shaped. Single
- * source of truth so the load-time capture in {@link IdentityMap.set} and
- * the end-of-run scan in {@link IdentityMap.instancesWithNewPendingEvents}
- * cannot drift apart.
+ * Pending-event count of a stored value, or `undefined` for anything that is
+ * not aggregate-shaped. Single source of truth so the load-time capture in
+ * {@link IdentityMap.set} and the end-of-run scan in
+ * {@link IdentityMap.instancesWithNewPendingEvents} cannot drift apart.
+ * The kit-internal count capability avoids the public `pendingEvents`
+ * getter, which allocates and freezes a defensive copy per read; the getter
+ * stays as the fallback for structural lookalikes.
  */
-function pendingEventsOf(value: unknown): readonly unknown[] | undefined {
+function pendingEventCountOf(value: unknown): number | undefined {
 	if (value === null || typeof value !== "object") return undefined;
+	const capability = pendingEventLifecycleCapabilityFor(value);
+	if (capability?.pendingEventCount) return capability.pendingEventCount();
 	const pending = (value as { pendingEvents?: unknown }).pendingEvents;
-	return Array.isArray(pending) ? pending : undefined;
+	return Array.isArray(pending) ? pending.length : undefined;
 }

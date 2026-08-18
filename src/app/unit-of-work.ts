@@ -1515,7 +1515,8 @@ class Session<Evt extends AnyDomainEvent> {
 		entry.intent = intent;
 		this._registeredWrites.push(entry);
 		entry.registeredVersion = entry.aggregate.version;
-		entry.registeredEvents = Object.freeze([...entry.aggregate.pendingEvents]);
+		// Already a frozen detached copy from the pendingEvents getter.
+		entry.registeredEvents = entry.aggregate.pendingEvents;
 		entry.registeredBaseline = recapturePersistenceBaseline(
 			entry.baseline,
 			entry.aggregate,
@@ -1808,19 +1809,42 @@ function classifyRunError(
 }
 
 /**
- * Walks `error`'s standard `cause` chain looking for `target` by
- * reference. Bounded and cycle-safe, and hardened for arbitrary driver
- * errors: a `target` of `undefined`/`null` never matches (every error
- * without a `cause` property would otherwise "contain" a thrown
- * `undefined`), and a throwing `cause` getter (lazy deserialization,
- * revoked Proxy) is treated as no-match instead of replacing the real
- * failure with the getter's exception.
+ * Cycle-safe, getter-throw-safe walk over `error`'s standard `cause`
+ * chain. `visit` runs for every object link (the top error included) and
+ * receives the link plus its lazily read `cause`; a non-undefined return
+ * stops the walk. A throwing `cause` getter (lazy deserialization, revoked
+ * Proxy) ends the walk as no-match instead of replacing the real failure
+ * with the getter's exception.
  */
+function findInCauseChain<T>(
+	error: unknown,
+	visit: (link: object, cause: unknown) => T | undefined,
+): T | undefined {
+	const seen = new Set<unknown>();
+	let current: unknown = error;
+	while (
+		current !== null &&
+		typeof current === "object" &&
+		!seen.has(current)
+	) {
+		seen.add(current);
+		let cause: unknown;
+		try {
+			cause = (current as { cause?: unknown }).cause;
+		} catch {
+			return undefined;
+		}
+		const found = visit(current, cause);
+		if (found !== undefined) return found;
+		current = cause;
+	}
+	return undefined;
+}
+
 /**
  * Walks `error`'s `cause` chain and returns the first `EventHarvestError`,
- * or `undefined`. Cycle-safe and getter-throw-safe, like
- * {@link causeChainContains}. `withCommit` throws the harvest-guard error
- * INSIDE `scope.transactional`, so a wrapping scope can nest it; matching
+ * or `undefined`. `withCommit` throws the harvest-guard error INSIDE
+ * `scope.transactional`, so a wrapping scope can nest it; matching
  * only the top-level error would let the wrapper mask the non-retryable
  * type. `withCommit` and `run()` share this module, so the local
  * `instanceof` is reliable for the un-wrapped link.
@@ -1828,50 +1852,23 @@ function classifyRunError(
 function findHarvestErrorInChain(
 	error: unknown,
 ): EventHarvestError | undefined {
-	const seen = new Set<unknown>();
-	let current: unknown = error;
-	while (
-		current !== null &&
-		typeof current === "object" &&
-		!seen.has(current)
-	) {
-		seen.add(current);
-		if (current instanceof EventHarvestError) {
-			return current;
-		}
-		let next: unknown;
-		try {
-			next = (current as { cause?: unknown }).cause;
-		} catch {
-			return undefined;
-		}
-		current = next;
-	}
-	return undefined;
+	return findInCauseChain(error, (link) =>
+		link instanceof EventHarvestError ? link : undefined,
+	);
 }
 
+/**
+ * Whether `error`'s `cause` chain contains `target` by reference. A
+ * `target` of `undefined`/`null` never matches: every error without a
+ * `cause` property would otherwise "contain" a thrown `undefined`.
+ */
 function causeChainContains(error: unknown, target: unknown): boolean {
 	if (target === undefined || target === null) {
 		return false;
 	}
-	const seen = new Set<unknown>();
-	let current: unknown = error;
-	while (
-		current !== null &&
-		typeof current === "object" &&
-		!seen.has(current)
-	) {
-		seen.add(current);
-		let next: unknown;
-		try {
-			next = (current as { cause?: unknown }).cause;
-		} catch {
-			return false;
-		}
-		if (next === target) {
-			return true;
-		}
-		current = next;
-	}
-	return false;
+	return (
+		findInCauseChain(error, (_link, cause) =>
+			cause === target ? true : undefined,
+		) ?? false
+	);
 }
