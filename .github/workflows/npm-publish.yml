@@ -1,0 +1,64 @@
+name: npm-publish
+
+# Publishes the package when a version tag is pushed (the local flow is
+# `npm version <x.y.z[-rc.n]>` followed by `git push --follow-tags`).
+# `workflow_dispatch` covers a tag that was pushed before this workflow
+# existed or a re-run after a fixed registry problem: run it from the
+# Actions tab with the tag selected as the ref.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # npm provenance: the publish carries a verifiable link to this exact
+  # workflow run. Also the prerequisite for tokenless npm Trusted
+  # Publishing, when that is configured on npmjs.com for this package.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag must match package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$tag" != "$pkg" ]; then
+            echo "Tag v$tag does not match package.json version $pkg." >&2
+            echo "Cut releases with 'npm version' so the two cannot drift." >&2
+            exit 1
+          fi
+
+      # `npm publish` runs prepublishOnly first: clean, typecheck, lint,
+      # test, build, and the edge-runtime smoke. A prerelease version
+      # publishes under the `next` dist-tag (the release-candidate soak);
+      # a stable version publishes under `latest`.
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          case "$pkg" in
+            *-*) dist_tag=next ;;
+            *) dist_tag=latest ;;
+          esac
+          echo "Publishing $pkg with dist-tag $dist_tag"
+          npm publish --provenance --access public --tag "$dist_tag"
