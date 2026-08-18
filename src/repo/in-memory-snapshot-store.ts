@@ -24,7 +24,7 @@ interface StoredSnapshot<TState> {
  * In-memory reference implementation of {@link SnapshotStore}: defines
  * the port's semantics and serves tests and demos. Snapshots are
  * deep-copied on save AND load (`structuredClone`; snapshot state is
- * plain data by the `createSnapshot` contract), so neither the caller
+ * serialisable data by the `SnapshotModel` contract), so neither the caller
  * nor the store can mutate the other's copy.
  *
  * Unconfigured retention is intended only for finite-lifetime tests and

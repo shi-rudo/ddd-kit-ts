@@ -31,10 +31,11 @@ const outcome = await withIdempotentCommit(
     fingerprint: stableHash(command),
   },
   async (tx, enrollment) => {
-    const orders = makeOrderRepository(tx);
-    const order = await orders.getById(command.orderId);
+    const loaded = await loadOrderForDirectCommit(tx, command.orderId);
+    const order = loaded.aggregate;
     order.confirm();
-    await orders.save(order);
+    recordPendingEvents(order, domainEvents);
+    await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
     return {
       result: { orderId: order.id },
@@ -114,10 +115,11 @@ const outcome = await withIdempotentCommit(
   },
   request,
   async (tx, enrollment, execution) => {
-    const orders = makeOrderRepository(tx);
-    const order = await orders.getById(command.orderId);
+    const loaded = await loadOrderForDirectCommit(tx, command.orderId);
+    const order = loaded.aggregate;
     order.confirm();
-    await orders.save(order);
+    recordPendingEvents(order, domainEvents);
+    await updateOrderForDirectCommit(tx, order, loaded.expectedVersion);
 
     // Persist this marker in the SAME transaction as the command effect.
     await saveCommandMarker(tx, {

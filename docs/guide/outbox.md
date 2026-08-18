@@ -5,11 +5,14 @@ change that produced it. The transactional outbox is the pattern for that:
 write the aggregate and enqueue its events in one database transaction, then
 deliver the events after the commit.
 
-The kit gives you four pieces:
+The kit gives you five pieces:
 
 - `TransactionScope<TCtx>`: opens the storage transaction.
+- `UnitOfWork`: owns repository tracking, immutable write receipts, and the
+  standard aggregate write protocol.
 - `withCommit`: runs the use case, harvests aggregate events, writes the
-  outbox row, commits, then publishes optional in-process notifications.
+  outbox row, commits, then publishes optional in-process notifications. The
+  unit of work builds on it. Custom infrastructure can also use it directly.
 - `OutboxWriter<Evt>` / `Outbox<Evt>`: the durable queue boundary.
 - `OutboxDispatcher`: a small poller for setups that do not already have CDC
   or broker-owned delivery.
@@ -17,68 +20,75 @@ The kit gives you four pieces:
 The main path looks like this:
 
 ```ts
-import { InMemoryOutbox, withCommit } from "@shirudo/ddd-kit";
+import {
+  InMemoryOutbox,
+  recordPendingEvents,
+  UnitOfWork,
+} from "@shirudo/ddd-kit";
 
 const outbox = new InMemoryOutbox<OrderEvent>();
 
-const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(id);
+const orderId = await new UnitOfWork({
+  scope,
+  outbox,
+  repositories: { orders: orderRepositoryDefinition },
+}).run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(id);
 
   order.confirm();
-  await orders.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
+  return order.id;
 });
 ```
 
-The important line is the return value. The use case returns opaque tokens for
-the repository writes it enrolled, not naked aggregates and not
-`order.pendingEvents`. A fresh but unsaved aggregate therefore cannot be
-harvested or acknowledged accidentally. `withCommit` owns event harvesting
-and persistence cleanup. Every issued token must be present in `commits`; an
-omission rejects inside the transaction rather than committing state without
-its events. Repositories save state; aggregate lifecycle acknowledgement is
-not part of their API.
+The important line is `repositories.orders.update(order)`. It registers the
+persistence intent after the domain decision and event recording. The unit of
+work freezes the change set and exact event batch. It flushes both values in
+the transaction. `withCommit` owns the outbox and post-commit acknowledgement.
+
+An unregistered change rejects the operation. It cannot commit state without
+its events.
 
 ## What Happens On Commit
 
 `withCommit` does the same sequence every time:
 
 1. It calls `scope.transactional(...)`.
-2. Your callback loads aggregates, mutates them, and saves them through
-   repositories bound to the transaction handle.
-3. Still inside the transaction, `withCommit` validates the invocation-bound
-   commit tokens, harvests `pendingEvents` from their aggregates, and calls
-   `outbox.add(events)`.
-4. The transaction commits.
-5. After commit, `withCommit` acknowledges every saved aggregate through a
+2. The unit of work builds transaction-bound read adapters and tracking.
+3. Your callback loads aggregates, makes domain decisions, and registers
+   explicit writes.
+4. Still inside the transaction, the unit of work freezes and flushes the
+   registered receipts. `withCommit` rejects invalid internal commit tokens
+   and calls `outbox.add(events)` with the exact batches.
+5. The transaction commits.
+6. After commit, `withCommit` acknowledges every saved aggregate through a
    non-exported capability and discards harvested events for deleted rows.
-6. The optional application observer
+7. The optional application observer
    `onPersisted(aggregate, version, context)` runs for successfully acknowledged
    saved aggregates only, after every commit record has completed its
    acknowledgement attempt. Its version argument is the commit-time value
    captured before any observer ran.
-7. If a `bus` was supplied, it publishes the same committed events to
+8. If a `bus` was supplied, it publishes the same committed events to
    in-process subscribers.
 
 If the transaction rolls back, step 5 never happens. The aggregate still has
 its pending events, so the caller can retry or discard the instance.
 
-`onPersisted` may be asynchronous and is awaited, but it is not a delivery
-guarantee. All invocations and the optional bus publication share one absolute
-`postCommitTimeoutMs` budget (30 seconds by default), rather than receiving a
-fresh budget each. Every invocation receives an `ExecutionContext` with the
-corresponding `signal` and shared absolute `deadlineAt`; observers and bus work
-that have not started when it expires are skipped. A throw, timeout, or request abort is reported to
-`onPersistError` and never rejects the already committed result. Use the outbox
-for side effects that must survive a process crash. The same failure observer
-reports a runtime failure in the internal acknowledgement step; peer
-aggregates are still processed, and only successfully acknowledged aggregates
-reach `onPersisted`.
+`onPersisted` can run asynchronously. `withCommit` waits for it, but it is not a
+delivery guarantee. All invocations and the optional bus publication share one
+absolute `postCommitTimeoutMs` budget (30 seconds by default), rather than
+receiving a fresh budget each. Every invocation receives an `ExecutionContext`
+with the corresponding `signal` and shared absolute `deadlineAt`. If the
+deadline expires, observers and bus work that did not start are skipped.
+
+A throw, timeout, or request abort is reported to `onPersistError`. It never
+rejects the committed result.
+
+Use the outbox for side effects that must survive a process crash. The same
+failure observer reports a runtime failure in the internal acknowledgement
+step. Peer aggregates are still processed. Only successfully acknowledged
+aggregates reach `onPersisted`.
 
 If `bus.publish` fails, times out, or is aborted after the commit, `withCommit`
 does not reject. The write already succeeded, and returning an error would make
@@ -124,21 +134,17 @@ class DrizzleScope implements TransactionScope<DrizzleTx> {
 }
 ```
 
-Repositories are usually created inside the callback from that transaction
-handle:
+Repository definitions bind their read adapter and flush callback to that
+transaction handle. Application code sees neither `tx` nor enrollment:
 
 ```ts
-await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(orderId);
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
 
   order.confirm();
-  await orders.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
+  return order.id;
 });
 ```
 
@@ -155,10 +161,11 @@ await withCommit({ scope, outbox }, async () => ({
 }));
 ```
 
-`TransactionScope` does not track dirty objects, registered repositories, or
-deletes. That lives above it. Use `withCommit` for the commit lifecycle, and
-use `UnitOfWork` when you want tx-bound repositories, enrollment, and an
-identity map.
+`TransactionScope` does not track aggregates, repository intent, or deletes.
+That lives in `UnitOfWork` above it. `withCommit` remains the lower-level commit
+lifecycle for custom infrastructure compositions.
+If you need transaction-bound repositories, enrollment, and an identity map,
+use `UnitOfWork`.
 
 ## The Outbox Ports
 
@@ -271,19 +278,22 @@ the full cursor therefore survives JSON serialization. SQL adapters must map
 the nullable predecessor column to JavaScript `null` when hydrating an
 envelope; omitting the property produces an invalid legacy cursor.
 
-The predecessor cannot be inferred from `aggregate.persistedVersion`: that is
-the OCC baseline and advances on state-only saves. A durable adapter needs a
-source-head record keyed by `(aggregate_type, aggregate_id)`. Lock that record,
-read its `last_eventful_aggregate_version`, insert every event in the commit
-with that predecessor, and advance the head to the candidate's
-`aggregateVersion` in the same transaction. A unique commit-position key such
-as `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` keeps
-the event identity stable under retries; all rows of that aggregate version
-must also agree on `commit_size`. Validate those invariants before advancing
-the source head. Creation of the first source-head row also
-needs race-safe insert-or-lock semantics: rely on the primary key and retry the
-losing transaction; do not let two concurrent "genesis" writers proceed from
-separate missing-row reads.
+Do not infer the predecessor from `write.expectedVersion`. That value is the
+OCC baseline and also advances on state-only writes. A durable adapter needs a
+source-head record for `(aggregate_type, aggregate_id)`.
+
+Lock the source-head record. Read its `last_eventful_aggregate_version`. Insert
+each event with that predecessor. Then advance the head to the candidate
+`aggregateVersion` in the same transaction.
+
+Use `(aggregate_type, aggregate_id, aggregate_version, commit_sequence)` as the
+unique key for the commit position. All rows for one aggregate version must use
+the same `commit_size`. Make sure that these invariants hold before you advance
+the source head.
+
+The first source-head row also needs race-safe insert-or-lock behavior. Use the
+primary key and retry the losing transaction. Do not continue two concurrent
+genesis writes from separate missing-row reads.
 
 For a projection, the four fields form a gap-proof cursor: the consumer can
 reject missing sequences and commits. For general deduplication across all

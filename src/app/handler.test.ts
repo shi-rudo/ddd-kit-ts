@@ -5,6 +5,10 @@ import {
 	type IAggregateRoot,
 } from "../aggregate/aggregate-root";
 import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import {
+	pendingEventLifecycleCapabilityFor,
+	registerPendingEventLifecycleCapability,
+} from "../aggregate/pending-event-lifecycle";
 import { EventHarvestError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
@@ -25,31 +29,49 @@ class MockAggregate extends AggregateRoot<
 	TestEvent
 > {
 	protected readonly aggregateType = "MockOrder";
+	private _acknowledgementCount = 0;
 
-	constructor(events: TestEvent[], version: number, persistedVersion?: number) {
+	constructor(events: TestEvent[], version: number, restoredVersion?: number) {
 		super("agg-1" as TestId, {});
-		if (persistedVersion !== undefined) {
-			this.markRestored(persistedVersion as Version);
+		if (restoredVersion !== undefined) {
+			this.markRestored(restoredVersion as Version);
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
+		const lifecycle = pendingEventLifecycleCapabilityFor(this);
+		if (!lifecycle) throw new Error("missing aggregate event lifecycle");
+		registerPendingEventLifecycleCapability(this, {
+			acknowledge: (committedEvents, committedVersion) => {
+				lifecycle.acknowledge(committedEvents, committedVersion);
+				this._acknowledgementCount += 1;
+			},
+			discardPendingEvents: (committedEvents) =>
+				lifecycle.discardPendingEvents(committedEvents),
+			persistedVersion: () => lifecycle.persistedVersion(),
+			pendingEventCount: () => lifecycle.pendingEventCount(),
+		});
 	}
 
 	public get acknowledgementCount(): number {
-		return this.persistedVersion === this.version ? 1 : 0;
+		return this._acknowledgementCount;
 	}
 
 	public advanceForObserverTest(): void {
 		this.setVersion((this.version + 1) as Version);
+	}
+
+	public recordAfterEnrollmentForTest(event: TestEvent): void {
+		this.setVersion((this.version + 1) as Version);
+		this.addDomainEvent(event);
 	}
 }
 
 function createMockAggregate(
 	events: TestEvent[],
 	version = 1,
-	persistedVersion?: number,
+	restoredVersion?: number,
 ): MockAggregate {
-	return new MockAggregate(events, version, persistedVersion);
+	return new MockAggregate(events, version, restoredVersion);
 }
 
 function createMockScope(): TransactionScope<undefined> {
@@ -164,6 +186,42 @@ describe("withCommit", () => {
 		expect(outbox.added[0]).toEqual([stamped(event)]);
 	});
 
+	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
+		class DecisionAggregate extends AggregateRoot<
+			Readonly<Record<string, never>>,
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
+
+			constructor(id: TestId) {
+				super(id, {});
+			}
+
+			decide(): void {
+				this.commit(
+					{},
+					this.createEvent("OrderCreated", { orderId: "order-1" }),
+				);
+			}
+		}
+		const outbox = createMockOutbox();
+		const aggregate = new DecisionAggregate("agg-1" as TestId);
+		aggregate.decide();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) =>
+					enrolledResult(enrollment, "ok", [aggregate]),
+			),
+		).rejects.toBeInstanceOf(EventHarvestError);
+
+		expect(outbox.added).toHaveLength(0);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+		expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+	});
+
 	it("rejects structural aggregate lookalikes before the transaction can commit", async () => {
 		let committed = false;
 		const scope: TransactionScope<undefined> = {
@@ -176,7 +234,6 @@ describe("withCommit", () => {
 		const lookalike: IAggregateRoot<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
 			version: 1 as Version,
-			persistedVersion: undefined,
 			pendingEvents: [],
 		};
 		const outbox = createMockOutbox();
@@ -741,7 +798,7 @@ describe("withCommit", () => {
 
 	it("deleted aggregates: events are harvested and discarded without saved acknowledgement or observation", async () => {
 		// Deletion events must reach the outbox atomically with the row
-		// removal, but the post-save lifecycle is a semantic lie for a
+		// removal, but the saved-aggregate lifecycle is a semantic lie for a
 		// deleted row: an application observer doing cache-fill would
 		// resurrect the deleted aggregate in the cache.
 		const deletionEvent = createDomainEvent(
@@ -957,11 +1014,64 @@ describe("withCommit", () => {
 		await expect(
 			withCommit(
 				{ outbox, scope: createMockScope() },
-				async (_ctx, enrollment) =>
-					enrolledResult(enrollment, "r", [aggregate]),
+				async (_ctx, enrollment) => ({
+					result: "r",
+					commits: [
+						enrollment.enrollSaved(aggregate, {
+							expectedVersion: 5 as Version,
+						}),
+					],
+				}),
 			),
 		).rejects.toThrow(/did not advance/i);
 		expect(outbox.added).toHaveLength(0);
+	});
+
+	it("rejects a stalled eventful commit even when enrollment omits options", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		// Restored at 5, recorded an event without advancing beyond 5, and
+		// enrolled in the documented no-options style: the kit-maintained
+		// persisted version must ground the unique-cursor guard, or the
+		// envelope claims an aggregateVersion an earlier commit already used.
+		const aggregate = createMockAggregate([event], 5, 5);
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => ({
+					result: "r",
+					commits: [enrollment.enrollSaved(aggregate)],
+				}),
+			),
+		).rejects.toThrow(/did not advance/i);
+		expect(outbox.added).toHaveLength(0);
+	});
+
+	it("admits an eventful version-0 commit of a never-persisted aggregate", async () => {
+		const outbox = createMockOutbox();
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		// Construction-time decision without a version bump: with no persisted
+		// row there is no cursor to collide with, so the commit is unique.
+		const aggregate = createMockAggregate([event], 0);
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollSaved(aggregate)],
+			}),
+		);
+
+		expect(outbox.added[0]?.[0]?.position.aggregateVersion).toBe(0);
 	});
 
 	describe("post-commit application observer isolation", () => {
@@ -1598,7 +1708,174 @@ describe("withCommit", () => {
 });
 
 describe("commit enrollment lifecycle", () => {
-	it("rejects save enrollment after delete enrollment in one transaction", async () => {
+	it("rejects events recorded after enrollment instead of dropping them", async () => {
+		const first = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "first" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const later = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "later" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([first]);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => {
+					const token = enrollment.enrollSaved(aggregate);
+					aggregate.recordAfterEnrollmentForTest(later);
+					return { result: undefined, commits: [token] };
+				},
+			),
+		).rejects.toThrow(
+			/changed after its commit batch was enrolled.*enroll last/s,
+		);
+
+		// Rolled back: nothing harvested, nothing acknowledged; the late
+		// event was never part of the attested write.
+		expect(outbox.added).toHaveLength(0);
+		expect(aggregate.pendingEvents).toEqual([first, later]);
+		expect(aggregate.acknowledgementCount).toBe(0);
+	});
+
+	it("treats an omitted expectedVersion on re-enrollment as no assertion", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				const first = enrollment.enrollSaved(aggregate, {
+					expectedVersion: 5 as Version,
+				});
+				// Duplicate enrollment is idempotent by reference; a repeat
+				// call without options makes no OCC assertion.
+				const second = enrollment.enrollSaved(aggregate);
+				expect(second).toBe(first);
+				return { result: "r", commits: [first] };
+			},
+		);
+
+		expect(outbox.added).toHaveLength(1);
+		expect(aggregate.acknowledgementCount).toBe(1);
+	});
+
+	it("acknowledges with the enrollment-time version, not the live version", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		// Un-awaited concurrent work mutates the instance after the commit
+		// but before the post-commit acknowledgement.
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+				const result = await fn(undefined);
+				aggregate.advanceForObserverTest();
+				return result;
+			},
+		};
+
+		await withCommit(
+			{ outbox: createMockOutbox(), scope },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollSaved(aggregate)],
+			}),
+		);
+
+		// The marker reflects what the commit persisted (7), not the version
+		// the concurrent mutation pushed the instance to (8).
+		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		expect(lifecycle?.persistedVersion()).toBe(7);
+	});
+
+	it("discard after deletion leaves the persisted marker untouched", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+
+		await withCommit(
+			{ outbox: createMockOutbox(), scope: createMockScope() },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollDeleted(aggregate)],
+			}),
+		);
+
+		// The row is gone: stamping the marker from the live instance would
+		// trip the unique-cursor guard on a later legitimate re-enrollment.
+		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		expect(lifecycle?.persistedVersion()).toBe(5);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("keeps the saved disposition when a later delete enrollment is rejected", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				const token = enrollment.enrollSaved(aggregate);
+				// A rejected delete enrollment whose error the callback catches
+				// must not flip the record to deleted behind the token's back.
+				expect(() =>
+					enrollment.enrollDeleted(aggregate, {
+						expectedVersion: 99 as Version,
+					}),
+				).toThrow(/re-enrolled with expectedVersion/);
+				return { result: "r", commits: [token] };
+			},
+		);
+
+		// Acknowledged as SAVED: the mock counts acknowledge, not discard.
+		expect(aggregate.acknowledgementCount).toBe(1);
+	});
+
+	it("rejects re-enrollment that asserts a different expectedVersion", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => {
+					const first = enrollment.enrollSaved(aggregate, {
+						expectedVersion: 5 as Version,
+					});
+					enrollment.enrollSaved(aggregate, { expectedVersion: 6 as Version });
+					return { result: "r", commits: [first] };
+				},
+			),
+		).rejects.toThrow(/re-enrolled with expectedVersion/);
+		expect(outbox.added).toHaveLength(0);
+	});
+
+	it("rejects saved enrollment after delete enrollment in one transaction", async () => {
 		const outbox = createMockOutbox();
 		const deletionEvent = createDomainEvent(
 			"OrderCreated",

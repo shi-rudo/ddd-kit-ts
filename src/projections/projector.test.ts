@@ -504,7 +504,7 @@ describe("Projector", () => {
 		]);
 	});
 
-	it("accepts an eventful commit after an intervening state-only aggregate save", async () => {
+	it("accepts an eventful commit after an intervening state-only aggregate commit", async () => {
 		const rows: string[] = [];
 		const outbox = new InMemoryOutbox<OrderEvent>();
 		const projector = new Projector<OrderEvent, undefined>({

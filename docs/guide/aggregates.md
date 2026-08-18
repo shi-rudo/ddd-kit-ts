@@ -62,18 +62,21 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
 ```
 
-`aggregateType` and `recordEvent` are intentionally visible in every aggregate:
+`aggregateType` and `createEvent` are intentionally visible in every aggregate:
 
 - `aggregateType` tells event dispatchers, outbox processors, and projections what kind of aggregate produced an event.
-- `recordEvent(type, payload)` adds the aggregate id and aggregate type to event metadata, so event routing has the fields it needs.
+- `createEvent(type, payload)` adds the aggregate id and aggregate type while
+  reading neither a clock nor an id generator.
 
-Calling `createDomainEvent(...)` directly still works, but inside an aggregate `recordEvent(...)` is the safer default.
+Calling `createDomainEvent(...)` directly still works, but inside an aggregate
+`createEvent(...)` is the safer default. The application records the pending
+decision with `recordPendingEvents(...)` before persistence.
 
 ## Creating New Aggregates
 
@@ -83,10 +86,15 @@ Prefer static factory methods over public constructors.
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  static place(id: OrderId, customerId: string): Order {
+  static place(
+    id: OrderId,
+    customerId: string,
+  ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
 
-    order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
+    order.addDomainEvent(
+      order.createEvent("OrderPlaced", { customerId }),
+    );
 
     return order;
   }
@@ -123,9 +131,14 @@ import type { Version } from "@shirudo/ddd-kit";
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  static place(id: OrderId, customerId: string): Order {
+  static place(
+    id: OrderId,
+    customerId: string,
+  ): Order {
     const order = new Order(id, { customerId, items: [], status: "draft" });
-    order.addDomainEvent(order.recordEvent("OrderPlaced", { customerId }));
+    order.addDomainEvent(
+      order.createEvent("OrderPlaced", { customerId }),
+    );
     return order;
   }
 
@@ -141,36 +154,40 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`markRestored(version)` tells the aggregate, "this state came from persistence at this version." It sets both `version` and `persistedVersion`, so the next save uses the loaded version as its optimistic-concurrency baseline.
-
-It does not call persistence hooks and it does not record events. Loading is not saving, and it is not a domain fact.
+`markRestored(version)` tells the aggregate, "these are the domain facts at
+this version." It sets the aggregate's current version without recording an
+event. It does not remember a database baseline. The operation-scoped
+`UnitOfWork` owns that baseline.
 
 A repository can then be straightforward:
 
 ```ts
-async findById(id: OrderId): Promise<Order | null> {
+async findById(id: OrderId): Promise<Order | undefined> {
   const row = await this.db
     .select()
     .from(orders)
     .where(eq(orders.id, id))
     .get();
 
-  if (!row) return null;
+  if (!row) return undefined;
 
-  return Order.reconstitute(
+  const order = Order.reconstitute(
     row.id as OrderId,
     row.state as OrderState,
     row.version as Version,
   );
+
+  return this.tracking.trackLoaded(order);
 }
 ```
 
-::: warning Use `persistedVersion` for insert vs update
-Do not decide between insert and update with `aggregate.version === 0`.
+::: warning Creation and update are explicit
+Call `repositories.orders.add(order)` for a new aggregate. For a loaded
+aggregate, call `repositories.orders.update(order)` with the exact instance
+that this unit of work loaded. Do not infer this lifecycle from `version`. A new
+aggregate can increase its version before persistence.
 
-A new aggregate can already be at version 1 or 2 before its first save if factory methods or domain methods changed it in memory. `persistedVersion === undefined` is the reliable signal that no row exists yet.
-
-See [Repository -> Insert vs update](./repository.md#insert-vs-update-the-persistedversion-convention).
+See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle-intent).
 :::
 
 ### Event-Sourced Aggregates
@@ -226,7 +243,7 @@ If state validation fails, no event is recorded and the version does not change.
 ```ts
 this.commit(
   { ...this.state, status: "confirmed" },
-  this.recordEvent("OrderConfirmed", { orderId: this.id }),
+  this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 
 this.commit(newState, [eventA, eventB]);
@@ -326,7 +343,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -374,7 +391,7 @@ import { sameVersion } from "@shirudo/ddd-kit";
 
 const before = await repo.findById(id);
 
-// Time passes. Another writer may save the same aggregate.
+// Time passes. Another writer may update the same aggregate.
 
 const after = await repo.findById(id);
 
@@ -383,56 +400,62 @@ if (!sameVersion(before!, after!)) {
 }
 ```
 
-Repository implementations should throw `ConcurrencyConflictError` when the saved version no longer matches the expected version.
+Repository adapters must throw `ConcurrencyConflictError` when the row or
+stream no longer matches the version captured during load. The
+`UnitOfWork` owns that baseline and passes it to `flush` as
+`write.expectedVersion`. The aggregate does not carry persistence metadata.
 
-`save()` should only persist. It should not mutate the aggregate's in-memory state. The `withCommit` helper coordinates the full flow: save the aggregate, harvest pending events, commit the transaction, then mark the aggregate as persisted.
+The use case registers `add`, `update`, or `remove` only after its domain
+decisions are complete. The unit of work then persists the immutable change
+set and exact event batch atomically.
 
 See [Repository](./repository.md) and [Outbox & Transactions](./outbox.md) for the full lifecycle.
 
 ## Snapshots
 
-Snapshots capture aggregate state and version so an aggregate can be restored without replaying or rebuilding everything from scratch.
+Snapshots capture aggregate state and version so an aggregate can be restored
+without replaying or rebuilding everything from scratch. Their stored shape is
+an adapter concern, so the mapping lives outside the aggregate.
 
 ```ts
-import type { AggregateSnapshot } from "@shirudo/ddd-kit";
+import {
+  captureAggregateSnapshot,
+  defineSnapshotModel,
+  reconstituteAggregateFromSnapshot,
+} from "@shirudo/ddd-kit";
 
-const snapshot = order.createSnapshot();
-// { state, version, snapshotAt: Date }
+const orderSnapshots = defineSnapshotModel({
+  aggregateType: "Order",
+  schemaVersion: 2,
+  capture: (order: Order) => orderStateDto(order),
+  reconstitute: (id: OrderId, state: OrderStateDto, version: Version) =>
+    Order.reconstitute(id, stateFromDto(state), version),
+  migrate: (stored, storedSchemaVersion) =>
+    migrateOrderSnapshot(stored, storedSchemaVersion),
+});
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
-
-  static fromSnapshot(
-    id: OrderId,
-    snapshot: AggregateSnapshot<OrderState>,
-  ): Order {
-    const order = new Order(id, blankState);
-    order.restoreFromSnapshot(snapshot);
-    return order;
-  }
-}
-
-const fresh = Order.fromSnapshot(id, snapshot);
-
-// fresh.version === snapshot.version
-// fresh.createSnapshot().state is detached from snapshot.state
+const snapshot = captureAggregateSnapshot(
+  orderSnapshots,
+  order,
+  clock(),
+);
+const fresh = reconstituteAggregateFromSnapshot(
+  orderSnapshots,
+  order.id,
+  snapshot,
+);
 ```
 
-`createSnapshot` uses `structuredClone`, so later mutations do not alter the snapshot. `restoreFromSnapshot` validates the restored state before assigning it.
+`captureAggregateSnapshot` rejects an invalid application-supplied time. It also
+detaches the persistence DTO, so later mutations cannot alter stored snapshot
+data.
+Reconstitution always creates a fresh aggregate through the model. It never
+mutates a live instance or records a new domain fact.
 
-Live aggregate state is `protected`. Use domain queries for application reads and
-`createSnapshot()` as the detached persistence memento; do not add a public getter
-that returns `this.state`.
-
-::: warning Restore only into a clean aggregate
-`restoreFromSnapshot` throws `UnreplayableAggregateError` if the target aggregate has pending events.
-
-Take snapshots only from a clean aggregate, usually right after load or save.
-If an in-memory operation must be abandoned, discard that dirty aggregate
-instance and reconstitute a fresh one. Public event disposal would let callers
-erase facts without a committed persistence boundary, so the aggregate API
-does not expose it.
-:::
+Live aggregate state remains `protected`. Give the persistence adapter an
+explicit DTO projection such as `orderStateDto(order)` rather than exposing a
+generic public state getter. For event-sourced aggregates, restore the
+snapshot first and then call `loadFromHistory` with only the stream tail.
 
 ## When to Skip `commit`
 
@@ -449,7 +472,7 @@ already-persisted aggregate may not harvest events without advancing its
 version: `withCommit` rejects that cursor collision.
 
 ::: warning Un-bumped mutations can lose concurrent writes
-A mutation that does not bump the version is invisible to optimistic concurrency. Another writer can load the same version, save successfully, and overwrite your change without a `ConcurrencyConflictError`.
+A mutation that does not bump the version is invisible to optimistic concurrency. Another writer can load the same version, update successfully, and overwrite your change without a `ConcurrencyConflictError`.
 
 That is why the method is named `setStateWithoutVersionBump`. Use it only for data where a lost update is acceptable.
 :::

@@ -1,3 +1,4 @@
+import { pendingEventLifecycleCapabilityFor } from "../aggregate/pending-event-lifecycle";
 import { AggregateDeletedError } from "../core/errors";
 import type { Id } from "../core/id";
 
@@ -28,9 +29,9 @@ export type AggregateClass<TAgg> =
  *
  * This is the shipped implementation of the contract the
  * [Repository guide](../../docs/guide/repository.md) places on
- * `IRepository` implementations: two `findById(id)` calls in the same
+ * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
- * enrollment dedupes by JavaScript object identity. Two instances for
+ * write registration dedupes by JavaScript object identity. Two instances for
  * one logical aggregate can otherwise produce two tokens, two harvests,
  * and two post-commit lifecycle calls.
  *
@@ -41,18 +42,17 @@ export type AggregateClass<TAgg> =
  * Repository read-path contract:
  *
  * ```ts
- * async findById(id: OrderId): Promise<Order | null> {
- *   const cached = this.session.identityMap.get(Order, id);
+ * async findById(id: OrderId): Promise<Order | undefined> {
+ *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   // Deleted in this unit of work = gone, even if the physical
  *   // delete is deferred and the row is still visible in the tx.
- *   if (this.session.identityMap.isDeleted(Order, id)) return null;
+ *   if (this.tracking.identityMap.isDeleted(Order, id)) return undefined;
  *
  *   const row = await this.loadRow(id);
- *   if (!row) return null;
+ *   if (!row) return undefined;
  *   const order = Order.reconstitute(row.id, row.state, row.version);
- *   this.session.identityMap.set(Order, id, order);
- *   return order;
+ *   return this.tracking.trackLoaded(order);
  * }
  * ```
  *
@@ -151,9 +151,9 @@ export class IdentityMap {
 			typeof aggregate === "object" &&
 			!this._pendingAtRegistration.has(aggregate as object)
 		) {
-			const pending = pendingEventsOf(aggregate);
-			if (pending) {
-				this._pendingAtRegistration.set(aggregate as object, pending.length);
+			const pending = pendingEventCountOf(aggregate);
+			if (pending !== undefined) {
+				this._pendingAtRegistration.set(aggregate as object, pending);
 			}
 		}
 	}
@@ -170,11 +170,11 @@ export class IdentityMap {
 		const result: unknown[] = [];
 		for (const store of this._stores.values()) {
 			for (const instance of store.values()) {
-				const pending = pendingEventsOf(instance);
-				if (!pending) continue;
+				const pending = pendingEventCountOf(instance);
+				if (pending === undefined) continue;
 				const atRegistration =
 					this._pendingAtRegistration.get(instance as object) ?? 0;
-				if (pending.length > atRegistration) {
+				if (pending > atRegistration) {
 					result.push(instance);
 				}
 			}
@@ -183,11 +183,32 @@ export class IdentityMap {
 	}
 
 	/**
+	 * Takes back a registration WITHOUT a tombstone: the entry is removed
+	 * only when the stored instance IS the given one, and a later
+	 * {@link set} of the same type+id stays legal. The Unit of Work calls
+	 * this when a registration step fails after {@link set} already ran, so
+	 * the failed instance cannot be served by `findById` as a phantom.
+	 * This is rollback, not deletion; deletion finality belongs to
+	 * {@link delete}.
+	 */
+	public discard<TAgg>(
+		type: AggregateClass<TAgg>,
+		id: Id<string>,
+		aggregate: TAgg,
+	): void {
+		const store = this._stores.get(type);
+		if (store?.get(id) === aggregate) {
+			store.delete(id);
+		}
+	}
+
+	/**
 	 * Removes the entry for type+id and records a tombstone: subsequent
 	 * {@link get} / {@link has} report absence, and a subsequent
 	 * {@link set} of the same type+id throws `AggregateDeletedError`.
-	 * Called by a repository's `delete(aggregate)` alongside
-	 * `session.enrollDeleted(aggregate)`.
+	 * The Unit of Work calls this as part of `repository.remove(aggregate)`;
+	 * repository adapters receive only the read-only
+	 * identity-map view.
 	 */
 	public delete<TAgg>(type: AggregateClass<TAgg>, id: Id<string>): void {
 		this._stores.get(type)?.delete(id);
@@ -212,14 +233,18 @@ export class IdentityMap {
 }
 
 /**
- * Duck-types a stored value as an aggregate and returns its `pendingEvents`
- * array, or `undefined` for anything that is not aggregate-shaped. Single
- * source of truth so the load-time capture in {@link IdentityMap.set} and
- * the end-of-run scan in {@link IdentityMap.instancesWithNewPendingEvents}
- * cannot drift apart.
+ * Pending-event count of a stored value, or `undefined` for anything that is
+ * not aggregate-shaped. Single source of truth so the load-time capture in
+ * {@link IdentityMap.set} and the end-of-run scan in
+ * {@link IdentityMap.instancesWithNewPendingEvents} cannot drift apart.
+ * The kit-internal count capability avoids the public `pendingEvents`
+ * getter, which allocates and freezes a defensive copy per read; the getter
+ * stays as the fallback for structural lookalikes.
  */
-function pendingEventsOf(value: unknown): readonly unknown[] | undefined {
+function pendingEventCountOf(value: unknown): number | undefined {
 	if (value === null || typeof value !== "object") return undefined;
+	const capability = pendingEventLifecycleCapabilityFor(value);
+	if (capability?.pendingEventCount) return capability.pendingEventCount();
 	const pending = (value as { pendingEvents?: unknown }).pendingEvents;
-	return Array.isArray(pending) ? pending : undefined;
+	return Array.isArray(pending) ? pending.length : undefined;
 }

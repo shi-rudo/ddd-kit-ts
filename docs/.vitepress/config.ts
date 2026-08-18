@@ -71,6 +71,7 @@ export default defineConfig({
 					text: "Introduction",
 					items: [
 						{ text: "Getting Started", link: "/guide/getting-started" },
+						{ text: "Migrating to v3", link: "/guide/migrating-to-v3" },
 						{ text: "Design Decisions", link: "/guide/design-decisions" },
 					],
 				},

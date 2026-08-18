@@ -1,13 +1,13 @@
 /**
  * Clock function producing a valid `Date` for the current instant.
- * Event and snapshot reads throw `TypeError` when the result is invalid.
+ * Event-clock reads throw `TypeError` when the result is invalid.
  */
 export type ClockFactory = () => Date;
 
 /** Immutable library default captured by the default domain-event factory. */
 export const defaultClockFactory: ClockFactory = () => new Date();
 
-/** Internal defensive read shared by events and aggregate snapshots. */
+/** Internal defensive event-clock read. */
 export function readClock(factory: ClockFactory): Date {
 	const reading = factory();
 	const value = reading instanceof Date ? reading.getTime() : Number.NaN;

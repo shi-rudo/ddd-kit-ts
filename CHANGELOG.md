@@ -7,17 +7,294 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-3.0.0 carries everything since 2.2.0 in one breaking window. It has two
-halves. The first is a tightening pass over the core: structured errors
-with one identifier, a version bump on every `setState`, buses that
-map only explicitly expected failures, one delete contract, identity-based repository
-loads, and consumer-owned query ports. The second is the event-driven
-periphery around that core: the outbox seam with a minimal dispatcher,
-command idempotency, projections, a snapshot store, durable deadlines, the
-specification primitive, adapter contract suites for all of it, and the
-opt-in `@shirudo/ddd-kit/money` entry point. Details and rationale live
-in the sections below; every break is covered in the migration guide
-here, with a before and after.
+The 3.0.0 release candidates are not source-compatible with each other, and
+every rc tag remains immutable. Users of rc.1 or rc.2 must use the matching
+appendix in the v3 migration guide. Do not mix persistence protocols from
+different candidates, and run one kit version per process during a cutover.
+
+Version 3.0.0 contains all changes since 2.2.0 in one breaking window. The
+release changes the core and its event-driven components.
+
+Core changes include structured errors with one identifier and explicit
+repository lifecycle intent. They also include identity-based repository loads
+and consumer-owned query ports. Each `setState` call increases the version.
+Buses map only expected failures.
+
+Event-driven changes include an outbox port and a minimal dispatcher. They also
+include command idempotency, projections, a snapshot store, durable deadlines,
+and a specification primitive. Adapter contract suites cover these parts. The
+release also adds the optional `@shirudo/ddd-kit/money` entry point.
+
+The sections below explain each change. The
+[v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
+gives a before-and-after example for each breaking change.
+
+### Changed (breaking): repository lifecycle intent is explicit
+
+- Remove `IRepository` and `IUnitOfWorkRepository`.
+- Add `AggregatePersistence<TAggregate, TId>` and
+  `Repository<TAggregate, TId>`.
+- Do not keep the old names as deprecated aliases.
+- Replace the overloaded asynchronous `save(aggregate)` operation with
+  `add(aggregate)` and `update(aggregate)`. These methods register write intent
+  synchronously. Durable I/O occurs during the Unit-of-Work flush.
+- `Repository` extends `AggregatePersistence` with `remove(aggregate)` for
+  physical removal. Persistence strategies that retain aggregate identity,
+  including ordinary event-sourced repositories, can implement the smaller
+  contract without a meaningless delete operation.
+- `findById` now represents expected absence with `undefined`. `exists` is no
+  longer a universal method. A consumer-owned repository port can add a
+  specific existence query when a command needs one.
+- Replace the old state-stored `createRepositoryContractTests` harness under
+  the same `@shirudo/ddd-kit/testing` export. The v3 suite covers explicit
+  lifecycle intent, expected-version conflicts, and state-plus-outbox
+  atomicity. It also covers rollback, identity mapping, nested state, and exact
+  event acknowledgement. It is not a compatibility layer for the legacy
+  `save`/`delete` protocol.
+
+Migration starts by choosing the truthful repository capability:
+
+```ts
+// Before
+interface OrderRepository extends IRepository<Order, OrderId> {}
+
+// After: retained aggregates
+interface OrderPersistence
+  extends AggregatePersistence<Order, OrderId> {}
+
+// After: persistence boundaries that support physical removal
+interface OrderRepository extends Repository<Order, OrderId> {}
+```
+
+Then replace each `save` call deliberately. Creation paths call `add`.
+Commands that loaded an aggregate call `update`. Replace `delete` with
+`remove` only for physical removal. Cancellation, archival, closure, and
+revocation remain aggregate behavior followed by `update`.
+
+### Changed (breaking): the Unit of Work owns aggregate write tracking
+
+- Repository read paths call `tracking.trackLoaded(aggregate)`
+  before returning a restored aggregate. The Unit of Work identity-maps the
+  instance and captures its current version as the optimistic-concurrency
+  expectation before application code can mutate it.
+- Application-facing `add`, `update`, and `remove` methods are Unit-of-Work
+  registrations. The repository facade replaces same-named adapter methods,
+  so those calls cannot perform durable I/O early or omit event harvesting.
+  Adapter `remove` is absent both by type and at runtime unless the definition
+  sets `physicalRemoval: true`.
+- A repository factory must return an adapter object. Invalid `null`, primitive,
+  or callable results fail during wiring with
+  `InvalidRepositoryAdapterError` instead of reaching application code as a
+  malformed facade. `RepositoryDefinition` now rejects callable result types
+  at compile time. The transaction context and event family must match the
+  Unit-of-Work scope and outbox.
+- `defineRepository` now takes the complete application-owned repository port
+  explicitly: `defineRepository<ForStoringOrders>()({...})`. Its adapter
+  implements only non-lifecycle methods. The Unit of Work supplies
+  `add`/`update`/optional `remove`. Concrete adapter-only methods no longer leak
+  into the use-case facade, and helper-created definitions carry a nominal
+  marker so raw adapter-shaped objects cannot bypass that boundary.
+  JavaScript or asserted TypeScript that supplies an unbranded definition fails
+  at runtime with `InvalidRepositoryDefinitionError`.
+- Every repository definition supplies `mapError`. A failed `flush` must become
+  an application-facing `InfrastructureError`. A mapper failure causes
+  `RepositoryErrorMappingFailedError`. This error preserves the original
+  persistence failure as its cause.
+- `update` and `remove` accept only the exact instance loaded by the active
+  Unit of Work. Adding a loaded aggregate, updating an untracked aggregate,
+  mixing write intents, or changing an aggregate after registration throws
+  `AggregateTrackingError` and rolls the transaction back.
+- One aggregate instance cannot be registered through two repository
+  definitions in the same operation. Repository facades also guard reads,
+  getters, and previously captured method references after close, while
+  ordinary reflection such as `Object.defineProperty` and `Object.freeze`
+  remains invariant-safe.
+- The application work context no longer exposes `rawTransaction` or a
+  tracking session. Repository definitions receive the transaction and a
+  narrow `RepositoryTracking` capability as adapter wiring, while use cases
+  depend only on their repositories and cancellation signal.
+- `UnitOfWorkSession`, `enrollSaved`, and `enrollDeleted` are removed.
+  Adapters register hydration through `trackLoaded`, while the Unit of Work
+  owns insertion, update, removal, tombstones, event harvest, and commit
+  acknowledgement.
+- Every transaction attempt receives fresh tracking state. Commit or rollback
+  closes and clears the identity map, so an aggregate instance from a failed
+  attempt cannot silently participate in a retry.
+
+### Changed (breaking): aggregate decisions are recorded by the shell
+
+- Aggregate behavior now creates an immutable `UncommittedDomainEvent` with
+  `this.createEvent(type, payload, { version })`. The value contains only the
+  producer-owned fact and aggregate address. Domain methods no longer accept
+  generic event identity, recording time, or trace metadata.
+- `recordPendingEvents(aggregate, factoryOrProvider)` is the application-shell
+  boundary that turns each new decision into a recorded `DomainEvent`. It
+  attaches a `DomainEventStamp` exactly once, so retries reuse the same event
+  identity and timestamp. `withCommit` rejects an unrecorded event before
+  outbox harvest.
+- `DomainEventFactory.createStamp(options?)` creates the shell-owned
+  `eventId`, `occurredAt`, and metadata. It cannot select the payload schema
+  version. That version stays beside the concrete event payload.
+- `DomainEventFacts` / `createFacts()` and `recordEvent(..., facts)` remain
+  deprecated migration aliases. Do not pass them through a new domain
+  operation. `createDomainEventFromFacts(...)` remains available for
+  strict construction outside aggregates.
+- Central validation covers domain-event type, identity, address, occurrence
+  time, and schema version. `DomainEventValidationError` and
+  `SnapshotTimeValidationError` remain `TypeError`s while adding stable
+  machine-readable `code` and `field` properties.
+- Factory-owned stamps reuse their already immutable metadata and decision
+  payload during recording. Hand-built stamps retain the full defensive-copy
+  path. The reproducible benchmark and ownership rationale live in
+  `docs/benchmarks/domain-event-stamping.md`.
+- Aggregate-owned snapshot capture and restore methods are removed.
+  Adapter-owned `SnapshotModel`s define DTO projection, schema migration, and
+  reconstitution. `captureAggregateSnapshot` receives application time and
+  returns a detached snapshot envelope.
+- `recordEventFromFactory(...)` retains the former event convenience behavior.
+  When no `AggregateConfig.domainEventFactory` is configured, it uses the
+  nondeterministic Web Crypto and platform-clock defaults. The method name
+  makes that dependency visible.
+
+Migration for aggregate operations:
+
+```ts
+// Before: recording data leaked into the domain signature
+confirm(facts: DomainEventFacts): void {
+  this.commit(
+    nextState,
+    this.recordEvent("OrderConfirmed", payload, facts),
+  );
+}
+
+const order = await orders.getById(command.orderId);
+order.confirm(domainEvents.createFacts());
+
+// After: pure decision in the aggregate
+confirm(): void {
+  this.commit(
+    nextState,
+    this.createEvent("OrderConfirmed", payload),
+  );
+}
+
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
+  order.confirm();
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({
+      metadata: { correlationId: command.correlationId },
+    }),
+  );
+  repositories.orders.update(order);
+});
+
+const snapshot = captureAggregateSnapshot(
+  orderSnapshots,
+  order,
+  domainEvents.now(),
+);
+```
+
+Aggregates that intentionally keep their injected factory can make the smaller
+event migration by renaming calls to `recordEventFromFactory(...)`.
+`AggregateConfig` depends only on the narrow event-convenience role. Snapshot
+policy and schema remain outside the aggregate.
+
+### Added: transactional command-outbox routing for process managers
+
+- Add `PublishedCommand` as the versioned Published Language for commands that
+  cross a process or Bounded-Context boundary. It has the stable
+  `{ type, version, payload }` shape, and the payload must be JSON-safe.
+  Domain values are translated explicitly at this boundary. The checkout
+  example maps `Money` to `MoneyDto`.
+- Add `CommandOutboxWriter`, `CommandOutboxCommitCandidate`, and
+  `DurableCommandMessage` as the write-side contract for a dedicated,
+  point-to-point command outbox. Every message has a `destination`, a stable
+  `messageId`, and direct `causationId`. An origin receipt retains the private
+  event source position without exposing the event or its payload.
+- Add `routeEventsToCommandOutbox(outbox, mapper)`. It adapts the
+  `OutboxWriter` that `withCommit` requires. It maps private process facts to
+  exact commands inside the aggregate transaction. It retains empty command
+  commits to prevent gaps in the source cursor.
+  The route rejects malformed or lossy command data with
+  `InvalidCommandMessageError` before calling the adapter.
+- Add `createCommandOutboxContractTests` for adapter authors. The suite covers
+  exact-retry deduplication and conflicting message, source, and position reuse.
+  It also covers atomic batches, input order, multi-event commit positions,
+  empty receipts, and source-cursor progression. It covers rollback when the
+  harness declares that capability.
+- Migrate the event-sourced checkout example from command-shaped facts such as
+  `CheckoutPaymentRequested` to private process facts such as
+  `CheckoutStartedAwaitingPayment`. These facts are not published on the
+  EventBus. An application mapper writes `RequestPayment`, `RequestShipping`,
+  `ConfirmOrder`, `RefundPayment`, and `CancelOrder` to explicit participant
+  destinations.
+- The process no longer records completion before its final participant acts:
+  `CheckoutOrderConfirmationStarted` enqueues `ConfirmOrder` and enters
+  `awaiting-order-confirmation`. A later `OrderConfirmed` input records the
+  command-free `CheckoutCompleted` fact. Cancellation and compensation states
+  likewise describe in-progress recovery rather than prematurely claiming it
+  finished. Shipping recovery waits for `PaymentRefunded` before deciding
+  `CancelOrder`. A permanent refund or cancellation failure records
+  `CheckoutManualRepairRequired`.
+- The runnable example covers atomic process-stream and command persistence. It
+  covers rollback, recovery after a post-commit crash, and replay without
+  command creation. It also covers stored-result idempotency, business and W3C
+  trace relationships, result-driven compensation, and manual repair. The saga
+  guide includes a staged migration for persisted command-shaped process
+  events.
+
+The command-outbox mapper is a breaking boundary change:
+
+```ts
+// Before: a local command shape and domain value object leak into transport
+{
+  destination: "payments.commands",
+  command: { type: "RequestPayment", orderId, paymentId, amount: total },
+}
+
+// After: a versioned Published Language made only of JSON-safe data
+{
+  destination: "payments.commands",
+  command: {
+    type: "RequestPayment",
+    version: 1,
+    payload: { orderId, paymentId, amount: moneyToDto(total) },
+  },
+}
+```
+
+Business correlation and technical tracing are now separate on durable command
+messages. Continue `correlationId` and `conversationId` to explain the business
+journey. If the next technical span belongs to the same trace, copy valid W3C
+`traceparent` and `tracestate` values.
+
+### Changed: event metadata is readonly
+
+- Mark every conventional `EventMetadata` field and its extension index
+  signature readonly, and add explicit `traceparent` and `tracestate` fields.
+  Event constructors still defensively copy metadata, so callers remain free
+  to reuse or mutate their input object without changing a recorded event.
+
+### Changed (breaking): persistence tracking leaves tactical aggregates
+
+- Remove `persistedVersion`, `hasChanges`, and `changedKeys` from both
+  aggregate base classes. Aggregates retain the current domain version,
+  pending facts, and a kit-internal persisted-version marker that only the
+  commit boundary can read; domain and adapter code cannot branch on it.
+- Make `UnitOfWork` the mandatory public write context for the standard
+  repository protocol. Its identity-bound entries own lifecycle intent and
+  the expected version captured during load.
+- Add adapter-owned `PersistenceModel`s with opaque baselines and typed change
+  sets. A document adapter can derive a full replacement. A relational adapter
+  can derive changes for roots and child tables.
+- When `add`, `update`, or `remove` is registered, freeze the version, changes,
+  and exact event batch. Mutation after registration rejects and rolls the
+  transaction back.
+- Replace the old contract suites with state-stored and event-sourced v3
+  suites. They cover routing, OCC, atomic rollback, identity mapping, exact
+  event batches, no-op writes, and optional physical removal.
 
 ### Changed (breaking): shell operations carry cancellation and deadlines
 
@@ -63,8 +340,8 @@ here, with a before and after.
 - An explicitly configured `DeadlineProcessor.clock` is now strict. If it
   throws or returns an invalid `Date`, the cycle stops before
   `DeadlineStore.due`, reports the failure through `onPollError`, and uses the
-  existing failure backoff. Omit `clock` to retain the system-time default;
-  the processor no longer hides a broken injected dependency by switching time
+  existing failure backoff. Omit `clock` to retain the system-time default.
+  The processor no longer hides a broken injected dependency by switching time
   sources.
 
 Migration for shell adapters:
@@ -96,8 +373,8 @@ const processor = new DeadlineProcessor({
 
 Existing one-argument callback implementations remain assignable in
 TypeScript, but direct calls to `OutboxSink.publish` must now provide an
-`ExecutionContext`. Custom `EventBus` implementations should accept and propagate
-the optional `PublishOptions`; custom transaction scopes already accept the
+`ExecutionContext`. Custom `EventBus` implementations must accept and propagate
+the optional `PublishOptions`. Custom transaction scopes already accept the
 optional signal through `TransactionalOptions`.
 
 Migration for delivery classification and poll-store cancellation:
@@ -131,10 +408,12 @@ async function markDispatched(ids, { signal, deadlineAt } = {}) {
 ```
 
 `countsTowardCeiling` is removed in v3. Map its `false` result to
-`"transient"`, its `true` result to `"permanent"`, and use `"unknown"` when an
-adapter cannot classify safely. Existing poll-store adapters remain structurally
-assignable because the new context parameter is optional, but production
-adapters should adopt it to avoid work continuing after the shell has timed out.
+`"transient"`. Map its `true` result to `"permanent"`. If an adapter cannot
+classify safely, use `"unknown"`.
+
+Existing poll-store adapters remain structurally assignable because the new
+context parameter is optional. Production adapters must adopt it to stop work
+after the shell timeout.
 
 ### Changed: Vite+ test and package toolchain
 
@@ -246,6 +525,248 @@ adapters should adopt it to avoid work continuing after the shell has timed out.
   authoritative model and replay value outweighs event upcasting, bounded
   stream reads, stream OCC, and snapshot-policy costs. Both variants keep
   participant rules in their owning aggregates.
+
+### Fixed: commit boundary guards and repository facade integrity
+
+Code review of the v3 persistence redesign found weak and wrong guards. All
+fixes ship inside the same breaking window.
+
+- `withCommit` checks each enrollment snapshot again at harvest time.
+  Before this fix, `withCommit` silently dropped an event that the aggregate
+  recorded after `enrollSaved`. Now the transaction rejects with
+  `EventHarvestError`.
+- The unique-cursor guard reads a kit-internal persisted-version marker, not
+  the enrollment option `expectedVersion`. Direct `withCommit` callers can
+  use the documented `enrollSaved(aggregate)` style and still get the
+  deterministic rejection when a persisted aggregate records events without
+  a version increase. A never-persisted aggregate can still make an eventful
+  version-0 commit. The registry key of the shared lifecycle capability
+  changed with the capability shape. An aggregate from an earlier 3.0.0
+  release candidate copy now fails enrollment with the generic "no
+  kit-managed persistence lifecycle" error. Run one kit version per process
+  during the cutover.
+- `recordPendingEvents` throws the new `ReentrantEventRecordingError` when a
+  stamp provider triggers a new decision on the aggregate under recording.
+  Before, recording silently discarded the re-entrant decision. Recording
+  stays atomic when the guard fires.
+- `reconstituteAggregateFromSnapshot` maps a `DomainError` from migration or
+  reconstitution to `SnapshotCorruptedError`. A tightened `validateState`
+  rule cannot make old snapshots unloadable anymore. The documented load
+  recipe catches the corruption error, discards the snapshot, and refolds
+  from the stream.
+- Mutation detection after registration compares persistence captures with
+  the new helper `persistenceProjectionDrifted`. It does not read
+  `changes()` and `isEmpty()` as a no-change detector anymore. Persistence
+  models with a full-replacement change set commit again. `capture` must be
+  deterministic for an unchanged aggregate. The default comparison is
+  structural deep equality. That comparison matches Set members and Map keys
+  by reference. A model whose capture rebuilds such values supplies the
+  optional `captureEquals`.
+- An assignment of a replacement method through the repository facade now
+  invalidates the guarded-method cache on the write-through path too.
+  Before, a test spy on an inherited adapter method kept the original
+  implementation in service.
+- The facade exempts language-level probes (`then`, absent well-known
+  symbols) from the session-open check. A facade returned from `run()`
+  resolves normally after a commit. Before, the probe raised a false
+  retryable `CommitError`. Real property access after close still throws
+  `TransactionClosedError`.
+- Duplicate enrollment of an unchanged aggregate accepts a repeat call
+  without `expectedVersion`. An omitted option makes no assertion. A
+  supplied value that contradicts the enrollment-time baseline rejects with
+  a message that names both values.
+- A failed `repository.add` rolls its identity-map and tracking
+  registration back. Before this fix, `findById` served the never-persisted
+  instance and the transaction committed without a write for it. The new
+  `IdentityMap.discard` removes an entry without a deletion tombstone.
+- A load of one aggregate instance through two repository definitions
+  rejects with reason `different_repository` and operation `load`. The
+  ownership check runs before identity-map registration. The
+  `AggregateTrackingError.operation` union gained `"load"`.
+- Repository adapters receive a frozen identity-map view with only `get`,
+  `has`, and `isDeleted`. Before, the full map exposed `set`, `delete`, and
+  `clear` at runtime. A stray `clear()` erased deletion tombstones and the
+  baselines behind `UnenrolledChangesError`.
+- The pending-event recording registry is shared across package copies
+  through a `Symbol.for` global key, like the lifecycle registry. With two
+  loaded kit copies, `recordPendingEvents` now accepts aggregates that the
+  other copy constructed.
+- The event-sourced contract suite does not check the in-memory mint brand
+  on events read back from the adapter store. An adapter that decodes
+  stored rows on read now passes. Only the persisted `eventId` is checked
+  on read-back events.
+- The example order snapshot model stores `MoneySnapshot` DTOs instead of
+  raw `Money` values. A JSON-backed snapshot store crashed on the first
+  save because raw `Money` carries a bigint amount.
+
+### Fixed: second review round on the commit path, contract coverage, and diagnostics
+
+A second branch-wide review confirmed ten more findings. All are closed
+inside the same breaking window.
+
+- `withCommit` checks recorded (minted) events at commit enrollment, before
+  any adapter flush. Before, only the harvest guard fired, after flush. A
+  non-transactional event store then kept a durably appended unstamped
+  batch when the shell forgot `recordPendingEvents`. The harvest check
+  stays as a backstop.
+- The event-sourcing guide and the `handlers` JSDoc document the
+  live-versus-replay shape difference. A live `apply()` dispatches the
+  event before recording, so `eventId` and `occurredAt` do not exist yet.
+  Replay dispatches recorded events through the same handlers. Handlers
+  must fold state from `type` and `payload` only.
+- `reconstituteAggregateFromSnapshot` enforces a post-condition: the
+  reconstituted aggregate must carry `snapshot.version`. A factory that
+  forgets `markRestored` now fails loudly. Before, it fed the
+  discard-and-refold recovery forever.
+- The repository facade method cache keys validity on the current source
+  function. Adapter methods run with `this` bound to the raw source. A
+  lazy-init self-assignment therefore bypassed the proxy traps, and the
+  cache kept the replaced implementation in service for the rest of the
+  run.
+- `assertJsonValue` rejects negative zero. `JSON.stringify(-0)` produces
+  `"0"`, so negative zero broke the exactness contract silently.
+- The state-stored contract suite restored the deep-equal requirement on
+  `mutateVersionOnly`. The suite again forces the version-only write with
+  an empty change set, which a skip-empty adapter drops. The repository
+  guide states the duty explicitly: an adapter must persist the version
+  even when the change set is empty.
+- The event-sourced contract suite restored the retry-after-rollback test.
+  A retry that adds the same never-persisted instance again must create the
+  stream with the full pending history.
+- `update` after `add` on the same aggregate reports `conflicting_intent`
+  with the registered `add` intent. Before, it reported `not_loaded` with
+  load advice that is impossible for a new aggregate.
+- The wrong-state error of the saga example names both candidate completion
+  events. Before, it hard-coded the shipping-failure event for every
+  caller.
+- `recordDomainEvent` shares the already-frozen payload when a stamp
+  provider callback records an event. Before, it paid a second deep copy
+  per event. Only the caller-owned stamp fields are checked and copied.
+
+### Fixed: third review round on enrollment ordering, cross-copy identity, and the examples gate
+
+A high-effort branch review confirmed 27 more findings. The correctness,
+contract, diagnostic, and convention findings are closed. A simplification
+and efficiency cluster remains tracked.
+
+- `enroll()` checks a duplicate enrollment before it adopts the widened
+  deleted disposition. Before this fix, a rejected `enrollDeleted` whose
+  error the callback caught left a saved aggregate marked deleted. The
+  post-commit loop then ran the discard path instead of the acknowledge
+  path.
+- Kit boundaries that route by error family are copy-safe. The new exported
+  `isDomainErrorLike` and `isInfrastructureErrorLike` use the structural
+  `category` field when `instanceof` fails across loaded kit copies. A
+  `mapError` result from an adapter package's own kit copy does not crash
+  as `RepositoryErrorMappingFailedError` anymore. A cross-copy
+  `DomainError` from a snapshot factory reaches the corruption channel. The
+  `RepositoryDefinition` brand moved to a versioned `Symbol.for` key, like
+  every other kit brand.
+- `recordPendingEvents` throws the new `DuplicateEventIdError` when two
+  events in one batch share an `eventId` (a reused stamp). Before,
+  idempotent consumers keyed on `eventId` silently dropped one of the two
+  facts.
+- `npm run typecheck` covers `examples/` through `tsconfig.typecheck.json`.
+  The gate surfaced 15 shipped type errors, and this change fixes all of
+  them. `MoneyDto` is a type alias now, so it satisfies the `JsonValue`
+  bound that `PublishedCommand` payloads require. The saga spec passes `id`
+  to `AggregateNotFoundError` again. The rugby example uses the v3
+  `createEvent` and handler shapes. The saga spec narrows the command union
+  before it reads payload fields.
+- The state-stored contract suite requires exactly `DUPLICATE_AGGREGATE`
+  for a duplicate add again, and it restored the preserved-row checks. The
+  silent relaxation to a retryable conflict contradicted the documented
+  mapping and retry rules.
+- `update` and `remove` through a different repository definition report
+  `different_repository`. This matches `add` and `trackLoaded`.
+- The repository facade follows one probe rule: a property that exists
+  nowhere on the facade answers `undefined` without the session-open check.
+  One rule covers `then`, `toJSON`, and inspection symbols. Existing
+  members still throw `TransactionClosedError` after close.
+- Removed (breaking within the unreleased window): the deprecated
+  `DomainEventFacts` and `CreateDomainEventFactsOptions` aliases, the
+  factory `createFacts` member, the legacy `recordEvent` and
+  `recordEventFromFactory` aggregate helpers, and the
+  `AggregateConfig.domainEventFactory` convenience wiring. The CHANGELOG
+  already promised no deprecated aliases. Now the code keeps that promise.
+  Use `createEvent` plus `recordPendingEvents`, or use
+  `createDomainEventFromFacts` for caller-owned identity.
+- The unit-of-work and migration guides document that reads inside `run()`
+  do not see registered writes. Only `findById` is covered by the identity
+  map. Secondary-key finders read the storage state from before the run.
+- Post-commit acknowledgement syncs the persisted-version marker from the
+  enrollment-time version, not from the live instance version. Un-awaited
+  concurrent work in the post-commit window cannot desync the marker.
+
+### Fixed: fourth review round on the round-3 fixes
+
+A medium review of the round-3 commits confirmed seven findings and one
+design question. All are closed.
+
+- Discard after a deletion strips the acknowledged prefix and leaves the
+  persisted-version marker untouched. Before, the marker took the live
+  instance version for a row that no longer exists. A later legitimate
+  re-enrollment of that instance then tripped the unique-cursor guard.
+- The facade membership check stops before `Object.prototype`. Inherited
+  members like `toString` and `valueOf` are language plumbing and answer
+  normally, so string interpolation on a leaked facade after close cannot
+  mask the original failure. Members below `Object.prototype` keep the loud
+  `TransactionClosedError`.
+- A repeated `remove` of the same instance is an accepted no-op, like a
+  repeated `add` or `update`. The decision follows collection semantics and
+  common Unit of Work practice. Everything else stays loud: `add`,
+  `update`, and `trackLoaded` after a removal reject, and so does any other
+  instance with the same id. The `AggregateDeletedError` message now covers
+  the other-instance case.
+- `assertSnapshotSafe` rejects symbol values with the module's guided
+  TypeError. Before, `structuredClone` threw a raw `DataCloneError` with no
+  path, and no recovery channel caught it.
+- `assertTraceContext` tolerates empty `tracestate` list-members, as the
+  W3C Trace Context specification requires. Empty members are dropped
+  before validation, and a header with only empty members counts as absent.
+  The limit message now says characters, not bytes.
+- `defineRepository` validates the definition after the spread copy. A
+  definition that carries `create`, `flush`, or `mapError` on a prototype
+  or as non-enumerable members now fails at definition time with a named
+  error. Before, the loss surfaced as a bare TypeError inside the first
+  `run()`.
+- The command-outbox contract suite documents that `createCommand` must
+  return distinct content per seed, and the conflict tests check it. A
+  constant command made the manufactured conflict equal to its original and
+  failed a compliant adapter.
+- German wording is removed from an `entity.ts` JSDoc sentence, the
+  generated API docs, and five issue records.
+- The event-sourcing guide drops a stale promise: replay does not check a
+  persistence flag, because the Unit of Work owns the factory-versus-load
+  lifecycle.
+
+### Changed: internal consolidation from the review backlog
+
+- `DomainEventValidationError` and `SnapshotTimeValidationError` set `name`
+  equal to `code`, like every other kit error. `KitErrorCode` now lists
+  every code the kit produces, including the event-validation codes, the
+  repository wiring codes, and the new recording codes.
+- One mint tail serves both stamp provenances. A factory-owned stamp is not
+  validated or copied a second time; a caller-built stamp still is.
+- The two capability registries share one `createGlobalCapabilityRegistry`
+  bootstrap. `isJsonObject` lives in `json-value.ts`. The snapshot model
+  reuses `assertPositiveSafeInteger`. The contract suites share their
+  event-identity helpers. One cause-chain walker serves both error
+  classification checks, and each check has its own doc comment.
+- Enrollment and write registration reuse the frozen copy that the
+  `pendingEvents` getter already returns. The identity map reads a
+  pending-event count through the kit-internal capability instead of one
+  array allocation per instance per scan.
+- One write registration replaces the session's parallel bookkeeping. The
+  five optional registration fields on a tracked aggregate are one frozen
+  registration object, and the enrolled and removed sets derive from it, so
+  the bookkeeping cannot drift apart. `close()` clears every clearable
+  collection, including the commit tokens.
+- The state-stored contract suite proves the outbox position facts again:
+  every envelope carries the committed version, a gapless zero-based
+  `commitSequence`, and the exact `commitSize`. Adapters that cannot run
+  the outbox suite (CDC, broker-native delivery) get position coverage from
+  the repository suite alone.
 
 ### Migration guide: 2.2.0 to 3.0.0
 

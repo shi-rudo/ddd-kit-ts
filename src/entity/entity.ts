@@ -184,9 +184,11 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * This accessor is deliberately protected: returning the generic
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
-	 * dirty tracking. Concrete entities should expose fachliche queries or
-	 * detached immutable DTOs. Aggregate roots can use `createSnapshot()`
-	 * as their persistence memento.
+	 * dirty tracking. Concrete entities should expose business-meaningful queries or
+	 * detached immutable DTOs. Snapshot projection belongs to an adapter-owned
+	 * `SnapshotModel`; persistence code captures an aggregate with
+	 * `captureAggregateSnapshot(model, aggregate, snapshotAt)` rather than
+	 * asking the entity to create its own persistence memento.
 	 */
 	protected get state(): TState {
 		return this._state;
@@ -453,10 +455,10 @@ export function removeEntityById<
 /**
  * Updates an entity with the given ID in the collection.
  * Returns a new array with the updated entity.
- * Structural sharing for the kit's reference-based dirty tracking: returns
+ * Structural sharing for adapter-owned persistence projections: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
- * its reference), so `changedKeys` stays clean and partial-write
- * repositories skip the untouched collection; a new array only when an
+ * its reference), so a partial-write adapter can skip the untouched
+ * collection; a new array only when an
  * element reference actually changed. The result is `ReadonlyArray<T>`:
  * it may BE the (possibly frozen) input; spread it if you need a mutable
  * copy.
@@ -500,10 +502,10 @@ export function updateEntityById<
 /**
  * Replaces an entity with the given ID in the collection.
  * Returns a new array with the replaced entity.
- * Structural sharing for the kit's reference-based dirty tracking: returns
+ * Structural sharing for adapter-owned persistence projections: returns
  * the ORIGINAL array when nothing changed (no match, or the element kept
- * its reference), so `changedKeys` stays clean and partial-write
- * repositories skip the untouched collection; a new array only when an
+ * its reference), so a partial-write adapter can skip the untouched
+ * collection; a new array only when an
  * element reference actually changed. The result is `ReadonlyArray<T>`:
  * it may BE the (possibly frozen) input; spread it if you need a mutable
  * copy.

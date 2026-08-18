@@ -1,41 +1,38 @@
 import {
-	SnapshotSchemaMismatchError,
+	DuplicateEventIdError,
+	ReentrantEventRecordingError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
 import { Entity, type EntityConfig } from "../entity/entity";
-import { isBuiltInObject } from "../utils/array/is-built-in";
-import type { AggregateSnapshot, IAggregateRoot, Version } from "./aggregate";
+import type { IAggregateRoot, Version } from "./aggregate";
 import {
 	type AnyDomainEvent,
-	type CreateDomainEventOptions,
-	defaultDomainEventFactory,
-	type DomainEventFactory,
-	type DomainEvent,
+	type AnyUncommittedDomainEvent,
+	type CreateUncommittedDomainEventOptions,
+	createUncommittedDomainEvent,
 	isMintedEvent,
+	isUncommittedDomainEvent,
+	type PendingDomainEvent,
+	recordDomainEvent,
+	type UncommittedDomainEventOf,
 } from "./domain-event";
-import { registerAggregatePersistenceCapability } from "./persistence-lifecycle";
+import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
+import { registerPendingEventRecordingCapability } from "./pending-event-recording";
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
-export interface AggregateConfig<TState = unknown>
-	extends EntityConfig<TState> {
-	/**
-	 * Immutable event factory captured by this aggregate instance. Its clock
-	 * also stamps snapshots, keeping request-local event and snapshot time
-	 * consistent without module-level mutation.
-	 */
-	readonly domainEventFactory?: DomainEventFactory;
-}
+export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
 
 /**
  * Shared base for both `AggregateRoot` (state-stored) and
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
- * identical across the two flavours: version + persistedVersion
+ * identical across the two flavours: current version, pending-event
  * tracking, the kit-internal post-commit acknowledgement capability,
- * the `markRestored` post-load marker, and the
- * `recordEvent` helper that auto-injects `aggregateId` +
- * `aggregateType` on every event the aggregate emits.
+ * the `markRestored` post-load marker, and the `createEvent` helper
+ * that auto-injects `aggregateId` + `aggregateType` on every event the
+ * aggregate emits. The application shell records the pending decisions
+ * with `recordPendingEvents` before persistence.
  *
  * Consumers do NOT extend this class directly; extend
  * `AggregateRoot` for state-stored aggregates or
@@ -49,23 +46,18 @@ export interface AggregateConfig<TState = unknown>
  * @template TEvent - The domain-event union. Defaults to `never` so
  *   aggregates without a declared event type cannot emit events
  *   (emitting any event becomes a compile error).
- * @template TSnapshotState - The plain-data shape stored in snapshots.
- *   Defaults to `TState` for plain-data states. Aggregates whose state
- *   carries class-based child entities declare a plain DTO shape here
- *   and override {@link toSnapshotState} / {@link fromSnapshotState}.
  */
 export abstract class BaseAggregate<
 		TState,
 		TId extends Id<string>,
 		TEvent extends AnyDomainEvent = never,
-		TSnapshotState = TState,
 	>
 	extends Entity<TState, TId>
 	implements IAggregateRoot<TId, TEvent>
 {
 	/**
 	 * The aggregate's domain type as a string, used to populate
-	 * `aggregateType` on events recorded via {@link recordEvent}.
+	 * `aggregateType` on events created via {@link createEvent}.
 	 *
 	 * Subclasses MUST declare this as a string literal:
 	 *
@@ -88,21 +80,15 @@ export abstract class BaseAggregate<
 	private _version: Version = 0 as Version;
 
 	/**
-	 * DB-baseline version. `undefined` until the aggregate has been
-	 * persisted or restored at least once. Repository implementations
-	 * route INSERT vs UPDATE on this field and use it as the OCC
-	 * baseline. See `IRepository.save` JSDoc.
-	 *
-	 * Distinct from {@link version}, which is the in-memory
-	 * post-mutation value. Mutations bump `_version` but never touch
-	 * `_persistedVersion`; that field moves on {@link markRestored}
-	 * (Post-Load) and kit-internal post-commit acknowledgement.
+	 * Version the persistence layer last confirmed for this instance:
+	 * `undefined` until the aggregate is reconstituted (`markRestored`) or a
+	 * commit is acknowledged. Kit-internal via the lifecycle capability; it
+	 * grounds the `withCommit` unique-cursor guard so an eventful commit that
+	 * did not advance beyond the persisted row is rejected deterministically.
 	 */
-	private _persistedVersion: Version | undefined = undefined;
+	private _persistedVersion: Version | undefined;
 
-	private _pendingEvents: TEvent[] = [];
-
-	private readonly domainEventFactory: DomainEventFactory;
+	private _pendingEvents: PendingDomainEvent<TEvent>[] = [];
 
 	protected constructor(
 		id: TId,
@@ -110,39 +96,112 @@ export abstract class BaseAggregate<
 		config?: AggregateConfig<TState>,
 	) {
 		super(id, initialState, config);
-		this.domainEventFactory =
-			config?.domainEventFactory ?? defaultDomainEventFactory;
-		registerAggregatePersistenceCapability(this, {
-			acknowledge: (version) => {
-				this._version = version;
-				this._persistedVersion = version;
-				this._pendingEvents = [];
+		registerPendingEventLifecycleCapability(this, {
+			acknowledge: (events, committedVersion) => {
+				this.acknowledgePendingEvents(events, committedVersion);
 			},
-			discardPendingEvents: () => {
-				this._pendingEvents = [];
+			discardPendingEvents: (events) => {
+				this.discardPendingEventsAfterDeletion(events);
+			},
+			persistedVersion: () => this._persistedVersion,
+			pendingEventCount: () => this._pendingEvents.length,
+		});
+		registerPendingEventRecordingCapability(this, {
+			record: (createStamp) => {
+				const stamped = this._pendingEvents;
+				const stampedCount = stamped.length;
+				const recorded: TEvent[] = stamped.map((event, index) => {
+					const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
+					if (isMintedEvent(candidate)) return candidate as TEvent;
+					if (!isUncommittedDomainEvent(candidate)) {
+						throw new UnmintedEventError(
+							(event as { readonly type: string }).type,
+						);
+					}
+					return recordDomainEvent(
+						candidate,
+						createStamp(candidate, index),
+					) as TEvent;
+				});
+				// A stamp provider that triggers a new decision on this aggregate
+				// grows or replaces the pending list mid-map; assigning `recorded`
+				// would silently discard that decision. Checked BEFORE the
+				// assignment, so recording stays atomic when the guard fires.
+				if (
+					this._pendingEvents !== stamped ||
+					this._pendingEvents.length !== stampedCount
+				) {
+					throw new ReentrantEventRecordingError(String(this.id));
+				}
+				// One identity per decision: a reused stamp would mint two facts
+				// sharing one eventId, and idempotent consumers keyed on it
+				// would silently drop one. Also checked before the assignment.
+				const seenEventIds = new Set<string>();
+				for (const event of recorded) {
+					const eventId = (event as AnyDomainEvent).eventId;
+					if (seenEventIds.has(eventId)) {
+						throw new DuplicateEventIdError(String(this.id), eventId);
+					}
+					seenEventIds.add(eventId);
+				}
+				this._pendingEvents = recorded;
+				return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
 			},
 		});
+	}
+
+	private acknowledgePendingEvents(
+		events: ReadonlyArray<unknown>,
+		committedVersion?: number,
+	): void {
+		this.stripAcknowledgedPrefix(events);
+		// The next eventful commit needs a cursor beyond the version this
+		// commit persisted. The caller passes the enrollment-time version:
+		// syncing from the live version instead would let un-awaited
+		// concurrent work that mutates the instance in the post-commit window
+		// desync the marker.
+		this._persistedVersion = (committedVersion ?? this._version) as Version;
+	}
+
+	/**
+	 * Post-commit cleanup for the deleted disposition. The row is gone, so
+	 * there is no persisted version to advance: stamping the marker from the
+	 * live instance would make a later legitimate re-enrollment of this
+	 * instance trip the unique-cursor guard for a row that does not exist.
+	 */
+	private discardPendingEventsAfterDeletion(
+		events: ReadonlyArray<unknown>,
+	): void {
+		this.stripAcknowledgedPrefix(events);
+	}
+
+	private stripAcknowledgedPrefix(events: ReadonlyArray<unknown>): void {
+		if (
+			events.length > this._pendingEvents.length ||
+			events.some((event, index) => event !== this._pendingEvents[index])
+		) {
+			throw new Error(
+				"The committed event batch is no longer the aggregate's pending prefix.",
+			);
+		}
+		this._pendingEvents = this._pendingEvents.slice(events.length);
 	}
 
 	public get version(): Version {
 		return this._version;
 	}
 
-	public get persistedVersion(): Version | undefined {
-		return this._persistedVersion;
-	}
-
 	/**
 	 * Read-only list of domain events recorded on this aggregate that
 	 * have not yet been flushed to the outbox / persistence layer.
 	 */
-	public get pendingEvents(): ReadonlyArray<TEvent> {
+	public get pendingEvents(): ReadonlyArray<PendingDomainEvent<TEvent>> {
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
 	/**
-	 * Count-only accessor for internal hot paths (`hasChanges` runs per
-	 * save): the public {@link pendingEvents} getter allocates and freezes
+	 * Count-only accessor for internal aggregate paths: the public
+	 * {@link pendingEvents} getter allocates and freezes
 	 * a defensive copy per read, which a length check does not need.
 	 */
 	protected get pendingEventCount(): number {
@@ -164,23 +223,16 @@ export abstract class BaseAggregate<
 
 	/**
 	 * **Lifecycle marker, Post-Load.** Syncs both `_version` and
-	 * `_persistedVersion` to the DB-stored version. Used by
+	 * the current version to the stored version. Used by
 	 * `reconstitute(...)` factories to assemble an in-memory aggregate
 	 * from a persisted row.
 	 *
 	 * The Factory-vs-Reconstitution distinction (Vernon §11) is honoured
 	 * structurally: reconstitution stays inside the aggregate factory while
-	 * post-save acknowledgement belongs to application commit orchestration.
+	 * post-commit acknowledgement belongs to application commit orchestration.
 	 *
-	 * **If you override this, call `super.markRestored(version)` FIRST**.
-	 * The marker is load-bearing
-	 * twice over: it syncs `version`/`persistedVersion`, and on
-	 * `AggregateRoot` it also captures the dirty-tracking baseline for
-	 * `changedKeys`/`hasChanges`. An override that skips `super` leaves
-	 * that baseline uncaptured: `changedKeys` permanently reports ALL
-	 * keys and `hasChanges` never returns `false`, so a partial-write
-	 * repository silently degrades to full writes on every save, on top
-	 * of the broken version sync.
+	 * If you override this, call `super.markRestored(version)` so the current
+	 * domain version remains aligned with the reconstituted facts.
 	 *
 	 * @param version - The version the row currently holds in the DB
 	 *
@@ -208,312 +260,59 @@ export abstract class BaseAggregate<
 	 * An event-only commit on an already-persisted aggregate has no unique
 	 * cursor and `withCommit` rejects it; use `commit(currentState, event)`.
 	 */
-	protected addDomainEvent(event: TEvent): void {
+	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		this.assertMintedEvent(event);
 		this._pendingEvents.push(event);
 	}
 
 	/**
 	 * Immutability gate for every recording path: only events minted by
-	 * the kit's constructors (`createDomainEvent`, `recordEvent`) pass,
+	 * the kit's constructors (`createDomainEvent`,
+	 * `createDomainEventFromFacts`, `createEvent`) pass,
 	 * checked against the constructor's internal, unforgeable mint
 	 * marker. Minted implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can
 	 * establish (a shallow-frozen literal with mutable nested data
 	 * would fool it). O(1): one WeakSet lookup.
 	 */
-	protected assertMintedEvent(event: TEvent): void {
-		if (!isMintedEvent(event)) {
-			throw new UnmintedEventError((event as AnyDomainEvent).type);
+	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
+		if (!isMintedEvent(event) && !isUncommittedDomainEvent(event)) {
+			throw new UnmintedEventError(
+				(event as AnyDomainEvent | AnyUncommittedDomainEvent).type,
+			);
 		}
 	}
 
 	/**
-	 * Creates a snapshot of the current aggregate state: the state at
-	 * this moment plus the version. Useful for ES snapshot policies and
-	 * for state-stored backup / restore.
+	 * Creates the immutable business fact accepted by this aggregate without
+	 * reading a clock, generating an id, or attaching tracing metadata.
 	 *
-	 * The state is converted via {@link toSnapshotState}; the default
-	 * requires plain, serialisable data and fails fast otherwise.
-	 *
-	 * `snapshotAt` is read from this aggregate instance's immutable
-	 * `DomainEventFactory`, the same clock `recordEvent` stamps
-	 * `occurredAt` from. Injecting a factory through `AggregateConfig`
-	 * therefore pins both timestamps in deterministic tests.
-	 * `schemaVersion` is stamped from
-	 * {@link snapshotSchemaVersion} so a later restore can detect
-	 * snapshots written against an older `TSnapshotState` shape.
+	 * The application shell records pending events after the domain operation
+	 * and before persistence. Payload schema version stays here, next to the
+	 * concrete event producer, rather than in shell-owned recording data.
 	 */
-	public createSnapshot(): AggregateSnapshot<TSnapshotState> {
-		return {
-			state: this.toSnapshotState(this._state),
-			version: this.version,
-			snapshotAt: this.domainEventFactory.now(),
-			schemaVersion: this.snapshotSchemaVersion,
-		};
-	}
-
-	/**
-	 * Schema version of the shape {@link toSnapshotState} produces.
-	 * Defaults to `1`. Bump it whenever `TSnapshotState` changes
-	 * incompatibly (renamed or removed fields, changed representations):
-	 * `createSnapshot` stamps it onto every snapshot, and the restore
-	 * paths compare it, so an outdated stored snapshot surfaces as a
-	 * `SnapshotSchemaMismatchError` at restore time (or is upgraded via
-	 * {@link migrateSnapshotState}) instead of crashing on the first
-	 * method call much later.
-	 */
-	protected readonly snapshotSchemaVersion: number = 1;
-
-	/**
-	 * Resolves a stored snapshot's state against the aggregate's current
-	 * snapshot schema: pass-through when the versions match (a missing
-	 * `schemaVersion` counts as `1`, the pre-versioning era), otherwise
-	 * routed through {@link migrateSnapshotState}. Called by both restore
-	 * paths BEFORE anything is assigned, so a rejected snapshot leaves
-	 * the aggregate untouched.
-	 */
-	protected resolveSnapshotState(
-		snapshot: AggregateSnapshot<TSnapshotState>,
-	): TSnapshotState {
-		const storedSchemaVersion = snapshot.schemaVersion ?? 1;
-		if (storedSchemaVersion === this.snapshotSchemaVersion) {
-			return snapshot.state;
-		}
-		return this.migrateSnapshotState(snapshot.state, storedSchemaVersion);
-	}
-
-	/**
-	 * Upgrade hook for snapshots written against an older
-	 * `TSnapshotState` shape. Receives the stored state as `unknown`
-	 * (its shape is, by definition, not the current `TSnapshotState`)
-	 * plus the schema version it was written with, and returns the
-	 * current shape. The default rejects with
-	 * `SnapshotSchemaMismatchError`: discard-and-refold from the full
-	 * event stream is the safe default strategy; override this only when
-	 * upgrading in place is cheaper than refolding.
-	 */
-	protected migrateSnapshotState(
-		_stored: unknown,
-		storedSchemaVersion: number,
-	): TSnapshotState {
-		throw new SnapshotSchemaMismatchError({
-			aggregateType: this.aggregateType,
-			aggregateId: String(this.id),
-			expectedSchemaVersion: this.snapshotSchemaVersion,
-			actualSchemaVersion: storedSchemaVersion,
-		});
-	}
-
-	/**
-	 * Converts live aggregate state into the plain-data shape stored in a
-	 * snapshot. The default validates that the state graph is plain,
-	 * serialisable data (no class instances, functions, Promise/WeakMap/
-	 * WeakSet) and then `structuredClone`s it: class instances would
-	 * silently lose their prototype here AND on every snapshot-store
-	 * round-trip, so the default fails fast with the offending path
-	 * instead of producing a snapshot that breaks on first method call
-	 * after restore.
-	 *
-	 * Override this together with {@link fromSnapshotState} (and the
-	 * `TSnapshotState` generic) when the state carries class-based child
-	 * entities. The override owns isolation: return fresh objects, not
-	 * references into live state.
-	 */
-	protected toSnapshotState(state: TState): TSnapshotState {
-		assertSnapshotSafe(state, "", new WeakSet());
-		return structuredClone(state) as unknown as TSnapshotState;
-	}
-
-	/**
-	 * Converts the plain-data snapshot shape back into live aggregate
-	 * state. The default `structuredClone`s the stored state so the
-	 * restored aggregate never aliases the snapshot object. Override
-	 * together with {@link toSnapshotState} to reconstruct class-based
-	 * child entities.
-	 */
-	protected fromSnapshotState(stored: TSnapshotState): TState {
-		return structuredClone(stored) as unknown as TState;
-	}
-
-	/**
-	 * Sugar for this aggregate's `DomainEventFactory` that auto-injects `aggregateId`
-	 * (from `this.id`) and `aggregateType` (from {@link aggregateType})
-	 * into the event's metadata fields. This is the canonical path for
-	 * recording events from inside aggregate domain methods.
-	 *
-	 * Downstream consumers (outbox dispatchers, projection handlers,
-	 * audit logs) route by these two fields. Calling
-	 * `createDomainEvent(...)` directly inside an aggregate method
-	 * leaves them unset and is caught at the `withCommit` harvest
-	 * boundary, but `this.recordEvent(...)` makes the right thing
-	 * impossible to forget.
-	 *
-	 * @example
-	 * ```ts
-	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-	 *   protected readonly aggregateType = "Order";
-	 *
-	 *   confirm(): void {
-	 *     this.commit(
-	 *       { ...this.state, status: "confirmed" },
-	 *       this.recordEvent("OrderConfirmed", { orderId: this.id }),
-	 *     );
-	 *   }
-	 * }
-	 * ```
-	 *
-	 * @param type    - event type discriminator (must be one of `TEvent`'s tags)
-	 * @param payload - payload for that event subtype
-	 * @param options - any remaining `createDomainEvent` options
-	 *   (`eventId`, `occurredAt`, `metadata`, `version`); `aggregateId`
-	 *   and `aggregateType` are deliberately omitted, because the helper
-	 *   sets them.
-	 */
-	protected recordEvent<E extends TEvent>(
+	protected createEvent<E extends TEvent>(
 		type: E["type"],
 		payload: E["payload"],
-		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
-	): E {
-		return this.domainEventFactory.create(type, payload, {
+		options?: Omit<
+			CreateUncommittedDomainEventOptions,
+			"aggregateId" | "aggregateType"
+		>,
+	): UncommittedDomainEventOf<E> {
+		return createUncommittedDomainEvent(type, payload, {
 			...options,
 			aggregateId: this.id,
 			aggregateType: this.aggregateType,
-		}) as DomainEvent<E["type"], E["payload"]> as E;
+		}) as UncommittedDomainEventOf<E>;
 	}
 }
 
 /**
- * Walks a state graph and throws a descriptive error (with the offending
- * path) when it contains anything `structuredClone` would either reject
- * (functions, Promise/WeakMap/WeakSet) or silently degrade (class
- * instances lose their prototype and methods; Errors lose subclass
- * prototypes and custom fields; symbol-keyed properties are dropped).
- * Used by the default `toSnapshotState` so snapshot corruption surfaces
- * at snapshot time, not on the first method call after a much later
- * restore.
- *
- * Built-in detection is brand-verified via {@link isBuiltInObject}: a
- * plain object spoofing a built-in tag through `Symbol.toStringTag` is
- * walked like any other plain object, so nothing can smuggle unsafe
- * members past the guard. The plain-object walk mirrors what
- * `structuredClone` serialises: own ENUMERABLE string-keyed values
- * (non-enumerable members are deliberately excluded from serialisation
- * and are ignored here too).
- */
-function assertSnapshotSafe(
-	value: unknown,
-	path: string,
-	seen: WeakSet<object>,
-): void {
-	if (typeof value === "function") {
-		throw new Error(
-			`createSnapshot: state${path} is a function: snapshot state must be ` +
-				`plain, serialisable data. Override toSnapshotState()/` +
-				`fromSnapshotState() to map it.`,
-		);
-	}
-	if (value === null || typeof value !== "object") return;
-	const obj = value as object;
-	if (seen.has(obj)) return;
-	seen.add(obj);
-
-	if (Array.isArray(obj)) {
-		for (let i = 0; i < obj.length; i++) {
-			assertSnapshotSafe(obj[i], `${path}[${i}]`, seen);
-		}
-		return;
-	}
-
-	const tag = Object.prototype.toString.call(obj);
-	if (isBuiltInObject(obj, tag)) {
-		if (tag === "[object Map]") {
-			let i = 0;
-			for (const [key, entryValue] of obj as Map<unknown, unknown>) {
-				assertSnapshotSafe(key, `${path}<map key #${i}>`, seen);
-				assertSnapshotSafe(entryValue, `${path}<map value #${i}>`, seen);
-				i++;
-			}
-			return;
-		}
-		if (tag === "[object Set]") {
-			let i = 0;
-			for (const member of obj as Set<unknown>) {
-				assertSnapshotSafe(member, `${path}<set member #${i}>`, seen);
-				i++;
-			}
-			return;
-		}
-		if (
-			tag === "[object Promise]" ||
-			tag === "[object WeakMap]" ||
-			tag === "[object WeakSet]"
-		) {
-			throw new Error(
-				`createSnapshot: state${path} is a ${tag.slice(8, -1)}: it cannot ` +
-					`be cloned or persisted. Override toSnapshotState()/` +
-					`fromSnapshotState() to map it.`,
-			);
-		}
-		if (tag === "[object Error]") {
-			throw new Error(
-				`createSnapshot: state${path} is an Error: structuredClone ` +
-					`downgrades Error subclasses to plain Error and silently drops ` +
-					`custom fields, so the restored value would not round-trip. ` +
-					`Override toSnapshotState()/fromSnapshotState() to map it to ` +
-					`plain data.`,
-			);
-		}
-		// Remaining brand-verified built-ins are snapshot-safe atomics:
-		// Date, RegExp, TypedArrays/DataView, ArrayBuffer(+Shared), and
-		// Boolean/Number/String wrappers. Never walked for own keys (a
-		// deep-frozen Date carries non-enumerable shadow methods that must
-		// not trip the function check).
-		return;
-	}
-
-	const proto = Object.getPrototypeOf(obj);
-	if (proto === Object.prototype || proto === null) {
-		for (const key of Reflect.ownKeys(obj)) {
-			const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-			if (!descriptor?.enumerable) continue;
-			if (typeof key === "symbol") {
-				throw new Error(
-					`createSnapshot: state${path} has a symbol-keyed property ` +
-						`(${String(key)}): structuredClone silently drops symbol ` +
-						`keys, so the snapshot would lose state. Override ` +
-						`toSnapshotState()/fromSnapshotState() to map it.`,
-				);
-			}
-			assertSnapshotSafe(
-				(obj as Record<PropertyKey, unknown>)[key],
-				`${path}.${key}`,
-				seen,
-			);
-		}
-		return;
-	}
-
-	// Class instances and unknown exotic objects (including anything whose
-	// built-in-looking tag failed brand verification): structuredClone
-	// would strip or reject them: fail fast with the path.
-	const name: string = proto.constructor?.name || "anonymous class";
-	throw new Error(
-		`createSnapshot: state${path} is a class instance (${name}): ` +
-			`structuredClone would strip its prototype and methods, producing ` +
-			`a snapshot that breaks on the first method call after restore. ` +
-			`Override toSnapshotState()/fromSnapshotState() to map child ` +
-			`entities to plain data.`,
-	);
-}
-
-/**
- * Restore/replay-target guard shared by `AggregateRoot.restoreFromSnapshot`
- * and the event-sourced replay methods (`loadFromHistory`,
- * `restoreFromSnapshotWithEvents`): a target carrying unflushed
+ * Replay-target guard used by `EventSourcedAggregate.loadFromHistory`: a
+ * target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
- * moves. Every restore path re-baselines the version via `markRestored`, so
- * unflushed events recorded against the old baseline would later be
+ * moves. Replay advances the aggregate's current version, so unflushed events
+ * recorded against the old version would later be
  * harvested claiming a version baseline they were never part of. When the
  * discard is deliberate, discard this dirty instance and reconstitute a
  * fresh aggregate instead of mutating persistence lifecycle state publicly.
@@ -526,7 +325,7 @@ function assertSnapshotSafe(
  * @internal Shared by the aggregate flavours in this package; not part of
  * the public API.
  */
-export function assertRestoreTargetHasNoPendingEvents(aggregate: {
+export function assertReplayTargetHasNoPendingEvents(aggregate: {
 	readonly id: unknown;
 	readonly pendingEvents: ReadonlyArray<unknown>;
 }): void {

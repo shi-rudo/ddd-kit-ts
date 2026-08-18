@@ -1,3 +1,4 @@
+import type { Version } from "../../src/aggregate/aggregate";
 import { AggregateRoot } from "../../src/aggregate/aggregate-root";
 import type { Id } from "../../src/core/id";
 import { addMoney, type Money } from "../../src/money";
@@ -36,6 +37,13 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 		return new Order(id, initialState);
 	}
 
+	/** Reconstitutes persisted facts without recording a new decision. */
+	static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
+		const order = new Order(id, state);
+		order.markRestored(version);
+		return order;
+	}
+
 	get customerId(): string {
 		return this.state.customerId;
 	}
@@ -46,6 +54,10 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 
 	get itemCount(): number {
 		return this.state.items.length;
+	}
+
+	get items(): OrderState["items"] {
+		return this.state.items.map((item) => ({ ...item }));
 	}
 
 	get total(): Money {

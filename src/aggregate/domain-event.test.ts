@@ -1,17 +1,204 @@
 import { describe, expect, it } from "vite-plus/test";
 import { HostileStateKeyError } from "../core/errors";
 import {
-	copyMetadata,
+	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
+	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
+	createDomainEventFromFacts,
+	createUncommittedDomainEvent,
 	type DomainEvent,
 	defaultDomainEventFactory,
 	type EventMetadata,
 	mergeMetadata,
+	recordDomainEvent,
 } from "./domain-event";
+import { DomainEventValidationError } from "./domain-event-errors";
 
 describe("DomainEvent", () => {
+	describe("uncommitted decisions", () => {
+		it("records shell-owned identity and time without changing producer-owned data", () => {
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+			const decision = createUncommittedDomainEvent(
+				"CustomerRenamed",
+				{ name: "Ada" },
+				{
+					aggregateId: "customer-1",
+					aggregateType: "Customer",
+					version: 2,
+				},
+			);
+
+			const event = recordDomainEvent(decision, {
+				eventId: "event-1",
+				occurredAt,
+				metadata: { correlationId: "correlation-1" },
+			});
+
+			expect(event).toEqual({
+				eventId: "event-1",
+				type: "CustomerRenamed",
+				aggregateId: "customer-1",
+				aggregateType: "Customer",
+				payload: { name: "Ada" },
+				occurredAt,
+				version: 2,
+				metadata: { correlationId: "correlation-1" },
+			});
+			expect(event.occurredAt).not.toBe(occurredAt);
+			expect(Object.isFrozen(event)).toBe(true);
+			expect(Object.isFrozen(event.payload)).toBe(true);
+			expect(Object.isFrozen(event.metadata)).toBe(true);
+		});
+
+		it("reuses factory-owned immutable data without weakening public ownership", () => {
+			const payload = { name: "Ada", nested: { locale: "en" } };
+			const metadata = {
+				correlationId: "correlation-1",
+				context: { tenant: "tenant-1" },
+			};
+			const decision = createUncommittedDomainEvent("CustomerRenamed", payload);
+			const stamp = createDomainEventFactory({
+				eventIdFactory: () => "event-1",
+				clock: () => new Date("2027-04-05T06:07:08.000Z"),
+			}).createStamp({ metadata });
+
+			const event = recordDomainEvent(decision, stamp);
+			payload.nested.locale = "de";
+			metadata.context.tenant = "tenant-2";
+
+			expect(event.payload).toBe(decision.payload);
+			expect(event.metadata).toBe(stamp.metadata);
+			expect(event.payload.nested.locale).toBe("en");
+			expect(event.metadata?.context).toEqual({ tenant: "tenant-1" });
+			expect(() => event.occurredAt.setUTCFullYear(2030)).toThrow(TypeError);
+		});
+	});
+
+	describe("contract validation", () => {
+		it.each(["", " ", "\t\n"])(
+			"rejects blank event ids through every recording path",
+			(eventId) => {
+				const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+				const decision = createUncommittedDomainEvent("CustomerRenamed", {
+					name: "Ada",
+				});
+				const factory = createDomainEventFactory({
+					eventIdFactory: () => eventId,
+					clock: () => occurredAt,
+				});
+				const actions = [
+					() =>
+						createDomainEvent("CustomerRenamed", { name: "Ada" }, { eventId }),
+					() => factory.create("CustomerRenamed", { name: "Ada" }),
+					() =>
+						createDomainEventFromFacts(
+							"CustomerRenamed",
+							{ name: "Ada" },
+							{
+								eventId,
+								occurredAt,
+							},
+						),
+					() => factory.createStamp(),
+					() => recordDomainEvent(decision, { eventId, occurredAt }),
+				];
+
+				for (const action of actions) {
+					expect(action).toThrowError(
+						expect.objectContaining({
+							// The kit identity model: name === code.
+							name: "EVENT_ID_INVALID",
+							code: "EVENT_ID_INVALID",
+							field: "eventId",
+						}),
+					);
+				}
+			},
+		);
+
+		it.each(["", " ", "\t\n"])("rejects blank event types", (type) => {
+			expect(() => createDomainEvent(type, undefined)).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_TYPE_INVALID",
+					field: "type",
+				}),
+			);
+			expect(() => createUncommittedDomainEvent(type, undefined)).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_TYPE_INVALID",
+					field: "type",
+				}),
+			);
+		});
+
+		it.each([0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+			"rejects invalid payload schema version %s",
+			(version) => {
+				const actions = [
+					() => createDomainEvent("Demo", undefined, { version }),
+					() => createUncommittedDomainEvent("Demo", undefined, { version }),
+					() =>
+						createDomainEventFromFacts("Demo", undefined, {
+							eventId: "event-1",
+							occurredAt: new Date(0),
+							version,
+						}),
+				];
+				for (const action of actions) {
+					expect(action).toThrowError(
+						expect.objectContaining({
+							code: "EVENT_SCHEMA_VERSION_INVALID",
+							field: "version",
+						}),
+					);
+				}
+			},
+		);
+
+		it.each([
+			["aggregateId", { aggregateId: " " }],
+			["aggregateType", { aggregateType: "\t" }],
+		] as const)("rejects a blank supplied %s", (field, options) => {
+			expect(() => createDomainEvent("Demo", undefined, options)).toThrowError(
+				expect.objectContaining({ code: "EVENT_ADDRESS_INVALID", field }),
+			);
+			expect(() =>
+				createUncommittedDomainEvent("Demo", undefined, options),
+			).toThrowError(
+				expect.objectContaining({ code: "EVENT_ADDRESS_INVALID", field }),
+			);
+		});
+
+		it("validates cheap envelope fields before cloning payload data", () => {
+			const unsupportedPayload = () => undefined;
+
+			expect(() =>
+				createDomainEvent("", unsupportedPayload, { version: 0 }),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_TYPE_INVALID",
+					field: "type",
+				}),
+			);
+		});
+
+		it("exposes one stable error type without making full prose contractual", () => {
+			try {
+				createDomainEvent("Demo", undefined, { version: 0 });
+				throw new Error("expected validation to fail");
+			} catch (error) {
+				expect(error).toBeInstanceOf(TypeError);
+				expect(error).toBeInstanceOf(DomainEventValidationError);
+				expect(error).toMatchObject({
+					code: "EVENT_SCHEMA_VERSION_INVALID",
+					field: "version",
+				});
+			}
+		});
+	});
+
 	describe("eventId", () => {
 		it("auto-generates a non-empty string eventId", () => {
 			const event = createDomainEvent("Demo", { x: 1 });
@@ -132,7 +319,10 @@ describe("DomainEvent", () => {
 		});
 
 		it("leaves a metadata object reusable across events", () => {
-			const metadata: EventMetadata = { correlationId: "corr-1" };
+			const metadata: {
+				correlationId: string;
+				causationId?: string;
+			} = { correlationId: "corr-1" };
 			const first = createDomainEvent("Demo", { x: 1 }, { metadata });
 
 			expect(Object.isFrozen(metadata)).toBe(false);
@@ -184,7 +374,163 @@ describe("DomainEvent", () => {
 		});
 	});
 
+	describe("explicit facts", () => {
+		it("creates identical events from identical inputs without hidden dependencies", () => {
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+			const options = {
+				eventId: "event-1",
+				occurredAt,
+				aggregateId: "order-1",
+				aggregateType: "Order",
+				version: 2,
+				metadata: { correlationId: "corr-1" },
+			};
+
+			const first = createDomainEventFromFacts(
+				"OrderConfirmed",
+				{ orderId: "order-1" },
+				options,
+			);
+			const second = createDomainEventFromFacts(
+				"OrderConfirmed",
+				{ orderId: "order-1" },
+				options,
+			);
+
+			expect(second).toEqual(first);
+			expect(first.occurredAt).not.toBe(occurredAt);
+			expect(second.occurredAt).not.toBe(first.occurredAt);
+			expect(first.metadata).not.toBe(options.metadata);
+		});
+
+		it("rejects an invalid explicit occurrence time", () => {
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+					occurredAt: new Date(Number.NaN),
+				}),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
+			);
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+					occurredAt: 0 as unknown as Date,
+				}),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
+			);
+		});
+
+		it("rejects missing facts at runtime instead of falling back", () => {
+			const occurredAt = new Date("2027-04-05T06:07:08.000Z");
+
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					occurredAt,
+				} as CreateDomainEventFromFactsOptions),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_ID_REQUIRED",
+					field: "eventId",
+				}),
+			);
+			expect(() =>
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+				} as CreateDomainEventFromFactsOptions),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_REQUIRED",
+					field: "occurredAt",
+				}),
+			);
+		});
+
+		it("requires event identity and occurrence time at compile time", () => {
+			const missingFactsMustNotCompile = (): void => {
+				// @ts-expect-error explicit construction requires eventId
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					occurredAt: new Date(0),
+				});
+				// @ts-expect-error explicit construction requires occurredAt
+				createDomainEventFromFacts("OrderConfirmed", undefined, {
+					eventId: "event-1",
+				});
+			};
+
+			expect(missingFactsMustNotCompile).toBeTypeOf("function");
+		});
+	});
+
 	describe("immutable factory instances", () => {
+		it("creates an event stamp from its captured dependencies", () => {
+			let sequence = 0;
+			const shared = new Date("2026-04-05T06:07:08.000Z");
+			const metadata: EventMetadata = { correlationId: "corr-1" };
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => `event-${++sequence}`,
+				clock: () => shared,
+			});
+
+			const stamp = factory.createStamp({ metadata });
+
+			expect(stamp).toEqual({
+				eventId: "event-1",
+				occurredAt: shared,
+				metadata,
+			});
+			expect(stamp.occurredAt).not.toBe(shared);
+			expect(stamp.metadata).not.toBe(metadata);
+			expect(Object.isFrozen(stamp)).toBe(true);
+			expect(Object.isFrozen(stamp.metadata)).toBe(true);
+		});
+
+		it("does not let shell-owned stamps select a payload schema version", () => {
+			const factory = createDomainEventFactory();
+			const invalidCallMustNotCompile = (): void => {
+				// @ts-expect-error schema version belongs to the concrete event producer
+				factory.createStamp({ version: 2 });
+			};
+
+			expect(invalidCallMustNotCompile).toBeTypeOf("function");
+		});
+
+		it("rejects an invalid explicit event-facts time", () => {
+			let generatedIds = 0;
+			const factory = createDomainEventFactory({
+				eventIdFactory: () => `event-${++generatedIds}`,
+			});
+
+			expect(() =>
+				factory.createStamp({
+					occurredAt: new Date(Number.NaN),
+				}),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
+			);
+			expect(() =>
+				factory.createStamp({
+					occurredAt: 0 as unknown as Date,
+				}),
+			).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
+			);
+			expect(generatedIds).toBe(0);
+		});
+
 		it("keeps event-id and clock dependencies isolated across overlapping async work", async () => {
 			let firstSequence = 0;
 			let secondSequence = 0;
@@ -232,6 +578,11 @@ describe("DomainEvent", () => {
 				// @ts-expect-error immutable factory methods cannot be replaced
 				custom.create = createDomainEvent;
 				// @ts-expect-error immutable factory methods cannot be replaced
+				custom.createStamp = () => ({
+					eventId: "replacement",
+					occurredAt: new Date(),
+				});
+				// @ts-expect-error immutable factory methods cannot be replaced
 				custom.now = () => new Date();
 			};
 
@@ -268,11 +619,14 @@ describe("DomainEvent", () => {
 			});
 
 			const event = factory.create("Ticked");
+			const facts = factory.createStamp();
 			const reading = factory.now();
 
 			expect(event.occurredAt).not.toBe(shared);
+			expect(facts.occurredAt).not.toBe(shared);
 			expect(reading).not.toBe(shared);
 			expect(reading).not.toBe(event.occurredAt);
+			expect(reading).not.toBe(facts.occurredAt);
 			expect(reading.getTime()).toBe(shared.getTime());
 		});
 
@@ -286,7 +640,16 @@ describe("DomainEvent", () => {
 				new TypeError("domain-event clock must return a valid Date"),
 			);
 			expect(() => factory.create("Ticked")).toThrowError(
-				new TypeError("domain-event clock must return a valid Date"),
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
+			);
+			expect(() => factory.createStamp()).toThrowError(
+				expect.objectContaining({
+					code: "EVENT_OCCURRED_AT_INVALID",
+					field: "occurredAt",
+				}),
 			);
 		});
 	});
@@ -472,11 +835,7 @@ describe("commit cursor boundary", () => {
 				// @ts-expect-error commit positions belong to CommittedDomainEvent
 				commitSize: 2,
 			};
-			createDomainEvent(
-				"Ticked",
-				{},
-				options,
-			);
+			createDomainEvent("Ticked", {}, options);
 		};
 
 		expect(invalidCreation).toBeTypeOf("function");

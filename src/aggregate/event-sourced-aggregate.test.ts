@@ -5,32 +5,36 @@ import {
 	ForeignEventError,
 	MisaddressedEventError,
 	MissingHandlerError,
-	SnapshotCorruptedError,
-	SnapshotSchemaMismatchError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../core/errors";
 import type { Id } from "../core/id";
+import { createDomainEvent, type DomainEvent, type Version } from "./aggregate";
 import {
-	type AggregateSnapshot,
-	createDomainEvent,
-	type DomainEvent,
-	type Version,
-} from "./aggregate";
-import type { AnyDomainEvent } from "./domain-event";
+	type AnyDomainEvent,
+	createUncommittedDomainEvent,
+	isMintedEvent,
+	isUncommittedDomainEvent,
+	type UncommittedDomainEventOf,
+} from "./domain-event";
 import { EventSourcedAggregate as ProductionEventSourcedAggregate } from "./event-sourced-aggregate";
-import { aggregatePersistenceCapabilityFor } from "./persistence-lifecycle";
+import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 
 function acknowledgePersisted(aggregate: object, version: Version): void {
-	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	capability.acknowledge(version);
+	void version;
+	capability.acknowledge(
+		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+	);
 }
 
 function discardPendingEvents(aggregate: object): void {
-	const capability = aggregatePersistenceCapabilityFor(aggregate);
+	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	capability.discardPendingEvents();
+	capability.discardPendingEvents(
+		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+	);
 }
 
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
@@ -38,8 +42,7 @@ abstract class EventSourcedAggregate<
 	TState,
 	TEvent extends AnyDomainEvent,
 	TId extends Id<string>,
-	TSnapshotState = TState,
-> extends ProductionEventSourcedAggregate<TState, TEvent, TId, TSnapshotState> {
+> extends ProductionEventSourcedAggregate<TState, TEvent, TId> {
 	public override get state(): TState {
 		return super.state;
 	}
@@ -64,6 +67,9 @@ type TestEvent =
 	| TestEventActivated
 	| TestEventDeactivated
 	| TestEventInvalid;
+type TestEventDecision = UncommittedDomainEventOf<TestEvent>;
+type TestEventCreatedDecision = UncommittedDomainEventOf<TestEventCreated>;
+type TestEventUpdatedDecision = UncommittedDomainEventOf<TestEventUpdated>;
 
 class InvalidTestEventError extends DomainError<"INVALID_TEST_EVENT"> {
 	constructor(reason: string) {
@@ -128,21 +134,21 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 	}
 
 	replayLikeLegacy(event: TestEventUpdated): void {
-		// @ts-expect-error the isNew flag argument is gone: apply() always records; replay goes through loadFromHistory / restoreFromSnapshotWithEvents
+		// @ts-expect-error the isNew flag argument is gone: apply() always records; replay goes through loadFromHistory
 		this.apply(event, false);
 	}
 
 	protected readonly handlers = {
 		TestEventCreated: (
 			state: TestState,
-			event: TestEventCreated,
+			event: TestEventCreatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.value,
 		}),
 		TestEventUpdated: (
 			state: TestState,
-			event: TestEventUpdated,
+			event: TestEventUpdatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.newValue,
@@ -170,7 +176,7 @@ class ValidatingAggregate extends EventSourcedAggregate<
 		super(id, initialState);
 	}
 
-	protected validateEvent(event: TestEvent): void {
+	protected validateEvent(event: TestEventDecision): void {
 		if (event.type === "TestEventInvalid") {
 			throw new InvalidTestEventError("forbidden event type");
 		}
@@ -183,14 +189,14 @@ class ValidatingAggregate extends EventSourcedAggregate<
 	protected readonly handlers = {
 		TestEventCreated: (
 			state: TestState,
-			event: TestEventCreated,
+			event: TestEventCreatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.value,
 		}),
 		TestEventUpdated: (
 			state: TestState,
-			event: TestEventUpdated,
+			event: TestEventUpdatedDecision,
 		): TestState => ({
 			...state,
 			value: event.payload.newValue,
@@ -294,7 +300,7 @@ describe("EventSourcedAggregate", () => {
 					super(id, initialState);
 				}
 
-				protected validateEvent(event: TestEvent): void {
+				protected validateEvent(event: TestEventDecision): void {
 					if (
 						event.type === "TestEventActivated" &&
 						this.state.status === "active"
@@ -310,14 +316,14 @@ describe("EventSourcedAggregate", () => {
 				protected readonly handlers = {
 					TestEventCreated: (
 						state: TestState,
-						event: TestEventCreated,
+						event: TestEventCreatedDecision,
 					): TestState => ({
 						...state,
 						value: event.payload.value,
 					}),
 					TestEventUpdated: (
 						state: TestState,
-						event: TestEventUpdated,
+						event: TestEventUpdatedDecision,
 					): TestState => ({
 						...state,
 						value: event.payload.newValue,
@@ -368,7 +374,7 @@ describe("EventSourcedAggregate", () => {
 					TestEventCreated: (s: TestState): TestState => s,
 				} as unknown as Record<
 					TestEvent["type"],
-					(s: TestState, e: TestEvent) => TestState
+					(s: TestState, e: TestEventDecision) => TestState
 				>;
 			}
 
@@ -410,7 +416,7 @@ describe("EventSourcedAggregate", () => {
 				}
 				protected readonly handlers = {} as unknown as Record<
 					TestEvent["type"],
-					(s: TestState, e: TestEvent) => TestState
+					(s: TestState, e: TestEventDecision) => TestState
 				>;
 			}
 
@@ -512,7 +518,7 @@ describe("EventSourcedAggregate", () => {
 				TestEventCreated: (s: TestState): TestState => s,
 			} as unknown as Record<
 				TestEvent["type"],
-				(s: TestState, e: TestEvent) => TestState
+				(s: TestState, e: TestEventDecision) => TestState
 			>;
 		}
 
@@ -577,8 +583,6 @@ describe("EventSourcedAggregate", () => {
 			// all-or-nothing contract as restoreFromSnapshotWithEvents.
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 			expect(aggregate.version).toBe(0);
-			// Never-persisted sentinel survives → follow-up save() routes to INSERT.
-			expect(aggregate.persistedVersion).toBeUndefined();
 		});
 
 		it("rolls back state when a mid-stream row propagates a non-domain error", () => {
@@ -627,9 +631,8 @@ describe("EventSourcedAggregate", () => {
 
 		it("throws UnreplayableAggregateError when the aggregate carries pending events", () => {
 			// A factory-created aggregate holds an unpersisted creation event.
-			// Replaying history onto it would markRestored a persistedVersion
-			// that counts the pending event, flipping repository routing to
-			// UPDATE against a row/stream that does not contain it.
+			// Replaying stored history onto the same object would mix an
+			// uncommitted decision with facts from a different stream baseline.
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
 				10,
@@ -657,35 +660,24 @@ describe("EventSourcedAggregate", () => {
 			expect((thrown as Error).message).toContain("fresh aggregate");
 			// Crash-loud programming bug, never a Result Err, and nothing moved.
 			expect(aggregate.version).toBe(1);
-			expect(aggregate.persistedVersion).toBeUndefined();
 			expect(aggregate.state.value).toBe(10);
 		});
 
-		it("throws UnreplayableAggregateError for in-memory versions that were never persisted", () => {
+		it("allows clean additive replay without carrying a persistence flag", () => {
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
 				10,
 			);
 			discardPendingEvents(aggregate);
 			expect(aggregate.version).toBe(1);
-			expect(aggregate.persistedVersion).toBeUndefined();
 
-			const thrown = ((): unknown => {
-				try {
-					aggregate.loadFromHistory([
-						createDomainEvent("TestEventUpdated", {
-							newValue: 20,
-						}) as TestEventUpdated,
-					]);
-					return undefined;
-				} catch (e) {
-					return e;
-				}
-			})();
-			expect(thrown).toBeInstanceOf(UnreplayableAggregateError);
-			// Only actual application commit orchestration may establish the
-			// missing persistence baseline.
-			expect((thrown as Error).message).toContain("withCommit or UnitOfWork");
+			const result = aggregate.loadFromHistory([
+				createDomainEvent("TestEventUpdated", {
+					newValue: 20,
+				}) as TestEventUpdated,
+			]);
+			expect(result.isOk()).toBe(true);
+			expect(aggregate.version).toBe(2);
 		});
 
 		it("should advance version additively on a persisted aggregate (catch-up replay)", () => {
@@ -694,7 +686,7 @@ describe("EventSourcedAggregate", () => {
 				10,
 			);
 			expect(aggregate.version).toBe(1); // created event
-			// Simulate the post-save lifecycle: the creation event is now
+			// Simulate the post-commit lifecycle: the creation event is now
 			// part of the persisted stream, so catching up is legitimate.
 			acknowledgePersisted(aggregate, aggregate.version);
 
@@ -711,7 +703,6 @@ describe("EventSourcedAggregate", () => {
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(3); // 1 + 2, not 2 (the bug stomped it)
-			expect(aggregate.persistedVersion).toBe(3);
 		});
 
 		it("should handle empty history", () => {
@@ -727,20 +718,18 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.version).toBe(0);
 		});
 
-		it("keeps the never-persisted sentinel on empty history (save must still INSERT)", () => {
+		it("keeps version zero on empty history while persistence lifecycle stays external", () => {
 			const initialState: TestState = { value: 10, status: "inactive" };
 			const aggregate = new TestEventSourcedAggregate(
 				"test-1" as TestId,
 				initialState,
 			);
-			expect(aggregate.persistedVersion).toBeUndefined();
 
 			const result = aggregate.loadFromHistory([]);
 
 			expect(result.isOk()).toBe(true);
 			// markRestored(0) would flip repository routing from INSERT to
 			// UPDATE against a row that does not exist.
-			expect(aggregate.persistedVersion).toBeUndefined();
 		});
 
 		it("runs the freshness guard before the empty-history fast path", () => {
@@ -800,8 +789,6 @@ describe("EventSourcedAggregate", () => {
 				"test-1" as TestId,
 				10,
 			);
-
-			expect("changedKeys" in aggregate).toBe(false);
 			expect("hasChanges" in aggregate).toBe(false);
 		});
 	});
@@ -829,7 +816,10 @@ describe("EventSourcedAggregate", () => {
 			}
 
 			protected readonly handlers = {
-				ItemAdded: (state: NestedEsState, event: ItemAdded): NestedEsState => ({
+				ItemAdded: (
+					state: NestedEsState,
+					event: UncommittedDomainEventOf<ItemAdded>,
+				): NestedEsState => ({
 					...state,
 					items: [...state.items, event.payload.item],
 				}),
@@ -854,7 +844,7 @@ describe("EventSourcedAggregate", () => {
 	});
 
 	describe("kit-internal persistence acknowledgement", () => {
-		it("updates the version and clears pending events", () => {
+		it("clears pending events without rewriting the domain version", () => {
 			const aggregate = TestEventSourcedAggregate.create(
 				"test-1" as TestId,
 				10,
@@ -866,7 +856,7 @@ describe("EventSourcedAggregate", () => {
 
 			acknowledgePersisted(aggregate, 99 as Version);
 
-			expect(aggregate.version).toBe(99);
+			expect(aggregate.version).toBe(2);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
@@ -895,606 +885,6 @@ describe("EventSourcedAggregate", () => {
 			expect(aggregate.pendingEvents.length).toBe(eventsBefore);
 		});
 	});
-
-	describe("Snapshots", () => {
-		it("should create snapshot with current state and version", () => {
-			const aggregate = TestEventSourcedAggregate.create(
-				"test-1" as TestId,
-				10,
-			);
-			aggregate.updateValue(20);
-			aggregate.activate();
-
-			const snapshot = aggregate.createSnapshot();
-
-			expect(snapshot.state.value).toBe(20);
-			expect(snapshot.state.status).toBe("active");
-			expect(snapshot.version).toBe(3);
-			expect(snapshot.snapshotAt).toBeInstanceOf(Date);
-		});
-
-		it("should restore from snapshot with events", () => {
-			const aggregate1 = TestEventSourcedAggregate.create(
-				"test-1" as TestId,
-				10,
-			);
-			aggregate1.updateValue(20);
-			aggregate1.activate();
-
-			const snapshot = aggregate1.createSnapshot();
-
-			// Create new aggregate and restore from snapshot
-			const initialState: TestState = { value: 0, status: "inactive" };
-			const aggregate2 = new TestEventSourcedAggregate(
-				"test-1" as TestId,
-				initialState,
-			);
-
-			const eventsAfterSnapshot: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 30,
-				}) as TestEventUpdated,
-			];
-
-			const result = aggregate2.restoreFromSnapshotWithEvents(
-				snapshot,
-				eventsAfterSnapshot,
-			);
-
-			expect(result.isOk()).toBe(true);
-			expect(aggregate2.state.value).toBe(30); // Updated by event after snapshot
-			expect(aggregate2.state.status).toBe("active"); // From snapshot
-			expect(aggregate2.version).toBe(4); // Snapshot version + events after
-		});
-
-		it("should restore from snapshot with no events after", () => {
-			const aggregate1 = TestEventSourcedAggregate.create(
-				"test-1" as TestId,
-				10,
-			);
-			aggregate1.updateValue(20);
-
-			const snapshot = aggregate1.createSnapshot();
-
-			const initialState: TestState = { value: 0, status: "inactive" };
-			const aggregate2 = new TestEventSourcedAggregate(
-				"test-1" as TestId,
-				initialState,
-			);
-
-			const result = aggregate2.restoreFromSnapshotWithEvents(snapshot, []);
-
-			expect(result.isOk()).toBe(true);
-			expect(aggregate2.state.value).toBe(20);
-			expect(aggregate2.version).toBe(2);
-		});
-
-		it("should deep-clone the snapshot when restoring: caller mutations don't leak in", () => {
-			const snapshot: AggregateSnapshot<TestState> = {
-				state: { value: 42, status: "active" },
-				version: 5 as Version,
-				snapshotAt: new Date(),
-			};
-
-			const initialState: TestState = { value: 0, status: "inactive" };
-			const aggregate = new TestEventSourcedAggregate(
-				"test-1" as TestId,
-				initialState,
-			);
-			const result = aggregate.restoreFromSnapshotWithEvents(snapshot, []);
-
-			expect(result.isOk()).toBe(true);
-
-			// Mutate the original snapshot AFTER restore. The aggregate must be isolated.
-			snapshot.state.value = 999;
-			snapshot.state.status = "inactive";
-
-			expect(aggregate.state.value).toBe(42);
-			expect(aggregate.state.status).toBe("active");
-		});
-
-		it("maps a DomainError from a migrateSnapshotState override to Err (the documented Result contract)", () => {
-			class UnmigratableSnapshotError extends DomainError<"UNMIGRATABLE_SNAPSHOT"> {
-				constructor() {
-					super({
-						code: "UNMIGRATABLE_SNAPSHOT",
-						message: "this v1 snapshot cannot be upgraded",
-					});
-				}
-			}
-
-			class MigratingEsAggregate extends TestEventSourcedAggregate {
-				protected override readonly snapshotSchemaVersion = 2;
-
-				protected override migrateSnapshotState(): TestState {
-					throw new UnmigratableSnapshotError();
-				}
-			}
-
-			const originalState: TestState = { value: 5, status: "inactive" };
-			const aggregate = new MigratingEsAggregate(
-				"test-1" as TestId,
-				originalState,
-			);
-			const v1Snapshot: AggregateSnapshot<TestState> = {
-				state: { value: 42, status: "active" },
-				version: 7 as Version,
-				snapshotAt: new Date(),
-				schemaVersion: 1,
-			};
-
-			// Repository code written to the documented contract ("catches
-			// DomainError and returns it as an Err") must see the Err and
-			// fall back to a full refold, not an uncaught throw.
-			const result = aggregate.restoreFromSnapshotWithEvents(v1Snapshot, []);
-
-			expect(result.isErr()).toBe(true);
-			if (result.isErr()) {
-				expect(result.error).toBeInstanceOf(UnmigratableSnapshotError);
-			}
-			expect(aggregate.state).toEqual(originalState);
-			expect(aggregate.version).toBe(0);
-			expect(aggregate.persistedVersion).toBeUndefined();
-		});
-
-		it("throws SnapshotSchemaMismatchError for a mismatched snapshot schema (not an Err) and leaves the aggregate untouched", () => {
-			const originalState: TestState = { value: 5, status: "inactive" };
-			const aggregate = new TestEventSourcedAggregate(
-				"test-1" as TestId,
-				originalState,
-			);
-			const stale: AggregateSnapshot<TestState> = {
-				state: { value: 42, status: "active" },
-				version: 7 as Version,
-				snapshotAt: new Date(),
-				schemaVersion: 99,
-			};
-
-			expect(() => aggregate.restoreFromSnapshotWithEvents(stale, [])).toThrow(
-				SnapshotSchemaMismatchError,
-			);
-			expect(aggregate.state).toEqual(originalState);
-			expect(aggregate.version).toBe(0);
-			expect(aggregate.persistedVersion).toBeUndefined();
-		});
-
-		it("throws UnreplayableAggregateError when restoring onto an aggregate with pending events", () => {
-			// Pending events recorded before the restore are unrelated to the
-			// restored stream; harvesting them after markRestored would emit
-			// them with a version baseline they were never part of.
-			const source = TestEventSourcedAggregate.create("test-1" as TestId, 10);
-			acknowledgePersisted(source, source.version);
-			const snapshot = source.createSnapshot();
-
-			const dirty = TestEventSourcedAggregate.create("test-1" as TestId, 0);
-			expect(dirty.pendingEvents).toHaveLength(1);
-
-			expect(() => dirty.restoreFromSnapshotWithEvents(snapshot, [])).toThrow(
-				UnreplayableAggregateError,
-			);
-		});
-
-		it("loads a snapshot that today's validateState would reject: snapshots are an optimization, not a rule gate", () => {
-			// "Replay from zero equals snapshot plus tail": full replay does
-			// not check handler-produced states against current rules, so
-			// the snapshot path must not either. A tightened validateState
-			// (value >= 0, introduced AFTER the snapshot was taken) must not
-			// make the persisted snapshot unloadable. Structural decode
-			// problems belong in fromSnapshotState / migrateSnapshotState,
-			// schema drift in snapshotSchemaVersion.
-			class StateValidatingAggregate extends EventSourcedAggregate<
-				TestState,
-				TestEvent,
-				TestId
-			> {
-				protected readonly aggregateType = "StateValidatingAggregate";
-
-				constructor(id: TestId, initialState: TestState) {
-					super(id, initialState, {
-						validateState: (state) => {
-							if (state.value < 0) {
-								throw new NegativeValueError();
-							}
-						},
-					});
-				}
-
-				protected readonly handlers = {
-					TestEventCreated: (
-						state: TestState,
-						event: TestEventCreated,
-					): TestState => ({ ...state, value: event.payload.value }),
-					TestEventUpdated: (
-						state: TestState,
-						event: TestEventUpdated,
-					): TestState => ({ ...state, value: event.payload.newValue }),
-					TestEventActivated: (state: TestState): TestState => ({
-						...state,
-						status: "active",
-					}),
-					TestEventDeactivated: (state: TestState): TestState => ({
-						...state,
-						status: "inactive",
-					}),
-					TestEventInvalid: (state: TestState): TestState => state,
-				};
-			}
-
-			const aggregate = new StateValidatingAggregate("test-1" as TestId, {
-				value: 5,
-				status: "inactive",
-			});
-
-			const historical: AggregateSnapshot<TestState> = {
-				state: { value: -1, status: "active" },
-				version: 7 as Version,
-				snapshotAt: new Date(),
-			};
-
-			const result = aggregate.restoreFromSnapshotWithEvents(historical, [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 30,
-				}) as TestEventUpdated,
-			]);
-
-			expect(result.isOk()).toBe(true);
-			expect(aggregate.state).toEqual({ value: 30, status: "active" });
-			expect(aggregate.version).toBe(8);
-		});
-
-		it("should roll back state + version when an event mid-stream fails validation", () => {
-			// aggregate1 produces a snapshot at v=3, value=20, status=active
-			const aggregate1 = TestEventSourcedAggregate.create(
-				"test-1" as TestId,
-				10,
-			);
-			aggregate1.updateValue(20);
-			aggregate1.activate();
-			const snapshot = aggregate1.createSnapshot();
-
-			// aggregate2 starts in a different state; the failed restore must leave it untouched
-			const originalState: TestState = { value: 555, status: "inactive" };
-			const aggregate2 = new ValidatingAggregate(
-				"test-1" as TestId,
-				originalState,
-			);
-			const originalVersion = aggregate2.version;
-
-			const eventsAfterSnapshot: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 30,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid, // rejected
-				createDomainEvent("TestEventUpdated", {
-					newValue: 40,
-				}) as TestEventUpdated,
-			];
-
-			const result = aggregate2.restoreFromSnapshotWithEvents(
-				snapshot,
-				eventsAfterSnapshot,
-			);
-
-			// Result reports the failure
-			expect(result.isErr()).toBe(true);
-
-			// And the aggregate is back to its pre-call state (atomic restore)
-			expect(aggregate2.state).toEqual(originalState);
-			expect(aggregate2.version).toBe(originalVersion);
-		});
-	});
-
-	describe("Snapshots with class-based child entities (toSnapshotState/fromSnapshotState)", () => {
-		class LineItem {
-			constructor(
-				readonly sku: string,
-				public qty: number,
-			) {}
-
-			toPlainData(): { sku: string; qty: number } {
-				return { sku: this.sku, qty: this.qty };
-			}
-
-			static fromPlainData(d: { sku: string; qty: number }): LineItem {
-				return new LineItem(d.sku, d.qty);
-			}
-		}
-
-		type CartState = { items: LineItem[] };
-		type CartSnapshotState = { items: Array<{ sku: string; qty: number }> };
-		type ItemAdded = DomainEvent<"ItemAdded", { sku: string }>;
-		type CartEvent = ItemAdded;
-
-		class Cart extends EventSourcedAggregate<
-			CartState,
-			CartEvent,
-			TestId,
-			CartSnapshotState
-		> {
-			protected readonly aggregateType = "Cart";
-
-			constructor(id: TestId, state: CartState) {
-				super(id, state);
-			}
-
-			protected readonly handlers = {
-				ItemAdded: (state: CartState, e: ItemAdded): CartState => ({
-					items: [...state.items, new LineItem(e.payload.sku, 1)],
-				}),
-			};
-
-			protected override toSnapshotState(state: CartState): CartSnapshotState {
-				return { items: state.items.map((i) => i.toPlainData()) };
-			}
-
-			protected override fromSnapshotState(
-				stored: CartSnapshotState,
-			): CartState {
-				return { items: stored.items.map(LineItem.fromPlainData) };
-			}
-		}
-
-		it("restoreFromSnapshotWithEvents revives class children and replays events on top", () => {
-			const cart = new Cart("agg-1" as TestId, {
-				items: [new LineItem("sku-a", 2)],
-			});
-			const snapshot = cart.createSnapshot();
-			expect(Object.getPrototypeOf(snapshot.state.items[0])).toBe(
-				Object.prototype,
-			);
-
-			const restored = new Cart("agg-1" as TestId, { items: [] });
-			const result = restored.restoreFromSnapshotWithEvents(snapshot, [
-				createDomainEvent("ItemAdded", { sku: "sku-b" }) as ItemAdded,
-			]);
-
-			expect(result.isOk()).toBe(true);
-			expect(restored.state.items[0]).toBeInstanceOf(LineItem);
-			expect(restored.state.items[0]?.toPlainData()).toEqual({
-				sku: "sku-a",
-				qty: 2,
-			});
-			expect(restored.state.items[1]?.sku).toBe("sku-b");
-		});
-
-		it("default createSnapshot fails fast on a Promise in state instead of DataCloneError", () => {
-			type JobState = { pending: Promise<number> };
-			class JobAggregate extends EventSourcedAggregate<
-				JobState,
-				CartEvent,
-				TestId
-			> {
-				protected readonly aggregateType = "JobAggregate";
-				constructor(id: TestId, state: JobState) {
-					super(id, state);
-				}
-				protected readonly handlers = {
-					ItemAdded: (s: JobState): JobState => s,
-				};
-			}
-			const agg = new JobAggregate("agg-1" as TestId, {
-				pending: Promise.resolve(1),
-			});
-
-			expect(() => agg.createSnapshot()).toThrow(/Promise/);
-			expect(() => agg.createSnapshot()).toThrow(/toSnapshotState/);
-		});
-	});
-
-	describe("persistedVersion + markRestored (Insert-vs-Update + OCC baseline)", () => {
-		it("persistedVersion is undefined on a freshly-constructed aggregate", () => {
-			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-
-			expect(agg.version).toBe(0);
-			expect(agg.persistedVersion).toBeUndefined();
-		});
-
-		it("persistedVersion stays undefined after apply()-ing new events on a never-persisted aggregate", () => {
-			// Factory + edit-before-save flow. `version` advances past 0
-			// in memory; `persistedVersion` must remain undefined so save()
-			// routes to INSERT / append-from-zero, not a stream-revision
-			// check against a stream that doesn't exist.
-			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 42);
-			agg.updateValue(100);
-			agg.activate();
-
-			expect(agg.version).toBe(3);
-			expect(agg.persistedVersion).toBeUndefined();
-		});
-
-		it("loadFromHistory aligns persistedVersion to the final post-replay version", () => {
-			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			expect(agg.persistedVersion).toBeUndefined();
-
-			const history: TestEvent[] = [
-				createDomainEvent("TestEventCreated", { value: 1 }) as TestEventCreated,
-				createDomainEvent("TestEventUpdated", {
-					newValue: 2,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
-			];
-
-			const result = agg.loadFromHistory(history);
-			expect(result.isOk()).toBe(true);
-			expect(agg.version).toBe(3);
-			expect(agg.persistedVersion).toBe(3); // baseline = post-replay version
-		});
-
-		it("new events after loadFromHistory bump version but not persistedVersion", () => {
-			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			const history: TestEvent[] = [
-				createDomainEvent("TestEventCreated", { value: 1 }) as TestEventCreated,
-				createDomainEvent("TestEventUpdated", {
-					newValue: 2,
-				}) as TestEventUpdated,
-			];
-			agg.loadFromHistory(history);
-			expect(agg.persistedVersion).toBe(2);
-
-			// Domain method appends a new event.
-			agg.updateValue(99);
-
-			expect(agg.version).toBe(3);
-			expect(agg.persistedVersion).toBe(2); // OCC baseline unchanged
-			expect(agg.pendingEvents).toHaveLength(1);
-		});
-
-		it("internal acknowledgement updates persistedVersion", () => {
-			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			agg.updateValue(1);
-			expect(agg.persistedVersion).toBeUndefined();
-
-			acknowledgePersisted(agg, 1 as Version);
-
-			expect(agg.version).toBe(1);
-			expect(agg.persistedVersion).toBe(1);
-		});
-
-		it("restoreFromSnapshotWithEvents aligns persistedVersion to the final version", () => {
-			const agg = new TestEventSourcedAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-
-			const snapshot: AggregateSnapshot<TestState> = {
-				state: { value: 50, status: "active" },
-				version: 5 as Version,
-				snapshotAt: new Date(),
-			};
-			const eventsAfterSnapshot: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 51,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventUpdated", {
-					newValue: 52,
-				}) as TestEventUpdated,
-			];
-
-			const result = agg.restoreFromSnapshotWithEvents(
-				snapshot,
-				eventsAfterSnapshot,
-			);
-			expect(result.isOk()).toBe(true);
-			expect(agg.version).toBe(7);
-			expect(agg.persistedVersion).toBe(7);
-		});
-
-		it("loadFromHistory failure preserves persistedVersion at the pre-call baseline", () => {
-			const agg = new ValidatingAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			// Establish a prior persisted baseline.
-			acknowledgePersisted(agg, 2 as Version);
-			const baselineBefore = agg.persistedVersion;
-
-			// Second event triggers ValidatingAggregate.validateEvent.
-			const history: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 1,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
-			];
-
-			const result = agg.loadFromHistory(history);
-			expect(result.isErr()).toBe(true);
-			// persistedVersion is invariant during the loop and the final
-			// markRestored is only called on the success path, so the
-			// baseline stays where it was before loadFromHistory was called.
-			expect(agg.persistedVersion).toBe(baselineBefore);
-		});
-
-		it("loadFromHistory failure on a fresh aggregate keeps persistedVersion undefined", () => {
-			const agg = new ValidatingAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			expect(agg.persistedVersion).toBeUndefined();
-
-			const history: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 1,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
-			];
-
-			const result = agg.loadFromHistory(history);
-			expect(result.isErr()).toBe(true);
-			// The "never persisted" sentinel survives a failed load: a
-			// follow-up save() must still route to INSERT, not UPDATE
-			// against a baseline that loadFromHistory never wrote.
-			expect(agg.persistedVersion).toBeUndefined();
-		});
-
-		it("multi-save cycle: persistedVersion advances on each acknowledgement", () => {
-			const agg = TestEventSourcedAggregate.create("id-1" as TestId, 10);
-			// First save: create event landed at v1.
-			expect(agg.version).toBe(1);
-			expect(agg.persistedVersion).toBeUndefined();
-
-			acknowledgePersisted(agg, 1 as Version);
-			expect(agg.persistedVersion).toBe(1);
-
-			// Second save cycle: one more event, then save at v2.
-			agg.updateValue(20);
-			expect(agg.version).toBe(2);
-			expect(agg.persistedVersion).toBe(1);
-
-			acknowledgePersisted(agg, 2 as Version);
-			expect(agg.persistedVersion).toBe(2);
-
-			// Third save cycle: another event, save at v3.
-			agg.activate();
-			expect(agg.version).toBe(3);
-			expect(agg.persistedVersion).toBe(2);
-
-			acknowledgePersisted(agg, 3 as Version);
-			expect(agg.persistedVersion).toBe(3);
-		});
-
-		it("restoreFromSnapshotWithEvents rolls back persistedVersion when an event fails mid-stream", () => {
-			const agg = new ValidatingAggregate("id-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			// Establish a prior persisted baseline.
-			acknowledgePersisted(agg, 2 as Version);
-			const baselineBeforeRestore = agg.persistedVersion;
-
-			const snapshot: AggregateSnapshot<TestState> = {
-				state: { value: 50, status: "active" },
-				version: 5 as Version,
-				snapshotAt: new Date(),
-			};
-			// Second event triggers validateEvent in ValidatingAggregate.
-			const eventsAfterSnapshot: TestEvent[] = [
-				createDomainEvent("TestEventUpdated", {
-					newValue: 51,
-				}) as TestEventUpdated,
-				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
-			];
-
-			const result = agg.restoreFromSnapshotWithEvents(
-				snapshot,
-				eventsAfterSnapshot,
-			);
-			expect(result.isErr()).toBe(true);
-			// Rolled back: persistedVersion is back to the pre-call baseline.
-			expect(agg.persistedVersion).toBe(baselineBeforeRestore);
-		});
-	});
 });
 
 describe("replay trusts history", () => {
@@ -1512,7 +902,7 @@ describe("replay trusts history", () => {
 			super(id, initialState);
 		}
 
-		protected validateEvent(event: TestEvent): void {
+		protected validateEvent(event: TestEventDecision): void {
 			if (
 				event.type === "TestEventActivated" &&
 				this.state.status === "active"
@@ -1528,11 +918,11 @@ describe("replay trusts history", () => {
 		protected readonly handlers = {
 			TestEventCreated: (
 				state: TestState,
-				event: TestEventCreated,
+				event: TestEventCreatedDecision,
 			): TestState => ({ ...state, value: event.payload.value }),
 			TestEventUpdated: (
 				state: TestState,
-				event: TestEventUpdated,
+				event: TestEventUpdatedDecision,
 			): TestState => ({ ...state, value: event.payload.newValue }),
 			TestEventActivated: (state: TestState): TestState => ({
 				...state,
@@ -1673,77 +1063,24 @@ describe("replay trusts history", () => {
 		expect(Object.isFrozen(recorded)).toBe(true);
 	});
 
-	it("rejects a tampered snapshot as Err through the structural validateRestoredState hook", () => {
-		// The structural gate the review demanded: a snapshot is derived
-		// data read back from storage, so a blob no version of the model
-		// could have produced must come back as Err (discard and refold),
-		// while a RULES-tightened validateState still does not run here.
-		class StructurallyGuardedAggregate extends EventSourcedAggregate<
-			TestState,
-			TestEvent,
-			TestId
-		> {
-			protected readonly aggregateType = "StructurallyGuardedAggregate";
-
-			constructor(id: TestId, initialState: TestState) {
-				super(id, initialState);
-			}
-
-			protected validateRestoredState(state: TestState): void {
-				if (
-					typeof state.value !== "number" ||
-					typeof state.status !== "string"
-				) {
-					throw new SnapshotCorruptedError("snapshot state is not a TestState");
-				}
-			}
-
-			protected readonly handlers = {
-				TestEventCreated: (
-					state: TestState,
-					event: TestEventCreated,
-				): TestState => ({ ...state, value: event.payload.value }),
-				TestEventUpdated: (
-					state: TestState,
-					event: TestEventUpdated,
-				): TestState => ({ ...state, value: event.payload.newValue }),
-				TestEventActivated: (state: TestState): TestState => ({
-					...state,
-					status: "active",
-				}),
-				TestEventDeactivated: (state: TestState): TestState => ({
-					...state,
-					status: "inactive",
-				}),
-				TestEventInvalid: (state: TestState): TestState => state,
-			};
-		}
-
-		const agg = new StructurallyGuardedAggregate("test-1" as TestId, {
+	it("keeps an address-stamped decision uncommitted until the shell records it", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
 		});
+		const decision = createUncommittedDomainEvent("TestEventUpdated", {
+			newValue: 42,
+		});
 
-		const tampered = {
-			state: { tampered: true } as unknown as TestState,
-			version: 7 as Version,
-			snapshotAt: new Date(),
-		};
+		agg.testApply(decision as unknown as TestEventUpdated);
 
-		const result = agg.restoreFromSnapshotWithEvents(tampered, []);
-
-		expect(result.isErr()).toBe(true);
-		if (result.isErr()) {
-			// An InfrastructureError, deliberately recoverable through the
-			// Result channel: corrupted persistence is a storage problem,
-			// and the load recipe answers Err with discard-and-refold.
-			expect(result.error).toBeInstanceOf(SnapshotCorruptedError);
-			expect(result.error.code).toBe("SNAPSHOT_CORRUPTED");
-		}
-		// Untouched: state, version, and the never-persisted sentinel.
-		expect(agg.state).toEqual({ value: 10, status: "inactive" });
-		expect(agg.version).toBe(0);
-		expect(agg.persistedVersion).toBeUndefined();
+		const pending = agg.pendingEvents[0];
+		expect(pending?.aggregateId).toBe("test-1");
+		expect(pending?.aggregateType).toBe("RuleTighteningAggregate");
+		expect(pending).not.toHaveProperty("eventId");
+		expect(pending).not.toHaveProperty("occurredAt");
+		expect(isUncommittedDomainEvent(pending as object)).toBe(true);
+		expect(isMintedEvent(pending as object)).toBe(false);
 	});
 
 	it("rejects a hand-rolled mutable event before anything moves", () => {
@@ -1873,46 +1210,6 @@ describe("replay trusts history", () => {
 		expect(agg.state.value).toBe(7);
 	});
 
-	it("replay from zero equals snapshot plus tail", () => {
-		// The equivalence that makes snapshots a pure optimization: the
-		// same stream must produce the same aggregate whether it is
-		// replayed in full or restored from a snapshot and caught up.
-		const history: TestEvent[] = [
-			createDomainEvent("TestEventCreated", { value: 1 }) as TestEventCreated,
-			createDomainEvent("TestEventUpdated", {
-				newValue: 2,
-			}) as TestEventUpdated,
-			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
-			createDomainEvent("TestEventUpdated", {
-				newValue: 9,
-			}) as TestEventUpdated,
-		];
-
-		const full = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		expect(full.loadFromHistory(history).isOk()).toBe(true);
-
-		const viaSnapshot = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		const snapshot: AggregateSnapshot<TestState> = {
-			state: { value: 2, status: "inactive" }, // state after history[1]
-			version: 2 as Version,
-			snapshotAt: new Date(),
-		};
-		expect(
-			viaSnapshot
-				.restoreFromSnapshotWithEvents(snapshot, history.slice(2))
-				.isOk(),
-		).toBe(true);
-
-		expect(viaSnapshot.state).toEqual(full.state);
-		expect(viaSnapshot.version).toBe(full.version);
-	});
-
 	it("accepts replayed events that carry the matching address", () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
@@ -1929,29 +1226,5 @@ describe("replay trusts history", () => {
 
 		expect(result.isOk()).toBe(true);
 		expect(agg.state.value).toBe(99);
-	});
-
-	it("guards the snapshot catch-up path the same way", () => {
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		const snapshot: AggregateSnapshot<TestState> = {
-			state: { value: 50, status: "active" },
-			version: 5 as Version,
-			snapshotAt: new Date(),
-		};
-
-		expect(() =>
-			agg.restoreFromSnapshotWithEvents(snapshot, [
-				createDomainEvent(
-					"TestEventUpdated",
-					{ newValue: 51 },
-					{ aggregateId: "someone-else" },
-				) as TestEventUpdated,
-			]),
-		).toThrow(ForeignEventError);
-		expect(agg.state).toEqual({ value: 0, status: "inactive" });
-		expect(agg.version).toBe(0);
 	});
 });

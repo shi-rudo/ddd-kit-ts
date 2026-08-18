@@ -1,4 +1,5 @@
 import type { Result } from "@shirudo/result";
+import type { JsonValue } from "../events/json-value";
 
 /**
  * Marker interface for Commands.
@@ -79,6 +80,21 @@ export interface Command {
 }
 
 /**
+ * Versioned Published Language for a command that crosses a process or
+ * Bounded-Context boundary. Unlike a local {@link Command}, its payload is
+ * JSON-safe data rather than a domain object graph. Map value objects to their
+ * wire DTOs at this boundary; for example, use `MoneyDto` instead of `Money`.
+ */
+export interface PublishedCommand<
+	TType extends string = string,
+	TPayload extends JsonValue = JsonValue,
+> extends Command {
+	readonly type: TType;
+	readonly version: number;
+	readonly payload: TPayload;
+}
+
+/**
  * Handler for executing commands.
  * Commands return Result for explicit error handling.
  * Commands may modify system state. When a caller can retry or a broker can
@@ -97,7 +113,7 @@ export interface Command {
  * ```typescript
  * const handler: CommandHandler<CreateOrderCommand, OrderId> = async (cmd) => {
  *   const order = Order.create(cmd.customerId, cmd.items);
- *   await repository.save(order);
+ *   repository.add(order);
  *   return ok(order.id);
  * };
  * ```

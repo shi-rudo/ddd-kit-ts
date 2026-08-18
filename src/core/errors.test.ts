@@ -135,10 +135,8 @@ describe("MissingHandlerError", () => {
 
 describe("UnreplayableAggregateError", () => {
 	it("keeps the class message focused on fresh-instance reconstitution", () => {
-		// The error is thrown by loadFromHistory (two distinct guards),
-		// restoreFromSnapshotWithEvents, and AggregateRoot.restoreFromSnapshot.
-		// Public lifecycle mutation is intentionally absent; each throw site
-		// can add context while the class keeps the safe common remedy.
+		// Replay guards can add context while the class keeps the safe common
+		// remedy: discard the dirty target and reconstitute a fresh instance.
 		const error = new UnreplayableAggregateError(
 			"agg-1",
 			"it carries 2 unflushed pending event(s)",

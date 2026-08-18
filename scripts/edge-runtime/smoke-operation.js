@@ -1,4 +1,9 @@
-import { AggregateRoot, CommandBus } from "@shirudo/ddd-kit";
+import {
+	AggregateRoot,
+	CommandBus,
+	createDomainEventFactory,
+	recordPendingEvents,
+} from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
 import { ok } from "@shirudo/result";
 
@@ -12,7 +17,7 @@ class EdgeOrder extends AggregateRoot {
 	confirm() {
 		this.commit(
 			{ status: "confirmed" },
-			this.recordEvent("EdgeOrderConfirmed", { orderId: this.id }),
+			this.createEvent("EdgeOrderConfirmed", { orderId: this.id }),
 		);
 	}
 
@@ -41,6 +46,10 @@ export async function runEdgeRuntimeSmoke(runtime) {
 
 	const order = new EdgeOrder();
 	order.confirm();
+	// The v3 flow: the aggregate produces the uncommitted decision, the
+	// application shell records it with the factory before persistence.
+	const domainEvents = createDomainEventFactory();
+	recordPendingEvents(order, domainEvents);
 	const orderView = order.toView();
 	assert(orderView.status === "confirmed", "aggregate state did not change");
 	assert(orderView.version === 1, "aggregate version did not advance");

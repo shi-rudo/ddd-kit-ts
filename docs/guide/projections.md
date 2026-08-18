@@ -10,8 +10,8 @@ read a table shaped for the query.
 The normal flow is:
 
 1. A use case mutates an aggregate.
-2. The repository saves the aggregate; `withCommit` validates its commit
-   token and writes the domain events to the outbox in the same transaction.
+2. The use case registers `add` or `update`. The Unit of Work flushes that
+   write and places its domain events in the outbox in the same transaction.
 3. A dispatcher delivers those events to a `Projector`.
 4. The `Projector` updates one read-model table and advances its checkpoint
    in the same transaction.
@@ -278,25 +278,26 @@ interface ProjectionCheckpointStore<TCtx> {
 }
 ```
 
-`withCommit` supplies the source plus current commit facts; the outbox/event
+`withCommit` supplies the source and current commit facts. The outbox or event
 source finalizes all four cursor fields on `CommittedDomainEvent.position`.
 The envelope's `source` is authoritative. Optional `aggregateId` and
-`aggregateType` values repeated on the bare event must match it; a contradiction
+`aggregateType` values repeated on the bare event must match it. A contradiction
 throws `ForeignEventError` before the transaction starts. Missing optional
 event stamps are allowed because the committed envelope already supplies the
 address.
-`commitSize` proves that every event of the current commit was consumed;
+
+`commitSize` proves that every event of the current commit was consumed.
 `previousEventfulAggregateVersion` links the next eventful commit to the
-checkpoint. State-only aggregate saves are intentionally absent from that
+checkpoint. State-only aggregate commits are intentionally absent from that
 chain. The projector rejects a missing
 sequence, an incomplete commit, a missing aggregate commit, and a first event
 that claims a predecessor. It never advances past an unknown hole.
 
-Only after that chain has been verified does a position at or behind the
-watermark count as already traversed under the source contract. A reordering
-transport therefore fails loudly at the first gap instead of silently dropping
-the late event. Repair/replay the missing event (or reset and rebuild) before
-the chain can advance.
+Only a complete chain makes a position at or behind the watermark count as
+already traversed under the source contract. A transport that reorders events
+fails at the first gap. It does not silently drop the late event. If the chain
+has a gap, replay the missing event. Alternatively, reset and rebuild the
+projection.
 
 The checkpoint stores the full position receipt plus the `eventId` at exactly
 its watermark. If the source later supplies another ID at that position, the
@@ -746,20 +747,15 @@ const stop = new AbortController();
 void dispatcher.run(stop.signal);
 
 commands.register("CreateOrder", async (command) => {
-  return withCommit({ scope, outbox, bus }, async (tx, enrollment) => {
-    const orders = makeOrderRepository(tx);
+  return uow.run(async ({ repositories }) => {
     const order = Order.create(orderIds.next(), command.customerId);
 
     for (const line of command.lines) {
       order.addLine(line.sku, line.quantity, line.price);
     }
 
-    await orders.save(order);
-
-    return {
-      result: ok(order.id),
-      commits: [enrollment.enrollSaved(order)],
-    };
+    repositories.orders.add(order);
+    return ok(order.id);
   });
 });
 

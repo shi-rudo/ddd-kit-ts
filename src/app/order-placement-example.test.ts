@@ -131,8 +131,8 @@ function createHandlerHarness(
 			createdIds += 1;
 			return orderId;
 		},
-		makeOrderRepository: () => ({
-			save: async (order) => {
+		makeOrderWriter: () => ({
+			insert: async (order) => {
 				savedOrders.push(order);
 			},
 		}),

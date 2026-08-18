@@ -56,19 +56,19 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		// Bump version to 1 and record the placement event.
 		order.commit(
 			{ id, customerId, total, status: "placed" },
-			order.recordEvent("OrderPlaced", { customerId, total }),
+			order.createEvent("OrderPlaced", { customerId, total }),
 		);
 		return order;
 	}
 
-	confirm(): void {
+	confirm(confirmedAt: Date): void {
 		if (this.state.status !== "placed") {
 			throw new OrderInWrongStateError(this.id, this.state.status, "confirm");
 		}
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			this.recordEvent("OrderConfirmed", {
-				confirmedAt: new Date().toISOString(),
+			this.createEvent("OrderConfirmed", {
+				confirmedAt: confirmedAt.toISOString(),
 			}),
 		);
 	}
@@ -80,7 +80,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		}
 		this.commit(
 			{ ...this.state, status: "cancelled", cancelReason: reason },
-			this.recordEvent("OrderCancelled", { reason }),
+			this.createEvent("OrderCancelled", { reason }),
 		);
 	}
 }

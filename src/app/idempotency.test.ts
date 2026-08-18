@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { AggregateRoot } from "../aggregate/aggregate-root";
-import type { AnyDomainEvent, DomainEvent } from "../aggregate/domain-event";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "../aggregate/domain-event";
 import {
 	ConcurrencyConflictError,
 	EventHarvestError,
@@ -18,8 +22,8 @@ import type {
 	CommitEnrollment,
 	WithCommitWorkResult,
 } from "./handler";
-import { withIdempotentCommit } from "./idempotency";
 import type { IdempotencyClaimHandle } from "./idempotency";
+import { withIdempotentCommit } from "./idempotency";
 import { InMemoryIdempotencyStore } from "./in-memory-idempotency-store";
 
 type OrderId = Id<"OrderId">;
@@ -36,7 +40,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	confirm(): void {
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			this.recordEvent("OrderConfirmed", { orderId: this.id }),
+			createDomainEvent("OrderConfirmed", { orderId: this.id }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 		);
 	}
 }

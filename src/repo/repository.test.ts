@@ -1,8 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-// @ts-expect-error IQueryableRepository was removed from the public API;
-// consumer applications own domain-specific query repository ports instead.
-import type { IQueryableRepository as RemovedQueryableRepository } from "../index";
 import type { Version } from "../aggregate/aggregate";
 import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import {
@@ -12,7 +9,20 @@ import {
 	InfrastructureError,
 } from "../core/errors";
 import type { Id } from "../core/id";
-import type { IRepository } from "./repository";
+// @ts-expect-error IQueryableRepository was removed from the public API;
+// consumer applications own domain-specific query repository ports instead.
+import type { IQueryableRepository as RemovedQueryableRepository } from "../index";
+import type { AggregatePersistence, Repository } from "./repository";
+
+// @ts-expect-error IRepository was removed in favour of the explicit
+// AggregatePersistence and Repository contracts.
+type RemovedIRepository = import("../index").IRepository;
+// @ts-expect-error IUnitOfWorkRepository was removed; repositories now
+// participate in the mandatory Unit of Work through the new contracts.
+type RemovedIUnitOfWorkRepository = import("../index").IUnitOfWorkRepository;
+
+void (undefined as unknown as RemovedIRepository);
+void (undefined as unknown as RemovedIUnitOfWorkRepository);
 
 type RemovedQueryContract = RemovedQueryableRepository<never, never, never>;
 const removedQueryContractMustStayAbsent =
@@ -31,91 +41,122 @@ describe("IAggregateRoot interface contract", () => {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
 			pendingEvents: [],
-			persistedVersion: undefined,
 		};
 
-		expect(stub.persistedVersion).toBeUndefined();
+		expect(stub.version).toBe(0);
 		expect(stub.pendingEvents).toEqual([]);
 	});
 });
 
 describe("Repository contract", () => {
-	describe("IRepository: id-only access", () => {
-		it("can be implemented by a write-side repo without any querying", async () => {
-			class InMemoryOrders implements IRepository<Order, OrderId> {
-				private readonly byId = new Map<OrderId, Order>();
+	describe("AggregatePersistence: common lifecycle contract", () => {
+		it("makes new and loaded write intent explicit", async () => {
+			class OrderPersistence implements AggregatePersistence<Order, OrderId> {
+				readonly added: Order[] = [];
+				readonly updated: Order[] = [];
 
-				async findById(id: OrderId): Promise<Order | null> {
-					return this.byId.get(id) ?? null;
+				async findById(_id: OrderId): Promise<Order | undefined> {
+					return undefined;
 				}
 
 				async getById(id: OrderId): Promise<Order> {
-					const existing = this.byId.get(id);
-					if (!existing) {
-						throw new AggregateNotFoundError({ aggregateType: "Order", id });
-					}
-					return existing;
+					throw new AggregateNotFoundError({ aggregateType: "Order", id });
 				}
 
-				async exists(id: OrderId): Promise<boolean> {
-					return this.byId.has(id);
+				add(aggregate: Order): void {
+					this.added.push(aggregate);
 				}
 
-				async save(aggregate: Order): Promise<void> {
-					this.byId.set(aggregate.id, aggregate);
-				}
-
-				async delete(aggregate: Order): Promise<void> {
-					this.byId.delete(aggregate.id);
+				update(aggregate: Order): void {
+					this.updated.push(aggregate);
 				}
 			}
 
-			const repo = new InMemoryOrders();
+			const persistence = new OrderPersistence();
 			const order: Order = {
 				id: "o-1" as OrderId,
 				version: 1 as never,
 				customerId: "c-1",
 				total: 100,
 				pendingEvents: [],
-				persistedVersion: undefined,
 			};
 
-			expect(await repo.exists("o-1" as OrderId)).toBe(false);
+			const addResult = persistence.add(order);
+			const updateResult = persistence.update(order);
 
-			await repo.save(order);
+			expect(addResult).toBeUndefined();
+			expect(updateResult).toBeUndefined();
+			expect(persistence.added).toEqual([order]);
+			expect(persistence.updated).toEqual([order]);
+			expect(await persistence.findById(order.id)).toBeUndefined();
+			await expect(persistence.getById(order.id)).rejects.toBeInstanceOf(
+				AggregateNotFoundError,
+			);
+		});
 
-			expect(await repo.exists("o-1" as OrderId)).toBe(true);
-			expect(await repo.exists("o-missing" as OrderId)).toBe(false);
-			expect(await repo.findById("o-1" as OrderId)).toBe(order);
-			expect(await repo.findById("o-missing" as OrderId)).toBeNull();
-			await expect(
-				repo.getById("o-missing" as OrderId),
-			).rejects.toBeInstanceOf(AggregateNotFoundError);
+		it("does not pretend that every persistence strategy supports physical removal", () => {
+			type CommonContract = AggregatePersistence<Order, OrderId>;
+			// @ts-expect-error physical removal is deliberately not universal
+			type RemovedFromCommonContract = CommonContract["remove"];
+			// @ts-expect-error exists is a consumer-owned lookup, not a universal law
+			type ExistsOnCommonContract = CommonContract["exists"];
+			// @ts-expect-error save hid the new-versus-loaded lifecycle decision
+			type SaveOnCommonContract = CommonContract["save"];
+			// @ts-expect-error delete was replaced by the collection-oriented remove name
+			type DeleteOnCommonContract = CommonContract["delete"];
+
+			void (undefined as unknown as RemovedFromCommonContract);
+			void (undefined as unknown as ExistsOnCommonContract);
+			void (undefined as unknown as SaveOnCommonContract);
+			void (undefined as unknown as DeleteOnCommonContract);
 		});
 	});
 
-	describe("delete contract (v3: one shape across both repository interfaces)", () => {
-		it("type-level: an id-only delete implementation no longer conforms", () => {
-			// v3 unified delete on the aggregate-taking shape: deletion-event
-			// harvest, the identity-map tombstone, and an OCC predicate all
-			// need the instance, which a bare id cannot provide.
-			class V2ShapedRepo implements IRepository<Order, OrderId> {
-				async findById(): Promise<Order | null> {
-					return null;
+	describe("Repository: full collection lifecycle", () => {
+		it("does not revive the ambiguous save/delete protocol", () => {
+			type FullContract = Repository<Order, OrderId>;
+			// @ts-expect-error add/update replace the ambiguous save operation
+			type SaveOnFullContract = FullContract["save"];
+			// @ts-expect-error physical removal is named remove, not delete
+			type DeleteOnFullContract = FullContract["delete"];
+
+			void (undefined as unknown as SaveOnFullContract);
+			void (undefined as unknown as DeleteOnFullContract);
+		});
+
+		it("adds physical removal to AggregatePersistence", () => {
+			class OrderRepository implements Repository<Order, OrderId> {
+				readonly removed: Order[] = [];
+
+				async findById(): Promise<Order | undefined> {
+					return undefined;
 				}
+
 				async getById(id: OrderId): Promise<Order> {
 					throw new AggregateNotFoundError({ aggregateType: "Order", id });
 				}
-				async exists(): Promise<boolean> {
-					return false;
-				}
-				async save(): Promise<void> {}
-				// @ts-expect-error v3 contract: delete takes the aggregate, not the bare id
-				async delete(id: OrderId): Promise<void> {
-					void id;
+
+				add(): void {}
+				update(): void {}
+
+				remove(aggregate: Order): void {
+					this.removed.push(aggregate);
 				}
 			}
-			expect(new V2ShapedRepo()).toBeDefined();
+
+			const repository = new OrderRepository();
+			const order = {
+				id: "o-1" as OrderId,
+				version: 1 as never,
+				customerId: "c-1",
+				total: 100,
+				pendingEvents: [],
+			};
+
+			const removeResult = repository.remove(order);
+
+			expect(removeResult).toBeUndefined();
+			expect(repository.removed).toEqual([order]);
 		});
 	});
 
@@ -270,40 +311,17 @@ describe("Repository contract", () => {
 			expect(error.message).toContain("actual 5");
 		});
 
-		it("is the canonical error a Repository.save() implementation throws on optimistic-lock mismatch", () => {
-			// Smoke check: a Repository implementation can construct + throw it.
-			class StaleRepo implements IRepository<Order, OrderId> {
-				async findById(): Promise<Order | null> {
-					return null;
-				}
-				async getById(id: OrderId): Promise<Order> {
-					throw new AggregateNotFoundError({ aggregateType: "Order", id });
-				}
-				async exists(): Promise<boolean> {
-					return false;
-				}
-				async save(aggregate: Order): Promise<void> {
-					throw new ConcurrencyConflictError({
-						aggregateType: "Order",
-						aggregateId: aggregate.id,
-						expectedVersion: aggregate.version as unknown as number,
-						actualVersion: (aggregate.version as unknown as number) + 1,
-					});
-				}
-				async delete(): Promise<void> {}
-			}
+		it("is the canonical error a Unit-of-Work flush surfaces on optimistic-lock mismatch", () => {
+			const flush = () => {
+				throw new ConcurrencyConflictError({
+					aggregateType: "Order",
+					aggregateId: "o-1",
+					expectedVersion: 3,
+					actualVersion: 4,
+				});
+			};
 
-			const repo = new StaleRepo();
-			return expect(
-				repo.save({
-					id: "o-1" as OrderId,
-					version: 3 as never,
-					customerId: "c-1",
-					total: 100,
-					pendingEvents: [],
-					persistedVersion: undefined,
-				}),
-			).rejects.toBeInstanceOf(ConcurrencyConflictError);
+			expect(flush).toThrow(ConcurrencyConflictError);
 		});
 	});
 });

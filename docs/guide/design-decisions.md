@@ -34,9 +34,18 @@ Be precise about the APIs:
 - `QueryHandler<Q, R>` returns `Promise<R>` because read handlers usually return data directly.
 - `QueryBus.execute(...)` wraps query output in `Result<R, E>` for callers that want a safe boundary.
 - `QueryBus.executeUnsafe(...)` returns `R` and lets handler failures throw.
-- `withCommit(...)` returns the committed result `R`; it is a transaction orchestrator, not a `Result` wrapper.
+- `withCommit(...)` returns the committed result `R`. It is a transaction
+  orchestrator, not a `Result` wrapper.
 
-Event-sourced replay is a third case. `loadFromHistory` and `restoreFromSnapshotWithEvents` return `Result<void, DomainError>` because a persisted stream or snapshot can be corrupt in ways the domain can name. The repository may need to inspect that error, rebuild from zero, discard a bad snapshot, or fail the load without treating it as a programmer bug. Not everything rides that channel: corruption that no generic handler should absorb still throws, such as `ForeignEventError` (a stream row addressed to a different aggregate) and `SnapshotSchemaMismatchError`. The rule of thumb: `Err` is for corruption the load recipe can answer (discard, refold, rebuild), throws are for wiring and misrouted data that need a human.
+Event-sourced replay is a third case. `loadFromHistory` returns
+`Result<void, DomainError>` because a persisted stream can contain invalid
+historical facts. A repository can reject the load or refold from another
+source. Snapshot DTO migration and reconstitution live
+in an adapter-owned `SnapshotModel` and throw when stored data cannot be
+interpreted. Not everything belongs on the recoverable channel:
+`ForeignEventError`, for example, means a stream row was addressed to the wrong
+aggregate and needs a human. The rule of thumb is that `Err` covers historical
+domain input the load recipe can answer, while wiring and misrouted data throw.
 
 The design goal is not "never throw" or "always throw". The design goal is that each layer uses one failure style for the job it owns. See [Result vs Throw](./result-vs-throw.md).
 
@@ -120,11 +129,14 @@ const userIds: IdGenerator<"UserId"> = {
 
 The brand keeps ids from different concepts from being accidentally passed to the wrong API. A `UserId` and an `OrderId` are both strings at runtime, but they are not interchangeable in TypeScript.
 
-Id generation belongs in the application, not in the repository. The repository persists and loads aggregates; it does not decide their identity. That keeps creation workflows explicit and makes ids available before the first save, which is useful for domain events, child references, idempotency, and API responses.
+Identifier generation belongs in the application, not in the repository. The
+repository persists and loads aggregates. It does not decide their identity.
+This rule makes identifiers available before the first insert. Domain events,
+child references, idempotency keys, and API responses can then use them.
 
 The kit provides event id and clock factories because events need ids and timestamps even when the consumer does not care about custom generation. Aggregate ids stay app-side.
 
-## `EventIdFactory` / `ClockFactory`: immutable defaults and explicit scope
+## Event identity and time cross the application boundary explicitly
 
 The top-level `createDomainEvent(...)` uses one immutable
 `defaultDomainEventFactory`: Web Crypto UUID v4 plus the platform clock. It is
@@ -134,22 +146,22 @@ factory object that permanently captures those dependencies.
 
 This draws a deliberate boundary:
 
-- the zero-configuration path is convenient and deterministic in its policy
-- custom policy is an ordinary value owned by the application composition
-- request and test isolation follow object identity, not restore discipline
-- per-event options remain available for one exceptional id or timestamp
+- The zero-configuration path uses nondeterministic values.
+- The application composition owns each custom policy.
+- Request and test isolation use object identity, not restore discipline.
+- Per-event options remain available for an exceptional identifier or timestamp.
 
 Mutable module factories were rejected because their effective owner is the
 last caller. A synchronous scoped helper can restore a global with
 `try/finally`, but it cannot make that global request-local across overlapping
 async work. The correct fix is to remove the shared write location.
 
-### Aggregate injection
+### Aggregates decide and the application records
 
-`AggregateConfig.domainEventFactory` lets each aggregate instance capture the
-factory used by `recordEvent(...)`. The same factory supplies
-`createSnapshot().snapshotAt`, so one aggregate cannot mint events with a
-request clock and snapshots with a process clock.
+An aggregate first produces an immutable, uncommitted domain event. The value
+is already a domain fact. The aggregate accepted the type and payload after its
+state changed. The value is not yet a technical event record. It has no
+generated identifier, recording time, or trace metadata.
 
 ```ts
 const domainEvents = createDomainEventFactory({
@@ -157,25 +169,112 @@ const domainEvents = createDomainEventFactory({
   clock: requestClock,
 });
 
-const order = new Order(orderId, state, { domainEventFactory: domainEvents });
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
+  order.confirm();
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({
+      metadata: { correlationId: command.correlationId },
+    }),
+  );
+  repositories.orders.update(order);
+});
 ```
 
-The concrete aggregate decides how that dependency appears in its own factory
-or constructor. Repositories and reconstitution factories must forward it just
-like any other operation-scoped dependency. An aggregate that does not care
-uses the default by omitting the config, so the common constructor stays small.
+Inside the aggregate, `createEvent(type, payload, { version })` adds the
+aggregate address and payload schema version but does not read the factory,
+clock, or Web Crypto. Equal aggregate state and command data therefore produce
+equal decisions. `recordPendingEvents` is the application-shell step that
+attaches a `DomainEventStamp` exactly once. A retry sees the already recorded
+events and reuses their identities.
 
-### Why one object owns both dependencies
+Snapshot creation follows the same boundary. The application supplies a time
+to `captureAggregateSnapshot(snapshotModel, aggregate, snapshotAt)`, while the
+adapter-owned model projects a plain persistence DTO. The aggregate neither
+reads a clock nor knows the stored snapshot schema.
 
-Event ids and timestamps are both minting policy. Carrying them as one immutable
-object prevents partial wiring: a consumer cannot inject a deterministic event
-clock while accidentally leaving snapshots on wall-clock time. It also gives
-system-event producers and aggregate factories the same composition primitive.
+`AggregateConfig.domainEventFactory` remains available through the narrow
+`AggregateEventConvenienceFactory` role for the clearly named
+`recordEventFromFactory(...)` convenience method. It is useful in small
+applications, but deliberately retains an implicit dependency read. When no
+factory is injected, it uses the platform clock and Web Crypto defaults.
 
-The object exposes `create(...)` for events and a defensive `now()` reading for
-snapshot infrastructure. Domain behavior should still receive a domain-specific
-time concept when time participates in a business rule; the event clock records
-when a fact was minted and is not a universal replacement for domain time.
+`occurredAt` is recording information, not a universal business clock. If a
+time changes a business decision, pass it as a domain input. Put this time in
+the payload. The application can use the same instant for both roles. It then
+supplies the value as business input and as the stamp recording time. This
+equality becomes an explicit decision instead of an effect of a hidden clock.
+
+## Private process facts do not double as participant commands
+
+An event-sourced Process Manager needs durable history and durable outgoing
+work, but those are two different contracts. Its stream contains private facts
+such as `CheckoutAdvancedToShipping`: completed decisions that rebuild the
+coordinator's own state. A participant receives `RequestShipping`: an
+imperative request addressed to one handler. Publishing the first value to one
+subscriber and treating it as the second hides command semantics behind an
+event-shaped object.
+
+Three designs were considered:
+
+1. A dedicated command outbox stores addressed commands beside the process
+   commit.
+2. One generalized message outbox stores both publish/subscribe events and
+   point-to-point commands behind a common envelope.
+3. The process stream stores pending effects that a worker later claims and
+   runs.
+
+The kit chooses the first, narrow seam. A generalized envelope makes
+destination, subscriber cardinality, and acknowledgement rules conditional on
+a message-kind flag. Those differences define the boundary. Persisted effects
+put delivery lifecycle into the process model. Replay must then distinguish
+history from unfinished work.
+A dedicated command outbox keeps both meanings honest without introducing a
+workflow engine.
+
+`routeEventsToCommandOutbox` adapts the event-candidate port used by
+`withCommit`. It runs the application's fact-to-command mapper inside the
+transaction and passes a `CommandOutboxWriter` only an origin receipt and the
+exact addressed messages. It never attaches the private fact or copies its
+payload automatically. The application mapper selects the fields that belong
+in each command contract.
+
+That mapper is also the Published-Language boundary. A local `Command` can use
+domain value objects because it never has to survive another runtime.
+`PublishedCommand`, by contrast, has the stable shape
+`{ type, version, payload }`. Its payload must be JSON-safe.
+
+A payment mapper therefore converts `Money` to `MoneyDto`. It does not give
+`bigint` or a domain object to an adapter. The route copies the complete command
+and rejects invalid values before it calls the port. Values that JSON discards
+or changes fail inside the same transaction.
+
+An empty command batch retains its origin receipt. The adapter can then advance
+the process source cursor. It can also distinguish an exact retry from a
+missing write.
+
+Command message identifiers derive from the private event identifier and
+command order. This rule keeps transaction retries stable. It also keeps
+commands from the same decision distinct. It does not guarantee delivery
+order. A process waits when one compensating action depends on another.
+
+The private fact identifies the input in its metadata. The command identifies
+that fact as its direct cause. The participant result identifies the command
+message. `conversationId` follows the full business interaction.
+
+`traceparent` and `tracestate` contain the W3C Trace Context. Business
+correlation identifies the journey. Trace context connects its technical spans.
+
+The write seam deliberately stops at transactional handoff. A database-backed
+adapter or broker-native outbox owns polling, claiming, acknowledgements,
+retry, and dead letters. Because delivery is at least once, the receiving
+application still uses `withIdempotentCommit` with the command `messageId` and
+stores the handler result before acknowledging.
+
+The port's prose is backed by
+`createCommandOutboxContractTests`. Every adapter must prove atomic batches,
+stable order, exact-retry deduplication, rejection of conflicting origin reuse,
+empty-receipt cursor progress, and rollback participation.
 
 ## Collection helpers practice structural sharing
 
@@ -188,9 +287,13 @@ That means:
 - replacing with the same reference returns the original array
 - unchanged siblings keep their identity
 
-This is the same immutable-update idea used by Redux, Immer, and persistent data structures. In this kit it is load-bearing because `AggregateRoot.changedKeys` is a shallow reference diff. If a helper returned a fresh array for a no-op, a repository would think the collection changed and perform unnecessary child-table writes.
+This is the immutable-update method that Redux, Immer, and persistent data
+structures use. It also gives an adapter-owned `PersistenceModel` a reliable
+signal. A no-op does not appear as a child-table change.
 
-The return type is `ReadonlyArray<T>` because the returned value may be the shallow-frozen input. If a caller needs a mutable copy, it can spread the result.
+The return type is `ReadonlyArray<T>` because the returned value can be the
+shallow-frozen input. If a caller needs a mutable copy, it can spread the
+result.
 
 A missing child is also a silent no-op at the helper level. The helper does not know whether "missing" is a domain error. The aggregate method does:
 
@@ -204,34 +307,40 @@ if (nextItems === this.state.items) {
 
 The structural sharing gives the aggregate a cheap way to decide.
 
-## Live state is protected; reads are explicit
+## Live state is protected and reads are explicit
 
-`Entity.state` is `protected`. A generic public getter cannot safely return a live
-graph, and a generic clone would silently destroy prototypes for class-based child
-entities. Concrete models expose fachliche queries or detached read DTOs instead;
-aggregate persistence uses `createSnapshot()` as its memento.
+`Entity.state` is `protected`. A generic public getter cannot safely return a
+live graph. A generic copy can destroy prototypes for class-based child
+entities. Concrete models expose domain queries or detached read DTOs.
+Persistence adapters define state and snapshot projections outside the
+aggregate.
 
-State is still shallowly frozen on assignment. Deep cloning or deep freezing on
-every internal read/write would make hot aggregate paths pay for a guarantee many
-models do not need.
+State is still shallowly frozen on assignment. A deep copy or deep freeze adds
+cost to every internal read and write. Many models do not need that guarantee.
 
 The contract is:
 
-- replace state through `setState`, `commit`, or event-sourced `apply`
-- never widen the protected `state` accessor in a concrete entity
-- expose scalar/domain queries or detached immutable read DTOs to consumers
-- model deeply immutable nested data as value objects with `vo()` or `ValueObject`
-- use an immutable-update library at the application layer if your state is deeply nested
+- Replace state through `setState`, `commit`, or event-sourced `apply`.
+- Do not widen the protected `state` accessor in a concrete entity.
+- Expose domain queries or detached immutable read DTOs to consumers.
+- Model deeply immutable data with `vo()` or `ValueObject`.
+- If state is deeply nested, use an immutable-update library in the application.
 
-Do not mutate nested state in place and expect `changedKeys` to notice. The aggregate change model is whole-state replacement with shallow structural sharing.
+Do not mutate nested state in place. Aggregate state changes use whole-state
+replacement with shallow structural sharing. An adapter defines deeper changes
+in its `PersistenceModel`.
 
 ## Version lives on the aggregate boundary, not on entities or value objects
 
-`version` and `persistedVersion` belong to aggregates, not to every entity and value object.
+The current domain `version` belongs to the aggregate, not to every entity and
+value object. The persistence baseline captured during load belongs to the
+operation-scoped `UnitOfWork`.
 
 That follows directly from the DDD consistency boundary.
 
-Value objects have no identity. They are values. If two value objects have the same attributes, they are the same value. A version would imply "this same thing changed over time", which is identity language. If you need that, you probably need an entity.
+Value objects have no identity. They are values. Two value objects with the
+same attributes are the same value. A version implies identity over time. If
+you need that identity, use an entity.
 
 Child entities do have identity, but they do not own persistence. They live inside the aggregate boundary. The aggregate is loaded, changed, and saved as one consistency unit, so optimistic concurrency belongs on the aggregate root.
 
@@ -244,9 +353,45 @@ If a child needs independent concurrent editing, it is probably not a child enti
 | migration of embedded state shape | event upcasting or state schema migration |
 | conflict detection for one part of a large aggregate | reconsider the aggregate boundary |
 
-A generic `version` field on `Entity` would invite consumers to split work across what should be one consistency boundary. The kit leaves it out on purpose.
+A generic `version` field on `Entity` invites consumers to split one
+consistency boundary. The kit omits this field deliberately.
 
-## TransactionScope stays minimal; the Unit of Work lives above it
+### Persistence tracking belongs to the Unit of Work
+
+The v3 protocol deliberately removes persistence lifecycle from tactical
+aggregates. Whether an object represents a new row, which version was loaded,
+and which table fields changed are not business facts. A domain method must
+never ask whether an order has already been inserted or whether a menu table is
+dirty.
+
+`UnitOfWork` therefore owns an identity-bound tracked entry for every loaded or
+new aggregate. The adapter contributes a `PersistenceModel` that captures an
+opaque baseline and derives its own change set. The application contributes an
+explicit lifecycle verb:
+
+- `add` means that the identity is new in this operation.
+- `update` means that this operation loaded the exact instance.
+- `remove` means physical deletion and exists only on repositories that opt in.
+
+This makes the mandatory write path slightly more structured than calling a
+repository directly. That cost buys several guarantees that a detachable
+version receipt cannot provide as safely:
+
+- The baseline cannot pair with a different instance.
+- One class and identifier map to one object for the operation.
+- Insert and update do not depend on a version convention.
+- Adapters derive partial or replacement writes from their own model.
+- The write receipt freezes the version, change set, and exact event batch.
+- The Unit of Work rejects mutation after registration.
+- A rollback acknowledges no events and changes no persistence baseline.
+
+The unit of work is consequently the public repository write context in v3.
+Low-level `withCommit` remains available for infrastructure compositions that
+do not present the standard aggregate repository protocol, but there is no
+parallel direct-repository `save` path. Two paths create different owners for
+the same OCC and event-harvest rules.
+
+## TransactionScope stays minimal and the Unit of Work lives above it
 
 `TransactionScope` has one job:
 
@@ -256,20 +401,24 @@ transactional<T>(fn: (ctx: TCtx) => Promise<T>): Promise<T>
 
 It delegates to the persistence layer's native transaction and returns the callback result. It does not track dirty objects, register new aggregates, flush changes, or own an identity map.
 
-That minimal shape keeps it compatible with Drizzle, Prisma, Mongo sessions, custom SQL adapters, and in-memory tests. ORMs already disagree about row-level change tracking. A generic transaction port should not pretend to solve that.
+That minimal shape supports Drizzle, Prisma, Mongo sessions, custom SQL
+adapters, and in-memory tests. ORMs use different methods for row-level change
+tracking. A generic transaction port does not solve that difference.
 
 The higher-level pieces live above it:
 
-- aggregates track their own dirty state through `changedKeys` and `hasChanges`
-- repositories decide what rows to write
-- `withCommit` orchestrates save, event harvest, outbox write, commit, mark-persisted, and post-commit publish
-- `UnitOfWork` adds tx-bound repositories, enrollment, and a per-operation identity map
+- Repository adapters reconstitute aggregates and give loaded instances to
+  `RepositoryTracking`.
+- Adapter-owned `PersistenceModel`s capture baselines and derive writes.
+- Application code registers explicit `add`, `update`, or `remove` intent.
+- `UnitOfWork` owns the identity map, freezes receipts, flushes writes, and
+  delegates transaction/outbox/post-commit orchestration to `withCommit`.
 
-Earlier docs said "no Fowler-style Unit of Work" too bluntly. The current design is more precise: the kit does ship an opt-in unit-of-work facade, but not an ORM-style auto-flush engine.
-
-In Fowler's terms, it is a transaction coordinator with registration and Identity Map. Repositories enroll aggregates when `save()` or `delete()` is called. Writes stay explicit. Auto-flush remains outside the current public contract.
-
-`withCommit` with hand-rolled transaction-bound repositories remains supported. `UnitOfWork` is a convenience layer for teams that want repository registration and identity-map support built in.
+In Fowler's terms, this is a Unit of Work with explicit registration and an
+Identity Map. It does not watch arbitrary objects or flush them automatically.
+Domain decisions come first. One explicit persistence registration comes
+last. That keeps the mechanism persistence-oriented without turning the kit
+into an ORM.
 
 ## Domain Services are consumer constructs, no library marker
 

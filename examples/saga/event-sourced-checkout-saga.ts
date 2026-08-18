@@ -1,4 +1,7 @@
-import type { DomainEvent } from "../../src/aggregate/domain-event";
+import type {
+	DomainEvent,
+	UncommittedDomainEventOf,
+} from "../../src/aggregate/domain-event";
 import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
 import { DomainError } from "../../src/core/errors";
 import type { Money } from "../../src/money";
@@ -10,9 +13,14 @@ export type EventSourcedCheckoutSagaStep =
 	| "not-started"
 	| "awaiting-payment"
 	| "awaiting-shipping"
+	| "awaiting-order-confirmation"
 	| "completed"
-	| "cancelled-payment-failed"
-	| "cancelled-shipping-failed";
+	| "awaiting-cancellation-after-payment-failure"
+	| "awaiting-refund-after-shipping-failure"
+	| "awaiting-cancellation-after-shipping-failure"
+	| "cancelled-after-payment-failure"
+	| "compensated-after-shipping-failure"
+	| "manual-repair-required";
 
 type EventSourcedCheckoutSagaState = {
 	readonly orderId: OrderId;
@@ -23,13 +31,13 @@ type EventSourcedCheckoutSagaState = {
 	readonly failureReason?: string;
 };
 
-export type CheckoutPaymentRequested = DomainEvent<
-	"CheckoutPaymentRequested",
+export type CheckoutStartedAwaitingPayment = DomainEvent<
+	"CheckoutStartedAwaitingPayment",
 	{ readonly total: Money; readonly paymentId: PaymentId }
 >;
 
-export type CheckoutShippingRequested = DomainEvent<
-	"CheckoutShippingRequested",
+export type CheckoutAdvancedToShipping = DomainEvent<
+	"CheckoutAdvancedToShipping",
 	{ readonly shipmentId: ShipmentId }
 >;
 
@@ -38,43 +46,97 @@ export type CheckoutCompleted = DomainEvent<
 	Record<string, never>
 >;
 
-export type CheckoutCancellationRequestedAfterPaymentFailure = DomainEvent<
-	"CheckoutCancellationRequestedAfterPaymentFailure",
+export type CheckoutOrderConfirmationStarted = DomainEvent<
+	"CheckoutOrderConfirmationStarted",
+	Record<string, never>
+>;
+
+export type CheckoutCancellationStartedAfterPaymentFailure = DomainEvent<
+	"CheckoutCancellationStartedAfterPaymentFailure",
 	{ readonly reason: string }
 >;
 
-export type CheckoutCompensationRequestedAfterShippingFailure = DomainEvent<
-	"CheckoutCompensationRequestedAfterShippingFailure",
+export type CheckoutCompensationStartedAfterShippingFailure = DomainEvent<
+	"CheckoutCompensationStartedAfterShippingFailure",
 	{ readonly paymentId: PaymentId; readonly reason: string }
 >;
 
-export type EventSourcedCheckoutSagaEvent =
-	| CheckoutPaymentRequested
-	| CheckoutShippingRequested
-	| CheckoutCompleted
-	| CheckoutCancellationRequestedAfterPaymentFailure
-	| CheckoutCompensationRequestedAfterShippingFailure;
+export type CheckoutPaymentRefundConfirmed = DomainEvent<
+	"CheckoutPaymentRefundConfirmed",
+	{ readonly reason: string }
+>;
 
-const EXPECTED_STEP_BY_EVENT = {
-	CheckoutPaymentRequested: "not-started",
-	CheckoutShippingRequested: "awaiting-payment",
-	CheckoutCompleted: "awaiting-shipping",
-	CheckoutCancellationRequestedAfterPaymentFailure: "awaiting-payment",
-	CheckoutCompensationRequestedAfterShippingFailure: "awaiting-shipping",
+export type CheckoutCancellationCompletedAfterPaymentFailure = DomainEvent<
+	"CheckoutCancellationCompletedAfterPaymentFailure",
+	Record<string, never>
+>;
+
+export type CheckoutCompensationCompletedAfterShippingFailure = DomainEvent<
+	"CheckoutCompensationCompletedAfterShippingFailure",
+	Record<string, never>
+>;
+
+export type CheckoutManualRepairRequired = DomainEvent<
+	"CheckoutManualRepairRequired",
+	{
+		readonly failedCommand: "CancelOrder" | "RefundPayment";
+		readonly reason: string;
+	}
+>;
+
+export type EventSourcedCheckoutSagaEvent =
+	| CheckoutStartedAwaitingPayment
+	| CheckoutAdvancedToShipping
+	| CheckoutOrderConfirmationStarted
+	| CheckoutCompleted
+	| CheckoutCancellationStartedAfterPaymentFailure
+	| CheckoutCompensationStartedAfterShippingFailure
+	| CheckoutPaymentRefundConfirmed
+	| CheckoutCancellationCompletedAfterPaymentFailure
+	| CheckoutCompensationCompletedAfterShippingFailure
+	| CheckoutManualRepairRequired;
+
+const EXPECTED_STEPS_BY_EVENT = {
+	CheckoutStartedAwaitingPayment: ["not-started"],
+	CheckoutAdvancedToShipping: ["awaiting-payment"],
+	CheckoutOrderConfirmationStarted: ["awaiting-shipping"],
+	CheckoutCompleted: ["awaiting-order-confirmation"],
+	CheckoutCancellationStartedAfterPaymentFailure: ["awaiting-payment"],
+	CheckoutCompensationStartedAfterShippingFailure: ["awaiting-shipping"],
+	CheckoutPaymentRefundConfirmed: ["awaiting-refund-after-shipping-failure"],
+	CheckoutCancellationCompletedAfterPaymentFailure: [
+		"awaiting-cancellation-after-payment-failure",
+	],
+	CheckoutCompensationCompletedAfterShippingFailure: [
+		"awaiting-cancellation-after-shipping-failure",
+	],
+	CheckoutManualRepairRequired: [
+		"awaiting-cancellation-after-payment-failure",
+		"awaiting-refund-after-shipping-failure",
+		"awaiting-cancellation-after-shipping-failure",
+	],
 } as const satisfies Record<
 	EventSourcedCheckoutSagaEvent["type"],
-	EventSourcedCheckoutSagaStep
+	ReadonlyArray<EventSourcedCheckoutSagaStep>
 >;
 
 export class CheckoutProcessInWrongStateError extends DomainError<"CHECKOUT_PROCESS_IN_WRONG_STATE"> {
 	constructor(
 		orderId: OrderId,
 		current: EventSourcedCheckoutSagaStep,
-		attempted: EventSourcedCheckoutSagaEvent["type"],
+		attempted:
+			| EventSourcedCheckoutSagaEvent["type"]
+			| ReadonlyArray<EventSourcedCheckoutSagaEvent["type"]>,
 	) {
+		// A method that serves several flows cannot know which event the
+		// caller intended when the state fits none of them; naming only one
+		// would point half the callers at the wrong flow.
+		const attemptedNames = Array.isArray(attempted)
+			? attempted.join(" or ")
+			: attempted;
 		super({
 			code: "CHECKOUT_PROCESS_IN_WRONG_STATE",
-			message: `Checkout process ${orderId} is ${current}; cannot record ${attempted}`,
+			message: `Checkout process ${orderId} is ${current}; cannot record ${attemptedNames}`,
 		});
 	}
 }
@@ -116,12 +178,15 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		paymentId: PaymentId,
 	): EventSourcedCheckoutSaga {
 		const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
-		saga.assertCanRecord("not-started", "CheckoutPaymentRequested");
+		saga.assertCanRecord("not-started", "CheckoutStartedAwaitingPayment");
 		saga.apply(
-			saga.recordEvent<CheckoutPaymentRequested>("CheckoutPaymentRequested", {
-				total,
-				paymentId,
-			}),
+			saga.createEvent<CheckoutStartedAwaitingPayment>(
+				"CheckoutStartedAwaitingPayment",
+				{
+					total,
+					paymentId,
+				},
+			),
 		);
 		return saga;
 	}
@@ -131,56 +196,144 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		return new EventSourcedCheckoutSaga(orderId);
 	}
 
-	requestShipping(shipmentId: ShipmentId): void {
-		this.assertCanRecord("awaiting-payment", "CheckoutShippingRequested");
+	advanceToShipping(shipmentId: ShipmentId): void {
+		this.assertCanRecord("awaiting-payment", "CheckoutAdvancedToShipping");
 		this.apply(
-			this.recordEvent<CheckoutShippingRequested>("CheckoutShippingRequested", {
-				shipmentId,
-			}),
+			this.createEvent<CheckoutAdvancedToShipping>(
+				"CheckoutAdvancedToShipping",
+				{ shipmentId },
+			),
 		);
 	}
 
 	complete(): void {
-		this.assertCanRecord("awaiting-shipping", "CheckoutCompleted");
-		this.apply(this.recordEvent<CheckoutCompleted>("CheckoutCompleted", {}));
+		this.assertCanRecord("awaiting-order-confirmation", "CheckoutCompleted");
+		this.apply(this.createEvent<CheckoutCompleted>("CheckoutCompleted", {}));
 	}
 
-	cancelAfterPaymentFailure(reason: string): void {
+	beginOrderConfirmation(): void {
 		this.assertCanRecord(
-			"awaiting-payment",
-			"CheckoutCancellationRequestedAfterPaymentFailure",
+			"awaiting-shipping",
+			"CheckoutOrderConfirmationStarted",
 		);
 		this.apply(
-			this.recordEvent<CheckoutCancellationRequestedAfterPaymentFailure>(
-				"CheckoutCancellationRequestedAfterPaymentFailure",
+			this.createEvent<CheckoutOrderConfirmationStarted>(
+				"CheckoutOrderConfirmationStarted",
+				{},
+			),
+		);
+	}
+
+	beginCancellationAfterPaymentFailure(reason: string): void {
+		this.assertCanRecord(
+			"awaiting-payment",
+			"CheckoutCancellationStartedAfterPaymentFailure",
+		);
+		this.apply(
+			this.createEvent<CheckoutCancellationStartedAfterPaymentFailure>(
+				"CheckoutCancellationStartedAfterPaymentFailure",
 				{ reason },
 			),
 		);
 	}
 
-	compensateAfterShippingFailure(reason: string): void {
+	beginCompensationAfterShippingFailure(reason: string): void {
 		this.assertCanRecord(
 			"awaiting-shipping",
-			"CheckoutCompensationRequestedAfterShippingFailure",
+			"CheckoutCompensationStartedAfterShippingFailure",
 		);
 		const { paymentId } = this.state;
 		if (paymentId === undefined) {
 			throw new CheckoutProcessInWrongStateError(
 				this.id,
 				this.state.step,
-				"CheckoutCompensationRequestedAfterShippingFailure",
+				"CheckoutCompensationStartedAfterShippingFailure",
 			);
 		}
 		this.apply(
-			this.recordEvent<CheckoutCompensationRequestedAfterShippingFailure>(
-				"CheckoutCompensationRequestedAfterShippingFailure",
+			this.createEvent<CheckoutCompensationStartedAfterShippingFailure>(
+				"CheckoutCompensationStartedAfterShippingFailure",
 				{ paymentId, reason },
 			),
 		);
 	}
 
-	protected validateEvent(event: EventSourcedCheckoutSagaEvent): void {
-		this.assertCanRecord(EXPECTED_STEP_BY_EVENT[event.type], event.type);
+	confirmPaymentRefunded(): void {
+		this.assertCanRecord(
+			"awaiting-refund-after-shipping-failure",
+			"CheckoutPaymentRefundConfirmed",
+		);
+		const reason = this.requiredFailureReason("CheckoutPaymentRefundConfirmed");
+		this.apply(
+			this.createEvent<CheckoutPaymentRefundConfirmed>(
+				"CheckoutPaymentRefundConfirmed",
+				{ reason },
+			),
+		);
+	}
+
+	confirmOrderCancelled(): void {
+		switch (this.state.step) {
+			case "awaiting-cancellation-after-payment-failure":
+				this.apply(
+					this.createEvent<CheckoutCancellationCompletedAfterPaymentFailure>(
+						"CheckoutCancellationCompletedAfterPaymentFailure",
+						{},
+					),
+				);
+				return;
+			case "awaiting-cancellation-after-shipping-failure":
+				this.apply(
+					this.createEvent<CheckoutCompensationCompletedAfterShippingFailure>(
+						"CheckoutCompensationCompletedAfterShippingFailure",
+						{},
+					),
+				);
+				return;
+			default:
+				throw new CheckoutProcessInWrongStateError(this.id, this.state.step, [
+					"CheckoutCancellationCompletedAfterPaymentFailure",
+					"CheckoutCompensationCompletedAfterShippingFailure",
+				]);
+		}
+	}
+
+	requireManualRepair(reason: string): void {
+		let failedCommand: CheckoutManualRepairRequired["payload"]["failedCommand"];
+		switch (this.state.step) {
+			case "awaiting-refund-after-shipping-failure":
+				failedCommand = "RefundPayment";
+				break;
+			case "awaiting-cancellation-after-payment-failure":
+			case "awaiting-cancellation-after-shipping-failure":
+				failedCommand = "CancelOrder";
+				break;
+			default:
+				throw new CheckoutProcessInWrongStateError(
+					this.id,
+					this.state.step,
+					"CheckoutManualRepairRequired",
+				);
+		}
+		this.apply(
+			this.createEvent<CheckoutManualRepairRequired>(
+				"CheckoutManualRepairRequired",
+				{ failedCommand, reason },
+			),
+		);
+	}
+
+	protected validateEvent(
+		event: UncommittedDomainEventOf<EventSourcedCheckoutSagaEvent>,
+	): void {
+		const expected = EXPECTED_STEPS_BY_EVENT[event.type];
+		if (!expected.some((step) => step === this.state.step)) {
+			throw new CheckoutProcessInWrongStateError(
+				this.id,
+				this.state.step,
+				event.type,
+			);
+		}
 	}
 
 	private assertCanRecord(
@@ -196,19 +349,32 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		}
 	}
 
+	private requiredFailureReason(
+		attempted: EventSourcedCheckoutSagaEvent["type"],
+	): string {
+		if (this.state.failureReason === undefined) {
+			throw new CheckoutProcessInWrongStateError(
+				this.id,
+				this.state.step,
+				attempted,
+			);
+		}
+		return this.state.failureReason;
+	}
+
 	protected readonly handlers = {
-		CheckoutPaymentRequested: (
+		CheckoutStartedAwaitingPayment: (
 			state: EventSourcedCheckoutSagaState,
-			event: CheckoutPaymentRequested,
+			event: UncommittedDomainEventOf<CheckoutStartedAwaitingPayment>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-payment",
 			total: event.payload.total,
 			paymentId: event.payload.paymentId,
 		}),
-		CheckoutShippingRequested: (
+		CheckoutAdvancedToShipping: (
 			state: EventSourcedCheckoutSagaState,
-			event: CheckoutShippingRequested,
+			event: UncommittedDomainEventOf<CheckoutAdvancedToShipping>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
 			step: "awaiting-shipping",
@@ -220,21 +386,51 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 			...state,
 			step: "completed",
 		}),
-		CheckoutCancellationRequestedAfterPaymentFailure: (
+		CheckoutOrderConfirmationStarted: (
 			state: EventSourcedCheckoutSagaState,
-			event: CheckoutCancellationRequestedAfterPaymentFailure,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
-			step: "cancelled-payment-failed",
+			step: "awaiting-order-confirmation",
+		}),
+		CheckoutCancellationStartedAfterPaymentFailure: (
+			state: EventSourcedCheckoutSagaState,
+			event: UncommittedDomainEventOf<CheckoutCancellationStartedAfterPaymentFailure>,
+		): EventSourcedCheckoutSagaState => ({
+			...state,
+			step: "awaiting-cancellation-after-payment-failure",
 			failureReason: event.payload.reason,
 		}),
-		CheckoutCompensationRequestedAfterShippingFailure: (
+		CheckoutCompensationStartedAfterShippingFailure: (
 			state: EventSourcedCheckoutSagaState,
-			event: CheckoutCompensationRequestedAfterShippingFailure,
+			event: UncommittedDomainEventOf<CheckoutCompensationStartedAfterShippingFailure>,
 		): EventSourcedCheckoutSagaState => ({
 			...state,
-			step: "cancelled-shipping-failed",
+			step: "awaiting-refund-after-shipping-failure",
 			failureReason: event.payload.reason,
+		}),
+		CheckoutPaymentRefundConfirmed: (
+			state: EventSourcedCheckoutSagaState,
+		): EventSourcedCheckoutSagaState => ({
+			...state,
+			step: "awaiting-cancellation-after-shipping-failure",
+		}),
+		CheckoutCancellationCompletedAfterPaymentFailure: (
+			state: EventSourcedCheckoutSagaState,
+		): EventSourcedCheckoutSagaState => ({
+			...state,
+			step: "cancelled-after-payment-failure",
+		}),
+		CheckoutCompensationCompletedAfterShippingFailure: (
+			state: EventSourcedCheckoutSagaState,
+		): EventSourcedCheckoutSagaState => ({
+			...state,
+			step: "compensated-after-shipping-failure",
+		}),
+		CheckoutManualRepairRequired: (
+			state: EventSourcedCheckoutSagaState,
+		): EventSourcedCheckoutSagaState => ({
+			...state,
+			step: "manual-repair-required",
 		}),
 	};
 }

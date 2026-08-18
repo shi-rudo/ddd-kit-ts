@@ -1,8 +1,9 @@
 /**
  * Opt-in testing entry point (`@shirudo/ddd-kit/testing`).
  *
- * Ships the adapter contract test suites (state-stored and
- * event-sourced repositories, event stores, outbox, idempotency store):
+ * Ships the adapter contract test suites (event-sourced repositories, event
+ * stores, event and command outboxes, idempotency stores, projections,
+ * snapshots, and deadlines):
  * the kit is ORM- and store-agnostic, so optimistic concurrency, outbox
  * semantics, and the idempotency lifecycle are adapter CONTRACTS the
  * consumer's implementation must prove; this entry provides the proof
@@ -10,6 +11,12 @@
  * into production bundles. Named exports only; the shared suite
  * plumbing in contract-assertions stays internal.
  */
+export {
+	type CommandOutboxContractEnvironment,
+	type CommandOutboxContractHarness,
+	type CommandOutboxContractTest,
+	createCommandOutboxContractTests,
+} from "./testing/command-outbox-contract";
 export {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractEnvironment,

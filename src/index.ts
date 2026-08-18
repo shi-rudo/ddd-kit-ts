@@ -21,28 +21,55 @@ export {
 } from "./aggregate/aggregate-root";
 export {
 	type AnyDomainEvent,
+	type AnyUncommittedDomainEvent,
 	type ClockFactory,
+	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
+	type CreateDomainEventStampOptions,
+	type CreateUncommittedDomainEventOptions,
 	copyMetadata,
 	createDomainEvent,
 	createDomainEventFactory,
+	createDomainEventFromFacts,
+	createUncommittedDomainEvent,
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
+	type DomainEventStamp,
 	defaultDomainEventFactory,
 	type EventIdFactory,
 	type EventMetadata,
 	mergeMetadata,
+	type PendingDomainEvent,
+	recordDomainEvent,
+	type UncommittedDomainEvent,
+	type UncommittedDomainEventOf,
 } from "./aggregate/domain-event";
+export {
+	type DomainEventValidationCode,
+	DomainEventValidationError,
+	type DomainEventValidationField,
+	SnapshotTimeValidationError,
+} from "./aggregate/domain-event-errors";
 export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
 
 // CQRS: commands, queries, buses
-export type { Command, CommandHandler } from "./app/command";
+export type { Command, CommandHandler, PublishedCommand } from "./app/command";
 export {
 	CommandBus,
 	type CommandBusOptions,
 	type ICommandBus,
 } from "./app/command-bus";
+export {
+	type CommandCommitOriginCandidate,
+	type CommandMessageContent,
+	type CommandMessageRelationships,
+	type CommandOutboxCommitCandidate,
+	type CommandOutboxMapper,
+	type CommandOutboxWriter,
+	type DurableCommandMessage,
+	routeEventsToCommandOutbox,
+} from "./app/command-outbox";
 export {
 	type DomainErrorClass,
 	domainErrorToResult,
@@ -51,6 +78,7 @@ export {
 export {
 	type AggregateCommitToken,
 	type CommitEnrollment,
+	type CommitEnrollmentOptions,
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
@@ -80,16 +108,35 @@ export {
 	type QueryBusOptions,
 } from "./app/query-bus";
 export {
+	type DomainEventStampFactory,
+	type DomainEventStampProvider,
+	recordPendingEvents,
+} from "./app/record-pending-events";
+export {
+	type AggregatePersistenceWrite,
+	AggregateTrackingError,
+	type AggregateTrackingFailure,
+	type AggregateWriteIntent,
+	type AggregateWriteRegistration,
 	CommitError,
+	type CompatibleRepositoryDefinitions,
+	defineRepository,
+	InvalidRepositoryAdapterError,
+	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
-	type RepositoryFactories,
+	type PhysicalRemovalRegistration,
+	type RepositoriesOf,
+	type RepositoryDefinition,
+	type RepositoryDefinitionOptions,
+	RepositoryErrorMappingFailedError,
+	type RepositoryTracking,
 	RollbackError,
 	type RunOptions,
 	TransactionClosedError,
 	UnitOfWork,
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
-	type UnitOfWorkSession,
+	type UnitOfWorkIdentityMap,
 } from "./app/unit-of-work";
 // Core: errors + branded ids
 export {
@@ -101,6 +148,7 @@ export {
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
+	DuplicateEventIdError,
 	DuplicateHandlerRegistrationError,
 	type DuplicateHandlerRegistrationErrorOptions,
 	ErrorMapperFailedError,
@@ -120,6 +168,7 @@ export {
 	InfrastructureError,
 	InMemoryCapacityExceededError,
 	type InMemoryCapacityExceededErrorOptions,
+	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
 	type KitErrorCode,
 	type KitErrorOptions,
@@ -131,6 +180,9 @@ export {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	ReentrantEventRecordingError,
+	isDomainErrorLike,
+	isInfrastructureErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
@@ -290,7 +342,18 @@ export {
 	InMemorySnapshotStore,
 	type InMemorySnapshotStoreOptions,
 } from "./repo/in-memory-snapshot-store";
-export type { IRepository, IUnitOfWorkRepository } from "./repo/repository";
+export {
+	capturePersistenceBaseline,
+	derivePersistenceChanges,
+	insertPersistenceBaseline,
+	type PersistenceBaseline,
+	type PersistenceChanges,
+	type PersistenceLifecycle,
+	type PersistenceModel,
+	persistenceProjectionDrifted,
+	recapturePersistenceBaseline,
+} from "./repo/persistence-model";
+export type { AggregatePersistence, Repository } from "./repo/repository";
 // computeBackoffDelay is deliberately NOT exported: internal since 2.x
 // (unit-tested via direct source import), removed from the surface in v3.
 export {
@@ -301,6 +364,12 @@ export type {
 	TransactionalOptions,
 	TransactionScope,
 } from "./repo/scope";
+export {
+	captureAggregateSnapshot,
+	defineSnapshotModel,
+	reconstituteAggregateFromSnapshot,
+	type SnapshotModel,
+} from "./repo/snapshot-model";
 export type { SnapshotStore } from "./repo/snapshot-store";
 // Specifications
 export {

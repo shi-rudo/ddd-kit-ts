@@ -1,4 +1,4 @@
-import { createDomainEvent } from "../../src/aggregate/aggregate";
+import type { UncommittedDomainEventOf } from "../../src/aggregate/domain-event";
 import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
 import type { Id } from "../../src/core/id";
 import { deepFreeze } from "../../src/value-object/value-object";
@@ -72,58 +72,58 @@ export class RugbyMatch extends EventSourcedAggregate<
 		};
 		const match = new RugbyMatch(id, initialState);
 		match.apply(
-			createDomainEvent("MatchScheduled", {
+			match.createEvent<MatchScheduled>("MatchScheduled", {
 				homeTeam,
 				awayTeam,
 				date,
-			}) as MatchScheduled,
+			}),
 		);
 		return match;
 	}
 
 	scoreTry(teamId: string, playerName: string): void {
 		this.apply(
-			createDomainEvent("TryScored", {
+			this.createEvent<TryScored>("TryScored", {
 				teamId,
 				playerName,
 				points: 5,
-			}) as TryScored,
+			}),
 		);
 	}
 
 	scoreConversion(teamId: string, playerName: string): void {
 		this.apply(
-			createDomainEvent("ConversionScored", {
+			this.createEvent<ConversionScored>("ConversionScored", {
 				teamId,
 				playerName,
 				points: 2,
-			}) as ConversionScored,
+			}),
 		);
 	}
 
 	scorePenaltyGoal(teamId: string, playerName: string): void {
 		this.apply(
-			createDomainEvent("PenaltyGoalScored", {
+			this.createEvent<PenaltyGoalScored>("PenaltyGoalScored", {
 				teamId,
 				playerName,
 				points: 3,
-			}) as PenaltyGoalScored,
+			}),
 		);
 	}
 
 	finish(): void {
-		this.apply(createDomainEvent("MatchFinished", {}) as MatchFinished);
+		this.apply(this.createEvent<MatchFinished>("MatchFinished", {}));
 	}
 
 	protected readonly handlers = {
-		MatchScheduled: (state: MatchState, event: MatchScheduled): MatchState => ({
+		MatchScheduled: (state: MatchState, event: UncommittedDomainEventOf<MatchScheduled>): MatchState => ({
 			...state,
 			homeTeam: event.payload.homeTeam,
 			awayTeam: event.payload.awayTeam,
 			date: event.payload.date,
 			status: "scheduled",
 		}),
-		TryScored: (state: MatchState, event: TryScored): MatchState => ({
+		TryScored: (state: MatchState, event: UncommittedDomainEventOf<TryScored>): MatchState => ({
 			...state,
 			homeScore:
 				state.homeTeam.id === event.payload.teamId
@@ -138,7 +138,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		}),
 		ConversionScored: (
 			state: MatchState,
-			event: ConversionScored,
+			event: UncommittedDomainEventOf<ConversionScored>,
 		): MatchState => ({
 			...state,
 			homeScore:
@@ -156,7 +156,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		}),
 		PenaltyGoalScored: (
 			state: MatchState,
-			event: PenaltyGoalScored,
+			event: UncommittedDomainEventOf<PenaltyGoalScored>,
 		): MatchState => ({
 			...state,
 			homeScore:

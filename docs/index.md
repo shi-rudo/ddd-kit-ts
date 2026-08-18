@@ -22,16 +22,16 @@ features:
     details: Value Objects, Entities, Aggregate Roots, Domain Events, Repositories, modelled after Evans and Vernon, not after a framework.
   - icon: 🔒
     title: Domain throws, App boundary returns Result
-    details: "Aggregates enforce invariants by throwing typed DomainErrors. Buses and the selective domainErrorToResult helper make expected Application outcomes explicit; unknown failures still throw."
+    details: "Aggregates enforce invariants with typed DomainErrors. Buses use domainErrorToResult for expected Application outcomes. Unknown failures still throw."
   - icon: 📜
     title: Event sourcing without the framework
-    details: 'EventSourcedAggregate enforces "record-after-mutation" structurally. apply() is atomic: handler throws? state and events stay in sync. loadFromHistory and snapshot+replay just work.'
+    details: 'EventSourcedAggregate records an event only after state changes. If a handler throws, the state and event queue stay unchanged.'
   - icon: ⚡
     title: Edge-runtime first
     details: Zero Node-isms. Works on Cloudflare Workers, Vercel Edge, Deno, Bun. crypto.randomUUID() defaults with override hooks for ULID/KSUID or deterministic tests.
   - icon: 🔌
     title: Bring your own persistence
-    details: "IRepository for id-canonical aggregate lifecycle. Consumer applications own intent-revealing query ports, so SQL, ORM filters, bounds, ordering, and cursor semantics stay at the right boundary."
+    details: "A tracked Unit of Work supplies explicit add, update, and remove operations. Adapter-owned persistence models keep storage logic outside the domain."
   - icon: 📦
     title: Tiny, tree-shakable, ESM-only
     details: ~80KB of types, ~30KB of code, sideEffects false. Use only what you need. Result type comes from the @shirudo/result peer dep.

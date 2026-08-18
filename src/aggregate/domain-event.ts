@@ -1,6 +1,7 @@
 import { assertNoHostileOwnProtoKey } from "../core/errors";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
+import { DomainEventValidationError } from "./domain-event-errors";
 
 export type { ClockFactory } from "./clock";
 
@@ -30,35 +31,44 @@ export interface EventMetadata {
 	 * Correlation ID for tracing events across multiple services/components.
 	 * Typically used to group related events in a distributed system.
 	 */
-	correlationId?: string;
+	readonly correlationId?: string;
 
 	/**
 	 * Conversation ID shared by every message in one long-running business
 	 * interaction, even when that interaction spans several correlations.
 	 */
-	conversationId?: string;
+	readonly conversationId?: string;
 
 	/**
 	 * Causation ID referencing the event or command that caused this event.
 	 * Used to build event chains and understand causality.
 	 */
-	causationId?: string;
+	readonly causationId?: string;
+
+	/**
+	 * W3C Trace Context parent for technical tracing across process boundaries.
+	 * This is distinct from business correlation and conversation identifiers.
+	 */
+	readonly traceparent?: string;
+
+	/** Optional W3C vendor trace state associated with `traceparent`. */
+	readonly tracestate?: string;
 
 	/**
 	 * User ID of the person or system that triggered the event.
 	 */
-	userId?: string;
+	readonly userId?: string;
 
 	/**
 	 * Source service or component that produced the event.
 	 */
-	source?: string;
+	readonly source?: string;
 
 	/**
 	 * Additional custom metadata fields.
 	 * Allows extensibility for domain-specific metadata.
 	 */
-	[key: string]: unknown;
+	readonly [key: string]: unknown;
 }
 
 /**
@@ -66,7 +76,8 @@ export interface EventMetadata {
  * Events are immutable and carry information about what occurred.
  *
  * **Events are PLAIN DATA objects**, constructed via `createDomainEvent`
- * (or the aggregate's `recordEvent` helper) and deeply frozen. Class-based
+ * (or the aggregate's `createEvent` plus application-shell recording path)
+ * and deeply frozen. Class-based
  * event objects that satisfy this shape structurally via prototype
  * members are unsupported.
  *
@@ -81,8 +92,8 @@ export interface DomainEvent<T extends string, P = void> {
 	/**
 	 * Unique identifier for this specific event instance. Used by idempotent
 	 * consumers, outbox dispatch tracking, and as the target of
-	 * `metadata.causationId`. Defaults to `crypto.randomUUID()` if not
-	 * supplied.
+	 * `metadata.causationId`. Convenience constructors default to
+	 * `crypto.randomUUID()`; strict construction requires the caller to supply it.
 	 */
 	readonly eventId: string;
 
@@ -111,7 +122,8 @@ export interface DomainEvent<T extends string, P = void> {
 	readonly payload: P;
 
 	/**
-	 * Timestamp when the event occurred.
+	 * Timestamp when the accepted fact was recorded by the application shell.
+	 * Put business-relevant time in the payload under a domain name.
 	 */
 	readonly occurredAt: Date;
 
@@ -140,6 +152,43 @@ export interface DomainEvent<T extends string, P = void> {
  * still narrow via `Extract<Evt, { type: K }>` at the use-site.
  */
 export type AnyDomainEvent = DomainEvent<string, unknown>;
+
+/**
+ * A domain event accepted by an aggregate but not yet given its recording
+ * identity, recording time, or delivery metadata.
+ *
+ * The aggregate owns the event type, payload, source address, and payload
+ * schema version because those values describe the business fact it produced.
+ * The application shell later turns this value into a {@link DomainEvent}.
+ */
+export interface UncommittedDomainEvent<T extends string, P = void> {
+	readonly type: T;
+	readonly aggregateId?: string;
+	readonly aggregateType?: string;
+	readonly payload: P;
+	readonly version: number;
+}
+
+/** Upper-bound alias for any uncommitted domain-event shape. */
+export type AnyUncommittedDomainEvent = UncommittedDomainEvent<string, unknown>;
+
+/** Derives the uncommitted shape represented by a concrete event or event union. */
+export type UncommittedDomainEventOf<TEvent extends AnyDomainEvent> =
+	TEvent extends DomainEvent<infer TType, infer TPayload>
+		? UncommittedDomainEvent<TType, TPayload>
+		: never;
+
+/** An aggregate may hold unstamped decisions and already recorded events together. */
+export type PendingDomainEvent<TEvent extends AnyDomainEvent> =
+	| TEvent
+	| UncommittedDomainEventOf<TEvent>;
+
+/** Producer-owned options for an uncommitted event. */
+export interface CreateUncommittedDomainEventOptions {
+	readonly aggregateId?: string;
+	readonly aggregateType?: string;
+	readonly version?: number;
+}
 
 /**
  * Shared option bag for the `createDomainEvent*` factories.
@@ -178,11 +227,35 @@ export interface CreateDomainEventOptions {
 	metadata?: EventMetadata;
 }
 
+/** Technical recording data attached by the application shell. */
+export interface DomainEventStamp {
+	/** Stable identity for this event instance. */
+	readonly eventId: string;
+	/** Time at which the accepted domain fact was recorded. */
+	readonly occurredAt: Date;
+	/** Optional correlation, causation, actor, and source metadata. */
+	readonly metadata?: EventMetadata;
+}
+
+/** Full strict-construction options, including producer-owned event fields. */
+export interface CreateDomainEventFromFactsOptions extends DomainEventStamp {
+	readonly aggregateId?: string;
+	readonly aggregateType?: string;
+	readonly version?: number;
+}
+
+/** Overrides accepted when an application-shell factory creates a stamp. */
+export interface CreateDomainEventStampOptions {
+	readonly eventId?: string;
+	readonly occurredAt?: Date;
+	readonly metadata?: EventMetadata;
+}
+
 /** Dependencies captured by one immutable domain-event factory instance. */
 export interface DomainEventFactoryOptions {
 	/** Event-id generator. Defaults to Web Crypto `crypto.randomUUID()`. */
 	readonly eventIdFactory?: EventIdFactory;
-	/** Event and snapshot clock. Defaults to `() => new Date()`. */
+	/** Event-recording clock. Defaults to `() => new Date()`. */
 	readonly clock?: ClockFactory;
 }
 
@@ -192,6 +265,12 @@ export interface DomainEventFactoryOptions {
  * overwrite one another through module state.
  */
 export interface DomainEventFactory {
+	/**
+	 * Creates immutable technical recording data in the application shell.
+	 */
+	readonly createStamp: (
+		options?: CreateDomainEventStampOptions,
+	) => DomainEventStamp;
 	readonly create: {
 		<T extends string>(
 			type: T,
@@ -216,8 +295,11 @@ export interface DomainEventFactory {
  *
  * The supplied functions are read once and captured by value. The returned
  * object is frozen, so another request, test, or library cannot replace its
- * policy. Pass it through `AggregateConfig.domainEventFactory` when aggregate
- * `recordEvent` and snapshot timestamps must share the same scope.
+ * policy. Its {@link DomainEventFactory.createStamp} method is the
+ * application-shell bridge that records an accepted aggregate decision.
+ * Passing the factory through `AggregateConfig`
+ * enables the explicitly named convenience methods, whose defaults read time
+ * and randomness.
  *
  * @example
  * ```ts
@@ -225,7 +307,8 @@ export interface DomainEventFactory {
  *   eventIdFactory: () => uuidv7(),
  *   clock: () => new Date(),
  * });
- * const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
+ * order.confirm();
+ * recordPendingEvents(order, domainEvents);
  * ```
  */
 export function createDomainEventFactory(
@@ -245,8 +328,36 @@ export function createDomainEventFactory(
 			eventIdFactory,
 			clock,
 		)) as DomainEventFactory["create"];
+	const createStamp = (
+		stampOptions: CreateDomainEventStampOptions = {},
+	): DomainEventStamp => {
+		const explicitOccurredAt =
+			stampOptions.occurredAt === undefined
+				? undefined
+				: copyValidEventDate(stampOptions.occurredAt);
+		if (stampOptions.eventId !== undefined) {
+			assertNonBlankEventField(
+				stampOptions.eventId,
+				"eventId",
+				"EVENT_ID_INVALID",
+			);
+		}
+		const eventId = stampOptions.eventId ?? eventIdFactory();
+		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
+		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
+		const metadata = guardedMetadataClone(stampOptions.metadata);
+		const stamp: DomainEventStamp = {
+			eventId,
+			occurredAt,
+			metadata,
+		};
+		const owned = deepFreeze(stamp) as DomainEventStamp;
+		FACTORY_OWNED_EVENT_STAMPS.add(owned);
+		return owned;
+	};
 
 	return Object.freeze({
+		createStamp,
 		create,
 		now: () => readClock(clock),
 	});
@@ -272,7 +383,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * values throw a `TypeError`; symbol-keyed properties are not carried
  * over.
  *
- * **For aggregate-internal events, prefer `this.recordEvent(...)` on
+ * **For aggregate-internal events, prefer `this.createEvent(...)` on
  * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
@@ -280,7 +391,8 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * route by. The `withCommit` harvest boundary now validates both fields
  * are present and throws if they're missing, so a direct
  * `createDomainEvent(...)` call inside an aggregate that forgets the
- * options is caught at runtime.
+ * options is caught at runtime. Record pending decisions in the application
+ * shell before repository persistence or outbox harvest.
  *
  * Use `createDomainEvent(...)` directly for events that don't belong to
  * an aggregate: system events, integration events, configuration events,
@@ -306,6 +418,8 @@ export const defaultDomainEventFactory: DomainEventFactory =
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
 const MINTED_EVENTS = new WeakSet<object>();
+const UNCOMMITTED_EVENTS = new WeakSet<object>();
+const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
 // Cooperative cross-instance tier of the mint check: a WeakSet is
 // bound to ONE loaded copy of this module, so an event legitimately
@@ -318,6 +432,7 @@ const MINTED_EVENTS = new WeakSet<object>();
 // is not a security boundary against code that deliberately fakes the
 // brand inside the same process.
 const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
+const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
 function stampMintBrand(event: object): void {
 	Object.defineProperty(event, MINT_BRAND, {
@@ -328,9 +443,22 @@ function stampMintBrand(event: object): void {
 	});
 }
 
+function stampUncommittedBrand(event: object): void {
+	Object.defineProperty(event, UNCOMMITTED_BRAND, {
+		value: true,
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+}
+
+function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
+	return FACTORY_OWNED_EVENT_STAMPS.has(stamp);
+}
+
 /**
  * Whether `event` came out of {@link createDomainEvent} (or a helper
- * built on it, such as `recordEvent`), i.e. is deeply frozen with
+ * built on it, such as the aggregate `createEvent` helper), i.e. is deeply frozen with
  * defensively copied payload and metadata. Two tiers: events of THIS
  * loaded copy of the kit are verified unforgeably via the module's
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
@@ -338,11 +466,123 @@ function stampMintBrand(event: object): void {
  * brand. Module-internal export for the aggregate recording paths;
  * not part of the package entries.
  */
-export function isMintedEvent(event: object): boolean {
+export function isMintedEvent(event: object): event is AnyDomainEvent {
 	return (
 		MINTED_EVENTS.has(event) ||
 		(event as Record<symbol, unknown>)[MINT_BRAND] === true
 	);
+}
+
+/** Whether a value was created by {@link createUncommittedDomainEvent}. */
+export function isUncommittedDomainEvent(
+	event: object,
+): event is AnyUncommittedDomainEvent {
+	return (
+		UNCOMMITTED_EVENTS.has(event) ||
+		(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true
+	);
+}
+
+export function createUncommittedDomainEvent<T extends string>(
+	type: T,
+	payload?: undefined,
+	options?: CreateUncommittedDomainEventOptions,
+): UncommittedDomainEvent<T, void>;
+export function createUncommittedDomainEvent<T extends string, P>(
+	type: T,
+	payload: P,
+	options?: CreateUncommittedDomainEventOptions,
+): UncommittedDomainEvent<T, P>;
+export function createUncommittedDomainEvent<T extends string, P>(
+	type: T,
+	payload?: P,
+	options?: CreateUncommittedDomainEventOptions,
+): UncommittedDomainEvent<T, P> {
+	assertProducerOwnedEventFields(type, options);
+	const event: UncommittedDomainEvent<T, P> = {
+		type,
+		aggregateId: options?.aggregateId,
+		aggregateType: options?.aggregateType,
+		payload: cloneOwnedEventData(payload as P, "payload"),
+		version: options?.version ?? 1,
+	};
+	stampUncommittedBrand(event);
+	const uncommitted = deepFreeze(event) as UncommittedDomainEvent<T, P>;
+	UNCOMMITTED_EVENTS.add(uncommitted);
+	return uncommitted;
+}
+
+/** Brands and freezes a kit-derived copy of an uncommitted event. */
+export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
+	stampUncommittedBrand(copy);
+	Object.freeze(copy);
+	UNCOMMITTED_EVENTS.add(copy);
+	return copy;
+}
+
+/**
+ * Attaches shell-owned recording data to an accepted aggregate decision.
+ *
+ * The decision supplies the domain type, payload, source address, and payload
+ * schema version. The stamp supplies only event identity, recording time, and
+ * trace metadata.
+ */
+export function recordDomainEvent<T extends string, P>(
+	event: UncommittedDomainEvent<T, P>,
+	stamp: DomainEventStamp,
+): DomainEvent<T, P> {
+	if (!isUncommittedDomainEvent(event)) {
+		throw new TypeError(
+			"recordDomainEvent requires an event created by createUncommittedDomainEvent",
+		);
+	}
+	if (isFactoryOwnedDomainEventStamp(stamp)) {
+		// createStamp already validated, defensively copied, and deep-froze
+		// every stamp field; re-validating or re-copying here would only pay
+		// the work twice per recorded event.
+		return mintRecordedEvent(event, stamp.eventId, stamp.occurredAt, stamp.metadata);
+	}
+	// A caller-built stamp is caller-owned and unfrozen: validate and copy
+	// the stamp fields before they enter the immutable event.
+	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
+	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
+	const metadata = guardedMetadataClone(stamp.metadata);
+	return mintRecordedEvent(
+		event,
+		stamp.eventId,
+		occurredAt,
+		metadata === undefined ? undefined : (deepFreeze(metadata) as EventMetadata),
+	);
+}
+
+/**
+ * Single mint tail for both stamp provenances. The stamp fields arrive
+ * pre-validated, copied, and frozen (by `createStamp` for factory-owned
+ * stamps, by `recordDomainEvent` for caller-built stamps); the uncommitted
+ * event's payload is already defensively cloned and deeply frozen by its
+ * constructor and is shared instead of paying a second deep copy per event.
+ */
+function mintRecordedEvent<T extends string, P>(
+	event: UncommittedDomainEvent<T, P>,
+	eventId: string,
+	occurredAt: Date,
+	metadata: EventMetadata | undefined,
+): DomainEvent<T, P> {
+	assertProducerOwnedEventFields(event.type, event);
+	const recorded: DomainEvent<T, P> = {
+		eventId,
+		type: event.type,
+		aggregateId: event.aggregateId,
+		aggregateType: event.aggregateType,
+		payload: event.payload,
+		occurredAt,
+		version: event.version,
+		metadata,
+	};
+	stampMintBrand(recorded);
+	Object.freeze(recorded);
+	MINTED_EVENTS.add(recorded);
+	return recorded;
 }
 
 /**
@@ -383,6 +623,62 @@ export function createDomainEvent<T extends string, P>(
 	) as DomainEvent<T, P>;
 }
 
+/**
+ * Creates an already minted domain event exclusively from explicit envelope
+ * facts. Unlike {@link createDomainEvent}, it has no clock or event-id fallback
+ * and is useful when replay, migration, or a caller-owned boundary already has
+ * the final identity and occurrence time.
+ *
+ * Aggregate behavior normally creates an {@link UncommittedDomainEvent} through
+ * its protected `createEvent` helper. The application shell later records that
+ * pending fact with caller-owned time and identity.
+ */
+export function createDomainEventFromFacts<T extends string>(
+	type: T,
+	payload: undefined,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, void>;
+export function createDomainEventFromFacts<T extends string, P>(
+	type: T,
+	payload: P,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, P>;
+export function createDomainEventFromFacts<T extends string, P>(
+	type: T,
+	payload: P | undefined,
+	options: CreateDomainEventFromFactsOptions,
+): DomainEvent<T, P> {
+	if (options?.eventId === undefined) {
+		missingExplicitEventId();
+	}
+	if (options.occurredAt === undefined) {
+		missingExplicitOccurredAt();
+	}
+	return mintDomainEvent(
+		type,
+		payload,
+		options,
+		missingExplicitEventId,
+		missingExplicitOccurredAt,
+	);
+}
+
+function missingExplicitEventId(): string {
+	throw new DomainEventValidationError(
+		"EVENT_ID_REQUIRED",
+		"eventId",
+		"createDomainEventFromFacts requires an explicit eventId",
+	);
+}
+
+function missingExplicitOccurredAt(): Date {
+	throw new DomainEventValidationError(
+		"EVENT_OCCURRED_AT_REQUIRED",
+		"occurredAt",
+		"createDomainEventFromFacts requires an explicit occurredAt",
+	);
+}
+
 function mintDomainEvent<T extends string, P>(
 	type: T,
 	payload: P | undefined,
@@ -390,8 +686,16 @@ function mintDomainEvent<T extends string, P>(
 	eventIdFactory: EventIdFactory,
 	clock: ClockFactory,
 ): DomainEvent<T, P> {
+	assertProducerOwnedEventFields(type, options);
+	const eventId = options?.eventId ?? eventIdFactory();
+	assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
+	const occurredAt =
+		options?.occurredAt === undefined
+			? readEventClock(clock)
+			: copyValidEventDate(options.occurredAt);
+	const version = options?.version ?? 1;
 	const event: DomainEvent<T, P> = {
-		eventId: options?.eventId ?? eventIdFactory(),
+		eventId,
 		type,
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
@@ -404,10 +708,8 @@ function mintDomainEvent<T extends string, P>(
 		payload: cloneOwnedEventData(payload as P, "payload"),
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.
-		occurredAt: options?.occurredAt
-			? new Date(options.occurredAt.getTime())
-			: readClock(clock),
-		version: options?.version ?? 1,
+		occurredAt,
+		version,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
@@ -419,6 +721,71 @@ function mintDomainEvent<T extends string, P>(
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
 	MINTED_EVENTS.add(minted);
 	return minted;
+}
+
+function assertProducerOwnedEventFields(
+	type: unknown,
+	options:
+		| CreateDomainEventOptions
+		| CreateUncommittedDomainEventOptions
+		| undefined,
+): void {
+	assertNonBlankEventField(type, "type", "EVENT_TYPE_INVALID");
+	const version = options?.version ?? 1;
+	if (
+		!Number.isSafeInteger(version) ||
+		typeof version !== "number" ||
+		version < 1
+	) {
+		throw new DomainEventValidationError(
+			"EVENT_SCHEMA_VERSION_INVALID",
+			"version",
+			"domain-event version must be a safe integer greater than or equal to 1",
+		);
+	}
+	if (options?.aggregateId !== undefined) {
+		assertNonBlankEventField(
+			options.aggregateId,
+			"aggregateId",
+			"EVENT_ADDRESS_INVALID",
+		);
+	}
+	if (options?.aggregateType !== undefined) {
+		assertNonBlankEventField(
+			options.aggregateType,
+			"aggregateType",
+			"EVENT_ADDRESS_INVALID",
+		);
+	}
+}
+
+function assertNonBlankEventField(
+	value: unknown,
+	field: "eventId" | "type" | "aggregateId" | "aggregateType",
+	code: "EVENT_ID_INVALID" | "EVENT_TYPE_INVALID" | "EVENT_ADDRESS_INVALID",
+): asserts value is string {
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new DomainEventValidationError(
+			code,
+			field,
+			`domain-event ${field} must be a non-blank string`,
+		);
+	}
+}
+
+function copyValidEventDate(value: unknown): Date {
+	if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+		throw new DomainEventValidationError(
+			"EVENT_OCCURRED_AT_INVALID",
+			"occurredAt",
+			"domain-event occurredAt must be a valid Date",
+		);
+	}
+	return new Date(value.getTime());
+}
+
+function readEventClock(clock: ClockFactory): Date {
+	return copyValidEventDate(clock());
 }
 
 /**

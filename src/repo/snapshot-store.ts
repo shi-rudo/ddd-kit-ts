@@ -3,10 +3,9 @@ import type { AggregateAddress } from "../aggregate/aggregate-address";
 
 /**
  * Driven port for aggregate snapshot persistence: the storage half of
- * the snapshot-plus-recent-events load path for event-sourced
- * aggregates (`createSnapshot` / `restoreFromSnapshotWithEvents` are
- * the aggregate half; `EventStore.readStream`'s `fromVersion` is the
- * catch-up read).
+ * the snapshot-plus-recent-events load path for event-sourced aggregates.
+ * `SnapshotModel` owns projection, migration, and reconstitution;
+ * `EventStore.readStream` supplies the catch-up tail to `loadFromHistory`.
  *
  * **A snapshot is derived data, never authority.** The stream remains
  * the source of truth; a snapshot only shortens replay. That shapes
@@ -32,8 +31,8 @@ import type { AggregateAddress } from "../aggregate/aggregate-address";
  * internal state), and keys are isolated per aggregate type AND id
  * (one table may serve every aggregate type).
  *
- * @template TState - The snapshot state shape (the aggregate's
- * `TSnapshotState`); a store shared across aggregate types is a
+ * @template TState - The adapter-owned snapshot DTO shape; a store shared
+ * across aggregate types is a
  * `SnapshotStore<unknown>` with typed views per repository
  */
 export interface SnapshotStore<TState = unknown> {
@@ -59,8 +58,8 @@ export interface SnapshotStore<TState = unknown> {
 	/**
 	 * Removes the aggregate's snapshot; a no-op when none exists. The
 	 * two callers: the schema-migration fallback (a
-	 * `SnapshotSchemaMismatchError` or a corrupt-snapshot `Err` on
-	 * restore discards the snapshot and refolds from the full stream)
+	 * `SnapshotSchemaMismatchError` or corrupt snapshot during adapter
+	 * reconstitution discards the snapshot and refolds from the full stream)
 	 * and erasure (a snapshot duplicates aggregate state and follows
 	 * the same retention rules). When erasing, delete the snapshot
 	 * BEFORE the event stream: the reverse order has a crash window in

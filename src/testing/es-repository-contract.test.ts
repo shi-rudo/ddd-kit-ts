@@ -1,15 +1,26 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type { DomainEvent } from "../aggregate/domain-event";
+import {
+	createDomainEvent,
+	type DomainEvent,
+	isMintedEvent,
+	type UncommittedDomainEventOf,
+} from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
-import { UnitOfWork, type UnitOfWorkSession } from "../app/unit-of-work";
-import { ConcurrencyConflictError } from "../core/errors";
+import {
+	type AggregatePersistenceWrite,
+	defineRepository,
+	type RepositoryTracking,
+	UnitOfWork,
+} from "../app/unit-of-work";
+import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
 	Outbox,
 } from "../events/ports";
+import type { PersistenceModel } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
 import {
 	createEsRepositoryContractTests,
@@ -20,10 +31,11 @@ import {
 /**
  * The in-memory REFERENCE adapter for the event-sourced contract suite:
  * the example consumers copy when wiring their own harness. It follows
- * every documented pattern: identity-map read path, bare-instance
- * reconstitution via `loadFromHistory`, enroll-before-append, and a
- * REAL expectedVersion guard on append (the `WHERE stream_version = ?`
- * equivalent) against a store with genuine transactional rollback.
+ * every documented pattern: identity-mapped reads, bare-instance
+ * reconstitution through `loadFromHistory`, explicit add/update intent,
+ * exact event batches, and a real expected-version guard on append (the
+ * `WHERE stream_version = ?` equivalent) against a store with genuine
+ * transactional rollback.
  *
  * It is an EXAMPLE, not a proof: passing the suite in memory proves the
  * reference, not your adapter. SQL-backed event stores must run the
@@ -60,8 +72,11 @@ class ContractEsOrder extends EventSourcedAggregate<
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
 		order.apply(
-			order.recordEvent("EsOrderCreated", {
+			createDomainEvent("EsOrderCreated", {
 				name: "initial",
+			}, {
+				aggregateId: order.id,
+				aggregateType: order.aggregateType,
 			}) as EsOrderCreated,
 		);
 		return order;
@@ -72,24 +87,45 @@ class ContractEsOrder extends EventSourcedAggregate<
 		return new ContractEsOrder(id);
 	}
 
+	get name(): string {
+		return this.state.name;
+	}
+
+	get items(): readonly string[] {
+		return [...this.state.items];
+	}
+
 	rename(name: string): void {
-		this.apply(this.recordEvent("EsOrderRenamed", { name }) as EsOrderRenamed);
+		this.apply(
+			createDomainEvent("EsOrderRenamed", { name }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}) as EsOrderRenamed,
+		);
 	}
 
 	addItem(item: string): void {
-		this.apply(this.recordEvent("EsItemAdded", { item }) as EsItemAdded);
+		this.apply(
+			createDomainEvent("EsItemAdded", { item }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}) as EsItemAdded,
+		);
 	}
 
 	protected readonly handlers = {
 		EsOrderCreated: (
 			state: EsOrderState,
-			event: EsOrderCreated,
+			event: UncommittedDomainEventOf<EsOrderCreated>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
 		EsOrderRenamed: (
 			state: EsOrderState,
-			event: EsOrderRenamed,
+			event: UncommittedDomainEventOf<EsOrderRenamed>,
 		): EsOrderState => ({ ...state, name: event.payload.name }),
-		EsItemAdded: (state: EsOrderState, event: EsItemAdded): EsOrderState => ({
+		EsItemAdded: (
+			state: EsOrderState,
+			event: UncommittedDomainEventOf<EsItemAdded>,
+		): EsOrderState => ({
 			...state,
 			items: [...state.items, event.payload.item],
 		}),
@@ -167,63 +203,82 @@ class InMemoryEsDb {
 	}
 }
 
-class InMemoryEsOrderRepository
-	implements EsContractRepository<ContractEsOrder>
-{
+class InMemoryEsOrderRepository {
 	constructor(
 		protected readonly db: InMemoryEsDb,
-		protected readonly session: UnitOfWorkSession<EsOrderEvent>,
+		protected readonly tracking: RepositoryTracking<ContractEsOrder>,
 	) {}
 
-	async findById(id: EsOrderId): Promise<ContractEsOrder | null> {
-		const cached = this.session.identityMap.get(ContractEsOrder, id);
+	async findById(id: EsOrderId): Promise<ContractEsOrder | undefined> {
+		const cached = this.tracking.identityMap.get(ContractEsOrder, id);
 		if (cached) return cached;
-		if (this.session.identityMap.isDeleted(ContractEsOrder, id)) return null;
+		if (this.tracking.identityMap.isDeleted(ContractEsOrder, id)) {
+			return undefined;
+		}
 
 		const history = this.db.streams.get(streamMapKey(orderStream(id)));
-		if (!history || history.length === 0) return null;
+		if (!history || history.length === 0) return undefined;
 		const order = ContractEsOrder.bare(id);
 		const result = order.loadFromHistory(history);
 		if (result.isErr()) throw result.error; // corrupt stream
-		this.session.identityMap.set(ContractEsOrder, id, order);
-		return order;
-	}
-
-	async save(order: ContractEsOrder): Promise<void> {
-		if (order.pendingEvents.length === 0) {
-			return; // nothing to append; skipping save is safe for ES
-		}
-		// Enroll FIRST (the deleted-gate and harvest rely on it); a failed
-		// append rolls the whole unit of work back anyway.
-		this.session.enrollSaved(order);
-		// The REAL expectedVersion guard: the in-memory equivalent of an
-		// append predicated on the current stream version.
-		const expectedVersion = order.persistedVersion ?? 0;
-		const key = streamMapKey(orderStream(order.id));
-		const stream = this.db.streams.get(key) ?? [];
-		if (stream.length !== expectedVersion) {
-			throw new ConcurrencyConflictError({
-				aggregateType: "ContractEsOrder",
-				aggregateId: order.id,
-				expectedVersion,
-				actualVersion: stream.length,
-			});
-		}
-		// Appends the UNSTAMPED pendingEvents originals (the outbox gets
-		// committed envelopes from withCommit's harvest).
-		this.db.streams.set(key, [...stream, ...order.pendingEvents]);
+		return this.tracking.trackLoaded(order);
 	}
 }
 
+type EsOrderReadAdapter = Pick<
+	EsContractRepository<ContractEsOrder>,
+	"findById"
+>;
 type EsRepoFactory = (
 	db: InMemoryEsDb,
-	session: UnitOfWorkSession<EsOrderEvent>,
-) => EsContractRepository<ContractEsOrder>;
+	tracking: RepositoryTracking<ContractEsOrder>,
+) => EsOrderReadAdapter;
+
+class ContractEsRepositoryPersistenceError extends InfrastructureError<"CONTRACT_ES_REPOSITORY_PERSISTENCE"> {
+	constructor(cause: unknown) {
+		super({
+			code: "CONTRACT_ES_REPOSITORY_PERSISTENCE",
+			message: "The event-stream contract repository failed",
+			cause,
+		});
+	}
+}
+
+function mapRepositoryError(error: unknown): InfrastructureError {
+	return error instanceof InfrastructureError
+		? error
+		: new ContractEsRepositoryPersistenceError(error);
+}
+
+const esPersistence: PersistenceModel<
+	ContractEsOrder,
+	number,
+	number | undefined
+> = {
+	capture: (aggregate) => aggregate.version,
+	changes: (baseline, aggregate, lifecycle) =>
+		lifecycle === "loaded" && baseline === aggregate.version
+			? undefined
+			: aggregate.version,
+	isEmpty: (change) => change === undefined,
+};
+
+interface InMemoryEsTransaction {
+	readonly snapshot: ReturnType<InMemoryEsDb["snapshot"]>;
+	mutated: boolean;
+}
+
+type EsFlusher = (
+	db: InMemoryEsDb,
+	transaction: InMemoryEsTransaction,
+	write: AggregatePersistenceWrite<ContractEsOrder, number | undefined>,
+) => void | Promise<void>;
 
 /** The harness consumers copy; `repoFactory` only parameterizes mutants. */
 function createInMemoryEsHarness(
 	repoFactory: EsRepoFactory = (db, session) =>
 		new InMemoryEsOrderRepository(db, session),
+	flush: EsFlusher = flushEsOrder,
 ): EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent> {
 	let mutationCounter = 0;
 	let idCounter = 0;
@@ -231,42 +286,68 @@ function createInMemoryEsHarness(
 	return {
 		createEnvironment: async () => {
 			const db = new InMemoryEsDb();
-			const scope: TransactionScope<undefined> = {
-				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
-					const snapshot = db.snapshot();
-					try {
-						return await fn(undefined);
-					} catch (error) {
-						db.restore(snapshot);
-						throw error;
-					}
-				},
-			};
-			const outbox: Outbox<EsOrderEvent> = {
-				add: async (events) => {
-					db.addToOutbox(events);
-				},
-				getPending: async () =>
-					db.outbox.map((message, i) => ({
-						...message,
-						dispatchId: String(i),
-					})),
-				markDispatched: async () => {},
-			};
+			let nextOutboxFailure: Error | undefined;
 			return {
-				run: (work) =>
-					new UnitOfWork({
+				run: (work) => {
+					let activeTransaction: InMemoryEsTransaction | undefined;
+					const scope: TransactionScope<InMemoryEsTransaction> = {
+						transactional: async <T>(
+							fn: (context: InMemoryEsTransaction) => Promise<T>,
+						) => {
+							const transaction: InMemoryEsTransaction = {
+								snapshot: db.snapshot(),
+								mutated: false,
+							};
+							activeTransaction = transaction;
+							try {
+								return await fn(transaction);
+							} catch (error) {
+								if (transaction.mutated) db.restore(transaction.snapshot);
+								throw error;
+							} finally {
+								activeTransaction = undefined;
+							}
+						},
+					};
+					const outbox: Outbox<EsOrderEvent> = {
+						add: async (events) => {
+							if (!activeTransaction) {
+								throw new Error("outbox write outside transaction");
+							}
+							activeTransaction.mutated = true;
+							if (nextOutboxFailure) {
+								const failure = nextOutboxFailure;
+								nextOutboxFailure = undefined;
+								throw failure;
+							}
+							db.addToOutbox(events);
+						},
+						getPending: async () => [],
+						markDispatched: async () => {},
+					};
+					return new UnitOfWork({
 						scope,
 						outbox,
 						repositories: {
-							orders: (
-								_tx: undefined,
-								session: UnitOfWorkSession<EsOrderEvent>,
-							) => repoFactory(db, session),
+							orders: defineRepository<EsContractRepository<ContractEsOrder>>()(
+								{
+									aggregate: ContractEsOrder,
+									persistence: esPersistence,
+									create: (_tx: InMemoryEsTransaction, tracking) =>
+										repoFactory(db, tracking),
+									flush: (transaction: InMemoryEsTransaction, write) =>
+										flush(db, transaction, write),
+									mapError: mapRepositoryError,
+								},
+							),
 						},
 					}).run(({ repositories }) =>
 						work({ repository: repositories.orders }),
-					),
+					);
+				},
+				failNextOutboxWrite: (error) => {
+					nextOutboxFailure = error;
+				},
 				committedOutboxEvents: async () => [...db.outbox],
 				// The suite's window into the store: same read-and-slice
 				// semantics as EventStore.readStream(options).
@@ -294,8 +375,32 @@ function createInMemoryEsHarness(
 			ContractEsOrder.create(`contract-es-order-${idCounter++}` as EsOrderId),
 		createAggregateWithId: (id) => ContractEsOrder.create(id),
 		mutate: (order) => order.rename(`renamed-${mutationCounter++}`),
-		snapshotState: (order) => order.createSnapshot().state,
+		snapshotState: (order) => ({ name: order.name, items: [...order.items] }),
 	};
+}
+
+function flushEsOrder(
+	db: InMemoryEsDb,
+	transaction: InMemoryEsTransaction,
+	write: AggregatePersistenceWrite<ContractEsOrder, number | undefined>,
+): void {
+	const expectedVersion = write.expectedVersion ?? 0;
+	const key = streamMapKey(orderStream(write.aggregateId));
+	const stream = db.streams.get(key) ?? [];
+	if (stream.length !== expectedVersion) {
+		throw new ConcurrencyConflictError({
+			aggregateType: "ContractEsOrder",
+			aggregateId: write.aggregateId,
+			expectedVersion,
+			actualVersion: stream.length,
+		});
+	}
+	if (!write.events.every(isMintedEvent)) {
+		throw new Error("repository received an unrecorded domain event");
+	}
+	if (write.events.length === 0) return;
+	transaction.mutated = true;
+	db.streams.set(key, [...stream, ...([...write.events] as EsOrderEvent[])]);
 }
 
 describe("event-sourced repository contract test suite (in-memory reference adapter)", () => {
@@ -307,7 +412,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 
 	it("contains the point-in-time stream-window proof", () => {
 		expect(tests.map(({ name }) => name)).toContain(
-			"readStream honors toVersion: point-in-time reads stop at the inclusive upper position",
+			"read windows preserve absence, actual head, and point-in-time bounds",
 		);
 	});
 
@@ -333,58 +438,62 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 
 	/** Mutant pinning: the suite must EXPOSE broken adapters. */
 	async function expectMutantFails(
-		repoFactory: EsRepoFactory,
+		options: {
+			repoFactory?: EsRepoFactory;
+			flush?: EsFlusher;
+		},
 		testNamePrefix: string,
 		expectedFailure: RegExp,
 	): Promise<void> {
 		const mutantTest = createEsRepositoryContractTests(
-			createInMemoryEsHarness(repoFactory),
+			createInMemoryEsHarness(options.repoFactory, options.flush),
 		).find((t) => t.name.startsWith(testNamePrefix));
 		expect(mutantTest).toBeDefined();
 		expect(mutantTest?.skipped).toBeUndefined();
 		await expect(mutantTest?.run()).rejects.toThrow(expectedFailure);
 	}
 
-	// Mutant: append without the expectedVersion guard (blind append).
-	class BlindAppendRepository extends InMemoryEsOrderRepository {
-		override async save(order: ContractEsOrder): Promise<void> {
-			if (order.pendingEvents.length === 0) return;
-			this.session.enrollSaved(order);
-			// ❌ no expectedVersion check:
-			const key = streamMapKey(orderStream(order.id));
-			const stream = this.db.streams.get(key) ?? [];
-			this.db.streams.set(key, [...stream, ...order.pendingEvents]);
-		}
-	}
-
 	it("the suite EXPOSES a blind append: no expectedVersion guard fails the mandatory test", async () => {
 		await expectMutantFails(
-			(db, session) => new BlindAppendRepository(db, session),
+			{
+				flush: (db, transaction, write) => {
+					const key = streamMapKey(orderStream(write.aggregateId));
+					const stream = db.streams.get(key) ?? [];
+					transaction.mutated = true;
+					db.streams.set(key, [
+						...stream,
+						...([...write.events] as EsOrderEvent[]),
+					]);
+				},
+			},
 			"MANDATORY",
-			/the second writer's commit must reject/,
+			/stale append must reject/,
 		);
 	});
 
 	it("the suite EXPOSES a wrong fold order: a reversed read fails the replay-equality test", async () => {
 		class ReversedReadRepository extends InMemoryEsOrderRepository {
-			override async findById(id: EsOrderId): Promise<ContractEsOrder | null> {
-				const cached = this.session.identityMap.get(ContractEsOrder, id);
+			override async findById(
+				id: EsOrderId,
+			): Promise<ContractEsOrder | undefined> {
+				const cached = this.tracking.identityMap.get(ContractEsOrder, id);
 				if (cached) return cached;
 				const history = this.db.streams.get(streamMapKey(orderStream(id)));
-				if (!history || history.length === 0) return null;
+				if (!history || history.length === 0) return undefined;
 				const order = ContractEsOrder.bare(id);
 				// ❌ folds newest-first (a SELECT without ORDER BY, unlucky):
 				const result = order.loadFromHistory([...history].reverse());
 				if (result.isErr()) throw result.error;
-				this.session.identityMap.set(ContractEsOrder, id, order);
-				return order;
+				return this.tracking.trackLoaded(order);
 			}
 		}
 
 		await expectMutantFails(
-			(db, session) => new ReversedReadRepository(db, session),
-			"replay equality",
-			/must fold to the same state/,
+			{
+				repoFactory: (db, tracking) => new ReversedReadRepository(db, tracking),
+			},
+			"replay preserves",
+			/replay must fold to the same state/,
 		);
 	});
 });

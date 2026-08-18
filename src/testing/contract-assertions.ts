@@ -3,6 +3,7 @@
  * repository contract suites (state-stored and event-sourced). Internal
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
+import { isMintedEvent } from "../aggregate/domain-event";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -79,14 +80,14 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
  * vs broken replay read).
  */
 export async function loadAggregateOrFail<TAgg, TId>(
-	repository: { findById(id: TId): Promise<TAgg | null> },
+	repository: { findById(id: TId): Promise<TAgg | null | undefined> },
 	id: TId,
 	suspectHint: string,
 ): Promise<TAgg> {
 	const loaded = await repository.findById(id);
 	assert(
-		loaded !== null,
-		`findById(${String(id)}) returned null for an aggregate that must exist: ${suspectHint}`,
+		loaded !== null && loaded !== undefined,
+		`findById(${String(id)}) returned no aggregate for an identity that must exist: ${suspectHint}`,
 	);
 	return loaded;
 }
@@ -127,6 +128,34 @@ export function gatedContractTest(
 	return gate.satisfiedBy
 		? test
 		: skippedContractTest(test.name, gate.capability);
+}
+
+/**
+ * Identities of an in-memory pending batch, with the shared precondition
+ * that every event is recorded (minted). The `requirement` names the
+ * suite-specific rule the harness violated when an event is unminted.
+ */
+export function mintedPendingEventIds(
+	events: ReadonlyArray<unknown>,
+	requirement: string,
+): string[] {
+	return events.map((event) => {
+		assert(
+			typeof event === "object" && event !== null && isMintedEvent(event),
+			requirement,
+		);
+		return (event as { readonly eventId: string }).eventId;
+	});
+}
+
+/**
+ * Sorted identities of committed outbox envelopes. Shared by both
+ * repository suites so the projection cannot drift between them.
+ */
+export function sortedCommittedEventIds(
+	committed: ReadonlyArray<{ readonly event: { readonly eventId: string } }>,
+): string[] {
+	return committed.map(({ event }) => event.eventId).sort();
 }
 
 export function assert(condition: boolean, message: string): asserts condition {

@@ -6,9 +6,9 @@ export interface EventStoreAppendOptions {
 	/**
 	 * The stream version the writer loaded (its optimistic-concurrency
 	 * baseline): the number of events the stream held when the aggregate
-	 * was reconstituted. `0` for a brand-new stream. For kit aggregates
-	 * this is `aggregate.persistedVersion ?? 0`; the aggregate version IS
-	 * the event count, so stream version and aggregate version align.
+	 * was reconstituted. `0` for a brand-new stream. `UnitOfWork` captures
+	 * this value when the adapter returns a loaded aggregate; it is not stored
+	 * on the aggregate itself.
 	 */
 	readonly expectedVersion: number;
 }
@@ -26,8 +26,8 @@ export interface ReadStreamOptions {
 	/**
 	 * Return only events AFTER this stream position (1-based event count),
 	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
-	 * snapshot.version, limit: 256 })` yields the next page of events
-	 * `restoreFromSnapshotWithEvents` needs. Defaults to `0` (the first
+	 * snapshot.version, limit: 256 })` yields the next page passed to
+	 * `aggregate.loadFromHistory`. Defaults to `0` (the first
 	 * stream page).
 	 * Must be a non-negative safe integer when present.
 	 */
@@ -80,7 +80,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * contract suites (`createEventStoreContractTests` and
  * `createEsRepositoryContractTests` from `@shirudo/ddd-kit/testing`).
  * Your adapter implements this port against a real store and must pass
- * those suites. Like the state-stored `IRepository`, its optimistic
+ * those suites. Like the state-stored repository contract, its optimistic
  * concurrency and key isolation are testable adapter contracts, not kit
  * guarantees.
  *
@@ -91,8 +91,8 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   return { aggregateType: "Order", aggregateId: id };
  * }
  *
- * async findById(id: OrderId): Promise<Order | null> {
- *   const cached = this.session.identityMap.get(Order, id);
+ * async findById(id: OrderId): Promise<Order | undefined> {
+ *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   const address = this.stream(id);
  *   const order = Order.reconstitute(id); // bare instance, no events
@@ -104,7 +104,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *       toVersion: targetVersion,
  *       limit: 256,
  *     });
- *     if (!page.exists) return null;
+ *     if (!page.exists) return undefined;
  *     targetVersion ??= page.lastVersion; // pin the first observed head
  *     if (fromVersion === targetVersion) break;
  *     if (page.events.length === 0) {
@@ -118,31 +118,23 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *     if (result.isErr()) throw result.error; // corrupt stream
  *     fromVersion += page.events.length;
  *   }
- *   this.session.identityMap.set(Order, id, order);
- *   return order;
+ *   return this.tracking.trackLoaded(order);
  * }
  *
- * async save(order: Order): Promise<void> {
- *   if (order.pendingEvents.length === 0) return;
- *   this.session.enrollSaved(order);
- *   await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
- *     expectedVersion: order.persistedVersion ?? 0,
+ * flush(write: AggregatePersistenceWrite<Order, number | undefined>) {
+ *   return this.eventStore.append(this.stream(write.aggregateId), write.events, {
+ *     expectedVersion: write.expectedVersion ?? 0,
  *   });
  * }
  * ```
  *
- * `save` appends the bare `pendingEvents` originals; `withCommit`
+ * `flush` appends the exact event batch registered by `add` or `update`;
+ * `withCommit`
  * separately composes them into outbox envelopes. The event store's own
  * stream position remains the ordering authority for replay.
  *
- * **One save per aggregate per unit of work, after all mutations.**
- * `pendingEvents` are cleared and `persistedVersion` advances only AFTER
- * the commit (internal acknowledgement), so a second `save` of the same instance
- * inside one unit of work would re-append the already-appended events
- * with a stale `expectedVersion` and deterministically conflict, with no
- * concurrent writer in sight. This is the same rule the state-stored
- * path documents as "mutate first, save last" on `withCommit`; it is
- * not specific to event sourcing.
+ * The exact appended event batch is acknowledged only after the surrounding
+ * transaction commits. Rollback leaves it pending.
  */
 export interface EventStore<Evt extends AnyDomainEvent> {
 	/**
@@ -186,7 +178,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     aggregate type or id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without
-	 * touching the store (an ES repository skips `save` for aggregates
+	 * touching the store (an ES repository skips `append` for aggregates
 	 * without pending events anyway).
 	 *
 	 * Treat `aggregateType` as a stable technical stream category. If two

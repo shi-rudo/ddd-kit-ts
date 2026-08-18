@@ -2,10 +2,10 @@
 
 Tactical Domain-Driven Design building blocks for TypeScript.
 
-`@shirudo/ddd-kit` gives you the pieces you need to model a real domain:
-value objects, entities, aggregates, domain events, repositories, command and
-query handlers, an outbox, a Unit of Work facade, event-store ports,
-projections, and adapter contract tests.
+`@shirudo/ddd-kit` supplies the main parts for a domain model. These parts
+include value objects, entities, aggregates, domain events, and repositories.
+The package also supplies application handlers, outbox ports, projections, and
+adapter contract tests.
 
 It is not an application framework. You keep your HTTP layer, database, queue,
 ORM, and runtime choices. The kit gives your domain model a strong center and
@@ -105,7 +105,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -121,11 +121,12 @@ order.pendingEvents[0]?.type; // "OrderConfirmed"
 
 That example is deliberately small, but it shows the core shape:
 
-- the aggregate owns the rule
-- the domain throws when an invariant is broken
-- `commit(...)` changes state and records the event together
-- `recordEvent(...)` stamps aggregate identity onto the event
-- persistence is still outside the aggregate
+- The aggregate owns the rule.
+- The domain throws an error when an invariant is broken.
+- `commit(...)` changes the state and records the event together.
+- `createEvent(...)` captures the immutable domain decision and aggregate source.
+- The application shell adds event identity, recording time, and trace metadata.
+- Persistence stays outside the aggregate.
 
 In production, a repository and `withCommit` or `UnitOfWork` persist the state,
 write the events to an outbox inside the same transaction, and mark the

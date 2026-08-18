@@ -4,7 +4,15 @@ A domain event is a fact that has just happened in the domain.
 
 Use events for facts other parts of the system may care about: an order was confirmed, a payment was captured, a shipment failed. The event should describe the fact, not the command that requested it. `ConfirmOrder` is a command. `OrderConfirmed` is an event.
 
-The kit treats domain events as plain, immutable data:
+The kit represents a newly accepted fact in two deliberately separate forms:
+
+1. The aggregate creates an immutable `UncommittedDomainEvent`. It contains
+   only what the domain owns: type, payload, source aggregate, and payload
+   schema version.
+2. The application shell records that fact as a `DomainEvent` by attaching an
+   id, a recording time, and tracing metadata.
+
+A recorded domain event is plain, immutable data:
 
 - they have a stable `eventId`
 - they carry a `type` discriminator
@@ -34,9 +42,9 @@ The fields have different jobs:
 | --- | --- |
 | `eventId` | Unique id for this event instance. Use it for idempotency and deduplication. |
 | `type` | Routing discriminator, such as `"OrderConfirmed"`. |
-| `aggregateId` / `aggregateType` | Source aggregate. `recordEvent` fills these in automatically. |
+| `aggregateId` / `aggregateType` | Source aggregate. `createEvent` fills these in automatically. |
 | `payload` | Domain data for the fact that happened. |
-| `occurredAt` | Time the event was created. |
+| `occurredAt` | Time the accepted fact was recorded by the application shell. It is not automatically a business timestamp. |
 | `version` | Event schema version, used for payload evolution and upcasting. |
 | `metadata` | Correlation, causation, user, source, and custom tracing fields. |
 
@@ -45,10 +53,14 @@ stream position; those values live in `CommittedDomainEvent.position`.
 
 ## Creating Events
 
-Outside an aggregate, use `createDomainEvent`:
+Outside an aggregate, `createDomainEvent` is the short convenience form:
 
 ```ts
-import { createDomainEvent, type DomainEvent } from "@shirudo/ddd-kit";
+import {
+  createDomainEvent,
+  createDomainEventFromFacts,
+  type DomainEvent,
+} from "@shirudo/ddd-kit";
 
 type OrderConfirmed = DomainEvent<
   "OrderConfirmed",
@@ -73,32 +85,59 @@ The returned event is deeply frozen. The payload and metadata are cloned before 
 
 Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records.
 
-## Inside Aggregates: Use `recordEvent`
+`createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`
+or `eventId` is omitted. If the caller must provide every nondeterministic
+value, use `createDomainEventFromFacts`:
 
-Inside aggregate methods, prefer `this.recordEvent(...)`:
+```ts
+const event = createDomainEventFromFacts(
+  "OrderConfirmed",
+  { orderId: "o-1" },
+  {
+    eventId: command.eventId,
+    occurredAt: command.receivedAt,
+    aggregateId: "o-1",
+    aggregateType: "Order",
+  },
+);
+```
+
+## Inside aggregates: create the fact, not its envelope
+
+An aggregate method speaks the domain language. Event identifiers, tracing
+headers, and recording timestamps do not help an order decide whether it can be
+confirmed, so they do not belong in `confirm(...)`.
 
 ```ts
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
-  confirm(): void {
+  confirm(confirmedAt: Date): void {
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.createEvent("OrderConfirmed", {
+        orderId: this.id,
+        confirmedAt: confirmedAt.toISOString(),
+      }),
     );
   }
 }
 ```
 
-`recordEvent` uses the aggregate's `DomainEventFactory` and fills in `aggregateId` and `aggregateType` from the aggregate. That metadata is how outbox dispatchers, projection handlers, audit logs, and process managers know which aggregate produced the event.
+`createEvent` clones and freezes the payload and fills in `aggregateId` and
+`aggregateType`. It does not read a clock, generate an id, or attach tracing
+metadata. The optional `version` passed to `createEvent` is the payload schema
+version and stays next to the code that creates that payload.
 
-Calling `createDomainEvent(...)` directly inside an aggregate is easy to get wrong because you must remember those routing fields by hand. `withCommit` validates harvested aggregate events and throws if the fields are missing, but the better path is to make the wrong event hard to create.
+`confirmedAt` is present because it has business meaning. If the domain does
+not need that time, leave it out of the method and payload. Do not derive a
+business timestamp from the technical event stamp by accident.
 
 Use `createDomainEvent(...)` directly for events that do not come from an aggregate: system events, integration events, test fixtures, process-manager events, and adapter-level events.
 
 See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
-## Auto-Generated Fields
+## Convenience Defaults
 
 `createDomainEvent` uses the immutable `defaultDomainEventFactory` and fills in
 common fields when you omit them:
@@ -109,6 +148,11 @@ common fields when you omit them:
 | `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
 | `version` | `1` | `options.version` |
 | `metadata` | `undefined` | `options.metadata` |
+
+These defaults are intentionally convenient and nondeterministic. They are
+appropriate in an application shell or for a one-off system event. Aggregate
+behavior must use `createEvent`. Its result depends only on visible domain
+inputs and current aggregate state.
 
 The default event id is UUID v4 because it comes from Web Crypto's `crypto.randomUUID()`. That is portable and safe for uniqueness, but it is not time-ordered. For large event stores, prefer UUID v7, ULID, or KSUID so indexes stay clustered and ids sort roughly by creation time.
 
@@ -126,29 +170,53 @@ const domainEvents = createDomainEventFactory({
   clock: () => new Date(),
 });
 
-const event = domainEvents.create("OrderConfirmed", { orderId: "o-1" });
+order.confirm(confirmedAt);
+recordPendingEvents(order, () =>
+  domainEvents.createStamp({
+    occurredAt: confirmedAt,
+    metadata: { correlationId: request.id },
+  }),
+);
 ```
 
 The returned `DomainEventFactory` is frozen and permanently captures those two
 functions. Creating another factory cannot change this one or the
 `defaultDomainEventFactory`. This makes the same API safe across overlapping
-async requests and parallel tests; no restore hook or async context is needed.
+async requests and parallel tests. No restore hook or async context is needed.
 Every clock read is defensively copied and fails immediately with a `TypeError`
 if the injected clock does not return a valid `Date`.
 
-Per-event `eventId` and `occurredAt` options still win over the captured
-defaults.
+`createStamp()` is the bridge from an accepted domain decision to its technical
+record. It reads the captured dependencies and returns an immutable
+`DomainEventStamp`. A stamp contains only `eventId`, `occurredAt`, and optional
+metadata. It cannot select the payload schema version. The factory also exposes
+`create(...)` for non-aggregate convenience events and `now()` for
+infrastructure such as snapshot policies.
 
-## Supplying a factory to an aggregate
+## Factory-backed aggregate convenience
 
-Aggregate constructors opt in by forwarding the factory through
-`AggregateConfig`:
+The preferred path does not inject a factory into the aggregate:
 
 ```ts
-import {
-  AggregateRoot,
-  type DomainEventFactory,
-} from "@shirudo/ddd-kit";
+const order = await loadOrder(orderId);
+order.confirm(confirmedAt);
+recordPendingEvents(order, domainEvents);
+
+await snapshots.save(
+  orderAddress,
+  captureAggregateSnapshot(orderSnapshots, order, domainEvents.now()),
+);
+```
+
+This keeps the aggregate's result a function of its visible inputs. Repositories
+do not need to forward a clock or id generator through every reconstitution
+path.
+
+For small applications that prefer less plumbing, aggregate constructors can
+still forward a factory through `AggregateConfig`:
+
+```ts
+import { AggregateRoot, type AggregateEventConvenienceFactory } from "@shirudo/ddd-kit";
 
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
@@ -156,54 +224,91 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   constructor(
     id: OrderId,
     state: OrderState,
-    domainEventFactory: DomainEventFactory,
+    domainEventFactory: AggregateEventConvenienceFactory,
   ) {
     super(id, state, { domainEventFactory });
   }
 }
 ```
 
-`recordEvent(...)` now uses that aggregate instance's factory. `createSnapshot()`
-uses the same captured clock for `snapshotAt`, so event and snapshot timestamps
-cannot drift between two dependency scopes. Aggregates that omit the config use
-the immutable default and need no constructor change.
+That factory is used only when the aggregate deliberately calls
+`recordEventFromFactory(...)`. If no factory is configured, that method uses
+the immutable default and therefore reads Web Crypto and the platform clock.
+Its name makes that trade-off visible at the call site. Snapshot clocks and
+DTO mappings stay outside the aggregate in an adapter-owned `SnapshotModel`.
 
-At a request boundary, construct or select the factory before constructing or
-reconstituting the aggregate:
+## Migrating from event facts
 
 ```ts
-export async function handle(request: Request): Promise<Response> {
-  const domainEvents = createDomainEventFactory({
-    eventIdFactory: requestEventIds(request),
-    clock: requestClock(request),
-  });
-  const order = await loadOrder(orderIdFrom(request), domainEvents);
-  order.confirm();
-  // persist order
+// Before
+confirm(facts: DomainEventFacts): void {
+  this.commit(
+    nextState,
+    this.recordEvent("OrderConfirmed", payload, facts),
+  );
+}
+
+// Preferred v3 path
+confirm(): void {
+  this.commit(
+    nextState,
+    this.createEvent("OrderConfirmed", payload),
+  );
 }
 ```
 
-Repository factories should pass the same `DomainEventFactory` through every
-creation and reconstitution path for that operation.
+The application handler records the accepted decision before repository
+persistence or outbox harvest:
+
+```ts
+const domainEvents = createDomainEventFactory({
+  eventIdFactory: () => uuidv7(),
+  clock: requestClock,
+});
+
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
+  order.confirm();
+  recordPendingEvents(order, () =>
+    domainEvents.createStamp({
+      metadata: { correlationId: command.correlationId },
+    }),
+  );
+  repositories.orders.update(order);
+});
+```
+
+Move aggregate snapshot methods to an adapter-owned `SnapshotModel`, then call
+`captureAggregateSnapshot(model, aggregate, snapshotAt)` with a timestamp from
+the application or snapshot policy. Existing aggregates can make the smaller
+event migration to `recordEventFromFactory(...)`. That retains the old event
+factory posture while making the hidden read explicit in the method name.
+
+`DomainEventFacts` and `createFacts()` remain deprecated aliases for
+`DomainEventStamp` and `createStamp()` during migration. A schema `version`
+formerly supplied through facts must move to the concrete producer:
+`this.createEvent("NameChanged", payload, { version: 2 })`.
 
 ## Deterministic tests
 
 ```ts
-it("emits deterministic ids and timestamps", () => {
+it("keeps the decision deterministic and records it once", () => {
   const domainEvents = createDomainEventFactory({
     eventIdFactory: () => "evt-1",
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
   });
-  const order = new Order(orderId, initialState, domainEvents);
-
+  const order = Order.reconstitute(orderId, initialState);
   order.confirm();
+  const events = recordPendingEvents(order, domainEvents);
 
-  expect(order.pendingEvents[0]?.eventId).toBe("evt-1");
+  expect(events[0]?.eventId).toBe("evt-1");
 });
 ```
 
 No `afterEach` reset is required because the test owns the factory instance and
-never changes module state. Async tests use the same pattern unchanged.
+never changes module state. More importantly, the aggregate itself never sees
+that factory: two equal aggregates given the same domain input produce equal
+uncommitted facts. Recording policy can be tested separately.
 
 ## Custom id formats
 
@@ -231,25 +336,35 @@ The kit only requires a string. Choose the id format that fits your storage and 
 
 ```ts
 interface EventMetadata {
-  correlationId?: string;
-  conversationId?: string;
-  causationId?: string;
-  userId?: string;
-  source?: string;
-  [key: string]: unknown;
+  readonly correlationId?: string;
+  readonly conversationId?: string;
+  readonly causationId?: string;
+  readonly userId?: string;
+  readonly source?: string;
+  readonly traceparent?: string;
+  readonly tracestate?: string;
+  readonly [key: string]: unknown;
 }
 ```
 
-Use metadata for tracing and operational context, not for core domain state. If a value is required to understand the event as a domain fact, put it in the payload.
+The readonly surface prevents context changes in a recorded event. Constructors
+still make a defensive copy. A caller can change the original input object
+without changing the event.
+
+Use metadata for message relationships and operational context, not for core
+domain state. If a value is required to understand the event as a domain fact,
+put it in the payload.
 
 The usual meanings:
 
-- `correlationId` groups messages that belong to one operation or trace.
-- `conversationId` remains stable across a longer business interaction that may
+- `correlationId` groups messages that belong to one business operation.
+- `conversationId` remains stable across a longer business interaction that can
   contain several correlations.
 - `causationId` points to the event or command that caused this event.
 - `userId` records the actor when known.
 - `source` names the producing component or bounded context.
+- `traceparent` and `tracestate` carry W3C Trace Context between technical
+  spans. They complement business correlation. They do not replace it.
 
 ### Copying Correlation
 
@@ -387,7 +502,9 @@ The lower-level `setState` and `addDomainEvent` methods are still available for 
 
 ```ts
 this.setState(nextState);
-this.addDomainEvent(this.recordEvent("OrderConfirmed", { orderId: this.id }));
+this.addDomainEvent(
+  this.createEvent("OrderConfirmed", { orderId: this.id }),
+);
 ```
 
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.

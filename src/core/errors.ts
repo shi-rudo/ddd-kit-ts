@@ -122,6 +122,36 @@ export abstract class InfrastructureError<
 	}
 }
 
+/**
+ * Copy-safe membership check for the kit's domain-error family.
+ *
+ * `instanceof` is false for an error constructed by another loaded copy of
+ * the kit (a separately installed adapter package, a CJS/ESM dual load), so
+ * kit boundaries that route by error family fall back to the structural
+ * `category` field, the stable cross-copy contract.
+ */
+export function isDomainErrorLike(value: unknown): value is DomainError {
+	return (
+		value instanceof DomainError ||
+		(value instanceof Error &&
+			(value as { readonly category?: unknown }).category === "DOMAIN")
+	);
+}
+
+/**
+ * Copy-safe membership check for the kit's infrastructure-error family.
+ * Same rationale as {@link isDomainErrorLike}.
+ */
+export function isInfrastructureErrorLike(
+	value: unknown,
+): value is InfrastructureError {
+	return (
+		value instanceof InfrastructureError ||
+		(value instanceof Error &&
+			(value as { readonly category?: unknown }).category === "INFRASTRUCTURE")
+	);
+}
+
 /** Options bag for {@link InMemoryCapacityExceededError}. */
 export interface InMemoryCapacityExceededErrorOptions {
 	/** Concrete reference adapter whose configured capacity was exhausted. */
@@ -176,8 +206,8 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
- * replay methods (`loadFromHistory`, `restoreFromSnapshotWithEvents`)
- * also let it propagate uncaught instead of wrapping it in `Result.Err`.
+ * replay through `loadFromHistory` also lets it propagate uncaught instead
+ * of wrapping it in `Result.Err`.
  *
  * Use `isBaseError(e)` from `@shirudo/base-error` to detect
  * "any structured error from the kit or any other BaseError-using
@@ -337,6 +367,21 @@ export class InvalidIntegrationMessageError extends InfrastructureError<"INVALID
 	}
 }
 
+/** A malformed or non-JSON-safe command selected for durable delivery. */
+export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COMMAND_MESSAGE"> {
+	constructor(
+		public readonly path: string,
+		public readonly reason: string,
+		cause?: unknown,
+	) {
+		super({
+			code: "INVALID_COMMAND_MESSAGE",
+			message: `Invalid command message at ${path}: ${reason}`,
+			cause,
+		});
+	}
+}
+
 /**
  * Thrown by `Entity` (constructor and `setState`) and by the event
  * metadata helpers (`createDomainEvent`'s `options.metadata`,
@@ -371,15 +416,10 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory`,
- * `restoreFromSnapshotWithEvents`, and `AggregateRoot.restoreFromSnapshot`
- * when the restore/replay target is not fresh: the aggregate carries
- * unflushed `pendingEvents`, or (for `loadFromHistory`) an in-memory
- * version that was never persisted. Restoring onto such an instance
- * would `markRestored` a version baseline the unflushed events were
- * never part of: repository routing flips from INSERT to UPDATE (or
- * appends with a wrong expected version) and harvested events would
- * claim history the stream does not carry.
+ * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
+ * carries unflushed `pendingEvents`. Replaying persisted facts onto that
+ * instance would advance the version underneath decisions made against an
+ * older state and could later claim history the stream does not carry.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): a deterministic programming
@@ -401,7 +441,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 	) {
 		super(
 			"UNREPLAYABLE_AGGREGATE",
-			`Cannot restore or replay onto aggregate ${aggregateId}: ${reason}. ` +
+			`Cannot replay onto aggregate ${aggregateId}: ${reason}. ` +
 				"Reconstitute on a fresh instance (no factory-recorded events, " +
 				"no unpersisted mutations).",
 		);
@@ -415,7 +455,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
  * copied event addressed elsewhere), caught before the event can be
  * recorded and poison the own stream. Events with MISSING address
  * fields do not trip this: `apply()` stamps them from the aggregate,
- * the same guarantee `recordEvent` gives. A wiring error, distinct
+ * the same guarantee `createEvent` gives. A wiring error, distinct
  * from {@link ForeignEventError} on purpose: a wrong new event is a
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
  * infrastructure, and handlers for one must not absorb the other.
@@ -433,21 +473,20 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 			`New event "${eventType}" is addressed to ` +
 				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
 				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
-				"fix the call site (recordEvent stamps the right address).",
+				"fix the call site (createEvent stamps the right address).",
 		);
 	}
 }
 
 /**
- * The structural-integrity rejection for a restored snapshot: thrown
- * by a consumer's `validateRestoredState` override when the stored
- * blob could not have been produced by any version of the model
+ * The structural-integrity rejection for a stored snapshot. A consumer's
+ * adapter-owned `SnapshotModel` may throw it from migration or reconstitution
+ * when the blob could not have been produced by any version of the model
  * (missing fields, impossible types, truncated data). An
  * `InfrastructureError`, because corrupted persistence is a storage
  * problem, never a business rejection; it is nevertheless RECOVERABLE
- * by design: `restoreFromSnapshotWithEvents` catches it into its
- * `Result` channel, and the documented load recipe answers an `Err`
- * by discarding the snapshot and refolding from the stream.
+ * by design: the repository catches it, discards the derived snapshot, and
+ * refolds from the authoritative event stream.
  */
 export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUPTED"> {
 	constructor(message: string, cause?: unknown) {
@@ -458,7 +497,9 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 /**
  * Thrown when an event reaches the aggregate's recording paths
  * (`apply`, `commit`, `addDomainEvent`) without having been minted by
- * the kit's constructors: `createDomainEvent` / `recordEvent`
+ * the kit's constructors: `createDomainEvent`,
+ * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or aggregate
+ * event helpers
  * deep-freeze the event and defensively copy payload and metadata,
  * and register the result in an internal, unforgeable mint marker.
  * Anything else (a hand-rolled literal, a shallow-frozen copy with
@@ -471,8 +512,9 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 	constructor(eventType: string) {
 		super(
 			"UNMINTED_EVENT",
-			`Event "${eventType}" was not minted by createDomainEvent(...) or ` +
-				"this.recordEvent(...). Those constructors deep-freeze the event " +
+			`Event "${eventType}" was not minted by a domain-event constructor ` +
+				"or aggregate createEvent(...) helper. Those " +
+				"constructors deep-freeze the event " +
 				"and defensively copy payload and metadata; a mutable event " +
 				"could diverge from the state change it records.",
 		);
@@ -480,8 +522,53 @@ export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 }
 
 /**
- * Thrown by persisted-event consumers (including `loadFromHistory`,
- * `restoreFromSnapshotWithEvents`, and `Projector`) when an event carries an
+ * Thrown by `recordPendingEvents` when the aggregate's pending-event list
+ * changes while its events are being stamped: a stamp provider that
+ * directly or transitively triggers a new decision on the same aggregate
+ * would otherwise have that decision silently discarded when recording
+ * replaces the pending list. Recording is atomic: when this guard fires,
+ * every decision (including the re-entrant one) remains unrecorded. A
+ * wiring error: deterministic bug at the call site, the remedy is keeping
+ * stamp providers free of domain decisions.
+ */
+export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVENT_RECORDING"> {
+	constructor(aggregateId: string) {
+		super(
+			"REENTRANT_EVENT_RECORDING",
+			`Pending events of aggregate ${aggregateId} changed while ` +
+				"recordPendingEvents was stamping them. A stamp provider must not " +
+				"trigger new decisions on the aggregate being recorded; make every " +
+				"domain decision first, then record.",
+		);
+	}
+}
+
+/**
+ * Thrown by `recordPendingEvents` when two events in one aggregate's pending
+ * batch carry the same `eventId`: a stamp provider that returns one reused
+ * stamp (or repeats an explicit id) would otherwise mint two distinct facts
+ * sharing one identity, and downstream idempotent consumers keyed on
+ * `eventId` silently drop one of them. A wiring error: deterministic bug in
+ * the stamp provider, the remedy is one fresh identity per decision.
+ */
+export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
+	constructor(
+		aggregateId: string,
+		/** The identity two pending events would have shared. */
+		public readonly eventId: string,
+	) {
+		super(
+			"DUPLICATE_EVENT_ID",
+			`Two pending events of aggregate ${aggregateId} carry the same ` +
+				`eventId "${eventId}". Each decision needs its own identity; ` +
+				"return a fresh stamp per event from the stamp provider.",
+		);
+	}
+}
+
+/**
+ * Thrown by persisted-event consumers (including `loadFromHistory` and
+ * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
  * the persisted row belongs to someone else (a miswired stream read,
  * ids colliding across aggregate types, a corrupted store). An
@@ -718,13 +805,9 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
 
 /**
  * Thrown at the end of a `UnitOfWork.run` when an aggregate that was
- * loaded into the identity map during the operation carries unflushed
- * `pendingEvents` but was never enrolled (no `session.enrollSaved`, and
- * not deleted). The almost-certain cause is a repository `save()` that
- * forgot to call `enrollSaved`, or a use case that recorded events on a
- * loaded aggregate and never saved it. Without this guard those events
- * would be silently dropped: never harvested into the outbox, never
- * published.
+ * loaded into the identity map changed but no `update` intent was registered.
+ * Without this guard the changed state or pending events would be silently
+ * dropped.
  *
  * Deliberately **not** an `InfrastructureError` (same posture as
  * {@link MissingHandlerError}): a programming bug that must crash loud,
@@ -733,33 +816,27 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  * leaves no partial state.
  *
  * **Scope of the guard.** A best-effort runtime safety net, not a proof.
- * It only sees aggregates the identity map knows about (those loaded via
- * `findById`), and detects new events by comparing the pending-event COUNT
- * at load against commit, which assumes the kit's append-only event model
- * (so it cannot see events that were recorded and then cleared within the
- * same run). A freshly *created* aggregate that was never enrolled is
- * invisible to the kit. The repository contract test suite remains the
- * full mitigation. See the Unit of Work guide.
+ * It sees aggregates that repository adapters register through
+ * `tracking.trackLoaded` and detects ordinary state changes through the version
+ * captured at load. The pending-event count remains a second guard for an
+ * invalid event-only mutation that did not advance the version. A freshly
+ * created aggregate that is never passed to `add` is invisible to the kit.
  */
 export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
 	constructor(public readonly aggregateId: string) {
 		super(
 			"UNENROLLED_CHANGES",
-			`Aggregate ${aggregateId} was loaded in this unit of work and has ` +
-				"pending events, but was never enrolled (no save), so its events " +
-				"would be silently dropped. Call repository.save(aggregate), and " +
-				"ensure save() calls session.enrollSaved before the row write.",
+			`Aggregate ${aggregateId} was loaded and changed in this unit of work, ` +
+				"but no update intent was registered. Call repository.update(aggregate) " +
+				"after the final domain decision so state and events flush together.",
 		);
 	}
 }
 
 /**
- * Thrown when an aggregate that was deleted within the current unit of
- * work is saved or re-registered again in the same operation: by
- * `UnitOfWorkSession.enrollSaved` after `enrollDeleted` of the same
- * instance, and by `IdentityMap.set` for a type+id that was deleted.
- * Deletion is final within an operation; saving afterwards would write
- * a row the delete just removed (or resurrect it), which is always a
+ * Thrown when an aggregate removed within the current unit of work is added,
+ * updated, or tracked again in the same operation. Removal is final within an
+ * operation; writing afterwards would resurrect the row, which is always a
  * use-case bug.
  *
  * Carries the `WIRING` category (same reasoning as
@@ -770,21 +847,23 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 	constructor(public readonly aggregateId: string) {
 		super(
 			"AGGREGATE_DELETED",
-			`Aggregate ${aggregateId} was deleted in this unit of work and ` +
-				"cannot be saved or registered again. Deletion is final within an " +
-				"operation; if the aggregate must live, do not delete it.",
+			`Aggregate ${aggregateId} was removed in this unit of work and ` +
+				"cannot be added, updated, tracked, or removed through another " +
+				"instance again. Removal is final within an operation. A repeated " +
+				"remove of the SAME instance is an accepted no-op; if the " +
+				"aggregate must remain, do not remove it.",
 		);
 	}
 }
 
 /**
- * Thrown by `IRepository.getById()` when an aggregate with the
+ * Thrown by `AggregatePersistence.getById()` when an aggregate with the
  * given id does not exist. `InfrastructureError` because the storage
  * boundary, not a business rule, decided the row is absent. Use the
  * nullable variant `findById()` if "not found" is a valid outcome.
  *
- * Accepts an optional `cause` so a `Repository.save()` implementation
- * can wrap a lower-level "row not found" / driver-level error without
+ * Accepts an optional `cause` so a repository adapter can wrap a lower-level
+ * "row not found" or driver-level error without
  * losing context. Cause-chain helpers (`getRootCause`,
  * `findInCauseChain`) from `@shirudo/base-error` traverse the chain.
  *
@@ -813,7 +892,7 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
 }
 
 /**
- * Thrown by a repository's `save()` INSERT path when a row with the
+ * Thrown by a repository's `add()` flush when a row with the
  * aggregate's id already exists (unique-constraint violation): two
  * concurrent creators raced on the same business-derived id, or the
  * id generator collided. Same delegation model as
@@ -854,21 +933,19 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
 }
 
 /**
- * Thrown on snapshot restore (`restoreFromSnapshot`,
- * `restoreFromSnapshotWithEvents`) when the stored snapshot carries a
- * different schema version than the aggregate's declared
- * `snapshotSchemaVersion` and no `migrateSnapshotState` override handles
- * the upgrade. Without the check, a snapshot written against an older
- * `TSnapshotState` shape would surface as an undefined-field crash on
+ * Thrown by `reconstituteAggregateFromSnapshot` when the stored snapshot
+ * carries a different schema version than its adapter-owned `SnapshotModel`
+ * and the model declares no `migrate` function. Without the check, a snapshot
+ * written against an older DTO shape would surface as an undefined-field crash on
  * the first method call after a much later restore.
  *
  * `InfrastructureError` because the storage boundary served outdated
  * data; the schema evolving past stored snapshots is an expected
  * lifecycle event, not a programming bug. NOT retryable: the recovery
- * is a code path, not a repeat. Either override `migrateSnapshotState`
- * on the aggregate (upgrade old shapes in place), or catch this error
- * in the repository, discard the snapshot, and refold from the full
- * event stream / reload from the source of truth.
+ * is a code path, not a repeat. Add `migrate` to the snapshot model (upgrade
+ * old DTOs in place), or catch this error in the repository, discard the
+ * snapshot, and refold from the full event stream / reload from the source of
+ * truth.
  */
 export interface SnapshotSchemaMismatchErrorOptions {
 	readonly aggregateType: string;
@@ -888,9 +965,9 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 			code: "SNAPSHOT_SCHEMA_MISMATCH",
 			message:
 				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
-				`the aggregate expects snapshot schema ${options.expectedSchemaVersion}, ` +
+				`the snapshot model expects schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
-				`migrateSnapshotState to upgrade old snapshots, or discard the snapshot ` +
+				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
 		this.aggregateType = options.aggregateType;
@@ -901,14 +978,14 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 }
 
 /**
- * Thrown by `IRepository.save()` when the aggregate's expected version
- * does not match the version currently persisted: i.e. another writer
+ * Surfaced by a Unit-of-Work flush when the aggregate's expected version does
+ * not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-
  * concurrency signal; the App-Service typically reloads, re-applies
  * the use case, and retries, or surfaces HTTP 409 to the caller.
  *
  * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
- * `withCommit` invocation): reload, re-apply, save. Do NOT catch this
+ * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
  * inside the same `run()` callback and continue: the failed aggregate
  * is already enrolled (its events would be committed for a write that
  * never happened) and the identity map still serves the same stale
@@ -1121,13 +1198,22 @@ export class IdempotencyCompletionWithoutClaimError extends KitWiringError<"IDEM
 export type KitErrorCode =
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
+	| "AGGREGATE_TRACKING"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
 	| "DOMAIN_TRANSITION_GUARD_REJECTED"
 	| "DUPLICATE_AGGREGATE"
+	| "DUPLICATE_EVENT_ID"
 	| "DUPLICATE_HANDLER_REGISTRATION"
 	| "ERROR_MAPPER_FAILED"
+	| "EVENT_ADDRESS_INVALID"
 	| "EVENT_HARVEST_FAILED"
+	| "EVENT_ID_INVALID"
+	| "EVENT_ID_REQUIRED"
+	| "EVENT_OCCURRED_AT_INVALID"
+	| "EVENT_OCCURRED_AT_REQUIRED"
+	| "EVENT_SCHEMA_VERSION_INVALID"
+	| "EVENT_TYPE_INVALID"
 	| "FOREIGN_EVENT"
 	| "HOSTILE_STATE_KEY"
 	| "IDEMPOTENCY_CLAIM_LOST"
@@ -1143,8 +1229,11 @@ export type KitErrorCode =
 	| "INVALID_DOMAIN_TRANSITION"
 	| "INVALID_DOMAIN_TRANSITION_GUARD_RESULT"
 	| "INVALID_DOMAIN_TRANSITION_RESULT"
+	| "INVALID_COMMAND_MESSAGE"
 	| "INVALID_INTEGRATION_MESSAGE"
 	| "INVALID_MONEY"
+	| "INVALID_REPOSITORY_ADAPTER"
+	| "INVALID_REPOSITORY_DEFINITION"
 	| "MISADDRESSED_EVENT"
 	| "MISSING_HANDLER"
 	| "MONEY_CURRENCY_MISMATCH"
@@ -1157,9 +1246,12 @@ export type KitErrorCode =
 	| "PROJECTION_ORDER_VIOLATION"
 	| "PROJECTION_RECEIPT_VIOLATION"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
+	| "REENTRANT_EVENT_RECORDING"
+	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"
 	| "SNAPSHOT_SCHEMA_MISMATCH"
+	| "SNAPSHOT_TIME_INVALID"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
 	| "UNKNOWN_CURRENCY"

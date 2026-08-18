@@ -1,7 +1,7 @@
 import type { Result } from "@shirudo/result";
 import type { DomainError } from "../core/errors";
 import type { Id } from "../core/id";
-import type { AnyDomainEvent } from "./domain-event";
+import type { AnyDomainEvent, PendingDomainEvent } from "./domain-event";
 
 // Re-export domain event types for convenience
 export * from "./domain-event";
@@ -34,11 +34,11 @@ export interface AggregateSnapshot<TState> {
 	readonly snapshotAt: Date;
 
 	/**
-	 * Schema version of the SHAPE of `state` (the aggregate's declared
-	 * `snapshotSchemaVersion`), stamped by `createSnapshot`. Distinct from
+	 * Schema version of the stored `state` shape, declared by its adapter-owned
+	 * `SnapshotModel` and stamped by `captureAggregateSnapshot`. Distinct from
 	 * {@link version}, which counts mutations: this field says "which
 	 * shape does the stored state have", so a restore can detect a
-	 * snapshot written against an older `TSnapshotState` and migrate or
+	 * snapshot written against an older DTO shape and migrate or
 	 * discard it instead of crashing later. Optional: absent on snapshots
 	 * written by older kit versions, which restore treats as schema `1`.
 	 */
@@ -48,24 +48,26 @@ export interface AggregateSnapshot<TState> {
 /**
  * Public contract every Aggregate Root satisfies. Implemented by
  * `BaseAggregate` and inherited by both `AggregateRoot` and
- * `EventSourcedAggregate`. Repository implementations type their
- * `save(aggregate)` parameter against this interface rather than the
- * concrete classes, so the repo layer does not take a compile-time
+ * `EventSourcedAggregate`. Repository ports use this interface as their
+ * aggregate type rather than depending on concrete base classes, so persistence
+ * orchestration does not take a compile-time
  * dependency on the aggregate hierarchy.
  *
  * Full per-member documentation lives on the concrete `BaseAggregate`
  * class; the interface is intentionally terse to avoid drift. Persistence
  * facts are readable, but acknowledgement and pending-event disposal are not
- * part of this surface. `withCommit` / `UnitOfWork` hold that authority.
+ * part of this surface. `withCommit` and `UnitOfWork` hold that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
  */
-export interface IAggregateRoot<TId extends Id<string>, TEvent = never> {
+export interface IAggregateRoot<
+	TId extends Id<string>,
+	TEvent extends AnyDomainEvent = never,
+> {
 	readonly id: TId;
 	readonly version: Version;
-	readonly persistedVersion: Version | undefined;
-	readonly pendingEvents: ReadonlyArray<TEvent>;
+	readonly pendingEvents: ReadonlyArray<PendingDomainEvent<TEvent>>;
 }
 
 /**

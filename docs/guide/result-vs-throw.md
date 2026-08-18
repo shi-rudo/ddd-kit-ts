@@ -41,7 +41,10 @@ to do something illegal, the domain should stop the operation loudly with a
 typed error.
 
 ```ts
-import { AggregateRoot, DomainError } from "@shirudo/ddd-kit";
+import {
+  AggregateRoot,
+  DomainError,
+} from "@shirudo/ddd-kit";
 
 class OrderAlreadyConfirmedError
   extends DomainError<"ORDER_ALREADY_CONFIRMED"> {
@@ -63,7 +66,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
     this.commit(
       { ...this.state, status: "confirmed" },
-      this.recordEvent("OrderConfirmed", { orderId: this.id }),
+      this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
   }
 }
@@ -131,19 +134,14 @@ const confirmOrder: CommandHandler<
   ConfirmOrderError
 > = async (command) => {
   try {
-    const orderId = await withCommit(
-      { scope, outbox, bus },
-      async (tx, enrollment) => {
-        const orders = makeOrderRepository(tx);
-        const order = await orders.getById(command.orderId);
+    const orderId = await uow.run(
+      async ({ repositories }) => {
+        const order = await repositories.orders.getById(command.orderId);
 
         order.confirm();
-        await orders.save(order);
-
-        return {
-          result: order.id,
-          commits: [enrollment.enrollSaved(order)],
-        };
+        recordPendingEvents(order, domainEvents);
+        repositories.orders.update(order);
+        return order.id;
       },
     );
 
@@ -164,29 +162,24 @@ const confirmOrder: CommandHandler<
 };
 ```
 
-Notice the shape: `withCommit` returns `order.id` directly. The command
+Notice the shape: `UnitOfWork.run` returns `order.id` directly. The command
 handler wraps that value in `ok(...)`.
 
-You can also put a `Result` inside `withCommit`'s `result` field:
+You can also return a `Result` directly from the unit-of-work callback:
 
 ```ts
-return withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(command.orderId);
+return uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(command.orderId);
 
   order.confirm();
-  await orders.save(order);
-
-  return {
-    result: ok(order.id),
-    commits: [enrollment.enrollSaved(order)],
-  };
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
+  return ok(order.id);
 });
 ```
 
-That is useful when you want the transaction helper to return the exact
-handler result. It does not change `withCommit`; it still returns the `result`
-value you supplied.
+That is useful when you want the transaction boundary to return the exact
+handler result. The unit of work does not add another `Result` layer.
 
 ## Buses Map Only Expected Throws
 
@@ -299,27 +292,24 @@ Use it when the caller already wants try/catch semantics.
 
 ## Transaction Helpers Return Directly
 
-`withCommit` is not a command bus. It is a transaction orchestrator.
+`UnitOfWork` is not a command bus. It is repository and transaction
+orchestration.
 
 ```ts
-const orderId = await withCommit({ scope, outbox }, async (tx, enrollment) => {
-  const orders = makeOrderRepository(tx);
-  const order = await orders.getById(id);
+const orderId = await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(id);
 
   order.confirm();
-  await orders.save(order);
-
-  return {
-    result: order.id,
-    commits: [enrollment.enrollSaved(order)],
-  };
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
+  return order.id;
 });
 ```
 
 The resolved value is `OrderId`, not `Result<OrderId, E>`.
 
 If your command handler returns `Result`, wrap it there. If your HTTP handler
-calls `withCommit` directly, catch and map errors there.
+calls `UnitOfWork.run` directly, catch and map errors there.
 
 `UnitOfWork.run` follows the same direct-return rule:
 
@@ -327,7 +317,8 @@ calls `withCommit` directly, catch and map errors there.
 const orderId = await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(id);
   order.confirm();
-  await repositories.orders.save(order);
+  recordPendingEvents(order, domainEvents);
+  repositories.orders.update(order);
   return order.id;
 });
 ```

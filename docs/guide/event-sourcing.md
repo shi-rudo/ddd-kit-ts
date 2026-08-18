@@ -6,7 +6,8 @@ where events are the source of truth.
 The aggregate does not store its current state as the primary record. It derives
 state by applying events in order. New business methods record new facts by
 calling `apply(event)`. Reconstitution reads old facts and folds them back into
-state with `loadFromHistory(...)` or `restoreFromSnapshotWithEvents(...)`.
+state with `loadFromHistory(...)`. A snapshot model can create a fresh
+aggregate from a stored state DTO before the stream tail is replayed.
 
 That split is the whole model:
 
@@ -23,6 +24,7 @@ import {
   EventSourcedAggregate,
   type DomainEvent,
   type Id,
+  type UncommittedDomainEventOf,
 } from "@shirudo/ddd-kit";
 
 type OrderId = Id<"OrderId">;
@@ -82,9 +84,14 @@ class Order extends EventSourcedAggregate<
     super(id, state);
   }
 
-  static create(id: OrderId, customerId: string): Order {
+  static create(
+    id: OrderId,
+    customerId: string,
+  ): Order {
     const order = Order.reconstitute(id);
-    order.apply(order.recordEvent("OrderCreated", { customerId }));
+    order.apply(
+      order.createEvent("OrderCreated", { customerId }),
+    );
     return order;
   }
 
@@ -94,7 +101,7 @@ class Order extends EventSourcedAggregate<
 
   confirm(): void {
     this.apply(
-      this.recordEvent("OrderConfirmed", {
+      this.createEvent("OrderConfirmed", {
         orderId: this.id,
       }),
     );
@@ -109,7 +116,9 @@ class Order extends EventSourcedAggregate<
     });
   }
 
-  protected override validateEvent(event: OrderEvent): void {
+  protected override validateEvent(
+    event: UncommittedDomainEventOf<OrderEvent>,
+  ): void {
     if (event.type !== "OrderConfirmed") return;
 
     if (this.state.status === "empty") {
@@ -124,7 +133,7 @@ class Order extends EventSourcedAggregate<
   protected readonly handlers = {
     OrderCreated: (
       _state: OrderState,
-      event: OrderCreated,
+      event: UncommittedDomainEventOf<OrderCreated>,
     ): OrderState => ({
       customerId: event.payload.customerId,
       status: "pending",
@@ -142,12 +151,10 @@ is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
 
-1. The address discipline runs: missing `aggregateId` / `aggregateType`
-   fields are stamped from the aggregate (the `recordEvent` guarantee, by
-   construction), and a present-but-foreign address throws the wiring error
-   `MisaddressedEventError` before anything is recorded. `ForeignEventError`
-   is the replay-side counterpart for persisted rows.
-2. `validateEvent(event)` checks whether this event is allowed in the current
+1. The address check runs. The aggregate supplies a missing `aggregateId` or
+   `aggregateType`. A foreign address throws `MisaddressedEventError` before
+   recording. `ForeignEventError` is the replay error for persisted rows.
+2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
 3. The handler for `event.type` is found.
 4. The handler computes the next state.
@@ -155,71 +162,75 @@ is the only code that changes state for that fact.
    bumps the version.
 
 If validation, handler lookup, or state computation throws, the aggregate does
-not record the event. That is the event-sourcing safety rule in code form: the
-aggregate should not publish a fact that did not successfully change state.
+not record the event. This behavior is the event-sourcing safety rule. The
+aggregate must not publish a fact that did not change state.
 
 There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
-## Saving new events
+Handlers must fold state from `type` and `payload` only. A live `apply(...)`
+dispatches the event before the shell records it, so `eventId` and
+`occurredAt` do not exist yet. Replay dispatches recorded events through the
+same handlers, so those fields are present there at runtime. The handler
+parameter type declares the uncommitted shape to keep them out of reach, but
+TypeScript cannot protect an `as any` cast or plain JavaScript. A handler
+that reads a stamp field folds `undefined` into live state and a value into
+every replayed instance, and the two silently diverge. When a time changes a
+business decision, pass it in the payload as a domain input.
 
-After `apply(...)`, new events sit in `pendingEvents`. The repository appends
-those events to the stream. It cannot clear or acknowledge them through the
-aggregate API; `withCommit` owns that internal lifecycle after the transaction
-commits.
+## Persisting new events
+
+After `apply(...)`, new events sit in `pendingEvents`. The use case makes all
+of its decisions and then registers the final lifecycle intent:
 
 ```ts
-import type {
-  AggregateAddress,
-  EventStore,
-  UnitOfWorkSession,
-} from "@shirudo/ddd-kit";
-
-class OrderRepository {
-  constructor(
-    private readonly eventStore: EventStore<OrderEvent>,
-    private readonly session: UnitOfWorkSession<OrderEvent>,
-  ) {}
-
-  private stream(id: OrderId): AggregateAddress<OrderId> {
-    return { aggregateType: "Order", aggregateId: id };
-  }
-
-  async save(order: Order): Promise<void> {
-    if (order.pendingEvents.length === 0) return;
-
-    this.session.enrollSaved(order);
-
-    await this.eventStore.append(this.stream(order.id), order.pendingEvents, {
-      expectedVersion: order.persistedVersion ?? 0,
-    });
-  }
-}
+await uow.run(async ({ repositories }) => {
+  const order = await repositories.orders.getById(orderId);
+  order.confirm();
+  repositories.orders.update(order);
+});
 ```
 
-Save once per aggregate per unit of work, after all domain mutations. Until the
-transaction commits, `pendingEvents` remain pending and `persistedVersion`
-remains the old stream version. A second save of the same instance in the same
-unit of work tries to append the same pending events again with a stale
-`expectedVersion`; it should conflict even without another writer.
+The event-store adapter receives an immutable write receipt. Append its exact
+event batch and use the version captured by the unit of work during load:
 
-The normal lifecycle is:
+```ts
+interface ForStoringOrders
+  extends AggregatePersistence<Order, OrderId> {}
 
-1. Load or create the aggregate.
-2. Run domain methods.
-3. Save the aggregate once.
-4. Return the token from `enrollment.enrollSaved(aggregate)` in
-   `withCommit`'s `commits` array. `UnitOfWork` does this from repository
-   enrollment automatically.
-5. `withCommit` writes outbox rows, commits the transaction, then acknowledges
-   the aggregate through its kit-internal capability.
+const eventSourcedOrders = defineRepository<ForStoringOrders>()({
+  aggregate: Order,
+  persistence: orderStreamPersistence,
+  create: (tx: EventStoreTx, tracking: RepositoryTracking<Order>) =>
+    new EventSourcedOrderReadAdapter(tx, tracking),
+  flush: async (tx: EventStoreTx, write) => {
+    await tx.eventStore.append(
+      { aggregateType: "Order", aggregateId: write.aggregateId },
+      write.events,
+      { expectedVersion: write.expectedVersion ?? 0 },
+    );
+  },
+  mapError: mapOrderPersistenceError,
+});
+```
 
-That last step clears `pendingEvents` and aligns `persistedVersion`.
+Use `add` for a new stream and `update` for an aggregate loaded by this unit of
+work. Do not derive the distinction from `version`. `write.expectedVersion` is
+absent for a new stream and contains the load-time stream version for an
+update.
+
+The append and outbox write share one transaction. Only after that transaction
+commits does `UnitOfWork` acknowledge exactly the registered batch on the
+aggregate. If append, outbox, or commit fails, the transaction rolls back and
+the events remain pending on that in-memory instance. A retry starts a fresh
+unit of work and replays the command from fresh history.
 
 ### Stream events and outbox events
 
-The event store receives the original pending events. The outbox receives
-envelopes that reference those same immutable events.
+The event store receives the recorded pending events. The outbox receives
+envelopes that reference those same immutable objects. Calling
+`recordPendingEvents` again during a retry does not generate another identity
+or timestamp.
 
 The outbox source finalizes those envelopes with the full cursor under `position`:
 `aggregateVersion`, `commitSequence`, `commitSize`, and
@@ -288,29 +299,39 @@ event so continuation makes progress.
 A missing stream is
 `{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
 `exists: true` even when its requested window is empty. An existing stream has
-at least one event, so `exists: true` implies `lastVersion >= 1`; metadata or
-tombstones without events must be reported as absent. `lastVersion` always
-reports the actual head (the event count); `fromVersion` is the exclusive lower
-bound and `toVersion` is the inclusive upper bound, both expressed as 1-based
-stream positions. Together they select `(fromVersion, toVersion]` without
-changing `lastVersion`. `toVersion: 0` returns an empty window, a value beyond
-the head clamps to the head, and `fromVersion >= toVersion` describes an empty
-interval rather than an error. This is how a snapshot-backed repository
-distinguishes "aggregate is gone" from "snapshot is already at the head", and
-how a point-in-time reader verifies the requested historical position against
-the actual head. `limit` must be a positive safe integer; present stream bounds
-must be non-negative safe integers. Invalid options reject with `RangeError`.
-Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
-view of the page; do not assemble the result from racing reads.
+at least one event. Thus, `exists: true` implies `lastVersion >= 1`. Report
+metadata or tombstones without events as absent.
 
-Separate pages are separate store reads. For a stable replay, record the first
-page's `lastVersion`, pass it as `toVersion` on every continuation, and advance
-`fromVersion` by the number of events actually returned. New appends can move
+`lastVersion` always reports the actual head (the event count). `fromVersion`
+is the exclusive lower bound. `toVersion` is the inclusive upper bound. Both
+values use 1-based stream positions. Together they select
+`(fromVersion, toVersion]` without changing `lastVersion`.
+
+`toVersion: 0` returns an empty window. A value beyond the head clamps to the
+head. `fromVersion >= toVersion` describes an empty interval, not an error.
+These rules distinguish an absent aggregate from a snapshot at the head. They
+also make sure that the requested historical position does not exceed the
+actual head.
+
+`limit` must be a positive safe integer. Present stream bounds must be
+non-negative safe integers.
+
+Invalid options reject with `RangeError`.
+Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
+view of the page. Do not assemble the result from racing reads.
+
+Separate pages are separate store reads. For a stable replay:
+
+1. Record the first page's `lastVersion`.
+2. Pass it as `toVersion` on every continuation.
+3. Advance `fromVersion` by the number of returned events.
+
+New appends can move
 the reported head while the load runs, but they cannot enter that pinned
-prefix. The next repository load sees them; a save from the older prefix still
+prefix. The next repository load sees them. An update from the older prefix still
 meets the normal OCC guard.
 
-A database adapter should also reject duplicate or non-contiguous persisted
+A database adapter must also reject duplicate or non-contiguous persisted
 positions rather than silently folding a truncated stream.
 
 `InMemoryEventStore` is the reference implementation for finite-lifetime tests
@@ -411,14 +432,17 @@ stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
 the current event shape. The same principle covers snapshots: restoring from
-a snapshot does not re-check the historical state against today's
+a snapshot should not re-check the historical state against today's
 `validateState` rules, so a stream loads identically whether it is replayed
 from zero or restored from a snapshot plus tail. Snapshots do get their own
-STRUCTURAL gate: override `validateRestoredState(state)` to reject blobs no
-version of the model could have produced (missing fields, wrong types); a
-`DomainError` from it comes back as `Err`, and the load recipe answers by
-discarding the snapshot and refolding from the stream. Rules and structure
-are different questions, and only the first one is frozen in history.
+STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
+of the model could have produced (missing fields, wrong types) by throwing
+`SnapshotCorruptedError` from `migrate` or `reconstitute`. When a
+reconstitution factory does run current rules and throws a `DomainError`,
+`reconstituteAggregateFromSnapshot` surfaces it as `SnapshotCorruptedError`
+too, and the load recipe answers both the same way: discard the snapshot and
+refold from the stream. Rules and structure are different questions, and only
+the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
 `MissingHandlerError` also throws, because a forgotten event handler is a code
@@ -436,17 +460,16 @@ Version advances additively:
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
 `loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
-moves. If it has an in-memory version that was never persisted, it also throws.
-Replaying onto that object would mark unpersisted history as persisted and
-corrupt the next repository save.
+moves. The Unit of Work owns the factory-versus-load lifecycle, so the
+aggregate carries no persistence flag and replay does not check one.
 
 Use a fresh `Order.reconstitute(id)` target for normal loads.
 
 ### Point-in-time reconstruction
 
 An audit or debugging query can fold only the history that existed at stream
-position `N`. Keep that query outside the aggregate's normal write repository:
-it creates a historical view, not a live aggregate that may be saved.
+position `N`. Keep that query outside the normal write repository. It creates a
+historical view, not a live aggregate for updates.
 
 ```ts
 async function findOrderAsOfVersion(
@@ -509,8 +532,8 @@ When a stream gets long, loading from event zero on every request can dominate
 latency. The snapshot path is:
 
 1. Load the latest snapshot.
-2. Read stream events after `snapshot.version`.
-3. Restore the snapshot and replay the tail.
+2. Reconstitute a fresh aggregate through its adapter-owned `SnapshotModel`.
+3. Read and replay stream events after `snapshot.version`.
 4. If the snapshot is missing or invalid, fall back to full replay.
 
 ```ts
@@ -539,12 +562,13 @@ async function findById(id: OrderId): Promise<Order | null> {
     return discardSnapshotAndRefold();
   }
 
-  const order = Order.reconstitute(id);
+  let order: Order;
   const targetVersion = tail.lastVersion;
   let fromVersion = snapshot.version;
 
   try {
-    const result = order.restoreFromSnapshotWithEvents(snapshot, tail.events);
+    order = reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot);
+    const result = order.loadFromHistory(tail.events);
 
     if (result.isErr()) {
       return discardSnapshotAndRefold();
@@ -570,7 +594,10 @@ async function findById(id: OrderId): Promise<Order | null> {
       fromVersion += tail.events.length;
     }
   } catch (error) {
-    if (error instanceof SnapshotSchemaMismatchError) {
+    if (
+      error instanceof SnapshotSchemaMismatchError ||
+      error instanceof SnapshotCorruptedError
+    ) {
       return discardSnapshotAndRefold();
     }
 
@@ -585,18 +612,23 @@ The page checks are deliberate. A missing stream means the snapshot cannot
 establish aggregate existence. A head behind the snapshot or behind the pinned
 target means the authoritative stream was truncated or replaced. A zero-length
 page before the cursor reaches the target cannot make progress and violates the
-EventStore contract. All three discard the derived snapshot and refold from the
-stream; none may return the partially restored aggregate. Reaching the target
+EventStore contract.
+
+All three discard the derived snapshot and refold from the stream. None can
+return the partially restored aggregate. Reaching the target
 cursor proves every page bridged the snapshot to the pinned head without
 materializing the whole tail.
 
-`restoreFromSnapshotWithEvents(...)` has the same `Result<void, DomainError>`
-boundary as `loadFromHistory(...)`. A `DomainError` from snapshot conversion,
-snapshot validation, or tail replay becomes `Err`. Non-domain failures throw.
+`loadFromHistory(...)` keeps its `Result<void, DomainError>` boundary for
+invalid historical facts. Snapshot DTO validation, migration, and
+reconstitution belong to the adapter model and throw when stored data cannot
+be interpreted. The repository can discard that derived snapshot and replay
+from zero. Other infrastructure failures must still escape.
 
-Snapshot schema mismatches throw `SnapshotSchemaMismatchError` unless you
-override `migrateSnapshotState(...)`. The usual fallback is to delete the stale
-snapshot and replay from zero. The next snapshot save writes the new shape.
+A schema mismatch throws `SnapshotSchemaMismatchError` unless the model
+provides `migrate(stored, storedSchemaVersion)`. A missing schema version means
+schema `1`, which lets v3 adapters migrate snapshots written by earlier
+versions.
 
 Delete snapshots before deleting streams during erasure. The reverse order has a
 bad crash window: a stale snapshot can survive after the stream is gone and
@@ -629,18 +661,20 @@ transaction context.
 
 `InMemorySnapshotStore` is the reference implementation. Without retention
 options it is unbounded and intended only for finite-lifetime tests and demos.
-Snapshots are rebuildable derived data, so this is the one in-memory store that
-may forget state safely: `maxEntries` enables least-recently-used eviction, and
-`ttlMs` expires entries relative to an optional instance-bound `clock`. Loading
-a snapshot updates LRU recency but does not extend its TTL; saving it does.
-Production adapters should pass `createSnapshotStoreContractTests` from
+Snapshots are rebuildable derived data. Thus, this in-memory store can forget
+state safely.
+
+`maxEntries` enables least-recently-used eviction. `ttlMs` expires
+entries relative to an optional instance-bound `clock`. Loading a snapshot
+updates LRU recency but does not extend its TTL. Saving a snapshot extends it.
+Production adapters must pass `createSnapshotStoreContractTests` from
 `@shirudo/ddd-kit/testing`.
 
 ### Plain snapshot state
 
-Snapshots must round-trip through storage as plain data. The default
-`createSnapshot()` fails fast if aggregate state contains values that would not
-restore faithfully:
+Snapshots must round-trip through storage as plain data.
+`captureAggregateSnapshot(model, aggregate, snapshotAt)` fails fast if the
+model's DTO contains values that cannot restore faithfully:
 
 - class instances
 - functions
@@ -660,39 +694,32 @@ type OrderSnapshotState = {
   items: Array<{ id: ItemId; productId: string; quantity: number }>;
 };
 
-abstract class SnapshottingOrder extends EventSourcedAggregate<
-  OrderWithItemsState,
-  OrderEvent,
-  OrderId,
-  OrderSnapshotState
-> {
-  protected override toSnapshotState(
-    state: OrderState,
-  ): OrderSnapshotState {
-    return {
-      items: state.items.map((item) => ({
-        id: item.id,
-        productId: item.productId,
-        quantity: item.quantity,
-      })),
-    };
-  }
-
-  protected override fromSnapshotState(
-    stored: OrderSnapshotState,
-  ): OrderState {
-    return {
-      items: stored.items.map(
-        (item) =>
-          new OrderItem(
+const orderSnapshots = defineSnapshotModel({
+  aggregateType: "Order",
+  schemaVersion: 2,
+  capture: (order: Order): OrderSnapshotState => ({
+    items: order.items.map((item) => ({
+      id: item.id,
+      productId: item.productId,
+      quantity: item.quantity,
+    })),
+  }),
+  reconstitute: (id, stored, version) =>
+    Order.reconstituteFromSnapshot(
+      id,
+      {
+        items: stored.items.map(
+          (item) => new OrderItem(
             item.id,
             item.productId,
             item.quantity,
           ),
-      ),
-    };
-  }
-}
+        ),
+      },
+      version,
+    ),
+  migrate: migrateOrderSnapshot,
+});
 ```
 
 The mapping must return fresh objects. Do not return references into the live
@@ -708,7 +735,7 @@ shapes:
 
 | Policy | When it fits | Trade-off |
 | --- | --- | --- |
-| Every N events | aggregates have similar event volume | simple, but hot streams may snapshot too often |
+| Every N events | aggregates have similar event volume | simple, but hot streams can snapshot too often |
 | Max snapshot age | traffic varies widely | quiet streams eventually get snapshots, but every save checks time |
 | Background sweep | write-path latency matters | operationally heavier, but snapshot cost leaves the hot path |
 
@@ -717,7 +744,10 @@ The most common starting point is every N events after commit:
 ```ts
 const SNAPSHOT_EVERY = 100;
 
-async function snapshotAfterCommit(order: Order): Promise<void> {
+async function snapshotAfterCommit(
+  order: Order,
+  snapshotAt: Date,
+): Promise<void> {
   const lastSnapshotVersion =
     (await snapshotVersions.lastVersion("Order", order.id)) ?? 0;
 
@@ -725,7 +755,7 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 
   await snapshots.save(
     { aggregateType: "Order", aggregateId: order.id },
-    order.createSnapshot(),
+    captureAggregateSnapshot(orderSnapshots, order, snapshotAt),
   );
 }
 ```
@@ -733,7 +763,7 @@ async function snapshotAfterCommit(order: Order): Promise<void> {
 At scale, move the decision to a background worker:
 
 ```ts
-async function snapshotSweep(): Promise<void> {
+async function snapshotSweep(snapshotClock: () => Date): Promise<void> {
   const candidates = await snapshotVersions.findDue({
     aggregateType: "Order",
     minEventsSinceSnapshot: 100,
@@ -746,7 +776,7 @@ async function snapshotSweep(): Promise<void> {
 
     await snapshots.save(
       { aggregateType: "Order", aggregateId: order.id },
-      order.createSnapshot(),
+      captureAggregateSnapshot(orderSnapshots, order, snapshotClock()),
     );
   }
 }
@@ -756,10 +786,10 @@ There is no `SnapshotPolicy` port, no default frequency, and no built-in
 sweeper. Different stores have different native snapshot facilities, and the
 right policy depends on stream length, latency budget, and operational tooling.
 
-When event schemas change, snapshots may need attention too. A snapshot is state
-derived from historical events and old handler code. Either version snapshot
-state with `snapshotSchemaVersion` and discard mismatches, or rebuild affected
-snapshots during the event-schema migration.
+When event schemas change, snapshots can need attention too. A snapshot is
+state derived from historical events and old handler code. Increment the
+model's `schemaVersion` and provide a migration, discard incompatible
+snapshots, or rebuild them during the event-schema migration.
 
 ## Versioning
 
@@ -771,12 +801,16 @@ That gives the repository its optimistic-concurrency baseline:
 ```ts
 await eventStore.append(
   { aggregateType: "Order", aggregateId: order.id },
-  order.pendingEvents,
+  write.events,
   {
-    expectedVersion: order.persistedVersion ?? 0,
+    expectedVersion: write.expectedVersion ?? 0,
   },
 );
 ```
+
+`write.expectedVersion` comes from the unit-of-work load record. `write.version`
+is the aggregate version after the registered decision. Neither baseline is
+stored as persistence metadata on the aggregate.
 
 Keep this separate from store-specific positions. EventStoreDB revisions,
 database sequence numbers, Kafka offsets, or projection checkpoints are
