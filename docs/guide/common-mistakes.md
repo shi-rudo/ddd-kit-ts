@@ -365,7 +365,7 @@ value as `toVersion` on every later page. Advance `fromVersion` by the number of
 events actually returned, because adapters may return fewer than requested.
 Replay each page into the same fresh aggregate, and add it to the identity map
 only after the cursor reaches the pinned head. A zero-length page before that
-point is a violated adapter contract, not end-of-stream; throw
+point is a violated adapter contract, not end-of-stream. Throw
 `NonProgressingEventStreamPageError` so the stream address and both cursors
 survive into logs and telemetry.
 

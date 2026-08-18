@@ -4,7 +4,7 @@ layout: home
 hero:
   name: ddd-kit
   text: Tactical DDD for TypeScript
-  tagline: A composable toolkit for Domain-Driven Design, covering aggregates, entities, value objects, domain events, repositories, and CQRS. Edge-runtime first, no framework lock-in.
+  tagline: A composable toolkit for Domain-Driven Design. Aggregates, entities, value objects, domain events, repositories, and CQRS. Edge-runtime first, no framework lock-in.
   actions:
     - theme: brand
       text: Get Started

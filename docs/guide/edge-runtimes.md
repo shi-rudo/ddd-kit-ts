@@ -126,8 +126,8 @@ whole body and returns a value TypeScript cannot validate. The example below
 authenticates first, reads at most 64 KiB from the stream, parses into `unknown`,
 allow-lists the two body fields, and only then constructs branded ids. The
 authenticated actor comes from the verified principal, not from the JSON body.
-Your authentication and schema libraries may differ; the order of the boundary
-steps should not.
+Your authentication and schema libraries can differ. The order of the boundary
+steps must not.
 
 The `requestedBy` value below records who initiated the command. It does not
 authorize the operation by itself. The use case behind the Durable Object must

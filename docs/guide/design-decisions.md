@@ -74,7 +74,7 @@ For criteria that belong to the domain language rather than to a storage languag
 
 What the kit still does not ship is translation machinery. A `Specification<T>` powerful enough to translate itself across Drizzle, Prisma, Mongo, and SQL builders would have to become an expression-tree system, and an expression-tree system is a query framework. So predicates stay opaque, evaluation stays in memory, and a storage adapter translates the named leaves explicitly, recursing through the composite structure. The repository guide's Specifications section walks through this, including the drift risk when one rule lives as both a predicate and a query, and the shared-fixture test that contains it.
 
-The same reasoning explains why there is no visitor interface in the kit: a visitor's methods enumerate the specifications of one particular domain, and only that domain's owner can write them. What the kit guarantees instead is that such a layer stays buildable. The combinators can be overridden and the composite structure can be set by subclasses; the repository guide shows the full double-dispatch construction for teams that want the compiler to enforce translation completeness across several targets.
+The same reasoning explains why there is no visitor interface in the kit: a visitor's methods enumerate the specifications of one particular domain, and only that domain's owner can write them. What the kit guarantees instead is that such a layer stays buildable. Subclasses can override the combinators and set the composite structure. The repository guide shows the full double-dispatch construction for teams that want the compiler to enforce translation completeness across several targets.
 
 ## Event sourcing structurally enforces "record-after-mutation"
 

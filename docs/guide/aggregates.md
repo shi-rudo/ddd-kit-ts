@@ -4,7 +4,7 @@ An aggregate root is the object your application loads, changes, and saves as on
 
 Application code should talk to the root. It should not hold references to child entities or mutate value objects behind the root's back. That keeps the aggregate's business rules in one place: the methods on the root.
 
-In DDD terms, the aggregate boundary is also a consistency boundary. Everything inside the boundary should be valid together at the end of a transaction. Rules that need several objects to be checked atomically belong inside the same aggregate; rules that can settle later usually belong in a process manager or saga.
+In DDD terms, the aggregate boundary is also a consistency boundary. Everything inside the boundary must be valid together at the end of a transaction. Rules that need several objects checked atomically belong inside the same aggregate. Rules that can settle later usually belong in a process manager or saga.
 
 The kit gives you two base classes:
 

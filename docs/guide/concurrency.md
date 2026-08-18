@@ -83,7 +83,7 @@ return tracking.trackLoaded(order);
 `write.version`, the adapter-owned change set, and the exact event batch
 registered by the use case.
 
-Creation is not inferred from a version number:
+The kit does not infer creation from a version number:
 
 ```ts
 repositories.orders.add(newOrder);       // no expected version

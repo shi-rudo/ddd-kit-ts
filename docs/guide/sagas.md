@@ -19,7 +19,7 @@ The runnable version of everything below sits in
 [`examples/saga`](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga):
 a checkout process across three aggregates, with compensation, driven
 entirely through public kit APIs. Its README also untangles the saga versus
-process manager terminology; here we say saga throughout, meaning the
+process manager terminology. This page says saga throughout and means the
 centralized, stateful orchestrator.
 
 ## Is a saga the right tool here?
