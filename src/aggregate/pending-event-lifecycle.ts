@@ -6,7 +6,14 @@
  * acknowledge or discard them after the surrounding transaction commits.
  */
 export interface PendingEventLifecycleCapability {
-	acknowledge(events: ReadonlyArray<unknown>): void;
+	/**
+	 * Acknowledges the committed batch. `committedVersion` is the version the
+	 * commit actually persisted (captured at enrollment); the aggregate syncs
+	 * its persisted-version marker from it rather than from its live version,
+	 * so un-awaited concurrent work mutating the instance in the post-commit
+	 * window cannot desync the marker.
+	 */
+	acknowledge(events: ReadonlyArray<unknown>, committedVersion?: number): void;
 	discardPendingEvents(events: ReadonlyArray<unknown>): void;
 	/**
 	 * Version the persistence layer last confirmed for the aggregate, or

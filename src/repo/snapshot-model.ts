@@ -1,7 +1,7 @@
 import type { AggregateSnapshot, Version } from "../aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../aggregate/domain-event-errors";
 import {
-	DomainError,
+	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 } from "../core/errors";
@@ -135,7 +135,10 @@ export function reconstituteAggregateFromSnapshot<
 		}
 		aggregate = model.reconstitute(id, state, snapshot.version);
 	} catch (error) {
-		if (error instanceof DomainError) {
+		// Copy-safe: the model factory may run in another loaded copy of the
+		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
+		// plain instanceof; the corruption channel must catch it regardless.
+		if (isDomainErrorLike(error)) {
 			throw new SnapshotCorruptedError(
 				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +

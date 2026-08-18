@@ -642,6 +642,60 @@ inside the same breaking window.
   provider callback records an event, instead of paying a second deep copy
   per event; only the caller-owned stamp fields are validated and copied.
 
+### Fixed: third review round on enrollment ordering, cross-copy identity, and the examples gate
+
+A high-effort branch review confirmed 27 more findings. The correctness core
+and the contract, diagnostic, and convention findings are closed; a
+simplification and efficiency cluster remains tracked.
+
+- `enroll()` validates a duplicate enrollment BEFORE it adopts the widened
+  deleted disposition. A rejected `enrollDeleted` whose error the callback
+  caught no longer leaves a saved aggregate marked deleted, which made the
+  post-commit loop discard instead of acknowledge.
+- Kit boundaries that route by error family are copy-safe: the new exported
+  `isDomainErrorLike` and `isInfrastructureErrorLike` fall back to the
+  structural `category` field when `instanceof` fails across loaded kit
+  copies. `mapError` results from an adapter package's own kit copy no
+  longer crash as `RepositoryErrorMappingFailedError`, and a cross-copy
+  `DomainError` from a snapshot factory reaches the corruption channel. The
+  `RepositoryDefinition` brand moved to a versioned `Symbol.for` key like
+  every other kit brand.
+- `recordPendingEvents` throws the new `DuplicateEventIdError` when two
+  events in one batch would share an `eventId` (a reused stamp). Idempotent
+  consumers keyed on `eventId` no longer silently drop a fact.
+- `npm run typecheck` now covers `examples/` through
+  `tsconfig.typecheck.json`. That gate surfaced and this change fixes 15
+  shipped type errors: `MoneyDto` is a type alias so it satisfies the
+  `JsonValue` bound that `PublishedCommand` payloads require, the saga spec
+  passes `id` to `AggregateNotFoundError` again, the rugby example is
+  migrated to the v3 `createEvent` and handler shapes, and the saga spec
+  narrows the command union before reading payload fields.
+- The state-stored contract suite requires exactly `DUPLICATE_AGGREGATE`
+  for a duplicate add again and restored the preserved-row assertions. The
+  silent relaxation to a retryable conflict contradicted the documented
+  mapping and retry rules.
+- `update` and `remove` through a different repository definition report
+  `different_repository`, matching `add` and `trackLoaded`.
+- The repository facade follows one probe rule: a property that exists
+  nowhere on the facade answers `undefined` without the session-open
+  assertion, covering `then`, `toJSON`, and inspection symbols in one
+  stroke. Existing members still throw `TransactionClosedError` after
+  close.
+- Removed (breaking within the unreleased window): the deprecated
+  `DomainEventFacts` and `CreateDomainEventFactsOptions` aliases, the
+  factory `createFacts` member, the legacy `recordEvent` and
+  `recordEventFromFactory` aggregate helpers, and the
+  `AggregateConfig.domainEventFactory` convenience wiring. The CHANGELOG
+  already promised no deprecated aliases; now the code keeps that promise.
+  Use `createEvent` plus `recordPendingEvents`, or
+  `createDomainEventFromFacts` for caller-owned identity.
+- The unit-of-work and migration guides document that reads inside `run()`
+  do not see registered writes: only `findById` is covered by the identity
+  map, and secondary-key finders read pre-run storage state.
+- Post-commit acknowledgement syncs the persisted-version marker from the
+  enrollment-time version instead of the live instance version, so
+  un-awaited concurrent work in the post-commit window cannot desync it.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

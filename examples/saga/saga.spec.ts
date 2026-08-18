@@ -2,6 +2,7 @@ import { ok } from "@shirudo/result";
 import { describe, expect, it } from "vite-plus/test";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
 import {
+	type AnyDomainEvent,
 	createDomainEventFactory,
 	type DomainEventFactory,
 } from "../../src/aggregate/domain-event";
@@ -28,7 +29,7 @@ import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 // ----------------------------------------------------------------------------
 
 interface ExampleAggregateStore<
-	TAgg extends IAggregateRoot<TId>,
+	TAgg extends IAggregateRoot<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 > {
 	findById(id: TId): Promise<TAgg | undefined>;
@@ -38,7 +39,7 @@ interface ExampleAggregateStore<
 }
 
 function inMemoryStore<
-	TAgg extends IAggregateRoot<TId>,
+	TAgg extends IAggregateRoot<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 >(name: string): ExampleAggregateStore<TAgg, TId> {
 	const store = new Map<TId, TAgg>();
@@ -51,7 +52,7 @@ function inMemoryStore<
 			if (!a) {
 				throw new AggregateNotFoundError({
 					aggregateType: name,
-					aggregateId: id,
+					id,
 				});
 			}
 			return a;
@@ -64,7 +65,7 @@ function inMemoryStore<
 			if (!store.has(agg.id)) {
 				throw new AggregateNotFoundError({
 					aggregateType: name,
-					aggregateId: agg.id,
+					id: agg.id,
 				});
 			}
 			store.set(agg.id, agg);

@@ -17,14 +17,12 @@ export {
 export type { AggregateAddress } from "./aggregate/aggregate-address";
 export {
 	type AggregateConfig,
-	type AggregateEventConvenienceFactory,
 	AggregateRoot,
 } from "./aggregate/aggregate-root";
 export {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
 	type ClockFactory,
-	type CreateDomainEventFactsOptions,
 	type CreateDomainEventFromFactsOptions,
 	type CreateDomainEventOptions,
 	type CreateDomainEventStampOptions,
@@ -37,7 +35,6 @@ export {
 	type DomainEvent,
 	type DomainEventFactory,
 	type DomainEventFactoryOptions,
-	type DomainEventFacts,
 	type DomainEventStamp,
 	defaultDomainEventFactory,
 	type EventIdFactory,
@@ -151,6 +148,7 @@ export {
 	DomainError,
 	DuplicateAggregateError,
 	type DuplicateAggregateErrorOptions,
+	DuplicateEventIdError,
 	DuplicateHandlerRegistrationError,
 	type DuplicateHandlerRegistrationErrorOptions,
 	ErrorMapperFailedError,
@@ -183,6 +181,8 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
+	isDomainErrorLike,
+	isInfrastructureErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

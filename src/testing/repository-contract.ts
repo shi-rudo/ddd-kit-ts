@@ -359,18 +359,51 @@ export function createRepositoryContractTests<
 				run: inEnvironment(async (environment) => {
 					assert(createAggregateWithId !== undefined, "capability gate");
 					const seeded = await seed(environment);
+					// Mutated twice so its version differs from the seeded
+					// row's: a clobbering insert is then visible in the
+					// version check even without a state snapshot.
 					const duplicate = createAggregateWithId.call(harness, seeded.id);
+					harness.mutate(duplicate);
 					harness.mutate(duplicate);
 					const rejection = await captureRejection(
 						environment.run(async ({ repository }) => {
 							repository.add(duplicate);
 						}),
 					);
+					// Exactly DUPLICATE_AGGREGATE, not a retryable conflict:
+					// the docs instruct mapping uniqueness violations
+					// (Postgres 23505, MySQL 1062, SQLite
+					// SQLITE_CONSTRAINT_UNIQUE) to DuplicateAggregateError,
+					// and a duplicate add is deterministic and must not be
+					// retried unchanged.
 					assertChainContainsKitError(
 						rejection,
-						["DUPLICATE_AGGREGATE", "CONCURRENCY_CONFLICT"],
-						`duplicate add must reject with a mapped kit error; got ${describeError(rejection)}`,
+						["DUPLICATE_AGGREGATE"],
+						`duplicate add must reject with (or wrap) ` +
+							`DuplicateAggregateError; map your driver's ` +
+							`unique-violation signal instead of a retryable ` +
+							`conflict; got ${describeError(rejection)}`,
 					);
+					// The existing row is untouched by the rejected insert:
+					// version and (capability permitting) state.
+					const final = await reload(environment, seeded.id);
+					assertEqual(
+						final.version,
+						seeded.version,
+						"the existing row must be untouched by the rejected " +
+							"duplicate add; a duplicate check firing after the " +
+							"write clobbers it",
+					);
+					if (snapshotState) {
+						assert(
+							deepEqual(
+								snapshotState.call(harness, final),
+								snapshotState.call(harness, seeded),
+							),
+							"the existing row's state must be untouched by the " +
+								"rejected duplicate add",
+						);
+					}
 				}),
 			},
 		),

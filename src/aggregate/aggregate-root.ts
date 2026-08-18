@@ -3,10 +3,7 @@ import { BaseAggregate } from "./base-aggregate";
 import type { AnyDomainEvent, PendingDomainEvent } from "./domain-event";
 
 export type { IAggregateRoot } from "./aggregate";
-export type {
-	AggregateConfig,
-	AggregateEventConvenienceFactory,
-} from "./base-aggregate";
+export type { AggregateConfig } from "./base-aggregate";
 
 /**
  * OO-first Aggregate Root for state-stored domain models.

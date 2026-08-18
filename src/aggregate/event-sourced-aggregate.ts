@@ -140,7 +140,7 @@ export abstract class EventSourcedAggregate<
 		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
 	): void {
 		// New facts get their address here, by construction: missing
-		// fields are stamped from the aggregate (the recordEvent
+		// fields are stamped from the aggregate (the createEvent
 		// guarantee), a present-but-foreign address throws
 		// MisaddressedEventError before anything is recorded. Without
 		// this, a mis-addressed event would mutate state, version, and

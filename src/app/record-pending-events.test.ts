@@ -4,7 +4,10 @@ import {
 	createDomainEventFactory,
 	type DomainEvent,
 } from "../aggregate/domain-event";
-import { ReentrantEventRecordingError } from "../core/errors";
+import {
+	DuplicateEventIdError,
+	ReentrantEventRecordingError,
+} from "../core/errors";
 import type { Id } from "../core/id";
 import { recordPendingEvents } from "./record-pending-events";
 
@@ -97,6 +100,25 @@ describe("recordPendingEvents", () => {
 
 		// Recording stayed atomic: every decision, including the re-entrant
 		// one, remains pending and unrecorded.
+		expect(aggregate.pendingEvents).toHaveLength(2);
+		for (const event of aggregate.pendingEvents) {
+			expect(event).not.toHaveProperty("eventId");
+		}
+	});
+
+	it("rejects a stamp provider that reuses one eventId across decisions", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+		aggregate.change(2);
+
+		expect(() =>
+			recordPendingEvents(aggregate, () => ({
+				eventId: "event-reused",
+				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+			})),
+		).toThrow(DuplicateEventIdError);
+
+		// Recording stayed atomic: both decisions remain unrecorded.
 		expect(aggregate.pendingEvents).toHaveLength(2);
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");

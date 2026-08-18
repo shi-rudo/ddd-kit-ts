@@ -6,7 +6,11 @@ import {
 	type AggregateConfig,
 	AggregateRoot as ProductionAggregateRoot,
 } from "./aggregate-root";
-import type { AnyDomainEvent, DomainEvent } from "./domain-event";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "./domain-event";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 
 function acknowledgePersisted(aggregate: object, version: Version): void {
@@ -413,7 +417,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.addDomainEvent(ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return this.recordEventFromFactory("Updated", { value });
+				return createDomainEvent("Updated", { value }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			});
 			}
 		}
 
@@ -431,7 +438,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.commit({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return this.recordEventFromFactory("Updated", { value });
+				return createDomainEvent("Updated", { value }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			});
 			}
 		}
 
@@ -548,7 +558,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			fire(v: number): Recorded {
-				return this.recordEventFromFactory("Recorded", { v });
+				return createDomainEvent("Recorded", { v }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			});
 			}
 		}
 
@@ -595,7 +608,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 			addTestEvent(value: number): void {
 				this.addDomainEvent(
-					this.recordEventFromFactory("TestRecorded", { value }),
+					createDomainEvent("TestRecorded", { value }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 				);
 			}
 		}
@@ -718,7 +734,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 				public doSomething() {
 					this.addDomainEvent(
-						this.recordEventFromFactory("SomethingHappened", undefined),
+						createDomainEvent("SomethingHappened", undefined, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 					);
 				}
 			}
@@ -754,13 +773,19 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				public updateValue(newValue: number) {
 					this.setState({ ...this.state, value: newValue });
 					this.addDomainEvent(
-						this.recordEventFromFactory("ValueUpdated", { newValue }),
+						createDomainEvent("ValueUpdated", { newValue }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 					);
 				}
 				public activate() {
 					this.setState({ ...this.state, status: "active" });
 					this.addDomainEvent(
-						this.recordEventFromFactory("Activated", undefined),
+						createDomainEvent("Activated", undefined, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 					);
 				}
 			}
@@ -800,12 +825,15 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 				public doCorrect() {
 					this.addDomainEvent(
-						this.recordEventFromFactory("OnlyThis", { data: "hello" }),
+						createDomainEvent("OnlyThis", { data: "hello" }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 					);
 				}
 				public doWrong() {
 					// @ts-expect-error - wrong event type is rejected by TEvent constraint
-					this.recordEventFromFactory("WrongEvent", undefined);
+					this.createEvent("WrongEvent", undefined);
 				}
 			}
 

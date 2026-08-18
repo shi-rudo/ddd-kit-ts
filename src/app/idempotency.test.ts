@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { AggregateRoot } from "../aggregate/aggregate-root";
-import type { AnyDomainEvent, DomainEvent } from "../aggregate/domain-event";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "../aggregate/domain-event";
 import {
 	ConcurrencyConflictError,
 	EventHarvestError,
@@ -36,7 +40,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	confirm(): void {
 		this.commit(
 			{ ...this.state, status: "confirmed" },
-			this.recordEventFromFactory("OrderConfirmed", { orderId: this.id }),
+			createDomainEvent("OrderConfirmed", { orderId: this.id }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 		);
 	}
 }

@@ -41,8 +41,8 @@ class MockAggregate extends AggregateRoot<
 		const lifecycle = pendingEventLifecycleCapabilityFor(this);
 		if (!lifecycle) throw new Error("missing aggregate event lifecycle");
 		registerPendingEventLifecycleCapability(this, {
-			acknowledge: (committedEvents) => {
-				lifecycle.acknowledge(committedEvents);
+			acknowledge: (committedEvents, committedVersion) => {
+				lifecycle.acknowledge(committedEvents, committedVersion);
 				this._acknowledgementCount += 1;
 			},
 			discardPendingEvents: (committedEvents) =>
@@ -1765,6 +1765,65 @@ describe("commit enrollment lifecycle", () => {
 		);
 
 		expect(outbox.added).toHaveLength(1);
+		expect(aggregate.acknowledgementCount).toBe(1);
+	});
+
+	it("acknowledges with the enrollment-time version, not the live version", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		// Un-awaited concurrent work mutates the instance after the commit
+		// but before the post-commit acknowledgement.
+		const scope: TransactionScope<undefined> = {
+			transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+				const result = await fn(undefined);
+				aggregate.advanceForObserverTest();
+				return result;
+			},
+		};
+
+		await withCommit(
+			{ outbox: createMockOutbox(), scope },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollSaved(aggregate)],
+			}),
+		);
+
+		// The marker reflects what the commit persisted (7), not the version
+		// the concurrent mutation pushed the instance to (8).
+		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		expect(lifecycle?.persistedVersion()).toBe(7);
+	});
+
+	it("keeps the saved disposition when a later delete enrollment is rejected", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				const token = enrollment.enrollSaved(aggregate);
+				// A rejected delete enrollment whose error the callback catches
+				// must not flip the record to deleted behind the token's back.
+				expect(() =>
+					enrollment.enrollDeleted(aggregate, {
+						expectedVersion: 99 as Version,
+					}),
+				).toThrow(/re-enrolled with expectedVersion/);
+				return { result: "r", commits: [token] };
+			},
+		);
+
+		// Acknowledged as SAVED: the mock counts acknowledge, not discard.
 		expect(aggregate.acknowledgementCount).toBe(1);
 	});
 

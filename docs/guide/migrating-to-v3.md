@@ -105,6 +105,13 @@ interface OrderRepository
 If physical removal is part of this persistence boundary, use
 `Repository<Order, OrderId>`. It extends `AggregatePersistence` with `remove`.
 
+A secondary-key finder like `findByNumber` reads the storage state from
+before the run: durable I/O happens at flush, after the use case returned,
+and only `findById` is covered by the identity map. v2 code that saved an
+aggregate and re-read it by a secondary key in the same operation must
+branch on the tracked instance instead. See the unit-of-work guide, "Reads
+do not see registered writes".
+
 The public method changes are:
 
 | Before | v3 | Meaning |

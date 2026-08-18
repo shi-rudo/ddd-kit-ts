@@ -28,6 +28,20 @@ If any step through the outbox write fails, the transaction rolls back and no
 event is acknowledged. A retry starts a fresh unit of work, reloads the
 aggregate, and applies the command again.
 
+### Reads do not see registered writes
+
+Durable I/O happens at step 5, after the use case returned. A repository
+query inside the use case therefore reads the storage state from before the
+run. `findById` is the exception: the identity map returns the tracked
+instance for an id the run already knows, including an aggregate that
+`add(...)` registered. A secondary-key finder such as `findByEmail` has no
+identity-map cover, because the map keys by class and id only. When a use
+case adds an aggregate and then queries it by a secondary key in the same
+`run()`, the finder returns `undefined`. Branch on the tracked instance you
+already hold instead of re-reading it, and protect uniqueness with a
+database constraint: a violating `add` fails at flush with
+`DuplicateAggregateError`.
+
 ## Wiring a repository
 
 A repository definition has six parts:

@@ -508,7 +508,7 @@ describe("DomainEvent", () => {
 			});
 
 			expect(() =>
-				factory.createFacts({
+				factory.createStamp({
 					occurredAt: new Date(Number.NaN),
 				}),
 			).toThrowError(
@@ -518,7 +518,7 @@ describe("DomainEvent", () => {
 				}),
 			);
 			expect(() =>
-				factory.createFacts({
+				factory.createStamp({
 					occurredAt: 0 as unknown as Date,
 				}),
 			).toThrowError(
@@ -577,7 +577,7 @@ describe("DomainEvent", () => {
 				// @ts-expect-error immutable factory methods cannot be replaced
 				custom.create = createDomainEvent;
 				// @ts-expect-error immutable factory methods cannot be replaced
-				custom.createFacts = () => ({
+				custom.createStamp = () => ({
 					eventId: "replacement",
 					occurredAt: new Date(),
 				});
@@ -618,7 +618,7 @@ describe("DomainEvent", () => {
 			});
 
 			const event = factory.create("Ticked");
-			const facts = factory.createFacts();
+			const facts = factory.createStamp();
 			const reading = factory.now();
 
 			expect(event.occurredAt).not.toBe(shared);
@@ -644,7 +644,7 @@ describe("DomainEvent", () => {
 					field: "occurredAt",
 				}),
 			);
-			expect(() => factory.createFacts()).toThrowError(
+			expect(() => factory.createStamp()).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_OCCURRED_AT_INVALID",
 					field: "occurredAt",

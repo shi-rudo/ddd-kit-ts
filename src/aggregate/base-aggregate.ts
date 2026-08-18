@@ -1,4 +1,5 @@
 import {
+	DuplicateEventIdError,
 	ReentrantEventRecordingError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
@@ -9,14 +10,8 @@ import type { IAggregateRoot, Version } from "./aggregate";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
-	type CreateDomainEventOptions,
 	type CreateUncommittedDomainEventOptions,
-	createDomainEventFromFacts,
 	createUncommittedDomainEvent,
-	type DomainEvent,
-	type DomainEventFactory,
-	type DomainEventFacts,
-	defaultDomainEventFactory,
 	isMintedEvent,
 	isUncommittedDomainEvent,
 	type PendingDomainEvent,
@@ -26,33 +21,18 @@ import {
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
 import { registerPendingEventRecordingCapability } from "./pending-event-recording";
 
-/** Minimal compatibility role used by aggregate-held convenience methods. */
-export type AggregateEventConvenienceFactory = Pick<
-	DomainEventFactory,
-	"create" | "now"
->;
-
 /** Construction options shared by state-stored and event-sourced aggregates. */
-export interface AggregateConfig<TState = unknown>
-	extends EntityConfig<TState> {
-	/**
-	 * Immutable event factory captured for the explicitly named convenience
-	 * method `recordEventFromFactory`. The strict paths ignore it and require
-	 * event facts from the application operation.
-	 */
-	readonly domainEventFactory?: AggregateEventConvenienceFactory;
-}
+export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
 
 /**
  * Shared base for both `AggregateRoot` (state-stored) and
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
  * identical across the two flavours: current version, pending-event
  * tracking, the kit-internal post-commit acknowledgement capability,
- * the `markRestored` post-load marker, and the
- * `recordEvent` helpers that auto-inject `aggregateId` +
- * `aggregateType` on every event the aggregate emits. The strict helper takes
- * identity and occurrence time explicitly; the factory-backed helper is an
- * opt-in convenience path.
+ * the `markRestored` post-load marker, and the `createEvent` helper
+ * that auto-injects `aggregateId` + `aggregateType` on every event the
+ * aggregate emits. The application shell records the pending decisions
+ * with `recordPendingEvents` before persistence.
  *
  * Consumers do NOT extend this class directly; extend
  * `AggregateRoot` for state-stored aggregates or
@@ -77,7 +57,7 @@ export abstract class BaseAggregate<
 {
 	/**
 	 * The aggregate's domain type as a string, used to populate
-	 * `aggregateType` on events recorded via {@link recordEvent}.
+	 * `aggregateType` on events created via {@link createEvent}.
 	 *
 	 * Subclasses MUST declare this as a string literal:
 	 *
@@ -110,19 +90,15 @@ export abstract class BaseAggregate<
 
 	private _pendingEvents: PendingDomainEvent<TEvent>[] = [];
 
-	private readonly domainEventFactory: AggregateEventConvenienceFactory;
-
 	protected constructor(
 		id: TId,
 		initialState: TState,
 		config?: AggregateConfig<TState>,
 	) {
 		super(id, initialState, config);
-		this.domainEventFactory =
-			config?.domainEventFactory ?? defaultDomainEventFactory;
 		registerPendingEventLifecycleCapability(this, {
-			acknowledge: (events) => {
-				this.acknowledgePendingEvents(events);
+			acknowledge: (events, committedVersion) => {
+				this.acknowledgePendingEvents(events, committedVersion);
 			},
 			discardPendingEvents: (events) => {
 				this.acknowledgePendingEvents(events);
@@ -156,13 +132,27 @@ export abstract class BaseAggregate<
 				) {
 					throw new ReentrantEventRecordingError(String(this.id));
 				}
+				// One identity per decision: a reused stamp would mint two facts
+				// sharing one eventId, and idempotent consumers keyed on it
+				// would silently drop one. Also checked before the assignment.
+				const seenEventIds = new Set<string>();
+				for (const event of recorded) {
+					const eventId = (event as AnyDomainEvent).eventId;
+					if (seenEventIds.has(eventId)) {
+						throw new DuplicateEventIdError(String(this.id), eventId);
+					}
+					seenEventIds.add(eventId);
+				}
 				this._pendingEvents = recorded;
 				return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
 			},
 		});
 	}
 
-	private acknowledgePendingEvents(events: ReadonlyArray<unknown>): void {
+	private acknowledgePendingEvents(
+		events: ReadonlyArray<unknown>,
+		committedVersion?: number,
+	): void {
 		if (
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
@@ -172,9 +162,12 @@ export abstract class BaseAggregate<
 			);
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);
-		// The commit that is being acknowledged persisted the aggregate at its
-		// current version, so the next eventful commit needs a cursor beyond it.
-		this._persistedVersion = this._version;
+		// The next eventful commit needs a cursor beyond the version this
+		// commit persisted. The caller passes the enrollment-time version:
+		// syncing from the live version instead would let un-awaited
+		// concurrent work that mutates the instance in the post-commit window
+		// desync the marker.
+		this._persistedVersion = (committedVersion ?? this._version) as Version;
 	}
 
 	public get version(): Version {
@@ -258,7 +251,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Immutability gate for every recording path: only events minted by
 	 * the kit's constructors (`createDomainEvent`,
-	 * `createDomainEventFromFacts`, `recordEvent`) pass,
+	 * `createDomainEventFromFacts`, `createEvent`) pass,
 	 * checked against the constructor's internal, unforgeable mint
 	 * marker. Minted implies deeply frozen with defensively copied
 	 * payload and metadata, a guarantee no frozen-ness probe can
@@ -271,72 +264,6 @@ export abstract class BaseAggregate<
 				(event as AnyDomainEvent | AnyUncommittedDomainEvent).type,
 			);
 		}
-	}
-
-	/**
-	 * Legacy compatibility helper that creates a fully recorded aggregate
-	 * event from an explicit stamp and injects
-	 * `aggregateId` (from `this.id`) and `aggregateType` (from
-	 * {@link aggregateType}). New domain behavior should use
-	 * {@link createEvent}; this method remains for incremental migration.
-	 *
-	 * Downstream consumers (outbox dispatchers, projection handlers,
-	 * audit logs) route by these two fields. Calling
-	 * `createDomainEvent(...)` directly inside an aggregate method
-	 * leaves them unset and is caught at the `withCommit` harvest
-	 * boundary.
-	 *
-	 * @example
-	 * ```ts
-	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
-	 *   protected readonly aggregateType = "Order";
-	 *
-	 *   confirm(facts: DomainEventFacts): void {
-	 *     this.commit(
-	 *       { ...this.state, status: "confirmed" },
-	 *       this.recordEvent("OrderConfirmed", { orderId: this.id }, facts),
-	 *     );
-	 *   }
-	 * }
-	 * ```
-	 *
-	 * @param type    - event type discriminator (must be one of `TEvent`'s tags)
-	 * @param payload - payload for that event subtype
-	 * @param facts - explicit event identity, recording time, and metadata
-	 *   supplied by the application operation
-	 * @deprecated Prefer {@link createEvent} in domain behavior and record the
-	 * pending decision with `recordPendingEvents` in the application shell.
-	 */
-	protected recordEvent<E extends TEvent>(
-		type: E["type"],
-		payload: E["payload"],
-		facts: DomainEventFacts,
-	): E {
-		return createDomainEventFromFacts(type, payload, {
-			...facts,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		}) as DomainEvent<E["type"], E["payload"]> as E;
-	}
-
-	/**
-	 * Convenience event path that obtains omitted identity or time fields from
-	 * this aggregate's configured factory. Prefer {@link recordEvent} when the
-	 * domain operation should be deterministic from its explicit inputs. If no
-	 * factory was configured, omitted values come from Web Crypto and the
-	 * platform clock.
-	 * @deprecated Prefer {@link createEvent} plus application-shell recording.
-	 */
-	protected recordEventFromFactory<E extends TEvent>(
-		type: E["type"],
-		payload: E["payload"],
-		options?: Omit<CreateDomainEventOptions, "aggregateId" | "aggregateType">,
-	): E {
-		return this.domainEventFactory.create(type, payload, {
-			...options,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		}) as DomainEvent<E["type"], E["payload"]> as E;
 	}
 
 	/**

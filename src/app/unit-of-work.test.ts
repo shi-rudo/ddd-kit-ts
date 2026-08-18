@@ -49,8 +49,8 @@ function observeAcknowledgements(
 	const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!lifecycle) throw new Error("missing aggregate event lifecycle");
 	registerPendingEventLifecycleCapability(aggregate, {
-		acknowledge: (events) => {
-			lifecycle.acknowledge(events);
+		acknowledge: (events, committedVersion) => {
+			lifecycle.acknowledge(events, committedVersion);
 			onAcknowledge();
 		},
 		discardPendingEvents: (events) => lifecycle.discardPendingEvents(events),
@@ -763,6 +763,45 @@ describe("UnitOfWork", () => {
 					aggregate,
 				);
 				return undefined;
+			});
+		});
+
+		it("reports cross-definition update as different_repository", async () => {
+			const aggregate = createMockAggregate("o-1");
+			const definition = () =>
+				defineTestRepository({
+					aggregate: MockAggregate,
+					persistence: versionPersistenceModel<MockAggregate>(),
+					create: (_tx: undefined, tracking) => ({
+						trackLoaded: (loaded: MockAggregate) => tracking.trackLoaded(loaded),
+					}),
+					flush: async () => {},
+				});
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					primary: definition(),
+					secondary: definition(),
+				},
+			});
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.primary.trackLoaded(aggregate);
+					aggregate.change(testEvent("o-1"));
+					repositories.secondary.update(aggregate);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			expect(rejection).toBeInstanceOf(AggregateTrackingError);
+			expect(rejection).toMatchObject({
+				reason: "different_repository",
+				operation: "update",
 			});
 		});
 
@@ -1670,6 +1709,22 @@ describe("UnitOfWork", () => {
 			expect(() => facade.tx).toThrow(TransactionClosedError);
 		});
 
+		it("answers absent-property probes on a closed facade without throwing", async () => {
+			const { uow } = createUow();
+
+			const facade = (await uow.run(async ({ repositories }) => {
+				return repositories.orders;
+			})) as unknown as Record<PropertyKey, unknown>;
+
+			// JSON.stringify probes toJSON, inspectors probe symbols; a
+			// property that exists nowhere is a probe, not a member read.
+			expect(facade.toJSON).toBeUndefined();
+			expect(facade[Symbol.toStringTag]).toBeUndefined();
+			expect(facade.someAbsentProperty).toBeUndefined();
+			// Existing members keep the loud invalidation.
+			expect(() => facade.tx).toThrow(TransactionClosedError);
+		});
+
 		it("adapter tracking after rollback throws TransactionClosedError", async () => {
 			let leakedTracking!: RepositoryTracking<MockAggregate>;
 			const { uow } = createUow({
@@ -2440,6 +2495,69 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("deleted");
+		});
+	});
+
+	describe("cross-copy cooperation", () => {
+		it("accepts a mapped infrastructure error from another kit copy", async () => {
+			// Simulates an adapter package carrying its own copy of the kit:
+			// structurally an InfrastructureError, but not instanceof this
+			// copy's class.
+			class ForeignConflictError extends Error {
+				readonly category = "INFRASTRUCTURE";
+				readonly code = "CONCURRENCY_CONFLICT";
+				readonly retryable = true;
+			}
+			const foreign = new ForeignConflictError("foreign copy conflict");
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {
+							throw new Error("db failure");
+						},
+						mapError: () => foreign as unknown as InfrastructureError,
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(aggregate);
+					aggregate.change(testEvent("o-1"));
+					repositories.orders.update(aggregate);
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			// The mapper behaved correctly; misclassifying its result as a
+			// RepositoryErrorMappingFailedError would turn a retryable
+			// conflict into a non-retryable wiring crash.
+			expect(rejection).toBe(foreign);
+		});
+
+		it("brands definitions with the shared cross-copy symbol", () => {
+			const definition = defineTestRepository({
+				aggregate: MockAggregate,
+				persistence: versionPersistenceModel<MockAggregate>(),
+				flush: async () => {},
+				create: () => ({}),
+			});
+
+			expect(Object.getOwnPropertySymbols(definition)).toContain(
+				Symbol.for("@shirudo/ddd-kit/repository-definition/v1"),
+			);
 		});
 	});
 

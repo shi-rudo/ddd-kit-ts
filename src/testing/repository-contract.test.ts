@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { Version } from "../aggregate/aggregate";
 import { AggregateRoot } from "../aggregate/aggregate-root";
-import type { DomainEvent } from "../aggregate/domain-event";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../aggregate/domain-event";
 import {
 	type AggregatePersistenceWrite,
 	defineRepository,
@@ -83,14 +86,20 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	rename(name: string): void {
 		this.commit(
 			{ ...this.state, name },
-			this.recordEventFromFactory("OrderRenamed", { name }),
+			createDomainEvent("OrderRenamed", { name }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 		);
 	}
 
 	addItem(item: string): void {
 		this.commit(
 			{ ...this.state, items: [...this.state.items, item] },
-			this.recordEventFromFactory("ItemAdded", { item }),
+			createDomainEvent("ItemAdded", { item }, {
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			}),
 		);
 	}
 

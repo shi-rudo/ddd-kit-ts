@@ -7,6 +7,7 @@ import {
 	AggregateDeletedError,
 	EventHarvestError,
 	InfrastructureError,
+	isInfrastructureErrorLike,
 	KitWiringError,
 	UnenrolledChangesError,
 } from "../core/errors";
@@ -380,7 +381,14 @@ export interface RunOptions {
 	readonly signal?: AbortSignal;
 }
 
-const repositoryDefinitionBrand: unique symbol = Symbol("RepositoryDefinition");
+// Shared across package copies like every other kit brand: a definition
+// built by a bundled plugin copy's defineRepository must be accepted by the
+// host copy's UnitOfWork. The key version stamps the definition SHAPE; bump
+// it when the definition contract changes so an incompatible copy fails the
+// generic not-a-definition check instead of half-working.
+const repositoryDefinitionBrand: unique symbol = Symbol.for(
+	"@shirudo/ddd-kit/repository-definition/v1",
+);
 
 /** Adapter wiring accepted by {@link defineRepository}. */
 export interface RepositoryDefinitionOptions<
@@ -1037,15 +1045,15 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 	return {
 		get: (target, property, receiver) => {
 			// Language-level probes are not repository operations: promise
-			// resolution reads `then` on any value returned from run(), and
-			// inspection utilities read well-known symbols. Asserting
-			// session-open here would turn a facade returned from a COMMITTED
-			// run() into a TransactionClosedError during promise resolution,
-			// which classifyRunError then misreports as a retryable
-			// CommitError. Only absent properties are exempt; a repository
-			// that genuinely defines them still goes through the guard.
+			// resolution reads `then` on any value returned from run(),
+			// JSON.stringify probes `toJSON`, and inspection utilities read
+			// well-known symbols on any value that crosses an API boundary.
+			// One principled rule instead of one exemption per discovered
+			// probe: a property that exists NOWHERE on the facade is a probe
+			// and answers `undefined` without the session-open assertion.
+			// Existing members keep the loud TransactionClosedError after
+			// close (a probe cannot leak state; a member read can).
 			if (
-				(property === "then" || typeof property === "symbol") &&
 				!Reflect.has(target, property) &&
 				!Reflect.has(state.source, property)
 			) {
@@ -1366,6 +1374,18 @@ class Session<Evt extends AnyDomainEvent> {
 	): TrackedAggregate<Evt> {
 		this.assertNotRemoved(aggregate, definition);
 		const entry = this._trackingByAggregate.get(aggregate);
+		// Repository-ownership violations report as such on every operation:
+		// add and trackLoaded already use different_repository, and code
+		// branching on the machine-readable reason must not get not_loaded
+		// for the identical violation on the update/remove path.
+		if (entry && entry.definition !== definition) {
+			throw new AggregateTrackingError(
+				String(aggregate.id),
+				operation,
+				"different_repository",
+				entry.intent,
+			);
+		}
 		// An add()-registered aggregate IS tracked, just not "loaded": report
 		// the real conflict with the registered intent. The not_loaded advice
 		// ("load it through the repository") is impossible for an aggregate
@@ -1635,7 +1655,11 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 			mapperError,
 		});
 	}
-	if (mapped instanceof InfrastructureError) return mapped;
+	// Copy-safe: an adapter package can carry its own copy of the kit, whose
+	// InfrastructureError fails a plain instanceof here; rejecting it would
+	// turn every retryable conflict into a non-retryable wiring crash that
+	// blames a correct mapper.
+	if (isInfrastructureErrorLike(mapped)) return mapped;
 	throw new RepositoryErrorMappingFailedError({
 		aggregateId: String(write.aggregateId),
 		intent: write.intent,

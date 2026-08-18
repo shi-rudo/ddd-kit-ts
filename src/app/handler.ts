@@ -235,9 +235,6 @@ function createCommitTokenScope<
 						"saved after it was enrolled as deleted in the same transaction.",
 				);
 			}
-			if (disposition === "deleted") {
-				record.disposition = "deleted";
-			}
 			// Duplicate enrollment is idempotent by reference. An omitted
 			// expectedVersion is no assertion, not an assertion of "absent":
 			// only a supplied value is compared against the recorded baseline.
@@ -257,6 +254,13 @@ function createCommitTokenScope<
 					`withCommit: aggregate ${String(aggregate.id)} changed after its ` +
 						"commit batch was enrolled. Register persistence intent last.",
 				);
+			}
+			// The widened disposition is adopted only after every check passed:
+			// a rejected enrollDeleted whose error the callback catches must
+			// not leave a saved aggregate marked deleted, or the post-commit
+			// loop would discard instead of acknowledge.
+			if (disposition === "deleted") {
+				record.disposition = "deleted";
 			}
 			return existing;
 		}
@@ -636,7 +640,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			if (disposition === "deleted") {
 				eventLifecycle.discardPendingEvents(committedEvents);
 			} else {
-				eventLifecycle.acknowledge(committedEvents);
+				eventLifecycle.acknowledge(committedEvents, version as number);
 				persistedObservations.push({ aggregate, version });
 			}
 		} catch (error) {

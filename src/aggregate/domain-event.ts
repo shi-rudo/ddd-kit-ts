@@ -237,12 +237,6 @@ export interface DomainEventStamp {
 	readonly metadata?: EventMetadata;
 }
 
-/**
- * @deprecated Use {@link DomainEventStamp}. A recording stamp is technical
- * shell data, not a domain fact.
- */
-export type DomainEventFacts = DomainEventStamp;
-
 /** Full strict-construction options, including producer-owned event fields. */
 export interface CreateDomainEventFromFactsOptions extends DomainEventStamp {
 	readonly aggregateId?: string;
@@ -256,9 +250,6 @@ export interface CreateDomainEventStampOptions {
 	readonly occurredAt?: Date;
 	readonly metadata?: EventMetadata;
 }
-
-/** @deprecated Use {@link CreateDomainEventStampOptions}. */
-export type CreateDomainEventFactsOptions = CreateDomainEventStampOptions;
 
 /** Dependencies captured by one immutable domain-event factory instance. */
 export interface DomainEventFactoryOptions {
@@ -280,10 +271,6 @@ export interface DomainEventFactory {
 	readonly createStamp: (
 		options?: CreateDomainEventStampOptions,
 	) => DomainEventStamp;
-	/** @deprecated Use {@link createStamp}. */
-	readonly createFacts: (
-		options?: CreateDomainEventFactsOptions,
-	) => DomainEventFacts;
 	readonly create: {
 		<T extends string>(
 			type: T,
@@ -371,7 +358,6 @@ export function createDomainEventFactory(
 
 	return Object.freeze({
 		createStamp,
-		createFacts: createStamp,
 		create,
 		now: () => readClock(clock),
 	});
@@ -472,7 +458,7 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 
 /**
  * Whether `event` came out of {@link createDomainEvent} (or a helper
- * built on it, such as `recordEvent`), i.e. is deeply frozen with
+ * built on it, such as the aggregate `createEvent` helper), i.e. is deeply frozen with
  * defensively copied payload and metadata. Two tiers: events of THIS
  * loaded copy of the kit are verified unforgeably via the module's
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual

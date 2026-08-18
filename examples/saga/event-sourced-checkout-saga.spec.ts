@@ -281,7 +281,13 @@ describe("Event-sourced checkout saga", () => {
 			}),
 		).rejects.toThrow("command outbox unavailable");
 
-		const retainedEventId = saga.pendingEvents[0]?.eventId;
+		// The pending list is typed as the uncommitted union; the failed
+		// commit already recorded the decision, so narrow structurally.
+		const [retainedEvent] = saga.pendingEvents;
+		const retainedEventId =
+			retainedEvent !== undefined && "eventId" in retainedEvent
+				? retainedEvent.eventId
+				: undefined;
 		expect(database.snapshot()).toEqual({ history: [], commandCommits: [] });
 		expect(retainedEventId).toBe("process-event-1");
 
@@ -363,6 +369,12 @@ describe("Event-sourced checkout saga", () => {
 			},
 		);
 		const message = firstMessageIn(database.snapshot());
+		// A payment consumer handles exactly one command type; narrowing the
+		// union here types every payload field below.
+		const command = message.command;
+		if (command.type !== "RequestPayment") {
+			throw new Error("expected the RequestPayment participant command");
+		}
 		const idempotency = new InMemoryIdempotencyStore<undefined>();
 		const scope: TransactionScope<undefined> = {
 			transactional: (work) => work(undefined),
@@ -378,13 +390,13 @@ describe("Event-sourced checkout saga", () => {
 				{
 					key: `payments:${message.messageId}`,
 					fingerprint: [
-						message.command.type,
-						message.command.version,
-						message.command.payload.orderId,
-						message.command.payload.paymentId,
-						message.command.payload.amount.amountMinor,
-						message.command.payload.amount.currency,
-						message.command.payload.amount.scale,
+						command.type,
+						command.version,
+						command.payload.orderId,
+						command.payload.paymentId,
+						command.payload.amount.amountMinor,
+						command.payload.amount.currency,
+						command.payload.amount.scale,
 					].join(":"),
 				},
 				async () => {

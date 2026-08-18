@@ -108,6 +108,38 @@ describe("adapter-owned snapshot models", () => {
 		expect(restored.state).not.toBe(storedState);
 	});
 
+	it("routes a foreign-copy domain rejection into the corruption channel", () => {
+		// Structurally a DomainError from another loaded kit copy: not
+		// instanceof this copy's class, but category "DOMAIN".
+		class ForeignDomainError extends Error {
+			readonly category = "DOMAIN";
+			readonly code = "STATUS_NOT_ALLOWED";
+		}
+		const validatingModel = defineSnapshotModel({
+			...model,
+			reconstitute: (): Order => {
+				throw new ForeignDomainError("status no longer allowed");
+			},
+		});
+
+		let caught: unknown;
+		try {
+			reconstituteAggregateFromSnapshot(validatingModel, "order-1" as OrderId, {
+				state: { status: "placed" },
+				version: 7 as Version,
+				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
+				schemaVersion: 2,
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
+		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
+			ForeignDomainError,
+		);
+	});
+
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
 		// A factory that ignores the version parameter (a forgotten
 		// markRestored) is a wiring bug, not corruption: it must throw raw

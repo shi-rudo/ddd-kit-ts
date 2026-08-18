@@ -122,6 +122,36 @@ export abstract class InfrastructureError<
 	}
 }
 
+/**
+ * Copy-safe membership check for the kit's domain-error family.
+ *
+ * `instanceof` is false for an error constructed by another loaded copy of
+ * the kit (a separately installed adapter package, a CJS/ESM dual load), so
+ * kit boundaries that route by error family fall back to the structural
+ * `category` field, the stable cross-copy contract.
+ */
+export function isDomainErrorLike(value: unknown): value is DomainError {
+	return (
+		value instanceof DomainError ||
+		(value instanceof Error &&
+			(value as { readonly category?: unknown }).category === "DOMAIN")
+	);
+}
+
+/**
+ * Copy-safe membership check for the kit's infrastructure-error family.
+ * Same rationale as {@link isDomainErrorLike}.
+ */
+export function isInfrastructureErrorLike(
+	value: unknown,
+): value is InfrastructureError {
+	return (
+		value instanceof InfrastructureError ||
+		(value instanceof Error &&
+			(value as { readonly category?: unknown }).category === "INFRASTRUCTURE")
+	);
+}
+
 /** Options bag for {@link InMemoryCapacityExceededError}. */
 export interface InMemoryCapacityExceededErrorOptions {
 	/** Concrete reference adapter whose configured capacity was exhausted. */
@@ -425,7 +455,7 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
  * copied event addressed elsewhere), caught before the event can be
  * recorded and poison the own stream. Events with MISSING address
  * fields do not trip this: `apply()` stamps them from the aggregate,
- * the same guarantee `recordEvent` gives. A wiring error, distinct
+ * the same guarantee `createEvent` gives. A wiring error, distinct
  * from {@link ForeignEventError} on purpose: a wrong new event is a
  * bug in today's code, a wrong PERSISTED row is corrupted or miswired
  * infrastructure, and handlers for one must not absorb the other.
@@ -443,7 +473,7 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 			`New event "${eventType}" is addressed to ` +
 				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
 				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
-				"fix the call site (recordEvent stamps the right address).",
+				"fix the call site (createEvent stamps the right address).",
 		);
 	}
 }
@@ -509,6 +539,29 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 				"recordPendingEvents was stamping them. A stamp provider must not " +
 				"trigger new decisions on the aggregate being recorded; make every " +
 				"domain decision first, then record.",
+		);
+	}
+}
+
+/**
+ * Thrown by `recordPendingEvents` when two events in one aggregate's pending
+ * batch carry the same `eventId`: a stamp provider that returns one reused
+ * stamp (or repeats an explicit id) would otherwise mint two distinct facts
+ * sharing one identity, and downstream idempotent consumers keyed on
+ * `eventId` silently drop one of them. A wiring error: deterministic bug in
+ * the stamp provider, the remedy is one fresh identity per decision.
+ */
+export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
+	constructor(
+		aggregateId: string,
+		/** The identity two pending events would have shared. */
+		public readonly eventId: string,
+	) {
+		super(
+			"DUPLICATE_EVENT_ID",
+			`Two pending events of aggregate ${aggregateId} carry the same ` +
+				`eventId "${eventId}". Each decision needs its own identity; ` +
+				"return a fresh stamp per event from the stamp provider.",
 		);
 	}
 }

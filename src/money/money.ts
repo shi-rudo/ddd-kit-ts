@@ -58,13 +58,17 @@ declare const MONEY_BRAND: unique symbol;
  * `JSON.stringify` throws on bigint. Validate with `moneyFromDto`
  * immediately after deserialization; emit with `moneyToDto` right
  * before serialization.
+ *
+ * A type alias, not an interface, on purpose: only type aliases get the
+ * implicit index signature that makes the DTO assignable to `JsonValue`,
+ * which `PublishedCommand` payloads require.
  */
-export interface MoneyDto {
+export type MoneyDto = {
 	/** Integer string matching `/^-?\d+$/`. */
 	readonly amountMinor: string;
 	readonly currency: string;
 	readonly scale: number;
-}
+};
 
 const INTEGER_STRING = /^-?\d+$/;
 
