@@ -1,3 +1,5 @@
+![ddd-kit: tactical Domain-Driven Design building blocks for TypeScript](./ddd-kit-banner.jpg)
+
 # @shirudo/ddd-kit
 
 Tactical Domain-Driven Design building blocks for TypeScript.
