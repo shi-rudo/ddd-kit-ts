@@ -390,3 +390,33 @@ the source break is broader than the v2.2 repository rename:
 Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
 writers for the bounded context together. Use the same cutover procedure. Keep
 the backup until the post-deployment checks are complete.
+
+## Appendix: v3.0.0-rc.2 to rc.3 or later
+
+Stored business data stays reusable. The source break is narrow and comes
+from four review rounds on the persistence redesign:
+
+- Remove uses of the deleted names: the `DomainEventFacts` and
+  `CreateDomainEventFactsOptions` aliases, the factory `createFacts` member,
+  the aggregate `recordEvent` and `recordEventFromFactory` helpers, and
+  `AggregateConfig.domainEventFactory`. Use `createEvent` in the aggregate
+  and `recordPendingEvents` in the shell, or `createDomainEventFromFacts`
+  when the caller owns identity and time.
+- Update error handling that matched `error.name` on
+  `DomainEventValidationError` or `SnapshotTimeValidationError`: `name` now
+  equals `code`, like every other kit error. Code-based matching does not
+  change.
+- Reconstitution factories must call `markRestored(version)`. The snapshot
+  restore path enforces the version post-condition and rejects a factory
+  that ignores it.
+- A `PersistenceModel.capture` must be deterministic for an unchanged
+  aggregate. A capture that rebuilds object Set members or Map keys per
+  call supplies the optional `captureEquals`.
+- Run one kit version per process during the cutover. The internal
+  capability registry keys changed with the capability shape, so an
+  aggregate built by an rc.2 copy fails enrollment under an rc.3 copy with
+  the generic "no kit-managed persistence lifecycle" error.
+
+Behavior changes that need no code change: a repeated `remove` of the same
+instance is an accepted no-op, and a repeated enrollment without
+`expectedVersion` makes no OCC assertion.

@@ -7,9 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The current `3.0.0-rc.2` candidate breaks source compatibility with
-`3.0.0-rc.1`. The rc.1 tag remains immutable. Users of rc.1 must use its
-appendix in the v3 migration guide. Do not mix the two persistence protocols.
+The 3.0.0 release candidates are not source-compatible with each other, and
+every rc tag remains immutable. Users of rc.1 or rc.2 must use the matching
+appendix in the v3 migration guide. Do not mix persistence protocols from
+different candidates, and run one kit version per process during a cutover.
 
 Version 3.0.0 contains all changes since 2.2.0 in one breaking window. The
 release changes the core and its event-driven components.
