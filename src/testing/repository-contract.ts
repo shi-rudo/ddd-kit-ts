@@ -191,6 +191,50 @@ export function createRepositoryContractTests<
 			}),
 		},
 		{
+			name: "committed outbox envelopes carry exact position facts",
+			run: inEnvironment(async (environment) => {
+				// Position facts must be provable through the repository suite
+				// alone: OutboxWriter-only adapters (CDC, broker-native) cannot
+				// run the outbox suite, and idempotent consumers key their
+				// watermarks on (aggregateVersion, commitSequence).
+				const aggregate = harness.createAggregate();
+				harness.mutate(aggregate);
+				harness.mutate(aggregate);
+				const batchSize = aggregate.pendingEvents.length;
+				const committedVersion = aggregate.version;
+
+				await environment.run(async ({ repository }) => {
+					repository.add(aggregate);
+				});
+
+				const positions = (await environment.committedOutboxEvents())
+					.map(({ position }) => position)
+					.sort((a, b) => a.commitSequence - b.commitSequence);
+				assertEqual(
+					positions.length,
+					batchSize,
+					"every registered event must commit exactly one envelope",
+				);
+				positions.forEach((position, index) => {
+					assertEqual(
+						position.aggregateVersion,
+						committedVersion,
+						"every envelope must carry the version the commit persisted",
+					);
+					assertEqual(
+						position.commitSequence,
+						index,
+						"commitSequence must be gapless and zero-based over the batch",
+					);
+					assertEqual(
+						position.commitSize,
+						batchSize,
+						"commitSize must equal the exact batch length",
+					);
+				});
+			}),
+		},
+		{
 			name: "MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);

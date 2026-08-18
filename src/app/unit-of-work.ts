@@ -1225,6 +1225,24 @@ function deleteRepositoryFacadeProperty<Evt extends AnyDomainEvent>(
 
 type AggregateLifecycle = "new" | "loaded";
 
+/**
+ * The immutable receipt one add/update/remove registration freezes: intent,
+ * exact version and event batch, the sealed persistence baseline, and the
+ * derived change set. It exists as ONE optional unit so registration,
+ * rollback, and flush cannot half-apply it; `registration === undefined`
+ * means "tracked but no write registered".
+ */
+interface WriteRegistration<Evt extends AnyDomainEvent> {
+	readonly intent: AggregateWriteIntent;
+	readonly version: Version;
+	readonly events: ReadonlyArray<PendingDomainEvent<Evt>>;
+	readonly baseline: PersistenceBaseline<
+		IAggregateRoot<Id<string>, Evt>,
+		unknown
+	>;
+	readonly changes: PersistenceChanges<unknown>;
+}
+
 interface TrackedAggregate<Evt extends AnyDomainEvent> {
 	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
 	readonly lifecycle: AggregateLifecycle;
@@ -1234,26 +1252,17 @@ interface TrackedAggregate<Evt extends AnyDomainEvent> {
 		IAggregateRoot<Id<string>, Evt>,
 		unknown
 	>;
-	intent?: AggregateWriteIntent;
-	registeredVersion?: Version;
-	registeredEvents?: ReadonlyArray<PendingDomainEvent<Evt>>;
-	registeredBaseline?: PersistenceBaseline<
-		IAggregateRoot<Id<string>, Evt>,
-		unknown
-	>;
-	changes?: PersistenceChanges<unknown>;
+	registration?: WriteRegistration<Evt>;
 }
 
 /** Internal session implementation; closed by `run()`'s finally. */
 class Session<Evt extends AnyDomainEvent> {
-	// Insertion-ordered: harvest order = enrollment order (withCommit then
-	// preserves per-aggregate emission order).
-	private readonly _enrolled = new Set<IAggregateRoot<Id<string>, Evt>>();
 	// Read tracking order is independent of write registration order. Flush
 	// follows this list so adapters observe the same explicit order as the use
-	// case's add/update/remove calls.
+	// case's add/update/remove calls. Enrollment and removal state are NOT
+	// separate collections: both derive from each entry's registration, so
+	// the bookkeeping cannot drift apart.
 	private readonly _registeredWrites: TrackedAggregate<Evt>[] = [];
-	private readonly _deleted = new Set<IAggregateRoot<Id<string>, Evt>>();
 	private readonly _commitTokens = new Set<AggregateCommitToken<Evt>>();
 	private readonly _identityMap = new IdentityMap();
 	// What adapters receive: the typed read-only view, enforced at runtime.
@@ -1292,6 +1301,20 @@ class Session<Evt extends AnyDomainEvent> {
 		});
 	}
 
+	/** The registration of an instance, or undefined when none is tracked. */
+	private registrationOf(
+		aggregate: object,
+	): WriteRegistration<Evt> | undefined {
+		return this._trackingByAggregate.get(
+			aggregate as IAggregateRoot<Id<string>, Evt>,
+		)?.registration;
+	}
+
+	/** Whether THIS instance registered a remove in this session. */
+	private isRemovedInstance(aggregate: object): boolean {
+		return this.registrationOf(aggregate)?.intent === "remove";
+	}
+
 	private trackLoaded<TAggregate extends IAggregateRoot<Id<string>, Evt>>(
 		aggregate: TAggregate,
 		definition: RuntimePersistenceDefinition<Evt>,
@@ -1306,7 +1329,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				"load",
 				"different_repository",
-				existing.intent,
+				existing.registration?.intent,
 			);
 		}
 		this._identityMap.set(definition.aggregate, aggregate.id, aggregate);
@@ -1336,7 +1359,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				"add",
 				"different_repository",
-				existing.intent,
+				existing.registration?.intent,
 			);
 		}
 		if (existing?.lifecycle === "loaded") {
@@ -1344,7 +1367,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				"add",
 				"loaded_as_new",
-				existing.intent,
+				existing.registration?.intent,
 			);
 		}
 
@@ -1402,7 +1425,7 @@ class Session<Evt extends AnyDomainEvent> {
 		// after remove, and any OTHER instance with the same id, still
 		// reject.
 		const entry = this._trackingByAggregate.get(aggregate);
-		if (this._deleted.has(aggregate) && entry?.definition === definition) {
+		if (this.isRemovedInstance(aggregate) && entry?.definition === definition) {
 			return;
 		}
 		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
@@ -1452,7 +1475,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				operation,
 				"different_repository",
-				entry.intent,
+				entry.registration?.intent,
 			);
 		}
 		// An add()-registered aggregate IS tracked, just not "loaded": report
@@ -1468,7 +1491,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				operation,
 				"conflicting_intent",
-				entry.intent,
+				entry.registration?.intent,
 			);
 		}
 		if (
@@ -1480,7 +1503,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(aggregate.id),
 				operation,
 				"not_loaded",
-				entry?.intent,
+				entry?.registration?.intent,
 			);
 		}
 		return entry;
@@ -1499,29 +1522,28 @@ class Session<Evt extends AnyDomainEvent> {
 		entry: TrackedAggregate<Evt>,
 		intent: AggregateWriteIntent,
 	): boolean {
-		if (entry.intent !== undefined) {
-			if (entry.intent !== intent) {
+		if (entry.registration !== undefined) {
+			if (entry.registration.intent !== intent) {
 				throw new AggregateTrackingError(
 					String(entry.aggregate.id),
 					intent,
 					"conflicting_intent",
-					entry.intent,
+					entry.registration.intent,
 				);
 			}
 			this.assertUnchangedAfterRegistration(entry);
 			return false;
 		}
 
-		entry.intent = intent;
+		entry.registration = Object.freeze({
+			intent,
+			version: entry.aggregate.version,
+			// Already a frozen detached copy from the pendingEvents getter.
+			events: entry.aggregate.pendingEvents,
+			baseline: recapturePersistenceBaseline(entry.baseline, entry.aggregate),
+			changes: derivePersistenceChanges(entry.baseline, entry.aggregate),
+		});
 		this._registeredWrites.push(entry);
-		entry.registeredVersion = entry.aggregate.version;
-		// Already a frozen detached copy from the pendingEvents getter.
-		entry.registeredEvents = entry.aggregate.pendingEvents;
-		entry.registeredBaseline = recapturePersistenceBaseline(
-			entry.baseline,
-			entry.aggregate,
-		);
-		entry.changes = derivePersistenceChanges(entry.baseline, entry.aggregate);
 		return true;
 	}
 
@@ -1529,28 +1551,28 @@ class Session<Evt extends AnyDomainEvent> {
 	private rollbackIntentRegistration(entry: TrackedAggregate<Evt>): void {
 		const index = this._registeredWrites.lastIndexOf(entry);
 		if (index >= 0) this._registeredWrites.splice(index, 1);
-		delete entry.intent;
-		delete entry.registeredVersion;
-		delete entry.registeredEvents;
-		delete entry.registeredBaseline;
-		delete entry.changes;
+		delete entry.registration;
 	}
 
 	private assertUnchangedAfterRegistration(entry: TrackedAggregate<Evt>): void {
+		const registration = entry.registration;
+		if (registration === undefined) return;
 		const currentEvents = entry.aggregate.pendingEvents;
-		const registeredEvents = entry.registeredEvents ?? [];
 		// Capture-to-capture drift, NOT changes().isEmpty(): the
 		// PersistenceModel contract permits full-replacement change sets that
 		// are never empty, so a non-empty change set proves nothing about
 		// mutation after registration.
-		const persistenceChanged = entry.registeredBaseline
-			? persistenceProjectionDrifted(entry.registeredBaseline, entry.aggregate)
-			: false;
+		const persistenceChanged = persistenceProjectionDrifted(
+			registration.baseline,
+			entry.aggregate,
+		);
 		const sameEvents =
-			currentEvents.length === registeredEvents.length &&
-			currentEvents.every((event, index) => event === registeredEvents[index]);
+			currentEvents.length === registration.events.length &&
+			currentEvents.every(
+				(event, index) => event === registration.events[index],
+			);
 		if (
-			entry.registeredVersion !== entry.aggregate.version ||
+			registration.version !== entry.aggregate.version ||
 			!sameEvents ||
 			persistenceChanged
 		) {
@@ -1558,7 +1580,7 @@ class Session<Evt extends AnyDomainEvent> {
 				String(entry.aggregate.id),
 				"commit",
 				"mutated_after_registration",
-				entry.intent,
+				registration.intent,
 			);
 		}
 	}
@@ -1569,13 +1591,13 @@ class Session<Evt extends AnyDomainEvent> {
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
 		this.assertOpen("repository.add/update");
-		// Two gates, one invariant: the instance set catches the same
+		// Two gates, one invariant: the registration check catches the same
 		// reference; the identity-map tombstone (keyed on the instance's
 		// concrete class) catches a DIFFERENT instance with the same
 		// type+id: e.g. one re-created via the static factory after the
 		// delete. Both mean "deleted is final within this operation".
 		if (
-			this._deleted.has(aggregate) ||
+			this.isRemovedInstance(aggregate) ||
 			this._identityMap.isDeleted(definition.aggregate, aggregate.id)
 		) {
 			throw new AggregateDeletedError(String(aggregate.id));
@@ -1583,7 +1605,6 @@ class Session<Evt extends AnyDomainEvent> {
 		const token = this.commitEnrollment.enrollSaved(aggregate, {
 			expectedVersion,
 		});
-		this._enrolled.add(aggregate);
 		this._commitTokens.add(token);
 		return token;
 	}
@@ -1597,21 +1618,20 @@ class Session<Evt extends AnyDomainEvent> {
 		const token = this.commitEnrollment.enrollDeleted(aggregate, {
 			expectedVersion,
 		});
-		this._deleted.add(aggregate);
 		// One call does ALL the deletion bookkeeping: the identity-map
 		// entry is removed and tombstoned automatically (keyed on the
 		// instance's concrete class), so repositories do not need a
 		// second manual identityMap.delete() call; a forgotten leg of a
-		// two-call protocol would silently weaken the deletion gate.
+		// two-call protocol would silently weaken the deletion gate. The
+		// removed state itself derives from the entry's registration.
 		// Assumption (documented on IdentityMap): repositories key the
 		// map with the same concrete class their factories produce.
-		this._identityMap.delete(definition.aggregate, aggregate.id);
 		// Deleted aggregates stay in the harvest set: their recorded
 		// deletion events must reach the outbox (repository.md, hard-
 		// delete with event harvest). withCommit receives them in the
 		// deleted token disposition, so the saved-only application observer
 		// never fires for a deletion.
-		this._enrolled.add(aggregate);
+		this._identityMap.delete(definition.aggregate, aggregate.id);
 		this._commitTokens.add(token);
 		return token;
 	}
@@ -1625,7 +1645,7 @@ class Session<Evt extends AnyDomainEvent> {
 	 */
 	public assertReadyToCommit(): void {
 		for (const entry of this._trackedAggregates) {
-			if (entry.intent !== undefined) {
+			if (entry.registration !== undefined) {
 				this.assertUnchangedAfterRegistration(entry);
 				continue;
 			}
@@ -1642,9 +1662,12 @@ class Session<Evt extends AnyDomainEvent> {
 		}
 
 		for (const instance of this._identityMap.instancesWithNewPendingEvents()) {
+			// Any registration (add, update, or remove) means the instance is
+			// enrolled and its batch will be harvested.
 			if (
-				this._enrolled.has(instance as IAggregateRoot<Id<string>, Evt>) ||
-				this._deleted.has(instance as IAggregateRoot<Id<string>, Evt>)
+				instance !== null &&
+				typeof instance === "object" &&
+				this.registrationOf(instance) !== undefined
 			) {
 				continue;
 			}
@@ -1660,24 +1683,21 @@ class Session<Evt extends AnyDomainEvent> {
 	public async flush(transaction: unknown): Promise<void> {
 		this.assertOpen("unitOfWork.flush");
 		for (const entry of this._registeredWrites) {
-			const changes = entry.changes;
-			const events = entry.registeredEvents;
-			const version = entry.registeredVersion;
-			if (!changes || !events || version === undefined) {
+			const registration = entry.registration;
+			if (registration === undefined) {
 				throw new AggregateTrackingError(
 					String(entry.aggregate.id),
 					"commit",
 					"mutated_after_registration",
-					entry.intent,
 				);
 			}
 			const write = Object.freeze({
-				intent: entry.intent,
+				intent: registration.intent,
 				aggregateId: entry.aggregate.id,
 				expectedVersion: entry.expectedVersion,
-				version,
-				changes,
-				events,
+				version: registration.version,
+				changes: registration.changes,
+				events: registration.events,
 			}) as AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>;
 			try {
 				await entry.definition.flush(transaction, write);
@@ -1700,6 +1720,7 @@ class Session<Evt extends AnyDomainEvent> {
 		this._identityMap.clear();
 		this._trackedAggregates.clear();
 		this._registeredWrites.length = 0;
+		this._commitTokens.clear();
 	}
 
 	public assertOpen(operation: string): void {

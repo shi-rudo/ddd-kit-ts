@@ -756,6 +756,16 @@ design question. All are closed.
   `pendingEvents` getter already returns. The identity map reads a
   pending-event count through the kit-internal capability instead of one
   array allocation per instance per scan.
+- One write registration replaces the session's parallel bookkeeping. The
+  five optional registration fields on a tracked aggregate are one frozen
+  registration object, and the enrolled and removed sets derive from it, so
+  the bookkeeping cannot drift apart. `close()` clears every clearable
+  collection, including the commit tokens.
+- The state-stored contract suite proves the outbox position facts again:
+  every envelope carries the committed version, a gapless zero-based
+  `commitSequence`, and the exact `commitSize`. Adapters that cannot run
+  the outbox suite (CDC, broker-native delivery) get position coverage from
+  the repository suite alone.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
