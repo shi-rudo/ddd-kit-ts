@@ -179,6 +179,7 @@ skills-lock.json
 
 # Local agent instructions
 CLAUDE.md
+CLAUDE.local.md
 
 # Temporary local documentation rewrite checklist
 .guide-rewrite-todo.md
