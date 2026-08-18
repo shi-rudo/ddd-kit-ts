@@ -65,7 +65,7 @@ create table order_list_views (
 
 You might also have `order_detail_views`, `customer_order_summary_views`, or
 `invoice_export_views`. They can all be fed by the same events. Keep each
-projection focused on one read shape; that makes rebuilds and failures much
+projection focused on one read shape. That makes rebuilds and failures much
 easier to reason about.
 
 ## The Kit Projector

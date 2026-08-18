@@ -39,8 +39,8 @@ Most write-side code follows this shape:
 5. `withCommit` harvests events into the outbox and marks the aggregate
    persisted after the transaction commits.
 
-The aggregate is the consistency boundary. Application code should ask it to do
-domain work; it should not mutate child state or event lists from the outside.
+The aggregate is the consistency boundary. Application code asks it to do
+domain work. It must not mutate child state or event lists from the outside.
 
 ## A minimal aggregate
 

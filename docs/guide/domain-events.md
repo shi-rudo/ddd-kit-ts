@@ -429,9 +429,9 @@ All finalized envelopes produced by one aggregate in one commit share
 `position.aggregateVersion`, `position.commitSize`, and
 `position.previousEventfulAggregateVersion`. `position.commitSequence` is the
 zero-based position inside that harvest batch. The predecessor is the aggregate
-version of the immediately preceding EVENTFUL commit; state-only saves do not
+version of the immediately preceding EVENTFUL commit. State-only saves do not
 advance it. Only the event source at the persistence boundary can construct the
-complete cursor; neither `createDomainEvent` nor `withCommit` can infer it from
+complete cursor. Neither `createDomainEvent` nor `withCommit` can infer it from
 the aggregate's OCC baseline.
 
 Inside a committed envelope, `source` is the authoritative persistence address.

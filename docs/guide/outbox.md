@@ -341,7 +341,7 @@ dedupes exact pending, dead-lettered, and recently dispatched re-adds by
 position rejects instead of being mistaken for a retry. Once a dispatched
 receipt is evicted, a candidate behind the current source head fails with
 `EventHarvestError` rather than rewinding the head. This is intentionally
-fail-safe, not an unbounded idempotency promise; durable outboxes keep the
+fail-safe, not an unbounded idempotency promise. Durable outboxes keep the
 event-ID receipt in storage.
 
 It is not a production outbox for a database-backed app. It is not part of

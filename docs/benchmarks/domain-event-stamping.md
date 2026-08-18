@@ -35,7 +35,8 @@ time.
 
 Factory-created stamps now carry a non-enumerable internal ownership brand.
 Recording can share their already immutable metadata and the decision's already
-immutable payload. Public hand-built stamps still take the defensive-copy path.
+immutable payload. A hand-built stamp also shares the decision payload. Only its own fields, the
+time and the metadata, take the defensive-copy path.
 The event always receives its own frozen `Date`. Mutation and aliasing tests pin
 those ownership guarantees.
 
