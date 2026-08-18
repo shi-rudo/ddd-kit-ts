@@ -527,75 +527,73 @@ after the shell timeout.
 
 ### Fixed: commit boundary guards and repository facade integrity
 
-Code review of the v3 persistence redesign found gaps where guards had
-weakened or misfired. All of them are closed inside the same breaking window.
+Code review of the v3 persistence redesign found weak and wrong guards. All
+fixes ship inside the same breaking window.
 
-- `withCommit` rechecks every enrollment snapshot at harvest time. An event
-  recorded after `enrollSaved` but before the callback returned was silently
-  excluded from the outbox and the in-process bus; it now rejects the
-  transaction with `EventHarvestError`.
-- The unique-cursor guard for eventful commits is grounded in a kit-internal
-  persisted-version marker again instead of the enrollment-supplied
-  `expectedVersion`. Direct `withCommit` callers using the documented
-  `enrollSaved(aggregate)` style regain the deterministic rejection when a
-  persisted aggregate records events without advancing its version. A
-  never-persisted aggregate can still make an eventful version-0 commit.
-  The shared lifecycle-capability registry key changed with the capability
-  shape, so aggregates constructed by a package copy from an earlier 3.0.0
-  release candidate now fail enrollment with the generic "no kit-managed
-  persistence lifecycle" error instead of half-working; run one kit version
-  per process during the cutover.
+- `withCommit` checks each enrollment snapshot again at harvest time.
+  Before this fix, `withCommit` silently dropped an event that the aggregate
+  recorded after `enrollSaved`. Now the transaction rejects with
+  `EventHarvestError`.
+- The unique-cursor guard reads a kit-internal persisted-version marker, not
+  the enrollment option `expectedVersion`. Direct `withCommit` callers can
+  use the documented `enrollSaved(aggregate)` style and still get the
+  deterministic rejection when a persisted aggregate records events without
+  a version increase. A never-persisted aggregate can still make an eventful
+  version-0 commit. The registry key of the shared lifecycle capability
+  changed with the capability shape. An aggregate from an earlier 3.0.0
+  release candidate copy now fails enrollment with the generic "no
+  kit-managed persistence lifecycle" error. Run one kit version per process
+  during the cutover.
 - `recordPendingEvents` throws the new `ReentrantEventRecordingError` when a
-  stamp provider triggers a new decision on the aggregate being recorded.
-  The re-entrant decision was silently discarded before; recording stays
-  atomic when the guard fires.
-- `reconstituteAggregateFromSnapshot` surfaces a `DomainError` thrown during
-  migration or reconstitution as `SnapshotCorruptedError`. A tightened
-  `validateState` rule no longer makes aggregates with old snapshots
-  unloadable; the documented load recipe catches the corruption channel,
-  discards the snapshot, and refolds from the stream.
-- Mutation-after-registration detection compares persistence captures
-  through the new `persistenceProjectionDrifted` helper instead of
-  misreading `changes()`/`isEmpty()` as a no-change detector. Persistence
-  models that derive a full-replacement change set (permitted by the
-  contract) no longer fail every commit; `capture` must be deterministic for
-  an unchanged aggregate. The default comparison is structural deep
-  equality, which matches Set members and Map keys by reference; a model
-  whose capture re-materializes such values supplies the optional
-  `captureEquals` for adapter-owned comparison.
-- Assigning a replacement method through the repository facade invalidates
-  the guarded-method cache on the write-through path too. A test spy or
-  strategy swap for an inherited adapter method no longer keeps serving the
-  original implementation.
+  stamp provider triggers a new decision on the aggregate under recording.
+  Before, recording silently discarded the re-entrant decision. Recording
+  stays atomic when the guard fires.
+- `reconstituteAggregateFromSnapshot` maps a `DomainError` from migration or
+  reconstitution to `SnapshotCorruptedError`. A tightened `validateState`
+  rule cannot make old snapshots unloadable anymore. The documented load
+  recipe catches the corruption error, discards the snapshot, and refolds
+  from the stream.
+- Mutation detection after registration compares persistence captures with
+  the new helper `persistenceProjectionDrifted`. It does not read
+  `changes()` and `isEmpty()` as a no-change detector anymore. Persistence
+  models with a full-replacement change set commit again. `capture` must be
+  deterministic for an unchanged aggregate. The default comparison is
+  structural deep equality. That comparison matches Set members and Map keys
+  by reference. A model whose capture rebuilds such values supplies the
+  optional `captureEquals`.
+- An assignment of a replacement method through the repository facade now
+  invalidates the guarded-method cache on the write-through path too.
+  Before, a test spy on an inherited adapter method kept the original
+  implementation in service.
 - The facade exempts language-level probes (`then`, absent well-known
-  symbols) from the session-open assertion. Returning the facade from
-  `run()` no longer converts a committed transaction into a false retryable
-  `CommitError`; real property access after close still throws
+  symbols) from the session-open check. A facade returned from `run()`
+  resolves normally after a commit. Before, the probe raised a false
+  retryable `CommitError`. Real property access after close still throws
   `TransactionClosedError`.
-- Duplicate enrollment of an unchanged aggregate accepts a repeat call that
-  omits `expectedVersion`: an omitted option is no assertion. Only a
-  supplied value that contradicts the enrollment-time baseline rejects,
-  with a message that names both values.
+- Duplicate enrollment of an unchanged aggregate accepts a repeat call
+  without `expectedVersion`. An omitted option makes no assertion. A
+  supplied value that contradicts the enrollment-time baseline rejects with
+  a message that names both values.
 - A failed `repository.add` rolls its identity-map and tracking
   registration back. Before this fix, `findById` served the never-persisted
-  instance while the transaction committed without a write for it. The new
+  instance and the transaction committed without a write for it. The new
   `IdentityMap.discard` removes an entry without a deletion tombstone.
-- Loading one aggregate instance through two repository definitions now
-  rejects with reason `different_repository` and operation `load`, and the
+- A load of one aggregate instance through two repository definitions
+  rejects with reason `different_repository` and operation `load`. The
   ownership check runs before identity-map registration. The
   `AggregateTrackingError.operation` union gained `"load"`.
 - Repository adapters receive a frozen identity-map view with only `get`,
-  `has`, and `isDeleted`. The full map exposed `set`, `delete`, and `clear`
-  at runtime, and a stray `clear()` erased deletion tombstones and the
+  `has`, and `isDeleted`. Before, the full map exposed `set`, `delete`, and
+  `clear` at runtime. A stray `clear()` erased deletion tombstones and the
   baselines behind `UnenrolledChangesError`.
 - The pending-event recording registry is shared across package copies
   through a `Symbol.for` global key, like the lifecycle registry. With two
-  loaded copies of the kit, `recordPendingEvents` no longer throws for
-  aggregates that the other copy constructed.
-- The event-sourced repository contract suite no longer asserts the
-  in-memory mint brand on events read back from the adapter's store. An
-  adapter that serializes committed events to rows and decodes them on read
-  now passes; only the persisted `eventId` is asserted on read-back events.
+  loaded kit copies, `recordPendingEvents` now accepts aggregates that the
+  other copy constructed.
+- The event-sourced contract suite does not check the in-memory mint brand
+  on events read back from the adapter store. An adapter that decodes
+  stored rows on read now passes. Only the persisted `eventId` is checked
+  on read-back events.
 - The example order snapshot model stores `MoneySnapshot` DTOs instead of
   raw `Money` values. A JSON-backed snapshot store crashed on the first
   save because raw `Money` carries a bigint amount.
@@ -605,96 +603,99 @@ weakened or misfired. All of them are closed inside the same breaking window.
 A second branch-wide review confirmed ten more findings. All are closed
 inside the same breaking window.
 
-- `withCommit` asserts recorded (minted) events at commit enrollment, before
-  any adapter flush. The harvest guard alone fired after flush, so a
-  non-transactional event store kept a durably appended unstamped batch when
-  the shell forgot `recordPendingEvents`. The harvest check stays as a
-  backstop.
+- `withCommit` checks recorded (minted) events at commit enrollment, before
+  any adapter flush. Before, only the harvest guard fired, after flush. A
+  non-transactional event store then kept a durably appended unstamped
+  batch when the shell forgot `recordPendingEvents`. The harvest check
+  stays as a backstop.
 - The event-sourcing guide and the `handlers` JSDoc document the
-  live-versus-replay shape difference: a live `apply()` dispatches the event
-  before recording, so `eventId` and `occurredAt` do not exist yet, while
-  replay dispatches recorded events through the same handlers. Handlers must
-  fold state from `type` and `payload` only.
+  live-versus-replay shape difference. A live `apply()` dispatches the
+  event before recording, so `eventId` and `occurredAt` do not exist yet.
+  Replay dispatches recorded events through the same handlers. Handlers
+  must fold state from `type` and `payload` only.
 - `reconstituteAggregateFromSnapshot` enforces a post-condition: the
   reconstituted aggregate must carry `snapshot.version`. A factory that
-  forgets `markRestored` now fails loudly instead of feeding the
+  forgets `markRestored` now fails loudly. Before, it fed the
   discard-and-refold recovery forever.
 - The repository facade method cache keys validity on the current source
-  function. Adapter methods run with `this` bound to the raw source, so a
-  lazy-init self-assignment bypassed the proxy traps and the cache served
-  the replaced implementation for the rest of the run.
-- `assertJsonValue` rejects negative zero: `JSON.stringify(-0)` produces
-  `"0"`, which broke the exactness contract silently.
+  function. Adapter methods run with `this` bound to the raw source. A
+  lazy-init self-assignment therefore bypassed the proxy traps, and the
+  cache kept the replaced implementation in service for the rest of the
+  run.
+- `assertJsonValue` rejects negative zero. `JSON.stringify(-0)` produces
+  `"0"`, so negative zero broke the exactness contract silently.
 - The state-stored contract suite restored the deep-equal requirement on
-  `mutateVersionOnly`, so it again forces the version-only, empty-change-set
-  write that a skip-empty adapter would drop. The repository guide states
-  the duty explicitly: an empty change set with a bumped version must still
-  persist the version.
-- The event-sourced contract suite restored the retry-after-rollback test:
-  re-adding the same never-persisted instance after a rollback must create
-  the stream with the full pending history.
+  `mutateVersionOnly`. The suite again forces the version-only write with
+  an empty change set, which a skip-empty adapter drops. The repository
+  guide states the duty explicitly: an adapter must persist the version
+  even when the change set is empty.
+- The event-sourced contract suite restored the retry-after-rollback test.
+  A retry that adds the same never-persisted instance again must create the
+  stream with the full pending history.
 - `update` after `add` on the same aggregate reports `conflicting_intent`
-  with the registered `add` intent instead of `not_loaded` with impossible
-  load advice.
-- The saga example's wrong-state error names both candidate completion
-  events instead of hard-coding the shipping-failure event for every caller.
+  with the registered `add` intent. Before, it reported `not_loaded` with
+  load advice that is impossible for a new aggregate.
+- The wrong-state error of the saga example names both candidate completion
+  events. Before, it hard-coded the shipping-failure event for every
+  caller.
 - `recordDomainEvent` shares the already-frozen payload when a stamp
-  provider callback records an event, instead of paying a second deep copy
-  per event; only the caller-owned stamp fields are validated and copied.
+  provider callback records an event. Before, it paid a second deep copy
+  per event. Only the caller-owned stamp fields are checked and copied.
 
 ### Fixed: third review round on enrollment ordering, cross-copy identity, and the examples gate
 
-A high-effort branch review confirmed 27 more findings. The correctness core
-and the contract, diagnostic, and convention findings are closed; a
-simplification and efficiency cluster remains tracked.
+A high-effort branch review confirmed 27 more findings. The correctness,
+contract, diagnostic, and convention findings are closed. A simplification
+and efficiency cluster remains tracked.
 
-- `enroll()` validates a duplicate enrollment BEFORE it adopts the widened
-  deleted disposition. A rejected `enrollDeleted` whose error the callback
-  caught no longer leaves a saved aggregate marked deleted, which made the
-  post-commit loop discard instead of acknowledge.
-- Kit boundaries that route by error family are copy-safe: the new exported
-  `isDomainErrorLike` and `isInfrastructureErrorLike` fall back to the
-  structural `category` field when `instanceof` fails across loaded kit
-  copies. `mapError` results from an adapter package's own kit copy no
-  longer crash as `RepositoryErrorMappingFailedError`, and a cross-copy
+- `enroll()` checks a duplicate enrollment before it adopts the widened
+  deleted disposition. Before this fix, a rejected `enrollDeleted` whose
+  error the callback caught left a saved aggregate marked deleted. The
+  post-commit loop then ran the discard path instead of the acknowledge
+  path.
+- Kit boundaries that route by error family are copy-safe. The new exported
+  `isDomainErrorLike` and `isInfrastructureErrorLike` use the structural
+  `category` field when `instanceof` fails across loaded kit copies. A
+  `mapError` result from an adapter package's own kit copy does not crash
+  as `RepositoryErrorMappingFailedError` anymore. A cross-copy
   `DomainError` from a snapshot factory reaches the corruption channel. The
-  `RepositoryDefinition` brand moved to a versioned `Symbol.for` key like
+  `RepositoryDefinition` brand moved to a versioned `Symbol.for` key, like
   every other kit brand.
 - `recordPendingEvents` throws the new `DuplicateEventIdError` when two
-  events in one batch would share an `eventId` (a reused stamp). Idempotent
-  consumers keyed on `eventId` no longer silently drop a fact.
-- `npm run typecheck` now covers `examples/` through
-  `tsconfig.typecheck.json`. That gate surfaced and this change fixes 15
-  shipped type errors: `MoneyDto` is a type alias so it satisfies the
-  `JsonValue` bound that `PublishedCommand` payloads require, the saga spec
-  passes `id` to `AggregateNotFoundError` again, the rugby example is
-  migrated to the v3 `createEvent` and handler shapes, and the saga spec
-  narrows the command union before reading payload fields.
+  events in one batch share an `eventId` (a reused stamp). Before,
+  idempotent consumers keyed on `eventId` silently dropped one of the two
+  facts.
+- `npm run typecheck` covers `examples/` through `tsconfig.typecheck.json`.
+  The gate surfaced 15 shipped type errors, and this change fixes all of
+  them. `MoneyDto` is a type alias now, so it satisfies the `JsonValue`
+  bound that `PublishedCommand` payloads require. The saga spec passes `id`
+  to `AggregateNotFoundError` again. The rugby example uses the v3
+  `createEvent` and handler shapes. The saga spec narrows the command union
+  before it reads payload fields.
 - The state-stored contract suite requires exactly `DUPLICATE_AGGREGATE`
-  for a duplicate add again and restored the preserved-row assertions. The
+  for a duplicate add again, and it restored the preserved-row checks. The
   silent relaxation to a retryable conflict contradicted the documented
   mapping and retry rules.
 - `update` and `remove` through a different repository definition report
-  `different_repository`, matching `add` and `trackLoaded`.
+  `different_repository`. This matches `add` and `trackLoaded`.
 - The repository facade follows one probe rule: a property that exists
-  nowhere on the facade answers `undefined` without the session-open
-  assertion, covering `then`, `toJSON`, and inspection symbols in one
-  stroke. Existing members still throw `TransactionClosedError` after
-  close.
+  nowhere on the facade answers `undefined` without the session-open check.
+  One rule covers `then`, `toJSON`, and inspection symbols. Existing
+  members still throw `TransactionClosedError` after close.
 - Removed (breaking within the unreleased window): the deprecated
   `DomainEventFacts` and `CreateDomainEventFactsOptions` aliases, the
   factory `createFacts` member, the legacy `recordEvent` and
   `recordEventFromFactory` aggregate helpers, and the
   `AggregateConfig.domainEventFactory` convenience wiring. The CHANGELOG
-  already promised no deprecated aliases; now the code keeps that promise.
-  Use `createEvent` plus `recordPendingEvents`, or
+  already promised no deprecated aliases. Now the code keeps that promise.
+  Use `createEvent` plus `recordPendingEvents`, or use
   `createDomainEventFromFacts` for caller-owned identity.
 - The unit-of-work and migration guides document that reads inside `run()`
-  do not see registered writes: only `findById` is covered by the identity
-  map, and secondary-key finders read pre-run storage state.
+  do not see registered writes. Only `findById` is covered by the identity
+  map. Secondary-key finders read the storage state from before the run.
 - Post-commit acknowledgement syncs the persisted-version marker from the
-  enrollment-time version instead of the live instance version, so
-  un-awaited concurrent work in the post-commit window cannot desync it.
+  enrollment-time version, not from the live instance version. Un-awaited
+  concurrent work in the post-commit window cannot desync the marker.
 
 ### Migration guide: 2.2.0 to 3.0.0
 
