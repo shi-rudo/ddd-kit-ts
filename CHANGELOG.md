@@ -697,6 +697,48 @@ and efficiency cluster remains tracked.
   enrollment-time version, not from the live instance version. Un-awaited
   concurrent work in the post-commit window cannot desync the marker.
 
+### Fixed: fourth review round on the round-3 fixes
+
+A medium review of the round-3 commits confirmed seven findings and one
+design question. All are closed.
+
+- Discard after a deletion strips the acknowledged prefix and leaves the
+  persisted-version marker untouched. Before, the marker took the live
+  instance version for a row that no longer exists. A later legitimate
+  re-enrollment of that instance then tripped the unique-cursor guard.
+- The facade membership check stops before `Object.prototype`. Inherited
+  members like `toString` and `valueOf` are language plumbing and answer
+  normally, so string interpolation on a leaked facade after close cannot
+  mask the original failure. Members below `Object.prototype` keep the loud
+  `TransactionClosedError`.
+- A repeated `remove` of the same instance is an accepted no-op, like a
+  repeated `add` or `update`. The decision follows collection semantics and
+  common Unit of Work practice. Everything else stays loud: `add`,
+  `update`, and `trackLoaded` after a removal reject, and so does any other
+  instance with the same id. The `AggregateDeletedError` message now covers
+  the other-instance case.
+- `assertSnapshotSafe` rejects symbol values with the module's guided
+  TypeError. Before, `structuredClone` threw a raw `DataCloneError` with no
+  path, and no recovery channel caught it.
+- `assertTraceContext` tolerates empty `tracestate` list-members, as the
+  W3C Trace Context specification requires. Empty members are dropped
+  before validation, and a header with only empty members counts as absent.
+  The limit message now says characters, not bytes.
+- `defineRepository` validates the definition after the spread copy. A
+  definition that carries `create`, `flush`, or `mapError` on a prototype
+  or as non-enumerable members now fails at definition time with a named
+  error. Before, the loss surfaced as a bare TypeError inside the first
+  `run()`.
+- The command-outbox contract suite documents that `createCommand` must
+  return distinct content per seed, and the conflict tests check it. A
+  constant command made the manufactured conflict equal to its original and
+  failed a compliant adapter.
+- German wording is removed from an `entity.ts` JSDoc sentence, the
+  generated API docs, and five issue records.
+- The event-sourcing guide drops a stale promise: replay does not check a
+  persistence flag, because the Unit of Work owns the factory-versus-load
+  lifecycle.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

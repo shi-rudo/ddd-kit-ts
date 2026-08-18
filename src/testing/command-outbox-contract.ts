@@ -32,6 +32,14 @@ export interface CommandOutboxContractHarness<C extends PublishedCommand> {
 	readonly createEnvironment: () => Promise<
 		CommandOutboxContractEnvironment<C>
 	>;
+	/**
+	 * Builds one command for the given seed. The suite derives conflicting
+	 * commits from different seeds, so `createCommand` MUST return distinct
+	 * command content per seed (put the seed in the payload). A constant
+	 * command makes a manufactured conflict deep-equal to its original, and
+	 * the conflict tests then fail a compliant adapter that deduplicates
+	 * the exact retry.
+	 */
 	readonly createCommand: (seed: number) => C;
 	readonly providesRolledBackAdds?: boolean;
 }
@@ -93,6 +101,11 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 						eventId: original.origin.eventId,
 					},
 				};
+				assert(
+					!deepEqual(conflict.messages, original.messages),
+					"harness contract: createCommand must return distinct content " +
+						"per seed, or the manufactured conflict is an exact retry",
+				);
 				const rejection = await captureRejection(env.addCommitted([conflict]));
 				assert(
 					rejection !== undefined,
@@ -211,6 +224,11 @@ export function createCommandOutboxContractTests<C extends PublishedCommand>(
 						eventId: original.origin.eventId,
 					},
 				};
+				assert(
+					!deepEqual(conflictingOriginal.messages, original.messages),
+					"harness contract: createCommand must return distinct content " +
+						"per seed, or the manufactured conflict is an exact retry",
+				);
 				const rejection = await captureRejection(
 					env.addCommitted([newCommit, conflictingOriginal]),
 				);

@@ -1799,6 +1799,29 @@ describe("commit enrollment lifecycle", () => {
 		expect(lifecycle?.persistedVersion()).toBe(7);
 	});
 
+	it("discard after deletion leaves the persisted marker untouched", async () => {
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "o-1" },
+			{ aggregateId: "o-1", aggregateType: "MockOrder" },
+		);
+		const aggregate = createMockAggregate([event], 7, 5);
+
+		await withCommit(
+			{ outbox: createMockOutbox(), scope: createMockScope() },
+			async (_ctx, enrollment) => ({
+				result: "r",
+				commits: [enrollment.enrollDeleted(aggregate)],
+			}),
+		);
+
+		// The row is gone: stamping the marker from the live instance would
+		// trip the unique-cursor guard on a later legitimate re-enrollment.
+		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		expect(lifecycle?.persistedVersion()).toBe(5);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
 	it("keeps the saved disposition when a later delete enrollment is rejected", async () => {
 		const event = createDomainEvent(
 			"OrderCreated",

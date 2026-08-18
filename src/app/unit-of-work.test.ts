@@ -1527,6 +1527,57 @@ describe("UnitOfWork", () => {
 			).toEqual([[stamped(deletionEvent, 2)]]);
 		});
 
+		it("a repeated remove of the same instance is an accepted no-op", async () => {
+			let flushCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						physicalRemoval: true,
+						flush: async () => {
+							flushCalls += 1;
+						},
+						create: (_tx: undefined, tracking) => ({
+							trackLoaded: (loaded: MockAggregate) =>
+								tracking.trackLoaded(loaded),
+						}),
+					}),
+				},
+			});
+			const aggregate = createMockAggregate("o-1");
+
+			// Two defensive cleanup paths both declare the same final
+			// lifecycle outcome; collection semantics make this convergent,
+			// not conflicting.
+			const result = await uow.run(async ({ repositories }) => {
+				repositories.orders.trackLoaded(aggregate);
+				repositories.orders.remove(aggregate);
+				repositories.orders.remove(aggregate);
+				return "removed";
+			});
+
+			expect(result).toBe("removed");
+			expect(flushCalls).toBe(1);
+		});
+
+		it("removing a second instance with the same id still throws AggregateDeletedError", async () => {
+			const { uow } = createUow();
+			const first = createMockAggregate("o-1");
+			const second = createMockAggregate("o-1");
+
+			await expect(
+				uow.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(first);
+					repositories.orders.remove(first);
+					repositories.orders.trackLoaded(second);
+					return undefined;
+				}),
+			).rejects.toBeInstanceOf(AggregateDeletedError);
+		});
+
 		it("saving an aggregate after deleting it in the same unit of work throws AggregateDeletedError", async () => {
 			const { uow } = createUow();
 			const agg = createMockAggregate("o-1");
@@ -1721,6 +1772,10 @@ describe("UnitOfWork", () => {
 			expect(facade.toJSON).toBeUndefined();
 			expect(facade[Symbol.toStringTag]).toBeUndefined();
 			expect(facade.someAbsentProperty).toBeUndefined();
+			// Object.prototype members are language plumbing, not repository
+			// surface: string interpolation in logging code must not throw.
+			expect(() => String(facade)).not.toThrow();
+			expect(String(facade)).toBe("[object Object]");
 			// Existing members keep the loud invalidation.
 			expect(() => facade.tx).toThrow(TransactionClosedError);
 		});
@@ -2495,6 +2550,33 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(result).toBe("deleted");
+		});
+	});
+
+	describe("definition validation", () => {
+		it("rejects a definition whose members would vanish in the spread", () => {
+			// A class instance carries create/flush/mapError on the prototype;
+			// the builder's spread copies own enumerable properties only, so
+			// without validation the loss would surface as a bare TypeError
+			// deep inside the first run().
+			class PrototypeDefinition {
+				readonly aggregate = MockAggregate;
+				readonly persistence = versionPersistenceModel<MockAggregate>();
+				create(): object {
+					return {};
+				}
+				async flush(): Promise<void> {}
+				mapError(): InfrastructureError {
+					return new TestRepositoryError(new Error("x"));
+				}
+			}
+
+			expect(() =>
+				defineExplicitRepository<{
+					add(aggregate: MockAggregate): void;
+					update(aggregate: MockAggregate): void;
+				}>()(new PrototypeDefinition() as never),
+			).toThrow(/"create" is missing or not a function/);
 		});
 	});
 

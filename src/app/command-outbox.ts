@@ -289,12 +289,21 @@ function assertTraceContext(traceparent: unknown, tracestate: unknown): void {
 	}
 	if (tracestate === undefined) return;
 	if (typeof tracestate !== "string" || tracestate.length > 512) {
-		invalid("$.tracestate", "must stay within the 512-byte command limit");
+		invalid(
+			"$.tracestate",
+			"must stay within the 512-character command limit",
+		);
 	}
-	const members = tracestate.split(",").map((member) => member.trim());
+	// W3C Trace Context requires receivers to tolerate empty list-members
+	// ("vendor1=abc,,vendor2=def"). They carry no data and are dropped
+	// before validation; a header with only empty members counts as absent.
+	const members = tracestate
+		.split(",")
+		.map((member) => member.trim())
+		.filter((member) => member.length > 0);
+	if (members.length === 0) return;
 	const keys = new Set<string>();
 	if (
-		members.length === 0 ||
 		members.length > 32 ||
 		members.some((member) => {
 			const memberMatch = TRACESTATE_MEMBER.exec(member);

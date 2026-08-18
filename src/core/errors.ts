@@ -848,8 +848,10 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
 		super(
 			"AGGREGATE_DELETED",
 			`Aggregate ${aggregateId} was removed in this unit of work and ` +
-				"cannot be added, updated, or tracked again. Removal is final within " +
-				"an operation; if the aggregate must remain, do not remove it.",
+				"cannot be added, updated, tracked, or removed through another " +
+				"instance again. Removal is final within an operation. A repeated " +
+				"remove of the SAME instance is an accepted no-op; if the " +
+				"aggregate must remain, do not remove it.",
 		);
 	}
 }

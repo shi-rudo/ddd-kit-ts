@@ -460,9 +460,8 @@ Version advances additively:
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
 `loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
-moves. If it has an in-memory version that was never persisted, it also throws.
-If replay uses that object, it marks unpersisted history as persisted. This
-corrupts the next repository update.
+moves. The Unit of Work owns the factory-versus-load lifecycle, so the
+aggregate carries no persistence flag and replay does not check one.
 
 Use a fresh `Order.reconstitute(id)` target for normal loads.
 

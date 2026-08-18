@@ -184,7 +184,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * This accessor is deliberately protected: returning the generic
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
-	 * dirty tracking. Concrete entities should expose fachliche queries or
+	 * dirty tracking. Concrete entities should expose business-meaningful queries or
 	 * detached immutable DTOs. Snapshot projection belongs to an adapter-owned
 	 * `SnapshotModel`; persistence code captures an aggregate with
 	 * `captureAggregateSnapshot(model, aggregate, snapshotAt)` rather than

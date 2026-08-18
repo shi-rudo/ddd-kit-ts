@@ -108,6 +108,31 @@ describe("adapter-owned snapshot models", () => {
 		expect(restored.state).not.toBe(storedState);
 	});
 
+	it("rejects symbol values with a guided error instead of a DataCloneError", () => {
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
+		const symbolModel = defineSnapshotModel({
+			...model,
+			capture: () =>
+				({ status: Symbol("draft") }) as unknown as {
+					readonly status: string;
+				},
+		});
+
+		// structuredClone would throw a raw DOMException with no path; the
+		// gate must reject with the module's guided TypeError instead.
+		expect(() =>
+			captureAggregateSnapshot(
+				symbolModel,
+				order,
+				new Date("2026-07-29T10:00:00.000Z"),
+			),
+		).toThrow(/snapshot state\.status is a symbol/);
+	});
+
 	it("routes a foreign-copy domain rejection into the corruption channel", () => {
 		// Structurally a DomainError from another loaded kit copy: not
 		// instanceof this copy's class, but category "DOMAIN".

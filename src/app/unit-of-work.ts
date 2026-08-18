@@ -530,6 +530,38 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
  * raw adapter-shaped object cannot silently turn its concrete surface into the
  * application contract.
  */
+function assertRepositoryDefinitionMembers(
+	definition: Record<PropertyKey, unknown>,
+): void {
+	for (const key of ["create", "flush", "mapError"] as const) {
+		if (typeof definition[key] !== "function") {
+			throw new TypeError(
+				`defineRepository: "${key}" is missing or not a function on the ` +
+					"definition. The builder copies own enumerable properties only; " +
+					"prototype methods and non-enumerable members are not carried. " +
+					"Pass a plain object literal.",
+			);
+		}
+	}
+	if (typeof definition.aggregate !== "function") {
+		throw new TypeError(
+			'defineRepository: "aggregate" is missing or not a class reference ' +
+				"on the definition. Pass a plain object literal with own " +
+				"enumerable properties.",
+		);
+	}
+	if (
+		definition.persistence === null ||
+		typeof definition.persistence !== "object"
+	) {
+		throw new TypeError(
+			'defineRepository: "persistence" is missing or not a ' +
+				"PersistenceModel on the definition. Pass a plain object literal " +
+				"with own enumerable properties.",
+		);
+	}
+}
+
 export function defineRepository<TRepositoryPort extends object>(): Extract<
 	TRepositoryPort,
 	CallableValue
@@ -538,6 +570,12 @@ export function defineRepository<TRepositoryPort extends object>(): Extract<
 	: never {
 	const builder = (definition: object): object => {
 		const branded = { ...definition };
+		// Validated AFTER the spread, on what actually survives it: the
+		// spread copies own enumerable properties only, so create/flush/
+		// mapError carried on a prototype (class instance) or as
+		// non-enumerable members vanish silently. Without this check, the
+		// loss surfaces as a bare TypeError deep inside the first run().
+		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
 		Object.defineProperty(branded, repositoryDefinitionBrand, {
 			configurable: false,
 			enumerable: false,
@@ -957,6 +995,24 @@ function isRepositoryLifecycleOperation(property: PropertyKey): boolean {
 	);
 }
 
+/**
+ * Own-or-inherited presence that stops BEFORE `Object.prototype`: members
+ * every object inherits (`toString`, `valueOf`, `constructor`) are language
+ * plumbing, not repository surface, and must not trip the facade's
+ * session-open assertion.
+ */
+function hasMemberBelowObjectPrototype(
+	object: object,
+	property: PropertyKey,
+): boolean {
+	let current: object | null = object;
+	while (current !== null && current !== Object.prototype) {
+		if (Reflect.getOwnPropertyDescriptor(current, property)) return true;
+		current = Reflect.getPrototypeOf(current);
+	}
+	return false;
+}
+
 function readRepositorySource<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
 	property: PropertyKey,
@@ -1046,18 +1102,20 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 		get: (target, property, receiver) => {
 			// Language-level probes are not repository operations: promise
 			// resolution reads `then` on any value returned from run(),
-			// JSON.stringify probes `toJSON`, and inspection utilities read
-			// well-known symbols on any value that crosses an API boundary.
+			// JSON.stringify probes `toJSON`, string interpolation reads
+			// `toString`, and inspection utilities read well-known symbols.
 			// One principled rule instead of one exemption per discovered
-			// probe: a property that exists NOWHERE on the facade is a probe
-			// and answers `undefined` without the session-open assertion.
-			// Existing members keep the loud TransactionClosedError after
-			// close (a probe cannot leak state; a member read can).
+			// probe: only a property present BELOW Object.prototype is
+			// repository surface and gets the session-open assertion.
+			// Everything else is language plumbing and answers normally, so
+			// logging a leaked facade after close cannot mask the original
+			// failure. Member reads keep the loud TransactionClosedError
+			// (a probe cannot leak state; a member read can).
 			if (
-				!Reflect.has(target, property) &&
-				!Reflect.has(state.source, property)
+				!hasMemberBelowObjectPrototype(target, property) &&
+				!hasMemberBelowObjectPrototype(state.source, property)
 			) {
-				return undefined;
+				return Reflect.get(target, property, receiver);
 			}
 			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
@@ -1336,8 +1394,19 @@ class Session<Evt extends AnyDomainEvent> {
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.remove");
-		const entry = this.loadedEntryFor(aggregate, "remove", definition);
-		this.registerWrite(entry, "remove", definition);
+		// Idempotent by reference, like add and update: a repeated remove of
+		// the SAME instance re-declares the same final lifecycle outcome
+		// (collection semantics; the enrollment layer already returns the
+		// same token for a repeat enrollDeleted). The deletion-finality gate
+		// stays sharp for everything else: add, update, and trackLoaded
+		// after remove, and any OTHER instance with the same id, still
+		// reject.
+		const entry = this._trackingByAggregate.get(aggregate);
+		if (this._deleted.has(aggregate) && entry?.definition === definition) {
+			return;
+		}
+		const loaded = this.loadedEntryFor(aggregate, "remove", definition);
+		this.registerWrite(loaded, "remove", definition);
 	}
 
 	/** Registers persistence intent and commit enrollment as one operation. */

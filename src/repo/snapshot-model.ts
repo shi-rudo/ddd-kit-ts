@@ -210,6 +210,13 @@ function assertSnapshotSafe(
 			`snapshot state${path} is a function; map it to serialisable data in the snapshot model`,
 		);
 	}
+	// Guided rejection instead of the raw DataCloneError DOMException that
+	// structuredClone throws for symbols, which no recovery channel catches.
+	if (typeof value === "symbol") {
+		throw new TypeError(
+			`snapshot state${path} is a symbol; map it to serialisable data in the snapshot model`,
+		);
+	}
 	if (value === null || typeof value !== "object") return;
 	const object = value as object;
 	if (seen.has(object)) return;

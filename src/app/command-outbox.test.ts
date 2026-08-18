@@ -414,6 +414,35 @@ describe("routeEventsToCommandOutbox", () => {
 		expect(received?.[0]?.messages[0]?.traceparent).toBe(traceparent);
 	});
 
+	it("tolerates spec-legal empty tracestate list-members", async () => {
+		let received: unknown;
+		const writer = routeEventsToCommandOutbox(
+			{
+				add: async (commits: unknown) => {
+					received = commits;
+				},
+			},
+			() => [
+				{
+					destination: "shipping.commands",
+					command: {
+						type: "RequestShipping",
+						version: 1,
+						payload: {},
+					},
+					traceparent:
+						"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+					// W3C Trace Context: receivers must tolerate empty
+					// list-members forwarded by upstream tracers.
+					tracestate: "vendor1=abc,,vendor2=def",
+				},
+			],
+		);
+
+		await expect(writer.add([processEventCandidate()])).resolves.not.toThrow();
+		expect(received).toBeDefined();
+	});
+
 	it("rejects duplicate tracestate keys before calling the adapter", async () => {
 		let addCalls = 0;
 		const writer = routeEventsToCommandOutbox(

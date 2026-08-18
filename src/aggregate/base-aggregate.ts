@@ -101,7 +101,7 @@ export abstract class BaseAggregate<
 				this.acknowledgePendingEvents(events, committedVersion);
 			},
 			discardPendingEvents: (events) => {
-				this.acknowledgePendingEvents(events);
+				this.discardPendingEventsAfterDeletion(events);
 			},
 			persistedVersion: () => this._persistedVersion,
 		});
@@ -153,6 +153,28 @@ export abstract class BaseAggregate<
 		events: ReadonlyArray<unknown>,
 		committedVersion?: number,
 	): void {
+		this.stripAcknowledgedPrefix(events);
+		// The next eventful commit needs a cursor beyond the version this
+		// commit persisted. The caller passes the enrollment-time version:
+		// syncing from the live version instead would let un-awaited
+		// concurrent work that mutates the instance in the post-commit window
+		// desync the marker.
+		this._persistedVersion = (committedVersion ?? this._version) as Version;
+	}
+
+	/**
+	 * Post-commit cleanup for the deleted disposition. The row is gone, so
+	 * there is no persisted version to advance: stamping the marker from the
+	 * live instance would make a later legitimate re-enrollment of this
+	 * instance trip the unique-cursor guard for a row that does not exist.
+	 */
+	private discardPendingEventsAfterDeletion(
+		events: ReadonlyArray<unknown>,
+	): void {
+		this.stripAcknowledgedPrefix(events);
+	}
+
+	private stripAcknowledgedPrefix(events: ReadonlyArray<unknown>): void {
 		if (
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
@@ -162,12 +184,6 @@ export abstract class BaseAggregate<
 			);
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);
-		// The next eventful commit needs a cursor beyond the version this
-		// commit persisted. The caller passes the enrollment-time version:
-		// syncing from the live version instead would let un-awaited
-		// concurrent work that mutates the instance in the post-commit window
-		// desync the marker.
-		this._persistedVersion = (committedVersion ?? this._version) as Version;
 	}
 
 	public get version(): Version {
