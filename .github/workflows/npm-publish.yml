@@ -4,7 +4,8 @@ name: npm-publish
 # `npm version <x.y.z[-rc.n]>` followed by `git push --follow-tags`).
 # `workflow_dispatch` covers a tag that was pushed before this workflow
 # existed or a re-run after a fixed registry problem: run it from the
-# Actions tab with the tag selected as the ref.
+# Actions tab (or `gh workflow run`) on a ref whose package.json version
+# carries an existing tag.
 on:
   push:
     tags:
@@ -13,9 +14,9 @@ on:
 
 permissions:
   contents: read
-  # npm provenance: the publish carries a verifiable link to this exact
-  # workflow run. Also the prerequisite for tokenless npm Trusted
-  # Publishing, when that is configured on npmjs.com for this package.
+  # npm Trusted Publishing: the job authenticates to the registry through
+  # this workflow's OIDC identity. No token secret exists or is needed,
+  # and the publish carries provenance for this exact run.
   id-token: write
 
 jobs:
@@ -32,19 +33,30 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs npm 11.5.1 or newer; Node 22 bundles npm 10.
+      - name: Update npm for Trusted Publishing
+        run: npm install -g npm@11
 
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Tag must match package.json
+      - name: Version must carry its tag
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           pkg=$(node -p "require('./package.json').version")
-          if [ "$tag" != "$pkg" ]; then
-            echo "Tag v$tag does not match package.json version $pkg." >&2
-            echo "Cut releases with 'npm version' so the two cannot drift." >&2
-            exit 1
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$pkg" ]; then
+              echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg." >&2
+              echo "Cut releases with 'npm version' so the two cannot drift." >&2
+              exit 1
+            fi
+          else
+            git fetch --tags --quiet
+            if ! git rev-parse -q --verify "refs/tags/v$pkg" >/dev/null; then
+              echo "No tag v$pkg exists for package.json version $pkg." >&2
+              echo "Tag the release before dispatching a publish." >&2
+              exit 1
+            fi
           fi
 
       # `npm publish` runs prepublishOnly first: clean, typecheck, lint,
@@ -52,8 +64,6 @@ jobs:
       # publishes under the `next` dist-tag (the release-candidate soak);
       # a stable version publishes under `latest`.
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           pkg=$(node -p "require('./package.json').version")
           case "$pkg" in
