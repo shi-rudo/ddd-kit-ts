@@ -795,6 +795,12 @@ design question. All are closed.
   fails after the callback resolved. Before, the claim wedged the key until
   lease expiry and demanded reconciliation after.
 
+### Fixed: poison deadlines reach the dead letter
+
+- The deadline processor's own delivery timeout consumes a poison attempt.
+  Before, a handler that ignores `context.signal` never reached the dead
+  letter, and every poll spawned another zombie execution.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,
