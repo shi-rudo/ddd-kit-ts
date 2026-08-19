@@ -768,6 +768,19 @@ design question. All are closed.
   the outbox suite (CDC, broker-native delivery) get position coverage from
   the repository suite alone.
 
+### Fixed: outbox batch atomicity and abort-safe publication
+
+- `InMemoryOutbox.add` keeps its all-or-nothing promise. Before, the batch
+  pre-validation skipped a stale-head candidate that the main loop rejected
+  only after earlier candidates were inserted. A rolled-back caller then
+  left a pending event for a commit that never happened. Exact retries
+  still deduplicate. The receipt check also splits into named variants
+  instead of a positional boolean flag.
+- `EventBus.publish` carries collected handler failures on the abort error
+  as an `AggregateError`. Failures are recorded the moment they happen, so
+  a hung peer cannot hide a settled rejection. A settled batch still
+  reports its failures in subscription order.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,
