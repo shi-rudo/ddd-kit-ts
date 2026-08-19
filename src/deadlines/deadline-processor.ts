@@ -239,11 +239,15 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 			const delivered: DueDeadline<TPayload>[] = [];
 			for (const deadline of batch) {
 				if (signal?.aborted) break;
+				let boundedContext: ExecutionContext | undefined;
 				try {
 					await runBoundedExecution(
 						"DeadlineProcessor.handler",
 						{ signal, timeoutMs: this.deliveryTimeoutMs },
-						(context) => this.handler(deadline, context),
+						(context) => {
+							boundedContext = context;
+							return this.handler(deadline, context);
+						},
 					);
 					delivered.push(deadline);
 				} catch (error) {
@@ -253,7 +257,15 @@ export class DeadlineProcessor<TPayload = unknown> extends PollLoop {
 					reportToObserver(() =>
 						this.observers.onDeliveryError(error, deadline, assessment),
 					);
-					if (assessment.kind !== "transient") {
+					// The processor's own delivery budget expiring is
+					// deterministic evidence against THIS deliveryId, not a
+					// transient infrastructure hiccup: without consuming an
+					// attempt, a handler that permanently ignores
+					// context.signal never reaches the dead letter and every
+					// poll re-serves it and spawns another zombie execution.
+					const ownBudgetExpired =
+						!signal?.aborted && boundedContext?.signal.aborted === true;
+					if (assessment.kind !== "transient" || ownBudgetExpired) {
 						try {
 							const deadLetter = await runBoundedExecution(
 								"DeadlineProcessor.markFailed",

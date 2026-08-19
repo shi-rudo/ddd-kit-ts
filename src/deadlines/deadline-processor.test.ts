@@ -587,7 +587,7 @@ describe("DeadlineProcessor", () => {
 		expect(await cronPass).toBe("drained");
 	});
 
-	it("times out a never-settling handler without consuming the poison ceiling", async () => {
+	it("times out a never-settling handler and consumes a poison attempt", async () => {
 		vi.useFakeTimers();
 		const store = await seeded([{ key: "a" }], { maxDeliveryAttempts: 99 });
 		let context: ExecutionContext | undefined;
@@ -627,8 +627,11 @@ describe("DeadlineProcessor", () => {
 			expect(context?.deadlineAt).toBeTypeOf("number");
 			expect(errors).toHaveLength(1);
 			expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+			// The processor's own delivery budget consumes an attempt: a
+			// handler that permanently ignores context.signal must reach the
+			// dead letter instead of spawning a zombie execution per poll.
 			const [pending] = await store.due(at(T1), 10);
-			expect(pending).toMatchObject({ key: "a", attempts: 0 });
+			expect(pending).toMatchObject({ key: "a", attempts: 1 });
 		} finally {
 			vi.useRealTimers();
 		}
