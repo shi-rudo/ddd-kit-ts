@@ -2329,6 +2329,51 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("cancellation (AbortSignal)", () => {
+		it("passes the abort reason through when the scope rejects between attempts", async () => {
+			const controller = new AbortController();
+			const cancellation = new Error("caller cancelled");
+			// A retrying scope whose backoff wait observes the abort: it
+			// rejects with the abort reason WITHOUT re-entering the callback,
+			// so the attempt flags still describe the previous attempt.
+			const scope: TransactionScope<undefined> = {
+				transactional: async <T>(fn: (_ctx: undefined) => Promise<T>) => {
+					try {
+						return await fn(undefined);
+					} catch {
+						controller.abort(cancellation);
+						throw cancellation;
+					}
+				},
+			};
+			const uow = new UnitOfWork({
+				scope,
+				outbox: createMockOutbox(),
+				repositories: {
+					orders: defineTestRepository({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						flush: async () => {},
+						create: () => ({}),
+					}),
+				},
+			});
+
+			const rejection = await uow
+				.run(
+					async () => {
+						throw new Error("attempt 1 conflict");
+					},
+					{ signal: controller.signal },
+				)
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				);
+
+			// The cancellation, not a RollbackError with a retryable cause.
+			expect(rejection).toBe(cancellation);
+		});
+
 		it("an already-aborted signal rejects run() before opening a transaction", async () => {
 			let txOpened = false;
 			const scope: TransactionScope<undefined> = {

@@ -1,6 +1,6 @@
 import { someChainRetryable } from "@shirudo/base-error";
 import { abortReason } from "../utils/abort";
-import { computeBackoffDelay } from "../utils/backoff";
+import { computeBackoffDelay, neutralJitterSource } from "../utils/backoff";
 import { reportToObserver } from "../utils/observer";
 import { sleepRejectingOnAbort } from "../utils/sleep";
 import {
@@ -126,7 +126,10 @@ export class RetryingTransactionScope<TCtx> implements TransactionScope<TCtx> {
 		);
 		this.isRetryable = policy.isRetryable ?? someChainRetryable;
 		this.sleep = policy.sleep ?? defaultSleep;
-		this.random = policy.random ?? Math.random;
+		// Wrapped like the poll loop's jitter: an injected source that throws
+		// or returns a non-finite value must not replace the transaction's
+		// original retryable error or eliminate the backoff.
+		this.random = neutralJitterSource(policy.random ?? Math.random);
 		this.onRetry = policy.onRetry;
 	}
 
