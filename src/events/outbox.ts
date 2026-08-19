@@ -226,7 +226,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					event,
 					position,
 					dispatchedReceipt.position,
-					false,
 				);
 				// eventId is the outbox idempotency key. Refresh its LRU position
 				// without recreating a pending record or touching the source head.
@@ -244,11 +243,15 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				// A pending record may move to another aggregateVersion only because
 				// this in-memory adapter cannot observe rollback and the same event is
 				// re-harvested. Its index and commit cardinality remain immutable.
-				assertSameCandidateReceipt(event, position, existing.position, true);
+				assertSameCandidateReceiptAllowingVersionRefresh(
+					event,
+					position,
+					existing.position,
+				);
 			}
 			if (deadLetter) {
 				assertSameEventSource(event, source, deadLetter.source);
-				assertSameCandidateReceipt(event, position, deadLetter.position, false);
+				assertSameCandidateReceipt(event, position, deadLetter.position);
 				// Requeue the durable record exactly as committed. A dead letter is a
 				// delivery state, not a new aggregate commit to re-finalize.
 				this.dead.delete(event.eventId);
@@ -278,15 +281,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				staleHeadVersion = sourceCursor.aggregateVersion;
 			}
 			if (staleHeadVersion !== undefined) {
-				throw new EventHarvestError(
-					`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
-						`${source.aggregateType} ${source.aggregateId} at aggregate version ` +
-						`${position.aggregateVersion}: the event-source head is already ` +
-						`${staleHeadVersion}. The dispatched-id receipt may have ` +
-						"expired; use a durable outbox with a transactional eventId unique key " +
-						"for unbounded idempotency.",
-					event.type,
-				);
+				throw staleHeadError(event, source, position, staleHeadVersion);
 			}
 			if (sourceCursor?.aggregateVersion === position.aggregateVersion) {
 				if (sourceCursor.commitSize !== position.commitSize) {
@@ -463,7 +458,6 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					event,
 					position,
 					batchReceipt.position,
-					false,
 				);
 			} else {
 				receiptsInBatch.set(event.eventId, { source, position });
@@ -475,19 +469,22 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 					event,
 					position,
 					dispatchedReceipt.position,
-					false,
 				);
 				continue;
 			}
 			const existing = this.pending.get(event.eventId);
 			if (existing !== undefined) {
 				assertSameEventSource(event, source, existing.source);
-				assertSameCandidateReceipt(event, position, existing.position, true);
+				assertSameCandidateReceiptAllowingVersionRefresh(
+					event,
+					position,
+					existing.position,
+				);
 			}
 			const deadLetter = this.dead.get(event.eventId);
 			if (deadLetter !== undefined) {
 				assertSameEventSource(event, source, deadLetter.source);
-				assertSameCandidateReceipt(event, position, deadLetter.position, false);
+				assertSameCandidateReceipt(event, position, deadLetter.position);
 			}
 		}
 	}
@@ -514,7 +511,33 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 				});
 				continue;
 			}
-			if (position.aggregateVersion < cursor.aggregateVersion) continue;
+			if (position.aggregateVersion < cursor.aggregateVersion) {
+				// Mirror of the main loop's stale-head rejection. A silent
+				// `continue` here would break add()'s all-or-nothing promise:
+				// the main loop would insert every earlier candidate and only
+				// then throw for this one, leaving a pending event for a
+				// commit the caller rolled back. Exact retries still dedupe:
+				// dispatched receipts, dead letters, and a pending record at
+				// or below the candidate version pass through.
+				const dedupes =
+					this.dispatchedEventIds.has(event.eventId) ||
+					this.dead.has(event.eventId);
+				const pendingRecord = this.pending.get(event.eventId);
+				const staleAgainstPending =
+					pendingRecord !== undefined &&
+					position.aggregateVersion < pendingRecord.position.aggregateVersion;
+				const staleAgainstHead = pendingRecord === undefined && !dedupes;
+				if (staleAgainstPending || staleAgainstHead) {
+					throw staleHeadError(
+						event,
+						source,
+						position,
+						pendingRecord?.position.aggregateVersion ??
+							cursor.aggregateVersion,
+					);
+				}
+				continue;
+			}
 			if (cursor.commitSize !== position.commitSize) {
 				throw new EventHarvestError(
 					`InMemoryOutbox rejected event "${event.eventId}" for ` +
@@ -659,6 +682,27 @@ function assertSameCandidateReceipt(
 	event: AnyDomainEvent,
 	received: EventCommitCandidatePosition,
 	recorded: EventCommitCandidatePosition,
+): void {
+	assertReceiptShape(event, received, recorded, false);
+}
+
+/**
+ * The lenient variant for PENDING records only: this in-memory adapter
+ * cannot observe rollback, so a re-harvested event may legitimately arrive
+ * at a new aggregateVersion. Index and commit cardinality stay immutable.
+ */
+function assertSameCandidateReceiptAllowingVersionRefresh(
+	event: AnyDomainEvent,
+	received: EventCommitCandidatePosition,
+	recorded: EventCommitCandidatePosition,
+): void {
+	assertReceiptShape(event, received, recorded, true);
+}
+
+function assertReceiptShape(
+	event: AnyDomainEvent,
+	received: EventCommitCandidatePosition,
+	recorded: EventCommitCandidatePosition,
 	allowAggregateVersionRefresh: boolean,
 ): void {
 	const sameVersion =
@@ -677,6 +721,23 @@ function assertSameCandidateReceipt(
 			`commitSize=${recorded.commitSize}) to (${received.aggregateVersion}, ` +
 			`${received.commitSequence}; commitSize=${received.commitSize}). ` +
 			"An exact redelivery must keep its source position immutable.",
+		event.type,
+	);
+}
+
+function staleHeadError(
+	event: { readonly eventId: string; readonly type: string },
+	source: AggregateAddress,
+	position: EventCommitCandidatePosition,
+	staleHeadVersion: number,
+): EventHarvestError {
+	return new EventHarvestError(
+		`InMemoryOutbox rejected stale event "${event.eventId}" for ` +
+			`${source.aggregateType} ${source.aggregateId} at aggregate version ` +
+			`${position.aggregateVersion}: the event-source head is already ` +
+			`${staleHeadVersion}. The dispatched-id receipt may have ` +
+			"expired; use a durable outbox with a transactional eventId unique key " +
+			"for unbounded idempotency.",
 		event.type,
 	);
 }

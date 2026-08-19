@@ -152,22 +152,46 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		events: ReadonlyArray<Evt>,
 		options: PublishOptions = {},
 	): Promise<void> {
-		return runBoundedExecution(
-			"EventBus.publish",
-			{
-				signal: options.signal,
-				timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
-			},
-			(context) => this.publishWithinContext(events, context),
-		);
+		// The errors array lives HERE, outside the bounded execution: the
+		// abort/timeout race can reject while handlers already failed, and
+		// the port contract promises that collected handler errors are
+		// thrown after dispatch. An abort ends the batch but must not
+		// swallow the failures that already happened.
+		const errors: Error[] = [];
+		try {
+			await runBoundedExecution(
+				"EventBus.publish",
+				{
+					signal: options.signal,
+					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
+				},
+				(context) => this.publishWithinContext(events, context, errors),
+			);
+		} catch (boundedError) {
+			if (errors.length === 0) throw boundedError;
+			throw new AggregateError(
+				[
+					boundedError instanceof Error
+						? boundedError
+						: new Error(String(boundedError), { cause: boundedError }),
+					...errors,
+				],
+				"EventBus.publish aborted after handler failures",
+			);
+		}
+		if (errors.length === 1) {
+			throw errors[0];
+		}
+		if (errors.length > 1) {
+			throw new AggregateError(errors, "Multiple event handlers failed");
+		}
 	}
 
 	private async publishWithinContext(
 		events: ReadonlyArray<Evt>,
 		context: ExecutionContext,
+		errors: Error[],
 	): Promise<void> {
-		const errors: Error[] = [];
-
 		for (const event of events) {
 			if (context.signal.aborted) {
 				throw abortReason(context.signal, "EventBus.publish aborted");
@@ -185,34 +209,43 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				...this.catchAllHandlers,
 			];
 			if (batch.length > 0) {
-				const results = await Promise.allSettled(
-					batch.map(async (handler) => handler(event, context)),
+				// Each failure is recorded the moment it happens, not after the
+				// whole batch settles: a hung peer would otherwise trap a
+				// settled rejection inside allSettled, invisible to the
+				// abort/timeout path that ends the publish.
+				const batchStart = errors.length;
+				const failedIndices: number[] = [];
+				await Promise.allSettled(
+					batch.map(async (handler, index) => {
+						try {
+							await handler(event, context);
+						} catch (reason) {
+							failedIndices.push(index);
+							errors.push(
+								reason instanceof Error
+									? reason
+									: // Attach the raw reason as cause: a handler
+										// rejecting with a structured payload must stay
+										// diagnosable, not collapse to '[object Object]'.
+										new Error(String(reason), { cause: reason }),
+							);
+						}
+					}),
 				);
-				for (const result of results) {
-					if (result.status === "rejected") {
-						errors.push(
-							result.reason instanceof Error
-								? result.reason
-								: // Attach the raw reason as cause: a handler
-									// rejecting with a structured payload must stay
-									// diagnosable, not collapse to '[object Object]'.
-									new Error(String(result.reason), {
-										cause: result.reason,
-									}),
-						);
-					}
-				}
+				// A settled batch reports its failures in subscription order
+				// (the aggregation contract); recording order above is
+				// settlement order so an abort mid-batch already sees them.
+				const settled = errors.splice(batchStart);
+				errors.push(
+					...failedIndices
+						.map((index, i) => ({ index, error: settled[i] as Error }))
+						.sort((a, b) => a.index - b.index)
+						.map((entry) => entry.error),
+				);
 			}
 			if (context.signal.aborted) {
 				throw abortReason(context.signal, "EventBus.publish aborted");
 			}
-		}
-
-		if (errors.length === 1) {
-			throw errors[0];
-		}
-		if (errors.length > 1) {
-			throw new AggregateError(errors, "Multiple event handlers failed");
 		}
 	}
 }

@@ -118,6 +118,41 @@ describe("EventBusImpl", () => {
 			}
 		});
 
+		it("carries accumulated handler failures on the abort error", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const handlerFailure = new Error("db write failed");
+			bus.subscribe("OrderCreated", async () => {
+				throw handlerFailure;
+			});
+			let hung: ExecutionContext | undefined;
+			bus.subscribe("OrderCreated", async (_event, received) => {
+				hung = received;
+				await new Promise<void>(() => {});
+			});
+			const event = createDomainEvent("OrderCreated", {
+				orderId: "order-123",
+			}) as OrderCreated;
+			const stop = new AbortController();
+			const execution = bus.publish([event], {
+				signal: stop.signal,
+				timeoutMs: 1_000,
+			});
+			await expect.poll(() => hung).toBeDefined();
+			const reason = new Error("request cancelled");
+
+			stop.abort(reason);
+
+			// The abort ends the batch, but the real failure that already
+			// happened must not vanish behind it.
+			const rejection = await execution.then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(rejection).toBeInstanceOf(AggregateError);
+			expect((rejection as AggregateError).errors).toContain(reason);
+			expect((rejection as AggregateError).errors).toContain(handlerFailure);
+		});
+
 		it("propagates owner cancellation to a never-settling handler", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			let context: ExecutionContext | undefined;

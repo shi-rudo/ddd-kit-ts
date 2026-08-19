@@ -28,6 +28,29 @@ function candidate(
 }
 
 describe("InMemoryOutbox", () => {
+	describe("batch atomicity", () => {
+		it("rejects a stale-head batch atomically without leaking earlier candidates", async () => {
+			const outbox = new InMemoryOutbox<OrderCreated>();
+			const head = createDomainEvent("OrderCreated", { orderId: "o-b" });
+			await outbox.add([candidate(head, 6)]);
+
+			// The pre-validation must reject the whole batch: without it, the
+			// main loop inserts the fresh candidate first and only then throws
+			// for the stale one, leaving a pending event for a commit the
+			// caller rolled back.
+			const fresh = createDomainEvent("OrderCreated", { orderId: "o-a" });
+			const stale = createDomainEvent("OrderCreated", { orderId: "o-b" });
+			await expect(
+				outbox.add([candidate(fresh), candidate(stale, 4)]),
+			).rejects.toThrow(/stale/);
+
+			const pending = await outbox.getPending();
+			expect(pending.map((record) => record.event.eventId)).toEqual([
+				head.eventId,
+			]);
+		});
+	});
+
 	describe("capacity", () => {
 		it("rejects an oversized batch atomically and releases record capacity after acknowledgement", async () => {
 			const outbox = new InMemoryOutbox<OrderCreated>({ maxRecords: 1 });
