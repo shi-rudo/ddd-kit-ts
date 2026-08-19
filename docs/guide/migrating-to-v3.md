@@ -420,3 +420,34 @@ from four review rounds on the persistence redesign:
 Behavior changes that need no code change: a repeated `remove` of the same
 instance is an accepted no-op, and a repeated enrollment without
 `expectedVersion` makes no OCC assertion.
+
+## Appendix: v3.0.0-rc.3 to rc.4 or later
+
+There is no source break. No name changes, no signature changes. The
+candidate corrects behavior on the event and delivery periphery. Read
+this list if your code observes one of these paths:
+
+- `InMemoryOutbox.add` rejects the whole batch before the first insert
+  when one candidate carries a stale head position. Before, it inserted
+  the earlier candidates first and rejected late. Exact retries still
+  deduplicate.
+- `EventBus.publish` throws an `AggregateError` when the time budget
+  expires after handler failures. The abort error is the first element,
+  the handler failures follow. Before, the abort error surfaced alone and
+  the failures were lost. Code that matches the bare abort error reads it
+  from `errors[0]`.
+- The deadline processor counts the expiry of its own delivery budget as
+  a failed attempt. A handler that ignores `context.signal` reaches the
+  dead letter after `maxAttempts`. Before, it retried forever.
+- `defineSnapshotModel` rejects a model whose members live on a
+  prototype, for example a class instance. Before, the definition passed
+  and the first snapshot write failed.
+- `run()` rethrows the caller's abort reason unchanged when cancellation
+  interrupts a retry wait. Before, the abort surfaced as
+  `ROLLBACK_FAILED` with a retryable cause.
+- `withIdempotentCommit` abandons the staged claim when the commit
+  fails. The key is free for a retry. Before, the key stayed blocked
+  until lease expiry.
+- `InMemoryEventStore` clones events on append and on read. A mutation
+  of a read event does not change stored history. Test doubles that
+  relied on shared references see copies now.
