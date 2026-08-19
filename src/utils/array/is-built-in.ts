@@ -274,13 +274,6 @@ export function findPropertyDescriptor(
 	return undefined;
 }
 
-export function objectTagWithoutInvokingAccessors(value: object): string {
-	const descriptor = findPropertyDescriptor(value, Symbol.toStringTag);
-	return descriptor !== undefined && !("value" in descriptor)
-		? "[object Object]"
-		: Object.prototype.toString.call(value);
-}
-
 export type MutableBuiltInTag =
 	| "[object Date]"
 	| "[object Map]"

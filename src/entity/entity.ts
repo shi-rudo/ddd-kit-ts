@@ -203,7 +203,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected _state: TState;
 
-	private readonly _deepFreezeState: boolean;
+	private readonly _stateFreezeMode: StateFreezeMode;
 	private readonly validateState: StateValidator<TState>;
 
 	/**
@@ -229,7 +229,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
-		this._deepFreezeState = config?.deepFreezeState ?? false;
+		this._stateFreezeMode = config?.deepFreezeState ?? false ? "deep" : "shallow";
 		this.validateState = config?.validateState ?? noStateValidation;
 		// Both mutation paths validate the exact frozen object that is stored.
 		// Assigning the validator as an own property before invoking it also
@@ -238,7 +238,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 		// freeze helper similarly avoids the protected post-construction hook.
 		this._state = freezeStateByMode(
 			shallowCopyOwned(initialState),
-			this._deepFreezeState,
+			this._stateFreezeMode,
 		);
 		this.validateState(this._state);
 	}
@@ -253,7 +253,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * path. Ordinary domain behavior should use {@link setState} instead.
 	 */
 	protected freezeState(value: TState): TState {
-		return freezeStateByMode(value, this._deepFreezeState);
+		return freezeStateByMode(value, this._stateFreezeMode);
 	}
 
 	/**
@@ -282,8 +282,14 @@ export abstract class Entity<TState, TId extends Id<string>>
 
 const noStateValidation: StateValidator<unknown> = () => {};
 
-function freezeStateByMode<TState>(value: TState, deep: boolean): TState {
-	return deep ? (deepFreeze(value) as TState) : freezeShallow(value);
+/** The entity's configured freeze depth, fixed once at construction. */
+type StateFreezeMode = "shallow" | "deep";
+
+function freezeStateByMode<TState>(
+	value: TState,
+	mode: StateFreezeMode,
+): TState {
+	return mode === "deep" ? (deepFreeze(value) as TState) : freezeShallow(value);
 }
 
 /**

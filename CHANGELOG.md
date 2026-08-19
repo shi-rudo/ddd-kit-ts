@@ -814,6 +814,14 @@ design question. All are closed.
   implementation now guarantees the same ownership rule that the contract
   tests demand from real adapters.
 
+### Changed: internal naming and documentation cleanup
+
+- The entity base class stores its freeze behavior as a named mode
+  (`"shallow"` or `"deep"`) instead of a positional boolean.
+- The command bus and query bus TSDoc no longer compares against earlier
+  versions of the code.
+- Removed the unused export `objectTagWithoutInvokingAccessors`.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,
