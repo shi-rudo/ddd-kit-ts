@@ -68,13 +68,13 @@ export interface QueryBusOptions<E = string> {
  *
  * @example
  * ```typescript
- * // With type map (recommended) – return type is inferred
+ * // With a type map (recommended): the return type is inferred
  * type MyQueries = { GetOrder: Order | null; ListOrders: Order[] };
  * const bus = new QueryBus<MyQueries>();
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * // result: Result<Order | null, string>
  *
- * // Without type map – works like before
+ * // Without a type map: the return type defaults to `unknown`
  * const bus = new QueryBus();
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * // result: Result<unknown, string>
@@ -144,7 +144,7 @@ export interface IQueryBus<
  * Supports an optional type map (`TMap`) for automatic return type inference.
  * When `TMap` is concrete, `execute()` and `executeUnsafe()` infer the result type from the query type.
  * Explicit competing result generics cannot override that map.
- * Without `TMap`, it works like before (return type defaults to `unknown` or can be specified manually).
+ * Without `TMap`, the return type defaults to `unknown` or is specified per call.
  *
  * **Note:** This is a basic implementation suitable for development and simple use cases.
  * For production environments, consider implementing or using a more feature-rich bus that includes:
@@ -162,13 +162,13 @@ export interface IQueryBus<
  *
  * @example
  * ```typescript
- * // With type map – full inference
+ * // With a type map: full inference
  * type Queries = { GetOrder: Order | null; ListOrders: Order[] };
  * const bus = new QueryBus<Queries>();
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });
  * // result: Result<Order | null, string>
  *
- * // Without type map – same as before
+ * // Without a type map: specify the return type per call
  * const bus = new QueryBus();
  * bus.register("GetOrder", async (query) => repository.findById(query.orderId));
  * const result = await bus.execute({ type: "GetOrder", orderId: "123" });

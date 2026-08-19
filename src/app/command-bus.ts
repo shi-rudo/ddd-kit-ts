@@ -68,13 +68,13 @@ export interface CommandBusOptions<E = string> {
  *
  * @example
  * ```typescript
- * // With type map (recommended) – return type is inferred
+ * // With a type map (recommended): the return type is inferred
  * type MyCommands = { CreateOrder: OrderId; CancelOrder: void };
  * const bus = new CommandBus<MyCommands>();
  * const result = await bus.execute({ type: "CreateOrder", ... });
  * // result: Result<OrderId, string>
  *
- * // Without type map – works like before
+ * // Without a type map: the return type defaults to `unknown`
  * const bus = new CommandBus();
  * bus.register("CreateOrder", createOrderHandler);
  * const result = await bus.execute({ type: "CreateOrder", ... });
@@ -130,7 +130,7 @@ export interface ICommandBus<
  * Supports an optional type map (`TMap`) for automatic return type inference.
  * When `TMap` is concrete, `execute()` infers the result type from the command type.
  * An explicit competing result generic cannot override that map.
- * Without `TMap`, it works like before (return type defaults to `unknown` or can be specified manually).
+ * Without `TMap`, the return type defaults to `unknown` or is specified per call.
  *
  * **Note:** This is a basic implementation suitable for development and simple use cases.
  * For production environments, consider implementing or using a more feature-rich bus that includes:
@@ -148,13 +148,13 @@ export interface ICommandBus<
  *
  * @example
  * ```typescript
- * // With type map – full inference
+ * // With a type map: full inference
  * type Commands = { CreateOrder: OrderId; CancelOrder: void };
  * const bus = new CommandBus<Commands>();
  * const result = await bus.execute({ type: "CreateOrder", ... });
  * // result: Result<OrderId, string>
  *
- * // Without type map – same as before
+ * // Without a type map: specify the return type per call
  * const bus = new CommandBus();
  * bus.register("CreateOrder", async (cmd) => ok(orderId));
  * const result = await bus.execute({ type: "CreateOrder", ... });
