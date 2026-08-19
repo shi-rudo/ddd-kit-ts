@@ -104,6 +104,34 @@ describe("withIdempotentCommit", () => {
 		).resolves.toEqual({ replayed: false, result: "retry" });
 	});
 
+	it("abandons the staged claim when the commit itself fails", async () => {
+		const deps = createDeps();
+		// A driver that rejects AFTER the callback resolved: the classic
+		// COMMIT-time serialization failure or dropped connection.
+		let commits = 0;
+		deps.scope = {
+			transactional: async (fn) => {
+				const result = await fn(undefined);
+				commits += 1;
+				if (commits === 1) throw new Error("commit failed");
+				return result;
+			},
+		};
+		let executions = 0;
+
+		const run = () =>
+			withIdempotentCommit(deps, request, async () => {
+				executions += 1;
+				return { result: executions, commits: [] };
+			});
+
+		await expect(run()).rejects.toThrow("commit failed");
+		// Without the abandon, the staged claim wedges the key and this
+		// retry would reject with IdempotencyInFlightError.
+		await expect(run()).resolves.toEqual({ replayed: false, result: 2 });
+		expect(executions).toBe(2);
+	});
+
 	it("seals the user enrollment capability before idempotency completion", async () => {
 		const deps = createDeps();
 		const originalComplete = deps.idempotency.complete.bind(deps.idempotency);

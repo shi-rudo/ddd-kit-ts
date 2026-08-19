@@ -201,6 +201,23 @@ describe("RetryingTransactionScope", () => {
 		expect(onRetry.mock.calls[0]?.[0]).toMatchObject({ attempt: 1 });
 	});
 
+	it("a throwing jitter source never replaces the transaction's error", async () => {
+		const inner = flakyScope(1, conflict);
+		const scope = new RetryingTransactionScope(inner, {
+			sleep: instantSleep,
+			random: () => {
+				throw new Error("jitter source exploded");
+			},
+		});
+
+		// The retry still happens with the neutral midpoint delay; the
+		// injected hook's failure must not surface to the caller.
+		const result = await scope.transactional(async () => "ok");
+
+		expect(result).toBe("ok");
+		expect(inner.attempts).toBe(2);
+	});
+
 	it("does NOT retry a non-retryable error and surfaces it unchanged", async () => {
 		const harvestError = new EventHarvestError("missing aggregateId");
 		const inner = flakyScope(1, () => harvestError);

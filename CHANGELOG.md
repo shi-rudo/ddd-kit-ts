@@ -781,6 +781,20 @@ design question. All are closed.
   a hung peer cannot hide a settled rejection. A settled batch still
   reports its failures in subscription order.
 
+### Fixed: cancellation and retry integrity in the transaction path
+
+- `run()` passes the caller's abort reason through when the transaction
+  scope rejects between retry attempts. Before, stale attempt flags labeled
+  the abort `ROLLBACK_FAILED` with a retryable cause, and a
+  retry-on-retryable caller re-ran a cancelled operation.
+- The retrying scope wraps `RetryPolicy.random` with the neutral jitter
+  guard, like the poll loop. A throwing source cannot replace the
+  transaction's original error, and a non-finite one cannot eliminate the
+  backoff.
+- `withIdempotentCommit` abandons the staged claim when the commit itself
+  fails after the callback resolved. Before, the claim wedged the key until
+  lease expiry and demanded reconciliation after.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

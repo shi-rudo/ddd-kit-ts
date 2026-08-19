@@ -863,6 +863,7 @@ export class UnitOfWork<
 				workThrew,
 				workCompleted,
 				workError,
+				signal: options?.signal,
 			});
 		} finally {
 			session?.close();
@@ -1808,8 +1809,23 @@ function classifyRunError(
 		readonly workThrew: boolean;
 		readonly workCompleted: boolean;
 		readonly workError: unknown;
+		readonly signal: AbortSignal | undefined;
 	},
 ): unknown {
+	// Cancellation wins over the attempt flags: a scope that rejects with
+	// the caller's abort reason between retry attempts never re-enters the
+	// work callback, so workThrew/workError still describe the PREVIOUS
+	// attempt. Classifying by those stale flags would mislabel the abort as
+	// a RollbackError carrying a retryable cause, inviting a retry of an
+	// explicitly cancelled operation.
+	if (
+		state.signal?.aborted &&
+		state.signal.reason !== undefined &&
+		(error === state.signal.reason ||
+			causeChainContains(error, state.signal.reason))
+	) {
+		return error;
+	}
 	if (state.workThrew) {
 		if (
 			error === state.workError ||

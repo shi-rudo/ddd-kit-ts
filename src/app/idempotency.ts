@@ -419,8 +419,9 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// including the ones outside this module's own callback, and it runs
 	// INSIDE a retrying scope's loop, so the next attempt starts clean.
 	const scope: TransactionScope<TCtx> = {
-		transactional: (work, options) =>
-			deps.scope.transactional(async (ctx) => {
+		transactional: async (work, options) => {
+			try {
+				return await deps.scope.transactional(async (ctx) => {
 				attempt.claim = undefined;
 				attempt.heartbeat = undefined;
 				try {
@@ -476,7 +477,35 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					}
 					throw error;
 				}
-			}, options),
+			}, options);
+			} catch (error) {
+				// COMMIT-time failure: the driver rejected AFTER the callback
+				// resolved, so the catch above never saw it and the staged
+				// claim would stay wedged until lease expiry (and demand
+				// reconciliation after). The store contract declares abandon
+				// safe when the commit outcome is unknown: a transactional
+				// store's claim died with the rollback anyway, and a leased
+				// store releases the lease while the durable outcome record
+				// still decides replay on the next attempt.
+				const staged = attempt.claim as IdempotencyClaimHandle | undefined;
+				if (staged) {
+					attempt.claim = undefined;
+					attempt.heartbeat = undefined;
+					try {
+						await store.abandon(staged);
+					} catch (abandonError) {
+						reportToObserver(() =>
+							deps.onIdempotencyError?.(abandonError, {
+								operation: "abandon",
+								key: staged.key,
+								token: staged.token,
+							}),
+						);
+					}
+				}
+				throw error;
+			}
+		},
 	};
 
 	const outcome = await withCommit<Evt, IdempotentCommitResult<R>, TCtx>(
