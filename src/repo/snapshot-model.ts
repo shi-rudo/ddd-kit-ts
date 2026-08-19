@@ -67,8 +67,13 @@ export function defineSnapshotModel<
 >(
 	model: SnapshotModel<TAggregate, TSnapshotState>,
 ): SnapshotModel<TAggregate, TSnapshotState> {
-	assertSnapshotModel(model);
-	return Object.freeze({ ...model });
+	// Validated AFTER the spread, on what actually survives it: the spread
+	// copies own enumerable properties only, so capture/reconstitute carried
+	// on a prototype (class instance) vanish silently and would surface much
+	// later as a raw TypeError outside the corruption channel.
+	const detached = Object.freeze({ ...model });
+	assertSnapshotModel(detached);
+	return detached;
 }
 
 /**
@@ -169,6 +174,9 @@ export function reconstituteAggregateFromSnapshot<
 function assertSnapshotModel(model: {
 	readonly aggregateType: string;
 	readonly schemaVersion: number;
+	readonly capture: unknown;
+	readonly reconstitute: unknown;
+	readonly migrate?: unknown;
 }): void {
 	if (
 		typeof model.aggregateType !== "string" ||
@@ -179,6 +187,18 @@ function assertSnapshotModel(model: {
 		);
 	}
 	assertPositiveSafeInteger("SnapshotModel", "schemaVersion", model.schemaVersion);
+	for (const key of ["capture", "reconstitute"] as const) {
+		if (typeof model[key] !== "function") {
+			throw new TypeError(
+				`SnapshotModel.${key} is missing or not a function. ` +
+					"defineSnapshotModel copies own enumerable properties only; " +
+					"prototype methods are not carried. Pass a plain object literal.",
+			);
+		}
+	}
+	if (model.migrate !== undefined && typeof model.migrate !== "function") {
+		throw new TypeError("SnapshotModel.migrate must be a function when set");
+	}
 }
 
 function copySnapshotAt(snapshotAt: Date): Date {

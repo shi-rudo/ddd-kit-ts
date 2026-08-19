@@ -801,6 +801,19 @@ design question. All are closed.
   Before, a handler that ignores `context.signal` never reached the dead
   letter, and every poll spawned another zombie execution.
 
+### Fixed: snapshot models and stored events own their data
+
+- `defineSnapshotModel` validates the detached copy it returns, not the
+  input. Before, a class instance with prototype methods passed validation,
+  and the spread dropped the methods. The broken copy then failed at the
+  first snapshot write. Now the definition call fails, with a message that
+  points at the prototype problem.
+- `InMemoryEventStore` clones events on append and on read. Before, the
+  store shared element references with the caller. A later mutation of a
+  produced or consumed event changed history in place. The reference
+  implementation now guarantees the same ownership rule that the contract
+  tests demand from real adapters.
+
 ### Migration guide: 2.2.0 to 3.0.0
 
 Most of these surface at compile time. Eleven do not (steps 3, 5, 11,

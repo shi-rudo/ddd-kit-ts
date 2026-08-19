@@ -140,7 +140,11 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 			this.streams.set(key, storedEvents);
 		}
 		for (const event of events) {
-			storedEvents.push(event);
+			// Detached on write and on read: the port forbids handing out
+			// live internal state, and a caller-mutated plain event must not
+			// rewrite stored history. Kit-minted events are already frozen;
+			// the clone detaches them from the shared graph as well.
+			storedEvents.push(structuredClone(event));
 		}
 		this.totalEvents += events.length;
 	}
@@ -166,11 +170,13 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 			toVersion ?? events.length,
 			fromVersion + options.limit,
 		);
-		// slice() always copies: callers never see the internal array.
+		// Cloned, not sliced: slice() copies the ARRAY but hands out live
+		// references to the stored elements, and a reader mutating one would
+		// silently corrupt every later replay.
 		return {
 			exists: true,
 			lastVersion: events.length,
-			events: events.slice(fromVersion, pageEnd),
+			events: structuredClone(events.slice(fromVersion, pageEnd)),
 		};
 	}
 }
