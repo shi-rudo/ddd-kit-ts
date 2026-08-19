@@ -23,6 +23,33 @@ function renamed(name: string, stream: AggregateAddress = streamA): OrderEvent {
 }
 
 describe("InMemoryEventStore", () => {
+	it("hands out detached events so a mutated read result never rewrites history", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		const address: AggregateAddress = {
+			aggregateType: "SalesOrder",
+			aggregateId: "own-1" as StreamId,
+		};
+		// A structurally typed plain event: unlike kit-minted events it is
+		// not frozen, so only store-side detachment protects history.
+		const plainEvent = {
+			eventId: "e-1",
+			type: "OrderRenamed",
+			payload: { name: "original" },
+			occurredAt: new Date("2026-07-29T10:00:00.000Z"),
+			version: 1,
+			...address,
+		} as unknown as OrderEvent;
+		await store.append(address, [plainEvent], { expectedVersion: 0 });
+
+		const firstRead = await store.readStream(address, { limit: 10 });
+		(firstRead.events[0] as { payload: { name: string } }).payload.name =
+			"tampered";
+		plainEvent.payload.name = "tampered at the source too";
+
+		const secondRead = await store.readStream(address, { limit: 10 });
+		expect(secondRead.events[0]?.payload.name).toBe("original");
+	});
+
 	it("isolates equal aggregate ids by aggregate type", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 		const aggregateId = "shared-1" as StreamId;

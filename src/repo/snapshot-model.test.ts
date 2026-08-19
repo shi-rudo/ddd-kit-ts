@@ -51,6 +51,27 @@ describe("adapter-owned snapshot models", () => {
 		);
 	});
 
+	it("rejects a class-based model whose methods would vanish in the spread", () => {
+		class OrderSnapshotModelClass {
+			readonly aggregateType = "Order";
+			readonly schemaVersion = 2;
+			capture(order: Order): { readonly status: string } {
+				return { status: order.state.status };
+			}
+			reconstitute(
+				id: OrderId,
+				state: { readonly status: string },
+				version: Version,
+			): Order {
+				return { id, state, version };
+			}
+		}
+
+		expect(() =>
+			defineSnapshotModel(new OrderSnapshotModelClass()),
+		).toThrow(/SnapshotModel\.capture is missing or not a function/);
+	});
+
 	it("captures a detached snapshot envelope from an aggregate", () => {
 		const state = { status: "placed" };
 		const order: Order = {
