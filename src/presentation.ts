@@ -3,9 +3,9 @@
 // presentation strings. These project the kit's technical errors into
 // client-safe public views; the transport mapping (HTTP status, gRPC, CLI
 // exit code) stays the consumer's concern.
-export { createKitPublicErrors } from "./presentation/kit-public-errors";
+export { createKitPublicErrors } from "./presentation/errors/kit-public-errors";
 export {
 	type PublicErrorViewDetails,
 	type PublicErrorViewOptions,
 	toPublicErrorView,
-} from "./presentation/public-error-view";
+} from "./presentation/errors/public-error-view";
