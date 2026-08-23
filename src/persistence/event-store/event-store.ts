@@ -1,5 +1,5 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
 
 /** Options for {@link EventStore.append}. */
 export interface EventStoreAppendOptions {

@@ -6,7 +6,10 @@ import {
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import type { CommittedDomainEvent } from "../events/ports";
-import type { ReadStreamOptions, StreamReadResult } from "../repo/event-store";
+import type {
+	ReadStreamOptions,
+	StreamReadResult,
+} from "../persistence/event-store/event-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,

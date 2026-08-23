@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemorySnapshotStore } from "../repo/in-memory-snapshot-store";
+import { InMemorySnapshotStore } from "../persistence/snapshot-store/adapters/in-memory-snapshot-store";
 import { createSnapshotStoreContractTests } from "./snapshot-store-contract";
 
 describe("snapshot-store contract suite against the in-memory reference", () => {

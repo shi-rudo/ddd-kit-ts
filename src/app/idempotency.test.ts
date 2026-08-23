@@ -15,8 +15,8 @@ import {
 import type { Id } from "../domain/identity/id";
 import { InMemoryOutbox } from "../events/outbox";
 import type { EventCommitCandidate } from "../events/ports";
-import { RetryingTransactionScope } from "../repo/retrying-scope";
-import type { TransactionScope } from "../repo/scope";
+import { RetryingTransactionScope } from "../persistence/repository/retrying-scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import type {
 	AggregateCommitToken,
 	CommitEnrollment,

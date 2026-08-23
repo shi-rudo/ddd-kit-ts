@@ -1,6 +1,6 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
-import type { EventStore } from "../repo/event-store";
+import type { EventStore } from "../persistence/event-store/event-store";
 import {
 	assert,
 	assertChainContainsKitError,

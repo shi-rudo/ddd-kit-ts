@@ -13,7 +13,7 @@ import {
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { OutboxSink } from "../events/outbox-dispatcher";
 import type { CommittedDomainEvent } from "../events/ports";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { abortReason } from "../utils/abort";
 import {
 	isPositionAfter,

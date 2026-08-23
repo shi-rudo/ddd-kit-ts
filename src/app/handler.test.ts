@@ -15,7 +15,7 @@ import {
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import {
 	type AggregateCommitToken,
 	type CommitEnrollment,

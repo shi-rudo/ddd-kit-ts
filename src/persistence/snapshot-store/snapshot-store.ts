@@ -1,5 +1,5 @@
-import type { AggregateSnapshot } from "../domain/aggregate/aggregate";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AggregateSnapshot } from "../../domain/aggregate/aggregate";
+import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 
 /**
  * Driven port for aggregate snapshot persistence: the storage half of

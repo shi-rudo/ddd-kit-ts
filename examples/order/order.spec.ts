@@ -3,7 +3,7 @@ import { type Money, moneyOfMinor, moneyToSnapshot } from "../../src/money";
 import {
 	captureAggregateSnapshot,
 	reconstituteAggregateFromSnapshot,
-} from "../../src/repo/snapshot-model";
+} from "../../src/persistence/snapshot-store/snapshot-model";
 import { Order, type OrderId } from "./order";
 import { orderSnapshotModel } from "./order-snapshot-model";
 

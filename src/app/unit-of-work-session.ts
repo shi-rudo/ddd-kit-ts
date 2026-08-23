@@ -10,7 +10,7 @@ import type {
 	PendingDomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
-import { IdentityMap } from "../repo/identity-map";
+import { IdentityMap } from "../persistence/repository/identity-map";
 import {
 	capturePersistenceBaseline,
 	derivePersistenceChanges,
@@ -19,7 +19,7 @@ import {
 	type PersistenceChanges,
 	persistenceProjectionDrifted,
 	recapturePersistenceBaseline,
-} from "../repo/persistence-model";
+} from "../persistence/repository/persistence-model";
 import {
 	AggregateTrackingError,
 	RepositoryErrorMappingFailedError,

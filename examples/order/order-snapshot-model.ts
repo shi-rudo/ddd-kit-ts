@@ -4,7 +4,7 @@ import {
 	moneyFromSnapshot,
 	moneyToSnapshot,
 } from "../../src/money";
-import { defineSnapshotModel } from "../../src/repo/snapshot-model";
+import { defineSnapshotModel } from "../../src/persistence/snapshot-store/snapshot-model";
 import { Order, type OrderId, type OrderState } from "./order";
 
 /**
