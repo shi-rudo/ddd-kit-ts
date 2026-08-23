@@ -7,12 +7,16 @@
 // the repository contract suites live in `@shirudo/ddd-kit/testing`.
 
 // CQRS: commands, queries, buses
-export type { Command, CommandHandler, PublishedCommand } from "./app/command";
+export type {
+	Command,
+	CommandHandler,
+	PublishedCommand,
+} from "./application/cqrs/command/command";
 export {
 	CommandBus,
 	type CommandBusOptions,
 	type ICommandBus,
-} from "./app/command-bus";
+} from "./application/cqrs/command/command-bus";
 export {
 	type CommandCommitOriginCandidate,
 	type CommandMessageContent,
@@ -22,22 +26,7 @@ export {
 	type CommandOutboxWriter,
 	type DurableCommandMessage,
 	routeEventsToCommandOutbox,
-} from "./app/command-outbox";
-export {
-	type DomainErrorClass,
-	domainErrorToResult,
-} from "./app/domain-error-result";
-export {
-	AggregateTrackingError,
-	type AggregateTrackingFailure,
-	CommitError,
-	InvalidRepositoryAdapterError,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
-	RepositoryErrorMappingFailedError,
-	RollbackError,
-	TransactionClosedError,
-} from "./app/errors";
+} from "./application/cqrs/command/command-outbox";
 // App orchestration: withCommit + Unit of Work
 export {
 	type AggregateCommitToken,
@@ -46,7 +35,36 @@ export {
 	type WithCommitDeps,
 	type WithCommitWorkResult,
 	withCommit,
-} from "./app/handler";
+} from "./application/cqrs/handler";
+export type { Query, QueryHandler } from "./application/cqrs/query/query";
+export {
+	type IQueryBus,
+	QueryBus,
+	type QueryBusOptions,
+} from "./application/cqrs/query/query-bus";
+export {
+	InMemoryDeadlineStore,
+	type InMemoryDeadlineStoreOptions,
+} from "./application/deadlines/adapters/in-memory-deadline-store";
+// Deadlines: durable timeout-as-input
+export {
+	DeadlineProcessor,
+	type DeadlineProcessorObservers,
+	type DeadlineProcessorOptions,
+} from "./application/deadlines/deadline-processor";
+export type {
+	DeadLetterDeadline,
+	DeadlineStore,
+	DueDeadline,
+} from "./application/deadlines/deadline-store";
+export {
+	type DomainErrorClass,
+	domainErrorToResult,
+} from "./application/domain-error-result";
+export {
+	InMemoryIdempotencyStore,
+	type InMemoryIdempotencyStoreOptions,
+} from "./application/idempotency/adapters/in-memory-idempotency-store";
 export {
 	type IdempotencyClaim,
 	type IdempotencyClaimHandle,
@@ -60,28 +78,54 @@ export {
 	type IdempotentExecution,
 	type WithIdempotentCommitDeps,
 	withIdempotentCommit,
-} from "./app/idempotency";
+} from "./application/idempotency/idempotency";
+// Projections: checkpoint port, runner, in-memory reference
 export {
-	InMemoryIdempotencyStore,
-	type InMemoryIdempotencyStoreOptions,
-} from "./app/in-memory-idempotency-store";
+	InMemoryProjectionCheckpointStore,
+	type InMemoryProjectionCheckpointStoreOptions,
+} from "./application/projections/adapters/in-memory-checkpoint-store";
+export {
+	isPositionAfter,
+	type Projection,
+	type ProjectionCheckpoint,
+	type ProjectionCheckpointStore,
+	type ProjectionPosition,
+} from "./application/projections/ports";
+export {
+	ignoreProjectionEvent,
+	type ProjectionEventHandler,
+	type ProjectionFromHandlersOptions,
+	type ProjectionHandlers,
+	projectionFromHandlers,
+} from "./application/projections/projection-from-handlers";
+export {
+	type ProjectionBatchResult,
+	type ProjectOptions,
+	Projector,
+	type ProjectorOptions,
+} from "./application/projections/projector";
+export {
+	AggregateTrackingError,
+	type AggregateTrackingFailure,
+	CommitError,
+	InvalidRepositoryAdapterError,
+	InvalidRepositoryDefinitionError,
+	NestedUnitOfWorkError,
+	RepositoryErrorMappingFailedError,
+	RollbackError,
+	TransactionClosedError,
+} from "./application/unit-of-work/errors";
 export type {
 	AggregatePersistenceWrite,
 	AggregateWriteIntent,
 	RepositoryTracking,
 	UnitOfWorkIdentityMap,
-} from "./app/persistence-contract";
-export type { Query, QueryHandler } from "./app/query";
-export {
-	type IQueryBus,
-	QueryBus,
-	type QueryBusOptions,
-} from "./app/query-bus";
+} from "./application/unit-of-work/persistence-contract";
 export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
 	recordPendingEvents,
-} from "./app/record-pending-events";
+} from "./application/unit-of-work/record-pending-events";
 export {
 	type AggregateWriteRegistration,
 	type CompatibleRepositoryDefinitions,
@@ -94,7 +138,7 @@ export {
 	UnitOfWork,
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
-} from "./app/unit-of-work";
+} from "./application/unit-of-work/unit-of-work";
 // Core: errors
 export {
 	AggregateDeletedError,
@@ -150,21 +194,6 @@ export {
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
 } from "./core/errors";
-// Deadlines: durable timeout-as-input
-export {
-	DeadlineProcessor,
-	type DeadlineProcessorObservers,
-	type DeadlineProcessorOptions,
-} from "./deadlines/deadline-processor";
-export type {
-	DeadLetterDeadline,
-	DeadlineStore,
-	DueDeadline,
-} from "./deadlines/deadline-store";
-export {
-	InMemoryDeadlineStore,
-	type InMemoryDeadlineStoreOptions,
-} from "./deadlines/in-memory-deadline-store";
 // Aggregates: type hub
 export {
 	type AggregateSnapshot,
@@ -372,31 +401,6 @@ export {
 	type SnapshotModel,
 } from "./persistence/snapshot-store/snapshot-model";
 export type { SnapshotStore } from "./persistence/snapshot-store/snapshot-store";
-// Projections: checkpoint port, runner, in-memory reference
-export {
-	InMemoryProjectionCheckpointStore,
-	type InMemoryProjectionCheckpointStoreOptions,
-} from "./projections/in-memory-checkpoint-store";
-export {
-	isPositionAfter,
-	type Projection,
-	type ProjectionCheckpoint,
-	type ProjectionCheckpointStore,
-	type ProjectionPosition,
-} from "./projections/ports";
-export {
-	ignoreProjectionEvent,
-	type ProjectionEventHandler,
-	type ProjectionFromHandlersOptions,
-	type ProjectionHandlers,
-	projectionFromHandlers,
-} from "./projections/projection-from-handlers";
-export {
-	type ProjectionBatchResult,
-	type ProjectOptions,
-	Projector,
-	type ProjectorOptions,
-} from "./projections/projector";
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,

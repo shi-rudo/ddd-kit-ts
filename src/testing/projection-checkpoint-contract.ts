@@ -1,9 +1,9 @@
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type {
 	ProjectionCheckpoint,
 	ProjectionCheckpointStore,
 	ProjectionPosition,
-} from "../projections/ports";
+} from "../application/projections/ports";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import {
 	assert,
 	assertEqual,

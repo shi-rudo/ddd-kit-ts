@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemoryDeadlineStore } from "../deadlines/in-memory-deadline-store";
+import { InMemoryDeadlineStore } from "../application/deadlines/adapters/in-memory-deadline-store";
 import {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractHarness,

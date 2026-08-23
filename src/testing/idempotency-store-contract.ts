@@ -2,7 +2,7 @@ import type {
 	IdempotencyClaim,
 	IdempotencyClaimHandle,
 	IdempotencyStore,
-} from "../app/idempotency";
+} from "../application/idempotency/idempotency";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,

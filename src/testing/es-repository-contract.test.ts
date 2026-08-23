@@ -2,8 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type {
 	AggregatePersistenceWrite,
 	RepositoryTracking,
-} from "../app/persistence-contract";
-import { defineRepository, UnitOfWork } from "../app/unit-of-work";
+} from "../application/unit-of-work/persistence-contract";
+import {
+	defineRepository,
+	UnitOfWork,
+} from "../application/unit-of-work/unit-of-work";
 import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";

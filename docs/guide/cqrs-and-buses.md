@@ -123,7 +123,7 @@ import { err, ok, type Result } from "@shirudo/result";
 import { type Money, tryMoneyFromDto } from "@shirudo/ddd-kit/money";
 ```
 
-<<< ../../src/app/order-placement-example.ts#order-domain{ts}
+<<< ../../examples/order-placement/order-placement-example.ts#order-domain{ts}
 
 ```ts
 type ConfirmOrderCommand = Command & {
@@ -386,7 +386,7 @@ coordinates the transaction and persistence, while `domainErrorToResult`
 selectively turns the one expected domain rejection into an application
 outcome:
 
-<<< ../../src/app/order-placement-example.ts#place-order-handler{ts}
+<<< ../../examples/order-placement/order-placement-example.ts#place-order-handler{ts}
 
 The transaction stores a plain `PlaceOrderOutcome`, including a rejection, so a
 duplicate idempotency key replays the same logical answer instead of running the

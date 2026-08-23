@@ -28,7 +28,7 @@ export type AggregateClass<TAgg> =
  * one aggregate type+id maps to exactly ONE in-memory instance.
  *
  * This is the shipped implementation of the contract the
- * [Repository guide](../../docs/guide/repository.md) places on
+ * [Repository guide](../../../docs/guide/repository.md) places on
  * `AggregatePersistence` implementations: two `findById(id)` calls in the same
  * unit of work MUST return the same instance, because commit-token
  * write registration dedupes by JavaScript object identity. Two instances for

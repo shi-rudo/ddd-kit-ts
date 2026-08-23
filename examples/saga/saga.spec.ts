@@ -1,9 +1,12 @@
 import { ok } from "@shirudo/result";
 import { assert, describe, expect, it } from "vite-plus/test";
-import type { Command, CommandHandler } from "../../src/app/command";
-import { CommandBus } from "../../src/app/command-bus";
-import { withCommit } from "../../src/app/handler";
-import { recordPendingEvents } from "../../src/app/record-pending-events";
+import type {
+	Command,
+	CommandHandler,
+} from "../../src/application/cqrs/command/command";
+import { CommandBus } from "../../src/application/cqrs/command/command-bus";
+import { withCommit } from "../../src/application/cqrs/handler";
+import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
 import { AggregateNotFoundError } from "../../src/core/errors";
 import type { IAggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import {
