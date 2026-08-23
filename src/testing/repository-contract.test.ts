@@ -1,7 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Version } from "../aggregate/aggregate";
-import { AggregateRoot } from "../aggregate/aggregate-root";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import type {
 	AggregatePersistenceWrite,
 	RepositoryTracking,
@@ -12,7 +9,13 @@ import {
 	DuplicateAggregateError,
 	InfrastructureError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { Version } from "../domain/aggregate/aggregate";
+import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,

@@ -1,15 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { IAggregateRoot, Version } from "../aggregate/aggregate";
-import { AggregateRoot } from "../aggregate/aggregate-root";
-import {
-	type AnyDomainEvent,
-	createDomainEvent,
-	type DomainEvent,
-} from "../aggregate/domain-event";
-import {
-	pendingEventLifecycleCapabilityFor,
-	registerPendingEventLifecycleCapability,
-} from "../aggregate/pending-event-lifecycle";
 import {
 	AggregateDeletedError,
 	ConcurrencyConflictError,
@@ -17,7 +6,18 @@ import {
 	InfrastructureError,
 	UnenrolledChangesError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { IAggregateRoot, Version } from "../domain/aggregate/aggregate";
+import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import {
+	pendingEventLifecycleCapabilityFor,
+	registerPendingEventLifecycleCapability,
+} from "../domain/aggregate/pending-event-lifecycle";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
 import type { AggregateClass } from "../repo/identity-map";
 import type { PersistenceModel } from "../repo/persistence-model";

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../events/outbox";
 import type { Outbox } from "../events/ports";
 import {

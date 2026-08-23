@@ -1,6 +1,6 @@
-import { pendingEventLifecycleCapabilityFor } from "../aggregate/pending-event-lifecycle";
 import { AggregateDeletedError } from "../core/errors";
-import type { Id } from "../core/id";
+import { pendingEventLifecycleCapabilityFor } from "../domain/aggregate/pending-event-lifecycle";
+import type { Id } from "../domain/identity/id";
 
 /**
  * A class reference used as the type key of the identity map. Keying

@@ -1,16 +1,16 @@
-import type { Version } from "../aggregate/aggregate";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
+import { EventHarvestError } from "../core/errors";
+import type { Version } from "../domain/aggregate/aggregate";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate-root";
+import {
+	type PendingEventLifecycleCapability,
+	pendingEventLifecycleCapabilityFor,
+} from "../domain/aggregate/pending-event-lifecycle";
 import {
 	type AnyDomainEvent,
 	isMintedEvent,
 	type PendingDomainEvent,
-} from "../aggregate/domain-event";
-import {
-	type PendingEventLifecycleCapability,
-	pendingEventLifecycleCapabilityFor,
-} from "../aggregate/pending-event-lifecycle";
-import { EventHarvestError } from "../core/errors";
-import type { Id } from "../core/id";
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type {
 	EventBus,
 	EventCommitCandidate,

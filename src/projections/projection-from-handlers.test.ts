@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
 import { MissingHandlerError } from "../core/errors";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
 import type { TransactionScope } from "../repo/scope";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 import {

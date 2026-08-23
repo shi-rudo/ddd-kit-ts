@@ -1,18 +1,18 @@
 import { ok } from "@shirudo/result";
 import { assert, describe, expect, it } from "vite-plus/test";
-import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
-import {
-	type AnyDomainEvent,
-	createDomainEventFactory,
-	type DomainEventFactory,
-} from "../../src/aggregate/domain-event";
 import type { Command, CommandHandler } from "../../src/app/command";
 import { CommandBus } from "../../src/app/command-bus";
 import { withCommit } from "../../src/app/handler";
 import { recordPendingEvents } from "../../src/app/record-pending-events";
 import { AggregateNotFoundError } from "../../src/core/errors";
-import type { Id } from "../../src/core/id";
-import { InvalidDomainTransitionError } from "../../src/domain-state-machine/domain-state-machine";
+import type { IAggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import {
+	type AnyDomainEvent,
+	createDomainEventFactory,
+	type DomainEventFactory,
+} from "../../src/domain/event/domain-event";
+import type { Id } from "../../src/domain/identity/id";
+import { InvalidDomainTransitionError } from "../../src/domain/state-machine/domain-state-machine";
 import { EventBusImpl } from "../../src/events/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import type { EventBus, OutboxWriter } from "../../src/events/ports";

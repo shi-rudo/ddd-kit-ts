@@ -1,6 +1,6 @@
-import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import type { Id } from "../../src/core/id";
-import { findEntityById } from "../../src/entity/entity";
+import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { findEntityById } from "../../src/domain/entity/entity";
+import type { Id } from "../../src/domain/identity/id";
 import { addMoney, type Money } from "../../src/money";
 import { type ItemId, OrderItem } from "./order-item";
 

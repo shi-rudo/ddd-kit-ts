@@ -1,10 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import { AggregateRoot } from "../aggregate/aggregate-root";
-import {
-	type AnyDomainEvent,
-	createDomainEvent,
-	type DomainEvent,
-} from "../aggregate/domain-event";
 import {
 	ConcurrencyConflictError,
 	EventHarvestError,
@@ -12,7 +6,13 @@ import {
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import {
+	type AnyDomainEvent,
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import { InMemoryOutbox } from "../events/outbox";
 import type { EventCommitCandidate } from "../events/ports";
 import { RetryingTransactionScope } from "../repo/retrying-scope";

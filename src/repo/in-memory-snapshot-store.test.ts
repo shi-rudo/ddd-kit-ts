@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateSnapshot, Version } from "../aggregate/aggregate";
-import type { Id } from "../core/id";
+import type { AggregateSnapshot, Version } from "../domain/aggregate/aggregate";
+import type { Id } from "../domain/identity/id";
 import { InMemorySnapshotStore } from "./in-memory-snapshot-store";
 
 interface TestState {

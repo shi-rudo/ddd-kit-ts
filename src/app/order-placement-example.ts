@@ -1,8 +1,8 @@
 import { err, ok } from "@shirudo/result";
-import { AggregateRoot } from "../aggregate/aggregate-root";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { DomainError } from "../core/errors";
-import type { Id } from "../core/id";
+import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { Money } from "../money";
 import type { Command, CommandHandler } from "./command";
 import { domainErrorToResult } from "./domain-error-result";

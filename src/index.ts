@@ -6,53 +6,6 @@
 // Details presenters live in the opt-in `@shirudo/ddd-kit/http` entry;
 // the repository contract suites live in `@shirudo/ddd-kit/testing`.
 
-// Aggregates: type hub + domain events
-export {
-	type AggregateSnapshot,
-	type IAggregateRoot,
-	type IEventSourcedAggregate,
-	sameVersion,
-	type Version,
-} from "./aggregate/aggregate";
-export type { AggregateAddress } from "./aggregate/aggregate-address";
-export {
-	type AggregateConfig,
-	AggregateRoot,
-} from "./aggregate/aggregate-root";
-export {
-	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
-	type ClockFactory,
-	type CreateDomainEventFromFactsOptions,
-	type CreateDomainEventOptions,
-	type CreateDomainEventStampOptions,
-	type CreateUncommittedDomainEventOptions,
-	copyMetadata,
-	createDomainEvent,
-	createDomainEventFactory,
-	createDomainEventFromFacts,
-	createUncommittedDomainEvent,
-	type DomainEvent,
-	type DomainEventFactory,
-	type DomainEventFactoryOptions,
-	type DomainEventStamp,
-	defaultDomainEventFactory,
-	type EventIdFactory,
-	type EventMetadata,
-	mergeMetadata,
-	type PendingDomainEvent,
-	recordDomainEvent,
-	type UncommittedDomainEvent,
-	type UncommittedDomainEventOf,
-} from "./aggregate/domain-event";
-export {
-	type DomainEventValidationCode,
-	DomainEventValidationError,
-	type DomainEventValidationField,
-	SnapshotTimeValidationError,
-} from "./aggregate/domain-event-errors";
-export { EventSourcedAggregate } from "./aggregate/event-sourced-aggregate";
-
 // CQRS: commands, queries, buses
 export type { Command, CommandHandler, PublishedCommand } from "./app/command";
 export {
@@ -142,7 +95,7 @@ export {
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
 } from "./app/unit-of-work";
-// Core: errors + branded ids
+// Core: errors
 export {
 	AggregateDeletedError,
 	AggregateNotFoundError,
@@ -197,7 +150,6 @@ export {
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
 } from "./core/errors";
-export type { Id, IdGenerator } from "./core/id";
 // Deadlines: durable timeout-as-input
 export {
 	DeadlineProcessor,
@@ -213,7 +165,77 @@ export {
 	InMemoryDeadlineStore,
 	type InMemoryDeadlineStoreOptions,
 } from "./deadlines/in-memory-deadline-store";
-
+// Aggregates: type hub
+export {
+	type AggregateSnapshot,
+	type IAggregateRoot,
+	type IEventSourcedAggregate,
+	sameVersion,
+	type Version,
+} from "./domain/aggregate/aggregate";
+export type { AggregateAddress } from "./domain/aggregate/aggregate-address";
+export {
+	type AggregateConfig,
+	AggregateRoot,
+} from "./domain/aggregate/aggregate-root";
+export { EventSourcedAggregate } from "./domain/aggregate/event-sourced-aggregate";
+// Entities
+export {
+	Entity,
+	type EntityConfig,
+	entityIds,
+	findEntityById,
+	freezeShallow,
+	hasEntityId,
+	type Identifiable,
+	type IEntity,
+	removeEntityById,
+	replaceEntityById,
+	type StateValidator,
+	sameEntity,
+	updateEntityById,
+} from "./domain/entity/entity";
+// Domain events
+export {
+	type AnyDomainEvent,
+	type AnyUncommittedDomainEvent,
+	type ClockFactory,
+	type CreateDomainEventFromFactsOptions,
+	type CreateDomainEventOptions,
+	type CreateDomainEventStampOptions,
+	type CreateUncommittedDomainEventOptions,
+	copyMetadata,
+	createDomainEvent,
+	createDomainEventFactory,
+	createDomainEventFromFacts,
+	createUncommittedDomainEvent,
+	type DomainEvent,
+	type DomainEventFactory,
+	type DomainEventFactoryOptions,
+	type DomainEventStamp,
+	defaultDomainEventFactory,
+	type EventIdFactory,
+	type EventMetadata,
+	mergeMetadata,
+	type PendingDomainEvent,
+	recordDomainEvent,
+	type UncommittedDomainEvent,
+	type UncommittedDomainEventOf,
+} from "./domain/event/domain-event";
+export {
+	type DomainEventValidationCode,
+	DomainEventValidationError,
+	type DomainEventValidationField,
+	SnapshotTimeValidationError,
+} from "./domain/event/domain-event-errors";
+// Identity
+export type { Id, IdGenerator } from "./domain/identity/id";
+// Specifications
+export {
+	Specification,
+	type SpecificationComposite,
+	specification,
+} from "./domain/specification/specification";
 // Domain State Machine
 export {
 	analyzeDomainMachineDefinition,
@@ -244,25 +266,19 @@ export {
 	prepareDomainMachineDefinition,
 	ReentrantDomainStateMachineEvaluationError,
 	transitionDomainState,
-} from "./domain-state-machine/domain-state-machine";
-
-// Entities
+} from "./domain/state-machine/domain-state-machine";
+// Value Objects
 export {
-	Entity,
-	type EntityConfig,
-	entityIds,
-	findEntityById,
-	freezeShallow,
-	hasEntityId,
-	type Identifiable,
-	type IEntity,
-	removeEntityById,
-	replaceEntityById,
-	type StateValidator,
-	sameEntity,
-	updateEntityById,
-} from "./entity/entity";
-
+	deepFreeze,
+	type IValueObject,
+	ValueObject,
+	type VO,
+	vo,
+	voEquals,
+	voEqualsExcept,
+	voWithValidation,
+} from "./domain/value-object/value-object";
+export { voValidated } from "./domain/value-object/vo-validated";
 // Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./events/event-bus";
 export {
@@ -375,12 +391,6 @@ export {
 	type SnapshotModel,
 } from "./repo/snapshot-model";
 export type { SnapshotStore } from "./repo/snapshot-store";
-// Specifications
-export {
-	Specification,
-	type SpecificationComposite,
-	specification,
-} from "./specification/specification";
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,
@@ -397,18 +407,3 @@ export type {
 	DeliveryFailureKind,
 } from "./utils/delivery-failure";
 export type { ExecutionContext } from "./utils/execution";
-
-// Validation
-export { voValidated } from "./validation";
-
-// Value Objects
-export {
-	deepFreeze,
-	type IValueObject,
-	ValueObject,
-	type VO,
-	vo,
-	voEquals,
-	voEqualsExcept,
-	voWithValidation,
-} from "./value-object/value-object";

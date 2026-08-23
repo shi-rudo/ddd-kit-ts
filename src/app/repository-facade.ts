@@ -1,6 +1,6 @@
-import type { IAggregateRoot } from "../aggregate/aggregate";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
-import type { Id } from "../core/id";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import { InvalidRepositoryAdapterError } from "./errors";
 import type { RuntimePersistenceDefinition } from "./persistence-contract";
 

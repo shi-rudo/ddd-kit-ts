@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	createDomainEvent,
-	createDomainEventFactory,
-	type DomainEventFactory,
-} from "../../src/aggregate/domain-event";
-import {
 	type CommandOutboxCommitCandidate,
 	type CommandOutboxWriter,
 	routeEventsToCommandOutbox,
@@ -13,6 +8,11 @@ import { withCommit } from "../../src/app/handler";
 import { withIdempotentCommit } from "../../src/app/idempotency";
 import { InMemoryIdempotencyStore } from "../../src/app/in-memory-idempotency-store";
 import { recordPendingEvents } from "../../src/app/record-pending-events";
+import {
+	createDomainEvent,
+	createDomainEventFactory,
+	type DomainEventFactory,
+} from "../../src/domain/event/domain-event";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import { moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/repo/scope";

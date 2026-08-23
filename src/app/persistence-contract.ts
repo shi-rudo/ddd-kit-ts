@@ -1,7 +1,7 @@
-import type { IAggregateRoot, Version } from "../aggregate/aggregate";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { InfrastructureError } from "../core/errors";
-import type { Id } from "../core/id";
+import type { IAggregateRoot, Version } from "../domain/aggregate/aggregate";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { AggregateClass, IdentityMap } from "../repo/identity-map";
 import type {
 	PersistenceChanges,

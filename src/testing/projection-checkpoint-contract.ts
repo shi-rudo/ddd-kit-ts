@@ -1,4 +1,4 @@
-import type { AggregateAddress } from "../aggregate/aggregate-address";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type {
 	ProjectionCheckpoint,
 	ProjectionCheckpointStore,

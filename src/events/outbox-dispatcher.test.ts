@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
 import type { ExecutionContext } from "../utils/execution";
 import { EventBusImpl } from "./event-bus";
 import { InMemoryOutbox } from "./outbox";

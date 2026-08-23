@@ -1,5 +1,5 @@
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { MissingHandlerError } from "../core/errors";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { Projection } from "./ports";
 
 /**

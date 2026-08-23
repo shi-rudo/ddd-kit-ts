@@ -1,5 +1,5 @@
-import type { Id } from "../../src/core/id";
-import { Entity } from "../../src/entity/entity";
+import { Entity } from "../../src/domain/entity/entity";
+import type { Id } from "../../src/domain/identity/id";
 import { isNegativeMoney, type Money } from "../../src/money";
 
 export type ItemId = Id<"ItemId">;

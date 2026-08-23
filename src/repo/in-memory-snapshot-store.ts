@@ -1,8 +1,8 @@
-import type { AggregateSnapshot } from "../aggregate/aggregate";
+import type { AggregateSnapshot } from "../domain/aggregate/aggregate";
 import {
 	type AggregateAddress,
 	encodeAggregateAddress,
-} from "../aggregate/aggregate-address";
+} from "../domain/aggregate/aggregate-address";
 import { assertPositiveSafeInteger } from "../utils/validate";
 import type { SnapshotStore } from "./snapshot-store";
 

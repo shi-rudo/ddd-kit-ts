@@ -1,9 +1,9 @@
+import { DomainError } from "../../src/core/errors";
+import { EventSourcedAggregate } from "../../src/domain/aggregate/event-sourced-aggregate";
 import type {
 	DomainEvent,
 	UncommittedDomainEventOf,
-} from "../../src/aggregate/domain-event";
-import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
-import { DomainError } from "../../src/core/errors";
+} from "../../src/domain/event/domain-event";
 import type { Money } from "../../src/money";
 import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";

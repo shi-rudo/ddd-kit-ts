@@ -3,7 +3,7 @@
  * repository contract suites (state-stored and event-sourced). Internal
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
-import { isMintedEvent } from "../aggregate/domain-event";
+import { isMintedEvent } from "../domain/event/domain-event";
 
 /**
  * One entry of a contract test suite. Every suite (repository,

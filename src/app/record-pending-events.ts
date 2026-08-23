@@ -1,12 +1,12 @@
-import type { IAggregateRoot } from "../aggregate/aggregate";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate";
+import { pendingEventRecordingCapabilityFor } from "../domain/aggregate/pending-event-recording";
 import type {
 	AnyDomainEvent,
 	DomainEventFactory,
 	DomainEventStamp,
 	UncommittedDomainEventOf,
-} from "../aggregate/domain-event";
-import { pendingEventRecordingCapabilityFor } from "../aggregate/pending-event-recording";
-import type { Id } from "../core/id";
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 
 /** Minimal shell role accepted by {@link recordPendingEvents}. */
 export type DomainEventStampFactory = Pick<DomainEventFactory, "createStamp">;

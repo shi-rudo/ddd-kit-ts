@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import { AggregateRoot } from "../aggregate/aggregate-root";
-import {
-	createDomainEventFactory,
-	type DomainEvent,
-} from "../aggregate/domain-event";
 import {
 	DuplicateEventIdError,
 	ReentrantEventRecordingError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import {
+	createDomainEventFactory,
+	type DomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import { recordPendingEvents } from "./record-pending-events";
 
 type CounterId = Id<"CounterId">;

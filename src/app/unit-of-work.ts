@@ -1,11 +1,11 @@
-import type { IAggregateRoot, Version } from "../aggregate/aggregate";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
 	EventHarvestError,
 	type InfrastructureError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { IAggregateRoot, Version } from "../domain/aggregate/aggregate";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { EventBus, OutboxWriter } from "../events/ports";
 import type { AggregateClass } from "../repo/identity-map";
 import type { PersistenceModel } from "../repo/persistence-model";

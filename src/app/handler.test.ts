@@ -1,16 +1,19 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { Version } from "../aggregate/aggregate";
+import { EventHarvestError, InfrastructureError } from "../core/errors";
+import type { Version } from "../domain/aggregate/aggregate";
 import {
 	AggregateRoot,
 	type IAggregateRoot,
-} from "../aggregate/aggregate-root";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+} from "../domain/aggregate/aggregate-root";
 import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
-} from "../aggregate/pending-event-lifecycle";
-import { EventHarvestError, InfrastructureError } from "../core/errors";
-import type { Id } from "../core/id";
+} from "../domain/aggregate/pending-event-lifecycle";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { EventBus, EventCommitCandidate, Outbox } from "../events/ports";
 import type { TransactionScope } from "../repo/scope";
 import {

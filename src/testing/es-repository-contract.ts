@@ -1,10 +1,10 @@
-import type { IAggregateRoot } from "../aggregate/aggregate";
-import type { AggregateAddress } from "../aggregate/aggregate-address";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import {
 	type AnyDomainEvent,
 	type PendingDomainEvent,
-} from "../aggregate/domain-event";
-import type { Id } from "../core/id";
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { CommittedDomainEvent } from "../events/ports";
 import type { ReadStreamOptions, StreamReadResult } from "../repo/event-store";
 import { deepEqual } from "../utils/array/deep-equal";

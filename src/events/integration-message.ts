@@ -1,12 +1,12 @@
-import type { AggregateAddress } from "../aggregate/aggregate-address";
+import { InvalidIntegrationMessageError } from "../core/errors";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
 	type DomainEvent,
 	type EventMetadata,
-} from "../aggregate/domain-event";
-import { InvalidIntegrationMessageError } from "../core/errors";
-import { deepFreeze } from "../value-object/value-object";
+} from "../domain/event/domain-event";
+import { deepFreeze } from "../domain/value-object/value-object";
 import {
 	assertJsonValue,
 	isJsonObject,

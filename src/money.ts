@@ -19,14 +19,14 @@ export {
 	negateMoney,
 	rescaleMoney,
 	subtractMoney,
-} from "./money/arithmetic";
+} from "./domain/value-object/money/arithmetic";
 export {
 	InvalidMoneyError,
 	MoneyCurrencyMismatchError,
 	MoneyPrecisionLossError,
 	MoneyScaleMismatchError,
 	UnknownCurrencyError,
-} from "./money/errors";
+} from "./domain/value-object/money/errors";
 export {
 	type CreateMoneyFactoryOptions,
 	type CurrencyScaleResolver,
@@ -34,8 +34,11 @@ export {
 	currencyScaleFromIntl,
 	currencyScaleFromRecord,
 	type MoneyFactory,
-} from "./money/factory";
-export { createMoneyFormatter, formatMoney } from "./money/format";
+} from "./domain/value-object/money/factory";
+export {
+	createMoneyFormatter,
+	formatMoney,
+} from "./domain/value-object/money/format";
 export {
 	type CurrencyCode,
 	isMoney,
@@ -50,17 +53,20 @@ export {
 	moneyOfMinor,
 	moneyToDecimalString,
 	moneyToDto,
-} from "./money/money";
-export { type ParseMoneyInputOptions, parseMoneyInput } from "./money/parse";
+} from "./domain/value-object/money/money";
+export {
+	type ParseMoneyInputOptions,
+	parseMoneyInput,
+} from "./domain/value-object/money/parse";
 export {
 	type MoneySnapshot,
 	type MoneySnapshotCurrencyLike,
 	type MoneySnapshotLike,
 	moneyFromSnapshot,
 	moneyToSnapshot,
-} from "./money/snapshot";
+} from "./domain/value-object/money/snapshot";
 export {
 	tryMoneyFromDto,
 	tryMoneyFromSnapshot,
 	tryParseMoneyInput,
-} from "./money/try-parse";
+} from "./domain/value-object/money/try-parse";

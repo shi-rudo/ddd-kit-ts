@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../aggregate/aggregate-address";
-import { createDomainEvent, type DomainEvent } from "../aggregate/domain-event";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import {
+	createDomainEvent,
+	type DomainEvent,
+} from "../domain/event/domain-event";
 import { InMemoryEventStore } from "../repo/in-memory-event-store";
 import { createEventStoreContractTests } from "../testing";
 

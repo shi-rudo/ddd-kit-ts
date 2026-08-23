@@ -6,7 +6,7 @@ import {
 	ConcurrencyConflictError,
 	DomainError,
 } from "../core/errors";
-import { moneyFromDto } from "../money/money";
+import { moneyFromDto } from "../domain/value-object/money/money";
 import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 
