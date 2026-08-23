@@ -5,7 +5,7 @@ import {
 	type PendingDomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
-import type { CommittedDomainEvent } from "../messaging/ports";
+import type { CommittedDomainEvent } from "../messaging/committed-event";
 import type {
 	ReadStreamOptions,
 	StreamReadResult,

@@ -4,7 +4,7 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../messaging/outbox/outbox";
-import type { Outbox } from "../messaging/ports";
+import type { Outbox } from "../messaging/outbox/ports";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,

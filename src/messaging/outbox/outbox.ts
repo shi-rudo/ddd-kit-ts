@@ -12,13 +12,15 @@ import {
 	assertPositiveSafeInteger,
 } from "../../utils/validate";
 import type {
-	DeadLetterRecord,
-	DispatchTrackingOutbox,
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
+} from "../committed-event";
+import type {
+	DeadLetterRecord,
+	DispatchTrackingOutbox,
 	OutboxRecord,
 	OutboxWriter,
-} from "../ports";
+} from "./ports";
 
 /**
  * An {@link OutboxWriter} that deliberately drops every event: the

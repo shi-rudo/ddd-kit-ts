@@ -15,14 +15,14 @@ import {
 } from "../../utils/observer";
 import { PollLoop } from "../../utils/poll-loop";
 import { assertNonNegativeFinite } from "../../utils/validate";
+import type { EventBus } from "../event-bus/ports";
 import {
 	type DeadLetterRecord,
 	type DispatchTrackingOutbox,
-	type EventBus,
 	isDispatchTrackingOutbox,
 	type Outbox,
 	type OutboxRecord,
-} from "../ports";
+} from "./ports";
 
 /**
  * Required operational observers for {@link OutboxDispatcher}. All hooks are

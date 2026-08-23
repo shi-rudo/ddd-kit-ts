@@ -18,8 +18,9 @@ import { InvalidDomainTransitionError } from "../../src/domain/state-machine/dom
 import { type Money, moneyOfMinor } from "../../src/domain/value-object/money";
 import { AggregateNotFoundError } from "../../src/errors/kit-errors";
 import { EventBusImpl } from "../../src/messaging/event-bus/event-bus";
+import type { EventBus } from "../../src/messaging/event-bus/ports";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
-import type { EventBus, OutboxWriter } from "../../src/messaging/ports";
+import type { OutboxWriter } from "../../src/messaging/outbox/ports";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 
 import { CheckoutSaga } from "./checkout-saga";

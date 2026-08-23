@@ -22,8 +22,8 @@ import {
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
-	Outbox,
-} from "../messaging/ports";
+} from "../messaging/committed-event";
+import type { Outbox } from "../messaging/outbox/ports";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
 import { deepEqual } from "../utils/array/deep-equal";

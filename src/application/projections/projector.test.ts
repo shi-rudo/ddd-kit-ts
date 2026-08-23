@@ -7,12 +7,12 @@ import {
 	ForeignEventError,
 	UnprojectableEventError,
 } from "../../errors/kit-errors";
-import { InMemoryOutbox } from "../../messaging/outbox/outbox";
-import { OutboxDispatcher } from "../../messaging/outbox/outbox-dispatcher";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
-} from "../../messaging/ports";
+} from "../../messaging/committed-event";
+import { InMemoryOutbox } from "../../messaging/outbox/outbox";
+import { OutboxDispatcher } from "../../messaging/outbox/outbox-dispatcher";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { InMemoryProjectionCheckpointStore } from "./adapters/in-memory-checkpoint-store";
 import type {

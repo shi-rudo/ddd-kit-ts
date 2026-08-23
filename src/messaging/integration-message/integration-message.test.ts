@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { createDomainEvent } from "../../domain/event/domain-event";
 import { InvalidIntegrationMessageError } from "../../errors/kit-errors";
-import type { CommittedDomainEvent } from "../ports";
+import type { CommittedDomainEvent } from "../committed-event";
 import {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
