@@ -401,7 +401,7 @@ export {
 	type SnapshotModel,
 } from "./persistence/snapshot-store/snapshot-model";
 export type { SnapshotStore } from "./persistence/snapshot-store/snapshot-store";
-// Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
+// Structural equality
 export { deepEqual } from "./utils/array/deep-equal";
 export {
 	type DeepEqualExceptOptions,

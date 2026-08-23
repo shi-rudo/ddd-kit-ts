@@ -51,7 +51,6 @@ The other four subpaths stay. `money`, `http`, `presentation` and
 the core barrel stays free of money, transport and test-support
 concerns. `utils` was the only entry point that duplicated the root.
 
-
 ### Changed (breaking): repository lifecycle intent is explicit
 
 - Remove `IRepository` and `IUnitOfWorkRepository`.

@@ -451,3 +451,23 @@ this list if your code observes one of these paths:
 - `InMemoryEventStore` clones events on append and on read. A mutation
   of a read event does not change stored history. Test doubles that
   relied on shared references see copies now.
+
+## Appendix: v3.0.0-rc.4 to rc.5 or later
+
+One source break: the `utils` entry point is gone.
+
+```ts
+// before
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit/utils";
+
+// after
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
+```
+
+The four types travel with the functions: `DeepEqualExceptOptions`,
+`DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
+
+No function and no type disappears. The subpath re-exported what the root
+entry already carried, so the change costs one import path. The `money`,
+`http`, `presentation` and `testing` entry points are unaffected; each of
+them carries symbols the root entry deliberately omits.
