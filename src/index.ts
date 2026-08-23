@@ -95,7 +95,7 @@ export {
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
 } from "./app/unit-of-work";
-// Core: errors + branded ids
+// Core: errors
 export {
 	AggregateDeletedError,
 	AggregateNotFoundError,
@@ -165,7 +165,7 @@ export {
 	InMemoryDeadlineStore,
 	type InMemoryDeadlineStoreOptions,
 } from "./deadlines/in-memory-deadline-store";
-// Aggregates: type hub + domain events
+// Aggregates: type hub
 export {
 	type AggregateSnapshot,
 	type IAggregateRoot,
@@ -195,6 +195,7 @@ export {
 	sameEntity,
 	updateEntityById,
 } from "./domain/entity/entity";
+// Domain events
 export {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
@@ -227,6 +228,7 @@ export {
 	type DomainEventValidationField,
 	SnapshotTimeValidationError,
 } from "./domain/event/domain-event-errors";
+// Identity
 export type { Id, IdGenerator } from "./domain/identity/id";
 // Specifications
 export {
@@ -276,7 +278,6 @@ export {
 	voEqualsExcept,
 	voWithValidation,
 } from "./domain/value-object/value-object";
-// Validation
 export { voValidated } from "./domain/value-object/vo-validated";
 // Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./events/event-bus";

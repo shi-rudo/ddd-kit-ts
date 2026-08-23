@@ -1,6 +1,6 @@
 {
 	// Type-checking scope for `npm run typecheck` and CI: the library source
-	// PLUS the shipped examples. The build config (tsconfig.json) keeps its
+	// PLUS the shipped examples and the architecture tests under test/. The build config (tsconfig.json) keeps its
 	// src-only scope; examples must never land in dist, but a type break in
 	// example code must fail the gate instead of shipping silently.
 	"extends": "./tsconfig.json",
@@ -9,5 +9,5 @@
 		"declaration": false,
 		"rootDir": "."
 	},
-	"include": ["src", "examples"]
+	"include": ["src", "examples", "test"]
 }
