@@ -16,10 +16,10 @@ import type { AggregatePersistence, Repository } from "./repository";
 
 // @ts-expect-error IRepository was removed in favour of the explicit
 // AggregatePersistence and Repository contracts.
-type RemovedIRepository = import("../index").IRepository;
+type RemovedIRepository = import("../../index").IRepository;
 // @ts-expect-error IUnitOfWorkRepository was removed; repositories now
 // participate in the mandatory Unit of Work through the new contracts.
-type RemovedIUnitOfWorkRepository = import("../index").IUnitOfWorkRepository;
+type RemovedIUnitOfWorkRepository = import("../../index").IUnitOfWorkRepository;
 
 void (undefined as unknown as RemovedIRepository);
 void (undefined as unknown as RemovedIUnitOfWorkRepository);

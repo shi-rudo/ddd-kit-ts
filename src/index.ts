@@ -321,11 +321,11 @@ export type {
 	OutboxWriter,
 	PublishOptions,
 } from "./events/ports";
+// Persistence: repository, event store, snapshot store
 export {
 	InMemoryEventStore,
 	type InMemoryEventStoreOptions,
 } from "./persistence/event-store/adapters/in-memory-event-store";
-// Repository: ports, identity map, event store, scopes
 export type {
 	EventStore,
 	EventStoreAppendOptions,
