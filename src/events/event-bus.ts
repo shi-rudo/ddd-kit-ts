@@ -43,10 +43,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		handler: EventHandler<Extract<Evt, { type: K }>>,
 	): () => void {
 		const type = eventType;
-		if (!this.handlers.has(type)) {
-			this.handlers.set(type, []);
+		let handlersForType = this.handlers.get(type);
+		if (handlersForType === undefined) {
+			handlersForType = [];
+			this.handlers.set(type, handlersForType);
 		}
-		const handlersForType = this.handlers.get(type)!;
 		const casted = handler as EventHandler<Evt>;
 		handlersForType.push(casted);
 
@@ -93,10 +94,12 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		options?: OnceOptions,
 	): Promise<Extract<Evt, { type: K }>> {
 		return new Promise<Extract<Evt, { type: K }>>((resolve, reject) => {
+			const signal = options?.signal;
+
 			// Reject synchronously if the signal is already aborted; don't
 			// even subscribe.
-			if (options?.signal?.aborted) {
-				reject(abortReason(options.signal, "EventBus.once aborted"));
+			if (signal?.aborted) {
+				reject(abortReason(signal, "EventBus.once aborted"));
 				return;
 			}
 
@@ -109,8 +112,8 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				settled = true;
 				unsubscribe();
 				if (timer !== undefined) clearTimeout(timer);
-				if (abortListener && options?.signal) {
-					options.signal.removeEventListener("abort", abortListener);
+				if (abortListener && signal) {
+					signal.removeEventListener("abort", abortListener);
 				}
 			};
 
@@ -119,12 +122,12 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				resolve(event);
 			});
 
-			if (options?.signal) {
+			if (signal) {
 				abortListener = () => {
 					cleanup();
-					reject(abortReason(options.signal!, "EventBus.once aborted"));
+					reject(abortReason(signal, "EventBus.once aborted"));
 				};
-				options.signal.addEventListener("abort", abortListener);
+				signal.addEventListener("abort", abortListener);
 			}
 
 			if (typeof options?.timeoutMs === "number") {
