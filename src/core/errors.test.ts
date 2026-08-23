@@ -157,19 +157,30 @@ describe("AggregateNotFoundError", () => {
 	});
 
 	it("is NOT retryable: the row isn't there; retry won't help", () => {
-		expect(isRetryable(new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }))).toBe(false);
+		expect(
+			isRetryable(
+				new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			),
+		).toBe(false);
 	});
 
 	it("preserves a wrapped driver error via cause", () => {
 		const driverErr = new Error("postgres: no rows in result set");
-		const e = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1", cause: driverErr });
+		const e = new AggregateNotFoundError({
+			aggregateType: "Order",
+			id: "o-1",
+			cause: driverErr,
+		});
 		expect(getRootCause(e)).toBe(driverErr);
 	});
 });
 
 describe("DuplicateAggregateError", () => {
 	it("carries aggregate type and id in the technical message", () => {
-		const e = new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1" });
+		const e = new DuplicateAggregateError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+		});
 		expect(e.aggregateType).toBe("Order");
 		expect(e.aggregateId).toBe("o-1");
 		expect(e.name).toBe("DUPLICATE_AGGREGATE");
@@ -177,7 +188,10 @@ describe("DuplicateAggregateError", () => {
 	});
 
 	it("is an InfrastructureError and NOT retryable: re-running the same INSERT cannot succeed", () => {
-		const e = new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1" });
+		const e = new DuplicateAggregateError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+		});
 		expect(e).toBeInstanceOf(InfrastructureError);
 		expect(isRetryable(e)).toBe(false);
 	});
@@ -186,14 +200,23 @@ describe("DuplicateAggregateError", () => {
 		const driverErr = Object.assign(new Error("duplicate key value"), {
 			code: "23505",
 		});
-		const e = new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1", cause: driverErr });
+		const e = new DuplicateAggregateError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			cause: driverErr,
+		});
 		expect(getRootCause(e)).toBe(driverErr);
 	});
 });
 
 describe("ConcurrencyConflictError", () => {
 	it("carries expected/actual versions for OCC reporting", () => {
-		const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+		const e = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
 		expect(e.aggregateType).toBe("Order");
 		expect(e.aggregateId).toBe("o-1");
 		expect(e.expectedVersion).toBe(3);
@@ -203,7 +226,12 @@ describe("ConcurrencyConflictError", () => {
 	});
 
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
-		const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+		const e = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
 		expect(e.retryable).toBe(true);
 		expect(isRetryable(e)).toBe(true);
 	});
@@ -211,10 +239,19 @@ describe("ConcurrencyConflictError", () => {
 	it("retryable hint survives wrapping in a use-case-level DomainError", () => {
 		class FailedToConfirmOrderError extends DomainError<"FAILED_TO_CONFIRM_ORDER"> {
 			constructor(cause: unknown) {
-				super({ code: "FAILED_TO_CONFIRM_ORDER", message: "Failed to confirm order", cause });
+				super({
+					code: "FAILED_TO_CONFIRM_ORDER",
+					message: "Failed to confirm order",
+					cause,
+				});
 			}
 		}
-		const root = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+		const root = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
 		const wrapped = new FailedToConfirmOrderError(root);
 
 		// The cause-chain helpers find the retryable root; an App-Service
@@ -224,7 +261,12 @@ describe("ConcurrencyConflictError", () => {
 	});
 
 	it("serialises to JSON with name, message, and timestamp for structured logging", () => {
-		const e = new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 });
+		const e = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "o-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
 		const json = e.toJSON();
 		expect(json.name).toBe("CONCURRENCY_CONFLICT");
 		expect(json.message).toContain("Order(o-1)");

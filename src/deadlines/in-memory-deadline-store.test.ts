@@ -37,7 +37,8 @@ describe("InMemoryDeadlineStore capacity", () => {
 		});
 		await store.schedule({ scope: "orders", key: "o-1", dueAt, payload: 1 });
 		const [record] = await store.due(dueAt, 1);
-		if (record === undefined) throw new Error("expected the scheduled deadline");
+		if (record === undefined)
+			throw new Error("expected the scheduled deadline");
 		await store.markFailed(record.deliveryId, new Error("poison"));
 
 		await expect(

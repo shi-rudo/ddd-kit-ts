@@ -67,9 +67,9 @@ describe("adapter-owned snapshot models", () => {
 			}
 		}
 
-		expect(() =>
-			defineSnapshotModel(new OrderSnapshotModelClass()),
-		).toThrow(/SnapshotModel\.capture is missing or not a function/);
+		expect(() => defineSnapshotModel(new OrderSnapshotModelClass())).toThrow(
+			/SnapshotModel\.capture is missing or not a function/,
+		);
 	});
 
 	it("captures a detached snapshot envelope from an aggregate", () => {

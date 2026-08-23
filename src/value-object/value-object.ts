@@ -1,15 +1,15 @@
+import { err, ok, type Result } from "@shirudo/result";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
-    deepEqualExcept,
-    type DeepEqualExceptOptions,
+	type DeepEqualExceptOptions,
+	deepEqualExcept,
 } from "../utils/array/deep-equal-except";
 import {
-    builtInTagWithoutInvokingAccessors,
-    hasIntrinsicPrototypeChain,
-    isIntrinsicConstructorPrototype,
-    mutableBuiltInTagWithoutInvokingAccessors,
+	builtInTagWithoutInvokingAccessors,
+	hasIntrinsicPrototypeChain,
+	isIntrinsicConstructorPrototype,
+	mutableBuiltInTagWithoutInvokingAccessors,
 } from "../utils/array/is-built-in";
-import { err, ok, type Result } from "@shirudo/result";
 
 // ============================================================================
 // Functional Value Object API
@@ -27,22 +27,22 @@ export type VO<T> = Readonly<T>;
  * round-trip never sees them).
  */
 const DATE_MUTATORS: readonly string[] = [
-    "setTime",
-    "setMilliseconds",
-    "setUTCMilliseconds",
-    "setSeconds",
-    "setUTCSeconds",
-    "setMinutes",
-    "setUTCMinutes",
-    "setHours",
-    "setUTCHours",
-    "setDate",
-    "setUTCDate",
-    "setMonth",
-    "setUTCMonth",
-    "setFullYear",
-    "setUTCFullYear",
-    "setYear",
+	"setTime",
+	"setMilliseconds",
+	"setUTCMilliseconds",
+	"setSeconds",
+	"setUTCSeconds",
+	"setMinutes",
+	"setUTCMinutes",
+	"setHours",
+	"setUTCHours",
+	"setDate",
+	"setUTCDate",
+	"setMonth",
+	"setUTCMonth",
+	"setFullYear",
+	"setUTCFullYear",
+	"setYear",
 ];
 
 // One thrower function per (typeName, method) for the lifetime of the
@@ -53,41 +53,41 @@ const mapEntries = Map.prototype.entries;
 const setValues = Set.prototype.values;
 
 function mutationThrower(typeName: string, method: string): () => never {
-    const key = `${typeName}.${method}`;
-    let thrower = mutationThrowers.get(key);
-    if (!thrower) {
-        thrower = function throwFrozenMutation(): never {
-            throw new TypeError(
-                `Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
-            );
-        };
-        mutationThrowers.set(key, thrower);
-    }
-    return thrower;
+	const key = `${typeName}.${method}`;
+	let thrower = mutationThrowers.get(key);
+	if (!thrower) {
+		thrower = function throwFrozenMutation(): never {
+			throw new TypeError(
+				`Cannot call ${method}() on a ${typeName} inside a deeply frozen value`,
+			);
+		};
+		mutationThrowers.set(key, thrower);
+	}
+	return thrower;
 }
 
 // Reused descriptor: Object.defineProperty reads it synchronously, so a
 // single mutable module-level object avoids one allocation per method.
 const shadowDescriptor = {
-    value: undefined as unknown,
-    writable: false,
-    enumerable: false,
-    configurable: false,
+	value: undefined as unknown,
+	writable: false,
+	enumerable: false,
+	configurable: false,
 };
 
 function shadowMutators(
-    obj: object,
-    typeName: string,
-    methods: readonly string[],
+	obj: object,
+	typeName: string,
+	methods: readonly string[],
 ): void {
-    // A non-extensible built-in (frozen, sealed, or preventExtensions'd)
-    // cannot receive shadow properties, so skip it (best effort; the caller
-    // chose to lock it themselves).
-    if (!Object.isExtensible(obj)) return;
-    for (const method of methods) {
-        shadowDescriptor.value = mutationThrower(typeName, method);
-        Object.defineProperty(obj, method, shadowDescriptor);
-    }
+	// A non-extensible built-in (frozen, sealed, or preventExtensions'd)
+	// cannot receive shadow properties, so skip it (best effort; the caller
+	// chose to lock it themselves).
+	if (!Object.isExtensible(obj)) return;
+	for (const method of methods) {
+		shadowDescriptor.value = mutationThrower(typeName, method);
+		Object.defineProperty(obj, method, shadowDescriptor);
+	}
 }
 
 /**
@@ -116,60 +116,60 @@ function shadowMutators(
  * unfrozen, because the spec forbids freezing a view with elements, and
  * freezing cannot protect the underlying buffer. Their contents remain mutable.
  */
-export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly<T> {
-    if (obj === null || typeof obj !== "object") {
-        return obj as Readonly<T>;
-    }
-    // ArrayBuffer views are atomic: Object.freeze on a typed array with
-    // elements throws per spec, and freezing cannot protect the underlying
-    // buffer anyway, so views are returned as-is (their contents stay
-    // mutable). Mirrors deepEqual, which also treats views atomically.
-    if (ArrayBuffer.isView(obj)) {
-        return obj as Readonly<T>;
-    }
-    if (visited.has(obj as object)) {
-        return obj as Readonly<T>;
-    }
-    visited.add(obj as object);
+export function deepFreeze<T>(
+	obj: T,
+	visited = new WeakSet<object>(),
+): Readonly<T> {
+	if (obj === null || typeof obj !== "object") {
+		return obj as Readonly<T>;
+	}
+	// ArrayBuffer views are atomic: Object.freeze on a typed array with
+	// elements throws per spec, and freezing cannot protect the underlying
+	// buffer anyway, so views are returned as-is (their contents stay
+	// mutable). Mirrors deepEqual, which also treats views atomically.
+	if (ArrayBuffer.isView(obj)) {
+		return obj as Readonly<T>;
+	}
+	if (visited.has(obj as object)) {
+		return obj as Readonly<T>;
+	}
+	visited.add(obj as object);
 
-    // Date/Map/Set keep internal-slot mutability under Object.freeze:
-    // shadow their mutators and freeze Map/Set contents (entries are not
-    // own keys, so the key walk below would miss them). Internal-slot brand
-    // probes distinguish genuine built-ins without invoking toStringTag
-    // accessors; spoofed plain objects are frozen structurally.
-    const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(
-        obj as object,
-    );
-    if (mutableBuiltInTag !== undefined) {
-        if (mutableBuiltInTag === "[object Date]") {
-            shadowMutators(obj as object, "Date", DATE_MUTATORS);
-        } else if (mutableBuiltInTag === "[object Map]") {
-            for (const [key, value] of obj as unknown as Map<
-                unknown,
-                unknown
-            >) {
-                deepFreeze(key, visited);
-                deepFreeze(value, visited);
-            }
-            shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
-        } else if (mutableBuiltInTag === "[object Set]") {
-            for (const member of obj as unknown as Set<unknown>) {
-                deepFreeze(member, visited);
-            }
-            shadowMutators(obj as object, "Set", ["add", "delete", "clear"]);
-        }
-    }
+	// Date/Map/Set keep internal-slot mutability under Object.freeze:
+	// shadow their mutators and freeze Map/Set contents (entries are not
+	// own keys, so the key walk below would miss them). Internal-slot brand
+	// probes distinguish genuine built-ins without invoking toStringTag
+	// accessors; spoofed plain objects are frozen structurally.
+	const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(
+		obj as object,
+	);
+	if (mutableBuiltInTag !== undefined) {
+		if (mutableBuiltInTag === "[object Date]") {
+			shadowMutators(obj as object, "Date", DATE_MUTATORS);
+		} else if (mutableBuiltInTag === "[object Map]") {
+			for (const [key, value] of obj as unknown as Map<unknown, unknown>) {
+				deepFreeze(key, visited);
+				deepFreeze(value, visited);
+			}
+			shadowMutators(obj as object, "Map", ["set", "delete", "clear"]);
+		} else if (mutableBuiltInTag === "[object Set]") {
+			for (const member of obj as unknown as Set<unknown>) {
+				deepFreeze(member, visited);
+			}
+			shadowMutators(obj as object, "Set", ["add", "delete", "clear"]);
+		}
+	}
 
-    // Reflect.ownKeys returns both string and symbol own keys.
-    const keys = Reflect.ownKeys(obj);
-    for (const key of keys) {
-        const value = (obj as Record<string | symbol, unknown>)[key];
-        if (value !== null && typeof value === "object") {
-            deepFreeze(value, visited);
-        }
-    }
+	// Reflect.ownKeys returns both string and symbol own keys.
+	const keys = Reflect.ownKeys(obj);
+	for (const key of keys) {
+		const value = (obj as Record<string | symbol, unknown>)[key];
+		if (value !== null && typeof value === "object") {
+			deepFreeze(value, visited);
+		}
+	}
 
-    return Object.freeze(obj) as Readonly<T>;
+	return Object.freeze(obj) as Readonly<T>;
 }
 
 /**
@@ -193,175 +193,176 @@ export function deepFreeze<T>(obj: T, visited = new WeakSet<object>()): Readonly
  * walked as the plain object it is. `__proto__` own keys are copied as
  * inert data properties.
  */
-function cloneForVo(value: unknown, visited: WeakMap<object, unknown>): unknown {
-    if (typeof value === "function") {
-        throw new TypeError(
-            "vo() does not accept function values: Value Objects are data, not behaviour",
-        );
-    }
-    if (value === null || typeof value !== "object") {
-        return value;
-    }
-    const obj = value as object;
-    if (ArrayBuffer.isView(obj)) {
-        throwUnsupportedValueSemantics(
-            builtInTagWithoutInvokingAccessors(obj) ??
-                "[object ArrayBuffer view]",
-        );
-    }
-    if (visited.has(obj)) {
-        return visited.get(obj);
-    }
+function cloneForVo(
+	value: unknown,
+	visited: WeakMap<object, unknown>,
+): unknown {
+	if (typeof value === "function") {
+		throw new TypeError(
+			"vo() does not accept function values: Value Objects are data, not behaviour",
+		);
+	}
+	if (value === null || typeof value !== "object") {
+		return value;
+	}
+	const obj = value as object;
+	if (ArrayBuffer.isView(obj)) {
+		throwUnsupportedValueSemantics(
+			builtInTagWithoutInvokingAccessors(obj) ?? "[object ArrayBuffer view]",
+		);
+	}
+	if (visited.has(obj)) {
+		return visited.get(obj);
+	}
 
-    if (Array.isArray(obj)) {
-        if (!hasIntrinsicPrototypeChain(obj, "Array")) {
-            throwUnsupportedClassInstance();
-        }
-        const clone: unknown[] = new Array(obj.length);
-        visited.set(obj, clone);
-        for (const key of Reflect.ownKeys(obj)) {
-            if (key === "length") continue;
-            const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-            if (descriptor === undefined) continue;
-            if (!("value" in descriptor)) {
-                throwUnsupportedAccessorProperty();
-            }
-            // Drop non-enumerable string keys just like the plain-object branch
-            // below, so an array and an object carrying the same hidden property
-            // clone to the same value surface. Array indices are enumerable and
-            // therefore preserved.
-            if (typeof key === "string" && !descriptor.enumerable) continue;
-            descriptor.value = cloneForVo(descriptor.value, visited);
-            Object.defineProperty(clone, key, descriptor);
-        }
-        return clone;
-    }
+	if (Array.isArray(obj)) {
+		if (!hasIntrinsicPrototypeChain(obj, "Array")) {
+			throwUnsupportedClassInstance();
+		}
+		const clone: unknown[] = new Array(obj.length);
+		visited.set(obj, clone);
+		for (const key of Reflect.ownKeys(obj)) {
+			if (key === "length") continue;
+			const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+			if (descriptor === undefined) continue;
+			if (!("value" in descriptor)) {
+				throwUnsupportedAccessorProperty();
+			}
+			// Drop non-enumerable string keys just like the plain-object branch
+			// below, so an array and an object carrying the same hidden property
+			// clone to the same value surface. Array indices are enumerable and
+			// therefore preserved.
+			if (typeof key === "string" && !descriptor.enumerable) continue;
+			descriptor.value = cloneForVo(descriptor.value, visited);
+			Object.defineProperty(clone, key, descriptor);
+		}
+		return clone;
+	}
 
-    const tag = builtInTagWithoutInvokingAccessors(obj);
-    if (tag !== undefined) {
-        if (!hasIntrinsicPrototypeChain(obj)) {
-            throwUnsupportedClassInstance();
-        }
-        if (tag === "[object Map]") {
-            const clone = new Map<unknown, unknown>();
-            visited.set(obj, clone);
-            for (const [key, entry] of mapEntries.call(
-                obj as Map<unknown, unknown>,
-            )) {
-                if (!isPrimitiveValue(key)) {
-                    throw new TypeError(
-                        "vo() Map keys must be primitive values to preserve value equality",
-                    );
-                }
-                clone.set(key, cloneForVo(entry, visited));
-            }
-            return clone;
-        }
-        if (tag === "[object Set]") {
-            const clone = new Set<unknown>();
-            visited.set(obj, clone);
-            for (const member of setValues.call(obj as Set<unknown>)) {
-                if (!isPrimitiveValue(member)) {
-                    throw new TypeError(
-                        "vo() Set members must be primitive values to preserve value equality",
-                    );
-                }
-                clone.add(member);
-            }
-            return clone;
-        }
-        if (
-            tag === "[object Promise]" ||
-            tag === "[object WeakMap]" ||
-            tag === "[object WeakSet]"
-        ) {
-            throw new TypeError(
-                `vo() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
-            );
-        }
-        if (
-            tag === "[object Error]" ||
-            tag === "[object ArrayBuffer]" ||
-            tag === "[object SharedArrayBuffer]"
-        ) {
-            throwUnsupportedValueSemantics(tag);
-        }
-        if (tag === "[object RegExp]") {
-            // A global or sticky RegExp carries observable mutable scan state:
-            // every test()/exec() writes lastIndex, so it is a stateful object,
-            // not a value. Deep-freezing it makes lastIndex non-writable and
-            // crashes matching, so reject it instead of admitting a half-frozen
-            // value. A plain (non-global, non-sticky) RegExp never touches
-            // lastIndex and stays a genuine immutable value.
-            const regExp = obj as RegExp;
-            if (regExp.global || regExp.sticky) {
-                throw new TypeError(
-                    "vo() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
-                );
-            }
-        }
-        // Atomic built-ins admitted by the VO contract: Date, RegExp and
-        // primitive wrappers all have stable value semantics in deepEqual.
-        const builtInClone = structuredClone(obj);
-        visited.set(obj, builtInClone);
-        return builtInClone;
-    }
+	const tag = builtInTagWithoutInvokingAccessors(obj);
+	if (tag !== undefined) {
+		if (!hasIntrinsicPrototypeChain(obj)) {
+			throwUnsupportedClassInstance();
+		}
+		if (tag === "[object Map]") {
+			const clone = new Map<unknown, unknown>();
+			visited.set(obj, clone);
+			for (const [key, entry] of mapEntries.call(
+				obj as Map<unknown, unknown>,
+			)) {
+				if (!isPrimitiveValue(key)) {
+					throw new TypeError(
+						"vo() Map keys must be primitive values to preserve value equality",
+					);
+				}
+				clone.set(key, cloneForVo(entry, visited));
+			}
+			return clone;
+		}
+		if (tag === "[object Set]") {
+			const clone = new Set<unknown>();
+			visited.set(obj, clone);
+			for (const member of setValues.call(obj as Set<unknown>)) {
+				if (!isPrimitiveValue(member)) {
+					throw new TypeError(
+						"vo() Set members must be primitive values to preserve value equality",
+					);
+				}
+				clone.add(member);
+			}
+			return clone;
+		}
+		if (
+			tag === "[object Promise]" ||
+			tag === "[object WeakMap]" ||
+			tag === "[object WeakSet]"
+		) {
+			throw new TypeError(
+				`vo() cannot clone a ${tag.slice(8, -1)}: Value Objects are plain data`,
+			);
+		}
+		if (
+			tag === "[object Error]" ||
+			tag === "[object ArrayBuffer]" ||
+			tag === "[object SharedArrayBuffer]"
+		) {
+			throwUnsupportedValueSemantics(tag);
+		}
+		if (tag === "[object RegExp]") {
+			// A global or sticky RegExp carries observable mutable scan state:
+			// every test()/exec() writes lastIndex, so it is a stateful object,
+			// not a value. Deep-freezing it makes lastIndex non-writable and
+			// crashes matching, so reject it instead of admitting a half-frozen
+			// value. A plain (non-global, non-sticky) RegExp never touches
+			// lastIndex and stays a genuine immutable value.
+			const regExp = obj as RegExp;
+			if (regExp.global || regExp.sticky) {
+				throw new TypeError(
+					"vo() cannot accept a global or sticky RegExp: its lastIndex is mutable scan state, not an immutable value",
+				);
+			}
+		}
+		// Atomic built-ins admitted by the VO contract: Date, RegExp and
+		// primitive wrappers all have stable value semantics in deepEqual.
+		const builtInClone = structuredClone(obj);
+		visited.set(obj, builtInClone);
+		return builtInClone;
+	}
 
-    const prototype = Object.getPrototypeOf(obj);
-    if (
-        prototype !== null &&
-        (!isIntrinsicConstructorPrototype(prototype, "Object") ||
-            Object.getPrototypeOf(prototype) !== null)
-    ) {
-        throwUnsupportedClassInstance();
-    }
+	const prototype = Object.getPrototypeOf(obj);
+	if (
+		prototype !== null &&
+		(!isIntrinsicConstructorPrototype(prototype, "Object") ||
+			Object.getPrototypeOf(prototype) !== null)
+	) {
+		throwUnsupportedClassInstance();
+	}
 
-    // Normalize cross-realm records to the local Object prototype.
-    const clone = Object.create(prototype === null ? null : Object.prototype);
-    visited.set(obj, clone);
-    for (const key of Reflect.ownKeys(obj)) {
-        const descriptor = Object.getOwnPropertyDescriptor(obj, key);
-        if (descriptor === undefined) continue;
-        if (!("value" in descriptor)) {
-            throwUnsupportedAccessorProperty();
-        }
-        if (typeof key === "string" && !descriptor.enumerable) continue;
-        // defineProperty (not assignment) so an own "__proto__" key can
-        // never invoke the prototype setter.
-        Object.defineProperty(clone, key, {
-            value: cloneForVo(descriptor.value, visited),
-            writable: true,
-            enumerable: descriptor.enumerable,
-            configurable: true,
-        });
-    }
-    return clone;
+	// Normalize cross-realm records to the local Object prototype.
+	const clone = Object.create(prototype === null ? null : Object.prototype);
+	visited.set(obj, clone);
+	for (const key of Reflect.ownKeys(obj)) {
+		const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+		if (descriptor === undefined) continue;
+		if (!("value" in descriptor)) {
+			throwUnsupportedAccessorProperty();
+		}
+		if (typeof key === "string" && !descriptor.enumerable) continue;
+		// defineProperty (not assignment) so an own "__proto__" key can
+		// never invoke the prototype setter.
+		Object.defineProperty(clone, key, {
+			value: cloneForVo(descriptor.value, visited),
+			writable: true,
+			enumerable: descriptor.enumerable,
+			configurable: true,
+		});
+	}
+	return clone;
 }
 
 function throwUnsupportedClassInstance(): never {
-    throw new TypeError(
-        "vo() cannot clone custom class instances: Value Objects are plain data",
-    );
+	throw new TypeError(
+		"vo() cannot clone custom class instances: Value Objects are plain data",
+	);
 }
 
 function throwUnsupportedAccessorProperty(): never {
-    throw new TypeError(
-        "vo() cannot clone accessor properties: Value Objects are plain data",
-    );
+	throw new TypeError(
+		"vo() cannot clone accessor properties: Value Objects are plain data",
+	);
 }
 
 function throwUnsupportedValueSemantics(tag: string): never {
-    const name = tag.startsWith("[object ") ? tag.slice(8, -1) : tag;
-    throw new TypeError(
-        `vo() cannot accept ${name} values: Value Objects require immutable value semantics`,
-    );
+	const name = tag.startsWith("[object ") ? tag.slice(8, -1) : tag;
+	throw new TypeError(
+		`vo() cannot accept ${name} values: Value Objects require immutable value semantics`,
+	);
 }
 
 function isPrimitiveValue(value: unknown): boolean {
-    return (
-        value === null ||
-        (typeof value !== "object" && typeof value !== "function")
-    );
+	return (
+		value === null || (typeof value !== "object" && typeof value !== "function")
+	);
 }
 
 /**
@@ -387,7 +388,7 @@ function isPrimitiveValue(value: unknown): boolean {
  * ```
  */
 export function vo<T>(t: T): VO<T> {
-    return deepFreeze(cloneForVo(t, new WeakMap()) as T);
+	return deepFreeze(cloneForVo(t, new WeakMap()) as T);
 }
 
 /**
@@ -421,7 +422,7 @@ export function vo<T>(t: T): VO<T> {
  * ```
  */
 export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
-    return deepEqual(a, b);
+	return deepEqual(a, b);
 }
 
 /**
@@ -462,11 +463,11 @@ export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
  * ```
  */
 export function voEqualsExcept<T>(
-    a: VO<T>,
-    b: VO<T>,
-    options: DeepEqualExceptOptions,
+	a: VO<T>,
+	b: VO<T>,
+	options: DeepEqualExceptOptions,
 ): boolean {
-    return deepEqualExcept(a, b, options);
+	return deepEqualExcept(a, b, options);
 }
 
 /**
@@ -499,16 +500,16 @@ export function voEqualsExcept<T>(
  * ```
  */
 export function voWithValidation<T>(
-    t: T,
-    validate: (value: T) => boolean,
-    errorMessage?: string,
+	t: T,
+	validate: (value: T) => boolean,
+	errorMessage?: string,
 ): Result<VO<T>, string> {
-    if (!validate(t)) {
-        return err(
-            errorMessage ?? `Validation failed for value object: ${describeValue(t)}`,
-        );
-    }
-    return ok(vo(t));
+	if (!validate(t)) {
+		return err(
+			errorMessage ?? `Validation failed for value object: ${describeValue(t)}`,
+		);
+	}
+	return ok(vo(t));
 }
 
 /**
@@ -517,13 +518,13 @@ export function voWithValidation<T>(
  * the error path of a Result-returning function must never throw itself.
  */
 function describeValue(value: unknown): string {
-    try {
-        const json = JSON.stringify(value);
-        if (json !== undefined) return json;
-    } catch {
-        // Cyclic or BigInt-bearing values cannot be JSON-serialised.
-    }
-    return String(value);
+	try {
+		const json = JSON.stringify(value);
+		if (json !== undefined) return json;
+	} catch {
+		// Cyclic or BigInt-bearing values cannot be JSON-serialised.
+	}
+	return String(value);
 }
 
 // ============================================================================
@@ -537,34 +538,34 @@ function describeValue(value: unknown): string {
  * @template T - The shape of the value object's properties
  */
 export interface IValueObject<T extends object> {
-    /**
-     * The immutable properties of the value object.
-     */
-    readonly props: Readonly<T>;
+	/**
+	 * The immutable properties of the value object.
+	 */
+	readonly props: Readonly<T>;
 
-    /**
-     * Checks if this value object is equal to another.
-     * Uses deep equality comparison on the properties.
-     *
-     * @param other - The other value object to compare
-     * @returns true if the properties are deeply equal
-     */
-    equals(other: IValueObject<T>): boolean;
+	/**
+	 * Checks if this value object is equal to another.
+	 * Uses deep equality comparison on the properties.
+	 *
+	 * @param other - The other value object to compare
+	 * @returns true if the properties are deeply equal
+	 */
+	equals(other: IValueObject<T>): boolean;
 
-    /**
-     * Creates a clone of the value object with optional property overrides.
-     *
-     * @param props - Optional properties to override
-     * @returns A new instance of the value object
-     */
-    clone(props?: Partial<T>): IValueObject<T>;
+	/**
+	 * Creates a clone of the value object with optional property overrides.
+	 *
+	 * @param props - Optional properties to override
+	 * @returns A new instance of the value object
+	 */
+	clone(props?: Partial<T>): IValueObject<T>;
 
-    /**
-     * Serializes the value object to its raw properties for JSON operations.
-     *
-     * @returns The raw properties object
-     */
-    toJSON(): Readonly<T>;
+	/**
+	 * Serializes the value object to its raw properties for JSON operations.
+	 *
+	 * @returns The raw properties object
+	 */
+	toJSON(): Readonly<T>;
 }
 
 /**
@@ -574,106 +575,102 @@ export interface IValueObject<T extends object> {
  * @template T - The shape of the value object's properties
  */
 export abstract class ValueObject<T extends object> implements IValueObject<T> {
-    public readonly props: Readonly<T>;
+	public readonly props: Readonly<T>;
 
-    /**
-     * Creates a new ValueObject.
-     * The plain-data properties are deep-cloned and then deeply
-     * frozen, so the caller's own object graph is never frozen or mutated,
-     * and later mutation of the input does not bleed into the value object.
-     *
-     * @param props - The properties of the value object
-     * @example
-     * ```ts
-     * class Money extends ValueObject<{ amount: number; currency: string }> {
-     *   constructor(props: { amount: number; currency: string }) {
-     *     super(props);
-     *   }
-     *
-     *   protected validate(props: { amount: number; currency: string }): void {
-     *     if (props.amount < 0) throw new Error("Amount cannot be negative");
-     *   }
-     * }
-     * ```
-     */
-    constructor(props: T) {
-        this.validate(props);
-        // Same clone as vo(): Map/Set contents are walked (so the caller's
-        // entries are never frozen or shadowed in place), and functions and
-        // custom class instances are rejected. A shallow `{ ...props }` or
-        // deepOmit (which aliases reference-compared built-ins by design)
-        // would let deepFreeze reach caller-owned objects.
-        this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
-    }
+	/**
+	 * Creates a new ValueObject.
+	 * The plain-data properties are deep-cloned and then deeply
+	 * frozen, so the caller's own object graph is never frozen or mutated,
+	 * and later mutation of the input does not bleed into the value object.
+	 *
+	 * @param props - The properties of the value object
+	 * @example
+	 * ```ts
+	 * class Money extends ValueObject<{ amount: number; currency: string }> {
+	 *   constructor(props: { amount: number; currency: string }) {
+	 *     super(props);
+	 *   }
+	 *
+	 *   protected validate(props: { amount: number; currency: string }): void {
+	 *     if (props.amount < 0) throw new Error("Amount cannot be negative");
+	 *   }
+	 * }
+	 * ```
+	 */
+	constructor(props: T) {
+		this.validate(props);
+		// Same clone as vo(): Map/Set contents are walked (so the caller's
+		// entries are never frozen or shadowed in place), and functions and
+		// custom class instances are rejected. A shallow `{ ...props }` or
+		// deepOmit (which aliases reference-compared built-ins by design)
+		// would let deepFreeze reach caller-owned objects.
+		this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
+	}
 
-    /**
-     * Optional validation hook that can be overridden by subclasses.
-     * Should throw an error if validation fails.
-     *
-     * @param props - The properties to validate
-     * @throws Error if validation fails
-     */
-    protected validate(props: T): void {
-        // Default implementation does nothing
-    }
+	/**
+	 * Optional validation hook that can be overridden by subclasses.
+	 * Should throw an error if validation fails.
+	 *
+	 * @param props - The properties to validate
+	 * @throws Error if validation fails
+	 */
+	protected validate(props: T): void {
+		// Default implementation does nothing
+	}
 
-    /**
-     * Checks if this value object is equal to another.
-     * Uses deep equality comparison on the properties and checks for constructor equality.
-     *
-     * @param other - The other value object to compare
-     * @returns true if the properties are deeply equal and constructors match
-     */
-    public equals(other: ValueObject<T>): boolean {
-        if (other === null || other === undefined) {
-            return false;
-        }
+	/**
+	 * Checks if this value object is equal to another.
+	 * Uses deep equality comparison on the properties and checks for constructor equality.
+	 *
+	 * @param other - The other value object to compare
+	 * @returns true if the properties are deeply equal and constructors match
+	 */
+	public equals(other: ValueObject<T>): boolean {
+		if (other === null || other === undefined) {
+			return false;
+		}
 
-        if (this.constructor !== other.constructor) {
-            return false;
-        }
+		if (this.constructor !== other.constructor) {
+			return false;
+		}
 
-        return deepEqual(this.props, other.props);
-    }
+		return deepEqual(this.props, other.props);
+	}
 
-    /**
-     * Creates a clone of the value object with optional property overrides.
-     *
-     * @param props - Optional properties to override
-     * @returns A new instance of the value object
-     */
-    public clone(props?: Partial<T>): this {
-        const Constructor = this.constructor as new (props: T) => this;
-        const merged = { ...this.props, ...(props || {}) } as T;
-        // A `{ ...spread }` copies only enumerable own keys, so any
-        // non-enumerable own property that cloneForVo preserved on this.props
-        // (e.g. a non-enumerable symbol) would be dropped, making
-        // `x.equals(x.clone())` false because deepEqual counts all own symbols.
-        // Re-attach every non-enumerable own key the caller did not override.
-        for (const key of Reflect.ownKeys(this.props)) {
-            const descriptor = Object.getOwnPropertyDescriptor(this.props, key);
-            if (descriptor === undefined || descriptor.enumerable) continue;
-            if (props && Object.hasOwn(props, key)) continue;
-            Object.defineProperty(merged, key, {
-                value: (this.props as Record<PropertyKey, unknown>)[
-                    key as PropertyKey
-                ],
-                writable: true,
-                enumerable: false,
-                configurable: true,
-            });
-        }
-        return new Constructor(merged);
-    }
+	/**
+	 * Creates a clone of the value object with optional property overrides.
+	 *
+	 * @param props - Optional properties to override
+	 * @returns A new instance of the value object
+	 */
+	public clone(props?: Partial<T>): this {
+		const Constructor = this.constructor as new (props: T) => this;
+		const merged = { ...this.props, ...(props || {}) } as T;
+		// A `{ ...spread }` copies only enumerable own keys, so any
+		// non-enumerable own property that cloneForVo preserved on this.props
+		// (e.g. a non-enumerable symbol) would be dropped, making
+		// `x.equals(x.clone())` false because deepEqual counts all own symbols.
+		// Re-attach every non-enumerable own key the caller did not override.
+		for (const key of Reflect.ownKeys(this.props)) {
+			const descriptor = Object.getOwnPropertyDescriptor(this.props, key);
+			if (descriptor === undefined || descriptor.enumerable) continue;
+			if (props && Object.hasOwn(props, key)) continue;
+			Object.defineProperty(merged, key, {
+				value: (this.props as Record<PropertyKey, unknown>)[key as PropertyKey],
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			});
+		}
+		return new Constructor(merged);
+	}
 
-    /**
-     * Serializes the value object to its raw properties for JSON operations.
-     *
-     * @returns The raw properties object
-     */
-    public toJSON(): Readonly<T> {
-        return this.props;
-    }
-
-
+	/**
+	 * Serializes the value object to its raw properties for JSON operations.
+	 *
+	 * @returns The raw properties object
+	 */
+	public toJSON(): Readonly<T> {
+		return this.props;
+	}
 }

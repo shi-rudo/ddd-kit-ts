@@ -1,9 +1,9 @@
-import { createGlobalCapabilityRegistry } from "./global-capability-registry";
 import type {
 	AnyDomainEvent,
 	AnyUncommittedDomainEvent,
 	DomainEventStamp,
 } from "./domain-event";
+import { createGlobalCapabilityRegistry } from "./global-capability-registry";
 
 export type PendingEventStampFactory = (
 	event: AnyUncommittedDomainEvent,
@@ -25,9 +25,10 @@ const recordingCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-recording-registry/v1",
 );
 
-const capabilities = createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
-	recordingCapabilityRegistryKey,
-);
+const capabilities =
+	createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
+		recordingCapabilityRegistryKey,
+	);
 
 export function registerPendingEventRecordingCapability(
 	aggregate: object,

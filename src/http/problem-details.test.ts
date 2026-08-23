@@ -21,7 +21,9 @@ describe("toProblemDetails()", () => {
 		expect(problem.body.details?.issues[0]?.message).toBe(
 			"must be a valid email",
 		);
-		expect(problem.headers["content-type"]).toContain("application/problem+json");
+		expect(problem.headers["content-type"]).toContain(
+			"application/problem+json",
+		);
 	});
 
 	it("honors status, type, detail, and instance overrides", () => {

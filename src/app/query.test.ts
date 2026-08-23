@@ -41,12 +41,14 @@ describe("Query", () => {
 				orderId: string;
 			};
 
-			const handler: QueryHandler<GetOrderQuery, { id: string } | null> =
-				async (query) => {
-					expect(query.type).toBe("GetOrder");
-					expect(query.orderId).toBe("order-123");
-					return { id: "order-123" };
-				};
+			const handler: QueryHandler<
+				GetOrderQuery,
+				{ id: string } | null
+			> = async (query) => {
+				expect(query.type).toBe("GetOrder");
+				expect(query.orderId).toBe("order-123");
+				return { id: "order-123" };
+			};
 
 			const result = await handler({
 				type: "GetOrder",
@@ -62,13 +64,15 @@ describe("Query", () => {
 				orderId: string;
 			};
 
-			const handler: QueryHandler<GetOrderQuery, { id: string } | null> =
-				async (query) => {
-					if (query.orderId === "not-found") {
-						return null;
-					}
-					return { id: query.orderId };
-				};
+			const handler: QueryHandler<
+				GetOrderQuery,
+				{ id: string } | null
+			> = async (query) => {
+				if (query.orderId === "not-found") {
+					return null;
+				}
+				return { id: query.orderId };
+			};
 
 			const found = await handler({
 				type: "GetOrder",

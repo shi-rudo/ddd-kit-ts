@@ -540,7 +540,12 @@ export function recordDomainEvent<T extends string, P>(
 		// createStamp already validated, defensively copied, and deep-froze
 		// every stamp field; re-validating or re-copying here would only pay
 		// the work twice per recorded event.
-		return mintRecordedEvent(event, stamp.eventId, stamp.occurredAt, stamp.metadata);
+		return mintRecordedEvent(
+			event,
+			stamp.eventId,
+			stamp.occurredAt,
+			stamp.metadata,
+		);
 	}
 	// A caller-built stamp is caller-owned and unfrozen: validate and copy
 	// the stamp fields before they enter the immutable event.
@@ -551,7 +556,9 @@ export function recordDomainEvent<T extends string, P>(
 		event,
 		stamp.eventId,
 		occurredAt,
-		metadata === undefined ? undefined : (deepFreeze(metadata) as EventMetadata),
+		metadata === undefined
+			? undefined
+			: (deepFreeze(metadata) as EventMetadata),
 	);
 }
 

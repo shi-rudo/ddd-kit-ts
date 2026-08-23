@@ -87,7 +87,11 @@ describe("IdentityMap", () => {
 
 	it("the tombstone is type-scoped: deleting Restaurant(123) does not block Booking(123)", () => {
 		const map = new IdentityMap();
-		map.set(Restaurant, "123" as RestaurantId, new Restaurant("123" as RestaurantId));
+		map.set(
+			Restaurant,
+			"123" as RestaurantId,
+			new Restaurant("123" as RestaurantId),
+		);
 		map.delete(Restaurant, "123" as RestaurantId);
 
 		const booking = new Booking("123" as BookingId);

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
 import { err, ok } from "@shirudo/result";
+import { describe, expect, it } from "vite-plus/test";
 import type { Command, CommandHandler } from "./command";
 
 describe("Command", () => {

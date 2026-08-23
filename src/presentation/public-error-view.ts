@@ -1,9 +1,9 @@
 import {
-	localize,
 	type LocalizedPublicError,
-	project,
+	localize,
 	type PublicError,
 	type PublicErrorCatalog,
+	project,
 } from "@shirudo/base-error/public-error";
 import {
 	createKitPublicErrors,

@@ -104,7 +104,10 @@ export function createEsRepositoryContractTests<
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		mintedPendingEventIds(events, "pending events must be recorded before flush");
+		mintedPendingEventIds(
+			events,
+			"pending events must be recorded before flush",
+		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
 	// mint brand, and no contract demands re-minting on read, so only the

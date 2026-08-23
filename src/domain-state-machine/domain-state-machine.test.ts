@@ -3725,7 +3725,11 @@ describe("transition outcomes are frozen like every sibling return value", () =>
 					draft: { on: { Finish: { target: "done" } } },
 					done: { terminal: true },
 				},
-			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>,
+			} as DomainMachineDefinition<
+				"draft" | "done",
+				object,
+				{ readonly type: "Finish" }
+			>,
 			createInitialDomainMachineSnapshot({
 				initial: "draft",
 				initialContext: () => ({}),
@@ -3733,7 +3737,11 @@ describe("transition outcomes are frozen like every sibling return value", () =>
 					draft: { on: { Finish: { target: "done" } } },
 					done: { terminal: true },
 				},
-			} as DomainMachineDefinition<"draft" | "done", object, { readonly type: "Finish" }>),
+			} as DomainMachineDefinition<
+				"draft" | "done",
+				object,
+				{ readonly type: "Finish" }
+			>),
 			{ type: "Finish" },
 		);
 

@@ -13,8 +13,8 @@ import {
 	assert,
 	assertEqual,
 	bindContractEnvironment,
-	captureRejection,
 	type ContractTest,
+	captureRejection,
 	describeError,
 	gatedContractTest,
 } from "./contract-assertions";

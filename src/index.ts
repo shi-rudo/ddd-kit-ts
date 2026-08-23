@@ -74,6 +74,17 @@ export {
 	type DomainErrorClass,
 	domainErrorToResult,
 } from "./app/domain-error-result";
+export {
+	AggregateTrackingError,
+	type AggregateTrackingFailure,
+	CommitError,
+	InvalidRepositoryAdapterError,
+	InvalidRepositoryDefinitionError,
+	NestedUnitOfWorkError,
+	RepositoryErrorMappingFailedError,
+	RollbackError,
+	TransactionClosedError,
+} from "./app/errors";
 // App orchestration: withCommit + Unit of Work
 export {
 	type AggregateCommitToken,
@@ -101,6 +112,12 @@ export {
 	InMemoryIdempotencyStore,
 	type InMemoryIdempotencyStoreOptions,
 } from "./app/in-memory-idempotency-store";
+export type {
+	AggregatePersistenceWrite,
+	AggregateWriteIntent,
+	RepositoryTracking,
+	UnitOfWorkIdentityMap,
+} from "./app/persistence-contract";
 export type { Query, QueryHandler } from "./app/query";
 export {
 	type IQueryBus,
@@ -112,23 +129,6 @@ export {
 	type DomainEventStampProvider,
 	recordPendingEvents,
 } from "./app/record-pending-events";
-export {
-	AggregateTrackingError,
-	type AggregateTrackingFailure,
-	CommitError,
-	InvalidRepositoryAdapterError,
-	InvalidRepositoryDefinitionError,
-	NestedUnitOfWorkError,
-	RepositoryErrorMappingFailedError,
-	RollbackError,
-	TransactionClosedError,
-} from "./app/errors";
-export type {
-	AggregatePersistenceWrite,
-	AggregateWriteIntent,
-	RepositoryTracking,
-	UnitOfWorkIdentityMap,
-} from "./app/persistence-contract";
 export {
 	type AggregateWriteRegistration,
 	type CompatibleRepositoryDefinitions,
@@ -174,6 +174,8 @@ export {
 	type InMemoryCapacityExceededErrorOptions,
 	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
+	isDomainErrorLike,
+	isInfrastructureErrorLike,
 	type KitErrorCode,
 	type KitErrorOptions,
 	MisaddressedEventError,
@@ -185,8 +187,6 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
-	isDomainErrorLike,
-	isInfrastructureErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

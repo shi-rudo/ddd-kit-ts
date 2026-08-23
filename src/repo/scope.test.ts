@@ -67,9 +67,7 @@ describe("TransactionScope contract", () => {
 		};
 
 		class FakeDrizzleDb {
-			async transaction<T>(
-				fn: (tx: FakeDrizzleTx) => Promise<T>,
-			): Promise<T> {
+			async transaction<T>(fn: (tx: FakeDrizzleTx) => Promise<T>): Promise<T> {
 				const tx: FakeDrizzleTx = { id: "drizzle-tx", executed: [] };
 				return fn(tx);
 			}

@@ -71,12 +71,16 @@ class ContractEsOrder extends EventSourcedAggregate<
 	static create(id: EsOrderId): ContractEsOrder {
 		const order = new ContractEsOrder(id);
 		order.apply(
-			createDomainEvent("EsOrderCreated", {
-				name: "initial",
-			}, {
-				aggregateId: order.id,
-				aggregateType: order.aggregateType,
-			}) as EsOrderCreated,
+			createDomainEvent(
+				"EsOrderCreated",
+				{
+					name: "initial",
+				},
+				{
+					aggregateId: order.id,
+					aggregateType: order.aggregateType,
+				},
+			) as EsOrderCreated,
 		);
 		return order;
 	}
@@ -96,19 +100,27 @@ class ContractEsOrder extends EventSourcedAggregate<
 
 	rename(name: string): void {
 		this.apply(
-			createDomainEvent("EsOrderRenamed", { name }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}) as EsOrderRenamed,
+			createDomainEvent(
+				"EsOrderRenamed",
+				{ name },
+				{
+					aggregateId: this.id,
+					aggregateType: this.aggregateType,
+				},
+			) as EsOrderRenamed,
 		);
 	}
 
 	addItem(item: string): void {
 		this.apply(
-			createDomainEvent("EsItemAdded", { item }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}) as EsItemAdded,
+			createDomainEvent(
+				"EsItemAdded",
+				{ item },
+				{
+					aggregateId: this.id,
+					aggregateType: this.aggregateType,
+				},
+			) as EsItemAdded,
 		);
 	}
 
