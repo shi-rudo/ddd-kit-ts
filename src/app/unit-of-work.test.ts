@@ -23,19 +23,21 @@ import type { AggregateClass } from "../repo/identity-map";
 import type { PersistenceModel } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
 import {
-	type AggregatePersistenceWrite,
 	AggregateTrackingError,
-	type AggregateWriteRegistration,
 	CommitError,
-	defineRepository as defineExplicitRepository,
 	InvalidRepositoryAdapterError,
 	NestedUnitOfWorkError,
+	RollbackError,
+	TransactionClosedError,
+} from "./errors";
+import {
+	type AggregatePersistenceWrite,
+	type AggregateWriteRegistration,
+	defineRepository as defineExplicitRepository,
 	type PhysicalRemovalRegistration,
 	type RepositoryDefinition,
 	type RepositoryDefinitionOptions,
 	type RepositoryTracking,
-	RollbackError,
-	TransactionClosedError,
 	UnitOfWork,
 } from "./unit-of-work";
 
