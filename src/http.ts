@@ -6,4 +6,4 @@ export {
 	type ValidationProblemDetails,
 	type ValidationProblemOptions,
 	type ValidationProblemResult,
-} from "./http/problem-details";
+} from "./presentation/http/problem-details";

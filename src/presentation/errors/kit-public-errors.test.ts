@@ -5,8 +5,8 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
-} from "../core/errors";
-import { moneyFromDto } from "../domain/value-object/money/money";
+} from "../../core/errors";
+import { moneyFromDto } from "../../domain/value-object/money/money";
 import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 
