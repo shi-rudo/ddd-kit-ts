@@ -44,6 +44,89 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## Source organization
+
+Organize source code by architectural responsibility first and by cohesive
+capability second.
+
+The allowed top-level areas under `src/` are:
+
+- `domain`: domain models, aggregates, entities, value objects, domain events,
+  specifications, and domain state machines.
+- `application`: use-case orchestration, CQRS, handlers, idempotency, units of
+  work, deadlines, and projections.
+- `messaging`: integration messages, event buses, and outbox processing.
+- `persistence`: repositories, event stores, snapshot stores, persistence
+  models, and storage adapters.
+- `presentation`: HTTP concerns, public error mapping, and external
+  representations.
+- `testing`: reusable testing contracts and test support that form part of the
+  package API.
+- `internal`: non-public, dependency-free implementation helpers.
+
+Before you create or move a source file:
+
+1. Identify the capability that owns the file.
+2. Place it under that capability, not under the capability that merely
+   consumes it.
+3. Reuse an existing module before you create a new directory.
+4. Create a new top-level directory only when none of the defined
+   architectural areas applies.
+5. Update the affected exports, API-surface tests, and architecture tests.
+
+Apply these constraints:
+
+- Do not create generic `core`, `common`, `shared`, `helpers`, or `utils`
+  directories.
+- Move a reusable helper to the capability that owns its meaning. Place it in
+  `internal` only when it is generic, non-public, and has no architectural
+  owner.
+- Keep ports with the capability that requires them. Place implementations in
+  an `adapters/` subdirectory.
+- Treat in-memory stores as adapters, not as contracts.
+- Keep domain events separate from integration messages.
+- Keep persistence contracts, persistence models, and storage adapters visibly
+  separated.
+- Keep unit tests next to their implementation.
+- Place architecture, API-surface, and cross-module integration tests under
+  `test/`.
+- Place examples and demonstration implementations under `examples/`, never
+  among production modules.
+- Use `index.ts` only at intentional public module boundaries.
+- Do not add root-level proxy files when the `package.json` exports can target
+  the owning module directly.
+- Do not create directories merely to shorten a file listing. Every directory
+  must represent a stable capability or architectural boundary.
+- Avoid names that repeat their parent context, such as
+  `domain/domain-state-machine/`.
+- Do not reorganize unrelated modules as part of a local change.
+
+If a file has more than one plausible location, choose the module that owns its
+invariants and lifecycle. If the ownership stays unclear, document the
+architectural decision before you implement the change.
+
+A change is not complete when it does any of the following:
+
+- It introduces an unexplained top-level directory.
+- It adds a generic utility collection.
+- It mixes a port with its adapter.
+- It exposes internal implementation details through the public API.
+
+### Current state
+
+The tree does not follow this rule yet. Today it breaks the rule in four ways:
+
+- No top-level directory under `src/` carries an allowed name.
+- `src/core` and `src/utils` are two of the forbidden collections.
+- Five root-level proxy files exist.
+- The examples sit in `src/app`.
+
+Bead `ddd-kit-ts-j0r7` tracks the migration and its order.
+
+The rule binds every new and every moved file from now on. Do not read the
+current tree as permission.
+
+
 <!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)
 
