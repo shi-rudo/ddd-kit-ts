@@ -50,7 +50,7 @@
 		"audit:prod": "pnpm audit --prod",
 		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",
 		"clean": "rm -rf dist",
-		"lint": "biome lint .",
+		"lint": "biome check .",
 		"format": "pnpm exec biome format --write . && pnpm exec biome lint --write . && pnpm exec biome check --write .",
 		"typecheck": "tsc -p tsconfig.typecheck.json",
 		"prepublishOnly": "npm run clean && npm run typecheck && npm run lint && vp test && npm run build && node scripts/run-edge-runtime-smoke.mjs",
