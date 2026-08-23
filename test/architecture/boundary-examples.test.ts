@@ -71,10 +71,10 @@ describe("untrusted-boundary examples", () => {
 	it("renders the executable order-placement example in the CQRS guide", () => {
 		const cqrsGuide = sourceOf("cqrsGuide");
 		expect(cqrsGuide).toContain(
-			"<<< ../../src/app/order-placement-example.ts#order-domain{ts}",
+			"<<< ../../examples/order-placement/order-placement-example.ts#order-domain{ts}",
 		);
 		expect(cqrsGuide).toContain(
-			"<<< ../../src/app/order-placement-example.ts#place-order-handler{ts}",
+			"<<< ../../examples/order-placement/order-placement-example.ts#place-order-handler{ts}",
 		);
 	});
 
