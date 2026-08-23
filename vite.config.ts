@@ -10,10 +10,10 @@ export default defineConfig({
 	pack: {
 		entry: {
 			index: "src/index.ts",
-			http: "src/http.ts",
-			money: "src/money.ts",
-			presentation: "src/presentation.ts",
-			testing: "src/testing.ts",
+			http: "src/presentation/http/problem-details.ts",
+			money: "src/domain/value-object/money/index.ts",
+			"public-errors": "src/presentation/errors/index.ts",
+			testing: "src/testing/index.ts",
 		},
 		format: ["esm"],
 		dts: true,

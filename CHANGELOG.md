@@ -29,6 +29,25 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): the `presentation` subpath is now `public-errors`
+
+- Rename `@shirudo/ddd-kit/presentation` to `@shirudo/ddd-kit/public-errors`.
+- The exported names do not change: `toPublicErrorView`,
+  `createKitPublicErrors` and their option types.
+
+```ts
+// before
+import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+
+// after
+import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
+```
+
+The old name said where the code lived, not what the entry point gives.
+`presentation/` also holds the HTTP problem-details mapper, which ships
+as `@shirudo/ddd-kit/http`, so `presentation` named a directory rather
+than a capability. The other three entry points keep their names.
+
 ### Changed (breaking): the `utils` subpath is gone
 
 - Remove the `@shirudo/ddd-kit/utils` entry point.

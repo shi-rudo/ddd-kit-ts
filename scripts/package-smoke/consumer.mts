@@ -1,7 +1,7 @@
 import { AggregateRoot, deepEqual } from "@shirudo/ddd-kit";
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
 import { parseMoneyInput } from "@shirudo/ddd-kit/money";
-import { createKitPublicErrors } from "@shirudo/ddd-kit/presentation";
+import { createKitPublicErrors } from "@shirudo/ddd-kit/public-errors";
 import { createEventStoreContractTests } from "@shirudo/ddd-kit/testing";
 
 const publicEntries = [

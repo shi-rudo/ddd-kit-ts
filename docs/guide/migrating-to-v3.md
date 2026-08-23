@@ -467,6 +467,17 @@ import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
 The four types travel with the functions: `DeepEqualExceptOptions`,
 `DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
 
+The `presentation` entry point is renamed. The names it exports stay the
+same.
+
+```ts
+// before
+import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+
+// after
+import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
+```
+
 No function and no type disappears. The subpath re-exported what the root
 entry already carried, so the change costs one import path. The `money`,
 `http`, `presentation` and `testing` entry points are unaffected; each of

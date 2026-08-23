@@ -65,7 +65,7 @@ export interface PublicErrorViewOptions {
  *
  * @example
  * ```ts
- * import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+ * import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
  * import { toProblem } from "@shirudo/base-error/public-error";
  *
  * const { body, status } = toProblem(

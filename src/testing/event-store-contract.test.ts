@@ -5,7 +5,7 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import { InMemoryEventStore } from "../persistence/event-store/adapters/in-memory-event-store";
-import { createEventStoreContractTests } from "../testing";
+import { createEventStoreContractTests } from "./index";
 
 type TestEvent = DomainEvent<"ContractEvent", { sequence: number }>;
 

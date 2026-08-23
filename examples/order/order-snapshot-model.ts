@@ -1,9 +1,9 @@
-import { SnapshotCorruptedError } from "../../src/errors/kit-errors";
 import {
 	type MoneySnapshot,
 	moneyFromSnapshot,
 	moneyToSnapshot,
-} from "../../src/money";
+} from "../../src/domain/value-object/money";
+import { SnapshotCorruptedError } from "../../src/errors/kit-errors";
 import { defineSnapshotModel } from "../../src/persistence/snapshot-store/snapshot-model";
 import { Order, type OrderId, type OrderState } from "./order";
 

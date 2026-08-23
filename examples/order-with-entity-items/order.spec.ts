@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { type Money, moneyOfMinor } from "../../src/money";
+import { type Money, moneyOfMinor } from "../../src/domain/value-object/money";
 import { Order, type OrderId } from "./order";
 
 const eur = (minor: bigint): Money => moneyOfMinor(minor, "EUR", 2);

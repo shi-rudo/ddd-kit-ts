@@ -15,11 +15,11 @@ import {
 } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { InvalidDomainTransitionError } from "../../src/domain/state-machine/domain-state-machine";
+import { type Money, moneyOfMinor } from "../../src/domain/value-object/money";
 import { AggregateNotFoundError } from "../../src/errors/kit-errors";
 import { EventBusImpl } from "../../src/messaging/event-bus/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
 import type { EventBus, OutboxWriter } from "../../src/messaging/ports";
-import { type Money, moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 
 import { CheckoutSaga } from "./checkout-saga";
