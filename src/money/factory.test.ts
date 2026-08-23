@@ -13,6 +13,43 @@ import { createMoneyFormatter, formatMoney } from "./format";
 import type { Money } from "./money";
 import { moneyOfMinor } from "./money";
 
+/** Mirrors CACHE_LIMIT in ./format, which owns the value. */
+const FORMATTER_CACHE_BOUND = 1_000;
+
+/** Mirrors CACHE_LIMIT in ./factory, which owns the value. */
+const RESOLVER_CACHE_BOUND = 1_000;
+
+/** Distinct, canonical alpha-3 code for every n below 26^3. */
+function currencyAt(n: number): string {
+	const letter = (value: number) => String.fromCharCode(65 + (value % 26));
+	return `${letter(Math.floor(n / 676))}${letter(Math.floor(n / 26))}${letter(n)}`;
+}
+
+/**
+ * Counts how often `run` reaches ICU. Both caches exist to keep this
+ * number down, so it is the only way to observe that they work.
+ */
+function countIntlConstructions(run: () => void): number {
+	const RealNumberFormat = Intl.NumberFormat;
+	let constructions = 0;
+	class CountingNumberFormat extends RealNumberFormat {
+		constructor(
+			locales?: Intl.LocalesArgument,
+			options?: Intl.NumberFormatOptions,
+		) {
+			super(locales, options);
+			constructions++;
+		}
+	}
+	Intl.NumberFormat = CountingNumberFormat as unknown as typeof Intl.NumberFormat;
+	try {
+		run();
+	} finally {
+		Intl.NumberFormat = RealNumberFormat;
+	}
+	return constructions;
+}
+
 describe("createMoneyFactory", () => {
 	const factory = createMoneyFactory({
 		scaleFor: currencyScaleFromRecord({ EUR: 2, JPY: 0 }),
@@ -94,6 +131,57 @@ describe("currencyScaleFromIntl", () => {
 		expect(factory.parse("10.99", "EUR").amountMinor).toBe(1099n);
 		expect(factory.parse("10", "JPY").scale).toBe(0);
 	});
+
+	it("rejects a non-string that stringifies to a canonical code", () => {
+		// Intl would coerce this to "EUR" and resolve it. Only a real
+		// string may pass, or a JavaScript caller smuggles one in.
+		const stringifiesToEur = { toString: () => "EUR" } as unknown as string;
+
+		expect(scaleFor(stringifiesToEur)).toBeUndefined();
+	});
+
+	it("reuses a cached scale instead of asking ICU again", () => {
+		const resolve = currencyScaleFromIntl();
+
+		const constructions = countIntlConstructions(() => {
+			resolve("EUR");
+			resolve("EUR");
+			resolve("JPY");
+		});
+
+		expect(constructions).toBe(2);
+	});
+
+	it("keeps ill-formed codes out of its bounded cache", () => {
+		// The bound exists so attacker-supplied strings cannot fill the
+		// cache. A code the guard rejects must not occupy a slot.
+		const resolve = currencyScaleFromIntl();
+		for (let i = 0; i < RESOLVER_CACHE_BOUND; i++) {
+			resolve(`${currencyAt(i)}X`);
+		}
+
+		const constructions = countIntlConstructions(() => {
+			resolve("EUR");
+			resolve("EUR");
+		});
+
+		expect(constructions).toBe(1);
+	});
+
+	it("stops caching once it reaches its bound", () => {
+		const resolve = currencyScaleFromIntl();
+		for (let i = 0; i < RESOLVER_CACHE_BOUND; i++) {
+			resolve(currencyAt(i));
+		}
+
+		const beyondBound = currencyAt(RESOLVER_CACHE_BOUND);
+		const constructions = countIntlConstructions(() => {
+			resolve(beyondBound);
+			resolve(beyondBound);
+		});
+
+		expect(constructions).toBe(2);
+	});
 });
 
 describe("formatting (presentation only)", () => {
@@ -152,18 +240,59 @@ describe("formatting (presentation only)", () => {
 
 	it("stays correct past the formatter cache bound", () => {
 		const format = createMoneyFormatter("en-US");
-		const letter = (n: number) => String.fromCharCode(65 + (n % 26));
 		for (let i = 0; i < 1100; i++) {
-			const code = `${letter(Math.floor(i / 676))}${letter(Math.floor(i / 26))}${letter(i)}`;
-			format(moneyOfMinor(100n, code, 2));
+			format(moneyOfMinor(100n, currencyAt(i), 2));
 		}
 		expect(format(moneyOfMinor(1099n, "USD", 2))).toBe("$10.99");
 	});
 
+	it("rejects non-Money before it constructs an Intl formatter", () => {
+		// "EU" is ill-formed for Intl. A RangeError instead of
+		// InvalidMoneyError would prove the guard ran after Intl.
+		const notMoney = {
+			amountMinor: 10.99,
+			currency: "EU",
+			scale: 2,
+		} as unknown as Money;
+
+		expect(() => formatMoney(notMoney, "en-US")).toThrow(InvalidMoneyError);
+		expect(() => createMoneyFormatter("en-US")(notMoney)).toThrow(
+			InvalidMoneyError,
+		);
+	});
+
+	it("createMoneyFormatter builds one Intl formatter per currency and scale", () => {
+		const format = createMoneyFormatter("en-US");
+
+		const constructions = countIntlConstructions(() => {
+			format(moneyOfMinor(1099n, "USD", 2));
+			format(moneyOfMinor(2500n, "USD", 2));
+			format(moneyOfMinor(1234n, "JPY", 0));
+			format(moneyOfMinor(1n, "USD", 3));
+		});
+
+		expect(constructions).toBe(3);
+	});
+
+	it("createMoneyFormatter stops caching once it reaches the bound", () => {
+		const format = createMoneyFormatter("en-US");
+		for (let i = 0; i < FORMATTER_CACHE_BOUND; i++) {
+			format(moneyOfMinor(100n, currencyAt(i), 2));
+		}
+
+		const beyondBound = currencyAt(FORMATTER_CACHE_BOUND);
+		const constructions = countIntlConstructions(() => {
+			format(moneyOfMinor(100n, beyondBound, 2));
+			format(moneyOfMinor(100n, beyondBound, 2));
+		});
+
+		expect(constructions).toBe(2);
+	});
+
 	it("currencyScaleFromIntl stays correct past its cache bound", () => {
 		const scaleFor = currencyScaleFromIntl();
-		for (let i = 0; i < 1100; i++) {
-			scaleFor(`garbage-${i}`);
+		for (let i = 0; i < RESOLVER_CACHE_BOUND + 100; i++) {
+			scaleFor(currencyAt(i));
 		}
 		expect(scaleFor("EUR")).toBe(2);
 		expect(scaleFor("garbage-0")).toBeUndefined();
