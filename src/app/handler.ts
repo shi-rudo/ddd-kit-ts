@@ -16,7 +16,7 @@ import type {
 	EventCommitCandidate,
 	OutboxWriter,
 } from "../events/ports";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { abortReason } from "../utils/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,

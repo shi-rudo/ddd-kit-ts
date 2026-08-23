@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ConcurrencyConflictError } from "../core/errors";
-import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import { ConcurrencyConflictError } from "../../../core/errors";
+import type { AggregateAddress } from "../../../domain/aggregate/aggregate-address";
 import {
 	createDomainEvent,
 	type DomainEvent,
-} from "../domain/event/domain-event";
-import type { Id } from "../domain/identity/id";
+} from "../../../domain/event/domain-event";
+import type { Id } from "../../../domain/identity/id";
 import { InMemoryEventStore } from "./in-memory-event-store";
 
 type StreamId = Id<"EsOrderId">;

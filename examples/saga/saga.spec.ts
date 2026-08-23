@@ -17,7 +17,7 @@ import { EventBusImpl } from "../../src/events/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
 import type { EventBus, OutboxWriter } from "../../src/events/ports";
 import { type Money, moneyOfMinor } from "../../src/money";
-import type { TransactionScope } from "../../src/repo/scope";
+import type { TransactionScope } from "../../src/persistence/repository/scope";
 
 import { CheckoutSaga } from "./checkout-saga";
 import { Order, type OrderEvent, type OrderId } from "./order";

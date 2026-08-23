@@ -4,7 +4,7 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../domain/event/domain-event";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 import {
 	ignoreProjectionEvent,

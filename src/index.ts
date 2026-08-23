@@ -321,6 +321,57 @@ export type {
 	OutboxWriter,
 	PublishOptions,
 } from "./events/ports";
+// Persistence: repository, event store, snapshot store
+export {
+	InMemoryEventStore,
+	type InMemoryEventStoreOptions,
+} from "./persistence/event-store/adapters/in-memory-event-store";
+export type {
+	EventStore,
+	EventStoreAppendOptions,
+	ReadStreamOptions,
+	StreamReadResult,
+} from "./persistence/event-store/event-store";
+export {
+	type AggregateClass,
+	IdentityMap,
+} from "./persistence/repository/identity-map";
+export {
+	capturePersistenceBaseline,
+	derivePersistenceChanges,
+	insertPersistenceBaseline,
+	type PersistenceBaseline,
+	type PersistenceChanges,
+	type PersistenceLifecycle,
+	type PersistenceModel,
+	persistenceProjectionDrifted,
+	recapturePersistenceBaseline,
+} from "./persistence/repository/persistence-model";
+export type {
+	AggregatePersistence,
+	Repository,
+} from "./persistence/repository/repository";
+// computeBackoffDelay is deliberately NOT exported: internal since 2.x
+// (unit-tested via direct source import), removed from the surface in v3.
+export {
+	RetryingTransactionScope,
+	type RetryPolicy,
+} from "./persistence/repository/retrying-scope";
+export type {
+	TransactionalOptions,
+	TransactionScope,
+} from "./persistence/repository/scope";
+export {
+	InMemorySnapshotStore,
+	type InMemorySnapshotStoreOptions,
+} from "./persistence/snapshot-store/adapters/in-memory-snapshot-store";
+export {
+	captureAggregateSnapshot,
+	defineSnapshotModel,
+	reconstituteAggregateFromSnapshot,
+	type SnapshotModel,
+} from "./persistence/snapshot-store/snapshot-model";
+export type { SnapshotStore } from "./persistence/snapshot-store/snapshot-store";
 // Projections: checkpoint port, runner, in-memory reference
 export {
 	InMemoryProjectionCheckpointStore,
@@ -346,51 +397,6 @@ export {
 	Projector,
 	type ProjectorOptions,
 } from "./projections/projector";
-// Repository: ports, identity map, event store, scopes
-export type {
-	EventStore,
-	EventStoreAppendOptions,
-	ReadStreamOptions,
-	StreamReadResult,
-} from "./repo/event-store";
-export { type AggregateClass, IdentityMap } from "./repo/identity-map";
-export {
-	InMemoryEventStore,
-	type InMemoryEventStoreOptions,
-} from "./repo/in-memory-event-store";
-export {
-	InMemorySnapshotStore,
-	type InMemorySnapshotStoreOptions,
-} from "./repo/in-memory-snapshot-store";
-export {
-	capturePersistenceBaseline,
-	derivePersistenceChanges,
-	insertPersistenceBaseline,
-	type PersistenceBaseline,
-	type PersistenceChanges,
-	type PersistenceLifecycle,
-	type PersistenceModel,
-	persistenceProjectionDrifted,
-	recapturePersistenceBaseline,
-} from "./repo/persistence-model";
-export type { AggregatePersistence, Repository } from "./repo/repository";
-// computeBackoffDelay is deliberately NOT exported: internal since 2.x
-// (unit-tested via direct source import), removed from the surface in v3.
-export {
-	RetryingTransactionScope,
-	type RetryPolicy,
-} from "./repo/retrying-scope";
-export type {
-	TransactionalOptions,
-	TransactionScope,
-} from "./repo/scope";
-export {
-	captureAggregateSnapshot,
-	defineSnapshotModel,
-	reconstituteAggregateFromSnapshot,
-	type SnapshotModel,
-} from "./repo/snapshot-model";
-export type { SnapshotStore } from "./repo/snapshot-store";
 // Utils (deep equality; also available via `@shirudo/ddd-kit/utils`)
 export {
 	type DeepEqualExceptOptions,

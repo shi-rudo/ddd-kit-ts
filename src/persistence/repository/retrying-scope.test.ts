@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ConcurrencyConflictError, EventHarvestError } from "../core/errors";
-import { computeBackoffDelay } from "../utils/backoff";
+import { ConcurrencyConflictError, EventHarvestError } from "../../core/errors";
+import { computeBackoffDelay } from "../../utils/backoff";
 import { RetryingTransactionScope } from "./retrying-scope";
 import type { TransactionScope } from "./scope";
 

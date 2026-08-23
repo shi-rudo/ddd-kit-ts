@@ -3,7 +3,7 @@ import { DomainError } from "../core/errors";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../events/outbox";
 import { moneyOfMinor } from "../money";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { InMemoryIdempotencyStore } from "./in-memory-idempotency-store";
 import {
 	type CustomerId,

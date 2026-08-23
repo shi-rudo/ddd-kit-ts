@@ -5,8 +5,8 @@ import { AggregateRoot } from "../domain/aggregate/aggregate-root";
 import type { DomainEvent } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import type { Outbox } from "../events/ports";
-import type { PersistenceModel } from "../repo/persistence-model";
-import type { TransactionScope } from "../repo/scope";
+import type { PersistenceModel } from "../persistence/repository/persistence-model";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { RepositoryErrorMappingFailedError } from "./errors";
 import type { RepositoryTracking } from "./persistence-contract";
 import {

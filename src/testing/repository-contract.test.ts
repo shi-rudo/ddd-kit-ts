@@ -21,8 +21,8 @@ import type {
 	EventCommitCandidate,
 	Outbox,
 } from "../events/ports";
-import type { PersistenceModel } from "../repo/persistence-model";
-import type { TransactionScope } from "../repo/scope";
+import type { PersistenceModel } from "../persistence/repository/persistence-model";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	type ContractRepository,

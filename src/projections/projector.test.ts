@@ -10,7 +10,7 @@ import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
 } from "../events/ports";
-import type { TransactionScope } from "../repo/scope";
+import type { TransactionScope } from "../persistence/repository/scope";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 import type {
 	Projection,

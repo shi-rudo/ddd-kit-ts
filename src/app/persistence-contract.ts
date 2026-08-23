@@ -2,11 +2,14 @@ import type { InfrastructureError } from "../core/errors";
 import type { IAggregateRoot, Version } from "../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
-import type { AggregateClass, IdentityMap } from "../repo/identity-map";
+import type {
+	AggregateClass,
+	IdentityMap,
+} from "../persistence/repository/identity-map";
 import type {
 	PersistenceChanges,
 	PersistenceModel,
-} from "../repo/persistence-model";
+} from "../persistence/repository/persistence-model";
 
 /** The explicit persistence intent registered for one tracked aggregate. */
 export type AggregateWriteIntent = "add" | "update" | "remove";

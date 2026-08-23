@@ -1,10 +1,10 @@
-import type { AggregateSnapshot } from "../domain/aggregate/aggregate";
+import type { AggregateSnapshot } from "../../../domain/aggregate/aggregate";
 import {
 	type AggregateAddress,
 	encodeAggregateAddress,
-} from "../domain/aggregate/aggregate-address";
-import { assertPositiveSafeInteger } from "../utils/validate";
-import type { SnapshotStore } from "./snapshot-store";
+} from "../../../domain/aggregate/aggregate-address";
+import { assertPositiveSafeInteger } from "../../../utils/validate";
+import type { SnapshotStore } from "../snapshot-store";
 
 export interface InMemorySnapshotStoreOptions {
 	/** Maximum retained snapshots. The least recently used entry is evicted. */

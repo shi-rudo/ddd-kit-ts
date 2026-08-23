@@ -3,16 +3,16 @@ import {
 	DomainError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
-} from "../core/errors";
-import type { Version } from "../domain/aggregate/aggregate";
-import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
+} from "../../core/errors";
+import type { Version } from "../../domain/aggregate/aggregate";
+import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
 	type UncommittedDomainEventOf,
-} from "../domain/event/domain-event";
-import { SnapshotTimeValidationError } from "../domain/event/domain-event-errors";
-import type { Id } from "../domain/identity/id";
+} from "../../domain/event/domain-event";
+import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
+import type { Id } from "../../domain/identity/id";
 import {
 	captureAggregateSnapshot,
 	defineSnapshotModel,

@@ -1,12 +1,12 @@
 import { someChainRetryable } from "@shirudo/base-error";
-import { abortReason } from "../utils/abort";
-import { computeBackoffDelay, neutralJitterSource } from "../utils/backoff";
-import { reportToObserver } from "../utils/observer";
-import { sleepRejectingOnAbort } from "../utils/sleep";
+import { abortReason } from "../../utils/abort";
+import { computeBackoffDelay, neutralJitterSource } from "../../utils/backoff";
+import { reportToObserver } from "../../utils/observer";
+import { sleepRejectingOnAbort } from "../../utils/sleep";
 import {
 	assertNonNegativeFinite,
 	assertPositiveInteger,
-} from "../utils/validate";
+} from "../../utils/validate";
 import type { TransactionalOptions, TransactionScope } from "./scope";
 
 /**

@@ -1,19 +1,19 @@
 import {
 	ConcurrencyConflictError,
 	InMemoryCapacityExceededError,
-} from "../core/errors";
+} from "../../../core/errors";
 import {
 	type AggregateAddress,
 	encodeAggregateAddress,
-} from "../domain/aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../domain/event/domain-event";
-import { assertPositiveSafeInteger } from "../utils/validate";
+} from "../../../domain/aggregate/aggregate-address";
+import type { AnyDomainEvent } from "../../../domain/event/domain-event";
+import { assertPositiveSafeInteger } from "../../../utils/validate";
 import type {
 	EventStore,
 	EventStoreAppendOptions,
 	ReadStreamOptions,
 	StreamReadResult,
-} from "./event-store";
+} from "../event-store";
 
 /** Optional fail-loud capacities for the finite-lifetime reference store. */
 export interface InMemoryEventStoreOptions {
