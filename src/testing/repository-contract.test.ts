@@ -7,11 +7,6 @@ import {
 	defineRepository,
 	UnitOfWork,
 } from "../application/unit-of-work/unit-of-work";
-import {
-	ConcurrencyConflictError,
-	DuplicateAggregateError,
-	InfrastructureError,
-} from "../core/errors";
 import type { Version } from "../domain/aggregate/aggregate";
 import { AggregateRoot } from "../domain/aggregate/aggregate-root";
 import {
@@ -19,6 +14,11 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
+import {
+	ConcurrencyConflictError,
+	DuplicateAggregateError,
+	InfrastructureError,
+} from "../errors/kit-errors";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,

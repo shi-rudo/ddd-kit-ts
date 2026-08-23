@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemoryCapacityExceededError } from "../../../core/errors";
+import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import { InMemoryProjectionCheckpointStore } from "./in-memory-checkpoint-store";
 
 const address = (aggregateId: string) => ({

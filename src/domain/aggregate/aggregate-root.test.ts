@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { UnmintedEventError } from "../../core/errors";
+import { UnmintedEventError } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,

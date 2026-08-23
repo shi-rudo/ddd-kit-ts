@@ -3,7 +3,7 @@ import {
 	DuplicateHandlerRegistrationError,
 	ErrorMapperFailedError,
 	UnregisteredHandlerError,
-} from "../../../core/errors";
+} from "../../../errors/kit-errors";
 
 /**
  * INTERNAL shared pieces of `CommandBus` and `QueryBus`. The two buses are

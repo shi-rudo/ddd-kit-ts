@@ -1,4 +1,4 @@
-import { DomainError } from "../../core/errors";
+import { DomainError } from "../../errors/kit-errors";
 import type {
 	DomainMachineDefinition,
 	DomainMachineInput,

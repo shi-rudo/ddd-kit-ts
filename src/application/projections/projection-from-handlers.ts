@@ -1,5 +1,5 @@
-import { MissingHandlerError } from "../../core/errors";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import { MissingHandlerError } from "../../errors/kit-errors";
 import type { Projection } from "./ports";
 
 /**

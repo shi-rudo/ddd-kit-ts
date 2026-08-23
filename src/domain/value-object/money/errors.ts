@@ -1,4 +1,4 @@
-import { DomainError } from "../../../core/errors";
+import { DomainError } from "../../../errors/kit-errors";
 
 /**
  * Renders a value for a diagnostic message with a hard size ceiling:

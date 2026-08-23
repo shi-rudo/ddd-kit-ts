@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@shirudo/result";
-import { DomainError } from "../core/errors";
+import { DomainError } from "../errors/kit-errors";
 
 /** A concrete consumer-defined DomainError subclass accepted at a boundary. */
 export type DomainErrorClass<E extends DomainError = DomainError> = new (

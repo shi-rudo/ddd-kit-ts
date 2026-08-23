@@ -4,7 +4,7 @@ import {
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 	InMemoryCapacityExceededError,
-} from "../../../core/errors";
+} from "../../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../../utils/validate";
 import type {
 	IdempotencyClaim,

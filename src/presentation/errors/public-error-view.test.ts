@@ -4,7 +4,7 @@ import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
-} from "../../core/errors";
+} from "../../errors/kit-errors";
 import { toPublicErrorView } from "./public-error-view";
 
 describe("toPublicErrorView()", () => {

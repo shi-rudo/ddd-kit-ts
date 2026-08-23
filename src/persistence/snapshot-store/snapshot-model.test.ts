@@ -1,9 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-	DomainError,
-	SnapshotCorruptedError,
-	type SnapshotSchemaMismatchError,
-} from "../../core/errors";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggregate";
 import {
@@ -13,6 +8,11 @@ import {
 } from "../../domain/event/domain-event";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
+import {
+	DomainError,
+	SnapshotCorruptedError,
+	type SnapshotSchemaMismatchError,
+} from "../../errors/kit-errors";
 import {
 	captureAggregateSnapshot,
 	defineSnapshotModel,

@@ -1,4 +1,4 @@
-import { InfrastructureError, KitWiringError } from "../../core/errors";
+import { InfrastructureError, KitWiringError } from "../../errors/kit-errors";
 import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**

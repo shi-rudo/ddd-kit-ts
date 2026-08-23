@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-	EventHarvestError,
-	InMemoryCapacityExceededError,
-} from "../../core/errors";
-import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/aggregate/aggregate";
+import {
+	EventHarvestError,
+	InMemoryCapacityExceededError,
+} from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../ports";
 import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 

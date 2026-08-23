@@ -1,6 +1,6 @@
 import type { Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import { UnregisteredHandlerError } from "../../../core/errors";
+import { UnregisteredHandlerError } from "../../../errors/kit-errors";
 import type { Query } from "./query";
 import { type IQueryBus, QueryBus } from "./query-bus";
 

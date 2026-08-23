@@ -1,6 +1,6 @@
 import type { Result } from "@shirudo/result";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
-import { DomainError, InfrastructureError } from "../core/errors";
+import { DomainError, InfrastructureError } from "../errors/kit-errors";
 import {
 	type DomainErrorClass,
 	domainErrorToResult,

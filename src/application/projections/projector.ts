@@ -1,16 +1,16 @@
 import {
+	type AggregateAddress,
+	encodeAggregateAddress,
+} from "../../domain/aggregate/aggregate-address";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import {
 	ForeignEventError,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	UnprojectableEventError,
-} from "../../core/errors";
-import {
-	type AggregateAddress,
-	encodeAggregateAddress,
-} from "../../domain/aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../../domain/event/domain-event";
+} from "../../errors/kit-errors";
 import type { OutboxSink } from "../../messaging/outbox/outbox-dispatcher";
 import type { CommittedDomainEvent } from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";

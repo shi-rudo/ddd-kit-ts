@@ -1,14 +1,14 @@
-import {
-	isDomainErrorLike,
-	SnapshotCorruptedError,
-	SnapshotSchemaMismatchError,
-} from "../../core/errors";
 import type {
 	AggregateSnapshot,
 	Version,
 } from "../../domain/aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
+import {
+	isDomainErrorLike,
+	SnapshotCorruptedError,
+	SnapshotSchemaMismatchError,
+} from "../../errors/kit-errors";
 import { isBuiltInObject } from "../../utils/array/is-built-in";
 import { assertPositiveSafeInteger } from "../../utils/validate";
 

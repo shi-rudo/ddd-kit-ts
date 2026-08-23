@@ -1,5 +1,5 @@
 import type { Result } from "@shirudo/result";
-import type { DomainError } from "../../core/errors";
+import type { DomainError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 

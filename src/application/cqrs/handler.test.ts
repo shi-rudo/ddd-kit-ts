@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EventHarvestError, InfrastructureError } from "../../core/errors";
 import type { Version } from "../../domain/aggregate/aggregate";
 import {
 	AggregateRoot,
@@ -14,6 +13,10 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import {
+	EventHarvestError,
+	InfrastructureError,
+} from "../../errors/kit-errors";
 import type {
 	EventBus,
 	EventCommitCandidate,

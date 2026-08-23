@@ -9,10 +9,10 @@ import type {
 	WithIdempotentCommitDeps,
 } from "../../src/application/idempotency/idempotency";
 import { withIdempotentCommit } from "../../src/application/idempotency/idempotency";
-import { DomainError } from "../../src/core/errors";
 import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
+import { DomainError } from "../../src/errors/kit-errors";
 import type { Money } from "../../src/money";
 
 // #region order-domain

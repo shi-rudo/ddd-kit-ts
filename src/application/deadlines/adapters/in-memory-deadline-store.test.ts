@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemoryCapacityExceededError } from "../../../core/errors";
+import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import { InMemoryDeadlineStore } from "./in-memory-deadline-store";
 
 const dueAt = new Date("2026-07-15T08:00:00.000Z");

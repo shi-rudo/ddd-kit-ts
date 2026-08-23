@@ -7,7 +7,7 @@ import {
 	MissingHandlerError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
-} from "../../core/errors";
+} from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	createUncommittedDomainEvent,

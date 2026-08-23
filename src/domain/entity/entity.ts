@@ -60,7 +60,7 @@
  * }
  * ```
  */
-import { assertNoHostileOwnProtoKey } from "../../core/errors";
+import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import { deepFreeze } from "../value-object/value-object";
 

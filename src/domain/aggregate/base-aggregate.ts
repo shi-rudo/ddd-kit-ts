@@ -3,7 +3,7 @@ import {
 	ReentrantEventRecordingError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
-} from "../../core/errors";
+} from "../../errors/kit-errors";
 import { Entity, type EntityConfig } from "../entity/entity";
 import {
 	type AnyDomainEvent,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { InMemoryIdempotencyStore } from "../../src/application/idempotency/adapters/in-memory-idempotency-store";
-import { DomainError } from "../../src/core/errors";
 import type { AnyDomainEvent } from "../../src/domain/event/domain-event";
+import { DomainError } from "../../src/errors/kit-errors";
 import { InMemoryOutbox } from "../../src/messaging/outbox/outbox";
 import { moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/persistence/repository/scope";

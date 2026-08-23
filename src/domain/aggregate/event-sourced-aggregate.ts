@@ -4,7 +4,7 @@ import {
 	ForeignEventError,
 	MisaddressedEventError,
 	MissingHandlerError,
-} from "../../core/errors";
+} from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,

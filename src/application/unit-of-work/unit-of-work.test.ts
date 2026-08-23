@@ -1,11 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-	AggregateDeletedError,
-	ConcurrencyConflictError,
-	EventHarvestError,
-	InfrastructureError,
-	UnenrolledChangesError,
-} from "../../core/errors";
 import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
@@ -18,6 +11,13 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import {
+	AggregateDeletedError,
+	ConcurrencyConflictError,
+	EventHarvestError,
+	InfrastructureError,
+	UnenrolledChangesError,
+} from "../../errors/kit-errors";
 import type {
 	EventBus,
 	EventCommitCandidate,

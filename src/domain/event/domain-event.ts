@@ -1,4 +1,4 @@
-import { assertNoHostileOwnProtoKey } from "../../core/errors";
+import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";

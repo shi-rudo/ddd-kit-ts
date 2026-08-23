@@ -1,11 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-	ConcurrencyConflictError,
-	EventHarvestError,
-	IdempotencyCompletionWithoutClaimError,
-	IdempotencyInFlightError,
-	IdempotencyKeyReuseError,
-} from "../../core/errors";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
 	type AnyDomainEvent,
@@ -13,6 +6,13 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import {
+	ConcurrencyConflictError,
+	EventHarvestError,
+	IdempotencyCompletionWithoutClaimError,
+	IdempotencyInFlightError,
+	IdempotencyKeyReuseError,
+} from "../../errors/kit-errors";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { EventCommitCandidate } from "../../messaging/ports";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";

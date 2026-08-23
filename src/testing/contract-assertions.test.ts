@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ConcurrencyConflictError } from "../core/errors";
+import { ConcurrencyConflictError } from "../errors/kit-errors";
 import {
 	assertChainContainsKitError,
 	describeError,

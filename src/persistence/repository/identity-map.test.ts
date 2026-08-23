@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { AggregateDeletedError } from "../../core/errors";
 import type { Id } from "../../domain/identity/id";
+import { AggregateDeletedError } from "../../errors/kit-errors";
 import { IdentityMap } from "./identity-map";
 
 type RestaurantId = Id<"RestaurantId">;

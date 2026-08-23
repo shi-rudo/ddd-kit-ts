@@ -1,7 +1,7 @@
-import { InvalidCommandMessageError } from "../../../core/errors";
 import type { AggregateAddress } from "../../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import { deepFreeze } from "../../../domain/value-object/value-object";
+import { InvalidCommandMessageError } from "../../../errors/kit-errors";
 import {
 	assertJsonValue,
 	isJsonObject,

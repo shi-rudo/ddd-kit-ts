@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ForeignEventError, UnprojectableEventError } from "../../core/errors";
 import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
+import {
+	ForeignEventError,
+	UnprojectableEventError,
+} from "../../errors/kit-errors";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import { OutboxDispatcher } from "../../messaging/outbox/outbox-dispatcher";
 import type {
