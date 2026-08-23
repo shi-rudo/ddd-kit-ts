@@ -1,8 +1,3 @@
-// The envelope that persistence puts around a domain event: where it was
-// stored and at which position. Deliberately separate from `DomainEvent`,
-// which carries the business fact alone. Outboxes, projectors and the
-// integration-message mapper consume this shape; in-process domain
-// handlers keep consuming the bare event.
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 

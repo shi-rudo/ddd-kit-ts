@@ -309,13 +309,13 @@ export {
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
 } from "./errors/kit-errors";
+// Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
 	CommittedDomainEvent,
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "./messaging/committed-event";
-// Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./messaging/event-bus/event-bus";
 export type {
 	EventBus,
