@@ -46,7 +46,6 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 - `@shirudo/ddd-kit/presentation` presentation-layer mapping
 - `@shirudo/ddd-kit/testing` repository contract suites
 - `@shirudo/ddd-kit/money` money contract and boundary module
-- `@shirudo/ddd-kit/utils` array and object utilities
 
 ## Related
 

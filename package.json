@@ -15,10 +15,6 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
-		"./utils": {
-			"types": "./dist/utils.d.ts",
-			"import": "./dist/utils.js"
-		},
 		"./http": {
 			"types": "./dist/http.d.ts",
 			"import": "./dist/http.js"

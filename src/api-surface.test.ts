@@ -21,7 +21,6 @@ import * as index from "./index";
 import * as money from "./money";
 import * as presentation from "./presentation";
 import * as testing from "./testing";
-import * as utils from "./utils";
 
 type PublicExecutionContext = import("./index").ExecutionContext;
 type PublicEventMetadata = import("./index").EventMetadata;
@@ -314,8 +313,6 @@ const INDEX_SURFACE = [
 	"withIdempotentCommit",
 ] as const;
 
-const UTILS_SURFACE = ["deepEqual", "deepEqualExcept", "deepOmit"] as const;
-
 const TESTING_SURFACE = [
 	"createCommandOutboxContractTests",
 	"createDeadlineStoreContractTests",
@@ -371,10 +368,6 @@ const MONEY_SURFACE = [
 describe("public API surface (runtime exports)", () => {
 	it("the main entry exports exactly the pinned names", () => {
 		expect(Object.keys(index).sort()).toEqual([...INDEX_SURFACE]);
-	});
-
-	it("the utils entry exports exactly the pinned names", () => {
-		expect(Object.keys(utils).sort()).toEqual([...UTILS_SURFACE]);
 	});
 
 	it("the testing entry exports exactly the pinned names", () => {

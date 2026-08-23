@@ -10,7 +10,6 @@ export default defineConfig({
 	pack: {
 		entry: {
 			index: "src/index.ts",
-			utils: "src/utils.ts",
 			http: "src/http.ts",
 			money: "src/money.ts",
 			presentation: "src/presentation.ts",

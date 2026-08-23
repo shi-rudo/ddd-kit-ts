@@ -29,6 +29,28 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): the `utils` subpath is gone
+
+- Remove the `@shirudo/ddd-kit/utils` entry point.
+- Import `deepEqual`, `deepEqualExcept` and `deepOmit` from the package
+  root. The four `DeepOmit` and `DeepEqualExcept` types move with them.
+- No function and no type disappears. The subpath carried nothing that
+  the root entry did not already export, so the change costs one import
+  path.
+
+```ts
+// before
+import { deepOmit } from "@shirudo/ddd-kit/utils";
+
+// after
+import { deepOmit } from "@shirudo/ddd-kit";
+```
+
+The other four subpaths stay. `money`, `http`, `presentation` and
+`testing` each carry symbols that the root entry deliberately omits, so
+the core barrel stays free of money, transport and test-support
+concerns. `utils` was the only entry point that duplicated the root.
+
 ### Changed (breaking): repository lifecycle intent is explicit
 
 - Remove `IRepository` and `IUnitOfWorkRepository`.

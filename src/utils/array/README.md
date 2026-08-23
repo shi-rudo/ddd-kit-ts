@@ -5,7 +5,7 @@ A collection of utility functions for deep comparison and manipulation of arrays
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqual, deepOmit, deepEqualExcept } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -27,7 +27,7 @@ Performs a deep equality check between two values. This function compares values
 #### Example
 
 ```ts
-import { deepEqual } from '@shirudo/ddd-kit/utils';
+import { deepEqual } from '@shirudo/ddd-kit';
 
 deepEqual([1, 2, 3], [1, 2, 3]); // true
 deepEqual({ a: 1, b: [2, 3] }, { a: 1, b: [2, 3] }); // true
@@ -75,7 +75,7 @@ This function recursively traverses the object tree and removes keys that match 
 #### Example
 
 ```ts
-import { deepOmit } from '@shirudo/ddd-kit/utils';
+import { deepOmit } from '@shirudo/ddd-kit';
 
 const obj = {
   id: 1,
@@ -119,7 +119,7 @@ This function first removes the specified keys from both values using `deepOmit`
 #### Example
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 const obj1 = {
   id: 1,
@@ -164,7 +164,7 @@ These utilities are particularly useful in Domain-Driven Design contexts for com
 Value Objects should be compared by their attributes, not identity:
 
 ```ts
-import { deepEqual } from '@shirudo/ddd-kit/utils';
+import { deepEqual } from '@shirudo/ddd-kit';
 import { vo, type VO } from '@shirudo/ddd-kit';
 
 type Money = VO<{
@@ -205,7 +205,7 @@ deepEqual(address1, address2); // true
 When comparing entities or aggregates, you often want to ignore infrastructure fields like IDs, versions, timestamps, and metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 // Compare entities ignoring ID and version
 const entity1 = {
@@ -241,7 +241,7 @@ deepEqualExcept(entity1, entity2, {
 Aggregates contain entities and value objects. Compare them while ignoring infrastructure concerns:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 type OrderState = {
   id: OrderId;
@@ -295,7 +295,7 @@ deepEqualExcept(order1, order2, {
 When testing domain logic, compare expected vs actual results while ignoring non-deterministic fields:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 import { describe, it, expect } from 'vitest';
 
 describe("Order aggregate", () => {
@@ -329,7 +329,7 @@ describe("Order aggregate", () => {
 Domain events often have metadata that should be ignored when comparing:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 type OrderCreatedEvent = {
   type: "OrderCreated";
@@ -383,7 +383,7 @@ When testing an adapter projection, compare its domain data while ignoring
 adapter-owned metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 describe("orderPersistence", () => {
   it("projects and reconstitutes domain state", async () => {
@@ -408,7 +408,7 @@ describe("orderPersistence", () => {
 When comparing aggregate snapshots, ignore snapshot-specific metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 type AggregateSnapshot = {
   aggregateId: string;
@@ -445,7 +445,7 @@ deepEqualExcept(snapshot1, snapshot2, {
 When testing specifications, compare query results while ignoring order or metadata:
 
 ```ts
-import { deepEqualExcept } from '@shirudo/ddd-kit/utils';
+import { deepEqualExcept } from '@shirudo/ddd-kit';
 
 describe("ActiveOrdersSpecification", () => {
   it("should return only active orders", async () => {
