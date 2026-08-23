@@ -26,7 +26,6 @@ import {
 import type { TransactionScope } from "../repo/scope";
 import { abortReason } from "../utils/abort";
 import type { ExecutionContext } from "../utils/execution";
-import { bindRepositoryWrites } from "./repository-facade";
 import {
 	AggregateTrackingError,
 	type AggregateWriteIntent,
@@ -42,7 +41,12 @@ import {
 	type CommitEnrollment,
 	withCommit,
 } from "./handler";
+import { bindRepositoryWrites } from "./repository-facade";
 
+/**
+ * @internal Shared with the repository facade in this package; not part
+ * of the public API.
+ */
 export interface RuntimePersistenceDefinition<Evt extends AnyDomainEvent> {
 	readonly aggregate: AggregateClass<IAggregateRoot<Id<string>, Evt>>;
 	readonly persistence: PersistenceModel<
