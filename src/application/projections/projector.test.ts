@@ -4,12 +4,12 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
-import { InMemoryOutbox } from "../../events/outbox";
-import { OutboxDispatcher } from "../../events/outbox-dispatcher";
+import { InMemoryOutbox } from "../../messaging/outbox/outbox";
+import { OutboxDispatcher } from "../../messaging/outbox/outbox-dispatcher";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
-} from "../../events/ports";
+} from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { InMemoryProjectionCheckpointStore } from "./adapters/in-memory-checkpoint-store";
 import type {

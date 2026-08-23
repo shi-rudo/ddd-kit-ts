@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InvalidIntegrationMessageError } from "../core/errors";
-import { createDomainEvent } from "../domain/event/domain-event";
+import { InvalidIntegrationMessageError } from "../../core/errors";
+import { createDomainEvent } from "../../domain/event/domain-event";
+import type { CommittedDomainEvent } from "../ports";
 import {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
 	encodeIntegrationMessage,
 	integrationMessageToCommittedEvent,
 } from "./integration-message";
-import type { CommittedDomainEvent } from "./ports";
 
 describe("integration message codec", () => {
 	const validWireMessage = () => ({

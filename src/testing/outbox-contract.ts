@@ -6,8 +6,8 @@ import type {
 	EventCommitCandidate,
 	Outbox,
 	OutboxRecord,
-} from "../events/ports";
-import { isDispatchTrackingOutbox } from "../events/ports";
+} from "../messaging/ports";
+import { isDispatchTrackingOutbox } from "../messaging/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,

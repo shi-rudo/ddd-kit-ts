@@ -15,7 +15,7 @@ import type {
 	EventBus,
 	EventCommitCandidate,
 	OutboxWriter,
-} from "../../events/ports";
+} from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { abortReason } from "../../utils/abort";
 import {

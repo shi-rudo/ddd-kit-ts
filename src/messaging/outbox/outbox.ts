@@ -1,16 +1,16 @@
 import {
 	EventHarvestError,
 	InMemoryCapacityExceededError,
-} from "../core/errors";
+} from "../../core/errors";
 import {
 	type AggregateAddress,
 	encodeAggregateAddress,
-} from "../domain/aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../domain/event/domain-event";
+} from "../../domain/aggregate/aggregate-address";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	assertPositiveInteger,
 	assertPositiveSafeInteger,
-} from "../utils/validate";
+} from "../../utils/validate";
 import type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
@@ -18,7 +18,7 @@ import type {
 	EventCommitCandidatePosition,
 	OutboxRecord,
 	OutboxWriter,
-} from "./ports";
+} from "../ports";
 
 /**
  * An {@link OutboxWriter} that deliberately drops every event: the

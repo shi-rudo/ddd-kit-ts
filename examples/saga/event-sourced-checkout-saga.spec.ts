@@ -13,7 +13,7 @@ import {
 	createDomainEventFactory,
 	type DomainEventFactory,
 } from "../../src/domain/event/domain-event";
-import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
+import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
 import { moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 import {

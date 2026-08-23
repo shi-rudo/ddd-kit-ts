@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-} from "../domain/aggregate/aggregate";
-import type { ExecutionContext } from "../utils/execution";
+} from "../../domain/aggregate/aggregate";
+import type { ExecutionContext } from "../../utils/execution";
 import { EventBusImpl } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;

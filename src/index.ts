@@ -309,7 +309,7 @@ export {
 } from "./domain/value-object/value-object";
 export { voValidated } from "./domain/value-object/vo-validated";
 // Events: bus, outbox, dispatcher, ports
-export { EventBusImpl } from "./events/event-bus";
+export { EventBusImpl } from "./messaging/event-bus/event-bus";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
@@ -322,19 +322,19 @@ export {
 	type JsonObject,
 	type JsonPrimitive,
 	type JsonValue,
-} from "./events/integration-message";
+} from "./messaging/integration-message/integration-message";
 export {
 	InMemoryOutbox,
 	type InMemoryOutboxOptions,
 	outboxWriterAcceptingEventLoss,
-} from "./events/outbox";
+} from "./messaging/outbox/outbox";
 export {
 	eventBusSink,
 	OutboxDispatcher,
 	type OutboxDispatcherObservers,
 	type OutboxDispatcherOptions,
 	type OutboxSink,
-} from "./events/outbox-dispatcher";
+} from "./messaging/outbox/outbox-dispatcher";
 export type {
 	CommitPosition,
 	CommittedDomainEvent,
@@ -349,7 +349,7 @@ export type {
 	OutboxRecord,
 	OutboxWriter,
 	PublishOptions,
-} from "./events/ports";
+} from "./messaging/ports";
 // Persistence: repository, event store, snapshot store
 export {
 	InMemoryEventStore,

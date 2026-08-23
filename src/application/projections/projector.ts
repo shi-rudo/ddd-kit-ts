@@ -11,8 +11,8 @@ import {
 	encodeAggregateAddress,
 } from "../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import type { OutboxSink } from "../../events/outbox-dispatcher";
-import type { CommittedDomainEvent } from "../../events/ports";
+import type { OutboxSink } from "../../messaging/outbox/outbox-dispatcher";
+import type { CommittedDomainEvent } from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { abortReason } from "../../utils/abort";
 import {

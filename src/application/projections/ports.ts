@@ -1,6 +1,6 @@
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import type { CommitPosition } from "../../events/ports";
+import type { CommitPosition } from "../../messaging/ports";
 
 /**
  * A projection's gap-proof cursor into one aggregate's commit chain.
