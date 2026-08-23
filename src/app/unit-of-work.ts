@@ -1495,11 +1495,7 @@ class Session<Evt extends AnyDomainEvent> {
 				entry.registration?.intent,
 			);
 		}
-		if (
-			!entry ||
-			entry.lifecycle !== "loaded" ||
-			entry.definition !== definition
-		) {
+		if (entry?.lifecycle !== "loaded" || entry.definition !== definition) {
 			throw new AggregateTrackingError(
 				String(aggregate.id),
 				operation,
