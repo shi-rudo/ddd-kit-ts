@@ -11,10 +11,7 @@ import type {
 	AggregatePersistenceWrite,
 	RepositoryTracking,
 } from "../app/persistence-contract";
-import {
-	defineRepository,
-	UnitOfWork,
-} from "../app/unit-of-work";
+import { defineRepository, UnitOfWork } from "../app/unit-of-work";
 import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";
 import type { Id } from "../core/id";
 import type {

@@ -66,7 +66,13 @@ interface TrackedAggregate<Evt extends AnyDomainEvent> {
 	registration?: WriteRegistration<Evt>;
 }
 
-/** Internal session implementation; closed by `run()`'s finally. */
+/**
+ * Tracks the aggregates of one `run()`: identity map, write intent and
+ * commit registration. Closed by `run()`'s finally.
+ *
+ * @internal Shared with the unit of work in this package; not part of
+ * the public API.
+ */
 export class Session<Evt extends AnyDomainEvent> {
 	// Read tracking order is independent of write registration order. Flush
 	// follows this list so adapters observe the same explicit order as the use

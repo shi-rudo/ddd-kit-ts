@@ -19,9 +19,7 @@ import {
 	RollbackError,
 	TransactionClosedError,
 } from "./errors";
-import {
-	withCommit,
-} from "./handler";
+import { withCommit } from "./handler";
 import type {
 	AggregatePersistenceWrite,
 	RepositoryTracking,
@@ -30,7 +28,6 @@ import type {
 import { bindRepositoryWrites } from "./repository-facade";
 import { Session } from "./unit-of-work-session";
 
-
 interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
 	extends RuntimePersistenceDefinition<Evt> {
 	readonly create: (
@@ -38,7 +35,6 @@ interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
 		tracking: RepositoryTracking<IAggregateRoot<Id<string>, Evt>>,
 	) => unknown;
 }
-
 
 /**
  * What the application work callback receives: repositories already bound to
@@ -146,7 +142,6 @@ export interface RepositoryDefinition<
 	/** Nominal marker installed by {@link defineRepository}. */
 	readonly [repositoryDefinitionBrand]: true;
 }
-
 
 /** @inline */
 type CallableValue = (...args: never[]) => unknown;

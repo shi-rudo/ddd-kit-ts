@@ -8,9 +8,7 @@ import type { Outbox } from "../events/ports";
 import type { PersistenceModel } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
 import { RepositoryErrorMappingFailedError } from "./errors";
-import type {
-	RepositoryTracking,
-} from "./persistence-contract";
+import type { RepositoryTracking } from "./persistence-contract";
 import {
 	defineRepository,
 	type RepositoryDefinitionOptions,
