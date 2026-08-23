@@ -1,6 +1,7 @@
 // Main entry point (`@shirudo/ddd-kit`). Every export is named
 // deliberately: the SemVer surface is exactly this list, internals never
-// leak by accident, and `src/api-surface.test.ts` pins the runtime part.
+// leak by accident, and `test/architecture/api-surface.test.ts` pins the
+// runtime part.
 // Result types come from the peer dependency `@shirudo/result`;
 // `ValidationError` comes from `@shirudo/base-error`; RFC 9457 Problem
 // Details presenters live in the opt-in `@shirudo/ddd-kit/http` entry;

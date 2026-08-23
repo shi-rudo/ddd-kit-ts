@@ -12,8 +12,8 @@ import { withIdempotentCommit } from "../../src/application/idempotency/idempote
 import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import type { AnyDomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
+import type { Money } from "../../src/domain/value-object/money";
 import { DomainError } from "../../src/errors/kit-errors";
-import type { Money } from "../../src/money";
 
 // #region order-domain
 export type OrderId = Id<"OrderId">;

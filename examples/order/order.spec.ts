@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { type Money, moneyOfMinor, moneyToSnapshot } from "../../src/money";
+import {
+	type Money,
+	moneyOfMinor,
+	moneyToSnapshot,
+} from "../../src/domain/value-object/money";
 import {
 	captureAggregateSnapshot,
 	reconstituteAggregateFromSnapshot,

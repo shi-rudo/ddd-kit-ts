@@ -43,7 +43,7 @@ entities, value objects, domain events, repositories, and the use-case boundary.
 
 - `@shirudo/ddd-kit` main surface (see `src/index.ts`)
 - `@shirudo/ddd-kit/http` RFC 9457 Problem Details presenters
-- `@shirudo/ddd-kit/presentation` presentation-layer mapping
+- `@shirudo/ddd-kit/public-errors` presentation-layer mapping
 - `@shirudo/ddd-kit/testing` repository contract suites
 - `@shirudo/ddd-kit/money` money contract and boundary module
 

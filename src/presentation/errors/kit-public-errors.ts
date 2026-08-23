@@ -113,7 +113,7 @@ function sanitizeIssuePath(path: unknown): PublicIssue["path"] | undefined {
  * composition root and extends that:
  *
  * ```ts
- * import { createKitPublicErrors } from "@shirudo/ddd-kit/presentation";
+ * import { createKitPublicErrors } from "@shirudo/ddd-kit/public-errors";
  *
  * const catalog = createKitPublicErrors().registerByCode(
  *   "ORDER_ALREADY_SHIPPED",

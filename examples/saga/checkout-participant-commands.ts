@@ -3,7 +3,7 @@ import type {
 	CommandMessageContent,
 	CommandMessageRelationships,
 } from "../../src/application/cqrs/command/command-outbox";
-import { type MoneyDto, moneyToDto } from "../../src/money";
+import { type MoneyDto, moneyToDto } from "../../src/domain/value-object/money";
 import type {
 	CheckoutAdvancedToShipping,
 	CheckoutCancellationStartedAfterPaymentFailure,

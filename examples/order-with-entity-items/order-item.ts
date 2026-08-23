@@ -1,6 +1,9 @@
 import { Entity } from "../../src/domain/entity/entity";
 import type { Id } from "../../src/domain/identity/id";
-import { isNegativeMoney, type Money } from "../../src/money";
+import {
+	isNegativeMoney,
+	type Money,
+} from "../../src/domain/value-object/money";
 
 export type ItemId = Id<"ItemId">;
 

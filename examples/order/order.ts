@@ -1,7 +1,7 @@
 import type { Version } from "../../src/domain/aggregate/aggregate";
 import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import type { Id } from "../../src/domain/identity/id";
-import { addMoney, type Money } from "../../src/money";
+import { addMoney, type Money } from "../../src/domain/value-object/money";
 
 export type OrderId = Id<"OrderId">;
 

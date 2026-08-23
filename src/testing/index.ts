@@ -16,54 +16,54 @@ export {
 	type CommandOutboxContractHarness,
 	type CommandOutboxContractTest,
 	createCommandOutboxContractTests,
-} from "./testing/command-outbox-contract";
+} from "./command-outbox-contract";
 export {
 	createDeadlineStoreContractTests,
 	type DeadlineStoreContractEnvironment,
 	type DeadlineStoreContractHarness,
 	type DeadlineStoreContractTest,
-} from "./testing/deadline-store-contract";
+} from "./deadline-store-contract";
 export {
 	createEsRepositoryContractTests,
 	type EsContractRepository,
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 	type EsRepositoryContractTest,
-} from "./testing/es-repository-contract";
+} from "./es-repository-contract";
 export {
 	createEventStoreContractTests,
 	type EventStoreContractEnvironment,
 	type EventStoreContractHarness,
 	type EventStoreContractTest,
-} from "./testing/event-store-contract";
+} from "./event-store-contract";
 export {
 	createIdempotencyStoreContractTests,
 	type IdempotencyStoreContractEnvironment,
 	type IdempotencyStoreContractHarness,
 	type IdempotencyStoreContractTest,
-} from "./testing/idempotency-store-contract";
+} from "./idempotency-store-contract";
 export {
 	createOutboxContractTests,
 	type OutboxContractEnvironment,
 	type OutboxContractHarness,
 	type OutboxContractTest,
-} from "./testing/outbox-contract";
+} from "./outbox-contract";
 export {
 	createProjectionCheckpointStoreContractTests,
 	type ProjectionCheckpointStoreContractEnvironment,
 	type ProjectionCheckpointStoreContractHarness,
 	type ProjectionCheckpointStoreContractTest,
-} from "./testing/projection-checkpoint-contract";
+} from "./projection-checkpoint-contract";
 export {
 	type ContractRepository,
 	createRepositoryContractTests,
 	type RepositoryContractEnvironment,
 	type RepositoryContractHarness,
 	type RepositoryContractTest,
-} from "./testing/repository-contract";
+} from "./repository-contract";
 export {
 	createSnapshotStoreContractTests,
 	type SnapshotStoreContractEnvironment,
 	type SnapshotStoreContractHarness,
 	type SnapshotStoreContractTest,
-} from "./testing/snapshot-store-contract";
+} from "./snapshot-store-contract";

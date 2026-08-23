@@ -5,7 +5,7 @@ import {
 	type DomainMachineSnapshot,
 	transitionDomainState,
 } from "../../src/domain/state-machine/domain-state-machine";
-import type { Money } from "../../src/money";
+import type { Money } from "../../src/domain/value-object/money";
 import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";
 import type { ShipmentId } from "./shipping";

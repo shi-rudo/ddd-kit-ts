@@ -13,8 +13,8 @@ import {
 	createDomainEventFactory,
 	type DomainEventFactory,
 } from "../../src/domain/event/domain-event";
+import { moneyOfMinor } from "../../src/domain/value-object/money";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
-import { moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 import {
 	type CheckoutParticipantCommand,

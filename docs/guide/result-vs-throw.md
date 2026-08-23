@@ -374,7 +374,7 @@ Client-safe messages are a presentation concern. Use the opt-in presentation
 entry point:
 
 ```ts
-import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
 import { toProblem } from "@shirudo/base-error/public-error";
 
 const view = toPublicErrorView(error);

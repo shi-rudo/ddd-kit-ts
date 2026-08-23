@@ -1,7 +1,7 @@
 import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import { findEntityById } from "../../src/domain/entity/entity";
 import type { Id } from "../../src/domain/identity/id";
-import { addMoney, type Money } from "../../src/money";
+import { addMoney, type Money } from "../../src/domain/value-object/money";
 import { type ItemId, OrderItem } from "./order-item";
 
 export type OrderId = Id<"OrderId">;

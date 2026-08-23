@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-import * as http from "./http";
 import type {
 	AggregatePersistence,
 	DeadlineProcessorObservers,
@@ -16,27 +15,28 @@ import type {
 	StateValidator,
 	UnitOfWorkContext,
 	UnitOfWorkIdentityMap,
-} from "./index";
-import * as index from "./index";
-import * as money from "./money";
-import * as presentation from "./presentation";
-import * as testing from "./testing";
+} from "../../src";
+import * as index from "../../src";
+import * as money from "../../src/domain/value-object/money";
+import * as presentation from "../../src/presentation/errors";
+import * as http from "../../src/presentation/http/problem-details";
+import * as testing from "../../src/testing";
 
-type PublicExecutionContext = import("./index").ExecutionContext;
-type PublicEventMetadata = import("./index").EventMetadata;
+type PublicExecutionContext = import("../../src").ExecutionContext;
+type PublicEventMetadata = import("../../src").EventMetadata;
 // @ts-expect-error EffectContext was replaced by the runtime-oriented ExecutionContext name in v3
-type RemovedEffectContext = import("./index").EffectContext;
+type RemovedEffectContext = import("../../src").EffectContext;
 // @ts-expect-error IRepository was removed instead of retained as a deprecated alias
-type RemovedIRepository = import("./index").IRepository;
+type RemovedIRepository = import("../../src").IRepository;
 // @ts-expect-error IUnitOfWorkRepository was removed with the legacy save/delete protocol
-type RemovedIUnitOfWorkRepository = import("./index").IUnitOfWorkRepository;
+type RemovedIUnitOfWorkRepository = import("../../src").IUnitOfWorkRepository;
 // @ts-expect-error the unscoped write-capable session was replaced by read-only RepositoryTracking
-type RemovedUnitOfWorkSession = import("./index").UnitOfWorkSession;
-type PublicContractRepository = import("./testing").ContractRepository<
+type RemovedUnitOfWorkSession = import("../../src").UnitOfWorkSession;
+type PublicContractRepository = import("../../src/testing").ContractRepository<
 	IAggregateRoot<Id<"RemovedRepositoryContract">>
 >;
 
-type IndexModule = typeof import("./index");
+type IndexModule = typeof import("../../src");
 // @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
 type RemovedResetClockFactory = IndexModule["resetClockFactory"];
 // @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
@@ -77,7 +77,7 @@ type RemovedClearPendingEvents = LifecycleSurface["clearPendingEvents"];
 void (undefined as unknown as RemovedMarkPersisted);
 void (undefined as unknown as RemovedClearPendingEvents);
 
-type StateAggregateSurface = import("./index").AggregateRoot<
+type StateAggregateSurface = import("../../src").AggregateRoot<
 	unknown,
 	Id<"StateAggregateSurface">
 >;
@@ -85,7 +85,7 @@ type StateAggregateSurface = import("./index").AggregateRoot<
 type RemovedCreateSnapshot = StateAggregateSurface["createSnapshot"];
 // @ts-expect-error snapshot reconstitution creates a fresh aggregate through the adapter model
 type RemovedRestoreFromSnapshot = StateAggregateSurface["restoreFromSnapshot"];
-type EventSourcedAggregateSurface = import("./index").EventSourcedAggregate<
+type EventSourcedAggregateSurface = import("../../src").EventSourcedAggregate<
 	unknown,
 	never,
 	Id<"EventSourcedAggregateSurface">

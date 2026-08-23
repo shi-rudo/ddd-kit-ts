@@ -1,11 +1,11 @@
 // Transport-neutral presentation helpers. Opt-in entry point
-// (`@shirudo/ddd-kit/presentation`) so the core kit stays free of
+// (`@shirudo/ddd-kit/public-errors`) so the core kit stays free of
 // presentation strings. These project the kit's technical errors into
 // client-safe public views; the transport mapping (HTTP status, gRPC, CLI
 // exit code) stays the consumer's concern.
-export { createKitPublicErrors } from "./presentation/errors/kit-public-errors";
+export { createKitPublicErrors } from "./kit-public-errors";
 export {
 	type PublicErrorViewDetails,
 	type PublicErrorViewOptions,
 	toPublicErrorView,
-} from "./presentation/errors/public-error-view";
+} from "./public-error-view";

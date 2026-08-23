@@ -19,13 +19,13 @@
 			"types": "./dist/http.d.ts",
 			"import": "./dist/http.js"
 		},
+		"./public-errors": {
+			"types": "./dist/public-errors.d.ts",
+			"import": "./dist/public-errors.js"
+		},
 		"./money": {
 			"types": "./dist/money.d.ts",
 			"import": "./dist/money.js"
-		},
-		"./presentation": {
-			"types": "./dist/presentation.d.ts",
-			"import": "./dist/presentation.js"
 		},
 		"./testing": {
 			"types": "./dist/testing.d.ts",
