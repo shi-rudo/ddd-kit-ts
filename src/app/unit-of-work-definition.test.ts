@@ -7,10 +7,10 @@ import type { Id } from "../core/id";
 import type { Outbox } from "../events/ports";
 import type { PersistenceModel } from "../repo/persistence-model";
 import type { TransactionScope } from "../repo/scope";
+import { RepositoryErrorMappingFailedError } from "./errors";
 import {
 	defineRepository,
 	type RepositoryDefinitionOptions,
-	RepositoryErrorMappingFailedError,
 	type RepositoryTracking,
 	UnitOfWork,
 } from "./unit-of-work";

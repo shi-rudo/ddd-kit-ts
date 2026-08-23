@@ -106,7 +106,7 @@ export abstract class KitWiringError<
  * Library-internal concrete subclasses: {@link AggregateNotFoundError},
  * {@link ConcurrencyConflictError}, {@link DuplicateAggregateError},
  * plus the unit-of-work lifecycle wrappers `CommitError` and
- * `RollbackError` (in `src/app/unit-of-work.ts`).
+ * `RollbackError` (in `src/app/errors.ts`).
  */
 export abstract class InfrastructureError<
 	TCode extends string = string,
