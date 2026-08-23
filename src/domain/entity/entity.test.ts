@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { HostileStateKeyError } from "../../core/errors";
+import { HostileStateKeyError } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
 	entityIds,

@@ -1,8 +1,8 @@
-import { InMemoryCapacityExceededError } from "../../../core/errors";
 import {
 	type AggregateAddress,
 	encodeAggregateAddress,
 } from "../../../domain/aggregate/aggregate-address";
+import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../../utils/validate";
 import {
 	isPositionAfter,

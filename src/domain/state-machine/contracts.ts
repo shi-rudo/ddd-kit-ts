@@ -1,4 +1,4 @@
-import type { DomainError } from "../../core/errors";
+import type { DomainError } from "../../errors/kit-errors";
 
 /** Base shape for every input accepted by a domain state machine. */
 export type DomainMachineInput = {

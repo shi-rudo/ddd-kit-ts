@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
 	DuplicateHandlerRegistrationError,
 	ErrorMapperFailedError,
-} from "../../core/errors";
+} from "../../errors/kit-errors";
 import { CommandBus } from "./command/command-bus";
 import { QueryBus } from "./query/query-bus";
 

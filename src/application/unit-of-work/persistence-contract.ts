@@ -1,7 +1,7 @@
-import type { InfrastructureError } from "../../core/errors";
 import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import type { InfrastructureError } from "../../errors/kit-errors";
 import type {
 	AggregateClass,
 	IdentityMap,

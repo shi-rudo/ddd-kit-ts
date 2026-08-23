@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { InfrastructureError } from "../../core/errors";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import { InfrastructureError } from "../../errors/kit-errors";
 import type { Outbox } from "../../messaging/ports";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";

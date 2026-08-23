@@ -1,4 +1,4 @@
-import { DomainError, KitWiringError } from "../../core/errors";
+import { DomainError, KitWiringError } from "../../errors/kit-errors";
 
 /** No transition is defined for the input in the current state. */
 export class InvalidDomainTransitionError extends DomainError<"INVALID_DOMAIN_TRANSITION"> {

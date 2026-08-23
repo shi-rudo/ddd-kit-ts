@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { DomainError } from "../../../core/errors";
+import { DomainError } from "../../../errors/kit-errors";
 import { InvalidMoneyError, MoneyPrecisionLossError } from "./errors";
 import {
 	isMoney,

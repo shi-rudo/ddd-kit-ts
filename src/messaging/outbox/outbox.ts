@@ -1,12 +1,12 @@
 import {
-	EventHarvestError,
-	InMemoryCapacityExceededError,
-} from "../../core/errors";
-import {
 	type AggregateAddress,
 	encodeAggregateAddress,
 } from "../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import {
+	EventHarvestError,
+	InMemoryCapacityExceededError,
+} from "../../errors/kit-errors";
 import {
 	assertPositiveInteger,
 	assertPositiveSafeInteger,

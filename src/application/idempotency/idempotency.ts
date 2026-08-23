@@ -1,8 +1,8 @@
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	EventHarvestError,
 	IdempotencyReconciliationRequiredError,
-} from "../../core/errors";
-import type { AnyDomainEvent } from "../../domain/event/domain-event";
+} from "../../errors/kit-errors";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { reportToObserver } from "../../utils/observer";
 import {

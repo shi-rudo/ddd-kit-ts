@@ -1,4 +1,3 @@
-import { EventHarvestError } from "../../core/errors";
 import type { Version } from "../../domain/aggregate/aggregate";
 import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
@@ -11,6 +10,7 @@ import {
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import { EventHarvestError } from "../../errors/kit-errors";
 import type {
 	EventBus,
 	EventCommitCandidate,

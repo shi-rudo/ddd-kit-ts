@@ -1,12 +1,12 @@
 import {
-	ConcurrencyConflictError,
-	InMemoryCapacityExceededError,
-} from "../../../core/errors";
-import {
 	type AggregateAddress,
 	encodeAggregateAddress,
 } from "../../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
+import {
+	ConcurrencyConflictError,
+	InMemoryCapacityExceededError,
+} from "../../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../../utils/validate";
 import type {
 	EventStore,

@@ -1,4 +1,3 @@
-import { InvalidIntegrationMessageError } from "../../core/errors";
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import {
 	type AnyDomainEvent,
@@ -7,6 +6,7 @@ import {
 	type EventMetadata,
 } from "../../domain/event/domain-event";
 import { deepFreeze } from "../../domain/value-object/value-object";
+import { InvalidIntegrationMessageError } from "../../errors/kit-errors";
 import type { CommitPosition, CommittedDomainEvent } from "../ports";
 import {
 	assertJsonValue,

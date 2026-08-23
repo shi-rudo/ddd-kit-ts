@@ -1,12 +1,12 @@
 import { ValidationError } from "@shirudo/base-error";
 import { LocalizedMessageSet, project } from "@shirudo/base-error/public-error";
 import { describe, expect, it } from "vite-plus/test";
+import { moneyFromDto } from "../../domain/value-object/money/money";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
-} from "../../core/errors";
-import { moneyFromDto } from "../../domain/value-object/money/money";
+} from "../../errors/kit-errors";
 import { createKitPublicErrors } from "./kit-public-errors";
 import { toPublicErrorView } from "./public-error-view";
 

@@ -7,7 +7,6 @@ import type {
 import { CommandBus } from "../../src/application/cqrs/command/command-bus";
 import { withCommit } from "../../src/application/cqrs/handler";
 import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
-import { AggregateNotFoundError } from "../../src/core/errors";
 import type { IAggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import {
 	type AnyDomainEvent,
@@ -16,6 +15,7 @@ import {
 } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { InvalidDomainTransitionError } from "../../src/domain/state-machine/domain-state-machine";
+import { AggregateNotFoundError } from "../../src/errors/kit-errors";
 import { EventBusImpl } from "../../src/messaging/event-bus/event-bus";
 import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
 import type { EventBus, OutboxWriter } from "../../src/messaging/ports";

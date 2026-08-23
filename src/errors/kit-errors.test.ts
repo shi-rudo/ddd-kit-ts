@@ -16,7 +16,7 @@ import {
 	NonProgressingEventStreamPageError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
-} from "./errors";
+} from "./kit-errors";
 
 describe("NonProgressingEventStreamPageError", () => {
 	it("names an EventStore page that cannot advance to its pinned target", () => {

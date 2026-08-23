@@ -25,7 +25,7 @@ import {
 	UnprojectableEventError,
 	UnregisteredHandlerError,
 	UnreplayableAggregateError,
-} from "./errors";
+} from "./kit-errors";
 
 // The structured-error contract for every kit error (decided 2026-07-05):
 // kit errors ARE StructuredErrors. `code` is THE identifier (SCREAMING_SNAKE,

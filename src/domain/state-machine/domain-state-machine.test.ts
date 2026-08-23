@@ -2,7 +2,7 @@
 import { runInNewContext } from "node:vm";
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-import { DomainError } from "../../core/errors";
+import { DomainError } from "../../errors/kit-errors";
 import {
 	canTransitionDomainState,
 	createInitialDomainMachineSnapshot,

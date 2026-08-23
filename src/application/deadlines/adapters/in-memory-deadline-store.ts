@@ -1,4 +1,4 @@
-import { InMemoryCapacityExceededError } from "../../../core/errors";
+import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import {
 	assertPositiveInteger,
 	assertPositiveSafeInteger,

@@ -1,4 +1,4 @@
-import { SnapshotCorruptedError } from "../../src/core/errors";
+import { SnapshotCorruptedError } from "../../src/errors/kit-errors";
 import {
 	type MoneySnapshot,
 	moneyFromSnapshot,
