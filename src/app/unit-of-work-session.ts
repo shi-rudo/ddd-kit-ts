@@ -214,7 +214,11 @@ export class Session<Evt extends AnyDomainEvent> {
 			if (newlyTracked) {
 				this._trackingByAggregate.delete(aggregate);
 				this._trackedAggregates.delete(entry);
-				this._identityMap.discard(definition.aggregate, aggregate.id, aggregate);
+				this._identityMap.discard(
+					definition.aggregate,
+					aggregate.id,
+					aggregate,
+				);
 			}
 			throw error;
 		}
@@ -299,11 +303,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		// the real conflict with the registered intent. The not_loaded advice
 		// ("load it through the repository") is impossible for an aggregate
 		// that has no row yet and would actively mislead.
-		if (
-			entry &&
-			entry.lifecycle === "new" &&
-			entry.definition === definition
-		) {
+		if (entry && entry.lifecycle === "new" && entry.definition === definition) {
 			throw new AggregateTrackingError(
 				String(aggregate.id),
 				operation,

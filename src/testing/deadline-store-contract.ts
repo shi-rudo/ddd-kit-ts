@@ -1,6 +1,6 @@
 import type {
-	DeadlineStore,
 	DeadLetterDeadline,
+	DeadlineStore,
 } from "../deadlines/deadline-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {

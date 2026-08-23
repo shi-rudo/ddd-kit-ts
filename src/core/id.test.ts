@@ -7,7 +7,9 @@ type OrderId = Id<"OrderId">;
 describe("Id<Tag> brand", () => {
 	it("structurally typed as string but tagged via __brand", () => {
 		const u = "user-1" as UserId;
-		expectTypeOf<UserId>().toEqualTypeOf<string & { readonly __brand: "UserId" }>();
+		expectTypeOf<UserId>().toEqualTypeOf<
+			string & { readonly __brand: "UserId" }
+		>();
 		// A bare string is not assignable to a branded UserId:
 		// @ts-expect-error: plain string lacks the brand
 		const _bad: UserId = "not-branded";

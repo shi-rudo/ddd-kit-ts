@@ -289,10 +289,7 @@ function assertTraceContext(traceparent: unknown, tracestate: unknown): void {
 	}
 	if (tracestate === undefined) return;
 	if (typeof tracestate !== "string" || tracestate.length > 512) {
-		invalid(
-			"$.tracestate",
-			"must stay within the 512-character command limit",
-		);
+		invalid("$.tracestate", "must stay within the 512-character command limit");
 	}
 	// W3C Trace Context requires receivers to tolerate empty list-members
 	// ("vendor1=abc,,vendor2=def"). They carry no data and are dropped

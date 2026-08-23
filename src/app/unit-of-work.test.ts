@@ -90,10 +90,7 @@ class MockAggregate extends AggregateRoot<
 
 	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
 	public changeWithUnrecordedEvent(orderId: string): void {
-		this.commit(
-			this.state,
-			this.createEvent("OrderCreated", { orderId }),
-		);
+		this.commit(this.state, this.createEvent("OrderCreated", { orderId }));
 	}
 }
 
@@ -683,7 +680,8 @@ describe("UnitOfWork", () => {
 					aggregate: MockAggregate,
 					persistence: versionPersistenceModel<MockAggregate>(),
 					create: (_tx: undefined, tracking) => ({
-						trackLoaded: (loaded: MockAggregate) => tracking.trackLoaded(loaded),
+						trackLoaded: (loaded: MockAggregate) =>
+							tracking.trackLoaded(loaded),
 					}),
 					flush: async () => {},
 				});
@@ -756,10 +754,7 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async ({ repositories }) => {
 				repositories.orders.trackLoaded(aggregate);
-				const view = tracking.identityMap as unknown as Record<
-					string,
-					unknown
-				>;
+				const view = tracking.identityMap as unknown as Record<string, unknown>;
 				expect(view.set).toBeUndefined();
 				expect(view.delete).toBeUndefined();
 				expect(view.clear).toBeUndefined();
@@ -778,7 +773,8 @@ describe("UnitOfWork", () => {
 					aggregate: MockAggregate,
 					persistence: versionPersistenceModel<MockAggregate>(),
 					create: (_tx: undefined, tracking) => ({
-						trackLoaded: (loaded: MockAggregate) => tracking.trackLoaded(loaded),
+						trackLoaded: (loaded: MockAggregate) =>
+							tracking.trackLoaded(loaded),
 					}),
 					flush: async () => {},
 				});

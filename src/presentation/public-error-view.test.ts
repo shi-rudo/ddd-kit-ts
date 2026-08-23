@@ -9,7 +9,9 @@ import { toPublicErrorView } from "./public-error-view";
 
 describe("toPublicErrorView()", () => {
 	it("maps AggregateNotFoundError to a safe view that does NOT leak the id", () => {
-		const view = toPublicErrorView(new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }));
+		const view = toPublicErrorView(
+			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+		);
 
 		expect(view.code).toBe("AGGREGATE_NOT_FOUND");
 		expect(view.locale).toBe("en");
@@ -19,11 +21,23 @@ describe("toPublicErrorView()", () => {
 	});
 
 	it("maps the conflict and duplicate errors to safe messages", () => {
-		expect(toPublicErrorView(new ConcurrencyConflictError({ aggregateType: "Order", aggregateId: "o-1", expectedVersion: 3, actualVersion: 5 })).code).toBe(
-			"CONCURRENCY_CONFLICT",
-		);
 		expect(
-			toPublicErrorView(new DuplicateAggregateError({ aggregateType: "Order", aggregateId: "o-1" })).message,
+			toPublicErrorView(
+				new ConcurrencyConflictError({
+					aggregateType: "Order",
+					aggregateId: "o-1",
+					expectedVersion: 3,
+					actualVersion: 5,
+				}),
+			).code,
+		).toBe("CONCURRENCY_CONFLICT");
+		expect(
+			toPublicErrorView(
+				new DuplicateAggregateError({
+					aggregateType: "Order",
+					aggregateId: "o-1",
+				}),
+			).message,
 		).toContain("already exists");
 	});
 
@@ -70,9 +84,12 @@ describe("toPublicErrorView()", () => {
 		// The built-in messages are English only, so a de-DE preference
 		// resolves to the base locale instead of claiming a locale the
 		// message is not actually in.
-		const view = toPublicErrorView(new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }), {
-			locale: "de-DE",
-		});
+		const view = toPublicErrorView(
+			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			{
+				locale: "de-DE",
+			},
+		);
 		expect(view.locale).toBe("en");
 		expect(view.message).toBe("The requested resource could not be found.");
 	});
@@ -195,9 +212,7 @@ describe("toPublicErrorView()", () => {
 			};
 
 			expect(toPublicErrorView(throwingName).code).toBe("INTERNAL_ERROR");
-			expect(toPublicErrorView(throwingCapability).code).toBe(
-				"INTERNAL_ERROR",
-			);
+			expect(toPublicErrorView(throwingCapability).code).toBe("INTERNAL_ERROR");
 		});
 	});
 });

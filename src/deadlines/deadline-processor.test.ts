@@ -95,8 +95,7 @@ function countingStore(
 			return inner.due(now, limit, context);
 		},
 		markDelivered: (ids, context) => inner.markDelivered(ids, context),
-		markFailed: (id, error, context) =>
-			inner.markFailed(id, error, context),
+		markFailed: (id, error, context) => inner.markFailed(id, error, context),
 		deadLetters: () => inner.deadLetters(),
 		dueCalls: () => dueCalls,
 	};

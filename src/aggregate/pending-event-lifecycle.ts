@@ -40,9 +40,10 @@ const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v4",
 );
 
-const capabilities = createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
-	persistenceCapabilityRegistryKey,
-);
+const capabilities =
+	createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
+		persistenceCapabilityRegistryKey,
+	);
 
 export function registerPendingEventLifecycleCapability(
 	aggregate: object,

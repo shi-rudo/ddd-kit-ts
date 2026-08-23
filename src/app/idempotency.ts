@@ -422,62 +422,64 @@ export async function withIdempotentCommit<Evt extends AnyDomainEvent, R, TCtx>(
 		transactional: async (work, options) => {
 			try {
 				return await deps.scope.transactional(async (ctx) => {
-				attempt.claim = undefined;
-				attempt.heartbeat = undefined;
-				try {
-					const result = await work(ctx);
-					const currentHeartbeat = attempt.heartbeat as
-						| LeaseHeartbeat
-						| undefined;
-					await currentHeartbeat?.stop();
-					const heartbeatFailure = currentHeartbeat?.failure();
-					if (heartbeatFailure !== undefined) throw heartbeatFailure;
-					return result;
-				} catch (error) {
-					const currentHeartbeat = attempt.heartbeat as
-						| LeaseHeartbeat
-						| undefined;
-					await currentHeartbeat?.stop();
-					const heartbeatFailure = currentHeartbeat?.failure();
-					const currentClaim = attempt.claim as
-						| IdempotencyClaimHandle
-						| undefined;
-					if (
-						heartbeatFailure !== undefined &&
-						heartbeatFailure !== error &&
-						currentClaim
-					) {
-						reportToObserver(() =>
-							deps.onIdempotencyError?.(heartbeatFailure, {
-								operation: "renew",
-								key: currentClaim.key,
-								token: currentClaim.token,
-							}),
-						);
-					}
-					const abandoned = attempt.claim as IdempotencyClaimHandle | undefined;
-					if (abandoned) {
-						attempt.claim = undefined;
-						try {
-							await store.abandon(abandoned);
-						} catch (abandonError) {
-							// Best-effort release: the abandon failure must not
-							// mask the attempt's error. Transactional stores
-							// release via rollback anyway; a leased store can
-							// recover after expiry. The observer keeps the
-							// secondary operational failure visible.
+					attempt.claim = undefined;
+					attempt.heartbeat = undefined;
+					try {
+						const result = await work(ctx);
+						const currentHeartbeat = attempt.heartbeat as
+							| LeaseHeartbeat
+							| undefined;
+						await currentHeartbeat?.stop();
+						const heartbeatFailure = currentHeartbeat?.failure();
+						if (heartbeatFailure !== undefined) throw heartbeatFailure;
+						return result;
+					} catch (error) {
+						const currentHeartbeat = attempt.heartbeat as
+							| LeaseHeartbeat
+							| undefined;
+						await currentHeartbeat?.stop();
+						const heartbeatFailure = currentHeartbeat?.failure();
+						const currentClaim = attempt.claim as
+							| IdempotencyClaimHandle
+							| undefined;
+						if (
+							heartbeatFailure !== undefined &&
+							heartbeatFailure !== error &&
+							currentClaim
+						) {
 							reportToObserver(() =>
-								deps.onIdempotencyError?.(abandonError, {
-									operation: "abandon",
-									key: abandoned.key,
-									token: abandoned.token,
+								deps.onIdempotencyError?.(heartbeatFailure, {
+									operation: "renew",
+									key: currentClaim.key,
+									token: currentClaim.token,
 								}),
 							);
 						}
+						const abandoned = attempt.claim as
+							| IdempotencyClaimHandle
+							| undefined;
+						if (abandoned) {
+							attempt.claim = undefined;
+							try {
+								await store.abandon(abandoned);
+							} catch (abandonError) {
+								// Best-effort release: the abandon failure must not
+								// mask the attempt's error. Transactional stores
+								// release via rollback anyway; a leased store can
+								// recover after expiry. The observer keeps the
+								// secondary operational failure visible.
+								reportToObserver(() =>
+									deps.onIdempotencyError?.(abandonError, {
+										operation: "abandon",
+										key: abandoned.key,
+										token: abandoned.token,
+									}),
+								);
+							}
+						}
+						throw error;
 					}
-					throw error;
-				}
-			}, options);
+				}, options);
 			} catch (error) {
 				// COMMIT-time failure: the driver rejected AFTER the callback
 				// resolved, so the catch above never saw it and the staged

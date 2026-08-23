@@ -293,16 +293,17 @@ export type CompatibleRepositoryDefinitions<
 };
 
 /** @inline */
-type RepositoryFacadeOf<TDefinition> = TDefinition extends RepositoryDefinition<
-	infer _TCtx,
-	infer TRepositoryPort,
-	infer _TAggregate,
-	infer _TBaseline,
-	infer _TChangeSet,
-	infer _TRemoval
->
-	? TRepositoryPort
-	: never;
+type RepositoryFacadeOf<TDefinition> =
+	TDefinition extends RepositoryDefinition<
+		infer _TCtx,
+		infer TRepositoryPort,
+		infer _TAggregate,
+		infer _TBaseline,
+		infer _TChangeSet,
+		infer _TRemoval
+	>
+		? TRepositoryPort
+		: never;
 
 /** Unit-of-Work-owned writes added to every application repository facade. */
 export interface AggregateWriteRegistration<

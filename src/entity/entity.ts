@@ -229,7 +229,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 			throw new Error("Entity ID cannot be null or undefined");
 		}
 		this.id = id;
-		this._stateFreezeMode = config?.deepFreezeState ?? false ? "deep" : "shallow";
+		this._stateFreezeMode =
+			(config?.deepFreezeState ?? false) ? "deep" : "shallow";
 		this.validateState = config?.validateState ?? noStateValidation;
 		// Both mutation paths validate the exact frozen object that is stored.
 		// Assigning the validator as an own property before invoking it also

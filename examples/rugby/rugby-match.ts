@@ -116,14 +116,20 @@ export class RugbyMatch extends EventSourcedAggregate<
 	}
 
 	protected readonly handlers = {
-		MatchScheduled: (state: MatchState, event: UncommittedDomainEventOf<MatchScheduled>): MatchState => ({
+		MatchScheduled: (
+			state: MatchState,
+			event: UncommittedDomainEventOf<MatchScheduled>,
+		): MatchState => ({
 			...state,
 			homeTeam: event.payload.homeTeam,
 			awayTeam: event.payload.awayTeam,
 			date: event.payload.date,
 			status: "scheduled",
 		}),
-		TryScored: (state: MatchState, event: UncommittedDomainEventOf<TryScored>): MatchState => ({
+		TryScored: (
+			state: MatchState,
+			event: UncommittedDomainEventOf<TryScored>,
+		): MatchState => ({
 			...state,
 			homeScore:
 				state.homeTeam.id === event.payload.teamId

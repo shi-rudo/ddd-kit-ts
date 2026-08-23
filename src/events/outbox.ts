@@ -222,11 +222,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
 			if (dispatchedReceipt !== undefined) {
 				assertSameEventSource(event, source, dispatchedReceipt.source);
-				assertSameCandidateReceipt(
-					event,
-					position,
-					dispatchedReceipt.position,
-				);
+				assertSameCandidateReceipt(event, position, dispatchedReceipt.position);
 				// eventId is the outbox idempotency key. Refresh its LRU position
 				// without recreating a pending record or touching the source head.
 				this.rememberDispatched(
@@ -454,22 +450,14 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 			const batchReceipt = receiptsInBatch.get(event.eventId);
 			if (batchReceipt !== undefined) {
 				assertSameEventSource(event, source, batchReceipt.source);
-				assertSameCandidateReceipt(
-					event,
-					position,
-					batchReceipt.position,
-				);
+				assertSameCandidateReceipt(event, position, batchReceipt.position);
 			} else {
 				receiptsInBatch.set(event.eventId, { source, position });
 			}
 			const dispatchedReceipt = this.dispatchedEventIds.get(event.eventId);
 			if (dispatchedReceipt !== undefined) {
 				assertSameEventSource(event, source, dispatchedReceipt.source);
-				assertSameCandidateReceipt(
-					event,
-					position,
-					dispatchedReceipt.position,
-				);
+				assertSameCandidateReceipt(event, position, dispatchedReceipt.position);
 				continue;
 			}
 			const existing = this.pending.get(event.eventId);
@@ -532,8 +520,7 @@ export class InMemoryOutbox<Evt extends AnyDomainEvent>
 						event,
 						source,
 						position,
-						pendingRecord?.position.aggregateVersion ??
-							cursor.aggregateVersion,
+						pendingRecord?.position.aggregateVersion ?? cursor.aggregateVersion,
 					);
 				}
 				continue;

@@ -3,11 +3,11 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	deepFreeze,
+	type VO,
 	vo,
 	voEquals,
 	voEqualsExcept,
 	voWithValidation,
-	type VO,
 } from "./value-object";
 
 describe("VO", () => {
@@ -70,11 +70,7 @@ describe("VO", () => {
 
 		it("should freeze nested objects within arrays", () => {
 			const complex = vo({
-				array: [
-					1,
-					2,
-					{ nested: "in array", deep: { value: "very deep" } },
-				],
+				array: [1, 2, { nested: "in array", deep: { value: "very deep" } }],
 			});
 
 			expect(() => {
@@ -567,9 +563,7 @@ describe("VO", () => {
 			const tag = Symbol("tag");
 			const v = vo({ [tag]: { nested: 1 } } as Record<symbol, unknown>);
 
-			const nested = (v as unknown as Record<symbol, { nested: number }>)[
-				tag
-			];
+			const nested = (v as unknown as Record<symbol, { nested: number }>)[tag];
 			// NOT vacuous: the property must exist…
 			expect(nested).toEqual({ nested: 1 });
 			// …and be deeply frozen, matching deepEqual's symbol-key support.
@@ -580,9 +574,7 @@ describe("VO", () => {
 			const meta = Symbol("meta");
 			const v = vo({ outer: { [meta]: "x", plain: 1 } });
 
-			expect(
-				(v.outer as unknown as Record<symbol, string>)[meta],
-			).toBe("x");
+			expect((v.outer as unknown as Record<symbol, string>)[meta]).toBe("x");
 			expect(v.outer.plain).toBe(1);
 		});
 
@@ -670,11 +662,14 @@ describe("VO", () => {
 			["ArrayBuffer", () => new ArrayBuffer(4)],
 			["SharedArrayBuffer", () => new SharedArrayBuffer(4)],
 			["Error", () => new Error("failure")],
-		] as const)("rejects %s because every admitted VO value must be immutable and value-based", (_name, create) => {
-			expect(() => vo({ value: create() })).toThrow(
-				/immutable value semantics/,
-			);
-		});
+		] as const)(
+			"rejects %s because every admitted VO value must be immutable and value-based",
+			(_name, create) => {
+				expect(() => vo({ value: create() })).toThrow(
+					/immutable value semantics/,
+				);
+			},
+		);
 
 		it("rejects unsupported values before validation can produce a mutable VO", () => {
 			expect(() =>
@@ -798,7 +793,9 @@ describe("VO", () => {
 
 		it("preserves symbol-keyed properties inside Map values", () => {
 			const s = Symbol("s");
-			const v = vo({ m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]) });
+			const v = vo({
+				m: new Map([["k", { [s]: 1 } as Record<symbol, number>]]),
+			});
 
 			expect(v.m.get("k")?.[s]).toBe(1);
 		});
@@ -1116,7 +1113,6 @@ describe("VO", () => {
 		});
 	});
 });
-
 
 describe("voWithValidation – error path never throws", () => {
 	it("returns err for cyclic input when no custom message is given", () => {

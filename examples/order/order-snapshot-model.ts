@@ -1,7 +1,7 @@
 import { SnapshotCorruptedError } from "../../src/core/errors";
 import {
-	moneyFromSnapshot,
 	type MoneySnapshot,
+	moneyFromSnapshot,
 	moneyToSnapshot,
 } from "../../src/money";
 import { defineSnapshotModel } from "../../src/repo/snapshot-model";

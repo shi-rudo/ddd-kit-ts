@@ -186,7 +186,11 @@ function assertSnapshotModel(model: {
 			"SnapshotModel.aggregateType must be a non-empty string",
 		);
 	}
-	assertPositiveSafeInteger("SnapshotModel", "schemaVersion", model.schemaVersion);
+	assertPositiveSafeInteger(
+		"SnapshotModel",
+		"schemaVersion",
+		model.schemaVersion,
+	);
 	for (const key of ["capture", "reconstitute"] as const) {
 		if (typeof model[key] !== "function") {
 			throw new TypeError(

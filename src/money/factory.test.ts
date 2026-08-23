@@ -41,7 +41,8 @@ function countIntlConstructions(run: () => void): number {
 			constructions++;
 		}
 	}
-	Intl.NumberFormat = CountingNumberFormat as unknown as typeof Intl.NumberFormat;
+	Intl.NumberFormat =
+		CountingNumberFormat as unknown as typeof Intl.NumberFormat;
 	try {
 		run();
 	} finally {

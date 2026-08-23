@@ -114,9 +114,7 @@ export default defineConfig({
 				},
 				{
 					text: "Reference",
-					items: [
-						{ text: "Common Mistakes", link: "/guide/common-mistakes" },
-					],
+					items: [{ text: "Common Mistakes", link: "/guide/common-mistakes" }],
 				},
 			],
 			"/api/": [
@@ -137,8 +135,7 @@ export default defineConfig({
 		],
 
 		editLink: {
-			pattern:
-				"https://github.com/shi-rudo/ddd-kit-ts/edit/main/docs/:path",
+			pattern: "https://github.com/shi-rudo/ddd-kit-ts/edit/main/docs/:path",
 			text: "Edit this page on GitHub",
 		},
 

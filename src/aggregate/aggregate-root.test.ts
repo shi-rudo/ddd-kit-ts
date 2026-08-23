@@ -417,10 +417,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.addDomainEvent(ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return createDomainEvent("Updated", { value }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			});
+				return createDomainEvent(
+					"Updated",
+					{ value },
+					{
+						aggregateId: this.id,
+						aggregateType: this.aggregateType,
+					},
+				);
 			}
 		}
 
@@ -438,10 +442,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				this.commit({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
-				return createDomainEvent("Updated", { value }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			});
+				return createDomainEvent(
+					"Updated",
+					{ value },
+					{
+						aggregateId: this.id,
+						aggregateType: this.aggregateType,
+					},
+				);
 			}
 		}
 
@@ -558,10 +566,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 
 			fire(v: number): Recorded {
-				return createDomainEvent("Recorded", { v }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			});
+				return createDomainEvent(
+					"Recorded",
+					{ v },
+					{
+						aggregateId: this.id,
+						aggregateType: this.aggregateType,
+					},
+				);
 			}
 		}
 
@@ -608,10 +620,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 			addTestEvent(value: number): void {
 				this.addDomainEvent(
-					createDomainEvent("TestRecorded", { value }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}),
+					createDomainEvent(
+						"TestRecorded",
+						{ value },
+						{
+							aggregateId: this.id,
+							aggregateType: this.aggregateType,
+						},
+					),
 				);
 			}
 		}
@@ -735,9 +751,9 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				public doSomething() {
 					this.addDomainEvent(
 						createDomainEvent("SomethingHappened", undefined, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}),
+							aggregateId: this.id,
+							aggregateType: this.aggregateType,
+						}),
 					);
 				}
 			}
@@ -773,19 +789,23 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				public updateValue(newValue: number) {
 					this.setState({ ...this.state, value: newValue });
 					this.addDomainEvent(
-						createDomainEvent("ValueUpdated", { newValue }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}),
+						createDomainEvent(
+							"ValueUpdated",
+							{ newValue },
+							{
+								aggregateId: this.id,
+								aggregateType: this.aggregateType,
+							},
+						),
 					);
 				}
 				public activate() {
 					this.setState({ ...this.state, status: "active" });
 					this.addDomainEvent(
 						createDomainEvent("Activated", undefined, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}),
+							aggregateId: this.id,
+							aggregateType: this.aggregateType,
+						}),
 					);
 				}
 			}
@@ -824,10 +844,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				}
 				public doCorrect() {
 					this.addDomainEvent(
-						createDomainEvent("OnlyThis", { data: "hello" }, {
-				aggregateId: this.id,
-				aggregateType: this.aggregateType,
-			}),
+						createDomainEvent(
+							"OnlyThis",
+							{ data: "hello" },
+							{
+								aggregateId: this.id,
+								aggregateType: this.aggregateType,
+							},
+						),
 					);
 				}
 				public doWrong() {
