@@ -1,4 +1,5 @@
 import { InfrastructureError, KitWiringError } from "../core/errors";
+import type { AggregateWriteIntent } from "./persistence-contract";
 
 /**
  * Thrown when `UnitOfWork.run()` is called while the same instance is
@@ -108,9 +109,6 @@ export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITOR
 		this.mapperCause = options.mapperError;
 	}
 }
-
-/** The explicit persistence intent registered for one tracked aggregate. */
-export type AggregateWriteIntent = "add" | "update" | "remove";
 
 /** Why an aggregate lifecycle registration was rejected. */
 export type AggregateTrackingFailure =
