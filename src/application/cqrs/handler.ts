@@ -11,11 +11,9 @@ import {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { EventHarvestError } from "../../errors/kit-errors";
-import type {
-	EventBus,
-	EventCommitCandidate,
-	OutboxWriter,
-} from "../../messaging/ports";
+import type { EventCommitCandidate } from "../../messaging/committed-event";
+import type { EventBus } from "../../messaging/event-bus/ports";
+import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { abortReason } from "../../utils/abort";
 import {

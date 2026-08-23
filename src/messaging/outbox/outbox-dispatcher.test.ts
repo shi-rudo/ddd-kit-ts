@@ -4,13 +4,8 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { ExecutionContext } from "../../utils/execution";
+import type { CommittedDomainEvent } from "../committed-event";
 import { EventBusImpl } from "../event-bus/event-bus";
-import type {
-	CommittedDomainEvent,
-	DeadLetterRecord,
-	Outbox,
-	OutboxRecord,
-} from "../ports";
 import { InMemoryOutbox } from "./outbox";
 import {
 	eventBusSink,
@@ -19,6 +14,7 @@ import {
 	type OutboxDispatcherOptions,
 	type OutboxSink,
 } from "./outbox-dispatcher";
+import type { DeadLetterRecord, Outbox, OutboxRecord } from "./ports";
 
 type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 type TestDispatcherOptions = OutboxDispatcherOptions<TestEvent>;

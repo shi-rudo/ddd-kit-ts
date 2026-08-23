@@ -11,8 +11,8 @@ import {
 	ProjectionReceiptViolationError,
 	UnprojectableEventError,
 } from "../../errors/kit-errors";
+import type { CommittedDomainEvent } from "../../messaging/committed-event";
 import type { OutboxSink } from "../../messaging/outbox/outbox-dispatcher";
-import type { CommittedDomainEvent } from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { abortReason } from "../../utils/abort";
 import {

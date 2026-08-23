@@ -13,8 +13,8 @@ import {
 	IdempotencyInFlightError,
 	IdempotencyKeyReuseError,
 } from "../../errors/kit-errors";
+import type { EventCommitCandidate } from "../../messaging/committed-event";
 import { InMemoryOutbox } from "../../messaging/outbox/outbox";
-import type { EventCommitCandidate } from "../../messaging/ports";
 import { RetryingTransactionScope } from "../../persistence/repository/retrying-scope";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import type {

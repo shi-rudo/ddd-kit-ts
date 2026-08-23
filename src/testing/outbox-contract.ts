@@ -1,13 +1,13 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { EventCommitCandidate } from "../messaging/committed-event";
 import type {
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
-	EventCommitCandidate,
 	Outbox,
 	OutboxRecord,
-} from "../messaging/ports";
-import { isDispatchTrackingOutbox } from "../messaging/ports";
+} from "../messaging/outbox/ports";
+import { isDispatchTrackingOutbox } from "../messaging/outbox/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,

@@ -7,7 +7,7 @@ import {
 } from "../../domain/event/domain-event";
 import { deepFreeze } from "../../domain/value-object/value-object";
 import { InvalidIntegrationMessageError } from "../../errors/kit-errors";
-import type { CommitPosition, CommittedDomainEvent } from "../ports";
+import type { CommitPosition, CommittedDomainEvent } from "../committed-event";
 import {
 	assertJsonValue,
 	isJsonObject,

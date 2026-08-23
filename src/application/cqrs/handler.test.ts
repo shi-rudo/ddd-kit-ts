@@ -17,11 +17,9 @@ import {
 	EventHarvestError,
 	InfrastructureError,
 } from "../../errors/kit-errors";
-import type {
-	EventBus,
-	EventCommitCandidate,
-	Outbox,
-} from "../../messaging/ports";
+import type { EventCommitCandidate } from "../../messaging/committed-event";
+import type { EventBus } from "../../messaging/event-bus/ports";
+import type { Outbox } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
 	type AggregateCommitToken,

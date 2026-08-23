@@ -6,7 +6,8 @@ import {
 	EventHarvestError,
 	type InfrastructureError,
 } from "../../errors/kit-errors";
-import type { EventBus, OutboxWriter } from "../../messaging/ports";
+import type { EventBus } from "../../messaging/event-bus/ports";
+import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";

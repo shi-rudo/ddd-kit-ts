@@ -7,7 +7,7 @@ import {
 	EventHarvestError,
 	InMemoryCapacityExceededError,
 } from "../../errors/kit-errors";
-import type { EventCommitCandidate } from "../ports";
+import type { EventCommitCandidate } from "../committed-event";
 import { InMemoryOutbox, outboxWriterAcceptingEventLoss } from "./outbox";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;

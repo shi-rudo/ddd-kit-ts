@@ -309,8 +309,20 @@ export {
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
 } from "./errors/kit-errors";
+export type {
+	CommitPosition,
+	CommittedDomainEvent,
+	EventCommitCandidate,
+	EventCommitCandidatePosition,
+} from "./messaging/committed-event";
 // Events: bus, outbox, dispatcher, ports
 export { EventBusImpl } from "./messaging/event-bus/event-bus";
+export type {
+	EventBus,
+	EventHandler,
+	OnceOptions,
+	PublishOptions,
+} from "./messaging/event-bus/ports";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,
@@ -337,20 +349,12 @@ export {
 	type OutboxSink,
 } from "./messaging/outbox/outbox-dispatcher";
 export type {
-	CommitPosition,
-	CommittedDomainEvent,
 	DeadLetterRecord,
 	DispatchTrackingOutbox,
-	EventBus,
-	EventCommitCandidate,
-	EventCommitCandidatePosition,
-	EventHandler,
-	OnceOptions,
 	Outbox,
 	OutboxRecord,
 	OutboxWriter,
-	PublishOptions,
-} from "./messaging/ports";
+} from "./messaging/outbox/ports";
 // Persistence: repository, event store, snapshot store
 export {
 	InMemoryEventStore,

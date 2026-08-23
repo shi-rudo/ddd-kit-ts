@@ -10,7 +10,7 @@ import type {
 	EventHandler,
 	OnceOptions,
 	PublishOptions,
-} from "../ports";
+} from "./ports";
 
 /**
  * Simple in-memory event bus implementation.
