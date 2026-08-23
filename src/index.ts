@@ -115,7 +115,6 @@ export {
 export {
 	AggregateTrackingError,
 	type AggregateTrackingFailure,
-	type AggregateWriteIntent,
 	CommitError,
 	InvalidRepositoryAdapterError,
 	InvalidRepositoryDefinitionError,
@@ -124,8 +123,13 @@ export {
 	RollbackError,
 	TransactionClosedError,
 } from "./app/errors";
+export type {
+	AggregatePersistenceWrite,
+	AggregateWriteIntent,
+	RepositoryTracking,
+	UnitOfWorkIdentityMap,
+} from "./app/persistence-contract";
 export {
-	type AggregatePersistenceWrite,
 	type AggregateWriteRegistration,
 	type CompatibleRepositoryDefinitions,
 	defineRepository,
@@ -133,12 +137,10 @@ export {
 	type RepositoriesOf,
 	type RepositoryDefinition,
 	type RepositoryDefinitionOptions,
-	type RepositoryTracking,
 	type RunOptions,
 	UnitOfWork,
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
-	type UnitOfWorkIdentityMap,
 } from "./app/unit-of-work";
 // Core: errors + branded ids
 export {

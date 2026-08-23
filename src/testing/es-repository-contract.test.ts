@@ -7,10 +7,12 @@ import {
 	type UncommittedDomainEventOf,
 } from "../aggregate/domain-event";
 import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
+import type {
+	AggregatePersistenceWrite,
+	RepositoryTracking,
+} from "../app/persistence-contract";
 import {
-	type AggregatePersistenceWrite,
 	defineRepository,
-	type RepositoryTracking,
 	UnitOfWork,
 } from "../app/unit-of-work";
 import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";

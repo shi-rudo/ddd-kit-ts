@@ -30,14 +30,16 @@ import {
 	RollbackError,
 	TransactionClosedError,
 } from "./errors";
+import type {
+	AggregatePersistenceWrite,
+	RepositoryTracking,
+} from "./persistence-contract";
 import {
-	type AggregatePersistenceWrite,
 	type AggregateWriteRegistration,
 	defineRepository as defineExplicitRepository,
 	type PhysicalRemovalRegistration,
 	type RepositoryDefinition,
 	type RepositoryDefinitionOptions,
-	type RepositoryTracking,
 	UnitOfWork,
 } from "./unit-of-work";
 

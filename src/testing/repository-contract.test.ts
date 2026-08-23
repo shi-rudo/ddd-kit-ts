@@ -5,10 +5,12 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../aggregate/domain-event";
+import type {
+	AggregatePersistenceWrite,
+	RepositoryTracking,
+} from "../app/persistence-contract";
 import {
-	type AggregatePersistenceWrite,
 	defineRepository,
-	type RepositoryTracking,
 	UnitOfWork,
 } from "../app/unit-of-work";
 import {

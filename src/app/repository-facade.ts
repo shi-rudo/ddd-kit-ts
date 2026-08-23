@@ -2,7 +2,7 @@ import type { IAggregateRoot } from "../aggregate/aggregate";
 import type { AnyDomainEvent } from "../aggregate/domain-event";
 import type { Id } from "../core/id";
 import { InvalidRepositoryAdapterError } from "./errors";
-import type { RuntimePersistenceDefinition } from "./unit-of-work";
+import type { RuntimePersistenceDefinition } from "./persistence-contract";
 
 /**
  * The part of the running unit of work that a facade needs: the open
