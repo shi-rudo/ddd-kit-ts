@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { createDomainEvent } from "../aggregate/domain-event";
 import { InvalidCommandMessageError } from "../core/errors";
+import { createDomainEvent } from "../domain/event/domain-event";
 import type { EventCommitCandidate } from "../events/ports";
 import type { PublishedCommand } from "./command";
 import {

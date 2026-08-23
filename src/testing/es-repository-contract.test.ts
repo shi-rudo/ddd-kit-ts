@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AggregateAddress } from "../aggregate/aggregate-address";
-import {
-	createDomainEvent,
-	type DomainEvent,
-	isMintedEvent,
-	type UncommittedDomainEventOf,
-} from "../aggregate/domain-event";
-import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import type {
 	AggregatePersistenceWrite,
 	RepositoryTracking,
 } from "../app/persistence-contract";
 import { defineRepository, UnitOfWork } from "../app/unit-of-work";
 import { ConcurrencyConflictError, InfrastructureError } from "../core/errors";
-import type { Id } from "../core/id";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
+import {
+	createDomainEvent,
+	type DomainEvent,
+	isMintedEvent,
+	type UncommittedDomainEventOf,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,

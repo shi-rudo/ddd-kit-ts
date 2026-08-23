@@ -1,4 +1,4 @@
-import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
 import {
 	assessDeliveryFailure,
 	type DeliveryFailureAssessment,

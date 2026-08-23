@@ -1,5 +1,5 @@
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
-import type { Id } from "../core/id";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate-root";
+import type { Id } from "../domain/identity/id";
 
 /**
  * The persistence operations shared by every aggregate repository.

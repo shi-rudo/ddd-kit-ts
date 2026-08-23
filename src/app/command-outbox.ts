@@ -1,6 +1,7 @@
-import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { InvalidCommandMessageError } from "../core/errors";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
+import { deepFreeze } from "../domain/value-object/value-object";
 import {
 	assertJsonValue,
 	isJsonObject,
@@ -11,7 +12,6 @@ import type {
 	EventCommitCandidatePosition,
 	OutboxWriter,
 } from "../events/ports";
-import { deepFreeze } from "../value-object/value-object";
 import type { PublishedCommand } from "./command";
 
 /**

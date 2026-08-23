@@ -1,14 +1,14 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-import type { Version } from "../aggregate/aggregate";
-import type { IAggregateRoot } from "../aggregate/aggregate-root";
 import {
 	AggregateNotFoundError,
 	ConcurrencyConflictError,
 	DomainError,
 	InfrastructureError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { Version } from "../domain/aggregate/aggregate";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate-root";
+import type { Id } from "../domain/identity/id";
 // @ts-expect-error IQueryableRepository was removed from the public API;
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../index";

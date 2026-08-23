@@ -1,4 +1,4 @@
-import type { AnyDomainEvent } from "../aggregate/domain-event";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { abortReason } from "../utils/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,

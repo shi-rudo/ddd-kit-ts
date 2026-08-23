@@ -1,10 +1,10 @@
-import { AggregateRoot } from "../../src/aggregate/aggregate-root";
+import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
 import {
 	createInitialDomainMachineSnapshot,
 	type DomainMachineDefinition,
 	type DomainMachineSnapshot,
 	transitionDomainState,
-} from "../../src/domain-state-machine/domain-state-machine";
+} from "../../src/domain/state-machine/domain-state-machine";
 import type { Money } from "../../src/money";
 import type { OrderId } from "./order";
 import type { PaymentId } from "./payment";

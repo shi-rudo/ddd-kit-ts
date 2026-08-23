@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { Version } from "../aggregate/aggregate";
-import {
-	createDomainEvent,
-	type DomainEvent,
-	type UncommittedDomainEventOf,
-} from "../aggregate/domain-event";
-import { SnapshotTimeValidationError } from "../aggregate/domain-event-errors";
-import { EventSourcedAggregate } from "../aggregate/event-sourced-aggregate";
 import {
 	DomainError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { Version } from "../domain/aggregate/aggregate";
+import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
+import {
+	createDomainEvent,
+	type DomainEvent,
+	type UncommittedDomainEventOf,
+} from "../domain/event/domain-event";
+import { SnapshotTimeValidationError } from "../domain/event/domain-event-errors";
+import type { Id } from "../domain/identity/id";
 import {
 	captureAggregateSnapshot,
 	defineSnapshotModel,

@@ -1,6 +1,6 @@
-import type { AggregateSnapshot, Version } from "../aggregate/aggregate";
-import type { AggregateAddress } from "../aggregate/aggregate-address";
-import type { Id } from "../core/id";
+import type { AggregateSnapshot, Version } from "../domain/aggregate/aggregate";
+import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
+import type { Id } from "../domain/identity/id";
 import type { SnapshotStore } from "../repo/snapshot-store";
 import { deepEqual } from "../utils/array/deep-equal";
 import {

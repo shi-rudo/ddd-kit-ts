@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AnyDomainEvent } from "../aggregate/domain-event";
 import { DomainError } from "../core/errors";
+import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { InMemoryOutbox } from "../events/outbox";
 import { moneyOfMinor } from "../money";
 import type { TransactionScope } from "../repo/scope";

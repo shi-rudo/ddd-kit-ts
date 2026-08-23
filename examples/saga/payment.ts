@@ -1,7 +1,7 @@
-import { AggregateRoot } from "../../src/aggregate/aggregate-root";
-import type { DomainEvent } from "../../src/aggregate/domain-event";
 import { DomainError } from "../../src/core/errors";
-import type { Id } from "../../src/core/id";
+import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import type { DomainEvent } from "../../src/domain/event/domain-event";
+import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/money";
 import type { OrderId } from "./order";
 

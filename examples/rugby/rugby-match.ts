@@ -1,7 +1,7 @@
-import type { UncommittedDomainEventOf } from "../../src/aggregate/domain-event";
-import { EventSourcedAggregate } from "../../src/aggregate/event-sourced-aggregate";
-import type { Id } from "../../src/core/id";
-import { deepFreeze } from "../../src/value-object/value-object";
+import { EventSourcedAggregate } from "../../src/domain/aggregate/event-sourced-aggregate";
+import type { UncommittedDomainEventOf } from "../../src/domain/event/domain-event";
+import type { Id } from "../../src/domain/identity/id";
+import { deepFreeze } from "../../src/domain/value-object/value-object";
 import type {
 	ConversionScored,
 	MatchFinished,

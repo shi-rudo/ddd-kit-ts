@@ -1,9 +1,9 @@
-import type { IAggregateRoot } from "../aggregate/aggregate";
+import type { IAggregateRoot } from "../domain/aggregate/aggregate";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
-} from "../aggregate/domain-event";
-import type { Id } from "../core/id";
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import type { CommittedDomainEvent } from "../events/ports";
 import { deepEqual } from "../utils/array/deep-equal";
 import {

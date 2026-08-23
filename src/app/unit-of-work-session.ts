@@ -1,15 +1,15 @@
-import type { IAggregateRoot, Version } from "../aggregate/aggregate";
-import type {
-	AnyDomainEvent,
-	PendingDomainEvent,
-} from "../aggregate/domain-event";
 import {
 	AggregateDeletedError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
 	UnenrolledChangesError,
 } from "../core/errors";
-import type { Id } from "../core/id";
+import type { IAggregateRoot, Version } from "../domain/aggregate/aggregate";
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
+} from "../domain/event/domain-event";
+import type { Id } from "../domain/identity/id";
 import { IdentityMap } from "../repo/identity-map";
 import {
 	capturePersistenceBaseline,
