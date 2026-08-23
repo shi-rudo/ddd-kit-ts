@@ -1,9 +1,9 @@
-import type { PublishedCommand } from "../app/command";
+import type { PublishedCommand } from "../application/cqrs/command/command";
 import type {
 	CommandOutboxCommitCandidate,
 	CommandOutboxWriter,
 	DurableCommandMessage,
-} from "../app/command-outbox";
+} from "../application/cqrs/command/command-outbox";
 import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,

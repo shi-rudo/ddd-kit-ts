@@ -1,8 +1,8 @@
-import type { PublishedCommand } from "../../src/app/command";
+import type { PublishedCommand } from "../../src/application/cqrs/command/command";
 import type {
 	CommandMessageContent,
 	CommandMessageRelationships,
-} from "../../src/app/command-outbox";
+} from "../../src/application/cqrs/command/command-outbox";
 import { type MoneyDto, moneyToDto } from "../../src/money";
 import type {
 	CheckoutAdvancedToShipping,

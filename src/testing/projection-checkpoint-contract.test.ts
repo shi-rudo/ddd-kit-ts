@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemoryProjectionCheckpointStore } from "../projections/in-memory-checkpoint-store";
+import { InMemoryProjectionCheckpointStore } from "../application/projections/adapters/in-memory-checkpoint-store";
 import {
 	createProjectionCheckpointStoreContractTests,
 	type ProjectionCheckpointStoreContractHarness,

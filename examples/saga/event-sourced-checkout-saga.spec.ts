@@ -3,11 +3,11 @@ import {
 	type CommandOutboxCommitCandidate,
 	type CommandOutboxWriter,
 	routeEventsToCommandOutbox,
-} from "../../src/app/command-outbox";
-import { withCommit } from "../../src/app/handler";
-import { withIdempotentCommit } from "../../src/app/idempotency";
-import { InMemoryIdempotencyStore } from "../../src/app/in-memory-idempotency-store";
-import { recordPendingEvents } from "../../src/app/record-pending-events";
+} from "../../src/application/cqrs/command/command-outbox";
+import { withCommit } from "../../src/application/cqrs/handler";
+import { InMemoryIdempotencyStore } from "../../src/application/idempotency/adapters/in-memory-idempotency-store";
+import { withIdempotentCommit } from "../../src/application/idempotency/idempotency";
+import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
 import {
 	createDomainEvent,
 	createDomainEventFactory,

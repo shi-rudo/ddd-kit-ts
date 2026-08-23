@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { PublishedCommand } from "../app/command";
+import type { PublishedCommand } from "../application/cqrs/command/command";
 import type {
 	CommandOutboxCommitCandidate,
 	CommandOutboxWriter,
-} from "../app/command-outbox";
+} from "../application/cqrs/command/command-outbox";
 import {
 	type CommandOutboxContractEnvironment,
 	type CommandOutboxContractHarness,

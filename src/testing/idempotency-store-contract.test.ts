@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { InMemoryIdempotencyStore } from "../app/in-memory-idempotency-store";
+import { InMemoryIdempotencyStore } from "../application/idempotency/adapters/in-memory-idempotency-store";
 import {
 	createIdempotencyStoreContractTests,
 	type IdempotencyStoreContractHarness,
