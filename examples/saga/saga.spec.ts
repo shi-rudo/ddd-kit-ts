@@ -16,9 +16,9 @@ import {
 } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { InvalidDomainTransitionError } from "../../src/domain/state-machine/domain-state-machine";
-import { EventBusImpl } from "../../src/events/event-bus";
-import { outboxWriterAcceptingEventLoss } from "../../src/events/outbox";
-import type { EventBus, OutboxWriter } from "../../src/events/ports";
+import { EventBusImpl } from "../../src/messaging/event-bus/event-bus";
+import { outboxWriterAcceptingEventLoss } from "../../src/messaging/outbox/outbox";
+import type { EventBus, OutboxWriter } from "../../src/messaging/ports";
 import { type Money, moneyOfMinor } from "../../src/money";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 

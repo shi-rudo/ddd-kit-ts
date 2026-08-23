@@ -3,8 +3,8 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../domain/event/domain-event";
-import { InMemoryOutbox } from "../events/outbox";
-import type { Outbox } from "../events/ports";
+import { InMemoryOutbox } from "../messaging/outbox/outbox";
+import type { Outbox } from "../messaging/ports";
 import {
 	createOutboxContractTests,
 	type OutboxContractHarness,

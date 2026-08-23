@@ -1,5 +1,5 @@
 import type { Result } from "@shirudo/result";
-import type { JsonValue } from "../../../events/json-value";
+import type { JsonValue } from "../../../messaging/integration-message/json-value";
 
 /**
  * Marker interface for Commands.

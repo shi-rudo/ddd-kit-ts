@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import { InMemoryOutbox } from "../../events/outbox";
+import { InMemoryOutbox } from "../../messaging/outbox/outbox";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import { InMemoryIdempotencyStore } from "./adapters/in-memory-idempotency-store";
 import { withIdempotentCommit } from "./idempotency";

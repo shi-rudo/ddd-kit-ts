@@ -1,16 +1,16 @@
-import type { AnyDomainEvent } from "../domain/event/domain-event";
-import { abortReason } from "../utils/abort";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
+import { abortReason } from "../../utils/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
 	runBoundedExecution,
-} from "../utils/execution";
+} from "../../utils/execution";
 import type {
 	EventBus,
 	EventHandler,
 	OnceOptions,
 	PublishOptions,
-} from "./ports";
+} from "../ports";
 
 /**
  * Simple in-memory event bus implementation.

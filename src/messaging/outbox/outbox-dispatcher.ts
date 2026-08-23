@@ -1,17 +1,20 @@
-import type { AnyDomainEvent } from "../domain/event/domain-event";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
 	assessDeliveryFailure,
 	type DeliveryFailureAssessment,
 	type DeliveryFailureClassifier,
-} from "../utils/delivery-failure";
+} from "../../utils/delivery-failure";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
 	runBoundedExecution,
-} from "../utils/execution";
-import { captureObserverFunctions, reportToObserver } from "../utils/observer";
-import { PollLoop } from "../utils/poll-loop";
-import { assertNonNegativeFinite } from "../utils/validate";
+} from "../../utils/execution";
+import {
+	captureObserverFunctions,
+	reportToObserver,
+} from "../../utils/observer";
+import { PollLoop } from "../../utils/poll-loop";
+import { assertNonNegativeFinite } from "../../utils/validate";
 import {
 	type DeadLetterRecord,
 	type DispatchTrackingOutbox,
@@ -19,7 +22,7 @@ import {
 	isDispatchTrackingOutbox,
 	type Outbox,
 	type OutboxRecord,
-} from "./ports";
+} from "../ports";
 
 /**
  * Required operational observers for {@link OutboxDispatcher}. All hooks are

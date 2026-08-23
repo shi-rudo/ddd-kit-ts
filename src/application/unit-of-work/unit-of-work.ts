@@ -6,7 +6,7 @@ import {
 import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import type { EventBus, OutboxWriter } from "../../events/ports";
+import type { EventBus, OutboxWriter } from "../../messaging/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";

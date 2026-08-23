@@ -6,12 +6,12 @@ import {
 	assertJsonValue,
 	isJsonObject,
 	type JsonObject,
-} from "../../../events/json-value";
+} from "../../../messaging/integration-message/json-value";
 import type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 	OutboxWriter,
-} from "../../../events/ports";
+} from "../../../messaging/ports";
 import type { PublishedCommand } from "./command";
 
 /**

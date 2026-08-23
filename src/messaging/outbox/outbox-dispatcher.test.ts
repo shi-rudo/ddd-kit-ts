@@ -2,9 +2,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-} from "../domain/event/domain-event";
-import type { ExecutionContext } from "../utils/execution";
-import { EventBusImpl } from "./event-bus";
+} from "../../domain/event/domain-event";
+import type { ExecutionContext } from "../../utils/execution";
+import { EventBusImpl } from "../event-bus/event-bus";
+import type {
+	CommittedDomainEvent,
+	DeadLetterRecord,
+	Outbox,
+	OutboxRecord,
+} from "../ports";
 import { InMemoryOutbox } from "./outbox";
 import {
 	eventBusSink,
@@ -13,12 +19,6 @@ import {
 	type OutboxDispatcherOptions,
 	type OutboxSink,
 } from "./outbox-dispatcher";
-import type {
-	CommittedDomainEvent,
-	DeadLetterRecord,
-	Outbox,
-	OutboxRecord,
-} from "./ports";
 
 type TestEvent = DomainEvent<"ThingHappened", { n: number }>;
 type TestDispatcherOptions = OutboxDispatcherOptions<TestEvent>;

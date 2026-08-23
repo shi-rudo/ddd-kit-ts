@@ -22,7 +22,7 @@ import type {
 	EventBus,
 	EventCommitCandidate,
 	Outbox,
-} from "../../events/ports";
+} from "../../messaging/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";

@@ -18,7 +18,7 @@ import type {
 	EventBus,
 	EventCommitCandidate,
 	Outbox,
-} from "../../events/ports";
+} from "../../messaging/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
 import {
 	type AggregateCommitToken,
