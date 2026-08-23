@@ -807,8 +807,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents[1]?.type).toBe("Activated");
 
 			// pendingEvents is typed: access event-specific fields without cast
-			const firstEvent = agg.pendingEvents[0]!;
-			expect(firstEvent.type).toBe("ValueUpdated");
+			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
 		});
 
 		it("should reject wrong event types at compile time with TEvent", () => {

@@ -57,9 +57,15 @@ type TestState = {
 
 type TestEventCreated = DomainEvent<"TestEventCreated", { value: number }>;
 type TestEventUpdated = DomainEvent<"TestEventUpdated", { newValue: number }>;
-type TestEventActivated = DomainEvent<"TestEventActivated", {}>;
-type TestEventDeactivated = DomainEvent<"TestEventDeactivated", {}>;
-type TestEventInvalid = DomainEvent<"TestEventInvalid", {}>;
+type TestEventActivated = DomainEvent<
+	"TestEventActivated",
+	Record<string, never>
+>;
+type TestEventDeactivated = DomainEvent<
+	"TestEventDeactivated",
+	Record<string, never>
+>;
+type TestEventInvalid = DomainEvent<"TestEventInvalid", Record<string, never>>;
 
 type TestEvent =
 	| TestEventCreated

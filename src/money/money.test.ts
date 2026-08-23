@@ -330,6 +330,20 @@ describe("hard bounds (hostile input cannot buy unbounded CPU or memory)", () =>
 		);
 	});
 
+	it("rejects an unusable scale before it pads the fraction", () => {
+		// Padding to this width throws a raw RangeError. Seeing one here
+		// would mean the scale guard ran after the conversion work.
+		expectKitError(
+			() =>
+				parseMoneyInput("10.99", {
+					currency: "EUR",
+					scale: Number.MAX_SAFE_INTEGER,
+				}),
+			InvalidMoneyError,
+			"INVALID_MONEY",
+		);
+	});
+
 	it("truncates what error messages echo for merely-invalid long input", () => {
 		let thrown: unknown;
 		try {

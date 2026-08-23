@@ -72,9 +72,24 @@ try {
 	await bundle("vercel-edge.js", vercelBundle, "iife");
 
 	const miniflare = new Miniflare({
-		compatibilityDate: "2026-07-15",
-		modules: true,
-		script: await readFile(cloudflareBundle, "utf8"),
+		workers: [
+			{
+				config: {
+					name: "edge-smoke",
+					type: "worker",
+					compatibilityDate: "2026-07-15",
+					manifest: {
+						mainModule: "cloudflare-worker.mjs",
+						modules: {
+							"cloudflare-worker.mjs": {
+								type: "esm",
+								contents: await readFile(cloudflareBundle, "utf8"),
+							},
+						},
+					},
+				},
+			},
+		],
 	});
 	try {
 		const response = await miniflare.dispatchFetch("https://edge-smoke.test/");

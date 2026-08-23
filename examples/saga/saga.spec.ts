@@ -1,5 +1,5 @@
 import { ok } from "@shirudo/result";
-import { describe, expect, it } from "vite-plus/test";
+import { assert, describe, expect, it } from "vite-plus/test";
 import type { IAggregateRoot } from "../../src/aggregate/aggregate-root";
 import {
 	type AnyDomainEvent,
@@ -448,8 +448,8 @@ describe("Checkout saga (Process Manager)", () => {
 		// Payment aggregate has been created with status "requested".
 		const saga = await deps.sagaRepository.getById(orderId);
 		expect(saga.step).toBe("awaiting-payment");
-		const paymentId = saga.paymentId!;
-		expect(paymentId).toBeDefined();
+		const { paymentId } = saga;
+		assert(paymentId !== undefined, "PlaceOrder must set the saga paymentId");
 
 		const payment = await deps.paymentRepository.getById(paymentId);
 		expect(payment.status).toBe("requested");
@@ -460,8 +460,11 @@ describe("Checkout saga (Process Manager)", () => {
 		// Saga transitions to awaiting-shipping; RequestShipping dispatched.
 		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
 		expect(sagaAfterPayment.step).toBe("awaiting-shipping");
-		const shipmentId = sagaAfterPayment.shipmentId!;
-		expect(shipmentId).toBeDefined();
+		const { shipmentId } = sagaAfterPayment;
+		assert(
+			shipmentId !== undefined,
+			"a received payment must set the saga shipmentId",
+		);
 
 		const shipment = await deps.shipmentRepository.getById(shipmentId);
 		expect(shipment.status).toBe("requested");
@@ -496,7 +499,8 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		const saga = await deps.sagaRepository.getById(orderId);
-		const paymentId = saga.paymentId!;
+		const { paymentId } = saga;
+		assert(paymentId !== undefined, "PlaceOrder must set the saga paymentId");
 
 		// Payment gateway rejects the charge
 		await simulatePaymentResult(deps, paymentId, {
@@ -530,13 +534,18 @@ describe("Checkout saga (Process Manager)", () => {
 		});
 
 		const sagaAfterPlace = await deps.sagaRepository.getById(orderId);
-		const paymentId = sagaAfterPlace.paymentId!;
+		const { paymentId } = sagaAfterPlace;
+		assert(paymentId !== undefined, "PlaceOrder must set the saga paymentId");
 
 		// Payment succeeds
 		await simulatePaymentResult(deps, paymentId, { kind: "received" });
 
 		const sagaAfterPayment = await deps.sagaRepository.getById(orderId);
-		const shipmentId = sagaAfterPayment.shipmentId!;
+		const { shipmentId } = sagaAfterPayment;
+		assert(
+			shipmentId !== undefined,
+			"a received payment must set the saga shipmentId",
+		);
 
 		// Shipping carrier reports failure (warehouse on fire, etc.)
 		await simulateShippingResult(deps, shipmentId, {
