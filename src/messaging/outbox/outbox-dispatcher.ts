@@ -1,20 +1,20 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import {
-	assessDeliveryFailure,
-	type DeliveryFailureAssessment,
-	type DeliveryFailureClassifier,
-} from "../../utils/delivery-failure";
-import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
 	runBoundedExecution,
-} from "../../utils/execution";
+} from "../../internal/async/execution";
+import { PollLoop } from "../../internal/async/poll-loop";
+import {
+	assessDeliveryFailure,
+	type DeliveryFailureAssessment,
+	type DeliveryFailureClassifier,
+} from "../../internal/delivery-failure";
 import {
 	captureObserverFunctions,
 	reportToObserver,
-} from "../../utils/observer";
-import { PollLoop } from "../../utils/poll-loop";
-import { assertNonNegativeFinite } from "../../utils/validate";
+} from "../../internal/observer";
+import { assertNonNegativeFinite } from "../../internal/validate";
 import type { EventBus } from "../event-bus/ports";
 import {
 	type DeadLetterRecord,

@@ -3,7 +3,7 @@ import {
 	ConcurrencyConflictError,
 	EventHarvestError,
 } from "../../errors/kit-errors";
-import { computeBackoffDelay } from "../../utils/backoff";
+import { computeBackoffDelay } from "../../internal/async/backoff";
 import { RetryingTransactionScope } from "./retrying-scope";
 import type { TransactionScope } from "./scope";
 

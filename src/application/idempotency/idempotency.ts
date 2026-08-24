@@ -3,8 +3,8 @@ import {
 	EventHarvestError,
 	IdempotencyReconciliationRequiredError,
 } from "../../errors/kit-errors";
+import { reportToObserver } from "../../internal/observer";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { reportToObserver } from "../../utils/observer";
 import {
 	type CommitEnrollment,
 	type WithCommitDeps,

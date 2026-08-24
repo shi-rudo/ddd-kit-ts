@@ -1,5 +1,5 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import type { ExecutionContext } from "../../utils/execution";
+import type { ExecutionContext } from "../../internal/async/execution";
 
 /**
  * Event handler function type for subscribing to domain events. The execution

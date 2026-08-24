@@ -3,7 +3,7 @@ import {
 	encodeAggregateAddress,
 } from "../../../domain/aggregate/aggregate-address";
 import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
-import { assertPositiveSafeInteger } from "../../../utils/validate";
+import { assertPositiveSafeInteger } from "../../../internal/validate";
 import {
 	isPositionAfter,
 	type ProjectionCheckpoint,

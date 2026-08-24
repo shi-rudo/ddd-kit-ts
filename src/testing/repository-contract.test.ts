@@ -19,6 +19,7 @@ import {
 	DuplicateAggregateError,
 	InfrastructureError,
 } from "../errors/kit-errors";
+import { deepEqual } from "../internal/structural/deep-equal";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
@@ -26,7 +27,6 @@ import type {
 import type { Outbox } from "../messaging/outbox/ports";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
-import { deepEqual } from "../utils/array/deep-equal";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,

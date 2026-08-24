@@ -1,4 +1,4 @@
-import { deepEqual } from "../../utils/array/deep-equal";
+import { deepEqual } from "../../internal/structural/deep-equal";
 
 /** Whether a baseline represents an existing row or a pending insert. */
 export type PersistenceLifecycle = "loaded" | "new";

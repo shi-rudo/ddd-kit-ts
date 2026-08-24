@@ -4,8 +4,8 @@ import type {
 	PendingDomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
+import { deepEqual } from "../internal/structural/deep-equal";
 import type { CommittedDomainEvent } from "../messaging/committed-event";
-import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
 	assertChainContainsKitError,

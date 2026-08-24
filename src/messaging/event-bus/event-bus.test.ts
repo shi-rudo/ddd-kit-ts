@@ -3,7 +3,7 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/aggregate/aggregate";
-import type { ExecutionContext } from "../../utils/execution";
+import type { ExecutionContext } from "../../internal/async/execution";
 import { EventBusImpl } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;

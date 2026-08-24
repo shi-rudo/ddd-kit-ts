@@ -10,7 +10,7 @@ import {
 import {
 	assertPositiveInteger,
 	assertPositiveSafeInteger,
-} from "../../utils/validate";
+} from "../../internal/validate";
 import type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,

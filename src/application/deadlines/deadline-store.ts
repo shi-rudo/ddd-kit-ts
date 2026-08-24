@@ -171,4 +171,4 @@ export interface DeadlineStore<TPayload = unknown> {
 	deadLetters(): Promise<ReadonlyArray<DeadLetterDeadline<TPayload>>>;
 }
 
-import type { ExecutionContext } from "../../utils/execution";
+import type { ExecutionContext } from "../../internal/async/execution";

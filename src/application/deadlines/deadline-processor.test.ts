@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { ExecutionContext } from "../../utils/execution";
+import type { ExecutionContext } from "../../internal/async/execution";
 import { InMemoryDeadlineStore } from "./adapters/in-memory-deadline-store";
 import {
 	DeadlineProcessor,

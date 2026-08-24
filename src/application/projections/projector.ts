@@ -11,10 +11,10 @@ import {
 	ProjectionReceiptViolationError,
 	UnprojectableEventError,
 } from "../../errors/kit-errors";
+import { abortReason } from "../../internal/async/abort";
 import type { CommittedDomainEvent } from "../../messaging/committed-event";
 import type { OutboxSink } from "../../messaging/outbox/outbox-dispatcher";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { abortReason } from "../../utils/abort";
 import {
 	isPositionAfter,
 	type Projection,

@@ -1,5 +1,5 @@
+import { assertNonNegativeFinite } from "../validate";
 import { abortReason } from "./abort";
-import { assertNonNegativeFinite } from "./validate";
 
 /** Cancellation and deadline controls for one bounded shell operation. */
 export interface ExecutionContext {

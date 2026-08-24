@@ -9,8 +9,8 @@ import {
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 } from "../../errors/kit-errors";
-import { isBuiltInObject } from "../../utils/array/is-built-in";
-import { assertPositiveSafeInteger } from "../../utils/validate";
+import { isBuiltInObject } from "../../internal/structural/is-built-in";
+import { assertPositiveSafeInteger } from "../../internal/validate";
 
 interface SnapshotAggregate {
 	readonly id: Id<string>;

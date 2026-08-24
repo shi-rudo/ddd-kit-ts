@@ -7,15 +7,19 @@ import {
 } from "../../domain/event/domain-event";
 import { deepFreeze } from "../../domain/value-object/value-object";
 import { InvalidIntegrationMessageError } from "../../errors/kit-errors";
-import type { CommitPosition, CommittedDomainEvent } from "../committed-event";
 import {
 	assertJsonValue,
 	isJsonObject,
 	type JsonObject,
 	type JsonValue,
-} from "./json-value";
+} from "../../internal/json-value";
+import type { CommitPosition, CommittedDomainEvent } from "../committed-event";
 
-export type { JsonObject, JsonPrimitive, JsonValue } from "./json-value";
+export type {
+	JsonObject,
+	JsonPrimitive,
+	JsonValue,
+} from "../../internal/json-value";
 
 /** Standard relationship headers carried by the public message envelope. */
 export interface IntegrationMessageRelationships {

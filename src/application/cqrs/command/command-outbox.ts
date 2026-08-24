@@ -2,15 +2,15 @@ import type { AggregateAddress } from "../../../domain/aggregate/aggregate-addre
 import type { AnyDomainEvent } from "../../../domain/event/domain-event";
 import { deepFreeze } from "../../../domain/value-object/value-object";
 import { InvalidCommandMessageError } from "../../../errors/kit-errors";
-import type {
-	EventCommitCandidate,
-	EventCommitCandidatePosition,
-} from "../../../messaging/committed-event";
 import {
 	assertJsonValue,
 	isJsonObject,
 	type JsonObject,
-} from "../../../messaging/integration-message/json-value";
+} from "../../../internal/json-value";
+import type {
+	EventCommitCandidate,
+	EventCommitCandidatePosition,
+} from "../../../messaging/committed-event";
 import type { OutboxWriter } from "../../../messaging/outbox/ports";
 import type { PublishedCommand } from "./command";
 
