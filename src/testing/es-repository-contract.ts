@@ -1,8 +1,8 @@
 import type { IAggregateRoot } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
-import {
-	type AnyDomainEvent,
-	type PendingDomainEvent,
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
 import { deepEqual } from "../internal/structural/deep-equal";

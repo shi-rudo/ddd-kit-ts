@@ -81,45 +81,13 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * across processes, for example through RabbitMQ or Kafka, use the
 	 * `Outbox` port and a dedicated dispatcher.
 	 *
-	 * **What this bus does not promise.** Delivery is at most once and
-	 * in memory. Nothing is persisted, nothing is retried, and there is
-	 * no dead-letter path. A process that dies mid-publish loses the
-	 * remaining work. Anything that must survive a crash belongs behind
-	 * the `Outbox` port, not here. This bus fits in-process consumers
-	 * whose work can be rebuilt: projections, caches, metrics.
+	 * **Delivery guarantee.** The port does not promise persistence, retry, or
+	 * a dead-letter path. Each implementation states its own guarantee. Work
+	 * that must survive a crash belongs behind the `Outbox` port.
 	 *
-	 * **Handlers must tolerate a second run.** The bus never redelivers. A
-	 * caller that retries after a timeout does redeliver. The handlers of
-	 * the first attempt can still run, or they can be finished already.
-	 * Make a handler idempotent, or do not retry a timed-out publish.
-	 *
-	 * **Errors name the failure, not the handler.** A rejected handler
-	 * reaches the caller unchanged, and an `AggregateError` carries every
-	 * failure in subscription order. Neither names which subscription
-	 * failed. `observers.onHandlerError` carries the batch position and the
-	 * event, so a handler no longer names itself to be identifiable.
-	 *
-	 * **A handler that publishes stays inside a bounded chain.** Such a
-	 * handler re-enters `publish`. A cycle in the handler graph overflows
-	 * the call stack, or it starves the event loop until the process runs
-	 * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
-	 * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
-	 * the bus throws `PublishDepthExceededError` and names the event path.
-	 * The aggregation contract still applies to it. If a second handler of
-	 * the same event also fails, the caller receives an `AggregateError` that
-	 * carries the depth error, not the depth error itself.
-	 *
-	 * The bound counts one chain, never the bus. Concurrent publications on
-	 * one shared bus never reach it. A handler links its nested publication
-	 * to the chain when it passes `context.signal`. That is the same
-	 * practice that gives the handler cancellation. The link survives the
-	 * nested operations of the kit, `withCommit` included. It ends at a
-	 * signal the kit did not derive, for example one from `AbortSignal.any`.
-	 * A handler that drops the signal leaves no link at all. There, only a
-	 * synchronous cycle is caught.
-	 *
-	 * Pass `chainStore` to follow every chain, whatever a handler does with
-	 * the signal.
+	 * **Handlers must tolerate a second run.** The port never redelivers. A
+	 * caller that retries does redeliver, and the handlers of the first
+	 * attempt can still run. Make a handler idempotent, or do not retry.
 	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout

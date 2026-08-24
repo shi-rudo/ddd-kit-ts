@@ -418,6 +418,7 @@ specifier does not resolve in an edge bundle.
 
 ```ts
 import { AsyncLocalStorage } from "node:async_hooks";
+import { EventBusImpl, type PublishChainState } from "@shirudo/ddd-kit";
 
 const bus = new EventBusImpl<OrderEvent>({
   chainStore: new AsyncLocalStorage<PublishChainState>(),

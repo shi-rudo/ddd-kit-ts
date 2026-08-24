@@ -1,5 +1,12 @@
 import { ownerSignalOf } from "../../internal/async/execution";
 
+/**
+ * Hops one ancestor walk inspects at most. A dead ancestor drops out of the
+ * chain once it is collected, so a real chain stays short. This only stops a
+ * pathological walk from becoming the cost of publishing.
+ */
+const WALK_LIMIT = 1024;
+
 /** Depth and event path of one publish chain. */
 export interface PublishChainState {
 	/** Nested publications, the outermost counting as 1. */
@@ -52,10 +59,12 @@ export interface PublishChainStore {
  * A window that cannot see a chain reports 0, never a wrong depth, so the
  * deepest one is the truth.
  *
- * Every window counts only while its own dispatch runs. A store and a context
- * signal both stay readable in deferred work, so a handler that schedules a
- * later publication would otherwise inherit a depth from a chain that already
- * ended, and a correct poll loop would die at the bound.
+ * Depth is the number of ancestors that are STILL OPEN, never a number copied
+ * from the parent. That distinction is the whole guard. A cycle keeps its
+ * ancestors open, because each one awaits the next, so the count grows. A
+ * relay lets them finish: a handler that starts the next publication without
+ * awaiting it ends, its publication ends, and the count stays flat. A copied
+ * depth counts both the same way and kills a correct relay at the bound.
  */
 export class PublishChainTracker {
 	private readonly store: PublishChainStore | undefined;
@@ -70,6 +79,13 @@ export class PublishChainTracker {
 	// Membership, not mere presence, says that a chain is still open.
 	private readonly liveChainStates = new WeakSet<PublishChainState>();
 	private readonly liveDispatchSignals = new WeakSet<AbortSignal>();
+
+	// The state one dispatch was nested in, so the store window can count its
+	// open ancestors the way the signal window walks its owner chain.
+	private readonly enclosingState = new WeakMap<
+		PublishChainState,
+		PublishChainState
+	>();
 
 	// The chain depth and path of the dispatch whose synchronous window is
 	// open. Absolute, never a frame count: a batch dispatches its events one
@@ -97,16 +113,10 @@ export class PublishChainTracker {
 
 	/** Depth and path that a publication on `signal` inherits. */
 	parentOf(signal: AbortSignal | undefined): PublishChainState {
-		const stored = this.store?.getStore();
-		const fromStore =
-			stored !== undefined && this.liveChainStates.has(stored)
-				? stored
-				: undefined;
-		const fromSignal = this.throughOwnerChain(signal);
 		let deepest: PublishChainState = { depth: 0, path: [] };
 		for (const window of [
-			fromStore ?? { depth: 0, path: [] },
-			fromSignal,
+			this.openAncestorsInStore(),
+			this.openAncestorsOnSignal(signal),
 			{ depth: this.syncWindowDepth, path: this.syncWindowPath },
 		]) {
 			// Depth and path come from the same window, so a reported depth and
@@ -139,6 +149,8 @@ export class PublishChainTracker {
 			await dispatch();
 			return;
 		}
+		const enclosing = this.store.getStore();
+		if (enclosing !== undefined) this.enclosingState.set(state, enclosing);
 		this.liveChainStates.add(state);
 		try {
 			await this.store.run(state, dispatch);
@@ -162,23 +174,47 @@ export class PublishChainTracker {
 	}
 
 	/**
-	 * Walks to the nearest open dispatch on the owner chain of `signal`.
+	 * Counts the open dispatches on the owner chain of `signal`.
 	 *
 	 * A caller can wrap one publication in further bounded executions, and
 	 * `withCommit` does exactly that. Every hop derives a fresh signal, so an
 	 * identity check alone loses the chain at the first hop.
+	 *
+	 * The path comes from the nearest open ancestor, which already carries the
+	 * event chain up to itself.
 	 */
-	private throughOwnerChain(
+	private openAncestorsOnSignal(
 		signal: AbortSignal | undefined,
 	): PublishChainState {
 		let current = signal;
-		while (current !== undefined) {
-			const depth = this.depthBySignal.get(current);
-			if (depth !== undefined && this.liveDispatchSignals.has(current)) {
-				return { depth, path: this.pathBySignal.get(current) ?? [] };
+		let depth = 0;
+		let path: readonly string[] = [];
+		let hops = 0;
+		while (current !== undefined && hops < WALK_LIMIT) {
+			hops++;
+			if (this.liveDispatchSignals.has(current)) {
+				depth++;
+				if (path.length === 0) path = this.pathBySignal.get(current) ?? [];
 			}
 			current = ownerSignalOf(current);
 		}
-		return { depth: 0, path: [] };
+		return { depth, path };
+	}
+
+	/** Counts the open dispatches that the injected store is nested in. */
+	private openAncestorsInStore(): PublishChainState {
+		let current = this.store?.getStore();
+		let depth = 0;
+		let path: readonly string[] = [];
+		let hops = 0;
+		while (current !== undefined && hops < WALK_LIMIT) {
+			hops++;
+			if (this.liveChainStates.has(current)) {
+				depth++;
+				if (path.length === 0) path = current.path;
+			}
+			current = this.enclosingState.get(current);
+		}
+		return { depth, path };
 	}
 }

@@ -104,9 +104,10 @@ export interface EventBusObservers {
 	 */
 	readonly onPublishAborted: (report: PublishAbortedReport) => void;
 	/**
-	 * One event type crossed `maxSubscriptionsPerEventType`. Reported once for
-	 * each crossing, never once per `subscribe`. When the count drops back to
-	 * the threshold, the next crossing reports again.
+	 * One event type crossed `maxSubscriptionsPerEventType`. Reported at the
+	 * crossing and then at each doubling, never once per `subscribe`: a real
+	 * leak never drops back, so the trend is the useful part. When the count
+	 * drops back to the threshold, the next crossing reports again.
 	 *
 	 * A subscription that a request path opens without the matching
 	 * unsubscribe leaks. The symptom is memory growth, and the bus is the only
@@ -186,6 +187,47 @@ export interface EventBusOptions {
  * await bus.publish([orderCreatedEvent]);
  * // Both handlers will be called
  * ```
+ *
+ * **What this bus does not promise.** Delivery is at most once and
+ * in memory. Nothing is persisted, nothing is retried, and there is
+ * no dead-letter path. A process that dies mid-publish loses the
+ * remaining work. Anything that must survive a crash belongs behind
+ * the `Outbox` port, not here. This bus fits in-process consumers
+ * whose work can be rebuilt: projections, caches, metrics.
+ *
+ * **Handlers must tolerate a second run.** The bus never redelivers. A
+ * caller that retries after a timeout does redeliver. The handlers of
+ * the first attempt can still run, or they can be finished already.
+ * Make a handler idempotent, or do not retry a timed-out publish.
+ *
+ * **Errors name the failure, not the handler.** A rejected handler
+ * reaches the caller unchanged, and an `AggregateError` carries every
+ * failure in subscription order. Neither names which subscription
+ * failed. `observers.onHandlerError` carries the batch position and the
+ * event, so a handler no longer names itself to be identifiable.
+ *
+ * **A handler that publishes stays inside a bounded chain.** Such a
+ * handler re-enters `publish`. A cycle in the handler graph overflows
+ * the call stack, or it starves the event loop until the process runs
+ * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
+ * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
+ * the bus throws `PublishDepthExceededError` and names the event path.
+ * The aggregation contract still applies to it. If a second handler of
+ * the same event also fails, the caller receives an `AggregateError` that
+ * carries the depth error, not the depth error itself.
+ *
+ * The bound counts one chain, never the bus. Concurrent publications on
+ * one shared bus never reach it. A handler links its nested publication
+ * to the chain when it passes `context.signal`. That is the same
+ * practice that gives the handler cancellation. The link survives the
+ * nested operations of the kit, `withCommit` included. It ends at a
+ * signal the kit did not derive, for example one from `AbortSignal.any`.
+ * A handler that drops the signal leaves no link at all. There, only a
+ * synchronous cycle is caught.
+ *
+ * Pass `chainStore` to follow every chain, whatever a handler does with
+ * the signal.
+ *
  */
 export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
@@ -195,10 +237,13 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly chain: PublishChainTracker;
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
-	// Event types that already reported their current crossing. Cleared when
-	// the count drops back, so a transient spike, for example many in-flight
-	// `once` waiters, cannot mute the event type for the rest of the process.
-	private readonly reportedThresholds = new Set<string | symbol>();
+	// The count at which each event type last reported. A real leak never
+	// drops back, so reporting only the first crossing would hide the number
+	// the operator needs. Reporting again at each doubling shows the trend and
+	// stays quiet. Cleared when the count drops back, so a transient spike,
+	// for example many in-flight `once` waiters, cannot mute the event type
+	// for the rest of the process.
+	private readonly reportedAt = new Map<string | symbol, number>();
 
 	constructor(options: EventBusOptions = {}) {
 		if (options.maxPublishDepth !== undefined) {
@@ -235,7 +280,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		subscriptionCount: number,
 	): void {
 		if (subscriptionCount > this.maxSubscriptionsPerEventType) return;
-		this.reportedThresholds.delete(eventType ?? CATCH_ALL);
+		this.reportedAt.delete(eventType ?? CATCH_ALL);
 	}
 
 	private reportSubscriptionCount(
@@ -246,8 +291,14 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		if (observer === undefined) return;
 		if (subscriptionCount <= this.maxSubscriptionsPerEventType) return;
 		const key = eventType ?? CATCH_ALL;
-		if (this.reportedThresholds.has(key)) return;
-		this.reportedThresholds.add(key);
+		const lastReportedAt = this.reportedAt.get(key);
+		if (
+			lastReportedAt !== undefined &&
+			subscriptionCount < lastReportedAt * 2
+		) {
+			return;
+		}
+		this.reportedAt.set(key, subscriptionCount);
 		reportToObserver(() =>
 			observer({
 				eventType,

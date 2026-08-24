@@ -927,7 +927,14 @@ describe("EventBusImpl", () => {
 			});
 
 			await bus.publish([created()]);
-			await new Promise((resolve) => setTimeout(resolve, 250));
+			const started = Date.now();
+			while (
+				generations < 12 &&
+				failure === undefined &&
+				Date.now() - started < 5_000
+			) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
 
 			expect(failure).toBeUndefined();
 			expect(generations).toBe(12);
@@ -1009,7 +1016,7 @@ describe("EventBusImpl", () => {
 	describe("subscription accumulation", () => {
 		const noop = () => {};
 
-		it("reports once when one event type crosses the threshold", () => {
+		it("reports the crossing, then each doubling", () => {
 			const reports: unknown[] = [];
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 3,
@@ -1025,6 +1032,7 @@ describe("EventBusImpl", () => {
 
 			expect(reports).toEqual([
 				{ eventType: "OrderCreated", subscriptionCount: 4, threshold: 3 },
+				{ eventType: "OrderCreated", subscriptionCount: 8, threshold: 3 },
 			]);
 		});
 
@@ -1086,6 +1094,26 @@ describe("EventBusImpl", () => {
 			bus.subscribeAll(noop);
 
 			expect(counts).toEqual([2, 2]);
+		});
+
+		it("keeps reporting as a monotonic leak grows", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			// A real leak never drops back, so a report that only fires on the
+			// first crossing hides the number the operator needs.
+			for (let index = 0; index < 40; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(counts).toEqual([5, 10, 20, 40]);
 		});
 
 		it("reports catch-all subscriptions with a null event type", () => {

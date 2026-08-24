@@ -57,9 +57,10 @@ gives a before-and-after example for each breaking change.
   is optional. When you pass it, the hook is required and the constructor
   throws a `TypeError` without it.
 - The report arrives once for each crossing, never once for each `subscribe`.
-  When the count drops back to the threshold, the next crossing reports again,
-  so a transient spike of in-flight `once` waiters cannot mute an event type
-  for the rest of the process. It never throws, because a large fan-out of
+  The report repeats at each doubling, because a real leak never drops back and
+  the trend is the useful part. When the count drops back to the threshold, the
+  next crossing reports again, so a transient spike of in-flight `once` waiters
+  cannot mute an event type for the rest of the process. It never throws, because a large fan-out of
   projections must stay possible.
 - The hook is best-effort. A throw or a rejected promise inside it cannot
   affect the subscription.
@@ -113,6 +114,10 @@ gives a before-and-after example for each breaking change.
 - The chain machinery lives in its own module, `PublishChainTracker`. It owns
   the three windows and the bound; the bus keeps subscriptions, dispatch and
   observers. The public API does not change.
+- Depth counts the ancestors that are still open, never a number copied from
+  the parent. A cycle keeps its ancestors open, because each one awaits the
+  next. A relay lets them finish, so a handler that starts the next
+  publication without awaiting it stays at a flat depth.
 
 ### Documentation: the event bus states what it does not promise
 

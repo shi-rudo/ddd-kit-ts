@@ -17,6 +17,17 @@ const created = () =>
 /** Stops the probe before an unbounded chain exhausts the test runner. */
 const BRAKE = 150;
 
+/** Waits for a condition instead of sleeping a fixed amount. */
+async function until(
+	reached: () => boolean,
+	deadlineMs = 5_000,
+): Promise<void> {
+	const started = Date.now();
+	while (!reached() && Date.now() - started < deadlineMs) {
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
 /**
  * A handler that gives its own publication an extra deadline writes exactly
  * this. The merged signal is not one the kit derived, so the owner chain ends
@@ -85,9 +96,41 @@ describe("event bus publish chain across a merged signal", () => {
 		});
 
 		await bus.publish([created()]);
-		await new Promise((resolve) => setTimeout(resolve, 150));
+		await until(() => generations >= 12 || failure !== undefined);
 
 		expect(failure).toBeUndefined();
 		expect(generations).toBe(12);
+	});
+
+	it("does not count a relay that its parent no longer awaits", async () => {
+		// The handler starts the next publication before it returns and never
+		// awaits it. Each generation ends, so nothing accumulates. Counting
+		// this as nesting kills a correct relay at the bound.
+		for (const store of [
+			undefined,
+			new AsyncLocalStorage<PublishChainState>(),
+		]) {
+			const bus = new EventBusImpl<OrderCreated>({
+				chainStore: store,
+				maxPublishDepth: 4,
+			});
+			let generations = 0;
+			let failure: unknown;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (generations >= 12) return;
+				generations++;
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				bus.publish([created()], { signal: context.signal }).catch((reason) => {
+					failure ??= reason;
+				});
+			});
+
+			await bus.publish([created()]);
+			await until(() => generations >= 12 || failure !== undefined);
+
+			expect(failure).toBeUndefined();
+			expect(generations).toBe(12);
+		}
 	});
 });
