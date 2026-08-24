@@ -17,10 +17,14 @@ export interface PublishChainOrigin {
 	readonly enclosing?: PublishChainState;
 }
 
-/** Depth and event path of one publish chain. */
+/**
+ * The event path of one publish chain.
+ *
+ * It carries no depth. Depth is counted from the states that are still open at
+ * the moment a publication starts, so a number stored here would be the count
+ * from an earlier moment and could disagree with it.
+ */
 export interface PublishChainState {
-	/** Nested publications, the outermost counting as 1. */
-	readonly depth: number;
 	/** Event types along the chain, oldest first. */
 	readonly path: readonly string[];
 }
@@ -148,6 +152,10 @@ export class PublishChainTracker {
 				: this.store.run(state, dispatch));
 		} finally {
 			this.openStates.delete(state);
+			// The link dies with the dispatch. A relay keeps the signal of each
+			// generation reachable, so without this the chain grows by one
+			// ancestor per hop and every later publication walks all of them.
+			this.enclosingState.delete(state);
 		}
 	}
 

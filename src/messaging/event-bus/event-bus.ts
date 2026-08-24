@@ -106,8 +106,9 @@ export interface EventBusObservers {
 	/**
 	 * One event type crossed `maxSubscriptionsPerEventType`. Reported at the
 	 * crossing and then at each doubling, never once per `subscribe`: a real
-	 * leak never drops back, so the trend is the useful part. When the count
-	 * drops back to the threshold, the next crossing reports again.
+	 * leak never drops back, so the trend is the useful part. The report
+	 * re-arms only strictly below the threshold: a steady state that sits on
+	 * it would otherwise report once per release.
 	 *
 	 * A subscription that a request path opens without the matching
 	 * unsubscribe leaks. The symptom is memory growth, and the bus is the only
@@ -547,7 +548,6 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			// the whole batch: an event that has not dispatched yet is not on
 			// the chain, and naming it in a cycle report is wrong.
 			const state: PublishChainState = {
-				depth,
 				path: [...parent.path, event.type],
 			};
 			await this.chain.whileOnEvent(

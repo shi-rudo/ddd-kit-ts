@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventBusClosedError, EventBusImpl } from "../../src";
-import {
-	createDomainEvent,
-	type DomainEvent,
-} from "../../src/domain/event/domain-event";
+import type { DomainEvent } from "../../src/domain/event/domain-event";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 
@@ -34,15 +31,37 @@ describe("event bus close releases what it holds", () => {
 
 	it("removes the abort listener of a waiter it settles", async () => {
 		const controller = new AbortController();
+		// Counting the listeners is the only way to see one that stays: an
+		// attached listener that runs after the promise settled changes
+		// nothing observable, so asserting on behaviour proves nothing.
+		let attached = 0;
+		const signal = new Proxy(controller.signal, {
+			get(target, property, receiver) {
+				if (property === "addEventListener") {
+					return (...args: Parameters<AbortSignal["addEventListener"]>) => {
+						attached++;
+						target.addEventListener(...args);
+					};
+				}
+				if (property === "removeEventListener") {
+					return (...args: Parameters<AbortSignal["removeEventListener"]>) => {
+						attached--;
+						target.removeEventListener(...args);
+					};
+				}
+				const value = Reflect.get(target, property, receiver);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
 		const bus = new EventBusImpl<OrderCreated>();
-		const waiting = bus.once("OrderCreated", { signal: controller.signal });
+		const waiting = bus.once("OrderCreated", { signal });
 
+		expect(attached).toBe(1);
 		bus.close();
 		await expect(waiting).rejects.toThrow(EventBusClosedError);
 
 		// A listener left attached keeps the closed bus reachable from a
 		// long-lived request signal.
-		expect(() => controller.abort(new Error("later"))).not.toThrow();
-		void createDomainEvent("OrderCreated", { orderId: "o-1" });
+		expect(attached).toBe(0);
 	});
 });

@@ -123,9 +123,10 @@ gives a before-and-after example for each breaking change.
   throws a `TypeError` without it.
 - The report arrives once for each crossing, never once for each `subscribe`.
   The report repeats at each doubling, because a real leak never drops back and
-  the trend is the useful part. When the count drops back to the threshold, the
-  next crossing reports again, so a transient spike of in-flight `once` waiters
-  cannot mute an event type for the rest of the process. It never throws, because a large fan-out of
+  the trend is the useful part. The report re-arms once the count drops
+  strictly below the threshold, so a transient spike of in-flight `once`
+  waiters cannot mute an event type for the rest of the process, and a steady
+  state on the threshold does not report on every release. It never throws, because a large fan-out of
   projections must stay possible.
 - The hook is best-effort. A throw or a rejected promise inside it cannot
   affect the subscription.

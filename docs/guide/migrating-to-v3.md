@@ -366,6 +366,66 @@ mistakes compiler-visible instead of preserving ambiguous behavior behind a
 shim.
 
 ## Appendix: v3.0.0-rc.1 to rc.2 or later
+
+If you adopted `3.0.0-rc.1`, the stored business data is still reusable, but
+the source break is broader than the v2.2 repository rename:
+
+- Remove `persistedVersion`, `hasChanges`, and `changedKeys` reads.
+- Remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
+  `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
+  `migrateSnapshotState` overrides.
+- Replace `UnitOfWorkSession` factories with `defineRepository` definitions.
+- Declare a capability-named application repository port. Pass it explicitly
+  as `defineRepository<ForStoringOrders>()`.
+- Make adapter `create` paths read-only. Call `tracking.trackLoaded`.
+- Move insert, update, and removal SQL into `flush`.
+- Add `mapError` to every definition. Do not expose ORM or driver errors to the
+  application.
+- Replace manual `enrollSaved` and `enrollDeleted` calls with
+  application-facing `add`, `update`, and `remove`.
+- Move dirty detection to `PersistenceModel`.
+- Move snapshot DTOs and migration to `SnapshotModel`.
+- Use the new repository contract harnesses.
+
+Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
+writers for the bounded context together. Use the same cutover procedure. Keep
+the backup until the post-deployment checks are complete.
+
+
+
+Two source breaks, both at the entry points. No function and no type
+disappears.
+
+### The `utils` entry point is gone
+
+```ts
+// before
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit/utils";
+
+// after
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
+```
+
+The four types travel with the functions: `DeepEqualExceptOptions`,
+`DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
+
+### The `presentation` entry point is now `public-errors`
+
+The names it exports stay the same. The old name said where the code
+lived, not what the entry point gives.
+
+```ts
+// before
+import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+
+// after
+import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
+```
+
+The `money`, `http` and `testing` entry points keep their names. Each of
+them carries symbols that the root entry deliberately omits, so none of
+them duplicates anything.
+
 ## Appendix: v3.0.0-rc.2 to rc.3 or later
 
 Stored business data stays reusable. The source break is narrow and comes
@@ -461,63 +521,3 @@ Call it when the scope that owns the bus ends. After the call, `publish`,
 pending `once()` rejects instead of waiting for an event that cannot arrive.
 Closing releases the subscriptions. It does not stop a handler that is already
 running.
-
-
-If you adopted `3.0.0-rc.1`, the stored business data is still reusable, but
-the source break is broader than the v2.2 repository rename:
-
-- Remove `persistedVersion`, `hasChanges`, and `changedKeys` reads.
-- Remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
-  `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
-  `migrateSnapshotState` overrides.
-- Replace `UnitOfWorkSession` factories with `defineRepository` definitions.
-- Declare a capability-named application repository port. Pass it explicitly
-  as `defineRepository<ForStoringOrders>()`.
-- Make adapter `create` paths read-only. Call `tracking.trackLoaded`.
-- Move insert, update, and removal SQL into `flush`.
-- Add `mapError` to every definition. Do not expose ORM or driver errors to the
-  application.
-- Replace manual `enrollSaved` and `enrollDeleted` calls with
-  application-facing `add`, `update`, and `remove`.
-- Move dirty detection to `PersistenceModel`.
-- Move snapshot DTOs and migration to `SnapshotModel`.
-- Use the new repository contract harnesses.
-
-Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
-writers for the bounded context together. Use the same cutover procedure. Keep
-the backup until the post-deployment checks are complete.
-
-
-
-Two source breaks, both at the entry points. No function and no type
-disappears.
-
-### The `utils` entry point is gone
-
-```ts
-// before
-import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit/utils";
-
-// after
-import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
-```
-
-The four types travel with the functions: `DeepEqualExceptOptions`,
-`DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
-
-### The `presentation` entry point is now `public-errors`
-
-The names it exports stay the same. The old name said where the code
-lived, not what the entry point gives.
-
-```ts
-// before
-import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
-
-// after
-import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
-```
-
-The `money`, `http` and `testing` entry points keep their names. Each of
-them carries symbols that the root entry deliberately omits, so none of
-them duplicates anything.

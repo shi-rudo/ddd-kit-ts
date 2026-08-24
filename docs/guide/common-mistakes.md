@@ -453,8 +453,9 @@ The bus reports the leak when one event type crosses
 `maxSubscriptionsPerEventType` (default 32). It reports at the crossing
 and then at each doubling, because a real leak never drops back and the trend
 is the useful part.
-When the count drops back to the threshold, the next crossing reports again. A
-short spike of `once` waiters therefore does not mute the event type. The bus never
+The report re-arms once the count drops strictly below the threshold, so a
+short spike of `once` waiters does not mute the event type, and a steady state
+that sits on the threshold does not report on every release. The bus never
 throws here, because a large fan-out of projections stays possible. Without an
 observer the bus reports nothing.
 

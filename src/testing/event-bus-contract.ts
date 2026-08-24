@@ -132,7 +132,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "runs the handlers of one event in parallel",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const trace: string[] = [];
 				bus.subscribe(firstType, async () => {
 					trace.push("a:start");
@@ -158,7 +158,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "runs every handler of an event when a peer fails",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const seen: string[] = [];
 				bus.subscribe(firstType, async () => {
 					throw new Error("first handler failed");
@@ -179,7 +179,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "reaches the caller with a single failure directly",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const failure = new Error("the only handler failed");
 				bus.subscribe(firstType, async () => {
 					throw failure;
@@ -197,7 +197,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "collects two or more failures into an AggregateError",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const one = new Error("handler one failed");
 				const two = new Error("handler two failed");
 				bus.subscribe(firstType, async () => {
@@ -250,7 +250,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "treats a handler that throws synchronously as a rejection",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const seen: string[] = [];
 				bus.subscribe(firstType, () => {
 					throw new Error("thrown synchronously");
@@ -318,7 +318,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "runs a catch-all handler in the same batch as the typed handlers",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const seen: string[] = [];
 				bus.subscribe(firstType, async () => {
 					throw new Error("typed handler failed");
@@ -339,7 +339,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "removes exactly one subscription when the same handler subscribed twice",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				let calls = 0;
 				const handler = async () => {
 					calls++;
@@ -360,7 +360,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "ignores a second call of the unsubscribe function",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				let calls = 0;
 				const release = bus.subscribe(firstType, async () => {
 					calls++;
@@ -383,7 +383,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "resolves once() with the next event of its type and stops after it",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				let deliveries = 0;
 				bus.subscribeAll(async () => {
 					deliveries++;
@@ -412,7 +412,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "rejects once() when its timeout expires",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const thrown = await captureRejection(
 					bus.once(firstType, { timeoutMs: 5 }),
 				);
@@ -423,7 +423,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "rejects once() with the reason of an aborted signal",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const controller = new AbortController();
 				const reason = new Error("the caller stopped waiting");
 				const waiting = captureRejection(
@@ -442,7 +442,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "rejects a publication whose signal is already aborted",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				const controller = new AbortController();
 				controller.abort(new Error("stopped before publish"));
 				let called = false;
@@ -465,7 +465,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "refuses every operation after close",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				bus.close();
 
 				let subscribeThrew = false;
@@ -496,7 +496,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "settles a pending once() when the bus closes",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				// Without a timeout and without a signal this waiter has no
 				// other way to end.
 				const waiting = captureRejection(bus.once(firstType));
@@ -512,7 +512,6 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "does nothing when close is called again",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
 				bus.close();
 
 				let threw = false;
@@ -528,7 +527,7 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "bounds the wait, not the handler, when the timeout expires",
 			run: inEnv(async ({ bus }: Env) => {
-				const { firstType, secondType } = types();
+				const { firstType } = types();
 				let running = true;
 				bus.subscribe(firstType, async () => {
 					await new Promise((resolve) => setTimeout(resolve, 200));
