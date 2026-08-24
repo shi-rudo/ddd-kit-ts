@@ -366,31 +366,6 @@ mistakes compiler-visible instead of preserving ambiguous behavior behind a
 shim.
 
 ## Appendix: v3.0.0-rc.1 to rc.2 or later
-
-If you adopted `3.0.0-rc.1`, the stored business data is still reusable, but
-the source break is broader than the v2.2 repository rename:
-
-- Remove `persistedVersion`, `hasChanges`, and `changedKeys` reads.
-- Remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
-  `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
-  `migrateSnapshotState` overrides.
-- Replace `UnitOfWorkSession` factories with `defineRepository` definitions.
-- Declare a capability-named application repository port. Pass it explicitly
-  as `defineRepository<ForStoringOrders>()`.
-- Make adapter `create` paths read-only. Call `tracking.trackLoaded`.
-- Move insert, update, and removal SQL into `flush`.
-- Add `mapError` to every definition. Do not expose ORM or driver errors to the
-  application.
-- Replace manual `enrollSaved` and `enrollDeleted` calls with
-  application-facing `add`, `update`, and `remove`.
-- Move dirty detection to `PersistenceModel`.
-- Move snapshot DTOs and migration to `SnapshotModel`.
-- Use the new repository contract harnesses.
-
-Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
-writers for the bounded context together. Use the same cutover procedure. Keep
-the backup until the post-deployment checks are complete.
-
 ## Appendix: v3.0.0-rc.2 to rc.3 or later
 
 Stored business data stays reusable. The source break is narrow and comes
@@ -453,6 +428,66 @@ this list if your code observes one of these paths:
   relied on shared references see copies now.
 
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
+### The event bus has a lifecycle
+
+`EventBus` gained `close()`. Every implementation of the port and every test
+double needs it.
+
+Before:
+
+```ts
+const bus: EventBus<OrderEvent> = {
+  publish: async () => {},
+  subscribe: () => () => {},
+  subscribeAll: () => () => {},
+  once: () => new Promise(() => {}),
+};
+```
+
+After:
+
+```ts
+const bus: EventBus<OrderEvent> = {
+  publish: async () => {},
+  subscribe: () => () => {},
+  subscribeAll: () => () => {},
+  once: () => new Promise(() => {}),
+  close: () => {},
+};
+```
+
+Call it when the scope that owns the bus ends. After the call, `publish`,
+`subscribe`, `subscribeAll` and `once` throw `EventBusClosedError`, and a
+pending `once()` rejects instead of waiting for an event that cannot arrive.
+Closing releases the subscriptions. It does not stop a handler that is already
+running.
+
+
+If you adopted `3.0.0-rc.1`, the stored business data is still reusable, but
+the source break is broader than the v2.2 repository rename:
+
+- Remove `persistedVersion`, `hasChanges`, and `changedKeys` reads.
+- Remove aggregate `createSnapshot*`, `restoreFromSnapshot*`,
+  `snapshotSchemaVersion`, `toSnapshotState`, `fromSnapshotState`, and
+  `migrateSnapshotState` overrides.
+- Replace `UnitOfWorkSession` factories with `defineRepository` definitions.
+- Declare a capability-named application repository port. Pass it explicitly
+  as `defineRepository<ForStoringOrders>()`.
+- Make adapter `create` paths read-only. Call `tracking.trackLoaded`.
+- Move insert, update, and removal SQL into `flush`.
+- Add `mapError` to every definition. Do not expose ORM or driver errors to the
+  application.
+- Replace manual `enrollSaved` and `enrollDeleted` calls with
+  application-facing `add`, `update`, and `remove`.
+- Move dirty detection to `PersistenceModel`.
+- Move snapshot DTOs and migration to `SnapshotModel`.
+- Use the new repository contract harnesses.
+
+Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
+writers for the bounded context together. Use the same cutover procedure. Keep
+the backup until the post-deployment checks are complete.
+
+
 
 Two source breaks, both at the entry points. No function and no type
 disappears.

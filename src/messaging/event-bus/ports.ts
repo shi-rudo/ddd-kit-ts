@@ -149,20 +149,6 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	subscribeAll: (handler: EventHandler<Evt>) => () => void;
 
 	/**
-	 * Subscribes to the next occurrence of an event type.
-	 * Returns a Promise that resolves with the event data.
-	 * Automatically unsubscribes after the first event.
-	 *
-	 * @param eventType - The event type to wait for
-	 * @returns A Promise that resolves with the event
-	 *
-	 * @example
-	 * ```typescript
-	 * const event = await bus.once("OrderCreated");
-	 * console.log("Order created:", event.payload.orderId);
-	 * ```
-	 */
-	/**
 	 * Releases every subscription and settles every waiter.
 	 *
 	 * A bus that outlives its scope keeps its handlers alive with it. A
@@ -185,6 +171,20 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 */
 	close: () => void;
 
+	/**
+	 * Subscribes to the next occurrence of an event type.
+	 * Returns a Promise that resolves with the event data.
+	 * Automatically unsubscribes after the first event.
+	 *
+	 * @param eventType - The event type to wait for
+	 * @returns A Promise that resolves with the event
+	 *
+	 * @example
+	 * ```typescript
+	 * const event = await bus.once("OrderCreated");
+	 * console.log("Order created:", event.payload.orderId);
+	 * ```
+	 */
 	once: <K extends Evt["type"]>(
 		eventType: K,
 		options?: OnceOptions,

@@ -48,6 +48,13 @@ gives a before-and-after example for each breaking change.
 - The contract suite pins the behavior, and it asserts that the operations
   throw rather than which error they throw, so a second implementation stays
   free to use its own.
+- Closing during a publication ends that publication. The remaining events of
+  the batch are not dispatched to subscriptions that close released, and
+  `publish` rejects instead of resolving as if every event had arrived.
+- Closing runs the cleanup of each waiter it settles, so the timeout timer and
+  the abort listener of a `once()` go with it.
+- The subscription report re-arms only strictly below the threshold. A steady
+  state that sits exactly on it would otherwise report once per request.
 
 ### Changed: the publish chain is one graph of states
 

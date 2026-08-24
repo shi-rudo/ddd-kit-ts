@@ -819,7 +819,7 @@ describe("EventBusImpl", () => {
 	});
 
 	describe("unsubscribe", () => {
-		it("ignores a second call", () => {
+		it("ignores a second call", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			const seen: string[] = [];
 			const releaseFirst = bus.subscribe("OrderCreated", () => {
@@ -831,9 +831,14 @@ describe("EventBusImpl", () => {
 
 			releaseFirst();
 			releaseFirst();
+			releaseFirst();
+			await bus.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
 
-			expect(() => releaseFirst()).not.toThrow();
-			expect(seen).toEqual([]);
+			// Without a publication the assertion proves nothing: an
+			// unsubscribe that wrongly removed the peer would pass too.
+			expect(seen).toEqual(["second"]);
 		});
 
 		it("ignores a second call on a catch-all subscription", () => {
@@ -928,6 +933,25 @@ describe("EventBusImpl", () => {
 			bus.close();
 
 			expect(() => bus.close()).not.toThrow();
+		});
+
+		it("refuses the rest of a batch when it closes mid-publish", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribe("OrderCreated", async (event) => {
+				seen.push(event.payload.orderId);
+				if (seen.length === 1) {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					bus.close();
+				}
+			});
+
+			// Resolving here would drop the remaining events in silence, which
+			// is what the closed error exists to prevent.
+			await expect(
+				bus.publish([created(), created(), created()]),
+			).rejects.toThrow(EventBusClosedError);
+			expect(seen).toEqual(["o-1"]);
 		});
 
 		it("does not stop a handler that is already running", async () => {
@@ -1276,7 +1300,7 @@ describe("EventBusImpl", () => {
 			expect(types).toEqual(["OrderCreated", "OrderShipped"]);
 		});
 
-		it("reports again after the count drops back to the threshold", () => {
+		it("reports again after the count drops below the threshold", () => {
 			const counts: number[] = [];
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
@@ -1288,11 +1312,15 @@ describe("EventBusImpl", () => {
 			});
 
 			bus.subscribe("OrderCreated", noop);
-			bus.subscribe("OrderCreated", noop);
 			// A transient spike, for example many in-flight `once` waiters, must
-			// not mute the event type for the rest of the process.
-			const release = bus.subscribe("OrderCreated", noop);
-			release();
+			// not mute the event type for the rest of the process. Receding to
+			// the threshold itself is not a recession: the next subscribe
+			// crosses again at once.
+			const releaseSecond = bus.subscribe("OrderCreated", noop);
+			const releaseThird = bus.subscribe("OrderCreated", noop);
+			releaseSecond();
+			releaseThird();
+			bus.subscribe("OrderCreated", noop);
 			bus.subscribe("OrderCreated", noop);
 
 			expect(counts).toEqual([3, 3]);
@@ -1320,6 +1348,30 @@ describe("EventBusImpl", () => {
 			expect(counts).toEqual([3]);
 		});
 
+		it("stays quiet in a steady state at the threshold", () => {
+			let reports = 0;
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: () => {
+						reports++;
+					},
+				},
+			});
+			for (let index = 0; index < 4; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			// One short-lived subscription per request, on top of a steady
+			// state that already sits at the threshold.
+			for (let request = 0; request < 10; request++) {
+				bus.subscribe("OrderCreated", noop)();
+			}
+
+			expect(reports).toBe(1);
+		});
+
 		it("re-arms the catch-all report as well", () => {
 			const counts: number[] = [];
 			const bus = new EventBusImpl<OrderEvent>({
@@ -1331,9 +1383,11 @@ describe("EventBusImpl", () => {
 				},
 			});
 
+			const releaseFirst = bus.subscribeAll(noop);
+			const releaseSecond = bus.subscribeAll(noop);
+			releaseFirst();
+			releaseSecond();
 			bus.subscribeAll(noop);
-			const release = bus.subscribeAll(noop);
-			release();
 			bus.subscribeAll(noop);
 
 			expect(counts).toEqual([2, 2]);

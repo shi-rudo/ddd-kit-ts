@@ -237,9 +237,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 
 	private readonly chain: PublishChainTracker;
 	private closed = false;
-	// Rejections of the waiters `once()` created. A callback learns that no
-	// event follows by not being called again; a promise cannot, so closing
-	// has to settle it or it waits forever.
+	// How to settle each waiter `once()` created, cleanup included. A callback
+	// learns that no event follows by not being called again; a promise cannot,
+	// so closing has to settle it or it waits forever. Rejecting alone would
+	// leave the timer armed and the abort listener attached, which is the leak
+	// close() exists to end.
 	private readonly pendingOnce = new Set<(error: Error) => void>();
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
@@ -285,7 +287,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		eventType: string | null,
 		subscriptionCount: number,
 	): void {
-		if (subscriptionCount > this.maxSubscriptionsPerEventType) return;
+		// Strictly below, never at the threshold. A steady state that sits on
+		// it would otherwise re-arm on every release and report once per
+		// request.
+		if (subscriptionCount >= this.maxSubscriptionsPerEventType) return;
 		this.reportedAt.delete(eventType ?? CATCH_ALL);
 	}
 
@@ -323,7 +328,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		this.reportedAt.clear();
 		const waiting = [...this.pendingOnce];
 		this.pendingOnce.clear();
-		for (const reject of waiting) reject(new EventBusClosedError("once"));
+		for (const settle of waiting) settle(new EventBusClosedError("once"));
 	}
 
 	private assertOpen(operation: string): void {
@@ -409,11 +414,15 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			let settled = false;
 			let abortListener: (() => void) | undefined;
 
-			this.pendingOnce.add(reject);
+			const settleAsClosed = (error: Error): void => {
+				cleanup();
+				reject(error);
+			};
+			this.pendingOnce.add(settleAsClosed);
 			const cleanup = () => {
 				if (settled) return;
 				settled = true;
-				this.pendingOnce.delete(reject);
+				this.pendingOnce.delete(settleAsClosed);
 				unsubscribe();
 				if (timer !== undefined) clearTimeout(timer);
 				if (abortListener && signal) {
@@ -530,6 +539,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// here, because the bounded execution returns before it calls this,
 		// and the check below ends the loop before the next event starts.
 		for (const event of events) {
+			// Closing during a batch ends it. Dispatching the rest to the
+			// subscriptions that close() released would resolve as if every
+			// event had been delivered.
+			this.assertOpen("publish");
 			// The chain is recorded for the event that dispatches now, never for
 			// the whole batch: an event that has not dispatched yet is not on
 			// the chain, and naming it in a cycle report is wrong.
