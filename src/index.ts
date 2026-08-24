@@ -341,8 +341,6 @@ export {
 	type EventBusOptions,
 	type HandlerFailureReport,
 	type PublishAbortedReport,
-	type PublishChainState,
-	type PublishChainStore,
 	type SubscriptionThresholdReport,
 } from "./messaging/event-bus/event-bus";
 export type {
@@ -351,6 +349,10 @@ export type {
 	OnceOptions,
 	PublishOptions,
 } from "./messaging/event-bus/ports";
+export type {
+	PublishChainState,
+	PublishChainStore,
+} from "./messaging/event-bus/publish-chain";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,

@@ -110,6 +110,9 @@ gives a before-and-after example for each breaking change.
   event of a nested batch is bounded now.
 - One bounded execution holds its owner signal weakly. A long chain of nested
   operations no longer keeps its whole ancestry of signals alive.
+- The chain machinery lives in its own module, `PublishChainTracker`. It owns
+  the three windows and the bound; the bus keeps subscriptions, dispatch and
+  observers. The public API does not change.
 
 ### Documentation: the event bus states what it does not promise
 

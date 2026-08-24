@@ -18,6 +18,11 @@ import type {
 	OnceOptions,
 	PublishOptions,
 } from "./ports";
+import {
+	type PublishChainState,
+	type PublishChainStore,
+	PublishChainTracker,
+} from "./publish-chain";
 
 /**
  * Wraps a handler rejection as an error without ever throwing itself.
@@ -122,36 +127,6 @@ const CATCH_ALL = Symbol("EventBusImpl.subscribeAll");
  */
 const DEFAULT_MAX_SUBSCRIPTIONS_PER_EVENT_TYPE = 32;
 
-/** Depth and event path of one publish chain. */
-export interface PublishChainState {
-	/** Nested publications, the outermost counting as 1. */
-	readonly depth: number;
-	/** Event types along the chain, oldest first. */
-	readonly path: readonly string[];
-}
-
-/**
- * Carries a publish chain across an `await` when the signal cannot.
- *
- * The shape is that of `AsyncLocalStorage`. The kit does not import
- * `node:async_hooks` itself: that specifier does not resolve under the browser
- * conditions an edge bundle uses, and the kit ships one build. A consumer on
- * Node passes the platform class, and a consumer on an edge runtime passes
- * nothing.
- *
- * ```ts
- * import { AsyncLocalStorage } from "node:async_hooks";
- *
- * const bus = new EventBusImpl<OrderEvent>({
- *   chainStore: new AsyncLocalStorage<PublishChainState>(),
- * });
- * ```
- */
-export interface PublishChainStore {
-	run<R>(state: PublishChainState, callback: () => R): R;
-	getStore(): PublishChainState | undefined;
-}
-
 /** Construction options for {@link EventBusImpl}. */
 export interface EventBusOptions {
 	/**
@@ -217,31 +192,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly catchAllHandlers: EventHandler<Evt>[] = [];
 	private readonly maxPublishDepth: number;
 
-	// Depth and event path of the chain each dispatched context belongs to,
-	// keyed by the signal the handlers receive. A nested publish that carries
-	// `context.signal` finds its parent here, across `await`. The entries die
-	// with the context, so nothing accumulates.
-	private readonly chainDepth = new WeakMap<AbortSignal, number>();
-	private readonly chainPath = new WeakMap<AbortSignal, readonly string[]>();
-
-	// The chain depth and path of the dispatch whose synchronous window is
-	// open. Absolute, never a frame count: a batch dispatches its events one
-	// after another, so the frame of event 1 has unwound when event 2 runs and
-	// only an absolute value still describes the chain. Swapped, never
-	// mutated, so a reader can keep the array it was handed. A synchronous
-	// window always runs to completion, so a concurrent publication never
-	// observes it open.
-	private syncWindowDepth = 0;
-	private syncWindowPath: readonly string[] = [];
-
-	private readonly chainStore: PublishChainStore | undefined;
-	// Chain states whose dispatch has not ended. A store keeps its value in
-	// deferred work too, so membership here, not mere presence, decides.
-	private readonly liveChains = new WeakSet<PublishChainState>();
-	// Signals whose publication still dispatches. A context signal stays
-	// readable after its publication ends, so presence in the chain map is not
-	// enough: deferred work would inherit a depth from a chain that is over.
-	private readonly liveDispatches = new WeakSet<AbortSignal>();
+	private readonly chain: PublishChainTracker;
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
 	// Event types that already reported their current crossing. Cleared when
@@ -264,18 +215,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				options.maxSubscriptionsPerEventType,
 			);
 		}
-		if (
-			options.chainStore !== undefined &&
-			(typeof options.chainStore.run !== "function" ||
-				typeof options.chainStore.getStore !== "function")
-		) {
-			throw new TypeError(
-				"EventBusImpl.chainStore must provide run and getStore",
-			);
-		}
-		// Kept as the original object: the methods of AsyncLocalStorage need
-		// their receiver, so copying them onto a new object would break it.
-		this.chainStore = options.chainStore;
+		this.chain = new PublishChainTracker(options.chainStore);
 		this.maxPublishDepth = options.maxPublishDepth ?? DEFAULT_MAX_PUBLISH_DEPTH;
 		this.maxSubscriptionsPerEventType =
 			options.maxSubscriptionsPerEventType ??
@@ -288,29 +228,6 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 						"onHandlerError",
 						"onPublishAborted",
 					]);
-	}
-
-	/**
-	 * Depth and path of the chain the given signal belongs to.
-	 *
-	 * A caller can wrap one publication in further bounded executions, and
-	 * `withCommit` does exactly that. Every hop derives a fresh signal, so an
-	 * identity check alone loses the chain at the first hop. Walking the owner
-	 * chain finds the nearest execution this bus dispatched.
-	 */
-	private chainStateFor(signal: AbortSignal | undefined): {
-		readonly depth: number;
-		readonly path: readonly string[] | undefined;
-	} {
-		let current = signal;
-		while (current !== undefined) {
-			const depth = this.chainDepth.get(current);
-			if (depth !== undefined && this.liveDispatches.has(current)) {
-				return { depth, path: this.chainPath.get(current) };
-			}
-			current = ownerSignalOf(current);
-		}
-		return { depth: 0, path: undefined };
 	}
 
 	private rearmSubscriptionReport(
@@ -473,21 +390,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// window, so a reported depth and the path beside it cannot describe
 		// different chains. Each window counts only while its own dispatch
 		// runs; the fields say why.
-		const lineage = this.chainStateFor(options.signal);
-		const stored = this.chainStore?.getStore();
-		const liveStore =
-			stored !== undefined && this.liveChains.has(stored) ? stored : undefined;
-		let parent: { depth: number; path: readonly string[] } = {
-			depth: 0,
-			path: [],
-		};
-		for (const window of [
-			{ depth: liveStore?.depth ?? 0, path: liveStore?.path ?? [] },
-			{ depth: lineage.depth, path: lineage.path ?? [] },
-			{ depth: this.syncWindowDepth, path: this.syncWindowPath },
-		]) {
-			if (window.depth > parent.depth) parent = window;
-		}
+		const parent = this.chain.parentOf(options.signal);
 		const depth = parent.depth + 1;
 		// An empty batch dispatches nothing, so it cannot extend a chain and
 		// must not meet the bound. Everything else still runs, so an invalid
@@ -510,18 +413,16 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 					signal: options.signal,
 					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 				},
-				(context) => {
-					this.liveDispatches.add(context.signal);
-					return this.publishWithinContext(
-						events,
-						context,
-						errors,
-						depth,
-						parent.path,
-					).finally(() => {
-						this.liveDispatches.delete(context.signal);
-					});
-				},
+				(context) =>
+					this.chain.whileDispatching(context.signal, () =>
+						this.publishWithinContext(
+							events,
+							context,
+							errors,
+							depth,
+							parent.path,
+						),
+					),
 			);
 		} catch (boundedError) {
 			if (errors.length === 0) throw boundedError;
@@ -557,22 +458,13 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			// The chain is recorded for the event that dispatches now, never for
 			// the whole batch: an event that has not dispatched yet is not on
 			// the chain, and naming it in a cycle report is wrong.
-			const path = [...parentPath, event.type];
-			this.chainDepth.set(context.signal, depth);
-			this.chainPath.set(context.signal, path);
-			const dispatch = () =>
-				this.dispatchEvent(event, context, errors, depth, path);
-			if (this.chainStore === undefined) {
-				await dispatch();
-			} else {
-				const state: PublishChainState = { depth, path };
-				this.liveChains.add(state);
-				try {
-					await this.chainStore.run(state, dispatch);
-				} finally {
-					this.liveChains.delete(state);
-				}
-			}
+			const state: PublishChainState = {
+				depth,
+				path: [...parentPath, event.type],
+			};
+			await this.chain.whileOnEvent(context.signal, state, () =>
+				this.dispatchEvent(event, context, errors, state),
+			);
 			if (context.signal.aborted) {
 				throw abortReason(context.signal, "EventBus.publish aborted");
 			}
@@ -583,8 +475,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		event: Evt,
 		context: ExecutionContext,
 		errors: Error[],
-		depth: number,
-		path: readonly string[],
+		state: PublishChainState,
 	): Promise<void> {
 		// Typed and catch-all handlers share ONE allSettled batch, so the
 		// contract holds across both kinds: none sees the others' errors,
@@ -633,17 +524,9 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 						// window covers exactly the synchronous part of the
 						// handler. Splitting the call from the `await` keeps a
 						// synchronous throw on the same path as a rejection.
-						const outerDepth = this.syncWindowDepth;
-						const outerPath = this.syncWindowPath;
-						this.syncWindowDepth = depth;
-						this.syncWindowPath = path;
-						let running: Promise<void> | void;
-						try {
-							running = handler(event, context);
-						} finally {
-							this.syncWindowDepth = outerDepth;
-							this.syncWindowPath = outerPath;
-						}
+						const running = this.chain.inSyncWindow(state, () =>
+							handler(event, context),
+						);
 						// A handler that returned without a promise is not pending.
 						// Mark it here, because a peer that aborts synchronously
 						// runs before this wrapper resumes.
