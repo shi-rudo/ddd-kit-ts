@@ -30,6 +30,25 @@ type ExecutionOptions =
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
 
 /**
+ * Owner signal of each child signal that {@link runBoundedExecution} minted.
+ *
+ * One bounded operation often wraps another, and every hop derives a fresh
+ * signal. A consumer that follows a call chain by signal identity alone loses
+ * the link at the first hop. Key and value are both weak: a long chain of
+ * nested operations must not hold its whole ancestry alive.
+ */
+const executionOwners = new WeakMap<AbortSignal, WeakRef<AbortSignal>>();
+
+/**
+ * The signal that a bounded execution derived this one from, or `undefined`
+ * when the signal did not come from {@link runBoundedExecution} or had no
+ * owner. Walk it to follow a chain across nested bounded executions.
+ */
+export function ownerSignalOf(signal: AbortSignal): AbortSignal | undefined {
+	return executionOwners.get(signal)?.deref();
+}
+
+/**
  * Runs one operation with a child signal that combines owner cancellation and a
  * shell-owned timeout. The returned promise settles on abort even when an
  * adapter ignores the signal; the adapter promise remains observed so a later
@@ -61,6 +80,9 @@ export function runBoundedExecution<T>(
 		deadlineAt,
 	});
 	const ownerSignal = options.signal;
+	if (ownerSignal !== undefined) {
+		executionOwners.set(controller.signal, new WeakRef(ownerSignal));
+	}
 	const abortFromOwner = (): void => {
 		controller.abort(
 			ownerSignal === undefined

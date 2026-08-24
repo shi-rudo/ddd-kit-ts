@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { Id } from "../../domain/identity/id";
 import { AggregateDeletedError } from "../../errors/kit-errors";
-import { IdentityMap } from "./identity-map";
+import { type AggregateClass, IdentityMap } from "./identity-map";
 
 type RestaurantId = Id<"RestaurantId">;
 type BookingId = Id<"BookingId">;
@@ -195,5 +195,26 @@ describe("clear() resets the pending-event baselines", () => {
 		aggregate.pendingEvents = [{}];
 
 		expect(map.instancesWithNewPendingEvents()).toHaveLength(1);
+	});
+});
+
+describe("AggregateClass", () => {
+	it("infers the aggregate type from the class", () => {
+		class Order {
+			protected constructor(readonly id: string) {}
+			static open(id: string): Order {
+				return new Order(id);
+			}
+			readonly total: number = 0;
+		}
+
+		// A compile-time witness for the property the type exists to give: a
+		// bare `Function` would infer `unknown` here and fail to assign.
+		// The prototype is the witness the type uses, and it exists at runtime,
+		// so this stays a type-level assertion without dereferencing nothing.
+		const infer = <T>(type: AggregateClass<T>): T => type.prototype as T;
+		const total: number = infer(Order).total;
+
+		expect(total).toBeUndefined();
 	});
 });

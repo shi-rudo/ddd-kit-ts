@@ -18,7 +18,14 @@ export type EventHandler<Evt> = (
 export interface PublishOptions {
 	/** Owner/request cancellation propagated to every event handler. */
 	readonly signal?: AbortSignal;
-	/** Maximum time to await the complete publication. Default `30000`ms. */
+	/**
+	 * Maximum time to await the complete publication. Default `30000`ms.
+	 *
+	 * This bounds the WAIT, not the handler. JavaScript cannot terminate a
+	 * running promise, so a handler that ignores `context.signal` keeps
+	 * running after `publish` rejects, and its side effects still land.
+	 * Pass `context.signal` into every I/O call a handler makes.
+	 */
 	readonly timeoutMs?: number;
 }
 
@@ -51,25 +58,36 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 *
 	 * **Ordering & parallelism contract:**
 	 *
-	 *  1. **Events run in input order.** `publish([a, b, c])` dispatches `a`,
-	 *     awaits all of its handlers, then dispatches `b`, and so on. The
-	 *     library never reorders or parallelises across events.
-	 *  2. **Handlers within a single event run in parallel.** All handlers
-	 *     subscribed to `event.type` are awaited via `Promise.allSettled`:
-	 *     none of them sees the others' errors and none is skipped if a
-	 *     peer fails.
-	 *  3. **Errors are collected and thrown AFTER everything dispatches.**
-	 *     If one handler throws, remaining handlers for that event still
-	 *     run, and remaining events in the batch still publish. Once
-	 *     `publish` reaches the end of the batch it throws: the single
-	 *     error directly if there was one, or an `AggregateError`
-	 *     ("Multiple event handlers failed") containing every captured
-	 *     error otherwise. Callers that need fail-fast semantics should
-	 *     publish events one at a time and not rely on batch atomicity.
+	 *  1. **Events run in input order.** `publish([a, b, c])` dispatches `a`
+	 *     and awaits every handler of `a`. Then it dispatches `b`, and so
+	 *     on. The bus never changes that order. It never dispatches two
+	 *     events at the same time.
+	 *  2. **The handlers of one event run in parallel.** The bus awaits
+	 *     every handler of `event.type` through `Promise.allSettled`. One
+	 *     handler never sees the error of another handler. The bus skips no
+	 *     handler when a peer fails. The bus applies no limit here: twenty
+	 *     handlers that each open a connection open twenty connections.
+	 *     Backpressure belongs to the client that the handler calls.
+	 *  3. **The bus collects the errors and throws them after the batch.**
+	 *     If one handler throws, the other handlers of that event still
+	 *     run, and the remaining events still publish. At the end of the
+	 *     batch `publish` throws. One failure throws that error directly.
+	 *     Two or more failures throw an `AggregateError` with the message
+	 *     "Multiple event handlers failed", which carries every collected
+	 *     error. For fail-fast behavior, publish one event for each call.
+	 *     A batch is not atomic.
 	 *
-	 * The contract is intentionally simple and in-process. For
-	 * cross-process delivery (RabbitMQ, Kafka, etc.), use the `Outbox`
-	 * port and a dedicated dispatcher.
+	 * The contract is intentionally simple and in-process. For delivery
+	 * across processes, for example through RabbitMQ or Kafka, use the
+	 * `Outbox` port and a dedicated dispatcher.
+	 *
+	 * **Delivery guarantee.** The port does not promise persistence, retry, or
+	 * a dead-letter path. Each implementation states its own guarantee. Work
+	 * that must survive a crash belongs behind the `Outbox` port.
+	 *
+	 * **Handlers must tolerate a second run.** The port never redelivers. A
+	 * caller that retries does redeliver, and the handlers of the first
+	 * attempt can still run. Make a handler idempotent, or do not retry.
 	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout
@@ -103,6 +121,40 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	) => () => void;
 
 	/**
+	 * Subscribes one handler to a set of event types.
+	 *
+	 * The returned function releases every subscription it made, so a
+	 * consumer that reacts to several types keeps one release instead of
+	 * one for each type. Losing one of several releases is how a partial
+	 * leak starts.
+	 *
+	 * A type that appears twice subscribes once: the argument is a set of
+	 * types, and delivering the same event twice to one handler would be a
+	 * surprise, not a feature. An empty set subscribes nothing and returns
+	 * a release that does nothing.
+	 *
+	 * @param eventTypes - The event types to subscribe to
+	 * @param handler - Called with every event of those types, narrowed to
+	 * their union
+	 * @returns A function that releases all of them, and does nothing when
+	 * called again
+	 *
+	 * @example
+	 * ```typescript
+	 * const release = bus.subscribeMany(
+	 *   ["OrderCreated", "OrderShipped"],
+	 *   async (event) => {
+	 *     await touchReadModel(event.payload.orderId);
+	 *   },
+	 * );
+	 * ```
+	 */
+	subscribeMany: <K extends Evt["type"]>(
+		eventTypes: readonly K[],
+		handler: EventHandler<Extract<Evt, { type: K }>>,
+	) => () => void;
+
+	/**
 	 * Subscribes a handler to EVERY event type: the subscription for
 	 * cross-cutting consumers (audit log, metrics, dev logging,
 	 * forward-all) that would otherwise have to enumerate the union's
@@ -131,6 +183,35 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	subscribeAll: (handler: EventHandler<Evt>) => () => void;
 
 	/**
+	 * Releases every subscription and settles every waiter.
+	 *
+	 * A bus that outlives its scope keeps its handlers alive with it. A
+	 * worker that shuts down, a test that tears down, and a request scope
+	 * that ends all need one call that leaves the bus holding nothing.
+	 *
+	 * After this call, `publish`, `subscribe`, `subscribeAll` and `once`
+	 * throw. Use after close is a programming bug, and a silent no-op would
+	 * look like a delivery that did not happen. A pending `once()` rejects
+	 * rather than waiting forever, which is the only waiter the port can
+	 * settle: a handler is a callback and learns that no event follows by
+	 * not being called again.
+	 *
+	 * Calling it again does nothing.
+	 *
+	 * A plain method, not `Symbol.dispose`. A port that declared the symbol
+	 * would need `esnext.disposable` in the `lib` of every consumer, only to
+	 * typecheck the types of this kit, and that requirement cannot be
+	 * declined. Group your own releases instead, as the common mistakes
+	 * guide shows.
+	 *
+	 * This releases the subscriptions. It does not stop a handler that is
+	 * already running, because JavaScript cannot terminate a running
+	 * promise. Pass `context.signal` into every call a handler makes, and a
+	 * publication in flight ends with the handler that honours it.
+	 */
+	close: () => void;
+
+	/**
 	 * Subscribes to the next occurrence of an event type.
 	 * Returns a Promise that resolves with the event data.
 	 * Automatically unsubscribes after the first event.
@@ -152,7 +233,7 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 
 /**
  * Options for `EventBus.once()`. Both fields are optional; without them
- * `once()` waits forever (the historical behaviour).
+ * `once()` waits forever.
  */
 export interface OnceOptions {
 	/**

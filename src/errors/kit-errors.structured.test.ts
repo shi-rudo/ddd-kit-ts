@@ -1,5 +1,9 @@
 import { isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
+import type {
+	EventBusClosedError,
+	PublishDepthExceededError,
+} from "../messaging/event-bus/errors";
 import {
 	AggregateDeletedError,
 	AggregateNotFoundError,
@@ -346,6 +350,8 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
+			AssertKitCode<EventBusClosedError["code"]>,
+			AssertKitCode<PublishDepthExceededError["code"]>,
 			AssertKitCode<ProjectionIdentityViolationError["code"]>,
 			AssertKitCode<ProjectionOrderViolationError["code"]>,
 			AssertKitCode<ProjectionReceiptViolationError["code"]>,

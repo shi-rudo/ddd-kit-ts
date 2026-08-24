@@ -897,3 +897,55 @@ describe("binary payloads are rejected at the mint", () => {
 		expect(Object.isFrozen(event.payload)).toBe(true);
 	});
 });
+
+describe("factory source strategy", () => {
+	it("stamps its origin on every event it mints", () => {
+		const factory = createDomainEventFactory({ source: "checkout" });
+
+		const event = factory.create("OrderPlaced", { orderId: "o-1" });
+
+		expect(event.metadata?.source).toBe("checkout");
+	});
+
+	it("stamps its origin on a stamp it mints", () => {
+		const factory = createDomainEventFactory({ source: "checkout" });
+
+		const stamp = factory.createStamp();
+
+		expect(stamp.metadata?.source).toBe("checkout");
+	});
+
+	it("keeps a source the call site named", () => {
+		const factory = createDomainEventFactory({ source: "checkout" });
+
+		const event = factory.create(
+			"OrderPlaced",
+			{ orderId: "o-1" },
+			{ metadata: { source: "import-job" } },
+		);
+
+		// An explicit fact about one event outranks the default of its factory.
+		expect(event.metadata?.source).toBe("import-job");
+	});
+
+	it("keeps the other metadata the call site named", () => {
+		const factory = createDomainEventFactory({ source: "checkout" });
+
+		const event = factory.create(
+			"OrderPlaced",
+			{ orderId: "o-1" },
+			{ metadata: { correlationId: "corr-1" } },
+		);
+
+		expect(event.metadata?.correlationId).toBe("corr-1");
+		expect(event.metadata?.source).toBe("checkout");
+	});
+
+	it("adds no metadata when the factory names no origin", () => {
+		const factory = createDomainEventFactory();
+
+		const event = factory.create("OrderPlaced", { orderId: "o-1" });
+
+		expect(event.metadata?.source).toBeUndefined();
+	});
+});

@@ -140,7 +140,9 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 		},
 		subscribe: () => () => {},
 		subscribeAll: () => () => {},
+		subscribeMany: () => () => {},
 		once: () => new Promise(() => {}),
+		close: () => {},
 	};
 }
 
@@ -1361,7 +1363,9 @@ describe("UnitOfWork", () => {
 				},
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
+				subscribeMany: () => () => {},
 				once: () => new Promise(() => {}),
+				close: () => {},
 			};
 			const event = testEvent("o-1");
 			const agg = createMockAggregate("o-1", [event]);

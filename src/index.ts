@@ -334,13 +334,28 @@ export type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "./messaging/committed-event";
-export { EventBusImpl } from "./messaging/event-bus/event-bus";
+export {
+	EventBusClosedError,
+	PublishDepthExceededError,
+} from "./messaging/event-bus/errors";
+export {
+	EventBusImpl,
+	type EventBusObservers,
+	type EventBusOptions,
+	type HandlerFailureReport,
+	type PublishAbortedReport,
+	type SubscriptionThresholdReport,
+} from "./messaging/event-bus/event-bus";
 export type {
 	EventBus,
 	EventHandler,
 	OnceOptions,
 	PublishOptions,
 } from "./messaging/event-bus/ports";
+export type {
+	PublishChainState,
+	PublishChainStore,
+} from "./messaging/event-bus/publish-chain";
 export {
 	createIntegrationMessage,
 	decodeIntegrationMessage,

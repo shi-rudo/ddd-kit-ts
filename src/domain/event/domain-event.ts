@@ -257,6 +257,15 @@ export interface DomainEventFactoryOptions {
 	readonly eventIdFactory?: EventIdFactory;
 	/** Event-recording clock. Defaults to `() => new Date()`. */
 	readonly clock?: ClockFactory;
+	/**
+	 * Origin stamped on every event this factory mints, unless the call site
+	 * names one itself.
+	 *
+	 * A plain value, not a factory like the two above. Those produce a new
+	 * value for each event. An origin identifies the system that mints them
+	 * and does not change between two of them.
+	 */
+	readonly source?: string;
 }
 
 /**
@@ -311,11 +320,29 @@ export interface DomainEventFactory {
  * recordPendingEvents(order, domainEvents);
  * ```
  */
+/**
+ * Fills the origin of a factory into options that name none.
+ *
+ * A call site that states its own source keeps it: an explicit fact about one
+ * event outranks the default of the factory that mints it.
+ */
+function withFactorySource<T extends { readonly metadata?: EventMetadata }>(
+	options: T | undefined,
+	source: string | undefined,
+): T {
+	const given = (options ?? {}) as T;
+	if (source === undefined || given.metadata?.source !== undefined) {
+		return given;
+	}
+	return { ...given, metadata: { ...given.metadata, source } };
+}
+
 export function createDomainEventFactory(
 	options: DomainEventFactoryOptions = {},
 ): DomainEventFactory {
 	const eventIdFactory = options.eventIdFactory ?? defaultEventIdFactory;
 	const clock = options.clock ?? defaultClockFactory;
+	const { source } = options;
 	const create = (<T extends string, P>(
 		type: T,
 		payload?: P,
@@ -324,7 +351,7 @@ export function createDomainEventFactory(
 		mintDomainEvent(
 			type,
 			payload,
-			createOptions,
+			withFactorySource(createOptions, source),
 			eventIdFactory,
 			clock,
 		)) as DomainEventFactory["create"];
@@ -345,7 +372,9 @@ export function createDomainEventFactory(
 		const eventId = stampOptions.eventId ?? eventIdFactory();
 		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
-		const metadata = guardedMetadataClone(stampOptions.metadata);
+		const metadata = guardedMetadataClone(
+			withFactorySource(stampOptions, source).metadata,
+		);
 		const stamp: DomainEventStamp = {
 			eventId,
 			occurredAt,

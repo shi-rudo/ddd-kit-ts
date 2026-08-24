@@ -2,10 +2,11 @@ import { defaultExclude, defineConfig } from "vite-plus";
 
 export default defineConfig({
 	test: {
-		// Keep Stryker sandboxes (left behind when a mutation run crashes)
-		// out of the suite; a leftover copy would silently double every
-		// test and mask real counts.
-		exclude: [...defaultExclude, ".stryker-tmp/**"],
+		// Keep repository copies out of the suite. A Stryker sandbox is left
+		// behind when a mutation run crashes, and an agent worktree lives
+		// under `.claude/`. Either one silently doubles every test and masks
+		// the real counts.
+		exclude: [...defaultExclude, ".stryker-tmp/**", ".claude/**"],
 	},
 	pack: {
 		entry: {

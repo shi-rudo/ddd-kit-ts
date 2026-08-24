@@ -29,6 +29,225 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: tests for two guarantees the bus already gave
+
+- Every subscriber receives the published event itself, not a copy, so the
+  metadata a publisher attached, `correlationId`, `causationId` and `source`,
+  cannot differ between them. The contract suite pins the identity for any
+  implementation, and a unit test pins the fields.
+- Two buses do not reach each other, and closing one leaves the other usable.
+  Nothing but three constants lives in module scope, so the guarantee held by
+  construction and nothing said so.
+
+### Changed: the published types carry no `any`
+
+- `AggregateClass` had a construct-signature branch whose parameters were
+  `any[]`, for variance: the reference is a map key and an instance witness,
+  never called. It was the last `any` in the published surface.
+- The branch is gone rather than rewritten. `Function & { prototype: TAgg }`
+  already accepts every class shape, protected constructors included, and it
+  infers `TAgg` just as well, so the construct signature beside it changed
+  neither what the type accepts nor what it infers.
+- Every entry point now publishes types without `any`.
+
+### Added: a domain event factory stamps its origin
+
+- `createDomainEventFactory({ source })` stamps that origin on every event and
+  every stamp it mints. `eventId` and the clock were already swappable through
+  the same factory; the origin was a field that existed on the metadata and
+  that nothing produced, so every call site repeated it or left it empty.
+- A call site that names its own source keeps it: an explicit fact about one
+  event outranks the default of the factory that mints it. Other metadata the
+  call site names survives untouched.
+- `source` is a plain value, not a factory like `eventIdFactory` and `clock`.
+  Those produce a new value for each event, and an origin identifies the
+  system that mints them.
+
+### Added (breaking): one subscription for a set of event types
+
+- `subscribeMany(types, handler)` subscribes one handler to several event
+  types and returns a single release. A consumer that reacts to several types
+  no longer keeps one release for each of them, and losing one of several
+  releases is how a partial leak starts.
+- The argument is a set: a type that appears twice subscribes once, because
+  delivering the same event twice to one handler would be a surprise. An empty
+  set subscribes nothing.
+- **Breaking**: the method is part of the port, so an implementation of
+  `EventBus` and every test double gains it.
+
+### Added (breaking): the event bus has a lifecycle
+
+- `EventBus` had no way to stop. A worker shutting down, a test tearing down,
+  or a request scope ending kept every subscription alive, and a `once()`
+  without a timeout and without a signal waited for an event that would never
+  arrive.
+- `close()` releases every subscription and settles every waiter. Afterwards
+  `publish`, `subscribe`, `subscribeAll` and `once` throw the new
+  `EventBusClosedError`, because use after close is a programming bug and a
+  silent no-op would look like a delivery that did not happen. Calling it
+  again does nothing.
+- It releases the subscriptions. It does not stop a handler that is already
+  running, because JavaScript cannot terminate a running promise.
+- **Breaking**: `close()` is part of the port, so an implementation of
+  `EventBus` and every test double gains one method. Six doubles in this
+  repository needed it.
+- The contract suite pins the behavior, and it asserts that the operations
+  throw rather than which error they throw, so a second implementation stays
+  free to use its own.
+- Closing during a publication ends that publication. The remaining events of
+  the batch are not dispatched to subscriptions that close released, and
+  `publish` rejects instead of resolving as if every event had arrived.
+- Closing runs the cleanup of each waiter it settles, so the timeout timer and
+  the abort listener of a `once()` go with it.
+- Closing settles every waiter, one failing waiter included. It rejects each
+  one before it runs that waiter's cleanup, and it isolates the waiters from
+  each other, so a cleanup that throws cannot strand the waiters after it.
+- A waiter registers itself only once its subscription exists. `once`
+  subscribes internally, which can report a subscription threshold, so an
+  observer was able to close the bus while the waiter was still being built
+  and leave it waiting forever.
+- The subscription report re-arms only strictly below the threshold. A steady
+  state that sits exactly on it would otherwise report once per request.
+
+### Changed: the publish chain is one graph of states
+
+- The tracker kept two liveness mechanisms, one for signals and one for store
+  states, and a depth map that nothing read. Every publication now records the
+  state it was created inside, and the depth is a walk of that graph counting
+  the states whose dispatch is still open. The three windows differ only in how
+  they find the state to start from.
+- Behavior does not change. The port doc now says that a handler re-enters
+  `publish` synchronously even when it does not await the result, which is why
+  a publication started inside a handler counts against the bound.
+
+### Added: an adapter contract suite for the event bus
+
+- `EventBus` was the only port without a contract suite, while nine other ports
+  ship one. Its contract is the subtlest in the kit, and it is the port that
+  consumers wrap most often: a tracing decorator, a metrics wrapper, a test
+  double. A wrapper that forwards `publish` but drops the error aggregation or
+  reorders the batch broke the contract with nothing to check against.
+- `createEventBusContractTests` pins what the port documents: input order,
+  parallelism within one event, error collection after the batch, catch-all
+  delivery, the subscription lifecycle, `once`, and the publish options. The
+  harness supplies the events, so the suite carries no event union of its own.
+- The suite pins the port and nothing else. `maxPublishDepth`, `chainStore` and
+  `observers` are construction options of `EventBusImpl`, so a second
+  implementation stays free to omit them.
+- `EventBusImpl` runs the suite as the reference and passes every test with no
+  capability gate.
+
+### Added: the event bus reports what happens during a publication
+
+- A rejected handler reached the caller without its identity, because an
+  `AggregateError` carries failures without their subscription. A publication
+  that timed out named only itself, never the handler that did not return, so
+  the one question an operator asks at that moment had no answer.
+- `observers.onHandlerError` reports each rejection with the event, the batch
+  position, and whether `subscribeAll` registered the handler.
+- `observers.onPublishAborted` reports the batch positions of the handlers that
+  had not settled when a timeout or an owner abort ended the publication. Those
+  handlers keep running, because JavaScript cannot stop a running promise.
+- Both report. They do not change the aggregation contract, and a throw inside
+  either one cannot affect the publication.
+- Every observer in the bundle is required. The bundle itself stays optional,
+  so a no-op is a decision in the code and never a signal nobody knew about.
+
+### Added: the event bus reports accumulating subscriptions
+
+- `subscribe` and `subscribeAll` return an unsubscribe function. Code that
+  subscribes for one request and never calls it leaks the handler, and 5000
+  subscriptions on one event type produced no report and hit no ceiling. The
+  symptom is memory growth with no pointer to the cause.
+- The bus now reports through `observers.onSubscriptionThresholdExceeded` when
+  one event type crosses `maxSubscriptionsPerEventType`, default 32. Catch-all
+  subscriptions report with a `null` event type. The `observers` option itself
+  is optional. When you pass it, the hook is required and the constructor
+  throws a `TypeError` without it.
+- The report arrives once for each crossing, never once for each `subscribe`.
+  The report repeats at each doubling, because a real leak never drops back and
+  the trend is the useful part. The report re-arms once the count drops
+  strictly below the threshold, so a transient spike of in-flight `once`
+  waiters cannot mute an event type for the rest of the process, and a steady
+  state on the threshold does not report on every release. It never throws, because a large fan-out of
+  projections must stay possible.
+- The hook is best-effort. A throw or a rejected promise inside it cannot
+  affect the subscription.
+- Without observers the bus reports nothing. The alternative, a required
+  observer bundle as the productive pollers carry, would turn a parameterless
+  constructor into one with a mandatory argument, for one signal that fires
+  only on a defect.
+
+### Added: the event bus bounds one publish chain
+
+- A handler that publishes re-enters `publish`. Nothing bounded that chain. A
+  synchronous cycle overflowed the call stack at depth 574. An asynchronous
+  cycle starved the event loop, and the process died with
+  `Reached heap limit Allocation failed` after about 270 ms. `timeoutMs`
+  stopped neither, because a timer is a macrotask and a starved loop never runs
+  one.
+- Beyond `maxPublishDepth` the bus now throws the new
+  `PublishDepthExceededError` and names the event path that formed the cycle.
+  The error carries the `WIRING` category and is not retryable. The
+  aggregation contract still applies to it: if a second handler of the same
+  event also fails, the caller receives an `AggregateError` that carries the
+  depth error.
+- `new EventBusImpl({ maxPublishDepth })` configures the bound. The default is
+  32. The constructor took no arguments before, so existing code stays valid.
+- The bound counts one publish chain, never the bus instance. Concurrent
+  publications on one shared bus are correct usage and never reach it.
+- A handler links its nested publication to the chain when it passes
+  `context.signal`. The link follows the owner chain of the bounded
+  executions, so it survives the nested operations of the kit, `withCommit`
+  included. It ends at a signal the kit did not derive, for example one from
+  `AbortSignal.any`, and a handler that drops the signal leaves no link at all.
+  A synchronous cycle is still caught there.
+- Added the optional `chainStore`, which follows every chain whatever a handler
+  does with the signal. Its shape is that of `AsyncLocalStorage`. The kit does
+  not import `node:async_hooks` itself, because that specifier does not resolve
+  under the browser conditions an edge bundle uses, and the kit ships one
+  build. A consumer on Node passes the platform class. A consumer on an edge
+  runtime passes nothing and keeps the signal-based bound.
+- A window counts only while its dispatch runs. Both a store and a context
+  signal stay readable in deferred work, so a handler that schedules a later
+  publication through `setTimeout` would otherwise inherit a depth from a
+  chain that already ended, and a correct poll loop would die at the bound.
+  This holds for the signal as well, which matters because the guide tells a
+  handler to pass `context.signal`.
+- The synchronous window carries the depth of the chain, not a count of stack
+  frames. A batch dispatches its events one after another, so the frame of
+  event 1 has unwound when event 2 runs. A cycle that goes through a later
+  event of a nested batch is bounded now.
+- One bounded execution holds its owner signal weakly. A long chain of nested
+  operations no longer keeps its whole ancestry of signals alive.
+- The chain machinery lives in its own module, `PublishChainTracker`. It owns
+  the three windows and the bound; the bus keeps subscriptions, dispatch and
+  observers. The public API does not change.
+- Added `npm run test:coverage`, backed by `@vitest/coverage-v8` on the same
+  version as the test runner. The event bus reports 100% of lines and
+  functions, 99.56% of statements and 96.33% of branches. The four branches
+  that stay open are defensive: two index guards and one settle guard with no
+  public path to them, and the hop limit of the ancestor walk.
+- Depth counts the ancestors that are still open, never a number copied from
+  the parent. A cycle keeps its ancestors open, because each one awaits the
+  next. A relay lets them finish, so a handler that starts the next
+  publication without awaiting it stays at a flat depth.
+
+### Documentation: the event bus states what it does not promise
+
+- The `publish` contract and `PublishOptions.timeoutMs` now state the delivery
+  guarantee at the port. The bus delivers in memory and at most once. It
+  persists nothing, it retries nothing, and it has no dead-letter path. Work
+  that must survive a crash belongs behind the `Outbox` port.
+- `timeoutMs` bounds the wait, not the handler. If a handler ignores
+  `context.signal`, it keeps running after `publish` rejects, and its side
+  effects still land.
+- A caller that retries a publish that timed out runs the handlers a second
+  time.
+- The common mistakes guide gains a matching entry. It names the work that fits
+  the bus and the work that belongs behind the outbox.
+- These are documentation changes. The API does not change.
+
 ### Changed (breaking): the `presentation` subpath is now `public-errors`
 
 - Rename `@shirudo/ddd-kit/presentation` to `@shirudo/ddd-kit/public-errors`.

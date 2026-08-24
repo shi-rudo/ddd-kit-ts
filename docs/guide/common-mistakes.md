@@ -373,6 +373,172 @@ Pinning the head matters. Without it, events appended during a slow load keep
 moving the target, so one request can observe an open-ended mixture of stream
 states. See [Event Sourcing](./event-sourcing.md#loading-from-history).
 
+### Using the Event Bus for Work That Must Not Be Lost
+
+The event bus delivers in memory and at most once. It persists nothing, it
+retries nothing, and it has no dead-letter path. If the process stops during
+`publish`, the remaining handlers never run. Those events are gone.
+
+Use the bus for work that you can rebuild. Projections, caches, and metrics fit
+here.
+
+Do not use the bus for an effect that the business cannot lose. An email, a
+payment, or a call to another system belongs behind the `Outbox` port. The unit
+of work writes the event to the outbox in the same transaction as the
+aggregate. A separate dispatcher then delivers it, retries it, and moves it
+to the dead-letter queue. Read the outbox guide for that path.
+
+Three facts decide how you write a handler:
+
+1. `timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a
+   running promise. A handler that ignores `context.signal` keeps running after
+   `publish` rejects, and its side effects still land. The thrown
+   `TimeoutError` names the publication, never the handler that hangs. Wire
+   `onPublishAborted` to see which handlers had not returned.
+2. A retry after a timeout runs the handlers a second time. The first attempt
+   can still run. Make the handler idempotent, or do not retry a publish that
+   timed out.
+3. A handler that publishes must pass `context.signal` into that publication.
+   The signal links the nested publication to its chain, and the bus stops a
+   cycle at `maxPublishDepth` (default 32) with `PublishDepthExceededError`.
+   If another handler of the same event also fails, that error arrives inside
+   an `AggregateError`.
+
+Pass `context.signal` into every call a handler makes. The signal gives the
+call cancellation, and it gives the bus the chain.
+
+The link survives the nested operations of the kit, `withCommit` included. It
+ends at a signal that the kit did not derive, for example one from
+`AbortSignal.any`. Without the link, an asynchronous cycle starves the event
+loop, and the process runs out of memory.
+
+On Node, `chainStore` follows every chain, even when a handler replaces the
+signal. The kit does not import `node:async_hooks` itself, because that
+specifier does not resolve in an edge bundle.
+
+```ts
+import { AsyncLocalStorage } from "node:async_hooks";
+import { EventBusImpl, type PublishChainState } from "@shirudo/ddd-kit";
+
+const bus = new EventBusImpl<OrderEvent>({
+  chainStore: new AsyncLocalStorage<PublishChainState>(),
+});
+```
+
+```ts
+// Rebuildable. The bus is the right home.
+bus.subscribe("OrderPlaced", async (event, context) => {
+  await readModel.apply(event, { signal: context.signal });
+});
+
+// Not rebuildable. This belongs behind the Outbox port.
+bus.subscribe("OrderPlaced", async (event) => {
+  await paymentProvider.charge(event.payload.orderId);
+});
+```
+
+### Subscribing Inside a Request Path
+
+`subscribe` and `subscribeAll` return an unsubscribe function. Code that
+subscribes for one request and never calls it leaks the handler. The handler
+stays, and it runs for every later event. The symptom is memory growth with no
+pointer to the cause.
+
+Subscribe once, at startup. If a subscription must follow one request, call the
+returned function when that request ends.
+
+For several subscriptions at once, `subscribeMany` returns one release for the
+whole set. For subscriptions a module opens over time, keep the releases and
+call them together. Both release what you registered and nothing else. The bus
+therefore has no call that removes every handler of a type. Such a call would
+release the subscriptions of other modules as well.
+
+```ts
+const registrations = [
+  bus.subscribe("OrderPlaced", onPlaced),
+  bus.subscribeMany(["OrderPaid", "OrderShipped"], onMoved),
+];
+
+function releaseAll(): void {
+  for (const release of registrations) release();
+}
+```
+
+`DisposableStack` does the same with `using`. Every runtime this kit supports
+has it, Node, Cloudflare workerd, Vercel Edge and Bun. TypeScript needs
+`esnext.disposable` in `lib` for it, so a project on `lib: es2022` gets
+`Cannot find global type 'Disposable'` and the array above stays the simpler
+choice.
+
+`once` also holds a subscription. It
+releases the subscription when the event arrives, when `timeoutMs` expires, or
+when `signal` aborts. Without a timeout and without a signal it waits forever.
+
+The bus reports the leak when one event type crosses
+`maxSubscriptionsPerEventType` (default 32). It reports at the crossing
+and then at each doubling, because a real leak never drops back and the trend
+is the useful part.
+The report re-arms once the count drops strictly below the threshold. A short
+spike of `once` waiters therefore does not mute the event type. A steady state
+on the threshold does not report on every release. The bus never
+throws here, because a large fan-out of projections stays possible. Without an
+observer the bus reports nothing.
+
+The bus reports three things, and every observer is required once you pass the
+bundle. A no-op is then a decision in the code, not a signal you did not know
+about.
+
+```ts
+const bus = new EventBusImpl<OrderEvent>({
+  observers: {
+    // One event type accumulates subscriptions.
+    onSubscriptionThresholdExceeded: (report) => {
+      logger.warn(report, "event bus subscriptions are accumulating");
+    },
+    // A handler rejected. An AggregateError cannot name the subscription,
+    // the batch position can.
+    onHandlerError: ({ event, index, catchAll, error }) => {
+      logger.error({ type: event.type, index, catchAll }, error);
+    },
+    // A timeout ended the publication. These handlers still run.
+    onPublishAborted: ({ event, pendingIndices }) => {
+      logger.error({ type: event.type, pendingIndices }, "handlers pending");
+    },
+  },
+});
+```
+
+### Expecting the Bus to Replay What a Subscriber Missed
+
+The bus holds no past events. A handler receives what is published after it
+subscribes, and nothing from before.
+
+Subscribe while you compose the application. The kit publishes domain events
+from two places: the unit of work after a commit, and the outbox dispatcher in
+its poll loop. Both run after the composition root wired its subscriptions. A
+subscriber that arrives after the first publication is therefore a wiring order
+to correct, not a gap to fill.
+
+For a consumer that must catch up, the answer is a durable position rather than
+memory. A projection reads its checkpoint and continues where it stopped, and
+it survives a restart. The event store holds the history itself. A buffer in
+memory is the lossy approximation of both.
+
+For recent events in a diagnostic, keep your own ring:
+
+```ts
+const recent: OrderEvent[] = [];
+bus.subscribeAll((event) => {
+  recent.push(event);
+  if (recent.length > 100) recent.shift();
+});
+```
+
+The bus does not own that ring on purpose. Such a ring drops its oldest entry
+in silence, so it hands a late subscriber a part of the past that looks whole.
+Delivering it on subscribe adds a second cost: the side effects of every
+buffered event run again, and one new subscription sends a hundred emails.
+
 ### Treating Kit Errors as Unstructured Errors
 
 Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
@@ -422,5 +588,9 @@ When you review code that uses the kit, make sure that these rules apply:
 - Use a separate test factory for each test scope.
 - Load aggregates separately for each edge-runtime request.
 - Preserve structured errors until the mapping boundary.
+- Put work that the business cannot lose behind the outbox, not on the
+  event bus.
+- Pass `context.signal` into every publication a handler makes.
+- Call the unsubscribe function that `subscribe` returns.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

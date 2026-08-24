@@ -31,6 +31,12 @@ export {
 	type EsRepositoryContractTest,
 } from "./es-repository-contract";
 export {
+	createEventBusContractTests,
+	type EventBusContractEnvironment,
+	type EventBusContractHarness,
+	type EventBusContractTest,
+} from "./event-bus-contract";
+export {
 	createEventStoreContractTests,
 	type EventStoreContractEnvironment,
 	type EventStoreContractHarness,

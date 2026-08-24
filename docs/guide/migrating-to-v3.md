@@ -391,6 +391,8 @@ Do not carry an rc.1 compatibility layer into the next candidate. Upgrade all
 writers for the bounded context together. Use the same cutover procedure. Keep
 the backup until the post-deployment checks are complete.
 
+
+
 ## Appendix: v3.0.0-rc.2 to rc.3 or later
 
 Stored business data stays reusable. The source break is narrow and comes
@@ -486,3 +488,37 @@ import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
 The `money`, `http` and `testing` entry points keep their names. Each of
 them carries symbols that the root entry deliberately omits, so none of
 them duplicates anything.
+### The event bus has a lifecycle
+
+`EventBus` gained `close()` and `subscribeMany()`. Every implementation of the
+port and every test double needs both.
+
+Before:
+
+```ts
+const bus: EventBus<OrderEvent> = {
+  publish: async () => {},
+  subscribe: () => () => {},
+  subscribeAll: () => () => {},
+  once: () => new Promise(() => {}),
+};
+```
+
+After:
+
+```ts
+const bus: EventBus<OrderEvent> = {
+  publish: async () => {},
+  subscribe: () => () => {},
+  subscribeAll: () => () => {},
+  once: () => new Promise(() => {}),
+  subscribeMany: () => () => {},
+  close: () => {},
+};
+```
+
+Call it when the scope that owns the bus ends. After the call, `publish`,
+`subscribe`, `subscribeAll` and `once` throw `EventBusClosedError`, and a
+pending `once()` rejects instead of waiting for an event that cannot arrive.
+Closing releases the subscriptions. It does not stop a handler that is already
+running.

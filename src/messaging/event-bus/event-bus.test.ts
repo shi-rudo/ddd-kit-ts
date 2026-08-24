@@ -3,8 +3,20 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/aggregate/aggregate";
-import type { ExecutionContext } from "../../internal/async/execution";
-import { EventBusImpl } from "./event-bus";
+import {
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../../internal/async/execution";
+import { EventBusClosedError, PublishDepthExceededError } from "./errors";
+import { EventBusImpl, type EventBusObservers } from "./event-bus";
+import type { PublishChainStore } from "./publish-chain";
+
+/** Every observer is required. Tests override only the one they assert on. */
+const silentObservers = (): EventBusObservers => ({
+	onSubscriptionThresholdExceeded: () => {},
+	onHandlerError: () => {},
+	onPublishAborted: () => {},
+});
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 type OrderShipped = DomainEvent<"OrderShipped", { orderId: string }>;
@@ -803,6 +815,1145 @@ describe("EventBusImpl", () => {
 			const received = await p;
 			// Narrowed: trackingNumber is required on OrderShipped
 			expect(received.payload.trackingNumber).toBe("T-1");
+		});
+	});
+
+	describe("unsubscribe", () => {
+		it("ignores a second call", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const releaseFirst = bus.subscribe("OrderCreated", () => {
+				seen.push("first");
+			});
+			bus.subscribe("OrderCreated", () => {
+				seen.push("second");
+			});
+
+			releaseFirst();
+			releaseFirst();
+			releaseFirst();
+			await bus.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
+
+			// Without a publication the assertion proves nothing: an
+			// unsubscribe that wrongly removed the peer would pass too.
+			expect(seen).toEqual(["second"]);
+		});
+
+		it("ignores a second call on a catch-all subscription", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const release = bus.subscribeAll(() => {});
+
+			release();
+
+			expect(() => release()).not.toThrow();
+		});
+	});
+
+	describe("abort reason that is not an error", () => {
+		it("carries it alongside the handler failures", async () => {
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>();
+
+			bus.subscribe("OrderCreated", async () => {
+				controller.abort("stopped by a string");
+				throw new Error("handler failed");
+			});
+
+			const error = (await bus
+				.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+					],
+					{ signal: controller.signal },
+				)
+				.catch((reason) => reason)) as AggregateError;
+
+			expect(error).toBeInstanceOf(AggregateError);
+			for (const collected of error.errors) {
+				expect(collected).toBeInstanceOf(Error);
+			}
+		});
+	});
+
+	describe("subscribeMany", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+		const shipped = () =>
+			createDomainEvent("OrderShipped", {
+				orderId: "o-1",
+				trackingNumber: "T-1",
+			}) as OrderShipped;
+
+		it("delivers every type of the set to one handler", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribeMany(["OrderCreated", "OrderShipped"], (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([created(), shipped()]);
+
+			expect(seen).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("releases every subscription it made with one call", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const release = bus.subscribeMany(
+				["OrderCreated", "OrderShipped"],
+				(event) => {
+					seen.push(event.type);
+				},
+			);
+
+			release();
+			await bus.publish([created(), shipped()]);
+
+			// Losing one of several releases is how a partial leak starts.
+			expect(seen).toEqual([]);
+		});
+
+		it("subscribes a repeated type once", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			bus.subscribeMany(["OrderCreated", "OrderCreated"], () => {
+				calls++;
+			});
+
+			await bus.publish([created()]);
+
+			expect(calls).toBe(1);
+		});
+
+		it("subscribes nothing for an empty set", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			const release = bus.subscribeMany([], () => {
+				calls++;
+			});
+
+			await bus.publish([created()]);
+
+			expect(calls).toBe(0);
+			expect(() => release()).not.toThrow();
+		});
+
+		it("does nothing when the release is called again", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const release = bus.subscribeMany(["OrderCreated"], (event) => {
+				seen.push(event.type);
+			});
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(`peer:${event.type}`);
+			});
+
+			release();
+			release();
+			await bus.publish([created()]);
+
+			expect(seen).toEqual(["peer:OrderCreated"]);
+		});
+
+		it("refuses a closed bus", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.subscribeMany(["OrderCreated"], () => {})).toThrow(
+				EventBusClosedError,
+			);
+		});
+	});
+
+	describe("metadata and instance isolation", () => {
+		it("hands every subscriber the same event, metadata included", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: OrderEvent[] = [];
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(event);
+			});
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(event);
+			});
+			bus.subscribeAll((event) => {
+				seen.push(event);
+			});
+
+			const published = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{
+					aggregateId: "o-1",
+					aggregateType: "Order",
+					metadata: {
+						correlationId: "corr-1",
+						causationId: "cause-1",
+						source: "checkout",
+					},
+				},
+			) as OrderCreated;
+			await bus.publish([published]);
+
+			expect(seen).toHaveLength(3);
+			for (const received of seen) {
+				// Identity, not a copy: a bus that reserialized the event would
+				// give each subscriber its own metadata.
+				expect(received).toBe(published);
+				expect(received.metadata?.correlationId).toBe("corr-1");
+				expect(received.metadata?.causationId).toBe("cause-1");
+				expect(received.metadata?.source).toBe("checkout");
+			}
+		});
+
+		it("keeps two buses from reaching each other", async () => {
+			const first = new EventBusImpl<OrderEvent>();
+			const second = new EventBusImpl<OrderEvent>();
+			const onFirst: string[] = [];
+			const onSecond: string[] = [];
+			first.subscribe("OrderCreated", () => {
+				onFirst.push("first");
+			});
+			first.subscribeAll(() => {
+				onFirst.push("first:all");
+			});
+			second.subscribe("OrderCreated", () => {
+				onSecond.push("second");
+			});
+
+			await second.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
+
+			expect(onSecond).toEqual(["second"]);
+			expect(onFirst).toEqual([]);
+		});
+
+		it("leaves the other bus usable when one closes", async () => {
+			const first = new EventBusImpl<OrderEvent>();
+			const second = new EventBusImpl<OrderEvent>();
+			let reached = 0;
+			second.subscribe("OrderCreated", () => {
+				reached++;
+			});
+
+			first.close();
+			await second.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
+
+			expect(reached).toBe(1);
+		});
+	});
+
+	describe("close", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+
+		it("rejects every operation afterwards", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.subscribe("OrderCreated", () => {})).toThrow(
+				EventBusClosedError,
+			);
+			expect(() => bus.subscribeAll(() => {})).toThrow(EventBusClosedError);
+			await expect(bus.publish([created()])).rejects.toThrow(
+				EventBusClosedError,
+			);
+			await expect(bus.once("OrderCreated")).rejects.toThrow(
+				EventBusClosedError,
+			);
+		});
+
+		it("settles a waiter that would otherwise wait forever", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			// Without a timeout and without a signal this waits for an event
+			// that closing makes impossible.
+			const waiting = bus.once("OrderCreated");
+
+			bus.close();
+
+			await expect(waiting).rejects.toThrow(EventBusClosedError);
+		});
+
+		it("releases the subscriptions it held", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let called = 0;
+			bus.subscribe("OrderCreated", () => {
+				called++;
+			});
+			bus.subscribeAll(() => {
+				called++;
+			});
+
+			bus.close();
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				EventBusClosedError,
+			);
+			expect(called).toBe(0);
+		});
+
+		it("settles every waiter even when one of them throws while settling", async () => {
+			const controller = new AbortController();
+			// A signal whose listener removal throws makes the cleanup of the
+			// first waiter fail. The waiters after it must still settle.
+			const hostile = new Proxy(controller.signal, {
+				get(target, property, receiver) {
+					if (property === "removeEventListener") {
+						return () => {
+							throw new Error("hostile signal");
+						};
+					}
+					const value = Reflect.get(target, property, receiver);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const bus = new EventBusImpl<OrderEvent>();
+			const first = bus.once("OrderCreated", { signal: hostile });
+			const second = bus.once("OrderCreated");
+
+			bus.close();
+
+			await expect(first).rejects.toThrow();
+			await expect(second).rejects.toThrow(EventBusClosedError);
+		});
+
+		it("settles a waiter created while an observer closes the bus", async () => {
+			const bus: EventBusImpl<OrderEvent> = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					...silentObservers(),
+					// once() subscribes internally, so a report can fire while the
+					// waiter is still being built.
+					onSubscriptionThresholdExceeded: () => {
+						bus.close();
+					},
+				},
+			});
+
+			const first = bus.once("OrderCreated");
+			const second = bus.once("OrderCreated");
+
+			await expect(first).rejects.toThrow(EventBusClosedError);
+			await expect(second).rejects.toThrow(EventBusClosedError);
+		});
+
+		it("does nothing when called again", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.close()).not.toThrow();
+		});
+
+		it("refuses the rest of a batch when it closes mid-publish", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribe("OrderCreated", async (event) => {
+				seen.push(event.payload.orderId);
+				if (seen.length === 1) {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					bus.close();
+				}
+			});
+
+			// Resolving here would drop the remaining events in silence, which
+			// is what the closed error exists to prevent.
+			await expect(
+				bus.publish([created(), created(), created()]),
+			).rejects.toThrow(EventBusClosedError);
+			expect(seen).toEqual(["o-1"]);
+		});
+
+		it("does not stop a handler that is already running", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let finished = false;
+			bus.subscribe("OrderCreated", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				finished = true;
+			});
+
+			// JavaScript cannot terminate a running promise, so closing during
+			// a publication releases the subscriptions and lets the handler run
+			// to its end.
+			const publishing = bus.publish([created()]);
+			bus.close();
+			await publishing;
+
+			expect(finished).toBe(true);
+		});
+	});
+
+	describe("construction options", () => {
+		it("rejects a maximum publish depth that is not a positive integer", () => {
+			for (const invalid of [0, -1, 1.5, Number.NaN]) {
+				expect(
+					() => new EventBusImpl<OrderEvent>({ maxPublishDepth: invalid }),
+				).toThrow();
+			}
+		});
+
+		it("rejects a subscription threshold that is not a positive integer", () => {
+			expect(
+				() => new EventBusImpl<OrderEvent>({ maxSubscriptionsPerEventType: 0 }),
+			).toThrow();
+		});
+
+		it("rejects a chain store without run and getStore", () => {
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						chainStore: {} as unknown as PublishChainStore,
+					}),
+			).toThrow(TypeError);
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						chainStore: {
+							run: () => undefined,
+						} as unknown as PublishChainStore,
+					}),
+			).toThrow(TypeError);
+		});
+	});
+
+	describe("abort between the events of one batch", () => {
+		it("dispatches nothing when the signal is already aborted", async () => {
+			const controller = new AbortController();
+			controller.abort(new Error("owner stopped before publish"));
+			const bus = new EventBusImpl<OrderEvent>();
+			let called = false;
+
+			bus.subscribe("OrderCreated", () => {
+				called = true;
+			});
+
+			await expect(
+				bus.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+					],
+					{ signal: controller.signal },
+				),
+			).rejects.toThrow();
+
+			expect(called).toBe(false);
+		});
+
+		it("stops the batch and leaves the remaining events undispatched", async () => {
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			bus.subscribe("OrderCreated", async () => {
+				seen.push("OrderCreated");
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderShipped", async () => {
+				seen.push("OrderShipped");
+			});
+
+			await expect(
+				bus.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+						createDomainEvent("OrderShipped", {
+							orderId: "o-1",
+						}) as OrderShipped,
+					],
+					{ signal: controller.signal },
+				),
+			).rejects.toThrow();
+
+			expect(seen).toEqual(["OrderCreated"]);
+		});
+	});
+
+	describe("publish recursion", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+		const shipped = () =>
+			createDomainEvent("OrderShipped", { orderId: "o-1" }) as OrderShipped;
+
+		// Every cycle test carries its own brake. Without the guard the bus
+		// overflows the stack or starves the event loop until the process dies,
+		// and a test must not depend on that to fail.
+		const BRAKE = 200;
+
+		it("rejects a synchronous publish cycle instead of overflowing the stack", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("rejects an asynchronous publish cycle that carries the context signal", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				await Promise.resolve();
+				await bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("bounds a cycle whose signal crosses a nested bounded execution", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				// The await ends the synchronous window, so only the signal can
+				// still carry the chain. withCommit then publishes from inside its
+				// own bounded execution, so the bus receives a derived signal, not
+				// the one it handed to the handler.
+				await Promise.resolve();
+				await runBoundedExecution(
+					"nested",
+					{ signal: context.signal, timeoutMs: 5_000 },
+					(nested) => bus.publish([created()], { signal: nested.signal }),
+				);
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("bounds a synchronous cycle that runs through a later event of a batch", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 8 });
+			let hops = 0;
+
+			// The nested publication carries two events. The cycling one is
+			// second, so it dispatches after an await and the synchronous frame
+			// of its parent has unwound.
+			bus.subscribe("OrderCreated", () => {
+				if (hops >= BRAKE) return;
+				hops++;
+				return bus.publish([shipped(), created()]);
+			});
+			bus.subscribe("OrderShipped", () => {});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(hops).toBeLessThan(BRAKE);
+		});
+
+		it("does not count a later scheduled publication that carries the signal", async () => {
+			// The guide tells a handler to pass context.signal. A poll loop that
+			// obeys it must not run into the bound: every generation finishes
+			// before the next one starts, so nothing is nested.
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			let generations = 0;
+			let failure: unknown;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (generations >= 12) return;
+				generations++;
+				setTimeout(() => {
+					bus
+						.publish([created()], { signal: context.signal })
+						.catch((reason) => {
+							failure ??= reason;
+						});
+				}, 1);
+			});
+
+			await bus.publish([created()]);
+			const started = Date.now();
+			while (
+				generations < 12 &&
+				failure === undefined &&
+				Date.now() - started < 5_000
+			) {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+
+			expect(failure).toBeUndefined();
+			expect(generations).toBe(12);
+		});
+
+		it("names the event types that formed the cycle", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([shipped()], { signal: context.signal });
+			});
+			bus.subscribe("OrderShipped", (_event, context) =>
+				bus.publish([created()], { signal: context.signal }),
+			);
+
+			const error = await bus.publish([created()]).catch((reason) => reason);
+
+			expect(error).toBeInstanceOf(PublishDepthExceededError);
+			expect(error.code).toBe("PUBLISH_DEPTH_EXCEEDED");
+			expect(error.message).toContain("OrderCreated");
+			expect(error.message).toContain("OrderShipped");
+		});
+
+		it("dispatches nested publications that stay below the limit", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			const seen: string[] = [];
+
+			bus.subscribe("OrderCreated", (event, context) => {
+				seen.push(event.type);
+				return bus.publish([shipped()], { signal: context.signal });
+			});
+			bus.subscribe("OrderShipped", (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([created()]);
+
+			expect(seen).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("does not count concurrent publications on one bus as recursion", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			let handled = 0;
+
+			// One shared bus, published to concurrently, is correct usage. A
+			// guard that counts per instance instead of per chain rejects this.
+			bus.subscribe("OrderCreated", async () => {
+				await Promise.resolve();
+				handled++;
+			});
+
+			await Promise.all(
+				Array.from({ length: 100 }, () => bus.publish([created()])),
+			);
+
+			expect(handled).toBe(100);
+		});
+
+		it("honours a configured maximum publish depth", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 3 });
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBe(3);
+		});
+	});
+
+	describe("subscription accumulation", () => {
+		const noop = () => {};
+
+		it("reports the crossing, then each doubling", () => {
+			const reports: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 3,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) => reports.push(report),
+				},
+			});
+
+			for (let index = 0; index < 10; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(reports).toEqual([
+				{ eventType: "OrderCreated", subscriptionCount: 4, threshold: 3 },
+				{ eventType: "OrderCreated", subscriptionCount: 8, threshold: 3 },
+			]);
+		});
+
+		it("reports each event type separately", () => {
+			const types: (string | null)[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						types.push(report.eventType),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderShipped", noop);
+			bus.subscribe("OrderShipped", noop);
+
+			expect(types).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("reports again after the count drops below the threshold", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			// A transient spike, for example many in-flight `once` waiters, must
+			// not mute the event type for the rest of the process. Receding to
+			// the threshold itself is not a recession: the next subscribe
+			// crosses again at once.
+			const releaseSecond = bus.subscribe("OrderCreated", noop);
+			const releaseThird = bus.subscribe("OrderCreated", noop);
+			releaseSecond();
+			releaseThird();
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+
+			expect(counts).toEqual([3, 3]);
+		});
+
+		it("stays muted while the count is still above the threshold", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			const release = bus.subscribe("OrderCreated", noop);
+			// Back to 3, which is still over 2, so nothing is re-armed.
+			release();
+			bus.subscribe("OrderCreated", noop);
+
+			expect(counts).toEqual([3]);
+		});
+
+		it("stays quiet in a steady state at the threshold", () => {
+			let reports = 0;
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: () => {
+						reports++;
+					},
+				},
+			});
+			for (let index = 0; index < 4; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			// One short-lived subscription per request, on top of a steady
+			// state that already sits at the threshold.
+			for (let request = 0; request < 10; request++) {
+				bus.subscribe("OrderCreated", noop)();
+			}
+
+			expect(reports).toBe(1);
+		});
+
+		it("re-arms the catch-all report as well", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			const releaseFirst = bus.subscribeAll(noop);
+			const releaseSecond = bus.subscribeAll(noop);
+			releaseFirst();
+			releaseSecond();
+			bus.subscribeAll(noop);
+			bus.subscribeAll(noop);
+
+			expect(counts).toEqual([2, 2]);
+		});
+
+		it("keeps reporting as a monotonic leak grows", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			// A real leak never drops back, so a report that only fires on the
+			// first crossing hides the number the operator needs.
+			for (let index = 0; index < 40; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(counts).toEqual([5, 10, 20, 40]);
+		});
+
+		it("reports catch-all subscriptions with a null event type", () => {
+			const reports: { eventType: string | null }[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) => reports.push(report),
+				},
+			});
+
+			bus.subscribeAll(noop);
+			bus.subscribeAll(noop);
+			bus.subscribeAll(noop);
+
+			expect(reports).toEqual([
+				{ eventType: null, subscriptionCount: 3, threshold: 2 },
+			]);
+		});
+
+		it("stays silent at or below the threshold", () => {
+			let reported = false;
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: () => {
+						reported = true;
+					},
+				},
+			});
+
+			for (let index = 0; index < 4; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(reported).toBe(false);
+		});
+
+		it("keeps subscribing when the observer throws", () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: () => {
+						throw new Error("observer boom");
+					},
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+
+			expect(() => bus.subscribe("OrderCreated", noop)).not.toThrow();
+		});
+
+		it("rejects an observer bundle without the hook", () => {
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						observers: {} as unknown as EventBusObservers,
+					}),
+			).toThrow(TypeError);
+		});
+
+		it("subscribes without a configured observer", () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+			});
+
+			expect(() => {
+				bus.subscribe("OrderCreated", noop);
+				bus.subscribe("OrderCreated", noop);
+			}).not.toThrow();
+		});
+	});
+
+	describe("dispatch observability", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+
+		it("reports a failing handler with its position in the batch", async () => {
+			const failures: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) =>
+						failures.push({
+							index: report.index,
+							catchAll: report.catchAll,
+							type: report.event.type,
+							message: report.error.message,
+						}),
+				},
+			});
+
+			bus.subscribe("OrderCreated", () => {});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("second handler failed");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				"second handler failed",
+			);
+
+			expect(failures).toEqual([
+				{
+					index: 1,
+					catchAll: false,
+					type: "OrderCreated",
+					message: "second handler failed",
+				},
+			]);
+		});
+
+		it("marks a catch-all handler in the failure report", async () => {
+			const catchAll: boolean[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) => catchAll.push(report.catchAll),
+				},
+			});
+
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("typed");
+			});
+			bus.subscribeAll(() => {
+				throw new Error("catch all");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(AggregateError);
+
+			expect(catchAll).toEqual([false, true]);
+		});
+
+		it("keeps the catch-all flag correct when a peer unsubscribes mid-dispatch", async () => {
+			const flags: boolean[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) => flags.push(report.catchAll),
+				},
+			});
+
+			// The batch is snapshotted so an unsubscribe cannot shift indices.
+			// Anything derived from the live array must be snapshotted with it.
+			let releasePeer = () => {};
+			bus.subscribe("OrderCreated", () => {
+				releasePeer();
+			});
+			releasePeer = bus.subscribe("OrderCreated", () => {
+				throw new Error("typed handler failed");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				"typed handler failed",
+			);
+
+			expect(flags).toEqual([false]);
+		});
+
+		it("does not report a synchronously finished handler as still running", async () => {
+			const reports: (readonly number[])[] = [];
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: (report) => reports.push(report.pendingIndices),
+				},
+			});
+
+			// An async handler that returns at once resolves a microtask later.
+			// A report taken in the same turn would call it abandoned.
+			bus.subscribe("OrderCreated", async () => {});
+			bus.subscribe("OrderCreated", () => {
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderCreated", () => new Promise<void>(() => {}));
+
+			await expect(
+				bus.publish([created()], { signal: controller.signal }),
+			).rejects.toThrow();
+
+			// Only index 2 is open. Index 0 resolved, index 1 returned right
+			// after it aborted, and both settle before the report is taken.
+			expect(reports).toEqual([[2]]);
+		});
+
+		it("names the handlers that were still running when the publish aborted", async () => {
+			const reports: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: (report) =>
+						reports.push({
+							pending: report.pendingIndices,
+							type: report.event.type,
+							reason: (report.reason as Error)?.name,
+						}),
+				},
+			});
+
+			bus.subscribe("OrderCreated", async () => {});
+			// Never settles. This is the handler an operator needs named.
+			bus.subscribe("OrderCreated", () => new Promise<void>(() => {}));
+
+			await expect(
+				bus.publish([created()], { timeoutMs: 30 }),
+			).rejects.toThrow();
+
+			expect(reports).toEqual([
+				{ pending: [1], type: "OrderCreated", reason: "TimeoutError" },
+			]);
+		});
+
+		it("reports nothing when the abort finds every handler settled", async () => {
+			const controller = new AbortController();
+			let reported = false;
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: () => {
+						reported = true;
+					},
+				},
+			});
+
+			// Both handlers return without a promise, so both are settled when
+			// the report is taken. An abort with nothing left running must not
+			// raise a false alarm.
+			bus.subscribe("OrderCreated", () => {
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderCreated", () => {});
+
+			await expect(
+				bus.publish([created()], { signal: controller.signal }),
+			).rejects.toThrow();
+			await new Promise((resolve) => setTimeout(resolve, 5));
+
+			expect(reported).toBe(false);
+		});
+
+		it("reports nothing abandoned when every handler settles", async () => {
+			let aborted = 0;
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: () => {
+						aborted++;
+					},
+				},
+			});
+			bus.subscribe("OrderCreated", async () => {});
+
+			await bus.publish([created()]);
+
+			expect(aborted).toBe(0);
+		});
+
+		it("keeps a rejection that cannot become a string", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			// A value without a prototype has no string form, so String() on it
+			// throws. That must not swallow the failure of a peer.
+			bus.subscribe("OrderCreated", () => {
+				throw Object.create(null);
+			});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("second handler failed");
+			});
+
+			const error = (await bus
+				.publish([created()])
+				.catch((reason) => reason)) as AggregateError;
+
+			expect(error).toBeInstanceOf(AggregateError);
+			expect(error.errors).toHaveLength(2);
+			for (const collected of error.errors) {
+				expect(collected).toBeInstanceOf(Error);
+			}
+		});
+
+		it("rejects with an error when the only rejection has no string form", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const reason = Object.create(null);
+			bus.subscribe("OrderCreated", () => {
+				throw reason;
+			});
+
+			const error = await bus.publish([created()]).catch((thrown) => thrown);
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBe(reason);
+		});
+
+		it("publishes an empty batch at the depth bound", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 1 });
+			let nested: unknown = "not attempted";
+
+			// An empty batch dispatches nothing, so it cannot extend a cycle.
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				nested = await bus
+					.publish([], { signal: context.signal })
+					.then(() => "resolved")
+					.catch((reason) => reason);
+			});
+
+			await bus.publish([created()]);
+
+			expect(nested).toBe("resolved");
+		});
+
+		it("keeps the failure contract when a failure observer throws", async () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: () => {
+						throw new Error("observer boom");
+					},
+				},
+			});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("handler boom");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow("handler boom");
 		});
 	});
 });

@@ -9,19 +9,17 @@ import { AggregateDeletedError } from "../../errors/kit-errors";
  * someone names two aggregates identically across modules, and there
  * is no string-discipline to maintain.
  *
- * The `Function & { prototype: TAgg }` branch is load-bearing: the
- * kit's aggregate convention is a **protected constructor** plus
- * static factories, and TypeScript rejects assigning a class with a
- * protected constructor to a construct-signature type. The prototype
- * witness accepts those classes while still inferring `TAgg`.
+ * `Function & { prototype: TAgg }` carries this alone. The kit's aggregate
+ * convention is a **protected constructor** plus static factories, and
+ * TypeScript rejects assigning such a class to a construct-signature type, so
+ * the prototype witness is what accepts them. It infers `TAgg` as well.
+ * Measured: a construct signature beside it changes neither what the type
+ * accepts nor what it infers, and it was the last `any` in the published
+ * types.
  */
 export type AggregateClass<TAgg> =
-	| (abstract new (
-			// biome-ignore lint/suspicious/noExplicitAny: variance; a class reference is only used as a map key and instance witness here.
-			...args: any[]
-	  ) => TAgg)
 	// biome-ignore lint/complexity/noBannedTypes: Function is deliberate; a construct signature cannot accept protected-constructor classes (the kit's aggregate convention); the prototype witness keeps TAgg inference.
-	| (Function & { prototype: TAgg });
+	Function & { prototype: TAgg };
 
 /**
  * Per-unit-of-work Identity Map (Fowler, PoEAA): within one operation,
