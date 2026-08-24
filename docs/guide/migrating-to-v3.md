@@ -393,39 +393,6 @@ the backup until the post-deployment checks are complete.
 
 
 
-Two source breaks, both at the entry points. No function and no type
-disappears.
-
-### The `utils` entry point is gone
-
-```ts
-// before
-import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit/utils";
-
-// after
-import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
-```
-
-The four types travel with the functions: `DeepEqualExceptOptions`,
-`DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
-
-### The `presentation` entry point is now `public-errors`
-
-The names it exports stay the same. The old name said where the code
-lived, not what the entry point gives.
-
-```ts
-// before
-import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
-
-// after
-import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
-```
-
-The `money`, `http` and `testing` entry points keep their names. Each of
-them carries symbols that the root entry deliberately omits, so none of
-them duplicates anything.
-
 ## Appendix: v3.0.0-rc.2 to rc.3 or later
 
 Stored business data stays reusable. The source break is narrow and comes
@@ -488,6 +455,39 @@ this list if your code observes one of these paths:
   relied on shared references see copies now.
 
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
+
+Two source breaks, both at the entry points. No function and no type
+disappears.
+
+### The `utils` entry point is gone
+
+```ts
+// before
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit/utils";
+
+// after
+import { deepEqual, deepEqualExcept, deepOmit } from "@shirudo/ddd-kit";
+```
+
+The four types travel with the functions: `DeepEqualExceptOptions`,
+`DeepOmitKey`, `DeepOmitOptions` and `DeepOmitPathSegment`.
+
+### The `presentation` entry point is now `public-errors`
+
+The names it exports stay the same. The old name said where the code
+lived, not what the entry point gives.
+
+```ts
+// before
+import { toPublicErrorView } from "@shirudo/ddd-kit/presentation";
+
+// after
+import { toPublicErrorView } from "@shirudo/ddd-kit/public-errors";
+```
+
+The `money`, `http` and `testing` entry points keep their names. Each of
+them carries symbols that the root entry deliberately omits, so none of
+them duplicates anything.
 ### The event bus has a lifecycle
 
 `EventBus` gained `close()` and `subscribeMany()`. Every implementation of the

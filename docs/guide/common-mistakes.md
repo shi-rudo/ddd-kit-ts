@@ -469,7 +469,8 @@ has it, Node, Cloudflare workerd, Vercel Edge and Bun. TypeScript needs
 `esnext.disposable` in `lib` for it, so a project on `lib: es2022` gets
 `Cannot find global type 'Disposable'` and the array above stays the simpler
 choice.
- `once` also holds a subscription. It
+
+`once` also holds a subscription. It
 releases the subscription when the event arrives, when `timeoutMs` expires, or
 when `signal` aborts. Without a timeout and without a signal it waits forever.
 

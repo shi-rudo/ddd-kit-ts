@@ -99,6 +99,13 @@ gives a before-and-after example for each breaking change.
   `publish` rejects instead of resolving as if every event had arrived.
 - Closing runs the cleanup of each waiter it settles, so the timeout timer and
   the abort listener of a `once()` go with it.
+- Closing settles every waiter, one failing waiter included. It rejects each
+  one before it runs that waiter's cleanup, and it isolates the waiters from
+  each other, so a cleanup that throws cannot strand the waiters after it.
+- A waiter registers itself only once its subscription exists. `once`
+  subscribes internally, which can report a subscription threshold, so an
+  observer was able to close the bus while the waiter was still being built
+  and leave it waiting forever.
 - The subscription report re-arms only strictly below the threshold. A steady
   state that sits exactly on it would otherwise report once per request.
 

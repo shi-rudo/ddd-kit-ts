@@ -207,9 +207,13 @@ export interface EventBusOptions {
  * failed. `observers.onHandlerError` carries the batch position and the
  * event, so a handler no longer names itself to be identifiable.
  *
- * **A handler that publishes stays inside a bounded chain.** Such a
- * handler re-enters `publish`, and it does so synchronously even when it
- * does not await the result. A cycle in the handler graph overflows
+ * **A handler that publishes keeps the chain visible, or the bound cannot
+ * see it.** Pass `context.signal` into the nested publication, or inject a
+ * `chainStore`. A handler that does neither and publishes after an `await`
+ * leaves a chain no window can follow, and the bound never fires for it.
+ *
+ * Such a handler re-enters `publish`, and it does so synchronously even when
+ * it does not await the result. A cycle in the handler graph overflows
  * the call stack, or it starves the event loop until the process runs
  * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
  * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
@@ -329,7 +333,16 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		this.reportedAt.clear();
 		const waiting = [...this.pendingOnce];
 		this.pendingOnce.clear();
-		for (const settle of waiting) settle(new EventBusClosedError("once"));
+		for (const settle of waiting) {
+			try {
+				settle(new EventBusClosedError("once"));
+			} catch {
+				// The waiters are already out of the set, so a throw here would
+				// strand every waiter after this one and no later close() could
+				// reach them. Closing settles all of them or none of the port
+				// contract holds.
+			}
+		}
 	}
 
 	private assertOpen(operation: string): void {
@@ -434,11 +447,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			let settled = false;
 			let abortListener: (() => void) | undefined;
 
+			// Assigned by the subscribe below. `once` subscribes internally, and
+			// that can report a subscription threshold, so an observer is able
+			// to close the bus before this binding exists. A `const` would then
+			// be read from its temporal dead zone and the waiter would hang.
+			let unsubscribe: () => void = () => {};
 			const settleAsClosed = (error: Error): void => {
-				cleanup();
+				// Reject first. A cleanup that throws, for example a signal
+				// whose listener removal fails, must not keep this waiter
+				// unsettled: the promise is what the caller awaits.
 				reject(error);
+				cleanup();
 			};
-			this.pendingOnce.add(settleAsClosed);
 			const cleanup = () => {
 				if (settled) return;
 				settled = true;
@@ -450,10 +470,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				}
 			};
 
-			const unsubscribe = this.subscribe(eventType, (event) => {
+			unsubscribe = this.subscribe(eventType, (event) => {
 				cleanup();
 				resolve(event);
 			});
+			// Registered only once the subscription exists, and re-checked:
+			// closing during that subscribe would otherwise leave this waiter
+			// on a closed bus with nothing left to settle it.
+			this.pendingOnce.add(settleAsClosed);
+			if (this.closed) {
+				settleAsClosed(new EventBusClosedError("once"));
+				return;
+			}
 
 			if (signal) {
 				abortListener = () => {

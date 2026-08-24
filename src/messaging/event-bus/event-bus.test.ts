@@ -1098,6 +1098,51 @@ describe("EventBusImpl", () => {
 			expect(called).toBe(0);
 		});
 
+		it("settles every waiter even when one of them throws while settling", async () => {
+			const controller = new AbortController();
+			// A signal whose listener removal throws makes the cleanup of the
+			// first waiter fail. The waiters after it must still settle.
+			const hostile = new Proxy(controller.signal, {
+				get(target, property, receiver) {
+					if (property === "removeEventListener") {
+						return () => {
+							throw new Error("hostile signal");
+						};
+					}
+					const value = Reflect.get(target, property, receiver);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const bus = new EventBusImpl<OrderEvent>();
+			const first = bus.once("OrderCreated", { signal: hostile });
+			const second = bus.once("OrderCreated");
+
+			bus.close();
+
+			await expect(first).rejects.toThrow();
+			await expect(second).rejects.toThrow(EventBusClosedError);
+		});
+
+		it("settles a waiter created while an observer closes the bus", async () => {
+			const bus: EventBusImpl<OrderEvent> = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					...silentObservers(),
+					// once() subscribes internally, so a report can fire while the
+					// waiter is still being built.
+					onSubscriptionThresholdExceeded: () => {
+						bus.close();
+					},
+				},
+			});
+
+			const first = bus.once("OrderCreated");
+			const second = bus.once("OrderCreated");
+
+			await expect(first).rejects.toThrow(EventBusClosedError);
+			await expect(second).rejects.toThrow(EventBusClosedError);
+		});
+
 		it("does nothing when called again", () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			bus.close();
