@@ -449,9 +449,9 @@ returned function when that request ends.
 
 For several subscriptions at once, `subscribeMany` returns one release for the
 whole set. For subscriptions a module opens over time, collect the releases in
-a `DisposableStack`. Both release what you registered and nothing else, which
-is why the bus has no call that removes every handler of a type: that one would
-release the subscriptions of other modules too.
+a `DisposableStack`. Both release what you registered and nothing else. The
+bus therefore has no call that removes every handler of a type. Such a call
+would release the subscriptions of other modules as well.
 
 ```ts
 using registrations = new DisposableStack();
@@ -467,9 +467,9 @@ The bus reports the leak when one event type crosses
 `maxSubscriptionsPerEventType` (default 32). It reports at the crossing
 and then at each doubling, because a real leak never drops back and the trend
 is the useful part.
-The report re-arms once the count drops strictly below the threshold, so a
-short spike of `once` waiters does not mute the event type, and a steady state
-that sits on the threshold does not report on every release. The bus never
+The report re-arms once the count drops strictly below the threshold. A short
+spike of `once` waiters therefore does not mute the event type. A steady state
+on the threshold does not report on every release. The bus never
 throws here, because a large fan-out of projections stays possible. Without an
 observer the bus reports nothing.
 
