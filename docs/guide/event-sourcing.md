@@ -437,11 +437,11 @@ either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
 the current event shape. Replay does not run `validateState(...)` either:
 `loadFromHistory` stores each fold result as is, and only `apply(...)` runs
-both gates for new facts. The constructor is the exception: it runs
-`validateState` once on the initial state, so a `reconstitute` factory that
-passes a snapshot state to the constructor checks that state against today's
-rules. Keep `validateState` to structural rules that hold for every version of
-the state. Snapshots do get their own
+both gates for new facts. The constructor runs `validateState` once on the
+initial state, so a `reconstitute` factory that passes a snapshot state to the
+constructor checks that state against today's rules. The section
+[Where Invariants Live](./aggregates.md#where-invariants-live) states which
+rules belong in `validateState` for an event-sourced aggregate. Snapshots do get their own
 STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
 of the model could have produced (missing fields, wrong types) by throwing
 `SnapshotCorruptedError` from `migrate` or `reconstitute`. When a

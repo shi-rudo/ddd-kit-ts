@@ -296,10 +296,19 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 The validator runs on construction, on every `setState` call (including calls
 made by `commit` and state-stored snapshot restoration), and on `apply()` of a
-new event-sourced fact. It catches both bad domain transitions and corrupt
-state loaded from persistence. It does not run while event-sourced history
-replays; replay uses historical facts and pure event handlers rather than
-today's decision rules.
+new event-sourced fact. On a state-stored aggregate it catches both bad domain
+transitions and corrupt state loaded from persistence.
+
+On an event-sourced aggregate the validator has one more consequence. Replay
+does not run it; replay uses historical facts and pure event handlers rather
+than today's decision rules. A snapshot restore does run it, because the
+`reconstitute` factory passes the stored state to the constructor. If a rule
+in `validateState` later tightens, old streams still load from zero, but every
+snapshot restore throws, maps to `SnapshotCorruptedError`, and refolds the
+stream on each load. So on an event-sourced aggregate, keep decision rules in
+`validateEvent` and keep `validateState` for rules that hold for every version
+of the state. This section is the one place that states this rule; the
+event-sourcing guide and the `SnapshotModel` docs point here.
 
 ### Event-Sourced Invariants
 
