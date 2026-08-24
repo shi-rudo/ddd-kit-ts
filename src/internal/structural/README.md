@@ -1,6 +1,6 @@
-# Array Utilities
+# Structural Comparison
 
-A collection of utility functions for deep comparison and manipulation of arrays and objects.
+Functions that compare and reshape a value structure in depth: equality, equality with exclusions, and key removal. They work over objects, arrays, Maps, Sets and TypedArrays.
 
 ## Installation
 
