@@ -507,6 +507,37 @@ const bus = new EventBusImpl<OrderEvent>({
 });
 ```
 
+### Expecting the Bus to Replay What a Subscriber Missed
+
+The bus holds no past events. A handler receives what is published after it
+subscribes, and nothing from before.
+
+Subscribe while you compose the application. The kit publishes domain events
+from two places: the unit of work after a commit, and the outbox dispatcher in
+its poll loop. Both run after the composition root wired its subscriptions. A
+subscriber that arrives after the first publication is therefore a wiring order
+to correct, not a gap to fill.
+
+For a consumer that must catch up, the answer is a durable position rather than
+memory. A projection reads its checkpoint and continues where it stopped, and
+it survives a restart. The event store holds the history itself. A buffer in
+memory is the lossy approximation of both.
+
+For recent events in a diagnostic, keep your own ring:
+
+```ts
+const recent: OrderEvent[] = [];
+bus.subscribeAll((event) => {
+  recent.push(event);
+  if (recent.length > 100) recent.shift();
+});
+```
+
+The bus does not own that ring on purpose. Such a ring drops its oldest entry
+in silence, so it hands a late subscriber a part of the past that looks whole.
+Delivering it on subscribe adds a second cost: the side effects of every
+buffered event run again, and one new subscription sends a hundred emails.
+
 ### Treating Kit Errors as Unstructured Errors
 
 Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
