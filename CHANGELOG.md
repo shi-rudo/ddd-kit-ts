@@ -29,6 +29,21 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Documentation: the event bus states what it does not promise
+
+- The `publish` contract and `PublishOptions.timeoutMs` now state the delivery
+  guarantee at the port. The bus delivers in memory and at most once. It
+  persists nothing, it retries nothing, and it has no dead-letter path. Work
+  that must survive a crash belongs behind the `Outbox` port.
+- `timeoutMs` bounds the wait, not the handler. If a handler ignores
+  `context.signal`, it keeps running after `publish` rejects, and its side
+  effects still land.
+- A caller that retries a publish that timed out runs the handlers a second
+  time.
+- The common mistakes guide gains a matching entry. It names the work that fits
+  the bus and the work that belongs behind the outbox.
+- These are documentation changes. The API does not change.
+
 ### Changed (breaking): the `presentation` subpath is now `public-errors`
 
 - Rename `@shirudo/ddd-kit/presentation` to `@shirudo/ddd-kit/public-errors`.
