@@ -29,6 +29,22 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: the event bus reports what happens during a publication
+
+- A rejected handler reached the caller without its identity, because an
+  `AggregateError` carries failures without their subscription. A publication
+  that timed out named only itself, never the handler that did not return, so
+  the one question an operator asks at that moment had no answer.
+- `observers.onHandlerError` reports each rejection with the event, the batch
+  position, and whether `subscribeAll` registered the handler.
+- `observers.onPublishAborted` reports the batch positions of the handlers that
+  had not settled when a timeout or an owner abort ended the publication. Those
+  handlers keep running, because JavaScript cannot stop a running promise.
+- Both report. They do not change the aggregation contract, and a throw inside
+  either one cannot affect the publication.
+- Every observer in the bundle is required. The bundle itself stays optional,
+  so a no-op is a decision in the code and never a signal nobody knew about.
+
 ### Added: the event bus reports accumulating subscriptions
 
 - `subscribe` and `subscribeAll` return an unsubscribe function. Code that

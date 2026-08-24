@@ -339,6 +339,8 @@ export {
 	EventBusImpl,
 	type EventBusObservers,
 	type EventBusOptions,
+	type HandlerFailureReport,
+	type PublishAbortedReport,
 	type PublishChainState,
 	type PublishChainStore,
 	type SubscriptionThresholdReport,

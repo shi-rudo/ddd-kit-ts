@@ -392,7 +392,9 @@ Three facts decide how you write a handler:
 
 1. `timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a
    running promise. A handler that ignores `context.signal` keeps running after
-   `publish` rejects, and its side effects still land.
+   `publish` rejects, and its side effects still land. The thrown
+   `TimeoutError` names the publication, never the handler that hangs. Wire
+   `onPublishAborted` to see which handlers had not returned.
 2. A retry after a timeout runs the handlers a second time. The first attempt
    can still run. Make the handler idempotent, or do not retry a publish that
    timed out.
@@ -451,11 +453,25 @@ short spike of `once` waiters therefore does not mute the event type. The bus ne
 throws here, because a large fan-out of projections stays possible. Without an
 observer the bus reports nothing.
 
+The bus reports three things, and every observer is required once you pass the
+bundle. A no-op is then a decision in the code, not a signal you did not know
+about.
+
 ```ts
 const bus = new EventBusImpl<OrderEvent>({
   observers: {
+    // One event type accumulates subscriptions.
     onSubscriptionThresholdExceeded: (report) => {
       logger.warn(report, "event bus subscriptions are accumulating");
+    },
+    // A handler rejected. An AggregateError cannot name the subscription,
+    // the batch position can.
+    onHandlerError: ({ event, index, catchAll, error }) => {
+      logger.error({ type: event.type, index, catchAll }, error);
+    },
+    // A timeout ended the publication. These handlers still run.
+    onPublishAborted: ({ event, pendingIndices }) => {
+      logger.error({ type: event.type, pendingIndices }, "handlers abandoned");
     },
   },
 });

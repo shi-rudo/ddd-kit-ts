@@ -10,6 +10,13 @@ import {
 import { PublishDepthExceededError } from "./errors";
 import { EventBusImpl, type EventBusObservers } from "./event-bus";
 
+/** Every observer is required. Tests override only the one they assert on. */
+const silentObservers = (): EventBusObservers => ({
+	onSubscriptionThresholdExceeded: () => {},
+	onHandlerError: () => {},
+	onPublishAborted: () => {},
+});
+
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 type OrderShipped = DomainEvent<"OrderShipped", { orderId: string }>;
 type OrderEvent = OrderCreated | OrderShipped;
@@ -960,6 +967,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 3,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: (report) => reports.push(report),
 				},
 			});
@@ -978,6 +986,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: (report) =>
 						types.push(report.eventType),
 				},
@@ -996,6 +1005,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: (report) =>
 						counts.push(report.subscriptionCount),
 				},
@@ -1017,6 +1027,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: (report) =>
 						counts.push(report.subscriptionCount),
 				},
@@ -1035,6 +1046,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 2,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: (report) => reports.push(report),
 				},
 			});
@@ -1053,6 +1065,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 4,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: () => {
 						reported = true;
 					},
@@ -1070,6 +1083,7 @@ describe("EventBusImpl", () => {
 			const bus = new EventBusImpl<OrderEvent>({
 				maxSubscriptionsPerEventType: 1,
 				observers: {
+					...silentObservers(),
 					onSubscriptionThresholdExceeded: () => {
 						throw new Error("observer boom");
 					},
@@ -1099,6 +1113,126 @@ describe("EventBusImpl", () => {
 				bus.subscribe("OrderCreated", noop);
 				bus.subscribe("OrderCreated", noop);
 			}).not.toThrow();
+		});
+	});
+
+	describe("dispatch observability", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+
+		it("reports a failing handler with its position in the batch", async () => {
+			const failures: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) =>
+						failures.push({
+							index: report.index,
+							catchAll: report.catchAll,
+							type: report.event.type,
+							message: report.error.message,
+						}),
+				},
+			});
+
+			bus.subscribe("OrderCreated", () => {});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("second handler failed");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				"second handler failed",
+			);
+
+			expect(failures).toEqual([
+				{
+					index: 1,
+					catchAll: false,
+					type: "OrderCreated",
+					message: "second handler failed",
+				},
+			]);
+		});
+
+		it("marks a catch-all handler in the failure report", async () => {
+			const catchAll: boolean[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) => catchAll.push(report.catchAll),
+				},
+			});
+
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("typed");
+			});
+			bus.subscribeAll(() => {
+				throw new Error("catch all");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(AggregateError);
+
+			expect(catchAll).toEqual([false, true]);
+		});
+
+		it("names the handlers that were still running when the publish aborted", async () => {
+			const reports: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: (report) =>
+						reports.push({
+							pending: report.pendingIndices,
+							type: report.event.type,
+							reason: (report.reason as Error)?.name,
+						}),
+				},
+			});
+
+			bus.subscribe("OrderCreated", async () => {});
+			// Never settles. This is the handler an operator needs named.
+			bus.subscribe("OrderCreated", () => new Promise<void>(() => {}));
+
+			await expect(
+				bus.publish([created()], { timeoutMs: 30 }),
+			).rejects.toThrow();
+
+			expect(reports).toEqual([
+				{ pending: [1], type: "OrderCreated", reason: "TimeoutError" },
+			]);
+		});
+
+		it("reports nothing abandoned when every handler settles", async () => {
+			let aborted = 0;
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: () => {
+						aborted++;
+					},
+				},
+			});
+			bus.subscribe("OrderCreated", async () => {});
+
+			await bus.publish([created()]);
+
+			expect(aborted).toBe(0);
+		});
+
+		it("keeps the failure contract when a failure observer throws", async () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: () => {
+						throw new Error("observer boom");
+					},
+				},
+			});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("handler boom");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow("handler boom");
 		});
 	});
 });

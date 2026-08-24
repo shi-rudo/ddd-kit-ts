@@ -34,8 +34,48 @@ export interface SubscriptionThresholdReport {
 	readonly threshold: number;
 }
 
+/** One handler rejected during a publication. */
+export interface HandlerFailureReport {
+	/** The event the handler received. */
+	readonly event: AnyDomainEvent;
+	/** Position of the handler in the dispatch batch for this event. */
+	readonly index: number;
+	/** True when `subscribeAll` registered the handler. */
+	readonly catchAll: boolean;
+	/** The rejection, wrapped when the handler rejected with a non-error. */
+	readonly error: Error;
+}
+
+/** A publication ended while handlers were still running. */
+export interface PublishAbortedReport {
+	/** The event whose dispatch was in flight. */
+	readonly event: AnyDomainEvent;
+	/** Positions in the batch of the handlers that had not settled. */
+	readonly pendingIndices: readonly number[];
+	/** Why the publication ended, from the abort reason of the signal. */
+	readonly reason: unknown;
+}
+
 /** Operational signals from one event bus. */
 export interface EventBusObservers {
+	/**
+	 * A handler rejected. The batch position and the event name the handler
+	 * that the thrown error cannot name, because an `AggregateError` carries
+	 * failures without their subscription.
+	 *
+	 * This reports, it does not handle. The error still reaches the caller of
+	 * `publish` under the aggregation contract.
+	 */
+	readonly onHandlerError: (report: HandlerFailureReport) => void;
+	/**
+	 * A timeout or an owner abort ended the publication while handlers were
+	 * still running. Those handlers keep running, and their side effects still
+	 * land, because JavaScript cannot stop a running promise.
+	 *
+	 * The report names them. Without it a timed-out publication says only that
+	 * it timed out, never which handler did not return.
+	 */
+	readonly onPublishAborted: (report: PublishAbortedReport) => void;
 	/**
 	 * One event type crossed `maxSubscriptionsPerEventType`. Reported once for
 	 * each crossing, never once per `subscribe`. When the count drops back to
@@ -213,6 +253,8 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				? undefined
 				: captureObserverFunctions("EventBusImpl", options.observers, [
 						"onSubscriptionThresholdExceeded",
+						"onHandlerError",
+						"onPublishAborted",
 					]);
 	}
 
@@ -475,10 +517,8 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			// (EventHandler may return void) into a rejection; otherwise it
 			// would escape before allSettled sees the array, skipping peers
 			// and orphaning their promises.
-			const batch = [
-				...(this.handlers.get(event.type) ?? []),
-				...this.catchAllHandlers,
-			];
+			const typed = this.handlers.get(event.type) ?? [];
+			const batch = [...typed, ...this.catchAllHandlers];
 			if (batch.length > 0) {
 				// Each failure is recorded the moment it happens, not after the
 				// whole batch settles: a hung peer would otherwise trap a
@@ -486,36 +526,71 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				// abort/timeout path that ends the publish.
 				const batchStart = errors.length;
 				const failedIndices: number[] = [];
-				await Promise.allSettled(
-					batch.map(async (handler, index) => {
-						try {
-							// `handler(...)` returns at its first `await`, so this
-							// window is exactly the synchronous nesting. Splitting the
-							// call from the `await` keeps a synchronous throw on the
-							// same path as a rejection.
-							this.syncDepth++;
-							this.syncPath.push(event.type);
-							let running: Promise<void> | void;
+				// A handler that never returns keeps its slot open. On abort the
+				// bus reports the open slots, because the thrown TimeoutError
+				// names only the publication, never the handler that hangs.
+				const settledIndices = new Set<number>();
+				const reportAbandoned = (): void => {
+					const observer = this.observers?.onPublishAborted;
+					if (observer === undefined) return;
+					const pendingIndices = batch
+						.map((_, index) => index)
+						.filter((index) => !settledIndices.has(index));
+					if (pendingIndices.length === 0) return;
+					reportToObserver(() =>
+						observer({ event, pendingIndices, reason: context.signal.reason }),
+					);
+				};
+				context.signal.addEventListener("abort", reportAbandoned, {
+					once: true,
+				});
+				try {
+					await Promise.allSettled(
+						batch.map(async (handler, index) => {
 							try {
-								running = handler(event, context);
+								// `handler(...)` returns at its first `await`, so this
+								// window is exactly the synchronous nesting. Splitting the
+								// call from the `await` keeps a synchronous throw on the
+								// same path as a rejection.
+								this.syncDepth++;
+								this.syncPath.push(event.type);
+								let running: Promise<void> | void;
+								try {
+									running = handler(event, context);
+								} finally {
+									this.syncDepth--;
+									this.syncPath.pop();
+								}
+								await running;
+							} catch (reason) {
+								failedIndices.push(index);
+								const error =
+									reason instanceof Error
+										? reason
+										: // Attach the raw reason as cause: a handler
+											// rejecting with a structured payload must stay
+											// diagnosable, not collapse to '[object Object]'.
+											new Error(String(reason), { cause: reason });
+								errors.push(error);
+								const observer = this.observers?.onHandlerError;
+								if (observer !== undefined) {
+									reportToObserver(() =>
+										observer({
+											event,
+											index,
+											catchAll: index >= typed.length,
+											error,
+										}),
+									);
+								}
 							} finally {
-								this.syncDepth--;
-								this.syncPath.pop();
+								settledIndices.add(index);
 							}
-							await running;
-						} catch (reason) {
-							failedIndices.push(index);
-							errors.push(
-								reason instanceof Error
-									? reason
-									: // Attach the raw reason as cause: a handler
-										// rejecting with a structured payload must stay
-										// diagnosable, not collapse to '[object Object]'.
-										new Error(String(reason), { cause: reason }),
-							);
-						}
-					}),
-				);
+						}),
+					);
+				} finally {
+					context.signal.removeEventListener("abort", reportAbandoned);
+				}
 				// A settled batch reports its failures in subscription order
 				// (the aggregation contract); recording order above is
 				// settlement order so an abort mid-batch already sees them.
