@@ -39,6 +39,19 @@ gives a before-and-after example for each breaking change.
   Nothing but three constants lives in module scope, so the guarantee held by
   construction and nothing said so.
 
+### Added: a domain event factory stamps its origin
+
+- `createDomainEventFactory({ source })` stamps that origin on every event and
+  every stamp it mints. `eventId` and the clock were already swappable through
+  the same factory; the origin was a field that existed on the metadata and
+  that nothing produced, so every call site repeated it or left it empty.
+- A call site that names its own source keeps it: an explicit fact about one
+  event outranks the default of the factory that mints it. Other metadata the
+  call site names survives untouched.
+- `source` is a plain value, not a factory like `eventIdFactory` and `clock`.
+  Those produce a new value for each event, and an origin identifies the
+  system that mints them.
+
 ### Added (breaking): one subscription for a set of event types
 
 - `subscribeMany(types, handler)` subscribes one handler to several event
