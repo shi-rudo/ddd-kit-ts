@@ -1258,7 +1258,9 @@ describe("EventBusImpl", () => {
 				},
 			});
 
-			bus.subscribe("OrderCreated", () => {});
+			// An async handler that returns at once resolves a microtask later.
+			// A report taken in the same turn would call it abandoned.
+			bus.subscribe("OrderCreated", async () => {});
 			bus.subscribe("OrderCreated", () => {
 				controller.abort(new Error("owner stopped"));
 			});
@@ -1268,10 +1270,9 @@ describe("EventBusImpl", () => {
 				bus.publish([created()], { signal: controller.signal }),
 			).rejects.toThrow();
 
-			// Index 0 returned before the abort and must not appear. Index 1 is
-			// the handler that aborts, still on the stack at that instant, so it
-			// is correctly open. Index 2 hangs.
-			expect(reports).toEqual([[1, 2]]);
+			// Only index 2 is open. Index 0 resolved, index 1 returned right
+			// after it aborted, and both settle before the report is taken.
+			expect(reports).toEqual([[2]]);
 		});
 
 		it("names the handlers that were still running when the publish aborted", async () => {
@@ -1316,6 +1317,59 @@ describe("EventBusImpl", () => {
 			await bus.publish([created()]);
 
 			expect(aborted).toBe(0);
+		});
+
+		it("keeps a rejection that cannot become a string", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+
+			// A value without a prototype has no string form, so String() on it
+			// throws. That must not swallow the failure of a peer.
+			bus.subscribe("OrderCreated", () => {
+				throw Object.create(null);
+			});
+			bus.subscribe("OrderCreated", () => {
+				throw new Error("second handler failed");
+			});
+
+			const error = (await bus
+				.publish([created()])
+				.catch((reason) => reason)) as AggregateError;
+
+			expect(error).toBeInstanceOf(AggregateError);
+			expect(error.errors).toHaveLength(2);
+			for (const collected of error.errors) {
+				expect(collected).toBeInstanceOf(Error);
+			}
+		});
+
+		it("rejects with an error when the only rejection has no string form", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const reason = Object.create(null);
+			bus.subscribe("OrderCreated", () => {
+				throw reason;
+			});
+
+			const error = await bus.publish([created()]).catch((thrown) => thrown);
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBe(reason);
+		});
+
+		it("publishes an empty batch at the depth bound", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 1 });
+			let nested: unknown = "not attempted";
+
+			// An empty batch dispatches nothing, so it cannot extend a cycle.
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				nested = await bus
+					.publish([], { signal: context.signal })
+					.then(() => "resolved")
+					.catch((reason) => reason);
+			});
+
+			await bus.publish([created()]);
+
+			expect(nested).toBe("resolved");
 		});
 
 		it("keeps the failure contract when a failure observer throws", async () => {

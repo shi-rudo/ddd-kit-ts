@@ -19,6 +19,26 @@ import type {
 	PublishOptions,
 } from "./ports";
 
+/**
+ * Wraps a handler rejection as an error without ever throwing itself.
+ *
+ * A value with a null prototype has no string form, so `String()` on it
+ * throws. A throw here would leave the failure recorded in the index list but
+ * absent from the error list, and the caller would receive `undefined`.
+ */
+function toHandlerError(reason: unknown): Error {
+	if (reason instanceof Error) return reason;
+	let described: string;
+	try {
+		described = String(reason);
+	} catch {
+		described = "Event handler rejected with a value that has no string form";
+	}
+	// Attach the raw reason as cause: a handler rejecting with a structured
+	// payload must stay diagnosable, not collapse to '[object Object]'.
+	return new Error(described, { cause: reason });
+}
+
 /** Bound for one publish chain. Real nesting stays far below this. */
 const DEFAULT_MAX_PUBLISH_DEPTH = 32;
 
@@ -476,7 +496,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			if (window.depth > parent.depth) parent = window;
 		}
 		const depth = parent.depth + 1;
-		if (depth > this.maxPublishDepth) {
+		// An empty batch dispatches nothing, so it cannot extend a chain and
+		// must not meet the bound. Everything else still runs, so an invalid
+		// option is still rejected.
+		if (events.length > 0 && depth > this.maxPublishDepth) {
 			// Only the first event of the batch is about to dispatch. Naming the
 			// rest would put events on the chain that never reached it.
 			const first = events[0];
@@ -595,13 +618,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		const reportAbandoned = (): void => {
 			const observer = this.observers?.onPublishAborted;
 			if (observer === undefined) return;
-			const pendingIndices = batch
-				.map((_, index) => index)
-				.filter((index) => !settledIndices.has(index));
-			if (pendingIndices.length === 0) return;
-			reportToObserver(() =>
-				observer({ event, pendingIndices, reason: context.signal.reason }),
-			);
+			// One microtask later. A handler that returned an already resolved
+			// promise settles in that window, and naming it as still running
+			// would tell an operator the opposite of the truth.
+			queueMicrotask(() => {
+				const pendingIndices = batch
+					.map((_, index) => index)
+					.filter((index) => !settledIndices.has(index));
+				if (pendingIndices.length === 0) return;
+				reportToObserver(() =>
+					observer({ event, pendingIndices, reason: context.signal.reason }),
+				);
+			});
 		};
 		context.signal.addEventListener("abort", reportAbandoned, { once: true });
 		try {
@@ -631,14 +659,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 						}
 						await running;
 					} catch (reason) {
+						// Wrap first. An index without its error desynchronizes the
+						// reorder below and puts `undefined` in front of the caller.
+						const error = toHandlerError(reason);
 						failedIndices.push(index);
-						const error =
-							reason instanceof Error
-								? reason
-								: // Attach the raw reason as cause: a handler
-									// rejecting with a structured payload must stay
-									// diagnosable, not collapse to '[object Object]'.
-									new Error(String(reason), { cause: reason });
 						errors.push(error);
 						const observer = this.observers?.onHandlerError;
 						if (observer !== undefined) {
