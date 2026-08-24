@@ -198,6 +198,12 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 *
 	 * Calling it again does nothing.
 	 *
+	 * A plain method, not `Symbol.dispose`. A port that declared the symbol
+	 * would need `esnext.disposable` in the `lib` of every consumer, only to
+	 * typecheck the types of this kit, and that requirement cannot be
+	 * declined. Group your own releases instead, as the common mistakes
+	 * guide shows.
+	 *
 	 * This releases the subscriptions. It does not stop a handler that is
 	 * already running, because JavaScript cannot terminate a running
 	 * promise. Pass `context.signal` into every call a handler makes, and a
