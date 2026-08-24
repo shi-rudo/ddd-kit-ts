@@ -34,10 +34,10 @@ export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
  *
  * One bounded operation often wraps another, and every hop derives a fresh
  * signal. A consumer that follows a call chain by signal identity alone loses
- * the link at the first hop. The keys are weak, so an entry dies with its
- * execution.
+ * the link at the first hop. Key and value are both weak: a long chain of
+ * nested operations must not hold its whole ancestry alive.
  */
-const executionOwners = new WeakMap<AbortSignal, AbortSignal>();
+const executionOwners = new WeakMap<AbortSignal, WeakRef<AbortSignal>>();
 
 /**
  * The signal that a bounded execution derived this one from, or `undefined`
@@ -45,7 +45,7 @@ const executionOwners = new WeakMap<AbortSignal, AbortSignal>();
  * owner. Walk it to follow a chain across nested bounded executions.
  */
 export function ownerSignalOf(signal: AbortSignal): AbortSignal | undefined {
-	return executionOwners.get(signal);
+	return executionOwners.get(signal)?.deref();
 }
 
 /**
@@ -81,7 +81,7 @@ export function runBoundedExecution<T>(
 	});
 	const ownerSignal = options.signal;
 	if (ownerSignal !== undefined) {
-		executionOwners.set(controller.signal, ownerSignal);
+		executionOwners.set(controller.signal, new WeakRef(ownerSignal));
 	}
 	const abortFromOwner = (): void => {
 		controller.abort(

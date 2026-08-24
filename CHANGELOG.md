@@ -98,10 +98,18 @@ gives a before-and-after example for each breaking change.
   under the browser conditions an edge bundle uses, and the kit ships one
   build. A consumer on Node passes the platform class. A consumer on an edge
   runtime passes nothing and keeps the signal-based bound.
-- The store counts only while its dispatch runs. A store also propagates into
-  deferred work, so a handler that schedules a later publication through
-  `setTimeout` would otherwise inherit a depth from a chain that already
-  ended, and a correct poll loop would die at the bound.
+- A window counts only while its dispatch runs. Both a store and a context
+  signal stay readable in deferred work, so a handler that schedules a later
+  publication through `setTimeout` would otherwise inherit a depth from a
+  chain that already ended, and a correct poll loop would die at the bound.
+  This holds for the signal as well, which matters because the guide tells a
+  handler to pass `context.signal`.
+- The synchronous window carries the depth of the chain, not a count of stack
+  frames. A batch dispatches its events one after another, so the frame of
+  event 1 has unwound when event 2 runs. A cycle that goes through a later
+  event of a nested batch is bounded now.
+- One bounded execution holds its owner signal weakly. A long chain of nested
+  operations no longer keeps its whole ancestry of signals alive.
 
 ### Documentation: the event bus states what it does not promise
 

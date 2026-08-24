@@ -208,13 +208,22 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	// window always runs to completion, so a concurrent publication never
 	// observes this raised. It catches the cycle that a handler hides by
 	// dropping `context.signal`.
+	// The chain depth and path of the dispatch whose synchronous window is
+	// open. Absolute, never a frame count: a batch dispatches its events one
+	// after another, so the frame of event 1 has unwound when event 2 runs and
+	// only an absolute value still describes the chain. Swapped, never
+	// mutated, so a reader can keep the array it was handed.
 	private syncDepth = 0;
-	private readonly syncPath: string[] = [];
+	private syncPath: readonly string[] = [];
 
 	private readonly chainStore: PublishChainStore | undefined;
 	// Chain states whose dispatch has not ended. A store keeps its value in
 	// deferred work too, so membership here, not mere presence, decides.
 	private readonly liveChains = new WeakSet<PublishChainState>();
+	// Signals whose publication still dispatches. A context signal stays
+	// readable after its publication ends, so presence in the chain map is not
+	// enough: deferred work would inherit a depth from a chain that is over.
+	private readonly liveDispatches = new WeakSet<AbortSignal>();
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
 	// Event types that already reported their current crossing. Cleared when
@@ -278,7 +287,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		let current = signal;
 		while (current !== undefined) {
 			const depth = this.chainDepth.get(current);
-			if (depth !== undefined) {
+			if (depth !== undefined && this.liveDispatches.has(current)) {
 				return { depth, path: this.chainPath.get(current) };
 			}
 			current = ownerSignalOf(current);
@@ -441,12 +450,6 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// swallow the failures that already happened.
 		// Depth comes from the chain, never from the instance. Two sources see
 		// it: the parent signal (survives `await`, needs the handler to pass
-		// `context.signal`) and the synchronous window (needs nothing). Take
-		// whichever is higher.
-		// Up to three windows can see the chain: an injected store, the owner
-		// chain of the signal, and the synchronous window. A window that cannot
-		// see it reports 0, never a wrong depth, so the deepest one is the
-		// truth. Depth and path come from that same window, so a reported depth
 		// Up to three windows can see the chain: an injected store, the owner
 		// chain of the signal, and the synchronous window. A window that cannot
 		// see it reports 0, never a wrong depth, so the deepest one is the
@@ -468,15 +471,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		for (const window of [
 			{ depth: liveStore?.depth ?? 0, path: liveStore?.path ?? [] },
 			{ depth: lineage.depth, path: lineage.path ?? [] },
-			{ depth: this.syncDepth, path: this.syncPath as readonly string[] },
+			{ depth: this.syncDepth, path: this.syncPath },
 		]) {
 			if (window.depth > parent.depth) parent = window;
 		}
 		const depth = parent.depth + 1;
 		if (depth > this.maxPublishDepth) {
+			// Only the first event of the batch is about to dispatch. Naming the
+			// rest would put events on the chain that never reached it.
+			const first = events[0];
 			throw new PublishDepthExceededError(depth, this.maxPublishDepth, [
 				...parent.path,
-				...events.map((event) => event.type),
+				...(first === undefined ? [] : [first.type]),
 			]);
 		}
 
@@ -488,14 +494,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 					signal: options.signal,
 					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 				},
-				(context) =>
-					this.publishWithinContext(
+				(context) => {
+					this.liveDispatches.add(context.signal);
+					return this.publishWithinContext(
 						events,
 						context,
 						errors,
 						depth,
 						parent.path,
-					),
+					).finally(() => {
+						this.liveDispatches.delete(context.signal);
+					});
+				},
 			);
 		} catch (boundedError) {
 			if (errors.length === 0) throw boundedError;
@@ -534,7 +544,8 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			const path = [...parentPath, event.type];
 			this.chainDepth.set(context.signal, depth);
 			this.chainPath.set(context.signal, path);
-			const dispatch = () => this.dispatchEvent(event, context, errors);
+			const dispatch = () =>
+				this.dispatchEvent(event, context, errors, depth, path);
 			if (this.chainStore === undefined) {
 				await dispatch();
 			} else {
@@ -556,6 +567,8 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		event: Evt,
 		context: ExecutionContext,
 		errors: Error[],
+		depth: number,
+		path: readonly string[],
 	): Promise<void> {
 		// Typed and catch-all handlers share ONE allSettled batch, so the
 		// contract holds across both kinds: none sees the others' errors,
@@ -596,17 +609,19 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				batch.map(async (handler, index) => {
 					try {
 						// `handler(...)` returns at its first `await`, so this
-						// window is exactly the synchronous nesting. Splitting the
-						// call from the `await` keeps a synchronous throw on the
-						// same path as a rejection.
-						this.syncDepth++;
-						this.syncPath.push(event.type);
+						// window covers exactly the synchronous part of the
+						// handler. Splitting the call from the `await` keeps a
+						// synchronous throw on the same path as a rejection.
+						const outerDepth = this.syncDepth;
+						const outerPath = this.syncPath;
+						this.syncDepth = depth;
+						this.syncPath = path;
 						let running: Promise<void> | void;
 						try {
 							running = handler(event, context);
 						} finally {
-							this.syncDepth--;
-							this.syncPath.pop();
+							this.syncDepth = outerDepth;
+							this.syncPath = outerPath;
 						}
 						// A handler that returned without a promise holds no slot
 						// open. Mark it here, because a peer that aborts

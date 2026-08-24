@@ -886,6 +886,53 @@ describe("EventBusImpl", () => {
 			expect(depth).toBeLessThan(BRAKE);
 		});
 
+		it("bounds a synchronous cycle that runs through a later event of a batch", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 8 });
+			let hops = 0;
+
+			// The nested publication carries two events. The cycling one is
+			// second, so it dispatches after an await and the synchronous frame
+			// of its parent has unwound.
+			bus.subscribe("OrderCreated", () => {
+				if (hops >= BRAKE) return;
+				hops++;
+				return bus.publish([shipped(), created()]);
+			});
+			bus.subscribe("OrderShipped", () => {});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(hops).toBeLessThan(BRAKE);
+		});
+
+		it("does not count a later scheduled publication that carries the signal", async () => {
+			// The guide tells a handler to pass context.signal. A poll loop that
+			// obeys it must not run into the bound: every generation finishes
+			// before the next one starts, so nothing is nested.
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			let generations = 0;
+			let failure: unknown;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (generations >= 12) return;
+				generations++;
+				setTimeout(() => {
+					bus.publish([created()], { signal: context.signal }).catch(
+						(reason) => {
+							failure ??= reason;
+						},
+					);
+				}, 1);
+			});
+
+			await bus.publish([created()]);
+			await new Promise((resolve) => setTimeout(resolve, 250));
+
+			expect(failure).toBeUndefined();
+			expect(generations).toBe(12);
+		});
+
 		it("names the event types that formed the cycle", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			let depth = 0;
