@@ -270,6 +270,34 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "hands every subscriber the same event object",
+			run: inEnv(async ({ bus }: Env) => {
+				const { firstType } = types();
+				const received: unknown[] = [];
+				bus.subscribe(firstType, (event) => {
+					received.push(event);
+				});
+				bus.subscribeAll((event) => {
+					received.push(event);
+				});
+
+				const published = first();
+				await bus.publish([published]);
+
+				assertEqual(
+					received.length,
+					2,
+					"both subscriptions must receive the event",
+				);
+				for (const one of received) {
+					assert(
+						one === published,
+						"every subscriber receives the published event itself, so its metadata cannot differ between them",
+					);
+				}
+			}),
+		},
+		{
 			name: "delivers every event type to a catch-all subscription",
 			run: inEnv(async ({ bus }: Env) => {
 				const { firstType, secondType } = types();

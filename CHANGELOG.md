@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: tests for two guarantees the bus already gave
+
+- Every subscriber receives the published event itself, not a copy, so the
+  metadata a publisher attached, `correlationId`, `causationId` and `source`,
+  cannot differ between them. The contract suite pins the identity for any
+  implementation, and a unit test pins the fields.
+- Two buses do not reach each other, and closing one leaves the other usable.
+  Nothing but three constants lives in module scope, so the guarantee held by
+  construction and nothing said so.
+
 ### Added (breaking): the event bus has a lifecycle
 
 - `EventBus` had no way to stop. A worker shutting down, a test tearing down,

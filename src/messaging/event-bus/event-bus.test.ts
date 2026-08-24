@@ -879,6 +879,86 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("metadata and instance isolation", () => {
+		it("hands every subscriber the same event, metadata included", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: OrderEvent[] = [];
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(event);
+			});
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(event);
+			});
+			bus.subscribeAll((event) => {
+				seen.push(event);
+			});
+
+			const published = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{
+					aggregateId: "o-1",
+					aggregateType: "Order",
+					metadata: {
+						correlationId: "corr-1",
+						causationId: "cause-1",
+						source: "checkout",
+					},
+				},
+			) as OrderCreated;
+			await bus.publish([published]);
+
+			expect(seen).toHaveLength(3);
+			for (const received of seen) {
+				// Identity, not a copy: a bus that reserialized the event would
+				// give each subscriber its own metadata.
+				expect(received).toBe(published);
+				expect(received.metadata?.correlationId).toBe("corr-1");
+				expect(received.metadata?.causationId).toBe("cause-1");
+				expect(received.metadata?.source).toBe("checkout");
+			}
+		});
+
+		it("keeps two buses from reaching each other", async () => {
+			const first = new EventBusImpl<OrderEvent>();
+			const second = new EventBusImpl<OrderEvent>();
+			const onFirst: string[] = [];
+			const onSecond: string[] = [];
+			first.subscribe("OrderCreated", () => {
+				onFirst.push("first");
+			});
+			first.subscribeAll(() => {
+				onFirst.push("first:all");
+			});
+			second.subscribe("OrderCreated", () => {
+				onSecond.push("second");
+			});
+
+			await second.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
+
+			expect(onSecond).toEqual(["second"]);
+			expect(onFirst).toEqual([]);
+		});
+
+		it("leaves the other bus usable when one closes", async () => {
+			const first = new EventBusImpl<OrderEvent>();
+			const second = new EventBusImpl<OrderEvent>();
+			let reached = 0;
+			second.subscribe("OrderCreated", () => {
+				reached++;
+			});
+
+			first.close();
+			await second.publish([
+				createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated,
+			]);
+
+			expect(reached).toBe(1);
+		});
+	});
+
 	describe("close", () => {
 		const created = () =>
 			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
