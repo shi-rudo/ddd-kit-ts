@@ -39,6 +39,17 @@ gives a before-and-after example for each breaking change.
   Nothing but three constants lives in module scope, so the guarantee held by
   construction and nothing said so.
 
+### Changed: the published types carry no `any`
+
+- `AggregateClass` had a construct-signature branch whose parameters were
+  `any[]`, for variance: the reference is a map key and an instance witness,
+  never called. It was the last `any` in the published surface.
+- The branch is gone rather than rewritten. `Function & { prototype: TAgg }`
+  already accepts every class shape, protected constructors included, and it
+  infers `TAgg` just as well, so the construct signature beside it changed
+  neither what the type accepts nor what it infers.
+- Every entry point now publishes types without `any`.
+
 ### Added: a domain event factory stamps its origin
 
 - `createDomainEventFactory({ source })` stamps that origin on every event and
