@@ -294,11 +294,12 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-The validator runs on construction and every `setState` call, including calls
-made by `commit` and state-stored snapshot restoration. It catches both bad
-domain transitions and corrupt state loaded from persistence. It does not run
-while event-sourced history evolves; replay uses historical facts and pure
-event handlers rather than today's decision rules.
+The validator runs on construction, on every `setState` call (including calls
+made by `commit` and state-stored snapshot restoration), and on `apply()` of a
+new event-sourced fact. It catches both bad domain transitions and corrupt
+state loaded from persistence. It does not run while event-sourced history
+replays; replay uses historical facts and pure event handlers rather than
+today's decision rules.
 
 ### Event-Sourced Invariants
 

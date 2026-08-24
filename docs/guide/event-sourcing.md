@@ -452,8 +452,9 @@ refold from the stream. Rules and structure are different questions, and only
 the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
-`MissingHandlerError` also throws, because a forgotten event handler is a code
-bug, not a recoverable domain rejection.
+`MissingHandlerError` and `HandlerReturnedNoStateError` also throw, because a
+forgotten event handler or a handler without a `return` is a code bug, not a
+recoverable domain rejection.
 
 Replay is all-or-nothing. If an event in the middle fails with a `DomainError`,
 the aggregate rolls back to its pre-replay state and version before returning

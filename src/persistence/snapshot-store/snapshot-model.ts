@@ -42,10 +42,11 @@ export interface SnapshotModel<
 	 * This is normally a call to a static aggregate factory.
 	 *
 	 * A snapshot persisted under yesterday's decision rules must keep loading
-	 * after a rule change ("replay from zero equals snapshot plus tail"), so
-	 * prefer a factory path that does not re-run current `validateState`
-	 * rules against the stored blob. When the factory does validate and
-	 * throws a `DomainError`, `reconstituteAggregateFromSnapshot` surfaces it
+	 * after a rule change ("replay from zero equals snapshot plus tail"). The
+	 * aggregate constructor runs `validateState` on the state it receives, so
+	 * keep that function to structural rules that hold for every version of
+	 * the state. When the factory does reject the blob and throws a
+	 * `DomainError`, `reconstituteAggregateFromSnapshot` surfaces it
 	 * as a {@link SnapshotCorruptedError} so the documented load recipe can
 	 * discard the derived snapshot and refold from the stream; the load then
 	 * still succeeds, at the cost of a full replay on every hit.
