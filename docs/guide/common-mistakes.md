@@ -448,17 +448,27 @@ Subscribe once, at startup. If a subscription must follow one request, call the
 returned function when that request ends.
 
 For several subscriptions at once, `subscribeMany` returns one release for the
-whole set. For subscriptions a module opens over time, collect the releases in
-a `DisposableStack`. Both release what you registered and nothing else. The
-bus therefore has no call that removes every handler of a type. Such a call
-would release the subscriptions of other modules as well.
+whole set. For subscriptions a module opens over time, keep the releases and
+call them together. Both release what you registered and nothing else. The bus
+therefore has no call that removes every handler of a type. Such a call would
+release the subscriptions of other modules as well.
 
 ```ts
-using registrations = new DisposableStack();
-registrations.defer(bus.subscribe("OrderPlaced", onPlaced));
-registrations.defer(bus.subscribeMany(["OrderPaid", "OrderShipped"], onMoved));
-// Leaving the scope releases both.
+const registrations = [
+  bus.subscribe("OrderPlaced", onPlaced),
+  bus.subscribeMany(["OrderPaid", "OrderShipped"], onMoved),
+];
+
+function releaseAll(): void {
+  for (const release of registrations) release();
+}
 ```
+
+`DisposableStack` does the same with `using`. Every runtime this kit supports
+has it, Node, Cloudflare workerd, Vercel Edge and Bun. TypeScript needs
+`esnext.disposable` in `lib` for it, so a project on `lib: es2022` gets
+`Cannot find global type 'Disposable'` and the array above stays the simpler
+choice.
  `once` also holds a subscription. It
 releases the subscription when the event arrives, when `timeoutMs` expires, or
 when `signal` aborts. Without a timeout and without a signal it waits forever.
