@@ -17,6 +17,7 @@ import {
 	EventHarvestError,
 	InfrastructureError,
 	UnenrolledChangesError,
+	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
@@ -611,7 +612,7 @@ describe("UnitOfWork", () => {
 			await expect(
 				uow.run(async ({ repositories }) => {
 					expect(() => repositories.orders.add(lookalike)).toThrow(
-						EventHarvestError,
+						UnmanagedInstanceError,
 					);
 					return "continued";
 				}),
@@ -735,7 +736,7 @@ describe("UnitOfWork", () => {
 
 			await uow.run(async ({ repositories }) => {
 				expect(() => repositories.orders.add(impostor)).toThrow(
-					EventHarvestError,
+					UnmanagedInstanceError,
 				);
 				// Rolled back: findById must not serve the failed instance.
 				expect(

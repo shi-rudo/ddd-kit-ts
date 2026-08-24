@@ -1222,6 +1222,27 @@ describe("validateState on the apply path", () => {
 		expect(agg.version).toBe(1);
 	});
 
+	it("leaves a rejected fold result and the objects it shares unfrozen", () => {
+		const sharedLines: number[] = [];
+		class SharingAggregate extends TestEventSourcedAggregate {
+			protected override readonly handlers = {
+				...testHandlers,
+				TestEventUpdated: (): TestState =>
+					({ value: -1, status: "inactive", lines: sharedLines }) as TestState,
+			};
+		}
+		const agg = new SharingAggregate(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			{ validateState: rejectNegativeValue, deepFreezeState: true },
+		);
+
+		expect(() => agg.updateValue(-1)).toThrow(NegativeValueError);
+
+		expect(Object.isFrozen(sharedLines)).toBe(false);
+		expect(agg.state.value).toBe(1);
+	});
+
 	it("keeps the injected validator on apply() when a prototype member shares its name", () => {
 		class ShadowingAggregate extends TestEventSourcedAggregate {}
 		// JavaScript consumers can still attach a same-named prototype method.

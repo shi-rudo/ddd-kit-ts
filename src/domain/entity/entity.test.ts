@@ -237,29 +237,64 @@ describe("Entity", () => {
 			expect(Object.isFrozen(validated[0])).toBe(true);
 		});
 
-		it("rejects the removed subclass validation hook at compile time", () => {
-			// @ts-expect-error state validation is constructor-injected, not overridable
-			class LegacyValidator extends Entity<
+		const rejectNegativeQuantity = (state: { quantity: number }): void => {
+			if (state.quantity < 0) throw new Error("negative quantity");
+		};
+
+		it("keeps the injected validator when a subclass declares a validateState field", () => {
+			class FieldShadowingEntity extends Entity<
 				{ quantity: number },
-				Id<"LegacyValidatorId">
+				Id<"FieldShadowingId">
 			> {
+				// A field initializer runs after super(); it must not replace the
+				// injected validator on any path.
+				protected readonly validateState = (): void => {};
+
+				constructor(id: Id<"FieldShadowingId">, state: { quantity: number }) {
+					super(id, state, { validateState: rejectNegativeQuantity });
+				}
+
+				set(quantity: number): void {
+					this.setState({ quantity });
+				}
+			}
+
+			expect(
+				() =>
+					new FieldShadowingEntity("f-1" as Id<"FieldShadowingId">, {
+						quantity: -1,
+					}),
+			).toThrow("negative quantity");
+
+			const entity = new FieldShadowingEntity("f-1" as Id<"FieldShadowingId">, {
+				quantity: 1,
+			});
+			expect(() => entity.set(-1)).toThrow("negative quantity");
+			expect(entity.state.quantity).toBe(1);
+		});
+
+		it("keeps the injected validator when a subclass declares a validateState method", () => {
+			class MethodShadowingEntity extends Entity<
+				{ quantity: number },
+				Id<"MethodShadowingId">
+			> {
+				constructor(id: Id<"MethodShadowingId">, state: { quantity: number }) {
+					super(id, state, { validateState: rejectNegativeQuantity });
+				}
+
 				protected validateState(_state: { quantity: number }): void {}
+
+				set(quantity: number): void {
+					this.setState({ quantity });
+				}
 			}
 
-			// A field initializer runs after super() and would replace the
-			// injected validator at runtime, so the field form is rejected too.
-			// @ts-expect-error state validation is constructor-injected, not shadowable
-			class FieldValidator extends Entity<
-				{ quantity: number },
-				Id<"FieldValidatorId">
-			> {
-				protected readonly validateState = (_state: {
-					quantity: number;
-				}): void => {};
-			}
-
-			expect(typeof LegacyValidator).toBe("function");
-			expect(typeof FieldValidator).toBe("function");
+			const entity = new MethodShadowingEntity(
+				"m-1" as Id<"MethodShadowingId">,
+				{ quantity: 1 },
+			);
+			expect(() => entity.set(-1)).toThrow("negative quantity");
+			expect(entity.state.quantity).toBe(1);
 		});
 
 		it("should call validateState during construction", () => {

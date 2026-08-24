@@ -49,9 +49,14 @@ on `error.code`:
   and the pending length.
 - The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
   for a `null` or `undefined` id.
-- `recordPendingEvents` throws `UnmanagedInstanceError`
-  (`UNMANAGED_INSTANCE`) for an aggregate that this package did not
-  construct.
+- `recordPendingEvents`, `withCommit` enrollment, and the persistence
+  baseline functions throw `UnmanagedInstanceError` (`UNMANAGED_INSTANCE`)
+  for an aggregate or baseline that this package did not construct. The
+  `withCommit` case threw `EventHarvestError` before.
+
+`Entity` now validates a candidate state before it freezes it, on
+construction and on `setState`. A rejected candidate leaves no shared object
+frozen behind. The object validated is still the object stored.
 
 ### Fixed: event-sourced aggregates check the folded state
 
@@ -61,12 +66,15 @@ and records the event. Before this change the function ran only in the
 constructor, so an event-sourced aggregate accepted a state that its own
 validator rejects. Replay through `loadFromHistory` still skips both gates.
 
+### Changed (breaking): an event handler must return a state
+
 A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
-(code `HANDLER_RETURNED_NO_STATE`) on both paths. Before this change the
-aggregate stored `undefined` as its state and, on the apply path, recorded the
-event. A state type that includes `undefined` is no longer supported for
-event-sourced aggregates; model an absent state as `null` or as a status
-field.
+(code `HANDLER_RETURNED_NO_STATE`) on the apply path and on replay. Before
+this change the aggregate stored `undefined` as its state and, on the apply
+path, recorded the event. A state type that includes `undefined` is no longer
+supported for event-sourced aggregates. Migration: model an absent state as
+`null` or as a status field, and change every handler that returned
+`undefined` on purpose before you load streams that contain those events.
 
 ### Added: tests for two guarantees the bus already gave
 

@@ -55,7 +55,7 @@ export function recordPendingEvents<
 	if (!capability) {
 		throw new UnmanagedInstanceError(
 			"recordPendingEvents",
-			String(aggregate.id),
+			String((aggregate as { id?: unknown } | null)?.id),
 		);
 	}
 	const createStamp: DomainEventStampProvider<TEvent> =

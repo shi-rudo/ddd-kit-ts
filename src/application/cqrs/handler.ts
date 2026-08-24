@@ -10,7 +10,10 @@ import {
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { EventHarvestError } from "../../errors/kit-errors";
+import {
+	EventHarvestError,
+	UnmanagedInstanceError,
+} from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -265,11 +268,9 @@ function createCommitTokenScope<
 
 		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
 		if (!eventLifecycle) {
-			throw new EventHarvestError(
-				`withCommit: aggregate ${String(aggregate.id)} has no kit-managed ` +
-					"persistence lifecycle. Extend AggregateRoot or " +
-					"EventSourcedAggregate; repository DTOs and structural lookalikes " +
-					"cannot be enrolled for commit acknowledgement.",
+			throw new UnmanagedInstanceError(
+				"withCommit enrollment",
+				String((aggregate as { id?: unknown } | null)?.id),
 			);
 		}
 

@@ -16,6 +16,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	EventHarvestError,
 	InfrastructureError,
+	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
@@ -253,7 +254,7 @@ describe("withCommit", () => {
 				result: "must not commit",
 				commits: [enrollment.enrollSaved(lookalike)],
 			})),
-		).rejects.toThrow(/Extend AggregateRoot or EventSourcedAggregate/);
+		).rejects.toBeInstanceOf(UnmanagedInstanceError);
 
 		expect(committed).toBe(false);
 		expect(outbox.added).toEqual([]);

@@ -619,7 +619,7 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 
 /**
  * Thrown by the post-commit acknowledgement of an aggregate when the
- * committed batch is not the prefix of its pending events any more: the
+ * committed batch is not the prefix of its pending events any more. The
  * batch is longer than the pending list, or an event in it is not the
  * pending event at the same position. Acknowledging such a batch would
  * drop decisions the commit never persisted or keep events it did. The
@@ -760,12 +760,13 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 	constructor(
 		/** The kit operation that rejected the instance. */
 		public readonly operation: string,
-		public readonly instanceId: string,
+		/** The rejected instance: its id, or a description when it has none. */
+		public readonly instance: string,
 	) {
 		super(
 			"UNMANAGED_INSTANCE",
 			`${operation} requires an instance constructed by this package; ` +
-				`${instanceId} carries no kit-managed capability. Extend the ` +
+				`${instance} carries no kit-managed capability. Extend the ` +
 				"kit's base classes; a structural lookalike or an instance from " +
 				"an incompatible package copy cannot be managed.",
 		);
