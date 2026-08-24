@@ -473,7 +473,7 @@ const bus = new EventBusImpl<OrderEvent>({
     },
     // A timeout ended the publication. These handlers still run.
     onPublishAborted: ({ event, pendingIndices }) => {
-      logger.error({ type: event.type, pendingIndices }, "handlers abandoned");
+      logger.error({ type: event.type, pendingIndices }, "handlers pending");
     },
   },
 });

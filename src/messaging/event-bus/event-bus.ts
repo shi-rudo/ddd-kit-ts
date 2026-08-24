@@ -66,7 +66,7 @@ export interface HandlerFailureReport {
 	readonly error: Error;
 }
 
-/** A publication ended while handlers were still running. */
+/** A publication ended while handlers were pending. */
 export interface PublishAbortedReport {
 	/** The event whose dispatch was in flight. */
 	readonly event: AnyDomainEvent;
@@ -91,11 +91,11 @@ export interface EventBusObservers {
 	readonly onHandlerError: (report: HandlerFailureReport) => void;
 	/**
 	 * A timeout or an owner abort ended the publication while handlers were
-	 * still running. Those handlers keep running, and their side effects still
-	 * land, because JavaScript cannot stop a running promise.
+	 * pending. A pending handler continues, and its side effects still land,
+	 * because JavaScript cannot stop a running promise.
 	 *
 	 * The report names them. Without it a timed-out publication says only that
-	 * it timed out, never which handler did not return.
+	 * it timed out, never which handler was pending.
 	 */
 	readonly onPublishAborted: (report: PublishAbortedReport) => void;
 	/**
@@ -224,17 +224,15 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly chainDepth = new WeakMap<AbortSignal, number>();
 	private readonly chainPath = new WeakMap<AbortSignal, readonly string[]>();
 
-	// Depth of the SYNCHRONOUS part of the current dispatch. A synchronous
-	// window always runs to completion, so a concurrent publication never
-	// observes this raised. It catches the cycle that a handler hides by
-	// dropping `context.signal`.
 	// The chain depth and path of the dispatch whose synchronous window is
 	// open. Absolute, never a frame count: a batch dispatches its events one
 	// after another, so the frame of event 1 has unwound when event 2 runs and
 	// only an absolute value still describes the chain. Swapped, never
-	// mutated, so a reader can keep the array it was handed.
-	private syncDepth = 0;
-	private syncPath: readonly string[] = [];
+	// mutated, so a reader can keep the array it was handed. A synchronous
+	// window always runs to completion, so a concurrent publication never
+	// observes it open.
+	private syncWindowDepth = 0;
+	private syncWindowPath: readonly string[] = [];
 
 	private readonly chainStore: PublishChainStore | undefined;
 	// Chain states whose dispatch has not ended. A store keeps its value in
@@ -491,7 +489,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		for (const window of [
 			{ depth: liveStore?.depth ?? 0, path: liveStore?.path ?? [] },
 			{ depth: lineage.depth, path: lineage.path ?? [] },
-			{ depth: this.syncDepth, path: this.syncPath },
+			{ depth: this.syncWindowDepth, path: this.syncWindowPath },
 		]) {
 			if (window.depth > parent.depth) parent = window;
 		}
@@ -611,16 +609,16 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// abort/timeout path that ends the publish.
 		const batchStart = errors.length;
 		const failedIndices: number[] = [];
-		// A handler that never returns keeps its slot open. On abort the bus
-		// reports the open slots, because the thrown TimeoutError names only
-		// the publication, never the handler that hangs.
+		// A handler that never returns stays pending. On abort the bus reports
+		// the pending handlers, because the thrown TimeoutError names only the
+		// publication, never the handler that did not return.
 		const settledIndices = new Set<number>();
-		const reportAbandoned = (): void => {
+		const reportPending = (): void => {
 			const observer = this.observers?.onPublishAborted;
 			if (observer === undefined) return;
 			// One microtask later. A handler that returned an already resolved
-			// promise settles in that window, and naming it as still running
-			// would tell an operator the opposite of the truth.
+			// promise settles in that window, and calling it pending would tell
+			// an operator the opposite of the truth.
 			queueMicrotask(() => {
 				const pendingIndices = batch
 					.map((_, index) => index)
@@ -631,7 +629,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				);
 			});
 		};
-		context.signal.addEventListener("abort", reportAbandoned, { once: true });
+		context.signal.addEventListener("abort", reportPending, { once: true });
 		try {
 			await Promise.allSettled(
 				batch.map(async (handler, index) => {
@@ -640,20 +638,20 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 						// window covers exactly the synchronous part of the
 						// handler. Splitting the call from the `await` keeps a
 						// synchronous throw on the same path as a rejection.
-						const outerDepth = this.syncDepth;
-						const outerPath = this.syncPath;
-						this.syncDepth = depth;
-						this.syncPath = path;
+						const outerDepth = this.syncWindowDepth;
+						const outerPath = this.syncWindowPath;
+						this.syncWindowDepth = depth;
+						this.syncWindowPath = path;
 						let running: Promise<void> | void;
 						try {
 							running = handler(event, context);
 						} finally {
-							this.syncDepth = outerDepth;
-							this.syncPath = outerPath;
+							this.syncWindowDepth = outerDepth;
+							this.syncWindowPath = outerPath;
 						}
-						// A handler that returned without a promise holds no slot
-						// open. Mark it here, because a peer that aborts
-						// synchronously runs before this wrapper resumes.
+						// A handler that returned without a promise is not pending.
+						// Mark it here, because a peer that aborts synchronously
+						// runs before this wrapper resumes.
 						if (typeof (running as { then?: unknown })?.then !== "function") {
 							settledIndices.add(index);
 						}
@@ -681,7 +679,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				}),
 			);
 		} finally {
-			context.signal.removeEventListener("abort", reportAbandoned);
+			context.signal.removeEventListener("abort", reportPending);
 		}
 		// A settled batch reports its failures in subscription order
 		// (the aggregation contract); recording order above is
