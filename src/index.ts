@@ -309,6 +309,24 @@ export {
 	type UnregisteredHandlerErrorOptions,
 	UnreplayableAggregateError,
 } from "./errors/kit-errors";
+export type { ExecutionContext } from "./internal/async/execution";
+export type {
+	DeliveryFailureAssessment,
+	DeliveryFailureClassifier,
+	DeliveryFailureKind,
+} from "./internal/delivery-failure";
+// Structural equality
+export { deepEqual } from "./internal/structural/deep-equal";
+export {
+	type DeepEqualExceptOptions,
+	deepEqualExcept,
+} from "./internal/structural/deep-equal-except";
+export {
+	type DeepOmitKey,
+	type DeepOmitOptions,
+	type DeepOmitPathSegment,
+	deepOmit,
+} from "./internal/structural/deep-omit";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,
@@ -406,21 +424,3 @@ export {
 	type SnapshotModel,
 } from "./persistence/snapshot-store/snapshot-model";
 export type { SnapshotStore } from "./persistence/snapshot-store/snapshot-store";
-// Structural equality
-export { deepEqual } from "./utils/array/deep-equal";
-export {
-	type DeepEqualExceptOptions,
-	deepEqualExcept,
-} from "./utils/array/deep-equal-except";
-export {
-	type DeepOmitKey,
-	type DeepOmitOptions,
-	type DeepOmitPathSegment,
-	deepOmit,
-} from "./utils/array/deep-omit";
-export type {
-	DeliveryFailureAssessment,
-	DeliveryFailureClassifier,
-	DeliveryFailureKind,
-} from "./utils/delivery-failure";
-export type { ExecutionContext } from "./utils/execution";

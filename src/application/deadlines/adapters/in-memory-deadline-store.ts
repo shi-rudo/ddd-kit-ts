@@ -2,7 +2,7 @@ import { InMemoryCapacityExceededError } from "../../../errors/kit-errors";
 import {
 	assertPositiveInteger,
 	assertPositiveSafeInteger,
-} from "../../../utils/validate";
+} from "../../../internal/validate";
 import type {
 	DeadLetterDeadline,
 	DeadlineStore,

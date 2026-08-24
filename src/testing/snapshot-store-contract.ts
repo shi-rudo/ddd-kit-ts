@@ -1,8 +1,8 @@
 import type { AggregateSnapshot, Version } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { Id } from "../domain/identity/id";
+import { deepEqual } from "../internal/structural/deep-equal";
 import type { SnapshotStore } from "../persistence/snapshot-store/snapshot-store";
-import { deepEqual } from "../utils/array/deep-equal";
 import {
 	assert,
 	assertEqual,

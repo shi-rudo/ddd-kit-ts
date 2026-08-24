@@ -3,7 +3,7 @@ import {
 	type AggregateAddress,
 	encodeAggregateAddress,
 } from "../../../domain/aggregate/aggregate-address";
-import { assertPositiveSafeInteger } from "../../../utils/validate";
+import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type { SnapshotStore } from "../snapshot-store";
 
 export interface InMemorySnapshotStoreOptions {

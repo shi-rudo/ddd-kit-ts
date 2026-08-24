@@ -3,7 +3,7 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
-import type { ExecutionContext } from "../../utils/execution";
+import type { ExecutionContext } from "../../internal/async/execution";
 import type { CommittedDomainEvent } from "../committed-event";
 import { EventBusImpl } from "../event-bus/event-bus";
 import { InMemoryOutbox } from "./outbox";

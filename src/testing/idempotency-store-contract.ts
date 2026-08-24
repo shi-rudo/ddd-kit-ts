@@ -3,7 +3,7 @@ import type {
 	IdempotencyClaimHandle,
 	IdempotencyStore,
 } from "../application/idempotency/idempotency";
-import { deepEqual } from "../utils/array/deep-equal";
+import { deepEqual } from "../internal/structural/deep-equal";
 import {
 	assert,
 	assertChainContainsKitError,

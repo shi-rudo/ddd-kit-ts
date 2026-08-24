@@ -1,15 +1,15 @@
 import { err, ok, type Result } from "@shirudo/result";
-import { deepEqual } from "../../utils/array/deep-equal";
+import { deepEqual } from "../../internal/structural/deep-equal";
 import {
 	type DeepEqualExceptOptions,
 	deepEqualExcept,
-} from "../../utils/array/deep-equal-except";
+} from "../../internal/structural/deep-equal-except";
 import {
 	builtInTagWithoutInvokingAccessors,
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
 	mutableBuiltInTagWithoutInvokingAccessors,
-} from "../../utils/array/is-built-in";
+} from "../../internal/structural/is-built-in";
 
 // ============================================================================
 // Functional Value Object API

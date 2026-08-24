@@ -1,10 +1,10 @@
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import { abortReason } from "../../utils/abort";
+import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
 	runBoundedExecution,
-} from "../../utils/execution";
+} from "../../internal/async/execution";
 import type {
 	EventBus,
 	EventHandler,

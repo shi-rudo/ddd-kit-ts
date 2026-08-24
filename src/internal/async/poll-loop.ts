@@ -1,7 +1,7 @@
+import { assertNonNegativeFinite, assertPositiveInteger } from "../validate";
 import { computeBackoffDelay, neutralJitterSource } from "./backoff";
 import { joinWithoutBlockingOnAbort } from "./in-flight";
 import { sleepResolvingOnAbort } from "./sleep";
-import { assertNonNegativeFinite, assertPositiveInteger } from "./validate";
 
 /** Numeric options every kit poll loop shares; see the concrete classes. */
 export interface PollLoopOptions {

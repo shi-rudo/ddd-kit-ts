@@ -2,7 +2,7 @@ import {
 	findPropertyDescriptor,
 	isBuiltInObject,
 	isIntrinsicConstructorPrototype,
-} from "../../utils/array/is-built-in";
+} from "../../internal/structural/is-built-in";
 import { deepFreeze } from "../value-object/value-object";
 import type { DomainMachineInput, DomainMachineReadonly } from "./contracts";
 import {

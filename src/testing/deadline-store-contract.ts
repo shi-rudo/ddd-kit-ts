@@ -2,7 +2,7 @@ import type {
 	DeadLetterDeadline,
 	DeadlineStore,
 } from "../application/deadlines/deadline-store";
-import { deepEqual } from "../utils/array/deep-equal";
+import { deepEqual } from "../internal/structural/deep-equal";
 import {
 	assert,
 	assertEqual,

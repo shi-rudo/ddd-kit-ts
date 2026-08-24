@@ -7,7 +7,7 @@ import {
 	ConcurrencyConflictError,
 	InMemoryCapacityExceededError,
 } from "../../../errors/kit-errors";
-import { assertPositiveSafeInteger } from "../../../utils/validate";
+import { assertPositiveSafeInteger } from "../../../internal/validate";
 import type {
 	EventStore,
 	EventStoreAppendOptions,

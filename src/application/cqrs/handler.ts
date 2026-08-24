@@ -11,18 +11,18 @@ import {
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { EventHarvestError } from "../../errors/kit-errors";
-import type { EventCommitCandidate } from "../../messaging/committed-event";
-import type { EventBus } from "../../messaging/event-bus/ports";
-import type { OutboxWriter } from "../../messaging/outbox/ports";
-import type { TransactionScope } from "../../persistence/repository/scope";
-import { abortReason } from "../../utils/abort";
+import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
 	runBoundedExecution,
-} from "../../utils/execution";
-import { reportToObserver } from "../../utils/observer";
-import { assertNonNegativeFinite } from "../../utils/validate";
+} from "../../internal/async/execution";
+import { reportToObserver } from "../../internal/observer";
+import { assertNonNegativeFinite } from "../../internal/validate";
+import type { EventCommitCandidate } from "../../messaging/committed-event";
+import type { EventBus } from "../../messaging/event-bus/ports";
+import type { OutboxWriter } from "../../messaging/outbox/ports";
+import type { TransactionScope } from "../../persistence/repository/scope";
 
 /** Dependencies for {@link withCommit}. */
 export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {

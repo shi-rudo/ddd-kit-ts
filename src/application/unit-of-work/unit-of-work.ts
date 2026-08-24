@@ -6,13 +6,13 @@ import {
 	EventHarvestError,
 	type InfrastructureError,
 } from "../../errors/kit-errors";
+import { abortReason } from "../../internal/async/abort";
+import type { ExecutionContext } from "../../internal/async/execution";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
-import { abortReason } from "../../utils/abort";
-import type { ExecutionContext } from "../../utils/execution";
 import { withCommit } from "../cqrs/handler";
 import {
 	CommitError,
