@@ -18,7 +18,14 @@ export type EventHandler<Evt> = (
 export interface PublishOptions {
 	/** Owner/request cancellation propagated to every event handler. */
 	readonly signal?: AbortSignal;
-	/** Maximum time to await the complete publication. Default `30000`ms. */
+	/**
+	 * Maximum time to await the complete publication. Default `30000`ms.
+	 *
+	 * This bounds the WAIT, not the handler. JavaScript cannot terminate a
+	 * running promise, so a handler that ignores `context.signal` keeps
+	 * running after `publish` rejects, and its side effects still land.
+	 * Pass `context.signal` into every I/O call a handler makes.
+	 */
 	readonly timeoutMs?: number;
 }
 
@@ -70,6 +77,35 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * The contract is intentionally simple and in-process. For
 	 * cross-process delivery (RabbitMQ, Kafka, etc.), use the `Outbox`
 	 * port and a dedicated dispatcher.
+	 *
+	 * **What this bus does not promise.** Delivery is at most once and
+	 * in memory. Nothing is persisted, nothing is retried, and there is
+	 * no dead-letter path. A process that dies mid-publish loses the
+	 * remaining work. Anything that must survive a crash belongs behind
+	 * the `Outbox` port, not here. This bus fits in-process consumers
+	 * whose work can be rebuilt: projections, caches, metrics.
+	 *
+	 * **Handlers must tolerate a second run.** The bus never redelivers,
+	 * but a caller that retries after a timeout does: the first attempt's
+	 * handlers may still be running or already finished. Make a handler
+	 * idempotent, or do not retry a timed-out publish.
+	 *
+	 * **Errors name the failure, not the handler.** A rejected handler
+	 * reaches the caller unchanged, and an `AggregateError` carries every
+	 * failure in subscription order. Neither names which subscription
+	 * failed. A handler that wants to be identifiable in production logs
+	 * says so itself:
+	 *
+	 * ```typescript
+	 * bus.subscribe("OrderCreated", async (event, context) => {
+	 *   try {
+	 *     await sendReceipt(event, context);
+	 *   } catch (error) {
+	 *     logger.error({ handler: "sendReceipt", event: event.type }, error);
+	 *     throw error;
+	 *   }
+	 * });
+	 * ```
 	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout
