@@ -337,22 +337,29 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 		{
 			name: "resolves once() with the next event of its type and stops after it",
 			run: inEnv(async ({ bus }: Env) => {
+				let deliveries = 0;
+				bus.subscribeAll(async () => {
+					deliveries++;
+				});
 				const waiting = bus.once(firstType);
-				let settledTwice = false;
 
-				await bus.publish([first()]);
+				const announced = first();
+				await bus.publish([announced]);
 				const received = await waiting;
 				await bus.publish([first()]);
-				await waiting.then(() => {
-					settledTwice = false;
-				});
 
 				assertEqual(
-					received.type,
-					firstType,
-					"once() resolves with an event of the type it waited for",
+					received.eventId,
+					announced.eventId,
+					"once() resolves with the first event of that type",
 				);
-				assertEqual(settledTwice, false, "once() settles a single time");
+				// The catch-all proves the second publication happened, so the
+				// subscription of once() is gone rather than never reached.
+				assertEqual(
+					deliveries,
+					2,
+					"the second publication must still reach the bus",
+				);
 			}),
 		},
 		{

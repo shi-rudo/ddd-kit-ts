@@ -29,6 +29,17 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: the publish chain is one graph of states
+
+- The tracker kept two liveness mechanisms, one for signals and one for store
+  states, and a depth map that nothing read. Every publication now records the
+  state it was created inside, and the depth is a walk of that graph counting
+  the states whose dispatch is still open. The three windows differ only in how
+  they find the state to start from.
+- Behavior does not change. The port doc now says that a handler re-enters
+  `publish` synchronously even when it does not await the result, which is why
+  a publication started inside a handler counts against the bound.
+
 ### Added: an adapter contract suite for the event bus
 
 - `EventBus` was the only port without a contract suite, while nine other ports

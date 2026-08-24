@@ -7,6 +7,16 @@ import { ownerSignalOf } from "../../internal/async/execution";
  */
 const WALK_LIMIT = 1024;
 
+/** Where a new publication sits on its chain. */
+export interface PublishChainOrigin {
+	/** Ancestors whose dispatch is still open. */
+	readonly depth: number;
+	/** Event types along the chain, oldest first. */
+	readonly path: readonly string[];
+	/** The nearest open ancestor, which the new state records as enclosing. */
+	readonly enclosing?: PublishChainState;
+}
+
 /** Depth and event path of one publish chain. */
 export interface PublishChainState {
 	/** Nested publications, the outermost counting as 1. */
@@ -65,37 +75,34 @@ export interface PublishChainStore {
  * relay lets them finish: a handler that starts the next publication without
  * awaiting it ends, its publication ends, and the count stays flat. A copied
  * depth counts both the same way and kills a correct relay at the bound.
+ *
+ * One graph of states carries that. Each publication records the state it was
+ * created inside, and a walk of that graph counts the states whose dispatch is
+ * still open. The three windows differ only in how they find the state to
+ * start the walk from.
  */
 export class PublishChainTracker {
 	private readonly store: PublishChainStore | undefined;
 
-	// Depth and event path of the chain each dispatched context belongs to,
-	// keyed by the signal the handlers receive. A nested publication that
-	// carries `context.signal` finds its parent here, across `await`. The
-	// entries die with the context, so nothing accumulates.
-	private readonly depthBySignal = new WeakMap<AbortSignal, number>();
-	private readonly pathBySignal = new WeakMap<AbortSignal, readonly string[]>();
-
-	// Membership, not mere presence, says that a chain is still open.
-	private readonly liveChainStates = new WeakSet<PublishChainState>();
-	private readonly liveDispatchSignals = new WeakSet<AbortSignal>();
-
-	// The state one dispatch was nested in, so the store window can count its
-	// open ancestors the way the signal window walks its owner chain.
+	// The state each publication was created inside, and the states whose
+	// dispatch has not ended. Depth is a walk of the first, counting the
+	// second. Weak throughout, so a chain that ends is collectable.
 	private readonly enclosingState = new WeakMap<
 		PublishChainState,
 		PublishChainState
 	>();
+	private readonly openStates = new WeakSet<PublishChainState>();
 
-	// The chain depth and path of the dispatch whose synchronous window is
-	// open. Absolute, never a frame count: a batch dispatches its events one
-	// after another, so the frame of event 1 has unwound when event 2 runs and
-	// only an absolute value still describes the chain. Swapped, never
-	// mutated, so a reader can keep the array it was handed. A synchronous
-	// window always runs to completion, so a concurrent publication never
-	// observes it open.
-	private syncWindowDepth = 0;
-	private syncWindowPath: readonly string[] = [];
+	// The state a dispatched context belongs to. A nested publication that
+	// carries `context.signal` finds it here, across `await`.
+	private readonly stateBySignal = new WeakMap<
+		AbortSignal,
+		PublishChainState
+	>();
+
+	// The state whose synchronous window is open. A synchronous window always
+	// runs to completion, so a concurrent publication never observes it open.
+	private syncWindowState: PublishChainState | undefined;
 
 	constructor(store: PublishChainStore | undefined) {
 		if (
@@ -111,110 +118,96 @@ export class PublishChainTracker {
 		this.store = store;
 	}
 
-	/** Depth and path that a publication on `signal` inherits. */
-	parentOf(signal: AbortSignal | undefined): PublishChainState {
-		let deepest: PublishChainState = { depth: 0, path: [] };
-		for (const window of [
-			this.openAncestorsInStore(),
-			this.openAncestorsOnSignal(signal),
-			{ depth: this.syncWindowDepth, path: this.syncWindowPath },
+	/** Depth, path and enclosing state that a publication on `signal` inherits. */
+	parentOf(signal: AbortSignal | undefined): PublishChainOrigin {
+		let deepest: PublishChainOrigin = { depth: 0, path: [] };
+		for (const start of [
+			this.store?.getStore(),
+			this.syncWindowState,
+			this.stateOn(signal),
 		]) {
-			// Depth and path come from the same window, so a reported depth and
-			// the path beside it cannot describe different chains.
+			const window = this.openAncestorsFrom(start);
 			if (window.depth > deepest.depth) deepest = window;
 		}
 		return deepest;
-	}
-
-	/** Runs `dispatch` with the publication of `signal` marked as open. */
-	whileDispatching<R>(
-		signal: AbortSignal,
-		dispatch: () => Promise<R>,
-	): Promise<R> {
-		this.liveDispatchSignals.add(signal);
-		return dispatch().finally(() => {
-			this.liveDispatchSignals.delete(signal);
-		});
 	}
 
 	/** Records the chain of the event dispatching now and runs `dispatch`. */
 	async whileOnEvent(
 		signal: AbortSignal,
 		state: PublishChainState,
+		enclosing: PublishChainState | undefined,
 		dispatch: () => Promise<void>,
 	): Promise<void> {
-		this.depthBySignal.set(signal, state.depth);
-		this.pathBySignal.set(signal, state.path);
-		if (this.store === undefined) {
-			await dispatch();
-			return;
-		}
-		const enclosing = this.store.getStore();
 		if (enclosing !== undefined) this.enclosingState.set(state, enclosing);
-		this.liveChainStates.add(state);
+		this.stateBySignal.set(signal, state);
+		this.openStates.add(state);
 		try {
-			await this.store.run(state, dispatch);
+			await (this.store === undefined
+				? dispatch()
+				: this.store.run(state, dispatch));
 		} finally {
-			this.liveChainStates.delete(state);
+			this.openStates.delete(state);
 		}
 	}
 
 	/** Runs one handler call with the synchronous window open. */
 	inSyncWindow<R>(state: PublishChainState, call: () => R): R {
-		const outerDepth = this.syncWindowDepth;
-		const outerPath = this.syncWindowPath;
-		this.syncWindowDepth = state.depth;
-		this.syncWindowPath = state.path;
+		const outer = this.syncWindowState;
+		this.syncWindowState = state;
 		try {
 			return call();
 		} finally {
-			this.syncWindowDepth = outerDepth;
-			this.syncWindowPath = outerPath;
+			this.syncWindowState = outer;
 		}
 	}
 
 	/**
-	 * Counts the open dispatches on the owner chain of `signal`.
+	 * Counts the still-open states above `start`, itself included.
+	 *
+	 * The path comes from the nearest open one, which already carries the
+	 * event chain up to itself.
+	 */
+	private openAncestorsFrom(
+		start: PublishChainState | undefined,
+	): PublishChainOrigin {
+		let current = start;
+		let depth = 0;
+		let path: readonly string[] = [];
+		let nearest: PublishChainState | undefined;
+		let hops = 0;
+		while (current !== undefined && hops < WALK_LIMIT) {
+			hops++;
+			if (this.openStates.has(current)) {
+				depth++;
+				if (nearest === undefined) {
+					nearest = current;
+					path = current.path;
+				}
+			}
+			current = this.enclosingState.get(current);
+		}
+		return { depth, path, enclosing: nearest };
+	}
+
+	/**
+	 * The state of the nearest dispatch on the owner chain of `signal`.
 	 *
 	 * A caller can wrap one publication in further bounded executions, and
 	 * `withCommit` does exactly that. Every hop derives a fresh signal, so an
 	 * identity check alone loses the chain at the first hop.
-	 *
-	 * The path comes from the nearest open ancestor, which already carries the
-	 * event chain up to itself.
 	 */
-	private openAncestorsOnSignal(
+	private stateOn(
 		signal: AbortSignal | undefined,
-	): PublishChainState {
+	): PublishChainState | undefined {
 		let current = signal;
-		let depth = 0;
-		let path: readonly string[] = [];
 		let hops = 0;
 		while (current !== undefined && hops < WALK_LIMIT) {
 			hops++;
-			if (this.liveDispatchSignals.has(current)) {
-				depth++;
-				if (path.length === 0) path = this.pathBySignal.get(current) ?? [];
-			}
+			const state = this.stateBySignal.get(current);
+			if (state !== undefined) return state;
 			current = ownerSignalOf(current);
 		}
-		return { depth, path };
-	}
-
-	/** Counts the open dispatches that the injected store is nested in. */
-	private openAncestorsInStore(): PublishChainState {
-		let current = this.store?.getStore();
-		let depth = 0;
-		let path: readonly string[] = [];
-		let hops = 0;
-		while (current !== undefined && hops < WALK_LIMIT) {
-			hops++;
-			if (this.liveChainStates.has(current)) {
-				depth++;
-				if (path.length === 0) path = current.path;
-			}
-			current = this.enclosingState.get(current);
-		}
-		return { depth, path };
+		return undefined;
 	}
 }

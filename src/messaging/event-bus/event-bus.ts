@@ -3,7 +3,6 @@ import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
-	ownerSignalOf,
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import {
@@ -19,6 +18,7 @@ import type {
 	PublishOptions,
 } from "./ports";
 import {
+	type PublishChainOrigin,
 	type PublishChainState,
 	type PublishChainStore,
 	PublishChainTracker,
@@ -207,7 +207,8 @@ export interface EventBusOptions {
  * event, so a handler no longer names itself to be identifiable.
  *
  * **A handler that publishes stays inside a bounded chain.** Such a
- * handler re-enters `publish`. A cycle in the handler graph overflows
+ * handler re-enters `publish`, and it does so synchronously even when it
+ * does not await the result. A cycle in the handler graph overflows
  * the call stack, or it starves the event loop until the process runs
  * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
  * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
@@ -465,15 +466,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 				},
 				(context) =>
-					this.chain.whileDispatching(context.signal, () =>
-						this.publishWithinContext(
-							events,
-							context,
-							errors,
-							depth,
-							parent.path,
-						),
-					),
+					this.publishWithinContext(events, context, errors, depth, parent),
 			);
 		} catch (boundedError) {
 			if (errors.length === 0) throw boundedError;
@@ -500,7 +493,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		context: ExecutionContext,
 		errors: Error[],
 		depth: number,
-		parentPath: readonly string[],
+		parent: PublishChainOrigin,
 	): Promise<void> {
 		// One abort check for each event, after its dispatch. A check before
 		// the dispatch cannot fire: an already aborted signal never reaches
@@ -512,10 +505,13 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			// the chain, and naming it in a cycle report is wrong.
 			const state: PublishChainState = {
 				depth,
-				path: [...parentPath, event.type],
+				path: [...parent.path, event.type],
 			};
-			await this.chain.whileOnEvent(context.signal, state, () =>
-				this.dispatchEvent(event, context, errors, state),
+			await this.chain.whileOnEvent(
+				context.signal,
+				state,
+				parent.enclosing,
+				() => this.dispatchEvent(event, context, errors, state),
 			);
 			if (context.signal.aborted) {
 				throw abortReason(context.signal, "EventBus.publish aborted");

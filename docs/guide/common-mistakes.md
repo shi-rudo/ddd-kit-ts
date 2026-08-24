@@ -450,7 +450,9 @@ releases the subscription when the event arrives, when `timeoutMs` expires, or
 when `signal` aborts. Without a timeout and without a signal it waits forever.
 
 The bus reports the leak when one event type crosses
-`maxSubscriptionsPerEventType` (default 32). It reports once for each crossing.
+`maxSubscriptionsPerEventType` (default 32). It reports at the crossing
+and then at each doubling, because a real leak never drops back and the trend
+is the useful part.
 When the count drops back to the threshold, the next crossing reports again. A
 short spike of `once` waiters therefore does not mute the event type. The bus never
 throws here, because a large fan-out of projections stays possible. Without an
