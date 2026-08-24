@@ -197,9 +197,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 	/**
 	 * The state is `protected` so that only the subclass can modify it.
 	 * Ordinary entity behavior must use {@link setState}; direct assignment
-	 * skips instance-bound validation. Kit event-sourcing internals use direct
-	 * assignment deliberately because historical evolution must not run
-	 * today's decision validator.
+	 * skips instance-bound validation (see {@link assertStateInvariant} for
+	 * the paths that assign directly and still owe the check).
 	 */
 	protected _state: TState;
 
@@ -231,7 +230,9 @@ export abstract class Entity<TState, TId extends Id<string>>
 		this.id = id;
 		this._stateFreezeMode =
 			(config?.deepFreezeState ?? false) ? "deep" : "shallow";
-		this.validateState = config?.validateState ?? noStateValidation;
+		const validateState = config?.validateState ?? noStateValidation;
+		this.validateState = validateState;
+		stateValidators.set(this, validateState as StateValidator<unknown>);
 		// Both mutation paths validate the exact frozen object that is stored.
 		// Assigning the validator as an own property before invoking it also
 		// prevents same-named prototype methods in JavaScript consumers from
@@ -282,6 +283,42 @@ export abstract class Entity<TState, TId extends Id<string>>
 }
 
 const noStateValidation: StateValidator<unknown> = () => {};
+
+/**
+ * The instance-bound validator of every constructed entity, keyed by
+ * instance so {@link assertStateInvariant} cannot be redirected by a
+ * subclass member of any kind.
+ */
+const stateValidators = new WeakMap<object, StateValidator<unknown>>();
+
+/**
+ * Runs an entity's instance-bound {@link EntityConfig.validateState}
+ * against a candidate state on behalf of a subclass path that assigns
+ * `_state` directly and still owes the check (the event-sourced apply
+ * path; replay deliberately skips it because history is accepted fact).
+ * Call it with the exact frozen object that is about to be stored.
+ *
+ * Deliberately a module-level function, not a protected method: a method
+ * could be overridden, and a protected property could be shadowed by a
+ * subclass field initializer that runs after `super()`, either of which
+ * would disable the check on that path only. The lookup is by instance,
+ * so no prototype or own member can take the validator's place.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export function assertStateInvariant<TState>(
+	entity: Entity<TState, Id<string>>,
+	candidate: TState,
+): void {
+	const validateState = stateValidators.get(entity);
+	if (validateState === undefined) {
+		throw new TypeError(
+			"assertStateInvariant requires an entity constructed by this package",
+		);
+	}
+	validateState(candidate);
+}
 
 /** The entity's configured freeze depth, fixed once at construction. */
 type StateFreezeMode = "shallow" | "deep";

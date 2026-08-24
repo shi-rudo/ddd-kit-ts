@@ -29,6 +29,21 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: event-sourced aggregates check the folded state
+
+`EventSourcedAggregate.apply(...)` now runs the `validateState` function from
+the constructor config against the folded state before it stores the state
+and records the event. Before this change the function ran only in the
+constructor, so an event-sourced aggregate accepted a state that its own
+validator rejects. Replay through `loadFromHistory` still skips both gates.
+
+A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
+(code `HANDLER_RETURNED_NO_STATE`) on both paths. Before this change the
+aggregate stored `undefined` as its state and, on the apply path, recorded the
+event. A state type that includes `undefined` is no longer supported for
+event-sourced aggregates; model an absent state as `null` or as a status
+field.
+
 ### Added: tests for two guarantees the bus already gave
 
 - Every subscriber receives the published event itself, not a copy, so the

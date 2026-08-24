@@ -264,7 +264,7 @@ This is where the theory matters most. Aggregate invariants are not just validat
 
 | Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction, `setState`, and `commit` |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction, `setState`, `commit`, and `apply()`; replay skips it |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
@@ -294,11 +294,21 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-The validator runs on construction and every `setState` call, including calls
-made by `commit` and state-stored snapshot restoration. It catches both bad
-domain transitions and corrupt state loaded from persistence. It does not run
-while event-sourced history evolves; replay uses historical facts and pure
-event handlers rather than today's decision rules.
+The validator runs on construction, on every `setState` call (including calls
+made by `commit` and state-stored snapshot restoration), and on `apply()` of a
+new event-sourced fact. On a state-stored aggregate it catches both bad domain
+transitions and corrupt state loaded from persistence.
+
+On an event-sourced aggregate the validator has one more consequence. Replay
+does not run it; replay uses historical facts and pure event handlers rather
+than today's decision rules. A snapshot restore does run it, because the
+`reconstitute` factory passes the stored state to the constructor. If a rule
+in `validateState` later tightens, old streams still load from zero, but every
+snapshot restore throws, maps to `SnapshotCorruptedError`, and refolds the
+stream on each load. So on an event-sourced aggregate, keep decision rules in
+`validateEvent` and keep `validateState` for rules that hold for every version
+of the state. This section is the one place that states this rule; the
+event-sourcing guide and the `SnapshotModel` docs point here.
 
 ### Event-Sourced Invariants
 

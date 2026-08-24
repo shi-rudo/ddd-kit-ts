@@ -227,6 +227,26 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
+ * Thrown by an event-sourced aggregate when a handler returns `undefined`
+ * for an event, which is almost always a fold without a `return` statement.
+ * Storing that result would set the aggregate state to `undefined`, record
+ * the fact anyway on the apply path, and leave every later fold working on
+ * nothing. Same posture as {@link MissingHandlerError}: a deterministic bug
+ * in the handler map, never a domain rejection, so it propagates through
+ * `loadFromHistory` instead of riding its `Result`.
+ */
+export class HandlerReturnedNoStateError extends KitWiringError<"HANDLER_RETURNED_NO_STATE"> {
+	constructor(public readonly eventType: string) {
+		super(
+			"HANDLER_RETURNED_NO_STATE",
+			`The handler for event type "${eventType}" returned no state. ` +
+				"A handler must return the next state; check for a missing " +
+				"return statement.",
+		);
+	}
+}
+
+/**
  * Thrown by `Projector.project` when an event cannot be projected
  * safely because its cursor is missing or malformed, or its aggregate
  * address is absent. Applying such an event would break idempotency, so
@@ -1216,6 +1236,7 @@ export type KitErrorCode =
 	| "EVENT_SCHEMA_VERSION_INVALID"
 	| "EVENT_TYPE_INVALID"
 	| "FOREIGN_EVENT"
+	| "HANDLER_RETURNED_NO_STATE"
 	| "HOSTILE_STATE_KEY"
 	| "IDEMPOTENCY_CLAIM_LOST"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"

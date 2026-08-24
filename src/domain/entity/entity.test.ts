@@ -234,7 +234,20 @@ describe("Entity", () => {
 				protected validateState(_state: { quantity: number }): void {}
 			}
 
+			// A field initializer runs after super() and would replace the
+			// injected validator at runtime, so the field form is rejected too.
+			// @ts-expect-error state validation is constructor-injected, not shadowable
+			class FieldValidator extends Entity<
+				{ quantity: number },
+				Id<"FieldValidatorId">
+			> {
+				protected readonly validateState = (_state: {
+					quantity: number;
+				}): void => {};
+			}
+
 			expect(typeof LegacyValidator).toBe("function");
+			expect(typeof FieldValidator).toBe("function");
 		});
 
 		it("should call validateState during construction", () => {
