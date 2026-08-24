@@ -445,7 +445,21 @@ stays, and it runs for every later event. The symptom is memory growth with no
 pointer to the cause.
 
 Subscribe once, at startup. If a subscription must follow one request, call the
-returned function when that request ends. `once` also holds a subscription. It
+returned function when that request ends.
+
+For several subscriptions at once, `subscribeMany` returns one release for the
+whole set. For subscriptions a module opens over time, collect the releases in
+a `DisposableStack`. Both release what you registered and nothing else, which
+is why the bus has no call that removes every handler of a type: that one would
+release the subscriptions of other modules too.
+
+```ts
+using registrations = new DisposableStack();
+registrations.defer(bus.subscribe("OrderPlaced", onPlaced));
+registrations.defer(bus.subscribeMany(["OrderPaid", "OrderShipped"], onMoved));
+// Leaving the scope releases both.
+```
+ `once` also holds a subscription. It
 releases the subscription when the event arrives, when `timeoutMs` expires, or
 when `signal` aborts. Without a timeout and without a signal it waits forever.
 
