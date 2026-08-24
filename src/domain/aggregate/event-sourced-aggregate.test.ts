@@ -1,6 +1,7 @@
 import { isBaseError } from "@shirudo/base-error";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+	DirectStateMutationError,
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
@@ -1316,5 +1317,47 @@ describe("a handler that returns no state", () => {
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
+	});
+});
+
+describe("state changes only through events", () => {
+	class BypassingAggregate extends TestEventSourcedAggregate {
+		overwrite(value: number): void {
+			this.setState({ ...this.state, value });
+		}
+	}
+
+	it("rejects setState on an event-sourced aggregate", () => {
+		const agg = new BypassingAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() => agg.overwrite(2)).toThrow(DirectStateMutationError);
+
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
+	it("names the aggregate and carries the wiring code", () => {
+		const agg = new BypassingAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		let caught: unknown;
+		try {
+			agg.overwrite(2);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(DirectStateMutationError);
+		expect(caught).not.toBeInstanceOf(DomainError);
+		expect((caught as DirectStateMutationError).code).toBe(
+			"DIRECT_STATE_MUTATION",
+		);
+		expect((caught as DirectStateMutationError).aggregateId).toBe("test-1");
 	});
 });

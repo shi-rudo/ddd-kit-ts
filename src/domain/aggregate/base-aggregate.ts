@@ -1,5 +1,6 @@
 import {
 	DuplicateEventIdError,
+	PendingEventBatchMismatchError,
 	ReentrantEventRecordingError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
@@ -180,8 +181,10 @@ export abstract class BaseAggregate<
 			events.length > this._pendingEvents.length ||
 			events.some((event, index) => event !== this._pendingEvents[index])
 		) {
-			throw new Error(
-				"The committed event batch is no longer the aggregate's pending prefix.",
+			throw new PendingEventBatchMismatchError(
+				String(this.id),
+				events.length,
+				this._pendingEvents.length,
 			);
 		}
 		this._pendingEvents = this._pendingEvents.slice(events.length);

@@ -247,6 +247,25 @@ export class HandlerReturnedNoStateError extends KitWiringError<"HANDLER_RETURNE
 }
 
 /**
+ * Thrown by `EventSourcedAggregate.setState`: on an event-sourced aggregate
+ * the state changes only through `apply()`, where the fact is recorded and
+ * the version advances with it. A direct state write would leave the
+ * instance ahead of its stream with nothing to replay. A wiring error: a
+ * deterministic bug in the aggregate's own code, the remedy is an event
+ * and a handler.
+ */
+export class DirectStateMutationError extends KitWiringError<"DIRECT_STATE_MUTATION"> {
+	constructor(public readonly aggregateId: string) {
+		super(
+			"DIRECT_STATE_MUTATION",
+			`Aggregate ${aggregateId} is event-sourced: its state changes only ` +
+				"through apply(). Record the fact as an event and fold it in a " +
+				"handler instead of calling setState.",
+		);
+	}
+}
+
+/**
  * Thrown by `Projector.project` when an event cannot be projected
  * safely because its cursor is missing or malformed, or its aggregate
  * address is absent. Applying such an event would break idempotency, so
@@ -436,6 +455,18 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 }
 
 /**
+ * Thrown by the `Entity` constructor when the id is `null` or `undefined`.
+ * An entity without an identity cannot be tracked, compared, or persisted,
+ * so the construction fails before any state is stored. A wiring error: a
+ * deterministic bug at the call site, never a domain rejection.
+ */
+export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
+	constructor() {
+		super("MISSING_ENTITY_ID", "Entity ID cannot be null or undefined.");
+	}
+}
+
+/**
  * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
  * carries unflushed `pendingEvents`. Replaying persisted facts onto that
  * instance would advance the version underneath decisions made against an
@@ -587,6 +618,30 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 }
 
 /**
+ * Thrown by the post-commit acknowledgement of an aggregate when the
+ * committed batch is not the prefix of its pending events any more: the
+ * batch is longer than the pending list, or an event in it is not the
+ * pending event at the same position. Acknowledging such a batch would
+ * drop decisions the commit never persisted or keep events it did. The
+ * pending list stays untouched. A wiring error in application commit
+ * orchestration: acknowledge exactly the batch that was enrolled, once.
+ */
+export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVENT_BATCH_MISMATCH"> {
+	constructor(
+		public readonly aggregateId: string,
+		public readonly batchLength: number,
+		public readonly pendingLength: number,
+	) {
+		super(
+			"PENDING_EVENT_BATCH_MISMATCH",
+			`The committed batch of ${batchLength} event(s) is no longer the ` +
+				`pending prefix of aggregate ${aggregateId} (${pendingLength} ` +
+				"pending). Acknowledge exactly the batch that was enrolled, once.",
+		);
+	}
+}
+
+/**
  * Thrown by persisted-event consumers (including `loadFromHistory` and
  * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
@@ -691,6 +746,29 @@ export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 		public readonly eventType?: string,
 	) {
 		super("EVENT_HARVEST_FAILED", message);
+	}
+}
+
+/**
+ * Thrown when a kit operation receives an instance that this package did
+ * not construct: a structural lookalike, a repository DTO, or an instance
+ * from an incompatible copy of the package. Such an instance carries none
+ * of the kit-managed capabilities the operation needs. A wiring error:
+ * extend the kit's base classes and run one compatible package copy.
+ */
+export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE"> {
+	constructor(
+		/** The kit operation that rejected the instance. */
+		public readonly operation: string,
+		public readonly instanceId: string,
+	) {
+		super(
+			"UNMANAGED_INSTANCE",
+			`${operation} requires an instance constructed by this package; ` +
+				`${instanceId} carries no kit-managed capability. Extend the ` +
+				"kit's base classes; a structural lookalike or an instance from " +
+				"an incompatible package copy cannot be managed.",
+		);
 	}
 }
 
@@ -1221,6 +1299,7 @@ export type KitErrorCode =
 	| "AGGREGATE_TRACKING"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
+	| "DIRECT_STATE_MUTATION"
 	| "DOMAIN_TRANSITION_GUARD_REJECTED"
 	| "DUPLICATE_AGGREGATE"
 	| "DUPLICATE_EVENT_ID"
@@ -1257,12 +1336,14 @@ export type KitErrorCode =
 	| "INVALID_REPOSITORY_ADAPTER"
 	| "INVALID_REPOSITORY_DEFINITION"
 	| "MISADDRESSED_EVENT"
+	| "MISSING_ENTITY_ID"
 	| "MISSING_HANDLER"
 	| "MONEY_CURRENCY_MISMATCH"
 	| "MONEY_PRECISION_LOSS"
 	| "MONEY_SCALE_MISMATCH"
 	| "NESTED_UNIT_OF_WORK"
 	| "NON_PROGRESSING_EVENT_STREAM_PAGE"
+	| "PENDING_EVENT_BATCH_MISMATCH"
 	| "PROJECTION_GAP"
 	| "PROJECTION_IDENTITY_VIOLATION"
 	| "PROJECTION_ORDER_VIOLATION"
@@ -1278,6 +1359,7 @@ export type KitErrorCode =
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
 	| "UNKNOWN_CURRENCY"
+	| "UNMANAGED_INSTANCE"
 	| "UNMINTED_EVENT"
 	| "UNPROJECTABLE_EVENT"
 	| "UNREGISTERED_HANDLER"

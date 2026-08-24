@@ -1,5 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
+	DirectStateMutationError,
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
@@ -37,10 +38,11 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.
  *
- * Extends `BaseAggregate` (the shared lifecycle machinery) but does NOT
- * expose `setState()` or `commit()` from `AggregateRoot`. This enforces
- * the event sourcing pattern at the type level: there is no way to
- * mutate state without going through an event handler.
+ * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
+ * `commit()`, and the inherited `setState()` throws
+ * `DirectStateMutationError`: the only way to change state is an event
+ * folded by a handler through `apply()`, so the instance never runs ahead
+ * of its stream.
  *
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
  * on invariant violations. Subclasses override `validateEvent()` to
@@ -114,6 +116,15 @@ export abstract class EventSourcedAggregate<
 	 * and replay always receive the current event shape.
 	 */
 	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
+
+	/**
+	 * Always throws {@link DirectStateMutationError}. An event-sourced
+	 * aggregate changes state only through `apply()`, where the fact is
+	 * recorded and the version advances with it.
+	 */
+	protected override setState(_newState: TState): never {
+		throw new DirectStateMutationError(String(this.id));
+	}
 
 	/**
 	 * Applies an event: validates the decision, locates the handler, folds

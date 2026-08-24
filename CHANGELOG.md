@@ -29,6 +29,30 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: an event-sourced aggregate rejects setState
+
+`EventSourcedAggregate` overrides the inherited `setState` to throw
+`DirectStateMutationError` (code `DIRECT_STATE_MUTATION`). Before this change
+a subclass could call `this.setState(next)`, which changed the state with no
+event and no version bump, so the instance drifted from its stream. State
+changes only through `apply()`.
+
+### Changed: coded errors on three aggregate wiring paths
+
+Three paths that threw a bare `Error` or `TypeError` now throw a kit wiring
+error with a stable code, so `onPersistError` observers and tests can match
+on `error.code`:
+
+- A post-commit acknowledgement whose batch is not the aggregate's pending
+  prefix throws `PendingEventBatchMismatchError`
+  (`PENDING_EVENT_BATCH_MISMATCH`) with the aggregate id, the batch length,
+  and the pending length.
+- The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
+  for a `null` or `undefined` id.
+- `recordPendingEvents` throws `UnmanagedInstanceError`
+  (`UNMANAGED_INSTANCE`) for an aggregate that this package did not
+  construct.
+
 ### Fixed: event-sourced aggregates check the folded state
 
 `EventSourcedAggregate.apply(...)` now runs the `validateState` function from

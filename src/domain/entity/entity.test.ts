@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { HostileStateKeyError } from "../../errors/kit-errors";
+import {
+	HostileStateKeyError,
+	MissingEntityIdError,
+} from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
 	entityIds,
@@ -176,15 +179,24 @@ describe("Entity", () => {
 			expect(sameEntity(e1, e3)).toBe(false); // Different ID
 		});
 
-		it("should throw if ID is null or undefined", () => {
+		it("rejects a null or undefined id with a coded wiring error", () => {
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(null, "p1", 1)).toThrow(
-				"Entity ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(undefined, "p1", 1)).toThrow(
-				"Entity ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
+
+			let caught: unknown;
+			try {
+				// @ts-expect-error - testing invalid input
+				new OrderItemEntity(undefined, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
 		});
 
 		it("uses the configured pure validator instead of virtual constructor dispatch", () => {

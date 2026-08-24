@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { Version } from "../../domain/aggregate/aggregate";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
 	createDomainEventFactory,
@@ -8,6 +9,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	DuplicateEventIdError,
 	ReentrantEventRecordingError,
+	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import { recordPendingEvents } from "./record-pending-events";
 
@@ -139,6 +141,28 @@ describe("recordPendingEvents", () => {
 		// payload; recording must not pay a second deep copy per event.
 		expect(recorded?.payload).toBe(pendingPayload);
 		expect(Object.isFrozen(recorded?.payload)).toBe(true);
+	});
+
+	it("rejects an aggregate that this package did not construct", () => {
+		const lookalike = {
+			id: "counter-1" as CounterId,
+			version: 0 as Version,
+			pendingEvents: [] as ReadonlyArray<CounterChanged>,
+		};
+
+		let caught: unknown;
+		try {
+			recordPendingEvents(lookalike, () => ({
+				eventId: "event-1",
+				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+			}));
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(UnmanagedInstanceError);
+		expect((caught as UnmanagedInstanceError).code).toBe("UNMANAGED_INSTANCE");
+		expect((caught as UnmanagedInstanceError).message).toContain("counter-1");
 	});
 
 	it("shares the recording capability registry across package copies", () => {

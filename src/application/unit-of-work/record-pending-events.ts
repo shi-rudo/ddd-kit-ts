@@ -7,6 +7,7 @@ import type {
 	UncommittedDomainEventOf,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
+import { UnmanagedInstanceError } from "../../errors/kit-errors";
 
 /** Minimal shell role accepted by {@link recordPendingEvents}. */
 export type DomainEventStampFactory = Pick<DomainEventFactory, "createStamp">;
@@ -52,8 +53,9 @@ export function recordPendingEvents<
 ): ReadonlyArray<TEvent> {
 	const capability = pendingEventRecordingCapabilityFor(aggregate);
 	if (!capability) {
-		throw new TypeError(
-			"recordPendingEvents requires an aggregate created by this package",
+		throw new UnmanagedInstanceError(
+			"recordPendingEvents",
+			String(aggregate.id),
 		);
 	}
 	const createStamp: DomainEventStampProvider<TEvent> =

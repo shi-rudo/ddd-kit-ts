@@ -60,7 +60,11 @@
  * }
  * ```
  */
-import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
+import {
+	assertNoHostileOwnProtoKey,
+	MissingEntityIdError,
+	UnmanagedInstanceError,
+} from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -225,7 +229,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 		config?: EntityConfig<TState>,
 	) {
 		if (id === null || id === undefined) {
-			throw new Error("Entity ID cannot be null or undefined");
+			throw new MissingEntityIdError();
 		}
 		this.id = id;
 		this._stateFreezeMode =
@@ -313,9 +317,7 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
-		throw new TypeError(
-			"assertStateInvariant requires an entity constructed by this package",
-		);
+		throw new UnmanagedInstanceError("assertStateInvariant", String(entity.id));
 	}
 	validateState(candidate);
 }
