@@ -9,6 +9,7 @@ import {
 } from "../../internal/async/execution";
 import { PublishDepthExceededError } from "./errors";
 import { EventBusImpl, type EventBusObservers } from "./event-bus";
+import type { PublishChainStore } from "./publish-chain";
 
 /** Every observer is required. Tests override only the one they assert on. */
 const silentObservers = (): EventBusObservers => ({
@@ -814,6 +815,95 @@ describe("EventBusImpl", () => {
 			const received = await p;
 			// Narrowed: trackingNumber is required on OrderShipped
 			expect(received.payload.trackingNumber).toBe("T-1");
+		});
+	});
+
+	describe("construction options", () => {
+		it("rejects a maximum publish depth that is not a positive integer", () => {
+			for (const invalid of [0, -1, 1.5, Number.NaN]) {
+				expect(
+					() => new EventBusImpl<OrderEvent>({ maxPublishDepth: invalid }),
+				).toThrow();
+			}
+		});
+
+		it("rejects a subscription threshold that is not a positive integer", () => {
+			expect(
+				() => new EventBusImpl<OrderEvent>({ maxSubscriptionsPerEventType: 0 }),
+			).toThrow();
+		});
+
+		it("rejects a chain store without run and getStore", () => {
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						chainStore: {} as unknown as PublishChainStore,
+					}),
+			).toThrow(TypeError);
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						chainStore: {
+							run: () => undefined,
+						} as unknown as PublishChainStore,
+					}),
+			).toThrow(TypeError);
+		});
+	});
+
+	describe("abort between the events of one batch", () => {
+		it("dispatches nothing when the signal is already aborted", async () => {
+			const controller = new AbortController();
+			controller.abort(new Error("owner stopped before publish"));
+			const bus = new EventBusImpl<OrderEvent>();
+			let called = false;
+
+			bus.subscribe("OrderCreated", () => {
+				called = true;
+			});
+
+			await expect(
+				bus.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+					],
+					{ signal: controller.signal },
+				),
+			).rejects.toThrow();
+
+			expect(called).toBe(false);
+		});
+
+		it("stops the batch and leaves the remaining events undispatched", async () => {
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+
+			bus.subscribe("OrderCreated", async () => {
+				seen.push("OrderCreated");
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderShipped", async () => {
+				seen.push("OrderShipped");
+			});
+
+			await expect(
+				bus.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+						createDomainEvent("OrderShipped", {
+							orderId: "o-1",
+						}) as OrderShipped,
+					],
+					{ signal: controller.signal },
+				),
+			).rejects.toThrow();
+
+			expect(seen).toEqual(["OrderCreated"]);
 		});
 	});
 

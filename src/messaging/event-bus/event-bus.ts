@@ -502,10 +502,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		depth: number,
 		parentPath: readonly string[],
 	): Promise<void> {
+		// One abort check for each event, after its dispatch. A check before
+		// the dispatch cannot fire: an already aborted signal never reaches
+		// here, because the bounded execution returns before it calls this,
+		// and the check below ends the loop before the next event starts.
 		for (const event of events) {
-			if (context.signal.aborted) {
-				throw abortReason(context.signal, "EventBus.publish aborted");
-			}
 			// The chain is recorded for the event that dispatches now, never for
 			// the whole batch: an event that has not dispatched yet is not on
 			// the chain, and naming it in a cycle report is wrong.

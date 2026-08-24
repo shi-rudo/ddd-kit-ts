@@ -42,6 +42,7 @@
 	"scripts": {
 		"build": "vp pack",
 		"test": "vp test",
+		"test:coverage": "vp test --coverage --coverage.include='src/**'",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
 		"audit:prod": "pnpm audit --prod",
 		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",
@@ -73,6 +74,7 @@
 		"@stryker-mutator/core": "^10.0.0",
 		"@stryker-mutator/vitest-runner": "^10.0.0",
 		"@typescript/native": "npm:typescript@7.0.2",
+		"@vitest/coverage-v8": "catalog:",
 		"edge-runtime": "4.0.1",
 		"esbuild": "0.28.2",
 		"fast-check": "^4.9.0",

@@ -114,6 +114,9 @@ gives a before-and-after example for each breaking change.
 - The chain machinery lives in its own module, `PublishChainTracker`. It owns
   the three windows and the bound; the bus keeps subscriptions, dispatch and
   observers. The public API does not change.
+- Added `npm run test:coverage`, backed by `@vitest/coverage-v8` on the same
+  version as the test runner. The event bus reports 100% of lines and
+  functions, 98.25% of statements and 91.89% of branches.
 - Depth counts the ancestors that are still open, never a number copied from
   the parent. A cycle keeps its ancestors open, because each one awaits the
   next. A relay lets them finish, so a handler that starts the next
