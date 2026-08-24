@@ -85,16 +85,16 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * the `Outbox` port, not here. This bus fits in-process consumers
 	 * whose work can be rebuilt: projections, caches, metrics.
 	 *
-	 * **Handlers must tolerate a second run.** The bus never redelivers,
-	 * but a caller that retries after a timeout does: the first attempt's
-	 * handlers may still be running or already finished. Make a handler
-	 * idempotent, or do not retry a timed-out publish.
+	 * **Handlers must tolerate a second run.** The bus never redelivers. A
+	 * caller that retries after a timeout does redeliver. The handlers of
+	 * the first attempt can still run, or they can be finished already.
+	 * Make a handler idempotent, or do not retry a timed-out publish.
 	 *
 	 * **Errors name the failure, not the handler.** A rejected handler
 	 * reaches the caller unchanged, and an `AggregateError` carries every
 	 * failure in subscription order. Neither names which subscription
-	 * failed. A handler that wants to be identifiable in production logs
-	 * says so itself:
+	 * failed. A handler names itself when it must be identifiable in
+	 * production logs:
 	 *
 	 * ```typescript
 	 * bus.subscribe("OrderCreated", async (event, context) => {
@@ -118,9 +118,9 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * one shared bus never reach it. A handler links its nested publication
 	 * to the chain when it passes `context.signal`. That is the same
 	 * practice that gives the handler cancellation. The link survives the
-	 * kit's own nested operations, `withCommit` included. It ends at a signal
-	 * the kit did not derive, for example one from `AbortSignal.any`, and a
-	 * handler that drops the signal leaves no link at all. There, only a
+	 * nested operations of the kit, `withCommit` included. It ends at a
+	 * signal the kit did not derive, for example one from `AbortSignal.any`.
+	 * A handler that drops the signal leaves no link at all. There, only a
 	 * synchronous cycle is caught.
 	 *
 	 * Pass `chainStore` to follow every chain, whatever a handler does with

@@ -379,33 +379,38 @@ The event bus delivers in memory and at most once. It persists nothing, it
 retries nothing, and it has no dead-letter path. If the process stops during
 `publish`, the remaining handlers never run. Those events are gone.
 
-Use the bus for work that you can rebuild. Projections, caches and metrics fit
+Use the bus for work that you can rebuild. Projections, caches, and metrics fit
 here.
 
 Do not use the bus for an effect that the business cannot lose. An email, a
-payment or a call to another system belongs behind the `Outbox` port. The unit
+payment, or a call to another system belongs behind the `Outbox` port. The unit
 of work writes the event to the outbox in the same transaction as the
-aggregate. A separate dispatcher then delivers it, retries it, and dead-letters
-it. Read the outbox guide for that path.
+aggregate. A separate dispatcher then delivers it, retries it, and moves it
+to the dead-letter queue. Read the outbox guide for that path.
 
-Three more facts decide how you write a handler.
+Three facts decide how you write a handler:
 
-`timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a running
-promise. If a handler ignores `context.signal`, it keeps running after
-`publish` rejects, and its side effects still land. Pass `context.signal` into
-every call the handler makes.
+1. `timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a
+   running promise. A handler that ignores `context.signal` keeps running after
+   `publish` rejects, and its side effects still land.
+2. A retry after a timeout runs the handlers a second time. The first attempt
+   can still run. Make the handler idempotent, or do not retry a publish that
+   timed out.
+3. A handler that publishes must pass `context.signal` into that publication.
+   The signal links the nested publication to its chain, and the bus stops a
+   cycle at `maxPublishDepth` (default 32).
 
-A handler that publishes must pass `context.signal` into that publication. The
-signal links the nested publication to its chain. The bus then stops a cycle at
-`maxPublishDepth` (default 32) and throws `PublishDepthExceededError`. The link
-survives the nested operations of the kit, `withCommit` included. It does not
-survive a signal that the kit did not derive, for example one from
-`AbortSignal.any` or a new `AbortController`. Without the link, an asynchronous
-cycle starves the event loop, and the process runs out of memory.
+Pass `context.signal` into every call a handler makes. The signal gives the
+call cancellation, and it gives the bus the chain.
 
-On Node, pass `chainStore` and the bus follows every chain, whatever a handler
-does with the signal. The kit does not import `node:async_hooks` itself,
-because that specifier does not resolve in an edge bundle.
+The link survives the nested operations of the kit, `withCommit` included. It
+ends at a signal that the kit did not derive, for example one from
+`AbortSignal.any`. Without the link, an asynchronous cycle starves the event
+loop, and the process runs out of memory.
+
+On Node, `chainStore` follows every chain, even when a handler replaces the
+signal. The kit does not import `node:async_hooks` itself, because that
+specifier does not resolve in an edge bundle.
 
 ```ts
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -414,10 +419,6 @@ const bus = new EventBusImpl<OrderEvent>({
   chainStore: new AsyncLocalStorage<PublishChainState>(),
 });
 ```
-
-A retry after a timeout runs the handlers a second time. The first attempt is
-possibly still in flight. Make the handler idempotent, or do not retry a
-publish that timed out.
 
 ```ts
 // Rebuildable. The bus is the right home.
@@ -444,9 +445,11 @@ releases the subscription when the event arrives, when `timeoutMs` expires, or
 when `signal` aborts. Without a timeout and without a signal it waits forever.
 
 The bus reports the leak when one event type crosses
-`maxSubscriptionsPerEventType` (default 32). It reports once for that event
-type, and it never throws: a large fan-out of projections stays possible.
-Without an observer the bus reports nothing.
+`maxSubscriptionsPerEventType` (default 32). It reports once for each crossing.
+When the count drops back to the threshold, the next crossing reports again. A
+short spike of `once` waiters therefore does not mute the event type. The bus never
+throws here, because a large fan-out of projections stays possible. Without an
+observer the bus reports nothing.
 
 ```ts
 const bus = new EventBusImpl<OrderEvent>({
