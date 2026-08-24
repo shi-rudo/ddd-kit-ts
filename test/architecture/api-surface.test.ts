@@ -236,6 +236,7 @@ const INDEX_SURFACE = [
 	"ProjectionOrderViolationError",
 	"ProjectionReceiptViolationError",
 	"Projector",
+	"PublishDepthExceededError",
 	"QueryBus",
 	"ReentrantDomainStateMachineEvaluationError",
 	"ReentrantEventRecordingError",

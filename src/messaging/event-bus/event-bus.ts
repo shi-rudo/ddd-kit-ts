@@ -5,12 +5,33 @@ import {
 	type ExecutionContext,
 	runBoundedExecution,
 } from "../../internal/async/execution";
+import { assertPositiveInteger } from "../../internal/validate";
+import { PublishDepthExceededError } from "./errors";
 import type {
 	EventBus,
 	EventHandler,
 	OnceOptions,
 	PublishOptions,
 } from "./ports";
+
+/** Bound for one publish chain. Real nesting stays far below this. */
+const DEFAULT_MAX_PUBLISH_DEPTH = 32;
+
+/** Construction options for {@link EventBusImpl}. */
+export interface EventBusOptions {
+	/**
+	 * Maximum depth of one publish chain. Default `32`.
+	 *
+	 * A handler that publishes re-enters `publish`. An unbounded chain either
+	 * overflows the call stack or starves the event loop until the process runs
+	 * out of memory, and the publish timeout stops neither. Beyond this depth
+	 * the bus throws {@link PublishDepthExceededError}.
+	 *
+	 * The bound counts one publish CHAIN, never the bus instance. Concurrent
+	 * publications on one shared bus never reach it.
+	 */
+	readonly maxPublishDepth?: number;
+}
 
 /**
  * Simple in-memory event bus implementation.
@@ -37,6 +58,32 @@ import type {
 export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly handlers = new Map<string, EventHandler<Evt>[]>();
 	private readonly catchAllHandlers: EventHandler<Evt>[] = [];
+	private readonly maxPublishDepth: number;
+
+	// Depth and event path of the chain each dispatched context belongs to,
+	// keyed by the signal the handlers receive. A nested publish that carries
+	// `context.signal` finds its parent here, across `await`. The entries die
+	// with the context, so nothing accumulates.
+	private readonly chainDepth = new WeakMap<AbortSignal, number>();
+	private readonly chainPath = new WeakMap<AbortSignal, readonly string[]>();
+
+	// Depth of the SYNCHRONOUS part of the current dispatch. A synchronous
+	// window always runs to completion, so a concurrent publication never
+	// observes this raised. It catches the cycle that a handler hides by
+	// dropping `context.signal`.
+	private syncDepth = 0;
+	private readonly syncPath: string[] = [];
+
+	constructor(options: EventBusOptions = {}) {
+		if (options.maxPublishDepth !== undefined) {
+			assertPositiveInteger(
+				"EventBusImpl",
+				"maxPublishDepth",
+				options.maxPublishDepth,
+			);
+		}
+		this.maxPublishDepth = options.maxPublishDepth ?? DEFAULT_MAX_PUBLISH_DEPTH;
+	}
 
 	subscribe<K extends Evt["type"]>(
 		eventType: K,
@@ -160,6 +207,24 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// the port contract promises that collected handler errors are
 		// thrown after dispatch. An abort ends the batch but must not
 		// swallow the failures that already happened.
+		// Depth comes from the chain, never from the instance. Two sources see
+		// it: the parent signal (survives `await`, needs the handler to pass
+		// `context.signal`) and the synchronous window (needs nothing). Take
+		// whichever is higher.
+		const parentSignal = options.signal;
+		const parentDepth =
+			parentSignal === undefined ? 0 : (this.chainDepth.get(parentSignal) ?? 0);
+		const parentPath =
+			parentSignal === undefined ? undefined : this.chainPath.get(parentSignal);
+		const depth = Math.max(parentDepth, this.syncDepth) + 1;
+		const path = [
+			...(parentPath ?? this.syncPath),
+			...events.map((event) => event.type),
+		];
+		if (depth > this.maxPublishDepth) {
+			throw new PublishDepthExceededError(depth, this.maxPublishDepth, path);
+		}
+
 		const errors: Error[] = [];
 		try {
 			await runBoundedExecution(
@@ -168,7 +233,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 					signal: options.signal,
 					timeoutMs: options.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS,
 				},
-				(context) => this.publishWithinContext(events, context, errors),
+				(context) => {
+					this.chainDepth.set(context.signal, depth);
+					this.chainPath.set(context.signal, path);
+					return this.publishWithinContext(events, context, errors);
+				},
 			);
 		} catch (boundedError) {
 			if (errors.length === 0) throw boundedError;
@@ -221,7 +290,20 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				await Promise.allSettled(
 					batch.map(async (handler, index) => {
 						try {
-							await handler(event, context);
+							// `handler(...)` returns at its first `await`, so this
+							// window is exactly the synchronous nesting. Splitting the
+							// call from the `await` keeps a synchronous throw on the
+							// same path as a rejection.
+							this.syncDepth++;
+							this.syncPath.push(event.type);
+							let running: Promise<void> | void;
+							try {
+								running = handler(event, context);
+							} finally {
+								this.syncDepth--;
+								this.syncPath.pop();
+							}
+							await running;
 						} catch (reason) {
 							failedIndices.push(index);
 							errors.push(

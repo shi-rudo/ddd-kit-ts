@@ -29,6 +29,26 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: the event bus bounds one publish chain
+
+- A handler that publishes re-enters `publish`. Nothing bounded that chain. A
+  synchronous cycle overflowed the call stack at depth 574. An asynchronous
+  cycle starved the event loop, and the process died with
+  `Reached heap limit Allocation failed` after about 270 ms. `timeoutMs`
+  stopped neither, because a timer is a macrotask and a starved loop never runs
+  one.
+- Beyond `maxPublishDepth` the bus now throws the new
+  `PublishDepthExceededError` and names the event path that formed the cycle.
+  The error carries the `WIRING` category and is not retryable.
+- `new EventBusImpl({ maxPublishDepth })` configures the bound. The default is
+  32. The constructor took no arguments before, so existing code stays valid.
+- The bound counts one publish chain, never the bus instance. Concurrent
+  publications on one shared bus are correct usage and never reach it.
+- A handler links its nested publication to the chain when it passes
+  `context.signal`. A handler that drops the signal and publishes after an
+  `await` leaves a chain the bus cannot see. A synchronous cycle is still
+  caught there.
+
 ### Documentation: the event bus states what it does not promise
 
 - The `publish` contract and `PublishOptions.timeoutMs` now state the delivery

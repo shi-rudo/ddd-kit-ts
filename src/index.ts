@@ -334,7 +334,11 @@ export type {
 	EventCommitCandidate,
 	EventCommitCandidatePosition,
 } from "./messaging/committed-event";
-export { EventBusImpl } from "./messaging/event-bus/event-bus";
+export { PublishDepthExceededError } from "./messaging/event-bus/errors";
+export {
+	EventBusImpl,
+	type EventBusOptions,
+} from "./messaging/event-bus/event-bus";
 export type {
 	EventBus,
 	EventHandler,

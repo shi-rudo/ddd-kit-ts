@@ -388,12 +388,18 @@ of work writes the event to the outbox in the same transaction as the
 aggregate. A separate dispatcher then delivers it, retries it, and dead-letters
 it. Read the outbox guide for that path.
 
-Two more facts decide how you write a handler.
+Three more facts decide how you write a handler.
 
 `timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a running
 promise. If a handler ignores `context.signal`, it keeps running after
 `publish` rejects, and its side effects still land. Pass `context.signal` into
 every call the handler makes.
+
+A handler that publishes must pass `context.signal` into that publication. The
+signal links the nested publication to its chain. The bus then stops a cycle at
+`maxPublishDepth` (default 32) and throws `PublishDepthExceededError`. Without
+the signal, an asynchronous cycle starves the event loop, and the process runs
+out of memory.
 
 A retry after a timeout runs the handlers a second time. The first attempt is
 possibly still in flight. Make the handler idempotent, or do not retry a
@@ -462,5 +468,6 @@ When you review code that uses the kit, make sure that these rules apply:
 - Preserve structured errors until the mapping boundary.
 - Put work that the business cannot lose behind the outbox, not on the
   event bus.
+- Pass `context.signal` into every publication a handler makes.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

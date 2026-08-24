@@ -4,6 +4,7 @@ import {
 	type DomainEvent,
 } from "../../domain/aggregate/aggregate";
 import type { ExecutionContext } from "../../internal/async/execution";
+import { PublishDepthExceededError } from "./errors";
 import { EventBusImpl } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
@@ -803,6 +804,123 @@ describe("EventBusImpl", () => {
 			const received = await p;
 			// Narrowed: trackingNumber is required on OrderShipped
 			expect(received.payload.trackingNumber).toBe("T-1");
+		});
+	});
+
+	describe("publish recursion", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+		const shipped = () =>
+			createDomainEvent("OrderShipped", { orderId: "o-1" }) as OrderShipped;
+
+		// Every cycle test carries its own brake. Without the guard the bus
+		// overflows the stack or starves the event loop until the process dies,
+		// and a test must not depend on that to fail.
+		const BRAKE = 200;
+
+		it("rejects a synchronous publish cycle instead of overflowing the stack", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("rejects an asynchronous publish cycle that carries the context signal", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				await Promise.resolve();
+				await bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
+		it("names the event types that formed the cycle", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([shipped()], { signal: context.signal });
+			});
+			bus.subscribe("OrderShipped", (_event, context) =>
+				bus.publish([created()], { signal: context.signal }),
+			);
+
+			const error = await bus.publish([created()]).catch((reason) => reason);
+
+			expect(error).toBeInstanceOf(PublishDepthExceededError);
+			expect(error.code).toBe("PUBLISH_DEPTH_EXCEEDED");
+			expect(error.message).toContain("OrderCreated");
+			expect(error.message).toContain("OrderShipped");
+		});
+
+		it("dispatches nested publications that stay below the limit", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			const seen: string[] = [];
+
+			bus.subscribe("OrderCreated", (event, context) => {
+				seen.push(event.type);
+				return bus.publish([shipped()], { signal: context.signal });
+			});
+			bus.subscribe("OrderShipped", (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([created()]);
+
+			expect(seen).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("does not count concurrent publications on one bus as recursion", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 4 });
+			let handled = 0;
+
+			// One shared bus, published to concurrently, is correct usage. A
+			// guard that counts per instance instead of per chain rejects this.
+			bus.subscribe("OrderCreated", async () => {
+				await Promise.resolve();
+				handled++;
+			});
+
+			await Promise.all(
+				Array.from({ length: 100 }, () => bus.publish([created()])),
+			);
+
+			expect(handled).toBe(100);
+		});
+
+		it("honours a configured maximum publish depth", async () => {
+			const bus = new EventBusImpl<OrderEvent>({ maxPublishDepth: 3 });
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				return bus.publish([created()], { signal: context.signal });
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBe(3);
 		});
 	});
 });

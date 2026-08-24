@@ -107,6 +107,20 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * });
 	 * ```
 	 *
+	 * **A handler that publishes stays inside a bounded chain.** Such a
+	 * handler re-enters `publish`. A cycle in the handler graph overflows
+	 * the call stack, or it starves the event loop until the process runs
+	 * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
+	 * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
+	 * the bus throws `PublishDepthExceededError` and names the event path.
+	 *
+	 * The bound counts one chain, never the bus. Concurrent publications on
+	 * one shared bus never reach it. A handler links its nested publication
+	 * to the chain when it passes `context.signal`. That is the same
+	 * practice that gives the handler cancellation. A handler that drops the
+	 * signal and publishes after an `await` leaves a chain the bus cannot
+	 * see. There, only a synchronous cycle is still caught.
+	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout
 	 */
