@@ -3,6 +3,7 @@ import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
 	type ExecutionContext,
+	ownerSignalOf,
 	runBoundedExecution,
 } from "../../internal/async/execution";
 import {
@@ -37,7 +38,8 @@ export interface SubscriptionThresholdReport {
 export interface EventBusObservers {
 	/**
 	 * One event type crossed `maxSubscriptionsPerEventType`. Reported once for
-	 * that event type, never again.
+	 * each crossing, never once per `subscribe`. When the count drops back to
+	 * the threshold, the next crossing reports again.
 	 *
 	 * A subscription that a request path opens without the matching
 	 * unsubscribe leaks. The symptom is memory growth, and the bus is the only
@@ -130,8 +132,9 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
-	// One report per event type. A muted signal beats a report on every
-	// further subscribe once the count is already over.
+	// Event types that already reported their current crossing. Cleared when
+	// the count drops back, so a transient spike, for example many in-flight
+	// `once` waiters, cannot mute the event type for the rest of the process.
 	private readonly reportedThresholds = new Set<string | symbol>();
 
 	constructor(options: EventBusOptions = {}) {
@@ -159,6 +162,37 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				: captureObserverFunctions("EventBusImpl", options.observers, [
 						"onSubscriptionThresholdExceeded",
 					]);
+	}
+
+	/**
+	 * Depth and path of the chain the given signal belongs to.
+	 *
+	 * A caller can wrap one publication in further bounded executions, and
+	 * `withCommit` does exactly that. Every hop derives a fresh signal, so an
+	 * identity check alone loses the chain at the first hop. Walking the owner
+	 * chain finds the nearest execution this bus dispatched.
+	 */
+	private chainStateFor(signal: AbortSignal | undefined): {
+		readonly depth: number;
+		readonly path: readonly string[] | undefined;
+	} {
+		let current = signal;
+		while (current !== undefined) {
+			const depth = this.chainDepth.get(current);
+			if (depth !== undefined) {
+				return { depth, path: this.chainPath.get(current) };
+			}
+			current = ownerSignalOf(current);
+		}
+		return { depth: 0, path: undefined };
+	}
+
+	private rearmSubscriptionReport(
+		eventType: string | null,
+		subscriptionCount: number,
+	): void {
+		if (subscriptionCount > this.maxSubscriptionsPerEventType) return;
+		this.reportedThresholds.delete(eventType ?? CATCH_ALL);
 	}
 
 	private reportSubscriptionCount(
@@ -205,6 +239,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				handlersForType.splice(idx, 1);
 				removed = true;
 			}
+			this.rearmSubscriptionReport(type, handlersForType.length);
 			if (handlersForType.length === 0) {
 				this.handlers.delete(type);
 			}
@@ -230,6 +265,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				this.catchAllHandlers.splice(idx, 1);
 				removed = true;
 			}
+			this.rearmSubscriptionReport(null, this.catchAllHandlers.length);
 		};
 	}
 
@@ -308,14 +344,13 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// it: the parent signal (survives `await`, needs the handler to pass
 		// `context.signal`) and the synchronous window (needs nothing). Take
 		// whichever is higher.
-		const parentSignal = options.signal;
-		const parentDepth =
-			parentSignal === undefined ? 0 : (this.chainDepth.get(parentSignal) ?? 0);
-		const parentPath =
-			parentSignal === undefined ? undefined : this.chainPath.get(parentSignal);
-		const depth = Math.max(parentDepth, this.syncDepth) + 1;
+		const parent = this.chainStateFor(options.signal);
+		// Depth and path come from ONE source, so a reported depth and the path
+		// beside it cannot describe different chains.
+		const fromSyncWindow = this.syncDepth > parent.depth;
+		const depth = (fromSyncWindow ? this.syncDepth : parent.depth) + 1;
 		const path = [
-			...(parentPath ?? this.syncPath),
+			...(fromSyncWindow ? this.syncPath : (parent.path ?? [])),
 			...events.map((event) => event.type),
 		];
 		if (depth > this.maxPublishDepth) {

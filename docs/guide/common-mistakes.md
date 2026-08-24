@@ -397,9 +397,11 @@ every call the handler makes.
 
 A handler that publishes must pass `context.signal` into that publication. The
 signal links the nested publication to its chain. The bus then stops a cycle at
-`maxPublishDepth` (default 32) and throws `PublishDepthExceededError`. Without
-the signal, an asynchronous cycle starves the event loop, and the process runs
-out of memory.
+`maxPublishDepth` (default 32) and throws `PublishDepthExceededError`. The link
+survives the nested operations of the kit, `withCommit` included. It does not
+survive a signal that the kit did not derive, for example one from
+`AbortSignal.any` or a new `AbortController`. Without the link, an asynchronous
+cycle starves the event loop, and the process runs out of memory.
 
 A retry after a timeout runs the handlers a second time. The first attempt is
 possibly still in flight. Make the handler idempotent, or do not retry a

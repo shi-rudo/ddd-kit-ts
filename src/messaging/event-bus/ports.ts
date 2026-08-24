@@ -117,9 +117,11 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * The bound counts one chain, never the bus. Concurrent publications on
 	 * one shared bus never reach it. A handler links its nested publication
 	 * to the chain when it passes `context.signal`. That is the same
-	 * practice that gives the handler cancellation. A handler that drops the
-	 * signal and publishes after an `await` leaves a chain the bus cannot
-	 * see. There, only a synchronous cycle is still caught.
+	 * practice that gives the handler cancellation. The link survives the
+	 * kit's own nested operations, `withCommit` included. A handler that
+	 * drops the signal, or replaces it with one the kit did not derive,
+	 * leaves a chain the bus cannot see. There, only a synchronous cycle is
+	 * still caught.
 	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout

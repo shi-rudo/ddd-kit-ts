@@ -3,7 +3,10 @@ import {
 	createDomainEvent,
 	type DomainEvent,
 } from "../../domain/aggregate/aggregate";
-import type { ExecutionContext } from "../../internal/async/execution";
+import {
+	type ExecutionContext,
+	runBoundedExecution,
+} from "../../internal/async/execution";
 import { PublishDepthExceededError } from "./errors";
 import { EventBusImpl, type EventBusObservers } from "./event-bus";
 
@@ -851,6 +854,31 @@ describe("EventBusImpl", () => {
 			expect(depth).toBeLessThan(BRAKE);
 		});
 
+		it("bounds a cycle whose signal crosses a nested bounded execution", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let depth = 0;
+
+			bus.subscribe("OrderCreated", async (_event, context) => {
+				if (depth >= BRAKE) return;
+				depth++;
+				// The await ends the synchronous window, so only the signal can
+				// still carry the chain. withCommit then publishes from inside its
+				// own bounded execution, so the bus receives a derived signal, not
+				// the one it handed to the handler.
+				await Promise.resolve();
+				await runBoundedExecution(
+					"nested",
+					{ signal: context.signal, timeoutMs: 5_000 },
+					(nested) => bus.publish([created()], { signal: nested.signal }),
+				);
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				PublishDepthExceededError,
+			);
+			expect(depth).toBeLessThan(BRAKE);
+		});
+
 		it("names the event types that formed the cycle", async () => {
 			const bus = new EventBusImpl<OrderEvent>();
 			let depth = 0;
@@ -961,6 +989,45 @@ describe("EventBusImpl", () => {
 			bus.subscribe("OrderShipped", noop);
 
 			expect(types).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("reports again after the count drops back to the threshold", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			// A transient spike, for example many in-flight `once` waiters, must
+			// not mute the event type for the rest of the process.
+			const release = bus.subscribe("OrderCreated", noop);
+			release();
+			bus.subscribe("OrderCreated", noop);
+
+			expect(counts).toEqual([3, 3]);
+		});
+
+		it("re-arms the catch-all report as well", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			bus.subscribeAll(noop);
+			const release = bus.subscribeAll(noop);
+			release();
+			bus.subscribeAll(noop);
+
+			expect(counts).toEqual([2, 2]);
 		});
 
 		it("reports catch-all subscriptions with a null event type", () => {

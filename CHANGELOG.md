@@ -35,12 +35,16 @@ gives a before-and-after example for each breaking change.
   subscribes for one request and never calls it leaks the handler, and 5000
   subscriptions on one event type produced no report and hit no ceiling. The
   symptom is memory growth with no pointer to the cause.
-- The bus now reports through the new optional
-  `observers.onSubscriptionThresholdExceeded` when one event type crosses
-  `maxSubscriptionsPerEventType`, default 32. Catch-all subscriptions report
-  with a `null` event type.
-- The report arrives once for each event type. It never throws, because a large
-  fan-out of projections must stay possible.
+- The bus now reports through `observers.onSubscriptionThresholdExceeded` when
+  one event type crosses `maxSubscriptionsPerEventType`, default 32. Catch-all
+  subscriptions report with a `null` event type. The `observers` option itself
+  is optional. When you pass it, the hook is required and the constructor
+  throws a `TypeError` without it.
+- The report arrives once for each crossing, never once for each `subscribe`.
+  When the count drops back to the threshold, the next crossing reports again,
+  so a transient spike of in-flight `once` waiters cannot mute an event type
+  for the rest of the process. It never throws, because a large fan-out of
+  projections must stay possible.
 - The hook is best-effort. A throw or a rejected promise inside it cannot
   affect the subscription.
 - Without observers the bus reports nothing. The alternative, a required
@@ -64,9 +68,11 @@ gives a before-and-after example for each breaking change.
 - The bound counts one publish chain, never the bus instance. Concurrent
   publications on one shared bus are correct usage and never reach it.
 - A handler links its nested publication to the chain when it passes
-  `context.signal`. A handler that drops the signal and publishes after an
-  `await` leaves a chain the bus cannot see. A synchronous cycle is still
-  caught there.
+  `context.signal`. The link follows the owner chain of the bounded
+  executions, so it survives the nested operations of the kit, `withCommit`
+  included. A handler that drops the signal, or replaces it with one the kit
+  did not derive, leaves a chain the bus cannot see. A synchronous cycle is
+  still caught there.
 
 ### Documentation: the event bus states what it does not promise
 
