@@ -377,7 +377,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 
 	/**
 	 * See {@link EventBus.publish} for the full ordering / parallelism /
-	 * error-aggregation contract this implementation realises:
+	 * error-aggregation contract this implementation realizes:
 	 *  - events in input order, sequentially;
 	 *  - handlers within one event in parallel via `Promise.allSettled`;
 	 *  - errors collected and thrown after the batch (single Error, or

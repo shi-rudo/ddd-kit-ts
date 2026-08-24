@@ -58,25 +58,26 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 *
 	 * **Ordering & parallelism contract:**
 	 *
-	 *  1. **Events run in input order.** `publish([a, b, c])` dispatches `a`,
-	 *     awaits all of its handlers, then dispatches `b`, and so on. The
-	 *     library never reorders or parallelises across events.
-	 *  2. **Handlers within a single event run in parallel.** All handlers
-	 *     subscribed to `event.type` are awaited via `Promise.allSettled`:
-	 *     none of them sees the others' errors and none is skipped if a
-	 *     peer fails.
-	 *  3. **Errors are collected and thrown AFTER everything dispatches.**
-	 *     If one handler throws, remaining handlers for that event still
-	 *     run, and remaining events in the batch still publish. Once
-	 *     `publish` reaches the end of the batch it throws: the single
-	 *     error directly if there was one, or an `AggregateError`
-	 *     ("Multiple event handlers failed") containing every captured
-	 *     error otherwise. Callers that need fail-fast semantics should
-	 *     publish events one at a time and not rely on batch atomicity.
+	 *  1. **Events run in input order.** `publish([a, b, c])` dispatches `a`
+	 *     and awaits every handler of `a`. Then it dispatches `b`, and so
+	 *     on. The bus never changes that order. It never dispatches two
+	 *     events at the same time.
+	 *  2. **The handlers of one event run in parallel.** The bus awaits
+	 *     every handler of `event.type` through `Promise.allSettled`. One
+	 *     handler never sees the error of another handler. The bus skips no
+	 *     handler when a peer fails.
+	 *  3. **The bus collects the errors and throws them after the batch.**
+	 *     If one handler throws, the other handlers of that event still
+	 *     run, and the remaining events still publish. At the end of the
+	 *     batch `publish` throws. One failure throws that error directly.
+	 *     Two or more failures throw an `AggregateError` with the message
+	 *     "Multiple event handlers failed", which carries every collected
+	 *     error. For fail-fast behavior, publish one event for each call.
+	 *     A batch is not atomic.
 	 *
-	 * The contract is intentionally simple and in-process. For
-	 * cross-process delivery (RabbitMQ, Kafka, etc.), use the `Outbox`
-	 * port and a dedicated dispatcher.
+	 * The contract is intentionally simple and in-process. For delivery
+	 * across processes, for example through RabbitMQ or Kafka, use the
+	 * `Outbox` port and a dedicated dispatcher.
 	 *
 	 * **What this bus does not promise.** Delivery is at most once and
 	 * in memory. Nothing is persisted, nothing is retried, and there is
