@@ -466,18 +466,13 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// the port contract promises that collected handler errors are
 		// thrown after dispatch. An abort ends the batch but must not
 		// swallow the failures that already happened.
-		// Depth comes from the chain, never from the instance. Two sources see
-		// it: the parent signal (survives `await`, needs the handler to pass
-		// Up to three windows can see the chain: an injected store, the owner
-		// chain of the signal, and the synchronous window. A window that cannot
-		// see it reports 0, never a wrong depth, so the deepest one is the
-		// truth. Depth and path come from that same window, so a reported depth
-		// and the path beside it cannot describe different chains.
-		//
-		// The store counts only while its dispatch runs. A store propagates
-		// into deferred work as well, so a handler that schedules a later
-		// publication would otherwise inherit a depth from a chain that ended,
-		// and a correct poll loop would die at the bound.
+		// Depth comes from the chain, never from the instance: one bus is
+		// published to concurrently by design. Three windows can see a chain,
+		// and a window that cannot see it reports 0, never a wrong depth, so
+		// the deepest one is the truth. Depth and path come from that same
+		// window, so a reported depth and the path beside it cannot describe
+		// different chains. Each window counts only while its own dispatch
+		// runs; the fields say why.
 		const lineage = this.chainStateFor(options.signal);
 		const stored = this.chainStore?.getStore();
 		const liveStore =
