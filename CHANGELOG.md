@@ -29,6 +29,35 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: an event-sourced aggregate rejects setState
+
+`EventSourcedAggregate` overrides the inherited `setState` to throw
+`DirectStateMutationError` (code `DIRECT_STATE_MUTATION`). Before this change
+a subclass could call `this.setState(next)`, which changed the state with no
+event and no version bump, so the instance drifted from its stream. State
+changes only through `apply()`.
+
+### Changed: coded errors on three aggregate wiring paths
+
+Three paths that threw a bare `Error` or `TypeError` now throw a kit wiring
+error with a stable code, so `onPersistError` observers and tests can match
+on `error.code`:
+
+- A post-commit acknowledgement whose batch is not the aggregate's pending
+  prefix throws `PendingEventBatchMismatchError`
+  (`PENDING_EVENT_BATCH_MISMATCH`) with the aggregate id, the batch length,
+  and the pending length.
+- The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
+  for a `null` or `undefined` id.
+- `recordPendingEvents`, `withCommit` enrollment, and the persistence
+  baseline functions throw `UnmanagedInstanceError` (`UNMANAGED_INSTANCE`)
+  for an aggregate or baseline that this package did not construct. The
+  `withCommit` case threw `EventHarvestError` before.
+
+`Entity` now validates a candidate state before it freezes it, on
+construction and on `setState`. A rejected candidate leaves no shared object
+frozen behind. The object validated is still the object stored.
+
 ### Fixed: event-sourced aggregates check the folded state
 
 `EventSourcedAggregate.apply(...)` now runs the `validateState` function from
@@ -37,12 +66,15 @@ and records the event. Before this change the function ran only in the
 constructor, so an event-sourced aggregate accepted a state that its own
 validator rejects. Replay through `loadFromHistory` still skips both gates.
 
+### Changed (breaking): an event handler must return a state
+
 A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
-(code `HANDLER_RETURNED_NO_STATE`) on both paths. Before this change the
-aggregate stored `undefined` as its state and, on the apply path, recorded the
-event. A state type that includes `undefined` is no longer supported for
-event-sourced aggregates; model an absent state as `null` or as a status
-field.
+(code `HANDLER_RETURNED_NO_STATE`) on the apply path and on replay. Before
+this change the aggregate stored `undefined` as its state and, on the apply
+path, recorded the event. A state type that includes `undefined` is no longer
+supported for event-sourced aggregates. Migration: model an absent state as
+`null` or as a status field, and change every handler that returned
+`undefined` on purpose before you load streams that contain those events.
 
 ### Added: tests for two guarantees the bus already gave
 

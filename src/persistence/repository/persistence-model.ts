@@ -1,3 +1,4 @@
+import { UnmanagedInstanceError } from "../../errors/kit-errors";
 import { deepEqual } from "../../internal/structural/deep-equal";
 
 /** Whether a baseline represents an existing row or a pending insert. */
@@ -111,7 +112,7 @@ export function recapturePersistenceBaseline<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
 	aggregate: TAggregate,
 ): PersistenceBaseline<TAggregate, TChangeSet> {
-	const capability = capabilityFor(baseline);
+	const capability = capabilityFor(baseline, "recapturePersistenceBaseline");
 	return createErasedBaselineToken({
 		...capability,
 		baseline: capability.capture(aggregate),
@@ -135,7 +136,7 @@ export function persistenceProjectionDrifted<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
 	aggregate: TAggregate,
 ): boolean {
-	const capability = capabilityFor(baseline);
+	const capability = capabilityFor(baseline, "persistenceProjectionDrifted");
 	if (capability.lifecycle === "new") return false;
 	return !capability.captureEquals(
 		capability.baseline,
@@ -148,7 +149,7 @@ export function derivePersistenceChanges<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
 	aggregate: TAggregate,
 ): PersistenceChanges<TChangeSet> {
-	const capability = capabilityFor(baseline);
+	const capability = capabilityFor(baseline, "derivePersistenceChanges");
 	const value = capability.changes(
 		capability.baseline,
 		aggregate,
@@ -193,12 +194,11 @@ function createErasedBaselineToken<TAggregate, TChangeSet>(
 
 function capabilityFor<TAggregate, TChangeSet>(
 	baseline: PersistenceBaseline<TAggregate, TChangeSet>,
+	operation: string,
 ): BaselineCapability {
 	const capability = capabilities.get(baseline as object);
 	if (!capability) {
-		throw new TypeError(
-			"Persistence baseline was not created by this package instance.",
-		);
+		throw new UnmanagedInstanceError(operation, "the persistence baseline");
 	}
 	return capability;
 }

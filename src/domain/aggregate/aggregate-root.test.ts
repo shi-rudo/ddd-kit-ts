@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { UnmintedEventError } from "../../errors/kit-errors";
+import {
+	MissingEntityIdError,
+	PendingEventBatchMismatchError,
+	UnmintedEventError,
+} from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -655,6 +659,83 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
+		function lifecycleOf(aggregate: object) {
+			const capability = pendingEventLifecycleCapabilityFor(aggregate);
+			if (!capability) throw new Error("Missing test persistence capability");
+			return capability;
+		}
+
+		it("rejects an acknowledged batch in a different order than the pending prefix", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.addTestEvent(1);
+			aggregate.addTestEvent(2);
+			const [first, second] = aggregate.pendingEvents;
+
+			expect(() =>
+				lifecycleOf(aggregate).acknowledge([second, first], 1),
+			).toThrow(PendingEventBatchMismatchError);
+
+			expect(aggregate.pendingEvents).toHaveLength(2);
+		});
+
+		it("rejects an acknowledged batch longer than the pending list", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.addTestEvent(1);
+			const [only] = aggregate.pendingEvents;
+
+			let caught: unknown;
+			try {
+				lifecycleOf(aggregate).acknowledge([only, only], 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(PendingEventBatchMismatchError);
+			const mismatch = caught as PendingEventBatchMismatchError;
+			expect(mismatch.code).toBe("PENDING_EVENT_BATCH_MISMATCH");
+			expect(mismatch.aggregateId).toBe("test-1");
+			expect(mismatch.batchLength).toBe(2);
+			expect(mismatch.pendingLength).toBe(1);
+			expect(aggregate.pendingEvents).toHaveLength(1);
+		});
+
+		it("rejects a discarded batch that carries a foreign event", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.addTestEvent(1);
+			const foreign = createDomainEvent("TestRecorded", { value: 99 });
+
+			expect(() =>
+				lifecycleOf(aggregate).discardPendingEvents([foreign]),
+			).toThrow(PendingEventBatchMismatchError);
+
+			expect(aggregate.pendingEvents).toHaveLength(1);
+		});
+
+		it("acknowledges a strict prefix and keeps the newer events pending", () => {
+			const aggregate = new EventingAggregate("test-1" as TestId, {
+				value: 10,
+				status: "inactive",
+			});
+			aggregate.addTestEvent(1);
+			const enrolled = aggregate.pendingEvents;
+			aggregate.addTestEvent(2);
+
+			lifecycleOf(aggregate).acknowledge(enrolled, 1);
+
+			expect(aggregate.pendingEvents).toHaveLength(1);
+			expect(aggregate.pendingEvents[0]?.payload.value).toBe(2);
+			expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
+		});
+
 		it("does not expose acknowledgement or event disposal on aggregates", () => {
 			const aggregate = new EventingAggregate("test-1" as TestId, {
 				value: 10,
@@ -704,15 +785,15 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 
 	describe("Enhancements", () => {
-		it("should throw if ID is null or undefined", () => {
+		it("rejects a null or undefined id with a coded wiring error", () => {
 			const state = { value: 10, status: "inactive" as const };
 			// @ts-expect-error - testing invalid input
 			expect(() => new TestAggregate(null, state)).toThrow(
-				"ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
 			// @ts-expect-error - testing invalid input
 			expect(() => new TestAggregate(undefined, state)).toThrow(
-				"ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
 		});
 

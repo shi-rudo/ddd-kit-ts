@@ -60,7 +60,11 @@
  * }
  * ```
  */
-import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
+import {
+	assertNoHostileOwnProtoKey,
+	MissingEntityIdError,
+	UnmanagedInstanceError,
+} from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import { deepFreeze } from "../value-object/value-object";
 
@@ -203,7 +207,6 @@ export abstract class Entity<TState, TId extends Id<string>>
 	protected _state: TState;
 
 	private readonly _stateFreezeMode: StateFreezeMode;
-	private readonly validateState: StateValidator<TState>;
 
 	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
@@ -225,24 +228,24 @@ export abstract class Entity<TState, TId extends Id<string>>
 		config?: EntityConfig<TState>,
 	) {
 		if (id === null || id === undefined) {
-			throw new Error("Entity ID cannot be null or undefined");
+			throw new MissingEntityIdError();
 		}
 		this.id = id;
 		this._stateFreezeMode =
 			(config?.deepFreezeState ?? false) ? "deep" : "shallow";
-		const validateState = config?.validateState ?? noStateValidation;
-		this.validateState = validateState;
-		stateValidators.set(this, validateState as StateValidator<unknown>);
-		// Both mutation paths validate the exact frozen object that is stored.
-		// Assigning the validator as an own property before invoking it also
-		// prevents same-named prototype methods in JavaScript consumers from
-		// turning this constructor call back into virtual dispatch. The module
-		// freeze helper similarly avoids the protected post-construction hook.
-		this._state = freezeStateByMode(
-			shallowCopyOwned(initialState),
-			this._stateFreezeMode,
+		stateValidators.set(
+			this,
+			(config?.validateState ?? noStateValidation) as StateValidator<unknown>,
 		);
-		this.validateState(this._state);
+		// Copy, validate, freeze, assign: the object validated IS the object
+		// stored (the freeze is in place), and a rejected candidate leaves
+		// nothing frozen behind. The validator lives in a module-level map
+		// keyed by instance, and the freeze helper is a module function, so a
+		// same-named member in a JavaScript subclass cannot turn this
+		// constructor call into virtual dispatch.
+		const initial = shallowCopyOwned(initialState);
+		assertStateInvariant(this, initial);
+		this._state = freezeStateByMode(initial, this._stateFreezeMode);
 	}
 
 	/**
@@ -273,36 +276,31 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
-		// Same copy-freeze-validate-assign order as the constructor: the
+		// Same copy-validate-freeze-assign order as the constructor: the
 		// object validated IS the object stored, and a validation throw
-		// leaves the previous state untouched.
-		const next = this.freezeState(shallowCopyOwned(newState));
-		this.validateState(next);
-		this._state = next;
+		// leaves the previous state untouched and nothing frozen behind.
+		const next = shallowCopyOwned(newState);
+		assertStateInvariant(this, next);
+		this._state = this.freezeState(next);
 	}
 }
 
 const noStateValidation: StateValidator<unknown> = () => {};
 
-/**
- * The instance-bound validator of every constructed entity, keyed by
- * instance so {@link assertStateInvariant} cannot be redirected by a
- * subclass member of any kind.
- */
+/** The instance-bound validator of every constructed entity, keyed by instance. */
 const stateValidators = new WeakMap<object, StateValidator<unknown>>();
 
 /**
- * Runs an entity's instance-bound {@link EntityConfig.validateState}
- * against a candidate state on behalf of a subclass path that assigns
- * `_state` directly and still owes the check (the event-sourced apply
- * path; replay deliberately skips it because history is accepted fact).
- * Call it with the exact frozen object that is about to be stored.
+ * Runs the entity's instance-bound {@link EntityConfig.validateState}
+ * against a candidate state. The constructor, {@link Entity.setState}, and
+ * the event-sourced apply path all use it. Replay skips it because history
+ * is accepted fact. Call it before the freeze, with the object that will
+ * be stored.
  *
- * Deliberately a module-level function, not a protected method: a method
- * could be overridden, and a protected property could be shadowed by a
- * subclass field initializer that runs after `super()`, either of which
- * would disable the check on that path only. The lookup is by instance,
- * so no prototype or own member can take the validator's place.
+ * Deliberately a module-level function with a per-instance lookup. A
+ * method could be overridden. A property could be shadowed by a subclass
+ * field initializer that runs after `super()`. Neither can redirect this
+ * lookup.
  *
  * @internal Shared by the kit's own entity subclasses; not part of the
  * public API.
@@ -313,8 +311,9 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
-		throw new TypeError(
-			"assertStateInvariant requires an entity constructed by this package",
+		throw new UnmanagedInstanceError(
+			"assertStateInvariant",
+			String((entity as { id?: unknown } | null)?.id),
 		);
 	}
 	validateState(candidate);

@@ -1,5 +1,6 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
+	DirectStateMutationError,
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
@@ -37,10 +38,11 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.
  *
- * Extends `BaseAggregate` (the shared lifecycle machinery) but does NOT
- * expose `setState()` or `commit()` from `AggregateRoot`. This enforces
- * the event sourcing pattern at the type level: there is no way to
- * mutate state without going through an event handler.
+ * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
+ * `commit()`, and the inherited `setState()` throws
+ * `DirectStateMutationError`: the only way to change state is an event
+ * folded by a handler through `apply()`, so the instance never runs ahead
+ * of its stream.
  *
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
  * on invariant violations. Subclasses override `validateEvent()` to
@@ -116,6 +118,15 @@ export abstract class EventSourcedAggregate<
 	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
 
 	/**
+	 * Always throws {@link DirectStateMutationError}. An event-sourced
+	 * aggregate changes state only through `apply()`, where the fact is
+	 * recorded and the version advances with it.
+	 */
+	protected override setState(_newState: TState): void {
+		throw new DirectStateMutationError(String(this.id));
+	}
+
+	/**
 	 * Applies an event: validates the decision, locates the handler, folds
 	 * the next state, validates that state, then commits state + pending
 	 * event + version bump atomically.
@@ -135,7 +146,7 @@ export abstract class EventSourcedAggregate<
 	 *
 	 * The method is generic in the event tag `K`, so concrete callers
 	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
-	 * dispatched handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`,
+	 * handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`,
 	 * with no `as` cast required at the call site.
 	 *
 	 * `apply()` is exclusively for NEW facts: it always records the event
@@ -157,16 +168,18 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.stampNewEventAddress(event);
 		// Both gates live HERE, not in fold: only new facts are checked
-		// against current rules; replay trusts history. The state gate runs
-		// against the exact frozen object that is stored, as Entity.setState
-		// does, and nothing below assigns until it passed. Unlike setState
-		// there is no defensive copy: the fold result is the aggregate's own
-		// next state and is frozen in place.
-		// TODO: run the hostile own-key guard on the fold result as well.
+		// against current rules; replay trusts history. Validate, then
+		// freeze, then assign, in the order Entity.setState keeps: the object
+		// validated IS the object stored, a rejected fold result leaves
+		// nothing frozen behind, and nothing below assigns until both gates
+		// passed. Unlike setState there is no defensive copy: the fold result
+		// is the aggregate's own next state.
+		// TODO: run the hostile own-key guard on the fold result as well
+		// (ddd-kit-ts-rhxi.7).
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
-		const next = this.freezeState(this.fold(stamped));
+		const next = this.fold(stamped);
 		assertStateInvariant(this, next);
-		this._state = next;
+		this._state = this.freezeState(next);
 		this.addDomainEvent(stamped);
 		this.bumpVersion();
 	}
@@ -340,8 +353,8 @@ export abstract class EventSourcedAggregate<
 	 *
 	 * Handlers MUST fold state from `type` and `payload` only. The
 	 * parameter is typed as the uncommitted shape because a live `apply()`
-	 * dispatches the event BEFORE the shell records it: `eventId` and
-	 * `occurredAt` do not exist yet. Replay dispatches recorded events
+	 * folds the event BEFORE the shell records it: `eventId` and
+	 * `occurredAt` do not exist yet. Replay folds recorded events
 	 * through the same handlers, so those fields ARE present at runtime
 	 * there. A handler that reads them through an escape hatch (`as any`,
 	 * plain JavaScript) folds `undefined` live and a value on replay,
