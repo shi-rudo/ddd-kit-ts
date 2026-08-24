@@ -173,8 +173,8 @@ There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 Handlers must fold state from `type` and `payload` only. A live `apply(...)`
-dispatches the event before the shell records it, so `eventId` and
-`occurredAt` do not exist yet. Replay dispatches recorded events through the
+folds the event before the shell records it, so `eventId` and
+`occurredAt` do not exist yet. Replay folds recorded events through the
 same handlers, so those fields are present there at runtime. The handler
 parameter type declares the uncommitted shape to keep them out of reach, but
 TypeScript cannot protect an `as any` cast or plain JavaScript. A handler

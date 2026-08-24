@@ -304,8 +304,9 @@ does not run it; replay uses historical facts and pure event handlers rather
 than today's decision rules. A snapshot restore does run it, because the
 `reconstitute` factory passes the stored state to the constructor. If a rule
 in `validateState` later tightens, old streams still load from zero, but every
-snapshot restore throws, maps to `SnapshotCorruptedError`, and refolds the
-stream on each load. So on an event-sourced aggregate, keep decision rules in
+snapshot restore throws. When the validator throws a `DomainError`, the
+restore maps it to `SnapshotCorruptedError` and refolds the stream on each
+load. Any other error propagates as is. So on an event-sourced aggregate, keep decision rules in
 `validateEvent` and keep `validateState` for rules that hold for every version
 of the state. This section is the one place that states this rule; the
 event-sourcing guide and the `SnapshotModel` docs point here.
