@@ -5,6 +5,10 @@ import {
 	type ExecutionContext,
 	runBoundedExecution,
 } from "../../internal/async/execution";
+import {
+	captureObserverFunctions,
+	reportToObserver,
+} from "../../internal/observer";
 import { assertPositiveInteger } from "../../internal/validate";
 import { PublishDepthExceededError } from "./errors";
 import type {
@@ -17,8 +21,58 @@ import type {
 /** Bound for one publish chain. Real nesting stays far below this. */
 const DEFAULT_MAX_PUBLISH_DEPTH = 32;
 
+/**
+ * Subscriptions held for one event type when the count crossed the threshold.
+ */
+export interface SubscriptionThresholdReport {
+	/** The event type, or `null` when the subscriptions are catch-all. */
+	readonly eventType: string | null;
+	/** Subscriptions held at the moment of the crossing. */
+	readonly subscriptionCount: number;
+	/** The threshold that was crossed. */
+	readonly threshold: number;
+}
+
+/** Operational signals from one event bus. */
+export interface EventBusObservers {
+	/**
+	 * One event type crossed `maxSubscriptionsPerEventType`. Reported once for
+	 * that event type, never again.
+	 *
+	 * A subscription that a request path opens without the matching
+	 * unsubscribe leaks. The symptom is memory growth, and the bus is the only
+	 * place that can name the event type. The hook is best-effort: a throw or
+	 * a rejected promise cannot affect the subscription.
+	 */
+	readonly onSubscriptionThresholdExceeded: (
+		report: SubscriptionThresholdReport,
+	) => void;
+}
+
+/** Marks the catch-all subscriptions in the reported-once set. */
+const CATCH_ALL = Symbol("EventBusImpl.subscribeAll");
+
+/**
+ * Subscriptions for one event type above which the bus reports a leak. A
+ * fan-out of projections stays far below this.
+ */
+const DEFAULT_MAX_SUBSCRIPTIONS_PER_EVENT_TYPE = 32;
+
 /** Construction options for {@link EventBusImpl}. */
 export interface EventBusOptions {
+	/**
+	 * Subscriptions for one event type above which the bus reports through
+	 * `observers.onSubscriptionThresholdExceeded`. Default `32`.
+	 *
+	 * This reports, it never throws. A legitimate fan-out of many projections
+	 * on one event type stays possible.
+	 */
+	readonly maxSubscriptionsPerEventType?: number;
+	/**
+	 * Where operational signals go. Without this the bus reports nothing, and
+	 * a subscription leak stays invisible.
+	 */
+	readonly observers?: EventBusObservers;
 	/**
 	 * Maximum depth of one publish chain. Default `32`.
 	 *
@@ -74,6 +128,12 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private syncDepth = 0;
 	private readonly syncPath: string[] = [];
 
+	private readonly maxSubscriptionsPerEventType: number;
+	private readonly observers: Readonly<EventBusObservers> | undefined;
+	// One report per event type. A muted signal beats a report on every
+	// further subscribe once the count is already over.
+	private readonly reportedThresholds = new Set<string | symbol>();
+
 	constructor(options: EventBusOptions = {}) {
 		if (options.maxPublishDepth !== undefined) {
 			assertPositiveInteger(
@@ -82,7 +142,42 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				options.maxPublishDepth,
 			);
 		}
+		if (options.maxSubscriptionsPerEventType !== undefined) {
+			assertPositiveInteger(
+				"EventBusImpl",
+				"maxSubscriptionsPerEventType",
+				options.maxSubscriptionsPerEventType,
+			);
+		}
 		this.maxPublishDepth = options.maxPublishDepth ?? DEFAULT_MAX_PUBLISH_DEPTH;
+		this.maxSubscriptionsPerEventType =
+			options.maxSubscriptionsPerEventType ??
+			DEFAULT_MAX_SUBSCRIPTIONS_PER_EVENT_TYPE;
+		this.observers =
+			options.observers === undefined
+				? undefined
+				: captureObserverFunctions("EventBusImpl", options.observers, [
+						"onSubscriptionThresholdExceeded",
+					]);
+	}
+
+	private reportSubscriptionCount(
+		eventType: string | null,
+		subscriptionCount: number,
+	): void {
+		const observer = this.observers?.onSubscriptionThresholdExceeded;
+		if (observer === undefined) return;
+		if (subscriptionCount <= this.maxSubscriptionsPerEventType) return;
+		const key = eventType ?? CATCH_ALL;
+		if (this.reportedThresholds.has(key)) return;
+		this.reportedThresholds.add(key);
+		reportToObserver(() =>
+			observer({
+				eventType,
+				subscriptionCount,
+				threshold: this.maxSubscriptionsPerEventType,
+			}),
+		);
 	}
 
 	subscribe<K extends Evt["type"]>(
@@ -97,6 +192,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		}
 		const casted = handler as EventHandler<Evt>;
 		handlersForType.push(casted);
+		this.reportSubscriptionCount(type, handlersForType.length);
 
 		// Return unsubscribe: removes exactly this subscription, even if the
 		// same handler reference was subscribed multiple times (each call to
@@ -121,6 +217,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	 */
 	subscribeAll(handler: EventHandler<Evt>): () => void {
 		this.catchAllHandlers.push(handler);
+		this.reportSubscriptionCount(null, this.catchAllHandlers.length);
 
 		// Unsubscribe semantics as in subscribe(): removes exactly this
 		// subscription, even when the same handler reference was

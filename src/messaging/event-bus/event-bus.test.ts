@@ -5,7 +5,7 @@ import {
 } from "../../domain/aggregate/aggregate";
 import type { ExecutionContext } from "../../internal/async/execution";
 import { PublishDepthExceededError } from "./errors";
-import { EventBusImpl } from "./event-bus";
+import { EventBusImpl, type EventBusObservers } from "./event-bus";
 
 type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
 type OrderShipped = DomainEvent<"OrderShipped", { orderId: string }>;
@@ -921,6 +921,117 @@ describe("EventBusImpl", () => {
 				PublishDepthExceededError,
 			);
 			expect(depth).toBe(3);
+		});
+	});
+
+	describe("subscription accumulation", () => {
+		const noop = () => {};
+
+		it("reports once when one event type crosses the threshold", () => {
+			const reports: unknown[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 3,
+				observers: {
+					onSubscriptionThresholdExceeded: (report) => reports.push(report),
+				},
+			});
+
+			for (let index = 0; index < 10; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(reports).toEqual([
+				{ eventType: "OrderCreated", subscriptionCount: 4, threshold: 3 },
+			]);
+		});
+
+		it("reports each event type separately", () => {
+			const types: (string | null)[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					onSubscriptionThresholdExceeded: (report) =>
+						types.push(report.eventType),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderShipped", noop);
+			bus.subscribe("OrderShipped", noop);
+
+			expect(types).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("reports catch-all subscriptions with a null event type", () => {
+			const reports: { eventType: string | null }[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					onSubscriptionThresholdExceeded: (report) => reports.push(report),
+				},
+			});
+
+			bus.subscribeAll(noop);
+			bus.subscribeAll(noop);
+			bus.subscribeAll(noop);
+
+			expect(reports).toEqual([
+				{ eventType: null, subscriptionCount: 3, threshold: 2 },
+			]);
+		});
+
+		it("stays silent at or below the threshold", () => {
+			let reported = false;
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 4,
+				observers: {
+					onSubscriptionThresholdExceeded: () => {
+						reported = true;
+					},
+				},
+			});
+
+			for (let index = 0; index < 4; index++) {
+				bus.subscribe("OrderCreated", noop);
+			}
+
+			expect(reported).toBe(false);
+		});
+
+		it("keeps subscribing when the observer throws", () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+				observers: {
+					onSubscriptionThresholdExceeded: () => {
+						throw new Error("observer boom");
+					},
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+
+			expect(() => bus.subscribe("OrderCreated", noop)).not.toThrow();
+		});
+
+		it("rejects an observer bundle without the hook", () => {
+			expect(
+				() =>
+					new EventBusImpl<OrderEvent>({
+						observers: {} as unknown as EventBusObservers,
+					}),
+			).toThrow(TypeError);
+		});
+
+		it("subscribes without a configured observer", () => {
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 1,
+			});
+
+			expect(() => {
+				bus.subscribe("OrderCreated", noop);
+				bus.subscribe("OrderCreated", noop);
+			}).not.toThrow();
 		});
 	});
 });

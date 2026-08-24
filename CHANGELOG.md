@@ -29,6 +29,25 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: the event bus reports accumulating subscriptions
+
+- `subscribe` and `subscribeAll` return an unsubscribe function. Code that
+  subscribes for one request and never calls it leaks the handler, and 5000
+  subscriptions on one event type produced no report and hit no ceiling. The
+  symptom is memory growth with no pointer to the cause.
+- The bus now reports through the new optional
+  `observers.onSubscriptionThresholdExceeded` when one event type crosses
+  `maxSubscriptionsPerEventType`, default 32. Catch-all subscriptions report
+  with a `null` event type.
+- The report arrives once for each event type. It never throws, because a large
+  fan-out of projections must stay possible.
+- The hook is best-effort. A throw or a rejected promise inside it cannot
+  affect the subscription.
+- Without observers the bus reports nothing. The alternative, a required
+  observer bundle as the productive pollers carry, would turn a parameterless
+  constructor into one with a mandatory argument, for one signal that fires
+  only on a defect.
+
 ### Added: the event bus bounds one publish chain
 
 - A handler that publishes re-enters `publish`. Nothing bounded that chain. A

@@ -417,6 +417,33 @@ bus.subscribe("OrderPlaced", async (event) => {
 });
 ```
 
+### Subscribing Inside a Request Path
+
+`subscribe` and `subscribeAll` return an unsubscribe function. Code that
+subscribes for one request and never calls it leaks the handler. The handler
+stays, and it runs for every later event. The symptom is memory growth with no
+pointer to the cause.
+
+Subscribe once, at startup. If a subscription must follow one request, call the
+returned function when that request ends. `once` also holds a subscription. It
+releases the subscription when the event arrives, when `timeoutMs` expires, or
+when `signal` aborts. Without a timeout and without a signal it waits forever.
+
+The bus reports the leak when one event type crosses
+`maxSubscriptionsPerEventType` (default 32). It reports once for that event
+type, and it never throws: a large fan-out of projections stays possible.
+Without an observer the bus reports nothing.
+
+```ts
+const bus = new EventBusImpl<OrderEvent>({
+  observers: {
+    onSubscriptionThresholdExceeded: (report) => {
+      logger.warn(report, "event bus subscriptions are accumulating");
+    },
+  },
+});
+```
+
 ### Treating Kit Errors as Unstructured Errors
 
 Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
@@ -469,5 +496,6 @@ When you review code that uses the kit, make sure that these rules apply:
 - Put work that the business cannot lose behind the outbox, not on the
   event bus.
 - Pass `context.signal` into every publication a handler makes.
+- Call the unsubscribe function that `subscribe` returns.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.

@@ -337,7 +337,9 @@ export type {
 export { PublishDepthExceededError } from "./messaging/event-bus/errors";
 export {
 	EventBusImpl,
+	type EventBusObservers,
 	type EventBusOptions,
+	type SubscriptionThresholdReport,
 } from "./messaging/event-bus/event-bus";
 export type {
 	EventBus,
