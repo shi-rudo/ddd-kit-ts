@@ -918,11 +918,11 @@ describe("EventBusImpl", () => {
 				if (generations >= 12) return;
 				generations++;
 				setTimeout(() => {
-					bus.publish([created()], { signal: context.signal }).catch(
-						(reason) => {
+					bus
+						.publish([created()], { signal: context.signal })
+						.catch((reason) => {
 							failure ??= reason;
-						},
-					);
+						});
 				}, 1);
 			});
 
