@@ -7,7 +7,7 @@ import {
 	type ExecutionContext,
 	runBoundedExecution,
 } from "../../internal/async/execution";
-import { PublishDepthExceededError } from "./errors";
+import { EventBusClosedError, PublishDepthExceededError } from "./errors";
 import { EventBusImpl, type EventBusObservers } from "./event-bus";
 import type { PublishChainStore } from "./publish-chain";
 
@@ -871,6 +871,81 @@ describe("EventBusImpl", () => {
 			for (const collected of error.errors) {
 				expect(collected).toBeInstanceOf(Error);
 			}
+		});
+	});
+
+	describe("close", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+
+		it("rejects every operation afterwards", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.subscribe("OrderCreated", () => {})).toThrow(
+				EventBusClosedError,
+			);
+			expect(() => bus.subscribeAll(() => {})).toThrow(EventBusClosedError);
+			await expect(bus.publish([created()])).rejects.toThrow(
+				EventBusClosedError,
+			);
+			await expect(bus.once("OrderCreated")).rejects.toThrow(
+				EventBusClosedError,
+			);
+		});
+
+		it("settles a waiter that would otherwise wait forever", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			// Without a timeout and without a signal this waits for an event
+			// that closing makes impossible.
+			const waiting = bus.once("OrderCreated");
+
+			bus.close();
+
+			await expect(waiting).rejects.toThrow(EventBusClosedError);
+		});
+
+		it("releases the subscriptions it held", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let called = 0;
+			bus.subscribe("OrderCreated", () => {
+				called++;
+			});
+			bus.subscribeAll(() => {
+				called++;
+			});
+
+			bus.close();
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				EventBusClosedError,
+			);
+			expect(called).toBe(0);
+		});
+
+		it("does nothing when called again", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.close()).not.toThrow();
+		});
+
+		it("does not stop a handler that is already running", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let finished = false;
+			bus.subscribe("OrderCreated", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				finished = true;
+			});
+
+			// JavaScript cannot terminate a running promise, so closing during
+			// a publication releases the subscriptions and lets the handler run
+			// to its end.
+			const publishing = bus.publish([created()]);
+			bus.close();
+			await publishing;
+
+			expect(finished).toBe(true);
 		});
 	});
 

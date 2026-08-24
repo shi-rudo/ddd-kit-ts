@@ -10,7 +10,7 @@ import {
 	reportToObserver,
 } from "../../internal/observer";
 import { assertPositiveInteger } from "../../internal/validate";
-import { PublishDepthExceededError } from "./errors";
+import { EventBusClosedError, PublishDepthExceededError } from "./errors";
 import type {
 	EventBus,
 	EventHandler,
@@ -236,6 +236,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private readonly maxPublishDepth: number;
 
 	private readonly chain: PublishChainTracker;
+	private closed = false;
+	// Rejections of the waiters `once()` created. A callback learns that no
+	// event follows by not being called again; a promise cannot, so closing
+	// has to settle it or it waits forever.
+	private readonly pendingOnce = new Set<(error: Error) => void>();
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
 	// The count at which each event type last reported. A real leak never
@@ -309,10 +314,27 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		);
 	}
 
+	/** See {@link EventBus.close}. */
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.handlers.clear();
+		this.catchAllHandlers.length = 0;
+		this.reportedAt.clear();
+		const waiting = [...this.pendingOnce];
+		this.pendingOnce.clear();
+		for (const reject of waiting) reject(new EventBusClosedError("once"));
+	}
+
+	private assertOpen(operation: string): void {
+		if (this.closed) throw new EventBusClosedError(operation);
+	}
+
 	subscribe<K extends Evt["type"]>(
 		eventType: K,
 		handler: EventHandler<Extract<Evt, { type: K }>>,
 	): () => void {
+		this.assertOpen("subscribe");
 		const type = eventType;
 		let handlersForType = this.handlers.get(type);
 		if (handlersForType === undefined) {
@@ -346,6 +368,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	 * same dispatch batch as its typed handlers.
 	 */
 	subscribeAll(handler: EventHandler<Evt>): () => void {
+		this.assertOpen("subscribeAll");
 		this.catchAllHandlers.push(handler);
 		this.reportSubscriptionCount(null, this.catchAllHandlers.length);
 
@@ -369,6 +392,10 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		options?: OnceOptions,
 	): Promise<Extract<Evt, { type: K }>> {
 		return new Promise<Extract<Evt, { type: K }>>((resolve, reject) => {
+			if (this.closed) {
+				reject(new EventBusClosedError("once"));
+				return;
+			}
 			const signal = options?.signal;
 
 			// Reject synchronously if the signal is already aborted; don't
@@ -382,9 +409,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 			let settled = false;
 			let abortListener: (() => void) | undefined;
 
+			this.pendingOnce.add(reject);
 			const cleanup = () => {
 				if (settled) return;
 				settled = true;
+				this.pendingOnce.delete(reject);
 				unsubscribe();
 				if (timer !== undefined) clearTimeout(timer);
 				if (abortListener && signal) {
@@ -430,6 +459,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		events: ReadonlyArray<Evt>,
 		options: PublishOptions = {},
 	): Promise<void> {
+		this.assertOpen("publish");
 		// The errors array lives HERE, outside the bounded execution: the
 		// abort/timeout race can reject while handlers already failed, and
 		// the port contract promises that collected handler errors are

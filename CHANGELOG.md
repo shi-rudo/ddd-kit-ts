@@ -29,6 +29,26 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added (breaking): the event bus has a lifecycle
+
+- `EventBus` had no way to stop. A worker shutting down, a test tearing down,
+  or a request scope ending kept every subscription alive, and a `once()`
+  without a timeout and without a signal waited for an event that would never
+  arrive.
+- `close()` releases every subscription and settles every waiter. Afterwards
+  `publish`, `subscribe`, `subscribeAll` and `once` throw the new
+  `EventBusClosedError`, because use after close is a programming bug and a
+  silent no-op would look like a delivery that did not happen. Calling it
+  again does nothing.
+- It releases the subscriptions. It does not stop a handler that is already
+  running, because JavaScript cannot terminate a running promise.
+- **Breaking**: `close()` is part of the port, so an implementation of
+  `EventBus` and every test double gains one method. Six doubles in this
+  repository needed it.
+- The contract suite pins the behavior, and it asserts that the operations
+  throw rather than which error they throw, so a second implementation stays
+  free to use its own.
+
 ### Changed: the publish chain is one graph of states
 
 - The tracker kept two liveness mechanisms, one for signals and one for store

@@ -196,6 +196,7 @@ const INDEX_SURFACE = [
 	"DuplicateHandlerRegistrationError",
 	"Entity",
 	"ErrorMapperFailedError",
+	"EventBusClosedError",
 	"EventBusImpl",
 	"EventHarvestError",
 	"EventSourcedAggregate",

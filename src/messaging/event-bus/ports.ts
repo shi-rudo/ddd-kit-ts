@@ -162,6 +162,29 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * console.log("Order created:", event.payload.orderId);
 	 * ```
 	 */
+	/**
+	 * Releases every subscription and settles every waiter.
+	 *
+	 * A bus that outlives its scope keeps its handlers alive with it. A
+	 * worker that shuts down, a test that tears down, and a request scope
+	 * that ends all need one call that leaves the bus holding nothing.
+	 *
+	 * After this call, `publish`, `subscribe`, `subscribeAll` and `once`
+	 * throw. Use after close is a programming bug, and a silent no-op would
+	 * look like a delivery that did not happen. A pending `once()` rejects
+	 * rather than waiting forever, which is the only waiter the port can
+	 * settle: a handler is a callback and learns that no event follows by
+	 * not being called again.
+	 *
+	 * Calling it again does nothing.
+	 *
+	 * This releases the subscriptions. It does not stop a handler that is
+	 * already running, because JavaScript cannot terminate a running
+	 * promise. Pass `context.signal` into every call a handler makes, and a
+	 * publication in flight ends with the handler that honours it.
+	 */
+	close: () => void;
+
 	once: <K extends Evt["type"]>(
 		eventType: K,
 		options?: OnceOptions,

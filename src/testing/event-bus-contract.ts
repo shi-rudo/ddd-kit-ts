@@ -413,6 +413,66 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "refuses every operation after close",
+			run: inEnv(async ({ bus }: Env) => {
+				bus.close();
+
+				let subscribeThrew = false;
+				try {
+					bus.subscribe(firstType, () => {});
+				} catch {
+					subscribeThrew = true;
+				}
+				let subscribeAllThrew = false;
+				try {
+					bus.subscribeAll(() => {});
+				} catch {
+					subscribeAllThrew = true;
+				}
+
+				assert(subscribeThrew, "subscribe must refuse a closed bus");
+				assert(subscribeAllThrew, "subscribeAll must refuse a closed bus");
+				assert(
+					(await captureRejection(bus.publish([first()]))) !== undefined,
+					"publish must refuse a closed bus",
+				);
+				assert(
+					(await captureRejection(bus.once(firstType))) !== undefined,
+					"once must refuse a closed bus",
+				);
+			}),
+		},
+		{
+			name: "settles a pending once() when the bus closes",
+			run: inEnv(async ({ bus }: Env) => {
+				// Without a timeout and without a signal this waiter has no
+				// other way to end.
+				const waiting = captureRejection(bus.once(firstType));
+
+				bus.close();
+
+				assert(
+					(await waiting) !== undefined,
+					"closing must settle a pending once()",
+				);
+			}),
+		},
+		{
+			name: "does nothing when close is called again",
+			run: inEnv(async ({ bus }: Env) => {
+				bus.close();
+
+				let threw = false;
+				try {
+					bus.close();
+				} catch {
+					threw = true;
+				}
+
+				assert(threw === false, "a second close must do nothing");
+			}),
+		},
+		{
 			name: "bounds the wait, not the handler, when the timeout expires",
 			run: inEnv(async ({ bus }: Env) => {
 				let running = true;

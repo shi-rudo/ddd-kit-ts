@@ -112,6 +112,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 		subscribe: () => () => {},
 		subscribeAll: () => () => {},
 		once: () => new Promise(() => {}),
+		close: () => {},
 	};
 }
 
@@ -552,6 +553,7 @@ describe("withCommit", () => {
 			subscribe: () => () => {},
 			subscribeAll: () => () => {},
 			once: () => new Promise(() => {}),
+			close: () => {},
 		};
 		const agg = createMockAggregate([
 			createDomainEvent(
@@ -1549,6 +1551,7 @@ describe("withCommit", () => {
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
 				once: () => new Promise(() => {}),
+				close: () => {},
 			};
 		}
 
@@ -1665,6 +1668,7 @@ describe("withCommit", () => {
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
 				once: () => new Promise(() => {}),
+				close: () => {},
 			};
 
 			const execution = withCommit(

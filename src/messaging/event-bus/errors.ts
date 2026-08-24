@@ -42,3 +42,27 @@ export class PublishDepthExceededError extends KitWiringError<"PUBLISH_DEPTH_EXC
 		);
 	}
 }
+
+/**
+ * Thrown when a closed bus is used.
+ *
+ * `close()` releases every subscription and settles every waiter, so the bus
+ * holds nothing afterwards. A later `publish` would reach no handler and a
+ * later `subscribe` would never fire, and both would look like a delivery
+ * that simply did not happen.
+ *
+ * Use after close is a programming bug, usually a leaked reference or an
+ * operation that outlived the scope that owned the bus, so this carries the
+ * `WIRING` category and crashes loud rather than dropping the work in
+ * silence.
+ */
+export class EventBusClosedError extends KitWiringError<"EVENT_BUS_CLOSED"> {
+	constructor(public readonly operation: string) {
+		super(
+			"EVENT_BUS_CLOSED",
+			`Event bus is closed: ${operation} was called after close(). ` +
+				"Create one bus per scope and close it when that scope ends, " +
+				"instead of holding a reference past it.",
+		);
+	}
+}
