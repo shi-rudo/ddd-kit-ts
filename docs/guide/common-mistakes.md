@@ -373,6 +373,44 @@ Pinning the head matters. Without it, events appended during a slow load keep
 moving the target, so one request can observe an open-ended mixture of stream
 states. See [Event Sourcing](./event-sourcing.md#loading-from-history).
 
+### Using the Event Bus for Work That Must Not Be Lost
+
+The event bus delivers in memory and at most once. It persists nothing, it
+retries nothing, and it has no dead-letter path. If the process stops during
+`publish`, the remaining handlers never run. Those events are gone.
+
+Use the bus for work that you can rebuild. Projections, caches and metrics fit
+here.
+
+Do not use the bus for an effect that the business cannot lose. An email, a
+payment or a call to another system belongs behind the `Outbox` port. The unit
+of work writes the event to the outbox in the same transaction as the
+aggregate. A separate dispatcher then delivers it, retries it, and dead-letters
+it. Read the outbox guide for that path.
+
+Two more facts decide how you write a handler.
+
+`timeoutMs` bounds the wait, not the handler. JavaScript cannot stop a running
+promise. If a handler ignores `context.signal`, it keeps running after
+`publish` rejects, and its side effects still land. Pass `context.signal` into
+every call the handler makes.
+
+A retry after a timeout runs the handlers a second time. The first attempt is
+possibly still in flight. Make the handler idempotent, or do not retry a
+publish that timed out.
+
+```ts
+// Rebuildable. The bus is the right home.
+bus.subscribe("OrderPlaced", async (event, context) => {
+  await readModel.apply(event, { signal: context.signal });
+});
+
+// Not rebuildable. This belongs behind the Outbox port.
+bus.subscribe("OrderPlaced", async (event) => {
+  await paymentProvider.charge(event.payload.orderId);
+});
+```
+
 ### Treating Kit Errors as Unstructured Errors
 
 Older pre-v3 advice said that strict `base-error` helpers could not see kit errors. That is no longer true.
@@ -422,5 +460,7 @@ When you review code that uses the kit, make sure that these rules apply:
 - Use a separate test factory for each test scope.
 - Load aggregates separately for each edge-runtime request.
 - Preserve structured errors until the mapping boundary.
+- Put work that the business cannot lose behind the outbox, not on the
+  event bus.
 
 Most production bugs in this area come from moving responsibility one layer too early: repositories clearing events, callers harvesting events, tests owning globals, or application code bypassing aggregate metadata. Keep each responsibility at its boundary and the kit stays predictable.
