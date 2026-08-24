@@ -65,7 +65,9 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 *  2. **The handlers of one event run in parallel.** The bus awaits
 	 *     every handler of `event.type` through `Promise.allSettled`. One
 	 *     handler never sees the error of another handler. The bus skips no
-	 *     handler when a peer fails.
+	 *     handler when a peer fails. The bus applies no limit here: twenty
+	 *     handlers that each open a connection open twenty connections.
+	 *     Backpressure belongs to the client that the handler calls.
 	 *  3. **The bus collects the errors and throws them after the batch.**
 	 *     If one handler throws, the other handlers of that event still
 	 *     run, and the remaining events still publish. At the end of the
@@ -94,19 +96,8 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * **Errors name the failure, not the handler.** A rejected handler
 	 * reaches the caller unchanged, and an `AggregateError` carries every
 	 * failure in subscription order. Neither names which subscription
-	 * failed. A handler names itself when it must be identifiable in
-	 * production logs:
-	 *
-	 * ```typescript
-	 * bus.subscribe("OrderCreated", async (event, context) => {
-	 *   try {
-	 *     await sendReceipt(event, context);
-	 *   } catch (error) {
-	 *     logger.error({ handler: "sendReceipt", event: event.type }, error);
-	 *     throw error;
-	 *   }
-	 * });
-	 * ```
+	 * failed. `observers.onHandlerError` carries the batch position and the
+	 * event, so a handler no longer names itself to be identifiable.
 	 *
 	 * **A handler that publishes stays inside a bounded chain.** Such a
 	 * handler re-enters `publish`. A cycle in the handler graph overflows
@@ -114,6 +105,9 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * out of memory. `timeoutMs` stops neither. A timer is a macrotask, and
 	 * a starved loop never runs one. Beyond `maxPublishDepth` (default 32)
 	 * the bus throws `PublishDepthExceededError` and names the event path.
+	 * The aggregation contract still applies to it. If a second handler of
+	 * the same event also fails, the caller receives an `AggregateError` that
+	 * carries the depth error, not the depth error itself.
 	 *
 	 * The bound counts one chain, never the bus. Concurrent publications on
 	 * one shared bus never reach it. A handler links its nested publication

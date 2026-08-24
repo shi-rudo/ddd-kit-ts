@@ -78,7 +78,10 @@ gives a before-and-after example for each breaking change.
   one.
 - Beyond `maxPublishDepth` the bus now throws the new
   `PublishDepthExceededError` and names the event path that formed the cycle.
-  The error carries the `WIRING` category and is not retryable.
+  The error carries the `WIRING` category and is not retryable. The
+  aggregation contract still applies to it: if a second handler of the same
+  event also fails, the caller receives an `AggregateError` that carries the
+  depth error.
 - `new EventBusImpl({ maxPublishDepth })` configures the bound. The default is
   32. The constructor took no arguments before, so existing code stays valid.
 - The bound counts one publish chain, never the bus instance. Concurrent
@@ -95,6 +98,10 @@ gives a before-and-after example for each breaking change.
   under the browser conditions an edge bundle uses, and the kit ships one
   build. A consumer on Node passes the platform class. A consumer on an edge
   runtime passes nothing and keeps the signal-based bound.
+- The store counts only while its dispatch runs. A store also propagates into
+  deferred work, so a handler that schedules a later publication through
+  `setTimeout` would otherwise inherit a depth from a chain that already
+  ended, and a correct poll loop would die at the bound.
 
 ### Documentation: the event bus states what it does not promise
 

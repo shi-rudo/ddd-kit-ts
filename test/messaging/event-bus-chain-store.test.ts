@@ -62,4 +62,32 @@ describe("event bus publish chain across a merged signal", () => {
 
 		expect(counter.depth).toBe(BRAKE);
 	});
+
+	it("does not count a later scheduled publication as part of the chain", async () => {
+		// Each generation finishes before the next one starts, so nothing is
+		// nested. AsyncLocalStorage still propagates into the timer callback,
+		// and a depth that keeps counting there kills a correct poll loop.
+		const bus = new EventBusImpl<OrderCreated>({
+			chainStore: new AsyncLocalStorage<PublishChainState>(),
+			maxPublishDepth: 4,
+		});
+		let generations = 0;
+		let failure: unknown;
+
+		bus.subscribe("OrderCreated", () => {
+			if (generations >= 12) return;
+			generations++;
+			setTimeout(() => {
+				bus.publish([created()]).catch((reason) => {
+					failure ??= reason;
+				});
+			}, 1);
+		});
+
+		await bus.publish([created()]);
+		await new Promise((resolve) => setTimeout(resolve, 150));
+
+		expect(failure).toBeUndefined();
+		expect(generations).toBe(12);
+	});
 });

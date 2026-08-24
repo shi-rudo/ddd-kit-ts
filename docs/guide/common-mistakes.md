@@ -400,7 +400,9 @@ Three facts decide how you write a handler:
    timed out.
 3. A handler that publishes must pass `context.signal` into that publication.
    The signal links the nested publication to its chain, and the bus stops a
-   cycle at `maxPublishDepth` (default 32).
+   cycle at `maxPublishDepth` (default 32) with `PublishDepthExceededError`.
+   If another handler of the same event also fails, that error arrives inside
+   an `AggregateError`.
 
 Pass `context.signal` into every call a handler makes. The signal gives the
 call cancellation, and it gives the bus the chain.

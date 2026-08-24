@@ -1175,6 +1175,58 @@ describe("EventBusImpl", () => {
 			expect(catchAll).toEqual([false, true]);
 		});
 
+		it("keeps the catch-all flag correct when a peer unsubscribes mid-dispatch", async () => {
+			const flags: boolean[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onHandlerError: (report) => flags.push(report.catchAll),
+				},
+			});
+
+			// The batch is snapshotted so an unsubscribe cannot shift indices.
+			// Anything derived from the live array must be snapshotted with it.
+			let releasePeer = () => {};
+			bus.subscribe("OrderCreated", () => {
+				releasePeer();
+			});
+			releasePeer = bus.subscribe("OrderCreated", () => {
+				throw new Error("typed handler failed");
+			});
+
+			await expect(bus.publish([created()])).rejects.toThrow(
+				"typed handler failed",
+			);
+
+			expect(flags).toEqual([false]);
+		});
+
+		it("does not report a synchronously finished handler as still running", async () => {
+			const reports: (readonly number[])[] = [];
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: (report) => reports.push(report.pendingIndices),
+				},
+			});
+
+			bus.subscribe("OrderCreated", () => {});
+			bus.subscribe("OrderCreated", () => {
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderCreated", () => new Promise<void>(() => {}));
+
+			await expect(
+				bus.publish([created()], { signal: controller.signal }),
+			).rejects.toThrow();
+
+			// Index 0 returned before the abort and must not appear. Index 1 is
+			// the handler that aborts, still on the stack at that instant, so it
+			// is correctly open. Index 2 hangs.
+			expect(reports).toEqual([[1, 2]]);
+		});
+
 		it("names the handlers that were still running when the publish aborted", async () => {
 			const reports: unknown[] = [];
 			const bus = new EventBusImpl<OrderEvent>({
