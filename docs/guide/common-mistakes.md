@@ -403,6 +403,18 @@ survive a signal that the kit did not derive, for example one from
 `AbortSignal.any` or a new `AbortController`. Without the link, an asynchronous
 cycle starves the event loop, and the process runs out of memory.
 
+On Node, pass `chainStore` and the bus follows every chain, whatever a handler
+does with the signal. The kit does not import `node:async_hooks` itself,
+because that specifier does not resolve in an edge bundle.
+
+```ts
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const bus = new EventBusImpl<OrderEvent>({
+  chainStore: new AsyncLocalStorage<PublishChainState>(),
+});
+```
+
 A retry after a timeout runs the handlers a second time. The first attempt is
 possibly still in flight. Make the handler idempotent, or do not retry a
 publish that timed out.

@@ -339,6 +339,8 @@ export {
 	EventBusImpl,
 	type EventBusObservers,
 	type EventBusOptions,
+	type PublishChainState,
+	type PublishChainStore,
 	type SubscriptionThresholdReport,
 } from "./messaging/event-bus/event-bus";
 export type {

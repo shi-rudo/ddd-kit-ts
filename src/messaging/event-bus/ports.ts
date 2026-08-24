@@ -118,10 +118,13 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	 * one shared bus never reach it. A handler links its nested publication
 	 * to the chain when it passes `context.signal`. That is the same
 	 * practice that gives the handler cancellation. The link survives the
-	 * kit's own nested operations, `withCommit` included. A handler that
-	 * drops the signal, or replaces it with one the kit did not derive,
-	 * leaves a chain the bus cannot see. There, only a synchronous cycle is
-	 * still caught.
+	 * kit's own nested operations, `withCommit` included. It ends at a signal
+	 * the kit did not derive, for example one from `AbortSignal.any`, and a
+	 * handler that drops the signal leaves no link at all. There, only a
+	 * synchronous cycle is caught.
+	 *
+	 * Pass `chainStore` to follow every chain, whatever a handler does with
+	 * the signal.
 	 *
 	 * @param events - Array of events to publish
 	 * @param options - Owner cancellation and publication timeout

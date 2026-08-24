@@ -1,0 +1,65 @@
+// @ts-expect-error Node's async_hooks exists in the test runtime; the package stays Node-type-free.
+import { AsyncLocalStorage } from "node:async_hooks";
+import { describe, expect, it } from "vite-plus/test";
+import {
+	createDomainEvent,
+	type DomainEvent,
+	EventBusImpl,
+	type PublishChainState,
+	PublishDepthExceededError,
+} from "../../src";
+
+type OrderCreated = DomainEvent<"OrderCreated", { orderId: string }>;
+
+const created = () =>
+	createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+
+/** Stops the probe before an unbounded chain exhausts the test runner. */
+const BRAKE = 150;
+
+/**
+ * A handler that gives its own publication an extra deadline writes exactly
+ * this. The merged signal is not one the kit derived, so the owner chain ends
+ * there and only an injected store can still carry the depth.
+ */
+function subscribeMergingSignals(
+	bus: EventBusImpl<OrderCreated>,
+	counter: { depth: number },
+): void {
+	bus.subscribe("OrderCreated", async (_event, context) => {
+		if (counter.depth >= BRAKE) return;
+		counter.depth++;
+		await Promise.resolve();
+		const merged = AbortSignal.any([
+			context.signal,
+			new AbortController().signal,
+		]);
+		await bus.publish([created()], { signal: merged });
+	});
+}
+
+describe("event bus publish chain across a merged signal", () => {
+	it("bounds the chain when the caller injects a chain store", async () => {
+		const counter = { depth: 0 };
+		const bus = new EventBusImpl<OrderCreated>({
+			chainStore: new AsyncLocalStorage<PublishChainState>(),
+			maxPublishDepth: 8,
+		});
+		subscribeMergingSignals(bus, counter);
+
+		await expect(bus.publish([created()])).rejects.toThrow(
+			PublishDepthExceededError,
+		);
+		expect(counter.depth).toBe(8);
+	});
+
+	it("loses the chain without a store, which is why the store exists", async () => {
+		const counter = { depth: 0 };
+		const bus = new EventBusImpl<OrderCreated>({ maxPublishDepth: 8 });
+		subscribeMergingSignals(bus, counter);
+
+		await bus.publish([created()]);
+
+		expect(counter.depth).toBe(BRAKE);
+	});
+});

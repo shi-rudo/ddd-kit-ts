@@ -70,9 +70,15 @@ gives a before-and-after example for each breaking change.
 - A handler links its nested publication to the chain when it passes
   `context.signal`. The link follows the owner chain of the bounded
   executions, so it survives the nested operations of the kit, `withCommit`
-  included. A handler that drops the signal, or replaces it with one the kit
-  did not derive, leaves a chain the bus cannot see. A synchronous cycle is
-  still caught there.
+  included. It ends at a signal the kit did not derive, for example one from
+  `AbortSignal.any`, and a handler that drops the signal leaves no link at all.
+  A synchronous cycle is still caught there.
+- Added the optional `chainStore`, which follows every chain whatever a handler
+  does with the signal. Its shape is that of `AsyncLocalStorage`. The kit does
+  not import `node:async_hooks` itself, because that specifier does not resolve
+  under the browser conditions an edge bundle uses, and the kit ships one
+  build. A consumer on Node passes the platform class. A consumer on an edge
+  runtime passes nothing and keeps the signal-based bound.
 
 ### Documentation: the event bus states what it does not promise
 

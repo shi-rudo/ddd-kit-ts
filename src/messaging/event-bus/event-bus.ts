@@ -60,6 +60,36 @@ const CATCH_ALL = Symbol("EventBusImpl.subscribeAll");
  */
 const DEFAULT_MAX_SUBSCRIPTIONS_PER_EVENT_TYPE = 32;
 
+/** Depth and event path of one publish chain. */
+export interface PublishChainState {
+	/** Nested publications, the outermost counting as 1. */
+	readonly depth: number;
+	/** Event types along the chain, oldest first. */
+	readonly path: readonly string[];
+}
+
+/**
+ * Carries a publish chain across an `await` when the signal cannot.
+ *
+ * The shape is that of `AsyncLocalStorage`. The kit does not import
+ * `node:async_hooks` itself: that specifier does not resolve under the browser
+ * conditions an edge bundle uses, and the kit ships one build. A consumer on
+ * Node passes the platform class, and a consumer on an edge runtime passes
+ * nothing.
+ *
+ * ```ts
+ * import { AsyncLocalStorage } from "node:async_hooks";
+ *
+ * const bus = new EventBusImpl<OrderEvent>({
+ *   chainStore: new AsyncLocalStorage<PublishChainState>(),
+ * });
+ * ```
+ */
+export interface PublishChainStore {
+	run<R>(state: PublishChainState, callback: () => R): R;
+	getStore(): PublishChainState | undefined;
+}
+
 /** Construction options for {@link EventBusImpl}. */
 export interface EventBusOptions {
 	/**
@@ -87,6 +117,15 @@ export interface EventBusOptions {
 	 * publications on one shared bus never reach it.
 	 */
 	readonly maxPublishDepth?: number;
+	/**
+	 * Where the publish chain is kept across an `await`.
+	 *
+	 * Without this the bus follows the chain through the signal, which holds
+	 * across its own nested operations but ends at a signal the kit did not
+	 * derive, for example one from `AbortSignal.any`. A store follows every
+	 * chain, whatever the handler does with the signal.
+	 */
+	readonly chainStore?: PublishChainStore;
 }
 
 /**
@@ -130,6 +169,7 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 	private syncDepth = 0;
 	private readonly syncPath: string[] = [];
 
+	private readonly chainStore: PublishChainStore | undefined;
 	private readonly maxSubscriptionsPerEventType: number;
 	private readonly observers: Readonly<EventBusObservers> | undefined;
 	// Event types that already reported their current crossing. Cleared when
@@ -152,6 +192,18 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				options.maxSubscriptionsPerEventType,
 			);
 		}
+		if (
+			options.chainStore !== undefined &&
+			(typeof options.chainStore.run !== "function" ||
+				typeof options.chainStore.getStore !== "function")
+		) {
+			throw new TypeError(
+				"EventBusImpl.chainStore must provide run and getStore",
+			);
+		}
+		// Kept as the original object: the methods of AsyncLocalStorage need
+		// their receiver, so copying them onto a new object would break it.
+		this.chainStore = options.chainStore;
 		this.maxPublishDepth = options.maxPublishDepth ?? DEFAULT_MAX_PUBLISH_DEPTH;
 		this.maxSubscriptionsPerEventType =
 			options.maxSubscriptionsPerEventType ??
@@ -344,15 +396,26 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		// it: the parent signal (survives `await`, needs the handler to pass
 		// `context.signal`) and the synchronous window (needs nothing). Take
 		// whichever is higher.
-		const parent = this.chainStateFor(options.signal);
-		// Depth and path come from ONE source, so a reported depth and the path
-		// beside it cannot describe different chains.
-		const fromSyncWindow = this.syncDepth > parent.depth;
-		const depth = (fromSyncWindow ? this.syncDepth : parent.depth) + 1;
-		const path = [
-			...(fromSyncWindow ? this.syncPath : (parent.path ?? [])),
-			...events.map((event) => event.type),
-		];
+		// Up to three windows can see the chain: an injected store, the owner
+		// chain of the signal, and the synchronous window. A window that cannot
+		// see it reports 0, never a wrong depth, so the deepest one is the
+		// truth. Depth and path come from that same window, so a reported depth
+		// and the path beside it cannot describe different chains.
+		const lineage = this.chainStateFor(options.signal);
+		const stored = this.chainStore?.getStore();
+		let parent: { depth: number; path: readonly string[] } = {
+			depth: 0,
+			path: [],
+		};
+		for (const window of [
+			{ depth: stored?.depth ?? 0, path: stored?.path ?? [] },
+			{ depth: lineage.depth, path: lineage.path ?? [] },
+			{ depth: this.syncDepth, path: this.syncPath as readonly string[] },
+		]) {
+			if (window.depth > parent.depth) parent = window;
+		}
+		const depth = parent.depth + 1;
+		const path = [...parent.path, ...events.map((event) => event.type)];
 		if (depth > this.maxPublishDepth) {
 			throw new PublishDepthExceededError(depth, this.maxPublishDepth, path);
 		}
@@ -368,7 +431,11 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 				(context) => {
 					this.chainDepth.set(context.signal, depth);
 					this.chainPath.set(context.signal, path);
-					return this.publishWithinContext(events, context, errors);
+					const dispatch = () =>
+						this.publishWithinContext(events, context, errors);
+					return this.chainStore === undefined
+						? dispatch()
+						: this.chainStore.run({ depth, path }, dispatch);
 				},
 			);
 		} catch (boundedError) {
