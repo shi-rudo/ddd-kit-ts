@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	DomainError,
 	ForeignEventError,
+	HandlerReturnedNoStateError,
 	MisaddressedEventError,
 	MissingHandlerError,
 	UnmintedEventError,
@@ -1232,5 +1233,192 @@ describe("replay trusts history", () => {
 
 		expect(result.isOk()).toBe(true);
 		expect(agg.state.value).toBe(99);
+	});
+});
+
+describe("validateState on the apply path", () => {
+	class ValueBelowZeroError extends DomainError<"VALUE_BELOW_ZERO"> {
+		constructor(value: number) {
+			super({
+				code: "VALUE_BELOW_ZERO",
+				message: `value must not be below zero, got ${value}`,
+			});
+		}
+	}
+
+	const rejectNegativeValue = (state: TestState): void => {
+		if (state.value < 0) throw new ValueBelowZeroError(state.value);
+	};
+
+	class GuardedAggregate extends EventSourcedAggregate<
+		TestState,
+		TestEvent,
+		TestId
+	> {
+		protected readonly aggregateType = "GuardedAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState, { validateState: rejectNegativeValue });
+		}
+
+		updateValue(newValue: number): void {
+			this.apply(
+				createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
+			);
+		}
+
+		protected readonly handlers = {
+			TestEventCreated: (
+				state: TestState,
+				event: TestEventCreatedDecision,
+			): TestState => ({ ...state, value: event.payload.value }),
+			TestEventUpdated: (
+				state: TestState,
+				event: TestEventUpdatedDecision,
+			): TestState => ({ ...state, value: event.payload.newValue }),
+			TestEventActivated: (state: TestState): TestState => ({
+				...state,
+				status: "active",
+			}),
+			TestEventDeactivated: (state: TestState): TestState => ({
+				...state,
+				status: "inactive",
+			}),
+			TestEventInvalid: (state: TestState): TestState => state,
+		};
+	}
+
+	it("rejects a new fact whose resulting state fails validateState", () => {
+		const agg = new GuardedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() => agg.updateValue(-5)).toThrow(ValueBelowZeroError);
+	});
+
+	it("leaves state, version, and pendingEvents untouched when validateState rejects", () => {
+		const agg = new GuardedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+		agg.updateValue(2);
+
+		expect(() => agg.updateValue(-5)).toThrow(ValueBelowZeroError);
+
+		expect(agg.state.value).toBe(2);
+		expect(agg.version).toBe(1);
+		expect(agg.pendingEvents).toHaveLength(1);
+	});
+
+	it("replays history without running validateState", () => {
+		const agg = new GuardedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent("TestEventUpdated", {
+				newValue: -9,
+			}) as TestEventUpdated,
+		]);
+
+		expect(result.isOk()).toBe(true);
+		expect(agg.state.value).toBe(-9);
+		expect(agg.version).toBe(1);
+	});
+});
+
+describe("a handler that returns no state", () => {
+	class ForgetfulAggregate extends EventSourcedAggregate<
+		TestState,
+		TestEvent,
+		TestId
+	> {
+		protected readonly aggregateType = "ForgetfulAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		updateValue(newValue: number): void {
+			this.apply(
+				createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
+			);
+		}
+
+		protected readonly handlers = {
+			TestEventCreated: (
+				state: TestState,
+				event: TestEventCreatedDecision,
+			): TestState => ({ ...state, value: event.payload.value }),
+			// A fold without a return statement: the classic missing-return bug.
+			TestEventUpdated: (): TestState => undefined as unknown as TestState,
+			TestEventActivated: (state: TestState): TestState => ({
+				...state,
+				status: "active",
+			}),
+			TestEventDeactivated: (state: TestState): TestState => ({
+				...state,
+				status: "inactive",
+			}),
+			TestEventInvalid: (state: TestState): TestState => state,
+		};
+	}
+
+	it("throws HandlerReturnedNoStateError from apply() and leaves the aggregate untouched", () => {
+		const agg = new ForgetfulAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() => agg.updateValue(2)).toThrow(HandlerReturnedNoStateError);
+
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
+	it("carries the event type and the wiring code", () => {
+		const agg = new ForgetfulAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		let caught: unknown;
+		try {
+			agg.updateValue(2);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(HandlerReturnedNoStateError);
+		expect(isBaseError(caught)).toBe(true);
+		expect(caught).not.toBeInstanceOf(DomainError);
+		expect((caught as HandlerReturnedNoStateError).code).toBe(
+			"HANDLER_RETURNED_NO_STATE",
+		);
+		expect((caught as HandlerReturnedNoStateError).eventType).toBe(
+			"TestEventUpdated",
+		);
+	});
+
+	it("propagates HandlerReturnedNoStateError from loadFromHistory after rolling back", () => {
+		const agg = new ForgetfulAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() =>
+			agg.loadFromHistory([
+				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+				createDomainEvent("TestEventUpdated", {
+					newValue: 2,
+				}) as TestEventUpdated,
+			]),
+		).toThrow(HandlerReturnedNoStateError);
+
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
 	});
 });

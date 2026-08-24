@@ -271,6 +271,7 @@ export {
 	type ErrorMapperFailedErrorOptions,
 	EventHarvestError,
 	ForeignEventError,
+	HandlerReturnedNoStateError,
 	HostileStateKeyError,
 	IdempotencyClaimLostError,
 	type IdempotencyClaimLostErrorOptions,

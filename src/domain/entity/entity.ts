@@ -197,9 +197,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 	/**
 	 * The state is `protected` so that only the subclass can modify it.
 	 * Ordinary entity behavior must use {@link setState}; direct assignment
-	 * skips instance-bound validation. Kit event-sourcing internals use direct
-	 * assignment deliberately because historical evolution must not run
-	 * today's decision validator.
+	 * skips instance-bound validation. Kit event-sourcing internals assign
+	 * directly: replay must not run today's validator against historical
+	 * facts, and the new-fact path owes the check through
+	 * {@link assertStateInvariant} before it assigns.
 	 */
 	protected _state: TState;
 
@@ -255,6 +256,16 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected freezeState(value: TState): TState {
 		return freezeStateByMode(value, this._stateFreezeMode);
+	}
+
+	/**
+	 * Runs the instance-bound {@link EntityConfig.validateState} against a
+	 * candidate state. {@link setState} runs it by itself; subclass paths
+	 * that assign `_state` directly and still owe the invariant check call
+	 * this method with the exact frozen object they are about to store.
+	 */
+	protected assertStateInvariant(candidate: TState): void {
+		this.validateState(candidate);
 	}
 
 	/**

@@ -201,6 +201,7 @@ const INDEX_SURFACE = [
 	"EventHarvestError",
 	"EventSourcedAggregate",
 	"ForeignEventError",
+	"HandlerReturnedNoStateError",
 	"HostileStateKeyError",
 	"IdempotencyClaimLostError",
 	"IdempotencyCompletionWithoutClaimError",
