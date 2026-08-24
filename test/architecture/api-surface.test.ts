@@ -318,6 +318,7 @@ const TESTING_SURFACE = [
 	"createCommandOutboxContractTests",
 	"createDeadlineStoreContractTests",
 	"createEsRepositoryContractTests",
+	"createEventBusContractTests",
 	"createEventStoreContractTests",
 	"createIdempotencyStoreContractTests",
 	"createOutboxContractTests",

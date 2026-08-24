@@ -755,6 +755,32 @@ The kit does not ship a saga framework. The building blocks are already here:
 
 That shape keeps the workflow in application code instead of hiding it in bus middleware. See [examples/saga](https://github.com/shi-rudo/ddd-kit-ts/tree/main/examples/saga) for a worked example with a happy path and compensation flows.
 
+## Proving a wrapper still honours the bus contract
+
+A tracing decorator, a metrics wrapper, or a test double around `EventBus` is
+easy to write and easy to break. Input order, parallelism within one event, and
+error collection after the batch are contract, and a wrapper that forwards
+`publish` can drop any of them without a symptom.
+
+`@shirudo/ddd-kit/testing` ships the proof:
+
+```ts
+import { createEventBusContractTests } from "@shirudo/ddd-kit/testing";
+
+const tests = createEventBusContractTests<OrderEvent>({
+  createEnvironment: async () => ({ bus: new TracingEventBus(inner) }),
+  createFirstEvent: () => createDomainEvent("OrderPlaced", { orderId: "o-1" }),
+  createSecondEvent: () => createDomainEvent("OrderShipped", { orderId: "o-1" }),
+});
+
+for (const test of tests) {
+  (test.skipped ? it.skip : it)(test.name, test.run);
+}
+```
+
+The suite covers the port. It does not cover the construction options of
+`EventBusImpl`, so your own implementation is free to omit them.
+
 ## How to Choose
 
 Use this as the default split:

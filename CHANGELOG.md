@@ -29,6 +29,23 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: an adapter contract suite for the event bus
+
+- `EventBus` was the only port without a contract suite, while nine other ports
+  ship one. Its contract is the subtlest in the kit, and it is the port that
+  consumers wrap most often: a tracing decorator, a metrics wrapper, a test
+  double. A wrapper that forwards `publish` but drops the error aggregation or
+  reorders the batch broke the contract with nothing to check against.
+- `createEventBusContractTests` pins what the port documents: input order,
+  parallelism within one event, error collection after the batch, catch-all
+  delivery, the subscription lifecycle, `once`, and the publish options. The
+  harness supplies the events, so the suite carries no event union of its own.
+- The suite pins the port and nothing else. `maxPublishDepth`, `chainStore` and
+  `observers` are construction options of `EventBusImpl`, so a second
+  implementation stays free to omit them.
+- `EventBusImpl` runs the suite as the reference and passes every test with no
+  capability gate.
+
 ### Added: the event bus reports what happens during a publication
 
 - A rejected handler reached the caller without its identity, because an

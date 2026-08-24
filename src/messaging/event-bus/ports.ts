@@ -170,7 +170,7 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 
 /**
  * Options for `EventBus.once()`. Both fields are optional; without them
- * `once()` waits forever (the historical behaviour).
+ * `once()` waits forever.
  */
 export interface OnceOptions {
 	/**
