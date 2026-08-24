@@ -111,6 +111,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 		},
 		subscribe: () => () => {},
 		subscribeAll: () => () => {},
+		subscribeMany: () => () => {},
 		once: () => new Promise(() => {}),
 		close: () => {},
 	};
@@ -552,6 +553,7 @@ describe("withCommit", () => {
 			},
 			subscribe: () => () => {},
 			subscribeAll: () => () => {},
+			subscribeMany: () => () => {},
 			once: () => new Promise(() => {}),
 			close: () => {},
 		};
@@ -1550,6 +1552,7 @@ describe("withCommit", () => {
 				},
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
+				subscribeMany: () => () => {},
 				once: () => new Promise(() => {}),
 				close: () => {},
 			};
@@ -1667,6 +1670,7 @@ describe("withCommit", () => {
 				},
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
+				subscribeMany: () => () => {},
 				once: () => new Promise(() => {}),
 				close: () => {},
 			};

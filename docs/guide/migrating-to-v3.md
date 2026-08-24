@@ -490,8 +490,8 @@ this list if your code observes one of these paths:
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 ### The event bus has a lifecycle
 
-`EventBus` gained `close()`. Every implementation of the port and every test
-double needs it.
+`EventBus` gained `close()` and `subscribeMany()`. Every implementation of the
+port and every test double needs both.
 
 Before:
 
@@ -512,6 +512,7 @@ const bus: EventBus<OrderEvent> = {
   subscribe: () => () => {},
   subscribeAll: () => () => {},
   once: () => new Promise(() => {}),
+  subscribeMany: () => () => {},
   close: () => {},
 };
 ```

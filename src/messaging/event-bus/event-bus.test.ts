@@ -879,6 +879,96 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("subscribeMany", () => {
+		const created = () =>
+			createDomainEvent("OrderCreated", { orderId: "o-1" }) as OrderCreated;
+		const shipped = () =>
+			createDomainEvent("OrderShipped", {
+				orderId: "o-1",
+				trackingNumber: "T-1",
+			}) as OrderShipped;
+
+		it("delivers every type of the set to one handler", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			bus.subscribeMany(["OrderCreated", "OrderShipped"], (event) => {
+				seen.push(event.type);
+			});
+
+			await bus.publish([created(), shipped()]);
+
+			expect(seen).toEqual(["OrderCreated", "OrderShipped"]);
+		});
+
+		it("releases every subscription it made with one call", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const release = bus.subscribeMany(
+				["OrderCreated", "OrderShipped"],
+				(event) => {
+					seen.push(event.type);
+				},
+			);
+
+			release();
+			await bus.publish([created(), shipped()]);
+
+			// Losing one of several releases is how a partial leak starts.
+			expect(seen).toEqual([]);
+		});
+
+		it("subscribes a repeated type once", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			bus.subscribeMany(["OrderCreated", "OrderCreated"], () => {
+				calls++;
+			});
+
+			await bus.publish([created()]);
+
+			expect(calls).toBe(1);
+		});
+
+		it("subscribes nothing for an empty set", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			let calls = 0;
+			const release = bus.subscribeMany([], () => {
+				calls++;
+			});
+
+			await bus.publish([created()]);
+
+			expect(calls).toBe(0);
+			expect(() => release()).not.toThrow();
+		});
+
+		it("does nothing when the release is called again", async () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const release = bus.subscribeMany(["OrderCreated"], (event) => {
+				seen.push(event.type);
+			});
+			bus.subscribe("OrderCreated", (event) => {
+				seen.push(`peer:${event.type}`);
+			});
+
+			release();
+			release();
+			await bus.publish([created()]);
+
+			expect(seen).toEqual(["peer:OrderCreated"]);
+		});
+
+		it("refuses a closed bus", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			bus.close();
+
+			expect(() => bus.subscribeMany(["OrderCreated"], () => {})).toThrow(
+				EventBusClosedError,
+			);
+		});
+	});
+
 	describe("metadata and instance isolation", () => {
 		it("hands every subscriber the same event, metadata included", async () => {
 			const bus = new EventBusImpl<OrderEvent>();

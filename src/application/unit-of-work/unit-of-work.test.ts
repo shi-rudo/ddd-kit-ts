@@ -140,6 +140,7 @@ function createMockBus(): EventBus<TestEvent> & { published: TestEvent[][] } {
 		},
 		subscribe: () => () => {},
 		subscribeAll: () => () => {},
+		subscribeMany: () => () => {},
 		once: () => new Promise(() => {}),
 		close: () => {},
 	};
@@ -1362,6 +1363,7 @@ describe("UnitOfWork", () => {
 				},
 				subscribe: () => () => {},
 				subscribeAll: () => () => {},
+				subscribeMany: () => () => {},
 				once: () => new Promise(() => {}),
 				close: () => {},
 			};

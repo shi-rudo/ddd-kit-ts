@@ -298,6 +298,61 @@ export function createEventBusContractTests<Evt extends AnyDomainEvent>(
 			}),
 		},
 		{
+			name: "delivers every type of a subscribed set to one handler",
+			run: inEnv(async ({ bus }: Env) => {
+				const { firstType, secondType } = types();
+				const seen: string[] = [];
+				bus.subscribeMany([firstType, secondType], (event) => {
+					seen.push(event.type);
+				});
+
+				await bus.publish([first(), second()]);
+
+				assertEqual(
+					seen.join(","),
+					[firstType, secondType].join(","),
+					"a set subscription receives every type in the set",
+				);
+			}),
+		},
+		{
+			name: "releases every subscription of a set with one call",
+			run: inEnv(async ({ bus }: Env) => {
+				const { firstType, secondType } = types();
+				const seen: string[] = [];
+				const release = bus.subscribeMany([firstType, secondType], (event) => {
+					seen.push(event.type);
+				});
+
+				release();
+				await bus.publish([first(), second()]);
+
+				assertEqual(
+					seen.length,
+					0,
+					"one release must remove every subscription the set made",
+				);
+			}),
+		},
+		{
+			name: "subscribes a repeated type of a set once",
+			run: inEnv(async ({ bus }: Env) => {
+				const { firstType } = types();
+				let calls = 0;
+				bus.subscribeMany([firstType, firstType], () => {
+					calls++;
+				});
+
+				await bus.publish([first()]);
+
+				assertEqual(
+					calls,
+					1,
+					"the argument is a set, so a repeated type subscribes once",
+				);
+			}),
+		},
+		{
 			name: "delivers every event type to a catch-all subscription",
 			run: inEnv(async ({ bus }: Env) => {
 				const { firstType, secondType } = types();

@@ -121,6 +121,40 @@ export interface EventBus<Evt extends AnyDomainEvent> {
 	) => () => void;
 
 	/**
+	 * Subscribes one handler to a set of event types.
+	 *
+	 * The returned function releases every subscription it made, so a
+	 * consumer that reacts to several types keeps one release instead of
+	 * one for each type. Losing one of several releases is how a partial
+	 * leak starts.
+	 *
+	 * A type that appears twice subscribes once: the argument is a set of
+	 * types, and delivering the same event twice to one handler would be a
+	 * surprise, not a feature. An empty set subscribes nothing and returns
+	 * a release that does nothing.
+	 *
+	 * @param eventTypes - The event types to subscribe to
+	 * @param handler - Called with every event of those types, narrowed to
+	 * their union
+	 * @returns A function that releases all of them, and does nothing when
+	 * called again
+	 *
+	 * @example
+	 * ```typescript
+	 * const release = bus.subscribeMany(
+	 *   ["OrderCreated", "OrderShipped"],
+	 *   async (event) => {
+	 *     await touchReadModel(event.payload.orderId);
+	 *   },
+	 * );
+	 * ```
+	 */
+	subscribeMany: <K extends Evt["type"]>(
+		eventTypes: readonly K[],
+		handler: EventHandler<Extract<Evt, { type: K }>>,
+	) => () => void;
+
+	/**
 	 * Subscribes a handler to EVERY event type: the subscription for
 	 * cross-cutting consumers (audit log, metrics, dev logging,
 	 * forward-all) that would otherwise have to enumerate the union's

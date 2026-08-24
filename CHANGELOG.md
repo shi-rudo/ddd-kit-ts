@@ -39,6 +39,18 @@ gives a before-and-after example for each breaking change.
   Nothing but three constants lives in module scope, so the guarantee held by
   construction and nothing said so.
 
+### Added (breaking): one subscription for a set of event types
+
+- `subscribeMany(types, handler)` subscribes one handler to several event
+  types and returns a single release. A consumer that reacts to several types
+  no longer keeps one release for each of them, and losing one of several
+  releases is how a partial leak starts.
+- The argument is a set: a type that appears twice subscribes once, because
+  delivering the same event twice to one handler would be a surprise. An empty
+  set subscribes nothing.
+- **Breaking**: the method is part of the port, so an implementation of
+  `EventBus` and every test double gains it.
+
 ### Added (breaking): the event bus has a lifecycle
 
 - `EventBus` had no way to stop. A worker shutting down, a test tearing down,

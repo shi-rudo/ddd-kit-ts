@@ -369,6 +369,25 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		};
 	}
 
+	/** See {@link EventBus.subscribeMany}. */
+	subscribeMany<K extends Evt["type"]>(
+		eventTypes: readonly K[],
+		handler: EventHandler<Extract<Evt, { type: K }>>,
+	): () => void {
+		this.assertOpen("subscribeMany");
+		// A set: the same type twice is one subscription, never two
+		// deliveries of one event to one handler.
+		const releases = [...new Set(eventTypes)].map((eventType) =>
+			this.subscribe(eventType, handler),
+		);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			for (const release of releases) release();
+		};
+	}
+
 	/**
 	 * See {@link EventBus.subscribeAll}: every published event, in the
 	 * same dispatch batch as its typed handlers.
