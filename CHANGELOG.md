@@ -44,9 +44,6 @@ event. A state type that includes `undefined` is no longer supported for
 event-sourced aggregates; model an absent state as `null` or as a status
 field.
 
-`Entity.validateState` is now a `protected readonly` property, so a subclass
-path that assigns state directly can run the validator itself.
-
 ### Added: tests for two guarantees the bus already gave
 
 - Every subscriber receives the published event itself, not a copy, so the

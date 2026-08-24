@@ -6,6 +6,7 @@ import {
 	MisaddressedEventError,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
+import { assertStateInvariant } from "../entity/entity";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
@@ -157,12 +158,14 @@ export abstract class EventSourcedAggregate<
 		const stamped = this.stampNewEventAddress(event);
 		// Both gates live HERE, not in fold: only new facts are checked
 		// against current rules; replay trusts history. The state gate runs
-		// against the exact frozen object that is stored, in the same
-		// validate-then-assign order as Entity.setState, and nothing below
-		// assigns until it passed.
+		// against the exact frozen object that is stored, as Entity.setState
+		// does, and nothing below assigns until it passed. Unlike setState
+		// there is no defensive copy: the fold result is the aggregate's own
+		// next state and is frozen in place.
+		// TODO: run the hostile own-key guard on the fold result as well.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.freezeState(this.fold(stamped));
-		this.validateState(next);
+		assertStateInvariant(this, next);
 		this._state = next;
 		this.addDomainEvent(stamped);
 		this.bumpVersion();

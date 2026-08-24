@@ -201,28 +201,7 @@ class ValidatingAggregate extends EventSourcedAggregate<
 	// handler (a corrupt row a handler can name), while the apply-path
 	// tests still exercise validateEvent above.
 	protected readonly handlers = {
-		TestEventCreated: (
-			state: TestState,
-			event: TestEventCreatedDecision,
-		): TestState => ({
-			...state,
-			value: event.payload.value,
-		}),
-		TestEventUpdated: (
-			state: TestState,
-			event: TestEventUpdatedDecision,
-		): TestState => ({
-			...state,
-			value: event.payload.newValue,
-		}),
-		TestEventActivated: (state: TestState): TestState => ({
-			...state,
-			status: "active",
-		}),
-		TestEventDeactivated: (state: TestState): TestState => ({
-			...state,
-			status: "inactive",
-		}),
+		...testHandlers,
 		TestEventInvalid: (): TestState => {
 			throw new InvalidTestEventError("forbidden event type");
 		},
@@ -327,31 +306,7 @@ describe("EventSourcedAggregate", () => {
 					this.apply(event);
 				}
 
-				protected readonly handlers = {
-					TestEventCreated: (
-						state: TestState,
-						event: TestEventCreatedDecision,
-					): TestState => ({
-						...state,
-						value: event.payload.value,
-					}),
-					TestEventUpdated: (
-						state: TestState,
-						event: TestEventUpdatedDecision,
-					): TestState => ({
-						...state,
-						value: event.payload.newValue,
-					}),
-					TestEventActivated: (state: TestState): TestState => ({
-						...state,
-						status: "active",
-					}),
-					TestEventDeactivated: (state: TestState): TestState => ({
-						...state,
-						status: "inactive",
-					}),
-					TestEventInvalid: (state: TestState): TestState => state,
-				};
+				protected readonly handlers = testHandlers;
 			}
 
 			const initialState: TestState = { value: 10, status: "active" };
@@ -929,25 +884,7 @@ describe("replay trusts history", () => {
 			this.apply(event);
 		}
 
-		protected readonly handlers = {
-			TestEventCreated: (
-				state: TestState,
-				event: TestEventCreatedDecision,
-			): TestState => ({ ...state, value: event.payload.value }),
-			TestEventUpdated: (
-				state: TestState,
-				event: TestEventUpdatedDecision,
-			): TestState => ({ ...state, value: event.payload.newValue }),
-			TestEventActivated: (state: TestState): TestState => ({
-				...state,
-				status: "active",
-			}),
-			TestEventDeactivated: (state: TestState): TestState => ({
-				...state,
-				status: "inactive",
-			}),
-			TestEventInvalid: (state: TestState): TestState => state,
-		};
+		protected readonly handlers = testHandlers;
 	}
 
 	it("replays history that today's decision rules would reject", () => {
@@ -1282,6 +1219,21 @@ describe("validateState on the apply path", () => {
 		expect(result.isOk()).toBe(true);
 		expect(agg.state.value).toBe(-9);
 		expect(agg.version).toBe(1);
+	});
+
+	it("keeps the injected validator on apply() when a prototype member shares its name", () => {
+		class ShadowingAggregate extends TestEventSourcedAggregate {}
+		// JavaScript consumers can still attach a same-named prototype method.
+		Object.defineProperty(ShadowingAggregate.prototype, "validateState", {
+			value: () => {},
+		});
+		const agg = new ShadowingAggregate(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			{ validateState: rejectNegativeValue },
+		);
+
+		expect(() => agg.updateValue(-5)).toThrow(NegativeValueError);
 	});
 });
 
