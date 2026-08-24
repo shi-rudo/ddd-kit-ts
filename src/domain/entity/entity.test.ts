@@ -226,11 +226,11 @@ describe("Entity", () => {
 		});
 
 		it("rejects the removed subclass validation hook at compile time", () => {
-			// @ts-expect-error state validation is constructor-injected, not overridable
 			class LegacyValidator extends Entity<
 				{ quantity: number },
 				Id<"LegacyValidatorId">
 			> {
+				// @ts-expect-error state validation is constructor-injected, not overridable
 				protected validateState(_state: { quantity: number }): void {}
 			}
 

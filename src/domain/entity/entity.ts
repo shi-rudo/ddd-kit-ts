@@ -199,13 +199,21 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * Ordinary entity behavior must use {@link setState}; direct assignment
 	 * skips instance-bound validation. Kit event-sourcing internals assign
 	 * directly: replay must not run today's validator against historical
-	 * facts, and the new-fact path owes the check through
-	 * {@link assertStateInvariant} before it assigns.
+	 * facts, and the new-fact path calls {@link validateState} itself
+	 * before it assigns.
 	 */
 	protected _state: TState;
 
 	private readonly _stateFreezeMode: StateFreezeMode;
-	private readonly validateState: StateValidator<TState>;
+
+	/**
+	 * The instance-bound {@link EntityConfig.validateState} function, an own
+	 * property assigned before any use so a same-named prototype member can
+	 * never take its place. {@link setState} runs it by itself; a subclass
+	 * path that assigns `_state` directly and still owes the check calls it
+	 * with the exact frozen object it is about to store.
+	 */
+	protected readonly validateState: StateValidator<TState>;
 
 	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
@@ -256,16 +264,6 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 */
 	protected freezeState(value: TState): TState {
 		return freezeStateByMode(value, this._stateFreezeMode);
-	}
-
-	/**
-	 * Runs the instance-bound {@link EntityConfig.validateState} against a
-	 * candidate state. {@link setState} runs it by itself; subclass paths
-	 * that assign `_state` directly and still owe the invariant check call
-	 * this method with the exact frozen object they are about to store.
-	 */
-	protected assertStateInvariant(candidate: TState): void {
-		this.validateState(candidate);
 	}
 
 	/**

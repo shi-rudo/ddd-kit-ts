@@ -120,7 +120,8 @@ export abstract class EventSourcedAggregate<
 	 * event + version bump atomically.
 	 *
 	 * Throws `DomainError` (or a subclass) when `validateEvent` rejects the
-	 * decision or the `validateState` function rejects the folded state.
+	 * decision. Throws whatever the `validateState` function throws when it
+	 * rejects the folded state.
 	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
 	 * Throws `HandlerReturnedNoStateError` (wiring) when the handler returns
 	 * `undefined`, the signature of a fold without a `return`.
@@ -156,11 +157,12 @@ export abstract class EventSourcedAggregate<
 		const stamped = this.stampNewEventAddress(event);
 		// Both gates live HERE, not in fold: only new facts are checked
 		// against current rules; replay trusts history. The state gate runs
-		// against the exact frozen object that is stored, the contract
-		// Entity.setState keeps, and nothing below assigns until it passed.
+		// against the exact frozen object that is stored, in the same
+		// validate-then-assign order as Entity.setState, and nothing below
+		// assigns until it passed.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.freezeState(this.fold(stamped));
-		this.assertStateInvariant(next);
+		this.validateState(next);
 		this._state = next;
 		this.addDomainEvent(stamped);
 		this.bumpVersion();
@@ -328,6 +330,10 @@ export abstract class EventSourcedAggregate<
 	/**
 	 * A map of event types to their corresponding handlers.
 	 * Subclasses MUST implement this property.
+	 *
+	 * A handler returns the next state. `undefined` is rejected on both the
+	 * apply and the replay path as a missing `return`, so model an absent
+	 * state as `null` or as a status field, never as `undefined`.
 	 *
 	 * Handlers MUST fold state from `type` and `payload` only. The
 	 * parameter is typed as the uncommitted shape because a live `apply()`

@@ -40,10 +40,12 @@ validator rejects. Replay through `loadFromHistory` still skips both gates.
 A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
 (code `HANDLER_RETURNED_NO_STATE`) on both paths. Before this change the
 aggregate stored `undefined` as its state and, on the apply path, recorded the
-event.
+event. A state type that includes `undefined` is no longer supported for
+event-sourced aggregates; model an absent state as `null` or as a status
+field.
 
-`Entity` gains the protected hook `assertStateInvariant(candidate)` for
-subclass paths that assign state directly and still owe the check.
+`Entity.validateState` is now a `protected readonly` property, so a subclass
+path that assigns state directly can run the validator itself.
 
 ### Added: tests for two guarantees the bus already gave
 

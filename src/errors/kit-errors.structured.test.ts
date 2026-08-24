@@ -12,6 +12,7 @@ import {
 	DuplicateAggregateError,
 	ErrorMapperFailedError,
 	EventHarvestError,
+	HandlerReturnedNoStateError,
 	HostileStateKeyError,
 	InfrastructureError,
 	InMemoryCapacityExceededError,
@@ -92,6 +93,12 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () => new MissingHandlerError("OrderConfirmed"),
 		code: "MISSING_HANDLER",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new HandlerReturnedNoStateError("OrderConfirmed"),
+		code: "HANDLER_RETURNED_NO_STATE",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -343,6 +350,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<DuplicateAggregateError["code"]>,
 			AssertKitCode<ErrorMapperFailedError["code"]>,
 			AssertKitCode<EventHarvestError["code"]>,
+			AssertKitCode<HandlerReturnedNoStateError["code"]>,
 			AssertKitCode<HostileStateKeyError["code"]>,
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
