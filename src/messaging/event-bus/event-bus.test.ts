@@ -818,6 +818,62 @@ describe("EventBusImpl", () => {
 		});
 	});
 
+	describe("unsubscribe", () => {
+		it("ignores a second call", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const seen: string[] = [];
+			const releaseFirst = bus.subscribe("OrderCreated", () => {
+				seen.push("first");
+			});
+			bus.subscribe("OrderCreated", () => {
+				seen.push("second");
+			});
+
+			releaseFirst();
+			releaseFirst();
+
+			expect(() => releaseFirst()).not.toThrow();
+			expect(seen).toEqual([]);
+		});
+
+		it("ignores a second call on a catch-all subscription", () => {
+			const bus = new EventBusImpl<OrderEvent>();
+			const release = bus.subscribeAll(() => {});
+
+			release();
+
+			expect(() => release()).not.toThrow();
+		});
+	});
+
+	describe("abort reason that is not an error", () => {
+		it("carries it alongside the handler failures", async () => {
+			const controller = new AbortController();
+			const bus = new EventBusImpl<OrderEvent>();
+
+			bus.subscribe("OrderCreated", async () => {
+				controller.abort("stopped by a string");
+				throw new Error("handler failed");
+			});
+
+			const error = (await bus
+				.publish(
+					[
+						createDomainEvent("OrderCreated", {
+							orderId: "o-1",
+						}) as OrderCreated,
+					],
+					{ signal: controller.signal },
+				)
+				.catch((reason) => reason)) as AggregateError;
+
+			expect(error).toBeInstanceOf(AggregateError);
+			for (const collected of error.errors) {
+				expect(collected).toBeInstanceOf(Error);
+			}
+		});
+	});
+
 	describe("construction options", () => {
 		it("rejects a maximum publish depth that is not a positive integer", () => {
 			for (const invalid of [0, -1, 1.5, Number.NaN]) {
@@ -1167,6 +1223,28 @@ describe("EventBusImpl", () => {
 			expect(counts).toEqual([3, 3]);
 		});
 
+		it("stays muted while the count is still above the threshold", () => {
+			const counts: number[] = [];
+			const bus = new EventBusImpl<OrderEvent>({
+				maxSubscriptionsPerEventType: 2,
+				observers: {
+					...silentObservers(),
+					onSubscriptionThresholdExceeded: (report) =>
+						counts.push(report.subscriptionCount),
+				},
+			});
+
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			bus.subscribe("OrderCreated", noop);
+			const release = bus.subscribe("OrderCreated", noop);
+			// Back to 3, which is still over 2, so nothing is re-armed.
+			release();
+			bus.subscribe("OrderCreated", noop);
+
+			expect(counts).toEqual([3]);
+		});
+
 		it("re-arms the catch-all report as well", () => {
 			const counts: number[] = [];
 			const bus = new EventBusImpl<OrderEvent>({
@@ -1418,6 +1496,34 @@ describe("EventBusImpl", () => {
 			expect(reports).toEqual([
 				{ pending: [1], type: "OrderCreated", reason: "TimeoutError" },
 			]);
+		});
+
+		it("reports nothing when the abort finds every handler settled", async () => {
+			const controller = new AbortController();
+			let reported = false;
+			const bus = new EventBusImpl<OrderEvent>({
+				observers: {
+					...silentObservers(),
+					onPublishAborted: () => {
+						reported = true;
+					},
+				},
+			});
+
+			// Both handlers return without a promise, so both are settled when
+			// the report is taken. An abort with nothing left running must not
+			// raise a false alarm.
+			bus.subscribe("OrderCreated", () => {
+				controller.abort(new Error("owner stopped"));
+			});
+			bus.subscribe("OrderCreated", () => {});
+
+			await expect(
+				bus.publish([created()], { signal: controller.signal }),
+			).rejects.toThrow();
+			await new Promise((resolve) => setTimeout(resolve, 5));
+
+			expect(reported).toBe(false);
 		});
 
 		it("reports nothing abandoned when every handler settles", async () => {

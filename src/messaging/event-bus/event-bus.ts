@@ -445,14 +445,14 @@ export class EventBusImpl<Evt extends AnyDomainEvent> implements EventBus<Evt> {
 		const depth = parent.depth + 1;
 		// An empty batch dispatches nothing, so it cannot extend a chain and
 		// must not meet the bound. Everything else still runs, so an invalid
-		// option is still rejected.
-		if (events.length > 0 && depth > this.maxPublishDepth) {
-			// Only the first event of the batch is about to dispatch. Naming the
-			// rest would put events on the chain that never reached it.
-			const first = events[0];
+		// option is still rejected. Only the first event is about to dispatch,
+		// and naming the rest would put events on the chain that never
+		// reached it.
+		const [first] = events;
+		if (first !== undefined && depth > this.maxPublishDepth) {
 			throw new PublishDepthExceededError(depth, this.maxPublishDepth, [
 				...parent.path,
-				...(first === undefined ? [] : [first.type]),
+				first.type,
 			]);
 		}
 

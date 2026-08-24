@@ -116,7 +116,9 @@ gives a before-and-after example for each breaking change.
   observers. The public API does not change.
 - Added `npm run test:coverage`, backed by `@vitest/coverage-v8` on the same
   version as the test runner. The event bus reports 100% of lines and
-  functions, 98.25% of statements and 91.89% of branches.
+  functions, 99.56% of statements and 96.33% of branches. The four branches
+  that stay open are defensive: two index guards and one settle guard with no
+  public path to them, and the hop limit of the ancestor walk.
 - Depth counts the ancestors that are still open, never a number copied from
   the parent. A cycle keeps its ancestors open, because each one awaits the
   next. A relay lets them finish, so a handler that starts the next
