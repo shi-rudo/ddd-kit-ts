@@ -106,6 +106,15 @@ describe("version guards", () => {
 		expect(aggregate.version).toBe(2);
 	});
 
+	it("restores a row persisted at version zero onto a fresh instance", () => {
+		const aggregate = fresh();
+
+		aggregate.restore(0);
+
+		expect(aggregate.version).toBe(0);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(0);
+	});
+
 	it("accepts a restore at the current version", () => {
 		const aggregate = fresh();
 		aggregate.restore(5);
