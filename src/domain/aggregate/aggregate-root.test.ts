@@ -19,10 +19,14 @@ import {
 } from "./aggregate-root";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 
-function acknowledgePersisted(aggregate: object, version: Version): void {
+function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	capability.acknowledge(
+	return capability;
+}
+
+function acknowledgePersisted(aggregate: object, version: Version): void {
+	lifecycleOf(aggregate).acknowledge(
 		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
 			.pendingEvents,
 		version,
@@ -30,9 +34,7 @@ function acknowledgePersisted(aggregate: object, version: Version): void {
 }
 
 function discardPendingEvents(aggregate: object): void {
-	const capability = pendingEventLifecycleCapabilityFor(aggregate);
-	if (!capability) throw new Error("Missing test persistence capability");
-	capability.discardPendingEvents(
+	lifecycleOf(aggregate).discardPendingEvents(
 		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
 			.pendingEvents,
 	);
@@ -76,12 +78,6 @@ describe("version guards", () => {
 			value: 10,
 			status: "inactive",
 		});
-
-	const lifecycleOf = (aggregate: object) => {
-		const capability = pendingEventLifecycleCapabilityFor(aggregate);
-		if (!capability) throw new Error("Missing test persistence capability");
-		return capability;
-	};
 
 	it.each([
 		["NaN", Number.NaN],
@@ -804,12 +800,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.version).toBe(0);
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
-
-		function lifecycleOf(aggregate: object) {
-			const capability = pendingEventLifecycleCapabilityFor(aggregate);
-			if (!capability) throw new Error("Missing test persistence capability");
-			return capability;
-		}
 
 		it("rejects an acknowledged batch in a different order than the pending prefix", () => {
 			const aggregate = new EventingAggregate("test-1" as TestId, {
