@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { HostileStateKeyError } from "../../errors/kit-errors";
+import {
+	HostileStateKeyError,
+	MissingEntityIdError,
+} from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
 	entityIds,
@@ -176,15 +179,24 @@ describe("Entity", () => {
 			expect(sameEntity(e1, e3)).toBe(false); // Different ID
 		});
 
-		it("should throw if ID is null or undefined", () => {
+		it("rejects a null or undefined id with a coded wiring error", () => {
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(null, "p1", 1)).toThrow(
-				"Entity ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
 			// @ts-expect-error - testing invalid input
 			expect(() => new OrderItemEntity(undefined, "p1", 1)).toThrow(
-				"Entity ID cannot be null or undefined",
+				MissingEntityIdError,
 			);
+
+			let caught: unknown;
+			try {
+				// @ts-expect-error - testing invalid input
+				new OrderItemEntity(undefined, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
 		});
 
 		it("uses the configured pure validator instead of virtual constructor dispatch", () => {
@@ -225,16 +237,64 @@ describe("Entity", () => {
 			expect(Object.isFrozen(validated[0])).toBe(true);
 		});
 
-		it("rejects the removed subclass validation hook at compile time", () => {
-			// @ts-expect-error state validation is constructor-injected, not overridable
-			class LegacyValidator extends Entity<
+		const rejectNegativeQuantity = (state: { quantity: number }): void => {
+			if (state.quantity < 0) throw new Error("negative quantity");
+		};
+
+		it("keeps the injected validator when a subclass declares a validateState field", () => {
+			class FieldShadowingEntity extends Entity<
 				{ quantity: number },
-				Id<"LegacyValidatorId">
+				Id<"FieldShadowingId">
 			> {
-				protected validateState(_state: { quantity: number }): void {}
+				// A field initializer runs after super(); it must not replace the
+				// injected validator on any path.
+				protected readonly validateState = (): void => {};
+
+				constructor(id: Id<"FieldShadowingId">, state: { quantity: number }) {
+					super(id, state, { validateState: rejectNegativeQuantity });
+				}
+
+				set(quantity: number): void {
+					this.setState({ quantity });
+				}
 			}
 
-			expect(typeof LegacyValidator).toBe("function");
+			expect(
+				() =>
+					new FieldShadowingEntity("f-1" as Id<"FieldShadowingId">, {
+						quantity: -1,
+					}),
+			).toThrow("negative quantity");
+
+			const entity = new FieldShadowingEntity("f-1" as Id<"FieldShadowingId">, {
+				quantity: 1,
+			});
+			expect(() => entity.set(-1)).toThrow("negative quantity");
+			expect(entity.state.quantity).toBe(1);
+		});
+
+		it("keeps the injected validator when a subclass declares a validateState method", () => {
+			class MethodShadowingEntity extends Entity<
+				{ quantity: number },
+				Id<"MethodShadowingId">
+			> {
+				constructor(id: Id<"MethodShadowingId">, state: { quantity: number }) {
+					super(id, state, { validateState: rejectNegativeQuantity });
+				}
+
+				protected validateState(_state: { quantity: number }): void {}
+
+				set(quantity: number): void {
+					this.setState({ quantity });
+				}
+			}
+
+			const entity = new MethodShadowingEntity(
+				"m-1" as Id<"MethodShadowingId">,
+				{ quantity: 1 },
+			);
+			expect(() => entity.set(-1)).toThrow("negative quantity");
+			expect(entity.state.quantity).toBe(1);
 		});
 
 		it("should call validateState during construction", () => {

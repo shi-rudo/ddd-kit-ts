@@ -117,7 +117,8 @@ Use `setState(...)` for ordinary entity mutations. Direct `_state` assignment
 always skips the instance-bound validator and can also skip the configured
 freeze mode. The base keeps that field protected for specialised derivation
 machinery such as event replay, where bypassing today's decision rules is
-deliberate.
+deliberate. The kit's own event-sourced `apply(...)` runs the injected
+validator on its path internally; consumer code uses `setState(...)`.
 
 ### Validation is constructor-injected
 

@@ -157,20 +157,24 @@ is the only code that changes state for that fact.
 2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
 3. The handler for `event.type` is found.
-4. The handler computes the next state.
-5. The aggregate stores the new state, records the event in `pendingEvents`, and
+4. The handler computes the next state. A handler that returns `undefined`
+   throws `HandlerReturnedNoStateError`.
+5. The `validateState` function from the constructor config checks the next
+   state. This is the same check that `setState` runs on a state-stored
+   aggregate.
+6. The aggregate stores the new state, records the event in `pendingEvents`, and
    bumps the version.
 
-If validation, handler lookup, or state computation throws, the aggregate does
-not record the event. This behavior is the event-sourcing safety rule. The
+If validation, handler lookup, state computation, or the state check throws,
+the aggregate does not record the event. This behavior is the event-sourcing safety rule. The
 aggregate must not publish a fact that did not change state.
 
 There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 Handlers must fold state from `type` and `payload` only. A live `apply(...)`
-dispatches the event before the shell records it, so `eventId` and
-`occurredAt` do not exist yet. Replay dispatches recorded events through the
+folds the event before the shell records it, so `eventId` and
+`occurredAt` do not exist yet. Replay folds recorded events through the
 same handlers, so those fields are present there at runtime. The handler
 parameter type declares the uncommitted shape to keep them out of reach, but
 TypeScript cannot protect an `as any` cast or plain JavaScript. A handler
@@ -431,10 +435,13 @@ stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 `apply(...)` path only. Old storage shapes are not a replay-validation concern
 either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
-the current event shape. The same principle covers snapshots: restoring from
-a snapshot should not re-check the historical state against today's
-`validateState` rules, so a stream loads identically whether it is replayed
-from zero or restored from a snapshot plus tail. Snapshots do get their own
+the current event shape. Replay does not run `validateState(...)` either:
+`loadFromHistory` stores each fold result as is, and only `apply(...)` runs
+both gates for new facts. The constructor runs `validateState` once on the
+initial state, so a `reconstitute` factory that passes a snapshot state to the
+constructor checks that state against today's rules. The section
+[Where Invariants Live](./aggregates.md#where-invariants-live) states which
+rules belong in `validateState` for an event-sourced aggregate. Snapshots do get their own
 STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
 of the model could have produced (missing fields, wrong types) by throwing
 `SnapshotCorruptedError` from `migrate` or `reconstitute`. When a
@@ -445,8 +452,9 @@ refold from the stream. Rules and structure are different questions, and only
 the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
-`MissingHandlerError` also throws, because a forgotten event handler is a code
-bug, not a recoverable domain rejection.
+`MissingHandlerError` and `HandlerReturnedNoStateError` also throw, because a
+forgotten event handler or a handler without a `return` is a code bug, not a
+recoverable domain rejection.
 
 Replay is all-or-nothing. If an event in the middle fails with a `DomainError`,
 the aggregate rolls back to its pre-replay state and version before returning
