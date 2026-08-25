@@ -174,7 +174,7 @@ async findById(id: OrderId): Promise<Order | undefined> {
   const order = Order.reconstitute(
     row.id as OrderId,
     row.state as OrderState,
-    row.version as Version,
+    toVersion(row.version),
   );
 
   return this.tracking.trackLoaded(order);

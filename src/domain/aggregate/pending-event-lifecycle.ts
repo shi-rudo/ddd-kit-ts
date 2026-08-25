@@ -1,3 +1,5 @@
+import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
+import type { Version } from "./aggregate";
 import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 /**
@@ -15,14 +17,19 @@ export interface PendingEventLifecycleCapability {
 	 * so un-awaited concurrent work mutating the instance in the post-commit
 	 * window cannot desync the marker.
 	 */
-	acknowledge(events: ReadonlyArray<unknown>, committedVersion?: number): void;
-	discardPendingEvents(events: ReadonlyArray<unknown>): void;
+	acknowledge(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+		committedVersion: Version,
+	): void;
+	discardPendingEvents(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+	): void;
 	/**
 	 * Version the persistence layer last confirmed for the aggregate, or
 	 * `undefined` for a never-persisted instance. Grounds the `withCommit`
 	 * unique-cursor guard.
 	 */
-	persistedVersion(): number | undefined;
+	persistedVersion(): Version | undefined;
 	/**
 	 * Count of unflushed pending events. The public `pendingEvents` getter
 	 * allocates and freezes a defensive copy per read, which count-only
@@ -37,7 +44,7 @@ export interface PendingEventLifecycleCapability {
 // fails the generic "no kit-managed persistence lifecycle" check instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v4",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v5",
 );
 
 const capabilities =

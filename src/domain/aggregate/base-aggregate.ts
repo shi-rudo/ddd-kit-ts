@@ -1,5 +1,6 @@
 import {
 	DuplicateEventIdError,
+	InvalidVersionError,
 	PendingEventBatchMismatchError,
 	ReentrantEventRecordingError,
 	UnmintedEventError,
@@ -18,7 +19,7 @@ import {
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import type { IAggregateRoot, Version } from "./aggregate";
+import { type IAggregateRoot, toVersion, type Version } from "./aggregate";
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
 import { registerPendingEventRecordingCapability } from "./pending-event-recording";
 
@@ -153,15 +154,18 @@ export abstract class BaseAggregate<
 
 	private acknowledgePendingEvents(
 		events: ReadonlyArray<unknown>,
-		committedVersion?: number,
+		committedVersion: Version,
 	): void {
+		// Validate before anything moves: a rejected version leaves the
+		// pending list and the marker untouched.
+		const persisted = toVersion(committedVersion);
 		this.stripAcknowledgedPrefix(events);
 		// The next eventful commit needs a cursor beyond the version this
 		// commit persisted. The caller passes the enrollment-time version:
 		// syncing from the live version instead would let un-awaited
 		// concurrent work that mutates the instance in the post-commit window
 		// desync the marker.
-		this._persistedVersion = (committedVersion ?? this._version) as Version;
+		this._persistedVersion = persisted;
 	}
 
 	/**
@@ -211,24 +215,34 @@ export abstract class BaseAggregate<
 		return this._pendingEvents.length;
 	}
 
+	/** Sets the current version; rejects anything but a safe integer of at least zero. */
 	protected setVersion(version: Version): void {
-		this._version = version;
+		this._version = toVersion(version);
 	}
 
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState()` / `commit()` paths and by the
-	 * event-sourced replay path after each applied event.
+	 * aggregates' `setState()` / `commit()` paths and by the event-sourced
+	 * `apply()` path. The increment of a valid version is valid, so this
+	 * hot path skips the guard.
 	 */
 	protected bumpVersion(): void {
-		this.setVersion((this._version + 1) as Version);
+		this._version = (this._version + 1) as Version;
 	}
 
 	/**
-	 * **Lifecycle marker, Post-Load.** Syncs both `_version` and
-	 * the current version to the stored version. Used by
+	 * **Lifecycle marker, Post-Load.** Sets the current version and the
+	 * persisted-version marker to the stored version. Used by
 	 * `reconstitute(...)` factories to assemble an in-memory aggregate
 	 * from a persisted row.
+	 *
+	 * Three guards keep the marker honest. The instance must carry no
+	 * pending decisions, because a restore on a dirty instance would later
+	 * commit facts against a baseline they were never part of
+	 * ({@link UnreplayableAggregateError}). The version must be a safe
+	 * integer of at least zero, and it must not lie below the current
+	 * version ({@link InvalidVersionError}); a catch-up replay only moves
+	 * forward.
 	 *
 	 * The Factory-vs-Reconstitution distinction (Vernon §11) is honoured
 	 * structurally: reconstitution stays inside the aggregate factory while
@@ -249,8 +263,23 @@ export abstract class BaseAggregate<
 	 * ```
 	 */
 	protected markRestored(version: Version): void {
-		this.setVersion(version);
-		this._persistedVersion = version;
+		const pending = this._pendingEvents.length;
+		if (pending > 0) {
+			throw new UnreplayableAggregateError(
+				String(this.id),
+				`it carries ${pending} unflushed pending event(s); a restore ` +
+					"belongs on a fresh instance, before any decision is recorded",
+			);
+		}
+		const restored = toVersion(version);
+		if (restored < this._version) {
+			throw new InvalidVersionError(
+				version,
+				`is below the current version ${this._version}`,
+			);
+		}
+		this._version = restored;
+		this._persistedVersion = restored;
 	}
 
 	/**

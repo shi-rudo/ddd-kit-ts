@@ -19,6 +19,7 @@ import {
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
+	InvalidVersionError,
 	type KitErrorCode,
 	MissingEntityIdError,
 	MissingHandlerError,
@@ -127,6 +128,12 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () => new UnmanagedInstanceError("recordPendingEvents", "order-1"),
 		code: "UNMANAGED_INSTANCE",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new InvalidVersionError(-1, "is not a safe integer"),
+		code: "INVALID_VERSION",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -384,6 +391,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
+			AssertKitCode<InvalidVersionError["code"]>,
 			AssertKitCode<MissingEntityIdError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,

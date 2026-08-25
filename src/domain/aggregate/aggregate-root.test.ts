@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+	InvalidVersionError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	UnmintedEventError,
+	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
@@ -20,9 +22,10 @@ import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 function acknowledgePersisted(aggregate: object, version: Version): void {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	void version;
 	capability.acknowledge(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
+		version,
 	);
 }
 
@@ -30,9 +33,143 @@ function discardPendingEvents(aggregate: object): void {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
 	capability.discardPendingEvents(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
 	);
 }
+
+describe("version guards", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class RestorableAggregate extends AggregateRoot<TestState, TestId, Noted> {
+		protected readonly aggregateType = "RestorableAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		note(value: number): void {
+			this.addDomainEvent(
+				createDomainEvent(
+					"Noted",
+					{ value },
+					{ aggregateId: this.id, aggregateType: this.aggregateType },
+				),
+			);
+		}
+
+		restore(version: number): void {
+			this.markRestored(version as Version);
+		}
+
+		force(version: number): void {
+			this.setVersion(version as Version);
+		}
+
+		advance(): void {
+			this.bumpVersion();
+		}
+	}
+
+	const fresh = (): RestorableAggregate =>
+		new RestorableAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+	const lifecycleOf = (aggregate: object) => {
+		const capability = pendingEventLifecycleCapabilityFor(aggregate);
+		if (!capability) throw new Error("Missing test persistence capability");
+		return capability;
+	};
+
+	it.each([
+		["NaN", Number.NaN],
+		["a negative number", -1],
+		["a fraction", 1.5],
+	])("rejects %s on markRestored and keeps the version", (_label, value) => {
+		const aggregate = fresh();
+
+		expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
+
+		expect(aggregate.version).toBe(0);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+	});
+
+	it("rejects a version below the current one on markRestored", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.advance();
+
+		expect(() => aggregate.restore(1)).toThrow(InvalidVersionError);
+
+		expect(aggregate.version).toBe(2);
+	});
+
+	it("accepts a restore at the current version", () => {
+		const aggregate = fresh();
+		aggregate.restore(5);
+
+		aggregate.restore(5);
+
+		expect(aggregate.version).toBe(5);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
+	});
+
+	it("rejects markRestored while decisions are pending", () => {
+		const aggregate = fresh();
+		aggregate.note(1);
+
+		expect(() => aggregate.restore(5)).toThrow(UnreplayableAggregateError);
+
+		expect(aggregate.version).toBe(0);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("records a valid restore as the persisted version", () => {
+		const aggregate = fresh();
+
+		aggregate.restore(5);
+
+		expect(aggregate.version).toBe(5);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
+	});
+
+	it("rejects an invalid version on setVersion", () => {
+		const aggregate = fresh();
+
+		expect(() => aggregate.force(Number.NaN)).toThrow(InvalidVersionError);
+
+		expect(aggregate.version).toBe(0);
+	});
+
+	it("rejects an invalid committed version on acknowledge", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.note(1);
+
+		expect(() =>
+			lifecycleOf(aggregate).acknowledge(
+				aggregate.pendingEvents,
+				Number.NaN as Version,
+			),
+		).toThrow(InvalidVersionError);
+
+		expect(aggregate.pendingEvents).toHaveLength(1);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+	});
+
+	it("records the committed version as persisted on acknowledge", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.note(1);
+
+		lifecycleOf(aggregate).acknowledge(aggregate.pendingEvents, 1 as Version);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
+	});
+});
 
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
 abstract class AggregateRoot<
@@ -672,10 +809,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 			aggregate.addTestEvent(1);
 			aggregate.addTestEvent(2);
-			const [first, second] = aggregate.pendingEvents;
+			const reversed = [...aggregate.pendingEvents].reverse();
 
 			expect(() =>
-				lifecycleOf(aggregate).acknowledge([second, first], 1),
+				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
 			).toThrow(PendingEventBatchMismatchError);
 
 			expect(aggregate.pendingEvents).toHaveLength(2);
@@ -687,11 +824,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 			aggregate.addTestEvent(1);
-			const [only] = aggregate.pendingEvents;
+			const pending = aggregate.pendingEvents;
 
 			let caught: unknown;
 			try {
-				lifecycleOf(aggregate).acknowledge([only, only], 1);
+				lifecycleOf(aggregate).acknowledge(
+					[...pending, ...pending],
+					1 as Version,
+				);
 			} catch (error) {
 				caught = error;
 			}
@@ -729,7 +869,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const enrolled = aggregate.pendingEvents;
 			aggregate.addTestEvent(2);
 
-			lifecycleOf(aggregate).acknowledge(enrolled, 1);
+			lifecycleOf(aggregate).acknowledge(enrolled, 1 as Version);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
 			expect(aggregate.pendingEvents[0]?.payload.value).toBe(2);

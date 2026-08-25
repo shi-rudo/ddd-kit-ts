@@ -26,9 +26,10 @@ import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 function acknowledgePersisted(aggregate: object, version: Version): void {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	void version;
 	capability.acknowledge(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
+		version,
 	);
 }
 
@@ -36,7 +37,8 @@ function discardPendingEvents(aggregate: object): void {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
 	capability.discardPendingEvents(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
 	);
 }
 
@@ -1338,6 +1340,27 @@ describe("a handler that returns no state", () => {
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
+	});
+});
+
+describe("markRestored on an event-sourced aggregate", () => {
+	class RestoringAggregate extends TestEventSourcedAggregate {
+		restore(version: number): void {
+			this.markRestored(version as Version);
+		}
+	}
+
+	it("rejects markRestored while decisions are pending", () => {
+		const agg = new RestoringAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+		agg.updateValue(2);
+
+		expect(() => agg.restore(7)).toThrow(UnreplayableAggregateError);
+
+		expect(agg.version).toBe(1);
+		expect(agg.pendingEvents).toHaveLength(1);
 	});
 });
 

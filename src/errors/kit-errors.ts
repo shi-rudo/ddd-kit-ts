@@ -467,6 +467,29 @@ export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
 }
 
 /**
+ * Thrown when a number that is not a valid aggregate version reaches the
+ * kit: `toVersion`, `markRestored`, `setVersion`, and the post-commit
+ * acknowledgement all reject it. A version is a safe integer of at least
+ * zero, and a restore never moves below the current version. A wiring
+ * error: an adapter passed a corrupt row value or a wrong number, and
+ * the optimistic-concurrency cursor must not carry it. Not retryable.
+ */
+export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
+	constructor(
+		public readonly value: unknown,
+		/** Why the value was rejected, for example "is not a safe integer". */
+		public readonly reason: string,
+	) {
+		super(
+			"INVALID_VERSION",
+			`Version ${String(value)} ${reason}. A version is a safe integer of ` +
+				"at least zero; create one with toVersion(n) from the stored " +
+				"row value.",
+		);
+	}
+}
+
+/**
  * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
  * carries unflushed `pendingEvents`. Replaying persisted facts onto that
  * instance would advance the version underneath decisions made against an
@@ -1336,6 +1359,7 @@ export type KitErrorCode =
 	| "INVALID_MONEY"
 	| "INVALID_REPOSITORY_ADAPTER"
 	| "INVALID_REPOSITORY_DEFINITION"
+	| "INVALID_VERSION"
 	| "MISADDRESSED_EVENT"
 	| "MISSING_ENTITY_ID"
 	| "MISSING_HANDLER"
