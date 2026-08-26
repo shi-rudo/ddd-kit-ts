@@ -498,7 +498,7 @@ The kit gives you safe paths:
 - `EventSourcedAggregate.apply(event)` validates and applies the event before recording it as pending.
 - `AggregateRoot.commit(newState, events)` validates and assigns state before appending events.
 
-The lower-level `setState` and `addDomainEvent` methods are still available for special cases, but then the ordering is your responsibility:
+On an `AggregateRoot`, the lower-level `setState` and `addDomainEvent` methods are still available for special cases, but then the ordering is your responsibility:
 
 ```ts
 this.setState(nextState);
@@ -506,6 +506,9 @@ this.addDomainEvent(
   this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 ```
+
+On an `EventSourcedAggregate` there is no such path: `setState` throws
+`DirectStateMutationError`, and `apply(...)` is the only way to change state.
 
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.
 The mutation must also advance the version before an already-persisted
