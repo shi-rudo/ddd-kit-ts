@@ -29,6 +29,12 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Removed: the protected pendingEventCount getter on BaseAggregate
+
+No kit path read the getter. The pending-event lifecycle capability
+reports the count to the unit of work, and a subclass reads
+`pendingEvents.length`.
+
 ### Fixed: replay routes a domain rejection from another package copy into the Result
 
 `loadFromHistory` recognized a `DomainError` with a plain `instanceof`, so a
