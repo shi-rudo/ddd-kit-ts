@@ -29,6 +29,24 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: state-stored aggregates check the event address
+
+`AggregateRoot.commit` and `addDomainEvent` now apply the address discipline
+that `EventSourcedAggregate.apply` already had: a missing `aggregateId` or
+`aggregateType` is stamped from the aggregate, and an event addressed to
+another aggregate throws `MisaddressedEventError` before the state moves.
+Before this change a state-stored aggregate recorded a foreign-addressed
+event, and `withCommit` published it as this aggregate's commit because the
+envelope source is copied from the event. `withCommit` now also rejects a
+harvested event whose `aggregateId` or `aggregateType` differs from the
+enrolled aggregate, as a backstop for instances from another package copy.
+Kit-internal: the lifecycle capability exposes `aggregateType()` for that
+check, and the registry key moved to `v6`.
+
+`loadFromHistory` now also drops a pending decision that a handler recorded
+during the fold when it rolls back, so the instance is clean after a failed
+replay.
+
 ### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an
@@ -86,9 +104,13 @@ on `error.code`:
   for an aggregate or baseline that this package did not construct. The
   `withCommit` case threw `EventHarvestError` before.
 
-`Entity` now validates a candidate state before it freezes it, on
-construction and on `setState`. A rejected candidate leaves no shared object
-frozen behind. The object validated is still the object stored.
+### Changed (breaking): a subclass member named validateState is a compile error
+
+`Entity` declares a private `validateState` member that is never assigned.
+A subclass that declares a method or a field with that name fails to compile.
+Before this change such a member compiled and was silently ignored; the
+validator is passed through the constructor config. Migration: rename the
+member, or move its rule into `EntityConfig.validateState`.
 
 ### Fixed: event-sourced aggregates check the folded state
 
@@ -2024,8 +2046,8 @@ class Order extends AggregateRoot<OrderState, OrderId> {
 }
 ```
 
-The validator receives the copy that the entity stores, before the freeze.
-It runs during construction and every `setState` call. State-stored snapshot restore
+The validator receives the exact frozen copy that the entity stores. It runs
+during construction and every `setState` call. State-stored snapshot restore
 uses the same path, while event-sourced replay remains deliberately exempt
 from today's decision rules. TypeScript rejects legacy overrides; JavaScript
 subclasses silently stop receiving calls to a same-named prototype method, so

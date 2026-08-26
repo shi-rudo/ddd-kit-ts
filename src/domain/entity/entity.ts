@@ -78,10 +78,10 @@ export type StateValidator<TState> = (state: TState) => void;
 export interface EntityConfig<TState = unknown> {
 	/**
 	 * Pure state-invariant validator captured by the entity instance. It runs
-	 * against the copy the entity is about to store, before the freeze,
-	 * during construction, every {@link Entity.setState} call, and the
-	 * event-sourced apply path. Throw to reject the candidate state. Do not
-	 * mutate it: the object the validator receives is the object stored.
+	 * against the exact frozen copy the entity stores, during construction,
+	 * every {@link Entity.setState} call, and the event-sourced apply path.
+	 * Throw to reject the candidate state. A validator that tries to mutate
+	 * the candidate fails loudly, because the candidate is already frozen.
 	 *
 	 * Passing validation as data avoids virtual dispatch from the base
 	 * constructor: the function cannot observe partly initialised subclass
@@ -248,15 +248,18 @@ export abstract class Entity<TState, TId extends Id<string>>
 			this,
 			(config?.validateState ?? noStateValidation) as StateValidator<unknown>,
 		);
-		// Copy, validate, freeze, assign: the object validated IS the object
-		// stored (the freeze is in place), and a rejected candidate leaves
-		// nothing frozen behind. The validator lives in a module-level map
-		// keyed by instance, and the freeze helper is a module function, so a
-		// same-named member in a JavaScript subclass cannot turn this
-		// constructor call into virtual dispatch.
-		const initial = shallowCopyOwned(initialState);
+		// Copy, freeze, validate, assign: the object validated IS the frozen
+		// object stored, so a validator that tries to mutate it fails loudly.
+		// The validator lives in a module-level map keyed by instance, and
+		// the freeze helper is a module function, so a same-named member in a
+		// JavaScript subclass cannot turn this constructor call into virtual
+		// dispatch.
+		const initial = freezeStateByMode(
+			shallowCopyOwned(initialState),
+			this._stateFreezeMode,
+		);
 		assertStateInvariant(this, initial);
-		this._state = freezeStateByMode(initial, this._stateFreezeMode);
+		this._state = initial;
 	}
 
 	/**
@@ -287,12 +290,12 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
-		// Same copy-validate-freeze-assign order as the constructor: the
-		// object validated IS the object stored, and a validation throw
-		// leaves the previous state untouched and nothing frozen behind.
-		const next = shallowCopyOwned(newState);
+		// Same copy-freeze-validate-assign order as the constructor: the
+		// object validated IS the frozen object stored, and a validation
+		// throw leaves the previous state untouched.
+		const next = this.freezeState(shallowCopyOwned(newState));
 		assertStateInvariant(this, next);
-		this._state = this.freezeState(next);
+		this._state = next;
 	}
 }
 
@@ -305,8 +308,8 @@ const stateValidators = new WeakMap<object, StateValidator<unknown>>();
  * Runs the entity's instance-bound {@link EntityConfig.validateState}
  * against a candidate state. The constructor, {@link Entity.setState}, and
  * the event-sourced apply path all use it. Replay skips it because history
- * is accepted fact. Call it before the freeze, with the object that will
- * be stored.
+ * is accepted fact. Call it with the exact frozen object that will be
+ * stored, so a validator that tries to mutate it fails loudly.
  *
  * Deliberately a module-level function with a per-instance lookup. A
  * method could be overridden. A property could be shadowed by a subclass

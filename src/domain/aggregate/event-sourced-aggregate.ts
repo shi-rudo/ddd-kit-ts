@@ -4,21 +4,16 @@ import {
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
-	MisaddressedEventError,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
 import {
 	assertStateHasNoHostileOwnKey,
 	assertStateInvariant,
 } from "../entity/entity";
-import {
-	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
-	adoptMintedEvent,
-	adoptUncommittedDomainEvent,
-	isMintedEvent,
-	type PendingDomainEvent,
-	type UncommittedDomainEventOf,
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
+	UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { IEventSourcedAggregate, Version } from "./aggregate";
@@ -171,69 +166,19 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.stampNewEventAddress(event);
 		// Both gates live HERE, not in fold: only new facts are checked
-		// against current rules; replay trusts history. Validate, then
-		// freeze, then assign, in the order Entity.setState keeps: the object
-		// validated IS the object stored, a rejected fold result leaves
-		// nothing frozen behind, and nothing below assigns until both gates
-		// passed. Unlike setState there is no defensive copy: the fold result
-		// is the aggregate's own next state; the hostile own-key guard runs
-		// inside fold, on both paths.
+		// against current rules; replay trusts history. Freeze, validate,
+		// assign, in the order Entity.setState keeps: the object validated
+		// IS the frozen object stored, and nothing below assigns until both
+		// gates passed. Unlike setState there is no defensive copy: the fold
+		// result is the aggregate's own next state, so a rejected result is
+		// left frozen; the hostile own-key guard runs inside fold, on both
+		// paths. The event was stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
-		const next = this.fold(stamped);
+		const next = this.freezeState(this.fold(stamped));
 		assertStateInvariant(this, next);
-		this._state = this.freezeState(next);
-		this.addDomainEvent(stamped);
+		this._state = next;
+		this.appendStampedEvent(stamped);
 		this.bumpVersion();
-	}
-
-	/**
-	 * Address discipline for NEW facts: a present-but-foreign
-	 * `aggregateId` / `aggregateType` is a wiring bug and throws
-	 * {@link MisaddressedEventError}; missing fields are filled in from
-	 * the aggregate, so an applied event is always fully addressed and
-	 * can never fail the harvest or the replay guard later. The
-	 * stamped copy is frozen like the original (payload and metadata
-	 * are shared, already deep-frozen by `createDomainEvent`).
-	 */
-	private stampNewEventAddress<K extends TEvent["type"]>(
-		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
-	): PendingDomainEvent<Extract<TEvent, { type: K }>> {
-		// Immutability first: runs before validate/fold so a rejected
-		// event cannot leave mutated state behind (addDomainEvent would
-		// catch it too, but only after the handler already committed).
-		this.assertMintedEvent(event);
-		const { aggregateId, aggregateType } = event;
-		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
-		const typeForeign =
-			aggregateType !== undefined && aggregateType !== this.aggregateType;
-		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				aggregateId,
-				aggregateType,
-			);
-		}
-		if (aggregateId !== undefined && aggregateType !== undefined) {
-			return event;
-		}
-		// The spread preserves the event's structural shape; TS cannot
-		// prove it against the generic Extract, so the copy goes through
-		// the event's own wider type. `aggregateId`/`aggregateType` are
-		// `string | undefined` on DomainEvent; filling them in cannot
-		// leave the declared shape.
-		const copy = {
-			...event,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		};
-		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
-			event,
-		)
-			? adoptMintedEvent(copy)
-			: adoptUncommittedDomainEvent(copy);
-		return stamped as PendingDomainEvent<Extract<TEvent, { type: K }>>;
 	}
 
 	/**
@@ -312,11 +257,10 @@ export abstract class EventSourcedAggregate<
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
 	 * All-or-nothing: if any event mid-stream throws, or the final restore
-	 * marker is rejected, the aggregate's state and version are rolled back
-	 * to their pre-call values. Partial replay is never observable. A
-	 * handler that records a decision during the fold is the one way to
-	 * make the marker throw; its pending event stays on the instance, which
-	 * the error tells the caller to discard.
+	 * marker is rejected, the aggregate's state, version, and pending list
+	 * are rolled back to their pre-call values. Partial replay is never
+	 * observable. A handler that records a decision during the fold is the
+	 * one way to make the marker throw.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
@@ -348,6 +292,10 @@ export abstract class EventSourcedAggregate<
 		} catch (e) {
 			this._state = previousState;
 			this.setVersion(startVersion);
+			// The guard above proved the pending list empty before the loop,
+			// so anything in it now came from a handler that recorded a
+			// decision during the fold; the rollback drops it too.
+			this.discardPendingDecisions();
 			if (e instanceof DomainError) return err(e);
 			throw e;
 		}

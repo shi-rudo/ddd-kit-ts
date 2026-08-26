@@ -625,7 +625,7 @@ describe("validation sees the stored copy on both paths", () => {
 		}
 	}
 
-	it("setState validates the copy that will be stored, never the caller's object", () => {
+	it("setState validates the frozen copy that will be stored, never the caller's object", () => {
 		const entity = new ProbeEntity({ q: 1 });
 		const raw = { q: 2 };
 

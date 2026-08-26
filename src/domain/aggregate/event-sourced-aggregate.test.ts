@@ -1225,25 +1225,25 @@ describe("validateState on the apply path", () => {
 		expect(agg.version).toBe(1);
 	});
 
-	it("leaves a rejected fold result and the objects it shares unfrozen", () => {
-		const sharedLines: number[] = [];
-		class SharingAggregate extends TestEventSourcedAggregate {
-			protected override readonly handlers = {
-				...testHandlers,
-				TestEventUpdated: (): TestState =>
-					({ value: -1, status: "inactive", lines: sharedLines }) as TestState,
-			};
-		}
-		const agg = new SharingAggregate(
+	it("hands the validator the frozen fold result, so a mutating validator fails loudly", () => {
+		// A validator that normalizes instead of rejecting: it must fail on
+		// the frozen candidate instead of storing its own edit.
+		const normalizeInPlace = (state: TestState): void => {
+			if (state.value < 0) {
+				(state as { value: number }).value = -state.value;
+			}
+		};
+		const agg = new TestEventSourcedAggregate(
 			"test-1" as TestId,
 			{ value: 1, status: "inactive" },
-			{ validateState: rejectNegativeValue, deepFreezeState: true },
+			{ validateState: normalizeInPlace },
 		);
 
-		expect(() => agg.updateValue(-1)).toThrow(NegativeValueError);
+		expect(() => agg.updateValue(-5)).toThrow(TypeError);
 
-		expect(Object.isFrozen(sharedLines)).toBe(false);
 		expect(agg.state.value).toBe(1);
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
 	it("keeps the injected validator on apply() when a prototype member shares its name", () => {
@@ -1490,6 +1490,7 @@ describe("markRestored on an event-sourced aggregate", () => {
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
 	});
 });
 

@@ -6,13 +6,24 @@ import {
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
 import {
-	InvalidVersionError,
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 } from "../../errors/kit-errors";
 import { isBuiltInObject } from "../../internal/structural/is-built-in";
 import { assertPositiveSafeInteger } from "../../internal/validate";
+
+/**
+ * Copy-safe membership check for the version error: the model factory may
+ * run in another loaded copy of the kit, whose `InvalidVersionError` fails a
+ * plain `instanceof`, so the check routes by the stable code.
+ */
+function isInvalidVersionErrorLike(value: unknown): boolean {
+	return (
+		value instanceof Error &&
+		(value as { readonly code?: unknown }).code === "INVALID_VERSION"
+	);
+}
 
 interface SnapshotAggregate {
 	readonly id: Id<string>;
@@ -153,7 +164,7 @@ export function reconstituteAggregateFromSnapshot<
 		// Copy-safe: the model factory may run in another loaded copy of the
 		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
 		// plain instanceof; the corruption channel must catch it regardless.
-		if (isDomainErrorLike(error) || error instanceof InvalidVersionError) {
+		if (isDomainErrorLike(error) || isInvalidVersionErrorLike(error)) {
 			throw new SnapshotCorruptedError(
 				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +

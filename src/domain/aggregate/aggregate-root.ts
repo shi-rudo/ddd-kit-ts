@@ -21,8 +21,9 @@ export abstract class AggregateRoot<
 > extends BaseAggregate<TState, TId, TEvent> {
 	/**
 	 * Changes state and records the resulting facts in record-after-mutation
-	 * order. Validation and event mint checks run before the transition becomes
-	 * observable, so a rejected decision records nothing.
+	 * order. State validation, the event mint gate, and the event address
+	 * check run before the transition becomes observable, so a rejected
+	 * decision records nothing and moves nothing.
 	 */
 	protected commit(
 		newState: TState,
@@ -35,10 +36,10 @@ export abstract class AggregateRoot<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		for (const event of eventBatch) this.assertMintedEvent(event);
+		const stamped = eventBatch.map((event) => this.stampNewEventAddress(event));
 
 		this.setState(newState);
-		for (const event of eventBatch) this.addDomainEvent(event);
+		for (const event of stamped) this.appendStampedEvent(event);
 	}
 
 	/** Every normal domain-state transition advances the OCC version. */
