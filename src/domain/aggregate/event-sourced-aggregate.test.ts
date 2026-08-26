@@ -1462,6 +1462,35 @@ describe("markRestored on an event-sourced aggregate", () => {
 		expect(agg.version).toBe(1);
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
+
+	it("rolls back state and version when a handler records a decision during replay", () => {
+		class ReentrantAggregate extends TestEventSourcedAggregate {
+			protected override readonly handlers = {
+				...testHandlers,
+				TestEventActivated: (state: TestState): TestState => {
+					this.apply(
+						createDomainEvent("TestEventUpdated", {
+							newValue: 9,
+						}) as TestEventUpdated,
+					);
+					return { ...state, status: "active" };
+				},
+			};
+		}
+		const agg = new ReentrantAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() =>
+			agg.loadFromHistory([
+				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+			]),
+		).toThrow(UnreplayableAggregateError);
+
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
+	});
 });
 
 describe("state changes only through events", () => {

@@ -41,7 +41,7 @@ export interface PendingEventLifecycleCapability {
 // The key version stamps the capability SHAPE. Bump it whenever the
 // interface above changes: registrations made under another key stay
 // invisible, so an aggregate constructed by an incompatible package copy
-// fails the generic "no kit-managed persistence lifecycle" check instead of
+// fails the UnmanagedInstanceError check at enrollment instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v5",

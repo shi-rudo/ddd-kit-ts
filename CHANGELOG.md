@@ -29,7 +29,7 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
-### Fixed: the hostile own-key guard covers the fold result and the payload
+### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an
 event handler, on `apply()` and on replay, and on the event payload in
@@ -37,7 +37,10 @@ event handler, on `apply()` and on replay, and on the event payload in
 only the entity constructor, `setState`, and the metadata helpers checked,
 so a handler that folded a hostile row into state stored the key. The check
 looks at the root object only, on plain objects, null-prototype objects, and
-arrays; a class instance passes. It throws `HostileStateKeyError`.
+arrays; a class instance passes. It throws `HostileStateKeyError`, a wiring
+error: on replay, `loadFromHistory` throws it after the rollback instead of
+returning `Err`, the same posture as `MissingHandlerError`. A stored stream
+whose fold now hits the guard fails to load until the row is repaired.
 
 ### Fixed: aggregate versions are validated where a number enters
 
@@ -101,9 +104,12 @@ A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
 (code `HANDLER_RETURNED_NO_STATE`) on the apply path and on replay. Before
 this change the aggregate stored `undefined` as its state and, on the apply
 path, recorded the event. A state type that includes `undefined` is no longer
-supported for event-sourced aggregates. Migration: model an absent state as
-`null` or as a status field, and change every handler that returned
-`undefined` on purpose before you load streams that contain those events.
+supported for event-sourced aggregates. On replay, `loadFromHistory` throws
+the error after the rollback instead of returning `Err`, so a stored stream
+whose handler now returns `undefined` fails to load. Migration: model an
+absent state as `null` or as a status field, and change every handler that
+returned `undefined` on purpose before you load streams that contain those
+events.
 
 ### Added: tests for two guarantees the bus already gave
 
@@ -2018,8 +2024,8 @@ class Order extends AggregateRoot<OrderState, OrderId> {
 }
 ```
 
-The validator receives the exact frozen copy that the entity stores. It runs
-during construction and every `setState` call. State-stored snapshot restore
+The validator receives the copy that the entity stores, before the freeze.
+It runs during construction and every `setState` call. State-stored snapshot restore
 uses the same path, while event-sourced replay remains deliberately exempt
 from today's decision rules. TypeScript rejects legacy overrides; JavaScript
 subclasses silently stop receiving calls to a same-named prototype method, so

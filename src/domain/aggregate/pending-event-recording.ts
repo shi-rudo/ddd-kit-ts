@@ -19,8 +19,8 @@ export interface PendingEventRecordingCapability {
 // The key version stamps the capability SHAPE, mirroring
 // pending-event-lifecycle.ts. Bump it whenever the interface above changes:
 // registrations made under another key stay invisible, so an aggregate
-// constructed by an incompatible package copy fails the caller's generic
-// "created by this package" check instead of half-working.
+// constructed by an incompatible package copy fails the caller's
+// UnmanagedInstanceError check instead of half-working.
 const recordingCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-recording-registry/v1",
 );

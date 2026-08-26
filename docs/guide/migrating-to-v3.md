@@ -417,7 +417,7 @@ from four review rounds on the persistence redesign:
 - Run one kit version per process during the cutover. The internal
   capability registry keys changed with the capability shape, so an
   aggregate built by an rc.2 copy fails enrollment under an rc.3 copy with
-  the generic "no kit-managed persistence lifecycle" error.
+  `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`).
 
 Behavior changes that need no code change: a repeated `remove` of the same
 instance is an accepted no-op, and a repeated enrollment without
