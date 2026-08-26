@@ -10,6 +10,7 @@ import {
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
 	createDomainEvent,
+	createDomainEventFactory,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -22,6 +23,7 @@ import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { recordPendingEvents } from "../unit-of-work/record-pending-events";
 import {
 	type AggregateCommitToken,
 	type CommitEnrollment,
@@ -291,6 +293,55 @@ describe("withCommit", () => {
 
 		expect(committed).toBe(false);
 		expect(outbox.added).toEqual([]);
+	});
+
+	it("records createEvent decisions in the shell and harvests them with their stamps", async () => {
+		// The documented producer path end to end: the aggregate mints an
+		// uncommitted decision, the shell stamps it inside the transaction,
+		// withCommit harvests the recorded event and acknowledges it.
+		class ProducingAggregate extends AggregateRoot<
+			Readonly<Record<string, never>>,
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
+
+			constructor() {
+				super("agg-1" as TestId, {});
+			}
+
+			place(orderId: string): void {
+				this.commit({}, this.createEvent("OrderCreated", { orderId }));
+			}
+		}
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => "evt-1",
+			clock: () => new Date("2027-01-01T00:00:00.000Z"),
+		});
+		const aggregate = new ProducingAggregate();
+		aggregate.place("o-1");
+		expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				recordPendingEvents(aggregate, factory);
+				return enrolledResult(enrollment, "ok", [aggregate]);
+			},
+		);
+
+		const harvested = outbox.added[0]?.[0];
+		expect(harvested?.event.eventId).toBe("evt-1");
+		expect(harvested?.event.occurredAt.toISOString()).toBe(
+			"2027-01-01T00:00:00.000Z",
+		);
+		expect(harvested?.source).toEqual({
+			aggregateId: "agg-1",
+			aggregateType: "MockOrder",
+		});
+		expect(harvested?.position.aggregateVersion).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(0);
 	});
 
 	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {

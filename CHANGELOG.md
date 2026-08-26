@@ -29,6 +29,12 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Removed: the protected pendingEventCount getter on BaseAggregate
+
+No kit path read the getter. The pending-event lifecycle capability
+reports the count to the unit of work, and a subclass reads
+`pendingEvents.length`.
+
 ### Fixed: replay routes a domain rejection from another package copy into the Result
 
 `loadFromHistory` recognized a `DomainError` with a plain `instanceof`, so a
@@ -59,6 +65,13 @@ harvested event whose `aggregateId` or `aggregateType` differs from the
 enrolled aggregate, as a backstop for instances from another package copy.
 Kit-internal: the lifecycle capability exposes `aggregateType()` for that
 check, and the registry key moved to `v6`.
+
+Two observable details of the protected surface changed with it. An event
+that carries only part of its address is stored as a stamped copy, so
+`pendingEvents[0] === event` holds only for a fully addressed event.
+`commit` stamps and appends its events itself and no longer calls
+`addDomainEvent`; an override of `addDomainEvent` sees only the events
+passed to it directly.
 
 `loadFromHistory` now also drops a pending decision that a handler recorded
 during the fold when it rolls back, so the instance is clean after a failed

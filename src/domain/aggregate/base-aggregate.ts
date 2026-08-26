@@ -210,15 +210,6 @@ export abstract class BaseAggregate<
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
-	/**
-	 * Count-only accessor for internal aggregate paths: the public
-	 * {@link pendingEvents} getter allocates and freezes
-	 * a defensive copy per read, which a length check does not need.
-	 */
-	protected get pendingEventCount(): number {
-		return this._pendingEvents.length;
-	}
-
 	/** Sets the current version; rejects anything but a safe integer of at least zero. */
 	protected setVersion(version: Version): void {
 		this._version = toVersion(version);

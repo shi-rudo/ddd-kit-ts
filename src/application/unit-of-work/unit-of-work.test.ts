@@ -2540,6 +2540,11 @@ describe("UnitOfWork", () => {
 				public record(event: TestEvent): void {
 					this.commit(this.state, event);
 				}
+
+				/** Appends a decision without a state change, so the version stays. */
+				public note(event: TestEvent): void {
+					this.addDomainEvent(event);
+				}
 			}
 
 			return new LoadableAggregate();
@@ -2582,6 +2587,27 @@ describe("UnitOfWork", () => {
 
 			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
+		});
+
+		it("throws UnenrolledChangesError when a decision is added after load without a version change", async () => {
+			// The version net cannot see this one: addDomainEvent alone leaves
+			// the version untouched, so only the pending-count net catches it.
+			const agg = loadable("o-1");
+			const uow = createLoadableUow(agg);
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(agg);
+					agg.note(testEvent("o-1"));
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(agg.version).toBe(1);
+			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
 		});
 
 		it("does not throw when the mutated aggregate was enrolled", async () => {

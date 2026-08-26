@@ -242,7 +242,7 @@ export class IdentityMap {
 function pendingEventCountOf(value: unknown): number | undefined {
 	if (value === null || typeof value !== "object") return undefined;
 	const capability = pendingEventLifecycleCapabilityFor(value);
-	if (capability?.pendingEventCount) return capability.pendingEventCount();
+	if (capability !== undefined) return capability.pendingEventCount();
 	const pending = (value as { pendingEvents?: unknown }).pendingEvents;
 	return Array.isArray(pending) ? pending.length : undefined;
 }
