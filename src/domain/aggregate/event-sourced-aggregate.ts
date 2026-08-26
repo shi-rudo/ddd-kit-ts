@@ -7,7 +7,10 @@ import {
 	MisaddressedEventError,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
-import { assertStateInvariant } from "../entity/entity";
+import {
+	assertStateHasNoHostileOwnKey,
+	assertStateInvariant,
+} from "../entity/entity";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
@@ -173,9 +176,8 @@ export abstract class EventSourcedAggregate<
 		// validated IS the object stored, a rejected fold result leaves
 		// nothing frozen behind, and nothing below assigns until both gates
 		// passed. Unlike setState there is no defensive copy: the fold result
-		// is the aggregate's own next state.
-		// TODO: run the hostile own-key guard on the fold result as well
-		// (ddd-kit-ts-rhxi.7).
+		// is the aggregate's own next state; the hostile own-key guard runs
+		// inside fold, on both paths.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.fold(stamped);
 		assertStateInvariant(this, next);
@@ -296,6 +298,10 @@ export abstract class EventSourcedAggregate<
 		if (nextState === undefined) {
 			throw new HandlerReturnedNoStateError(event.type);
 		}
+		// A hostile row can reach a handler through the payload of a
+		// replayed event or through the handler's own construction; the
+		// guard runs at the same depth and on the same shapes as setState.
+		assertStateHasNoHostileOwnKey(nextState, "Aggregate state");
 		return nextState;
 	}
 
@@ -305,11 +311,12 @@ export abstract class EventSourcedAggregate<
 	 * infrastructure boundary, where event-stream corruption is an expected
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
-	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
-	 * is rolled back to its pre-call value, the same contract as
-	 * every replay path. Partial replay is never observable.
-	 * (Version needs no rollback: replay goes through `fold`, which
-	 * never bumps it; only the final `markRestored` advances it.)
+	 * All-or-nothing: if any event mid-stream throws, or the final restore
+	 * marker is rejected, the aggregate's state and version are rolled back
+	 * to their pre-call values. Partial replay is never observable. A
+	 * handler that records a decision during the fold is the one way to
+	 * make the marker throw; its pending event stays on the instance, which
+	 * the error tells the caller to discard.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
@@ -329,17 +336,21 @@ export abstract class EventSourcedAggregate<
 
 		const previousState = this._state;
 		const startVersion = this.version;
-		for (const event of history) {
-			try {
+		try {
+			for (const event of history) {
 				this.assertReplayedEventBelongsHere(event);
 				this._state = this.freezeState(this.fold(event));
-			} catch (e) {
-				this._state = previousState;
-				if (e instanceof DomainError) return err(e);
-				throw e;
 			}
+			// Inside the try on purpose: a handler that records a decision
+			// during the fold makes this throw, and the rollback below must
+			// cover that case too.
+			this.markRestored((startVersion + history.length) as Version);
+		} catch (e) {
+			this._state = previousState;
+			this.setVersion(startVersion);
+			if (e instanceof DomainError) return err(e);
+			throw e;
 		}
-		this.markRestored((startVersion + history.length) as Version);
 		return ok();
 	}
 

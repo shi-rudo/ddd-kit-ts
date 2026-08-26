@@ -1,10 +1,12 @@
-import type {
-	AggregateSnapshot,
-	Version,
+import {
+	type AggregateSnapshot,
+	toVersion,
+	type Version,
 } from "../../domain/aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
 import {
+	InvalidVersionError,
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
@@ -143,12 +145,15 @@ export function reconstituteAggregateFromSnapshot<
 				actualSchemaVersion: storedSchemaVersion,
 			});
 		}
-		aggregate = model.reconstitute(id, state, snapshot.version);
+		// A corrupt stored version is derived-data corruption like a bad
+		// blob: reject it here so the load recipe discards and refolds,
+		// instead of letting markRestored throw a raw wiring error.
+		aggregate = model.reconstitute(id, state, toVersion(snapshot.version));
 	} catch (error) {
 		// Copy-safe: the model factory may run in another loaded copy of the
 		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
 		// plain instanceof; the corruption channel must catch it regardless.
-		if (isDomainErrorLike(error)) {
+		if (isDomainErrorLike(error) || error instanceof InvalidVersionError) {
 			throw new SnapshotCorruptedError(
 				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +

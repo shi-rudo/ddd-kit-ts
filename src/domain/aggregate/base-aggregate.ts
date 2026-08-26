@@ -263,14 +263,7 @@ export abstract class BaseAggregate<
 	 * ```
 	 */
 	protected markRestored(version: Version): void {
-		const pending = this._pendingEvents.length;
-		if (pending > 0) {
-			throw new UnreplayableAggregateError(
-				String(this.id),
-				`it carries ${pending} unflushed pending event(s); a restore ` +
-					"belongs on a fresh instance, before any decision is recorded",
-			);
-		}
+		assertReplayTargetHasNoPendingEvents(this);
 		const restored = toVersion(version);
 		if (restored < this._version) {
 			throw new InvalidVersionError(
@@ -340,18 +333,18 @@ export abstract class BaseAggregate<
 }
 
 /**
- * Replay-target guard used by `EventSourcedAggregate.loadFromHistory`: a
- * target carrying unflushed
+ * Restore-target guard used by `markRestored` and by
+ * `EventSourcedAggregate.loadFromHistory`: a target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
- * moves. Replay advances the aggregate's current version, so unflushed events
- * recorded against the old version would later be
- * harvested claiming a version baseline they were never part of. When the
- * discard is deliberate, discard this dirty instance and reconstitute a
- * fresh aggregate instead of mutating persistence lifecycle state publicly.
+ * moves. A restore advances the aggregate's current version, so unflushed
+ * events recorded against the old version would later be harvested claiming
+ * a version baseline they were never part of. When the discard is
+ * deliberate, discard this dirty instance and reconstitute a fresh aggregate
+ * instead of mutating persistence lifecycle state publicly.
  *
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
- * disable the guard for all three call sites), and it checks the PUBLIC
+ * disable the guard at every call site), and it checks the PUBLIC
  * `pendingEvents` getter, the same surface `withCommit` harvests.
  *
  * @internal Shared by the aggregate flavours in this package; not part of

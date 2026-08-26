@@ -126,7 +126,8 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new UnmanagedInstanceError("recordPendingEvents", "order-1"),
+		error: () =>
+			new UnmanagedInstanceError("recordPendingEvents", "aggregate", "order-1"),
 		code: "UNMANAGED_INSTANCE",
 		category: "WIRING",
 		retryable: false,

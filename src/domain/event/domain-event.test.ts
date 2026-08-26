@@ -739,6 +739,36 @@ describe("DomainEvent", () => {
 		});
 	});
 
+	describe("payload prototype-pollution safety", () => {
+		const hostilePayload = (): Record<string, unknown> =>
+			JSON.parse('{"amount":1,"__proto__":{"isAdmin":true}}') as Record<
+				string,
+				unknown
+			>;
+
+		it("rejects a payload carrying an own __proto__ key at mint", () => {
+			expect(() => createDomainEvent("OrderPlaced", hostilePayload())).toThrow(
+				HostileStateKeyError,
+			);
+			expect(() =>
+				createUncommittedDomainEvent("OrderPlaced", hostilePayload()),
+			).toThrow(HostileStateKeyError);
+			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+		});
+
+		it("checks the payload root only: a nested own __proto__ key is cloned as data", () => {
+			const event = createDomainEvent("OrderPlaced", {
+				line: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
+					string,
+					unknown
+				>,
+			});
+
+			expect(Object.hasOwn(event.payload.line, "__proto__")).toBe(true);
+			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+		});
+	});
+
 	describe("copyMetadata interaction", () => {
 		it("does not copy eventId or aggregateId fields (those are per-event identity, not metadata)", () => {
 			const previous: DomainEvent<"Prev", { v: number }> = createDomainEvent(

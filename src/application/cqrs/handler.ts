@@ -268,12 +268,10 @@ function createCommitTokenScope<
 
 		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
 		if (!eventLifecycle) {
-			const id = (aggregate as { id?: unknown } | null)?.id;
 			throw new UnmanagedInstanceError(
 				"withCommit enrollment",
-				id === undefined
-					? "an aggregate without an id"
-					: `aggregate ${String(id)}`,
+				"aggregate",
+				(aggregate as { id?: unknown } | null)?.id,
 			);
 		}
 

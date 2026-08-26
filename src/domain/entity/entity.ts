@@ -78,8 +78,10 @@ export type StateValidator<TState> = (state: TState) => void;
 export interface EntityConfig<TState = unknown> {
 	/**
 	 * Pure state-invariant validator captured by the entity instance. It runs
-	 * against the exact frozen state stored during construction and every
-	 * {@link Entity.setState} call. Throw to reject the candidate state.
+	 * against the copy the entity is about to store, before the freeze,
+	 * during construction, every {@link Entity.setState} call, and the
+	 * event-sourced apply path. Throw to reject the candidate state. Do not
+	 * mutate it: the object the validator receives is the object stored.
 	 *
 	 * Passing validation as data avoids virtual dispatch from the base
 	 * constructor: the function cannot observe partly initialised subclass
@@ -209,6 +211,15 @@ export abstract class Entity<TState, TId extends Id<string>>
 	private readonly _stateFreezeMode: StateFreezeMode;
 
 	/**
+	 * Declared and never assigned: a subclass that declares a member named
+	 * `validateState` (a method or a field) fails to compile against this
+	 * private member. The validator itself lives in a module-level map, so
+	 * the runtime ignores such a member anyway; this declaration turns the
+	 * silent no-op into a compile error.
+	 */
+	private declare readonly validateState: never;
+
+	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
 	 * before the freeze, so the caller's own object stays mutable. A CLASS
 	 * INSTANCE passed as state is an ownership transfer: it is frozen
@@ -311,10 +322,10 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
-		const id = (entity as { id?: unknown } | null)?.id;
 		throw new UnmanagedInstanceError(
 			"assertStateInvariant",
-			id === undefined ? "an entity without an id" : `entity ${String(id)}`,
+			"entity",
+			(entity as { id?: unknown } | null)?.id,
 		);
 	}
 	validateState(candidate);
@@ -351,6 +362,31 @@ export function freezeShallow<T>(value: T): T {
 }
 
 /**
+ * The hostile own-key guard for a state value that is about to be stored.
+ * It checks the root object only, and only the shapes a JSON row can
+ * produce: a plain object, a null-prototype object, or an array. A class
+ * instance is an ownership transfer and passes. The constructor,
+ * {@link Entity.setState}, and the event-sourced fold all use it, so the
+ * depth and the shape rule cannot drift between the paths.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export function assertStateHasNoHostileOwnKey(
+	state: unknown,
+	subject: string,
+): void {
+	if (state === null || typeof state !== "object") return;
+	if (Array.isArray(state)) {
+		assertNoHostileOwnProtoKey(state, subject);
+		return;
+	}
+	const proto = Object.getPrototypeOf(state);
+	if (proto !== Object.prototype && proto !== null) return;
+	assertNoHostileOwnProtoKey(state, subject);
+}
+
+/**
  * Returns a shallow copy for plain objects and arrays so the subsequent
  * `freezeShallow` never locks the caller's own object in place (their later
  * writes to it would throw in strict mode). Class instances and primitives
@@ -360,8 +396,8 @@ export function freezeShallow<T>(value: T): T {
  */
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
+	assertStateHasNoHostileOwnKey(value, "Entity state");
 	if (Array.isArray(value)) {
-		assertNoHostileOwnProtoKey(value, "Entity state");
 		// Spread copies only iterated index elements; transfer own
 		// enumerable NON-INDEX keys (items.total = 5 style annotations) as
 		// data properties too, mirroring the plain-object branch, so the
@@ -382,7 +418,6 @@ function shallowCopyOwned<T>(value: T): T {
 	}
 	const proto = Object.getPrototypeOf(value);
 	if (proto !== Object.prototype && proto !== null) return value;
-	assertNoHostileOwnProtoKey(value, "Entity state");
 	// Copy as data properties, never through [[Set]]: object spread uses
 	// CreateDataProperty, so even without the guard above no key could
 	// reach the `__proto__` setter the way Object.assign onto an
