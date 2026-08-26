@@ -78,8 +78,10 @@ export type StateValidator<TState> = (state: TState) => void;
 export interface EntityConfig<TState = unknown> {
 	/**
 	 * Pure state-invariant validator captured by the entity instance. It runs
-	 * against the exact frozen state stored during construction and every
-	 * {@link Entity.setState} call. Throw to reject the candidate state.
+	 * against the copy the entity is about to store, before the freeze,
+	 * during construction, every {@link Entity.setState} call, and the
+	 * event-sourced apply path. Throw to reject the candidate state. Do not
+	 * mutate it: the object the validator receives is the object stored.
 	 *
 	 * Passing validation as data avoids virtual dispatch from the base
 	 * constructor: the function cannot observe partly initialised subclass
@@ -209,6 +211,15 @@ export abstract class Entity<TState, TId extends Id<string>>
 	private readonly _stateFreezeMode: StateFreezeMode;
 
 	/**
+	 * Declared and never assigned: a subclass that declares a member named
+	 * `validateState` (a method or a field) fails to compile against this
+	 * private member. The validator itself lives in a module-level map, so
+	 * the runtime ignores such a member anyway; this declaration turns the
+	 * silent no-op into a compile error.
+	 */
+	private declare readonly validateState: never;
+
+	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
 	 * before the freeze, so the caller's own object stays mutable. A CLASS
 	 * INSTANCE passed as state is an ownership transfer: it is frozen
@@ -311,10 +322,10 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
-		const id = (entity as { id?: unknown } | null)?.id;
 		throw new UnmanagedInstanceError(
 			"assertStateInvariant",
-			id === undefined ? "an entity without an id" : `entity ${String(id)}`,
+			"entity",
+			(entity as { id?: unknown } | null)?.id,
 		);
 	}
 	validateState(candidate);

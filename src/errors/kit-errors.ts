@@ -786,16 +786,18 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 	constructor(
 		/** The kit operation that rejected the instance. */
 		public readonly operation: string,
-		/** The rejected instance: its id, or a description when it has none. */
-		public readonly instance: string,
+		/** What was rejected: "aggregate", "entity", "the persistence baseline". */
+		public readonly subject: string,
+		/** The rejected instance's id, when it has one. */
+		public readonly instanceId?: unknown,
 	) {
 		super(
 			"UNMANAGED_INSTANCE",
 			`${operation} requires an instance constructed by this package; ` +
-				`${instance} carries no kit-managed capability. Construct it ` +
-				"through this package and run one compatible package copy; a " +
-				"structural lookalike or an instance from another copy cannot " +
-				"be managed.",
+				`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
+				"carries no kit-managed capability. Construct it through this " +
+				"package and run one compatible package copy; a structural " +
+				"lookalike or an instance from another copy cannot be managed.",
 		);
 	}
 }

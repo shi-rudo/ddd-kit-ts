@@ -53,12 +53,10 @@ export function recordPendingEvents<
 ): ReadonlyArray<TEvent> {
 	const capability = pendingEventRecordingCapabilityFor(aggregate);
 	if (!capability) {
-		const id = (aggregate as { id?: unknown } | null)?.id;
 		throw new UnmanagedInstanceError(
 			"recordPendingEvents",
-			id === undefined
-				? "an aggregate without an id"
-				: `aggregate ${String(id)}`,
+			"aggregate",
+			(aggregate as { id?: unknown } | null)?.id,
 		);
 	}
 	const createStamp: DomainEventStampProvider<TEvent> =
