@@ -1536,6 +1536,168 @@ describe("state changes only through events", () => {
 	});
 });
 
+describe("apply and replay bookkeeping", () => {
+	class ApplyingAggregate extends TestEventSourcedAggregate {
+		applyEvent(event: TestEvent): void {
+			this.apply(event);
+		}
+	}
+
+	const fresh = (): ApplyingAggregate =>
+		new ApplyingAggregate("test-1" as TestId, { value: 1, status: "inactive" });
+
+	const lifecycleOf = (aggregate: object) => {
+		const capability = pendingEventLifecycleCapabilityFor(aggregate);
+		if (!capability) throw new Error("Missing test lifecycle capability");
+		return capability;
+	};
+
+	const activated = (): TestEventActivated =>
+		createDomainEvent("TestEventActivated", {}) as TestEventActivated;
+
+	const updated = (newValue: number): TestEventUpdated =>
+		createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated;
+
+	it("keeps a fully addressed new event as the same object", () => {
+		const agg = fresh();
+		const event = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 2 },
+			{ aggregateId: "test-1", aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+
+		agg.applyEvent(event);
+
+		expect(agg.pendingEvents[0]).toBe(event);
+	});
+
+	it("stamps the missing half of a partial address and keeps the identity", () => {
+		const agg = fresh();
+		const event = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 2 },
+			{ eventId: "evt-partial", aggregateId: "test-1" },
+		) as TestEventUpdated;
+
+		agg.applyEvent(event);
+
+		const recorded = agg.pendingEvents[0];
+		expect(recorded).not.toBe(event);
+		expect(recorded?.aggregateType).toBe("TestEventSourcedAggregate");
+		expect((recorded as TestEventUpdated).eventId).toBe("evt-partial");
+		expect(isMintedEvent(recorded as object)).toBe(true);
+	});
+
+	it("stamps the missing id of a partial address that names only the type", () => {
+		const agg = fresh();
+		const event = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 2 },
+			{ aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+
+		agg.applyEvent(event);
+
+		const recorded = agg.pendingEvents[0];
+		expect(recorded).not.toBe(event);
+		expect(recorded?.aggregateId).toBe("test-1");
+		expect(recorded?.aggregateType).toBe("TestEventSourcedAggregate");
+	});
+
+	it("keeps persistedVersion undefined after an empty history on a fresh aggregate", () => {
+		const agg = fresh();
+
+		expect(agg.loadFromHistory([]).isOk()).toBe(true);
+
+		expect(lifecycleOf(agg).persistedVersion()).toBeUndefined();
+	});
+
+	it("applies a new fact on top of a restored version", () => {
+		const agg = fresh();
+		expect(agg.loadFromHistory([activated(), updated(2)]).isOk()).toBe(true);
+
+		agg.updateValue(4);
+
+		expect(agg.version).toBe(3);
+		expect(agg.state.value).toBe(4);
+		expect(agg.pendingEvents).toHaveLength(1);
+		expect(lifecycleOf(agg).persistedVersion()).toBe(2);
+	});
+
+	it("rolls back a foreign row to the restored baseline after earlier rows folded", () => {
+		const agg = fresh();
+		expect(agg.loadFromHistory([activated()]).isOk()).toBe(true);
+		const foreign = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 9 },
+			{ aggregateId: "other", aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+
+		expect(() => agg.loadFromHistory([updated(5), foreign])).toThrow(
+			ForeignEventError,
+		);
+
+		expect(agg.state).toEqual({ value: 1, status: "active" });
+		expect(agg.version).toBe(1);
+		expect(lifecycleOf(agg).persistedVersion()).toBe(1);
+	});
+
+	it.each([
+		["first", (invalid: TestEventInvalid) => [invalid, updated(5)]],
+		["last", (invalid: TestEventInvalid) => [updated(5), invalid]],
+	])(
+		"rolls back to the restored baseline when the %s row of a catch-up fails",
+		(_position, history) => {
+			const agg = new ValidatingAggregate("test-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+			expect(agg.loadFromHistory([activated()]).isOk()).toBe(true);
+			const invalid = createDomainEvent(
+				"TestEventInvalid",
+				{},
+			) as TestEventInvalid;
+
+			const result = agg.loadFromHistory(history(invalid));
+
+			expect(result.isErr()).toBe(true);
+			expect(agg.state).toEqual({ value: 1, status: "active" });
+			expect(agg.version).toBe(1);
+			expect(lifecycleOf(agg).persistedVersion()).toBe(1);
+		},
+	);
+
+	it("deep-freezes replayed state when deepFreezeState is on", () => {
+		type Shelf = { items: Array<{ sku: string }> };
+		type ItemAdded = DomainEvent<"ItemAdded", { sku: string }>;
+		class ShelfAggregate extends EventSourcedAggregate<
+			Shelf,
+			ItemAdded,
+			TestId
+		> {
+			protected readonly aggregateType = "ShelfAggregate";
+			constructor(id: TestId) {
+				super(id, { items: [] }, { deepFreezeState: true });
+			}
+			protected readonly handlers = {
+				ItemAdded: (
+					state: Shelf,
+					event: UncommittedDomainEventOf<ItemAdded>,
+				): Shelf => ({ items: [...state.items, { sku: event.payload.sku }] }),
+			};
+		}
+		const shelf = new ShelfAggregate("shelf-1" as TestId);
+
+		const result = shelf.loadFromHistory([
+			createDomainEvent("ItemAdded", { sku: "sku-1" }) as ItemAdded,
+		]);
+
+		expect(result.isOk()).toBe(true);
+		expect(Object.isFrozen(shelf.state.items)).toBe(true);
+		expect(Object.isFrozen(shelf.state.items[0])).toBe(true);
+	});
+});
+
 describe("replay routes a foreign-copy domain rejection into the Result", () => {
 	// Structurally a DomainError from another loaded kit copy: not
 	// instanceof this copy's class, but category "DOMAIN".

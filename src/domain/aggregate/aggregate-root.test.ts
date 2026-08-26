@@ -20,6 +20,7 @@ import {
 	AggregateRoot as ProductionAggregateRoot,
 } from "./aggregate-root";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
+import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
 
 function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
@@ -1098,6 +1099,114 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		expect("persistedVersion" in aggregate).toBe(false);
 		expect("changedKeys" in aggregate).toBe(false);
 		expect("hasChanges" in aggregate).toBe(false);
+	});
+});
+
+describe("createEvent options and pending-event bookkeeping", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class BookkeepingAggregate extends AggregateRoot<TestState, TestId, Noted> {
+		protected readonly aggregateType = "BookkeepingAggregate";
+
+		// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		decide(value: number, schemaVersion?: number): void {
+			this.commit(
+				{ ...this.state, value },
+				this.createEvent(
+					"Noted",
+					{ value },
+					schemaVersion === undefined ? undefined : { version: schemaVersion },
+				),
+			);
+		}
+
+		appendRaw(event: unknown): void {
+			this.addDomainEvent(event as PendingDomainEvent<Noted>);
+		}
+
+		appendBypassingStamp(event: unknown): void {
+			this.appendStampedEvent(event as PendingDomainEvent<Noted>);
+		}
+	}
+
+	const fresh = (): BookkeepingAggregate =>
+		new BookkeepingAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+	it("passes the payload schema version through createEvent", () => {
+		const aggregate = fresh();
+
+		aggregate.decide(1);
+		aggregate.decide(2, 3);
+
+		expect(aggregate.pendingEvents[0]?.version).toBe(1);
+		expect(aggregate.pendingEvents[1]?.version).toBe(3);
+	});
+
+	it("rejects a hand-rolled event on addDomainEvent", () => {
+		const aggregate = fresh();
+
+		expect(() =>
+			aggregate.appendRaw({ type: "Noted", payload: { value: 1 }, version: 1 }),
+		).toThrow(UnmintedEventError);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects a pending event that bypassed stamping when recording", () => {
+		const aggregate = fresh();
+		const recording = pendingEventRecordingCapabilityFor(aggregate);
+		if (!recording) throw new Error("Missing test recording capability");
+		aggregate.appendBypassingStamp({
+			type: "Noted",
+			payload: { value: 1 },
+			version: 1,
+		});
+
+		expect(() =>
+			recording.record((_event, index) => ({
+				eventId: `event-${index}`,
+				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+			})),
+		).toThrow(UnmintedEventError);
+	});
+
+	it("registers the lifecycle capability under the versioned global key", () => {
+		const aggregate = fresh();
+
+		const registry = Object.getOwnPropertyDescriptor(
+			globalThis,
+			Symbol.for("@shirudo/ddd-kit/pending-event-lifecycle-registry/v6"),
+		)?.value as WeakMap<object, unknown> | undefined;
+
+		expect(registry).toBeInstanceOf(WeakMap);
+		expect(registry?.has(aggregate)).toBe(true);
+	});
+
+	it("reports the pending count across add, record, and acknowledge", () => {
+		const aggregate = fresh();
+		const lifecycle = lifecycleOf(aggregate);
+		const recording = pendingEventRecordingCapabilityFor(aggregate);
+		if (!recording) throw new Error("Missing test recording capability");
+
+		aggregate.decide(1);
+		aggregate.decide(2);
+		expect(lifecycle.pendingEventCount()).toBe(2);
+
+		recording.record((_event, index) => ({
+			eventId: `event-${index}`,
+			occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+		}));
+		expect(lifecycle.pendingEventCount()).toBe(2);
+
+		lifecycle.acknowledge(aggregate.pendingEvents.slice(0, 1), 2 as Version);
+		expect(lifecycle.pendingEventCount()).toBe(1);
 	});
 });
 

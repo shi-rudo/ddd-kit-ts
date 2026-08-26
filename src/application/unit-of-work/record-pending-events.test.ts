@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
+	createDomainEvent,
 	createDomainEventFactory,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
@@ -31,7 +32,25 @@ class Counter extends AggregateRoot<
 	change(value: number): void {
 		this.commit({ value }, this.createEvent("CounterChanged", { value }));
 	}
+
+	/** A decision minted with its identity already, as a factory would. */
+	changeRecorded(value: number, eventId: string): void {
+		this.commit(
+			{ value },
+			createDomainEvent(
+				"CounterChanged",
+				{ value },
+				{
+					eventId,
+					aggregateId: this.id,
+					aggregateType: this.aggregateType,
+				},
+			),
+		);
+	}
 }
+
+const recordedAt = new Date("2027-04-05T06:07:08.000Z");
 
 describe("recordPendingEvents", () => {
 	it("records each accepted decision exactly once", () => {
@@ -141,6 +160,61 @@ describe("recordPendingEvents", () => {
 		// payload; recording must not pay a second deep copy per event.
 		expect(recorded?.payload).toBe(pendingPayload);
 		expect(Object.isFrozen(recorded?.payload)).toBe(true);
+	});
+
+	it("records nothing and reads no stamp when no decision is pending", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		let stamps = 0;
+
+		const recorded = recordPendingEvents(aggregate, () => {
+			stamps += 1;
+			return { eventId: "unused", occurredAt: recordedAt };
+		});
+
+		expect(recorded).toEqual([]);
+		expect(Object.isFrozen(recorded)).toBe(true);
+		expect(stamps).toBe(0);
+	});
+
+	it("passes an already recorded event through and stamps only the decisions", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.changeRecorded(1, "pre-minted");
+		aggregate.change(2);
+		const stampedIndexes: number[] = [];
+
+		const recorded = recordPendingEvents(aggregate, (_event, index) => {
+			stampedIndexes.push(index);
+			return { eventId: `stamp-${index}`, occurredAt: recordedAt };
+		});
+
+		expect(recorded[0]).toBe(aggregate.pendingEvents[0]);
+		expect(recorded[0]?.eventId).toBe("pre-minted");
+		expect(recorded[1]?.eventId).toBe("stamp-1");
+		// The index names the position in the pending list, not among the
+		// decisions that still need a stamp.
+		expect(stampedIndexes).toEqual([1]);
+	});
+
+	it("rejects a stamp provider that records the aggregate again while stamping", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+
+		expect(() =>
+			recordPendingEvents(aggregate, (_event, index) => {
+				// A nested recording replaces the pending list with a stamped
+				// copy of the same length; the outer recording must not
+				// overwrite it with its own stamps.
+				recordPendingEvents(aggregate, () => ({
+					eventId: "inner",
+					occurredAt: recordedAt,
+				}));
+				return { eventId: `outer-${index}`, occurredAt: recordedAt };
+			}),
+		).toThrow(ReentrantEventRecordingError);
+
+		expect((aggregate.pendingEvents[0] as CounterChanged).eventId).toBe(
+			"inner",
+		);
 	});
 
 	it("rejects an aggregate that this package did not construct", () => {
