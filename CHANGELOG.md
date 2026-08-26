@@ -29,6 +29,18 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: state-stored aggregates check the event address
+
+`AggregateRoot.commit` and `addDomainEvent` now apply the address discipline
+that `EventSourcedAggregate.apply` already had: a missing `aggregateId` or
+`aggregateType` is stamped from the aggregate, and an event addressed to
+another aggregate throws `MisaddressedEventError` before the state moves.
+Before this change a state-stored aggregate recorded a foreign-addressed
+event, and `withCommit` published it as this aggregate's commit because the
+envelope source is copied from the event. `withCommit` now also rejects a
+harvested event whose `aggregateId` differs from the enrolled aggregate, as a
+backstop for instances from another package copy.
+
 ### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an

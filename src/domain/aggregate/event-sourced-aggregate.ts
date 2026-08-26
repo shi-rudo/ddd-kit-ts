@@ -4,21 +4,16 @@ import {
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
-	MisaddressedEventError,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
 import {
 	assertStateHasNoHostileOwnKey,
 	assertStateInvariant,
 } from "../entity/entity";
-import {
-	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
-	adoptMintedEvent,
-	adoptUncommittedDomainEvent,
-	isMintedEvent,
-	type PendingDomainEvent,
-	type UncommittedDomainEventOf,
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
+	UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { IEventSourcedAggregate, Version } from "./aggregate";
@@ -184,56 +179,6 @@ export abstract class EventSourcedAggregate<
 		this._state = this.freezeState(next);
 		this.addDomainEvent(stamped);
 		this.bumpVersion();
-	}
-
-	/**
-	 * Address discipline for NEW facts: a present-but-foreign
-	 * `aggregateId` / `aggregateType` is a wiring bug and throws
-	 * {@link MisaddressedEventError}; missing fields are filled in from
-	 * the aggregate, so an applied event is always fully addressed and
-	 * can never fail the harvest or the replay guard later. The
-	 * stamped copy is frozen like the original (payload and metadata
-	 * are shared, already deep-frozen by `createDomainEvent`).
-	 */
-	private stampNewEventAddress<K extends TEvent["type"]>(
-		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
-	): PendingDomainEvent<Extract<TEvent, { type: K }>> {
-		// Immutability first: runs before validate/fold so a rejected
-		// event cannot leave mutated state behind (addDomainEvent would
-		// catch it too, but only after the handler already committed).
-		this.assertMintedEvent(event);
-		const { aggregateId, aggregateType } = event;
-		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
-		const typeForeign =
-			aggregateType !== undefined && aggregateType !== this.aggregateType;
-		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				aggregateId,
-				aggregateType,
-			);
-		}
-		if (aggregateId !== undefined && aggregateType !== undefined) {
-			return event;
-		}
-		// The spread preserves the event's structural shape; TS cannot
-		// prove it against the generic Extract, so the copy goes through
-		// the event's own wider type. `aggregateId`/`aggregateType` are
-		// `string | undefined` on DomainEvent; filling them in cannot
-		// leave the declared shape.
-		const copy = {
-			...event,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		};
-		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
-			event,
-		)
-			? adoptMintedEvent(copy)
-			: adoptUncommittedDomainEvent(copy);
-		return stamped as PendingDomainEvent<Extract<TEvent, { type: K }>>;
 	}
 
 	/**

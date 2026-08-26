@@ -104,6 +104,33 @@ function createMockAggregate(
 	return new MockAggregate(id, events);
 }
 
+/**
+ * An instance with the kit's lifecycle capability but without the address
+ * stamping of the aggregate base classes: the shape of an aggregate from
+ * another package copy. Only such an instance can carry an unstamped event
+ * into the harvest guard.
+ */
+function unstampedInstance(id: string, events: TestEvent[]): MockAggregate {
+	let acknowledgements = 0;
+	const instance = {
+		id: id as TestId,
+		version: 1 as Version,
+		pendingEvents: events,
+		get acknowledgementCount(): number {
+			return acknowledgements;
+		},
+	};
+	registerPendingEventLifecycleCapability(instance, {
+		acknowledge: () => {
+			acknowledgements += 1;
+		},
+		discardPendingEvents: () => {},
+		persistedVersion: () => undefined,
+		pendingEventCount: () => events.length,
+	});
+	return instance as unknown as MockAggregate;
+}
+
 function testEvent(orderId: string): TestEvent {
 	return createDomainEvent(
 		"OrderCreated",
@@ -393,7 +420,11 @@ describe("UnitOfWork", () => {
 				"unregistered" as TestId,
 				1,
 			);
-			const event = testEvent("event");
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "event" },
+				{ aggregateId: "event", aggregateType: "ProjectedAggregate" },
+			);
 			const outbox = createMockOutbox();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -2154,7 +2185,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = createMockAggregate("x", [badEvent]);
+			const agg = unstampedInstance("x", [badEvent]);
 			const { uow } = createUow();
 
 			const rejection = await uow
@@ -2194,7 +2225,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = createMockAggregate("x", [badEvent]);
+			const agg = unstampedInstance("x", [badEvent]);
 			const { uow } = createUow({ scope });
 
 			const rejection = await uow

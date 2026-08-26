@@ -40,8 +40,15 @@ class MockAggregate extends AggregateRoot<
 	protected readonly aggregateType = "MockOrder";
 	private _acknowledgementCount = 0;
 
-	constructor(events: TestEvent[], version: number, restoredVersion?: number) {
-		super("agg-1" as TestId, {});
+	constructor(
+		events: TestEvent[],
+		version: number,
+		restoredVersion?: number,
+		// The aggregate takes the address its events carry, so a fixture
+		// event addressed "first" builds aggregate "first".
+		id: TestId = (events[0]?.aggregateId ?? "agg-1") as TestId,
+	) {
+		super(id, {});
 		if (restoredVersion !== undefined) {
 			this.markRestored(restoredVersion as Version);
 		}
@@ -79,8 +86,9 @@ function createMockAggregate(
 	events: TestEvent[],
 	version = 1,
 	restoredVersion?: number,
+	id?: TestId,
 ): MockAggregate {
-	return new MockAggregate(events, version, restoredVersion);
+	return new MockAggregate(events, version, restoredVersion, id);
 }
 
 function createMockScope(): TransactionScope<undefined> {
@@ -139,6 +147,29 @@ function stamped(
 	};
 }
 
+/**
+ * An instance with the kit's lifecycle capability but without the address
+ * stamping of the aggregate base classes: the shape of an aggregate from
+ * another package copy. Only such an instance can carry an unstamped or
+ * foreign-addressed event into the harvest.
+ */
+function unstampedInstance(
+	events: ReadonlyArray<TestEvent>,
+): IAggregateRoot<TestId, TestEvent> {
+	const instance = {
+		id: "agg-1" as TestId,
+		version: 1 as Version,
+		pendingEvents: events,
+	};
+	registerPendingEventLifecycleCapability(instance, {
+		acknowledge: () => {},
+		discardPendingEvents: () => {},
+		persistedVersion: () => undefined,
+		pendingEventCount: () => events.length,
+	});
+	return instance;
+}
+
 function enrolledResult<R>(
 	enrollment: CommitEnrollment<TestEvent>,
 	result: R,
@@ -184,7 +215,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -260,12 +291,34 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
+	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {
+		// The aggregate base classes stamp and check the address themselves;
+		// this backstop covers an instance whose recording path did not.
+		const stray = unstampedInstance([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "agg-2", aggregateType: "MockOrder" },
+			),
+		]);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
+			),
+		).rejects.toThrow(/addressed to aggregate agg-2/);
+
+		expect(outbox.added).toEqual([]);
+	});
+
 	it("rejects a fresh aggregate that was never enrolled by persistence", async () => {
 		const outbox = createMockOutbox();
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 
@@ -289,7 +342,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 		const forged = Object.freeze({}) as AggregateCommitToken<TestEvent>;
@@ -331,7 +384,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-omitted" },
-			{ aggregateId: "order-omitted", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 
@@ -369,7 +422,7 @@ describe("withCommit", () => {
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-late" },
-				{ aggregateId: "order-late", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			),
 		]);
 		let leaked: CommitEnrollment<TestEvent> | undefined;
@@ -396,7 +449,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event], 7, 5);
 
@@ -407,7 +460,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added[0]?.[0]).toEqual({
 			event,
-			source: { aggregateId: "order-1", aggregateType: "MockOrder" },
+			source: { aggregateId: "agg-1", aggregateType: "MockOrder" },
 			position: {
 				aggregateVersion: 7,
 				commitSequence: 0,
@@ -422,7 +475,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event], 7, 5);
 
@@ -446,7 +499,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -464,7 +517,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -519,7 +572,7 @@ describe("withCommit", () => {
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-1" },
-				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			),
 		]);
 
@@ -852,22 +905,22 @@ describe("withCommit", () => {
 		const e1 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "a-evt-1" },
-			{ aggregateId: "a-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "a", aggregateType: "MockOrder" },
 		);
 		const e2 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "a-evt-2" },
-			{ aggregateId: "a-evt-2", aggregateType: "MockOrder" },
+			{ aggregateId: "a", aggregateType: "MockOrder" },
 		);
 		const e3 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "b-evt-1" },
-			{ aggregateId: "b-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "b", aggregateType: "MockOrder" },
 		);
 		const e4 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "c-evt-1" },
-			{ aggregateId: "c-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "c", aggregateType: "MockOrder" },
 		);
 
 		const aggA = createMockAggregate([e1, e2]);
@@ -923,11 +976,11 @@ describe("withCommit", () => {
 		expect(agg.acknowledgementCount).toBe(1);
 	});
 
-	it("throws if a harvested event is missing aggregateId (recordEvent guard)", async () => {
-		// A direct createDomainEvent without aggregateId would silently
-		// break downstream routing. The guard catches it at the harvest
-		// boundary with a diagnostic message naming the event type and
-		// the missing field.
+	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
+		// The aggregate base classes stamp a missing address; an instance
+		// from another package copy may not. The harvest guard catches the
+		// gap with a diagnostic message naming the event type and the
+		// missing field, because downstream routing relies on the source.
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
@@ -936,7 +989,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -954,7 +1007,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		const rejection = await withCommit(
 			{ outbox: createMockOutbox(), scope: createMockScope() },
@@ -965,16 +1018,16 @@ describe("withCommit", () => {
 		expect(rejection).not.toBeInstanceOf(InfrastructureError);
 	});
 
-	it("throws if a harvested event is missing aggregateType (recordEvent guard)", async () => {
+	it("throws if a harvested event is missing aggregateType (harvest guard)", async () => {
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
 			{
-				aggregateId: "x",
+				aggregateId: "agg-1",
 				// aggregateType missing → guard rejects
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -986,7 +1039,7 @@ describe("withCommit", () => {
 
 	it("guard error message names the event type and lists both missing fields", async () => {
 		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" });
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -1563,7 +1616,7 @@ describe("withCommit", () => {
 			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-1" },
-				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			);
 			return createMockAggregate([event]);
 		}

@@ -1,6 +1,7 @@
 import {
 	DuplicateEventIdError,
 	InvalidVersionError,
+	MisaddressedEventError,
 	PendingEventBatchMismatchError,
 	ReentrantEventRecordingError,
 	UnmintedEventError,
@@ -10,6 +11,8 @@ import { Entity, type EntityConfig } from "../entity/entity";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
+	adoptMintedEvent,
+	adoptUncommittedDomainEvent,
 	type CreateUncommittedDomainEventOptions,
 	createUncommittedDomainEvent,
 	isMintedEvent,
@@ -276,18 +279,70 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Appends a domain event to the pending list. Prefer the higher-level
-	 * `AggregateRoot.commit()` (state-stored) or `EventSourcedAggregate.apply()`
-	 * (event-sourced) call sites, both of which wrap `addDomainEvent` in the
-	 * canonical record-AFTER-mutation order (Vernon §8). Calling
-	 * `addDomainEvent` directly is appropriate only after a version-advancing
-	 * state mutation, or while constructing a never-persisted aggregate.
-	 * An event-only commit on an already-persisted aggregate has no unique
-	 * cursor and `withCommit` rejects it; use `commit(currentState, event)`.
+	 * Appends a domain event to the pending list. The event must be minted
+	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
+	 * stamped from this aggregate, and an address that names another
+	 * aggregate throws {@link MisaddressedEventError} before anything is
+	 * recorded. Prefer the higher-level `AggregateRoot.commit()`
+	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
+	 * sites, both of which wrap `addDomainEvent` in the canonical
+	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
+	 * directly is appropriate only after a version-advancing state mutation,
+	 * or while constructing a never-persisted aggregate. An event-only commit
+	 * on an already-persisted aggregate has no unique cursor and `withCommit`
+	 * rejects it; use `commit(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
+		this._pendingEvents.push(this.stampNewEventAddress(event));
+	}
+
+	/**
+	 * Address discipline for NEW facts, shared by both flavours: a
+	 * present-but-foreign `aggregateId` / `aggregateType` is a wiring bug and
+	 * throws {@link MisaddressedEventError}; missing fields are filled in
+	 * from the aggregate, so a recorded event is always fully addressed and
+	 * can never fail the harvest or the replay guard later. The mint gate
+	 * runs first, so an unminted event fails before anything else. The
+	 * stamped copy is frozen like the original (payload and metadata are
+	 * shared, already deep-frozen by the constructors); a fully addressed
+	 * event is returned as is.
+	 */
+	protected stampNewEventAddress<E extends PendingDomainEvent<TEvent>>(
+		event: E,
+	): E {
 		this.assertMintedEvent(event);
-		this._pendingEvents.push(event);
+		const { aggregateId, aggregateType } = event;
+		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
+		const typeForeign =
+			aggregateType !== undefined && aggregateType !== this.aggregateType;
+		if (idForeign || typeForeign) {
+			throw new MisaddressedEventError(
+				this.id,
+				this.aggregateType,
+				event.type,
+				aggregateId,
+				aggregateType,
+			);
+		}
+		if (aggregateId !== undefined && aggregateType !== undefined) {
+			return event;
+		}
+		// The spread preserves the event's structural shape; TS cannot
+		// prove it against the generic, so the copy goes through the
+		// event's own wider type. `aggregateId`/`aggregateType` are
+		// `string | undefined` on DomainEvent; filling them in cannot
+		// leave the declared shape.
+		const copy = {
+			...event,
+			aggregateId: this.id,
+			aggregateType: this.aggregateType,
+		};
+		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
+			event,
+		)
+			? adoptMintedEvent(copy)
+			: adoptUncommittedDomainEvent(copy);
+		return stamped as E;
 	}
 
 	/**

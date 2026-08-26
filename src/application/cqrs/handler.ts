@@ -594,6 +594,19 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							recordedEvent.type,
 						);
 					}
+					// Backstop behind the aggregate's own address check: the
+					// envelope source is copied from the event, so an event that
+					// names another aggregate must never become this commit.
+					if (aggregateId !== String(agg.id)) {
+						throw new EventHarvestError(
+							`withCommit: event "${recordedEvent.type}" is addressed to ` +
+								`aggregate ${aggregateId} but was enrolled under aggregate ` +
+								`${String(agg.id)}. The aggregate base classes stamp the ` +
+								"address on every recording path; an instance from another " +
+								"package copy must stamp it the same way.",
+							recordedEvent.type,
+						);
+					}
 					return Object.freeze({
 						event: recordedEvent,
 						source: Object.freeze({ aggregateId, aggregateType }),

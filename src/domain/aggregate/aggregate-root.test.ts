@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	InvalidVersionError,
+	MisaddressedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	UnmintedEventError,
@@ -10,6 +11,7 @@ import {
 	type AnyDomainEvent,
 	createDomainEvent,
 	type DomainEvent,
+	type PendingDomainEvent,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
@@ -1096,5 +1098,101 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		expect("persistedVersion" in aggregate).toBe(false);
 		expect("changedKeys" in aggregate).toBe(false);
 		expect("hasChanges" in aggregate).toBe(false);
+	});
+});
+
+describe("event address on the state-stored path", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class AddressedAggregate extends AggregateRoot<TestState, TestId, Noted> {
+		protected readonly aggregateType = "AddressedAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		commitWith(event: PendingDomainEvent<Noted>): void {
+			this.commit({ ...this.state, value: this.state.value + 1 }, event);
+		}
+
+		record(event: PendingDomainEvent<Noted>): void {
+			this.addDomainEvent(event);
+		}
+
+		decide(value: number): void {
+			this.commit(
+				{ ...this.state, value },
+				this.createEvent("Noted", { value }),
+			);
+		}
+	}
+
+	const fresh = (): AddressedAggregate =>
+		new AddressedAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+	it("rejects a committed event addressed to another aggregate before the state moves", () => {
+		const aggregate = fresh();
+		const foreign = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "someone-else", aggregateType: "AddressedAggregate" },
+		);
+
+		expect(() => aggregate.commitWith(foreign)).toThrow(MisaddressedEventError);
+
+		expect(aggregate.state.value).toBe(0);
+		expect(aggregate.version).toBe(0);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects an appended event of another aggregate type", () => {
+		const aggregate = fresh();
+		const foreign = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "test-1", aggregateType: "Other" },
+		);
+
+		expect(() => aggregate.record(foreign)).toThrow(MisaddressedEventError);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("stamps a missing address from the aggregate on commit", () => {
+		const aggregate = fresh();
+
+		aggregate.commitWith(createDomainEvent("Noted", { value: 1 }));
+
+		const recorded = aggregate.pendingEvents[0];
+		expect(recorded?.aggregateId).toBe("test-1");
+		expect(recorded?.aggregateType).toBe("AddressedAggregate");
+		expect(recorded?.payload).toEqual({ value: 1 });
+	});
+
+	it("keeps a fully addressed event as the same object", () => {
+		const aggregate = fresh();
+		const addressed = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "test-1", aggregateType: "AddressedAggregate" },
+		);
+
+		aggregate.record(addressed);
+
+		expect(aggregate.pendingEvents[0]).toBe(addressed);
+	});
+
+	it("keeps a createEvent decision as the same object", () => {
+		const aggregate = fresh();
+
+		aggregate.decide(5);
+
+		const decision = aggregate.pendingEvents[0];
+		expect(decision?.aggregateId).toBe("test-1");
+		expect(decision?.aggregateType).toBe("AddressedAggregate");
+		expect(aggregate.state.value).toBe(5);
 	});
 });
