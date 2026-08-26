@@ -1,10 +1,8 @@
 import type { Version } from "../../domain/aggregate/aggregate";
 import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
-import { LOCAL_REGISTRY_DETAIL } from "../../domain/aggregate/internal/global-capability-registry";
 import {
-	isPendingEventLifecycleRegistryShared,
 	type PendingEventLifecycleCapability,
-	pendingEventLifecycleCapabilityFor,
+	requirePendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
 	type AnyDomainEvent,
@@ -12,10 +10,7 @@ import {
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	EventHarvestError,
-	UnmanagedInstanceError,
-} from "../../errors/kit-errors";
+import { EventHarvestError } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -268,17 +263,10 @@ function createCommitTokenScope<
 			return existing;
 		}
 
-		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
-		if (!eventLifecycle) {
-			throw new UnmanagedInstanceError(
-				"withCommit enrollment",
-				"aggregate",
-				(aggregate as { id?: unknown } | null)?.id,
-				isPendingEventLifecycleRegistryShared()
-					? undefined
-					: LOCAL_REGISTRY_DETAIL,
-			);
-		}
+		const eventLifecycle = requirePendingEventLifecycleCapability(
+			aggregate,
+			"withCommit enrollment",
+		);
 
 		const token = Object.freeze(
 			Object.create(null),

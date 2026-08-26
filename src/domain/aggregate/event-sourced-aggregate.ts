@@ -176,6 +176,10 @@ export abstract class EventSourcedAggregate<
 		// paths. The event was stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.freezeState(this.fold(stamped));
+		// A hostile row can reach the handler through the payload or its own
+		// construction; the guard runs at the same depth and on the same
+		// shapes as setState, on the state that is about to be stored.
+		assertStateHasNoHostileOwnKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
 		this._state = next;
 		this.appendStampedEvent(stamped);
@@ -244,10 +248,6 @@ export abstract class EventSourcedAggregate<
 		if (nextState === undefined) {
 			throw new HandlerReturnedNoStateError(event.type);
 		}
-		// A hostile row can reach a handler through the payload of a
-		// replayed event or through the handler's own construction; the
-		// guard runs at the same depth and on the same shapes as setState.
-		assertStateHasNoHostileOwnKey(nextState, "Aggregate state");
 		return nextState;
 	}
 
@@ -286,6 +286,10 @@ export abstract class EventSourcedAggregate<
 				this.assertReplayedEventBelongsHere(event);
 				this._state = this.freezeState(this.fold(event));
 			}
+			// Only the final fold result is stored, so the hostile own-key
+			// guard runs once here instead of once per replayed event; a
+			// rejection rolls back below like any other replay failure.
+			assertStateHasNoHostileOwnKey(this._state, "Aggregate state");
 			// Inside the try on purpose: a handler that records a decision
 			// during the fold makes this throw, and the rollback below must
 			// cover that case too.

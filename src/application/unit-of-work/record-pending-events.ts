@@ -1,9 +1,5 @@
 import type { IAggregateRoot } from "../../domain/aggregate/aggregate";
-import { LOCAL_REGISTRY_DETAIL } from "../../domain/aggregate/internal/global-capability-registry";
-import {
-	isPendingEventRecordingRegistryShared,
-	pendingEventRecordingCapabilityFor,
-} from "../../domain/aggregate/pending-event-recording";
+import { requirePendingEventRecordingCapability } from "../../domain/aggregate/pending-event-recording";
 import type {
 	AnyDomainEvent,
 	DomainEventFactory,
@@ -11,7 +7,6 @@ import type {
 	UncommittedDomainEventOf,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
 
 /** Minimal shell role accepted by {@link recordPendingEvents}. */
 export type DomainEventStampFactory = Pick<DomainEventFactory, "createStamp">;
@@ -55,17 +50,10 @@ export function recordPendingEvents<
 	aggregate: IAggregateRoot<TId, TEvent>,
 	source: DomainEventStampFactory | DomainEventStampProvider<TEvent>,
 ): ReadonlyArray<TEvent> {
-	const capability = pendingEventRecordingCapabilityFor(aggregate);
-	if (!capability) {
-		throw new UnmanagedInstanceError(
-			"recordPendingEvents",
-			"aggregate",
-			(aggregate as { id?: unknown } | null)?.id,
-			isPendingEventRecordingRegistryShared()
-				? undefined
-				: LOCAL_REGISTRY_DETAIL,
-		);
-	}
+	const capability = requirePendingEventRecordingCapability(
+		aggregate,
+		"recordPendingEvents",
+	);
 	const createStamp: DomainEventStampProvider<TEvent> =
 		typeof source === "function" ? source : () => source.createStamp();
 	return capability.record((event, index) =>
