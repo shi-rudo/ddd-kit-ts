@@ -110,6 +110,7 @@ export abstract class BaseAggregate<
 			},
 			persistedVersion: () => this._persistedVersion,
 			pendingEventCount: () => this._pendingEvents.length,
+			aggregateType: () => this.aggregateType,
 		});
 		registerPendingEventRecordingCapability(this, {
 			record: (createStamp) => {
@@ -293,7 +294,25 @@ export abstract class BaseAggregate<
 	 * rejects it; use `commit(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		this._pendingEvents.push(this.stampNewEventAddress(event));
+		this.appendStampedEvent(this.stampNewEventAddress(event));
+	}
+
+	/**
+	 * Appends an event that the caller already passed through
+	 * {@link stampNewEventAddress}. `commit()` and `apply()` stamp before the
+	 * state moves and append afterwards, so the guard runs once per event.
+	 */
+	protected appendStampedEvent(event: PendingDomainEvent<TEvent>): void {
+		this._pendingEvents.push(event);
+	}
+
+	/**
+	 * Drops every pending decision. Only the event-sourced replay rollback
+	 * uses it, after its guard proved the list empty before the replay
+	 * began; anything present at rollback time came from the failed replay.
+	 */
+	protected discardPendingDecisions(): void {
+		this._pendingEvents = [];
 	}
 
 	/**

@@ -36,6 +36,12 @@ export interface PendingEventLifecycleCapability {
 	 * consumers (the identity map's end-of-run scan) do not need.
 	 */
 	pendingEventCount(): number;
+	/**
+	 * The aggregate's declared type, for the harvest to check a recorded
+	 * event's address against the enrolled aggregate; the type is protected
+	 * on the aggregate and absent from `IAggregateRoot`.
+	 */
+	aggregateType(): string;
 }
 
 // The key version stamps the capability SHAPE. Bump it whenever the
@@ -44,7 +50,7 @@ export interface PendingEventLifecycleCapability {
 // fails the UnmanagedInstanceError check at enrollment instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v5",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v6",
 );
 
 const capabilities =

@@ -39,7 +39,7 @@ export abstract class AggregateRoot<
 		const stamped = eventBatch.map((event) => this.stampNewEventAddress(event));
 
 		this.setState(newState);
-		for (const event of stamped) this.addDomainEvent(event);
+		for (const event of stamped) this.appendStampedEvent(event);
 	}
 
 	/** Every normal domain-state transition advances the OCC version. */

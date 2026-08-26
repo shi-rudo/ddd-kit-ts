@@ -65,6 +65,7 @@ class MockAggregate extends AggregateRoot<
 				lifecycle.discardPendingEvents(committedEvents),
 			persistedVersion: () => lifecycle.persistedVersion(),
 			pendingEventCount: () => lifecycle.pendingEventCount(),
+			aggregateType: () => lifecycle.aggregateType(),
 		});
 	}
 
@@ -166,6 +167,7 @@ function unstampedInstance(
 		discardPendingEvents: () => {},
 		persistedVersion: () => undefined,
 		pendingEventCount: () => events.length,
+		aggregateType: () => "MockOrder",
 	});
 	return instance;
 }
@@ -308,7 +310,29 @@ describe("withCommit", () => {
 				{ outbox, scope: createMockScope() },
 				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
 			),
-		).rejects.toThrow(/addressed to aggregate agg-2/);
+		).rejects.toThrow(/addressed to MockOrder agg-2/);
+
+		expect(outbox.added).toEqual([]);
+	});
+
+	it("rejects a harvested event of another aggregate type than the enrolled one", async () => {
+		const stray = unstampedInstance([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "agg-1", aggregateType: "Customer" },
+			),
+		]);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
+			),
+		).rejects.toThrow(
+			/addressed to Customer agg-1 but was enrolled under MockOrder agg-1/,
+		);
 
 		expect(outbox.added).toEqual([]);
 	});

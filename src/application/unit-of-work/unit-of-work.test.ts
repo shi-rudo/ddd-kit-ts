@@ -63,6 +63,7 @@ function observeAcknowledgements(
 		discardPendingEvents: (events) => lifecycle.discardPendingEvents(events),
 		persistedVersion: () => lifecycle.persistedVersion(),
 		pendingEventCount: () => lifecycle.pendingEventCount(),
+		aggregateType: () => lifecycle.aggregateType(),
 	});
 }
 
@@ -127,6 +128,7 @@ function unstampedInstance(id: string, events: TestEvent[]): MockAggregate {
 		discardPendingEvents: () => {},
 		persistedVersion: () => undefined,
 		pendingEventCount: () => events.length,
+		aggregateType: () => "MockOrder",
 	});
 	return instance as unknown as MockAggregate;
 }

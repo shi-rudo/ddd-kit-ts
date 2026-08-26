@@ -166,18 +166,18 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.stampNewEventAddress(event);
 		// Both gates live HERE, not in fold: only new facts are checked
-		// against current rules; replay trusts history. Validate, then
-		// freeze, then assign, in the order Entity.setState keeps: the object
-		// validated IS the object stored, a rejected fold result leaves
-		// nothing frozen behind, and nothing below assigns until both gates
-		// passed. Unlike setState there is no defensive copy: the fold result
-		// is the aggregate's own next state; the hostile own-key guard runs
-		// inside fold, on both paths.
+		// against current rules; replay trusts history. Freeze, validate,
+		// assign, in the order Entity.setState keeps: the object validated
+		// IS the frozen object stored, and nothing below assigns until both
+		// gates passed. Unlike setState there is no defensive copy: the fold
+		// result is the aggregate's own next state, so a rejected result is
+		// left frozen; the hostile own-key guard runs inside fold, on both
+		// paths. The event was stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
-		const next = this.fold(stamped);
+		const next = this.freezeState(this.fold(stamped));
 		assertStateInvariant(this, next);
-		this._state = this.freezeState(next);
-		this.addDomainEvent(stamped);
+		this._state = next;
+		this.appendStampedEvent(stamped);
 		this.bumpVersion();
 	}
 
@@ -257,11 +257,10 @@ export abstract class EventSourcedAggregate<
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
 	 * All-or-nothing: if any event mid-stream throws, or the final restore
-	 * marker is rejected, the aggregate's state and version are rolled back
-	 * to their pre-call values. Partial replay is never observable. A
-	 * handler that records a decision during the fold is the one way to
-	 * make the marker throw; its pending event stays on the instance, which
-	 * the error tells the caller to discard.
+	 * marker is rejected, the aggregate's state, version, and pending list
+	 * are rolled back to their pre-call values. Partial replay is never
+	 * observable. A handler that records a decision during the fold is the
+	 * one way to make the marker throw.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
@@ -293,6 +292,10 @@ export abstract class EventSourcedAggregate<
 		} catch (e) {
 			this._state = previousState;
 			this.setVersion(startVersion);
+			// The guard above proved the pending list empty before the loop,
+			// so anything in it now came from a handler that recorded a
+			// decision during the fold; the rollback drops it too.
+			this.discardPendingDecisions();
 			if (e instanceof DomainError) return err(e);
 			throw e;
 		}
