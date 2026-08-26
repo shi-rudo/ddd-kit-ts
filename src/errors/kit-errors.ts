@@ -776,6 +776,24 @@ export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 }
 
 /**
+ * Thrown at bootstrap when the global key of a kit capability registry
+ * already holds a value that is not a registry: another module claimed
+ * the key. The kit neither shares that value nor overwrites it, because a
+ * silent replacement would break whichever module owned the key first. A
+ * wiring error in the host process; the remedy is one owner per key.
+ */
+export class CapabilityRegistryConflictError extends KitWiringError<"CAPABILITY_REGISTRY_CONFLICT"> {
+	constructor(public readonly key: symbol) {
+		super(
+			"CAPABILITY_REGISTRY_CONFLICT",
+			`The global key ${String(key)} holds a value that is not a ` +
+				"capability registry of this package. Another module claimed the " +
+				"key; the kit refuses to share or overwrite it.",
+		);
+	}
+}
+
+/**
  * Thrown when a kit operation receives an instance that this package did
  * not construct: a structural lookalike, a repository DTO, or an instance
  * from an incompatible copy of the package. Such an instance carries none
@@ -790,6 +808,8 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 		public readonly subject: string,
 		/** The rejected instance's id, when it has one. */
 		public readonly instanceId?: unknown,
+		/** One extra sentence about the registry state, when it explains the rejection. */
+		detail?: string,
 	) {
 		super(
 			"UNMANAGED_INSTANCE",
@@ -797,7 +817,8 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 				`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
 				"carries no kit-managed capability. Construct it through this " +
 				"package and run one compatible package copy; a structural " +
-				"lookalike or an instance from another copy cannot be managed.",
+				"lookalike or an instance from another copy cannot be managed." +
+				(detail === undefined ? "" : ` ${detail}`),
 		);
 	}
 }
@@ -1327,6 +1348,7 @@ export type KitErrorCode =
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
 	| "AGGREGATE_TRACKING"
+	| "CAPABILITY_REGISTRY_CONFLICT"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
 	| "DIRECT_STATE_MUTATION"

@@ -183,6 +183,7 @@ const INDEX_SURFACE = [
 	"AggregateNotFoundError",
 	"AggregateRoot",
 	"AggregateTrackingError",
+	"CapabilityRegistryConflictError",
 	"CommandBus",
 	"CommitError",
 	"ConcurrencyConflictError",

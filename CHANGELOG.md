@@ -29,6 +29,23 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: replay routes a domain rejection from another package copy into the Result
+
+`loadFromHistory` recognized a `DomainError` with a plain `instanceof`, so a
+handler that runs in another loaded copy of the kit escaped the `Result`
+channel as a throw. It now routes by the copy-safe `isDomainErrorLike`, the
+check the snapshot seam already used.
+
+### Changed: the capability registry bootstrap fails loud
+
+The kit installs its capability registries on `globalThis` under versioned
+`Symbol.for` keys. Before this change a key that another module already held
+was silently overwritten when it was configurable, and a host that rejected
+the registration silently left the registry private to one package copy.
+Now a foreign value under a kit key throws `CapabilityRegistryConflictError`
+(code `CAPABILITY_REGISTRY_CONFLICT`) at bootstrap, and a private registry is
+named in the `UnmanagedInstanceError` that a later lookup produces.
+
 ### Fixed: state-stored aggregates check the event address
 
 `AggregateRoot.commit` and `addDomainEvent` now apply the address discipline

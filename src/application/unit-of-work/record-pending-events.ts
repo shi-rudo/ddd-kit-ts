@@ -1,5 +1,9 @@
 import type { IAggregateRoot } from "../../domain/aggregate/aggregate";
-import { pendingEventRecordingCapabilityFor } from "../../domain/aggregate/pending-event-recording";
+import { LOCAL_REGISTRY_DETAIL } from "../../domain/aggregate/internal/global-capability-registry";
+import {
+	isPendingEventRecordingRegistryShared,
+	pendingEventRecordingCapabilityFor,
+} from "../../domain/aggregate/pending-event-recording";
 import type {
 	AnyDomainEvent,
 	DomainEventFactory,
@@ -57,6 +61,9 @@ export function recordPendingEvents<
 			"recordPendingEvents",
 			"aggregate",
 			(aggregate as { id?: unknown } | null)?.id,
+			isPendingEventRecordingRegistryShared()
+				? undefined
+				: LOCAL_REGISTRY_DETAIL,
 		);
 	}
 	const createStamp: DomainEventStampProvider<TEvent> =

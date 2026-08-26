@@ -53,10 +53,19 @@ const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v6",
 );
 
-const capabilities =
+const { registry: capabilities, shared } =
 	createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
 		persistenceCapabilityRegistryKey,
 	);
+
+/**
+ * Whether the lifecycle registry is the process-wide one. `false` only on a
+ * host that rejected the global registration; a lookup that fails then
+ * names the private registry as the reason.
+ */
+export function isPendingEventLifecycleRegistryShared(): boolean {
+	return shared;
+}
 
 export function registerPendingEventLifecycleCapability(
 	aggregate: object,

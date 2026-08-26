@@ -1,6 +1,8 @@
 import type { Version } from "../../domain/aggregate/aggregate";
 import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
+import { LOCAL_REGISTRY_DETAIL } from "../../domain/aggregate/internal/global-capability-registry";
 import {
+	isPendingEventLifecycleRegistryShared,
 	type PendingEventLifecycleCapability,
 	pendingEventLifecycleCapabilityFor,
 } from "../../domain/aggregate/pending-event-lifecycle";
@@ -272,6 +274,9 @@ function createCommitTokenScope<
 				"withCommit enrollment",
 				"aggregate",
 				(aggregate as { id?: unknown } | null)?.id,
+				isPendingEventLifecycleRegistryShared()
+					? undefined
+					: LOCAL_REGISTRY_DETAIL,
 			);
 		}
 

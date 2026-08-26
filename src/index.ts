@@ -260,6 +260,7 @@ export {
 	AggregateDeletedError,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
+	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,

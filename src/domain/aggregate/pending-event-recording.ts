@@ -25,10 +25,19 @@ const recordingCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-recording-registry/v1",
 );
 
-const capabilities =
+const { registry: capabilities, shared } =
 	createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
 		recordingCapabilityRegistryKey,
 	);
+
+/**
+ * Whether the recording registry is the process-wide one. `false` only on a
+ * host that rejected the global registration; a lookup that fails then
+ * names the private registry as the reason.
+ */
+export function isPendingEventRecordingRegistryShared(): boolean {
+	return shared;
+}
 
 export function registerPendingEventRecordingCapability(
 	aggregate: object,
