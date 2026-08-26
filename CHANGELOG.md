@@ -66,6 +66,13 @@ enrolled aggregate, as a backstop for instances from another package copy.
 Kit-internal: the lifecycle capability exposes `aggregateType()` for that
 check, and the registry key moved to `v6`.
 
+Two observable details of the protected surface changed with it. An event
+that carries only part of its address is stored as a stamped copy, so
+`pendingEvents[0] === event` holds only for a fully addressed event.
+`commit` stamps and appends its events itself and no longer calls
+`addDomainEvent`; an override of `addDomainEvent` sees only the events
+passed to it directly.
+
 `loadFromHistory` now also drops a pending decision that a handler recorded
 during the fold when it rolls back, so the instance is clean after a failed
 replay.

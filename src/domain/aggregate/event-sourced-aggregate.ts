@@ -172,8 +172,9 @@ export abstract class EventSourcedAggregate<
 		// IS the frozen object stored, and nothing below assigns until both
 		// gates passed. Unlike setState there is no defensive copy: the fold
 		// result is the aggregate's own next state, so a rejected result is
-		// left frozen; the hostile own-key guard runs inside fold, on both
-		// paths. The event was stamped above, so it is appended as is.
+		// left frozen. The hostile own-key guard runs below on every new
+		// fact; replay runs it once on the final state. The event was
+		// stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.freezeState(this.fold(stamped));
 		// A hostile row can reach the handler through the payload or its own
