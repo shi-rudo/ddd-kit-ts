@@ -844,6 +844,13 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	if (value === null || typeof value !== "object") {
 		return value;
 	}
+	// An own "__proto__" data key survives structuredClone and would
+	// re-arm prototype pollution in every [[Set]]-based consumer of the
+	// event; reject it at the root, the same contract as entity state.
+	assertNoHostileOwnProtoKey(
+		value,
+		field === "payload" ? "Event payload" : "Event metadata",
+	);
 	// Binary buffers are rejected BEFORE the clone: freezing cannot make
 	// them immutable (the spec forbids freezing a view with elements, and
 	// a frozen view still shares its mutable buffer), so accepting them

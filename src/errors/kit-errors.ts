@@ -422,16 +422,19 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
 }
 
 /**
- * Thrown by `Entity` (constructor and `setState`) and by the event
- * metadata helpers (`createDomainEvent`'s `options.metadata`,
- * `mergeMetadata`, `copyMetadata`) when the value carries an own
- * `"__proto__"` data key:
+ * Thrown by `Entity` (constructor and `setState`), by the event-sourced
+ * fold (`apply` and replay), by the event constructors for the payload,
+ * and by the event metadata helpers (`createDomainEvent`'s
+ * `options.metadata`, `mergeMetadata`, `copyMetadata`) when the value
+ * carries an own `"__proto__"` data key:
  * the shape `JSON.parse` produces for hostile DB rows or request bodies
  * handed to reconstitute factories. Such a key can never be legitimate
  * domain state; accepting it would hand a prototype-pollution payload to
  * every downstream consumer that copies the state through `[[Set]]`
  * (`Object.assign`, for-in assignment loops), and dropping it would be
- * silent data mutation.
+ * silent data mutation. The check looks at the root object only; nested
+ * objects are not walked, and a class instance is an ownership transfer
+ * that passes.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): untrusted input reaching the

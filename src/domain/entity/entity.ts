@@ -351,6 +351,31 @@ export function freezeShallow<T>(value: T): T {
 }
 
 /**
+ * The hostile own-key guard for a state value that is about to be stored.
+ * It checks the root object only, and only the shapes a JSON row can
+ * produce: a plain object, a null-prototype object, or an array. A class
+ * instance is an ownership transfer and passes. The constructor,
+ * {@link Entity.setState}, and the event-sourced fold all use it, so the
+ * depth and the shape rule cannot drift between the paths.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export function assertStateHasNoHostileOwnKey(
+	state: unknown,
+	subject: string,
+): void {
+	if (state === null || typeof state !== "object") return;
+	if (Array.isArray(state)) {
+		assertNoHostileOwnProtoKey(state, subject);
+		return;
+	}
+	const proto = Object.getPrototypeOf(state);
+	if (proto !== Object.prototype && proto !== null) return;
+	assertNoHostileOwnProtoKey(state, subject);
+}
+
+/**
  * Returns a shallow copy for plain objects and arrays so the subsequent
  * `freezeShallow` never locks the caller's own object in place (their later
  * writes to it would throw in strict mode). Class instances and primitives
@@ -360,8 +385,8 @@ export function freezeShallow<T>(value: T): T {
  */
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
+	assertStateHasNoHostileOwnKey(value, "Entity state");
 	if (Array.isArray(value)) {
-		assertNoHostileOwnProtoKey(value, "Entity state");
 		// Spread copies only iterated index elements; transfer own
 		// enumerable NON-INDEX keys (items.total = 5 style annotations) as
 		// data properties too, mirroring the plain-object branch, so the
@@ -382,7 +407,6 @@ function shallowCopyOwned<T>(value: T): T {
 	}
 	const proto = Object.getPrototypeOf(value);
 	if (proto !== Object.prototype && proto !== null) return value;
-	assertNoHostileOwnProtoKey(value, "Entity state");
 	// Copy as data properties, never through [[Set]]: object spread uses
 	// CreateDataProperty, so even without the guard above no key could
 	// reach the `__proto__` setter the way Object.assign onto an

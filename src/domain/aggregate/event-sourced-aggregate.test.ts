@@ -5,6 +5,7 @@ import {
 	DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
+	HostileStateKeyError,
 	MisaddressedEventError,
 	MissingHandlerError,
 	UnmintedEventError,
@@ -1340,6 +1341,105 @@ describe("a handler that returns no state", () => {
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
+	});
+});
+
+describe("hostile own keys on the fold result", () => {
+	// JSON.parse creates an own "__proto__" DATA key, the shape of a hostile
+	// stream row or request body that a handler folds into state.
+	const hostileState = (): TestState =>
+		JSON.parse(
+			'{"value":1,"status":"inactive","__proto__":{"isAdmin":true}}',
+		) as TestState;
+
+	class HostileFoldAggregate extends TestEventSourcedAggregate {
+		protected override readonly handlers = {
+			...testHandlers,
+			TestEventUpdated: (): TestState => hostileState(),
+		};
+	}
+
+	it("rejects a fold result with an own __proto__ key on apply() and leaves the aggregate untouched", () => {
+		const agg = new HostileFoldAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		expect(() => agg.updateValue(1)).toThrow(HostileStateKeyError);
+
+		expect(agg.state).toEqual({ value: 0, status: "inactive" });
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+		expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+	});
+
+	it("rejects a replayed row that folds into a hostile state after rolling back", () => {
+		const agg = new HostileFoldAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		expect(() =>
+			agg.loadFromHistory([
+				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+				createDomainEvent("TestEventUpdated", {
+					newValue: 1,
+				}) as TestEventUpdated,
+			]),
+		).toThrow(HostileStateKeyError);
+
+		expect(agg.state).toEqual({ value: 0, status: "inactive" });
+		expect(agg.version).toBe(0);
+	});
+
+	it("checks the root level only: a nested own __proto__ key passes", () => {
+		class NestedAggregate extends TestEventSourcedAggregate {
+			protected override readonly handlers = {
+				...testHandlers,
+				TestEventUpdated: (): TestState =>
+					({
+						value: 1,
+						status: "inactive",
+						nested: JSON.parse('{"__proto__":{"isAdmin":true}}'),
+					}) as TestState,
+			};
+		}
+		const agg = new NestedAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		agg.updateValue(1);
+
+		expect(agg.state.value).toBe(1);
+	});
+
+	it("skips a class-instance state, which is an ownership transfer", () => {
+		class InstanceState {
+			value = 1;
+			status: "active" | "inactive" = "inactive";
+		}
+		class InstanceAggregate extends TestEventSourcedAggregate {
+			protected override readonly handlers = {
+				...testHandlers,
+				TestEventUpdated: (): TestState => {
+					const state = new InstanceState();
+					Object.defineProperty(state, "__proto__", {
+						value: { isAdmin: true },
+						enumerable: true,
+					});
+					return state;
+				},
+			};
+		}
+		const agg = new InstanceAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		agg.updateValue(1);
+
+		expect(agg.state.value).toBe(1);
 	});
 });
 

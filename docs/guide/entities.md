@@ -376,8 +376,11 @@ The ownership rules are precise:
   place because copying it would strip its prototype
 
 The entity constructor and `setState(...)` reject an own `"__proto__"` data key
-on plain object, null-prototype object, or array state. Validate and normalize
-untrusted JSON at the boundary before it reaches domain objects.
+on plain object, null-prototype object, or array state. The event-sourced
+`apply(...)` and replay apply the same check to the handler result, and the
+event constructors apply it to the payload. The check looks at the root
+object only; nested objects are not walked. Validate and normalize untrusted
+JSON at the boundary before it reaches domain objects.
 
 ## Choosing the shape
 

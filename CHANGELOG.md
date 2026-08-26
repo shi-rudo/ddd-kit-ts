@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: the hostile own-key guard covers the fold result and the payload
+
+The rejection of an own `"__proto__"` data key now runs on the result of an
+event handler, on `apply()` and on replay, and on the event payload in
+`createDomainEvent` and `createUncommittedDomainEvent`. Before this change
+only the entity constructor, `setState`, and the metadata helpers checked,
+so a handler that folded a hostile row into state stored the key. The check
+looks at the root object only, on plain objects, null-prototype objects, and
+arrays; a class instance passes. It throws `HostileStateKeyError`.
+
 ### Fixed: aggregate versions are validated where a number enters
 
 `toVersion(n)` is the new way to brand a stored row value as a `Version`. It

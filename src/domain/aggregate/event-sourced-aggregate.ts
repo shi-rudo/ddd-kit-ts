@@ -7,7 +7,10 @@ import {
 	MisaddressedEventError,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
-import { assertStateInvariant } from "../entity/entity";
+import {
+	assertStateHasNoHostileOwnKey,
+	assertStateInvariant,
+} from "../entity/entity";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
@@ -173,9 +176,8 @@ export abstract class EventSourcedAggregate<
 		// validated IS the object stored, a rejected fold result leaves
 		// nothing frozen behind, and nothing below assigns until both gates
 		// passed. Unlike setState there is no defensive copy: the fold result
-		// is the aggregate's own next state.
-		// TODO: run the hostile own-key guard on the fold result as well
-		// (ddd-kit-ts-rhxi.7).
+		// is the aggregate's own next state; the hostile own-key guard runs
+		// inside fold, on both paths.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.fold(stamped);
 		assertStateInvariant(this, next);
@@ -296,6 +298,10 @@ export abstract class EventSourcedAggregate<
 		if (nextState === undefined) {
 			throw new HandlerReturnedNoStateError(event.type);
 		}
+		// A hostile row can reach a handler through the payload of a
+		// replayed event or through the handler's own construction; the
+		// guard runs at the same depth and on the same shapes as setState.
+		assertStateHasNoHostileOwnKey(nextState, "Aggregate state");
 		return nextState;
 	}
 
