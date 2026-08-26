@@ -10,6 +10,7 @@ import { SnapshotTimeValidationError } from "../../domain/event/domain-event-err
 import type { Id } from "../../domain/identity/id";
 import {
 	DomainError,
+	InvalidVersionError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
 } from "../../errors/kit-errors";
@@ -183,6 +184,25 @@ describe("adapter-owned snapshot models", () => {
 		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
 		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
 			ForeignDomainError,
+		);
+	});
+
+	it("routes a corrupt stored version into the corruption channel", () => {
+		let caught: unknown;
+		try {
+			reconstituteAggregateFromSnapshot(model, "order-1" as OrderId, {
+				state: { status: "placed" },
+				version: -1 as Version,
+				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
+				schemaVersion: 2,
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(SnapshotCorruptedError);
+		expect((caught as SnapshotCorruptedError).cause).toBeInstanceOf(
+			InvalidVersionError,
 		);
 	});
 
