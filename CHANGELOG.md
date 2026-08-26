@@ -102,7 +102,10 @@ instead of `row.version as Version`.
 passed the `withCommit` unique-cursor guard because `NaN` compares false.
 `markRestored` also rejects a version below the current one, and it rejects
 an instance that already carries pending events (`UnreplayableAggregateError`),
-the same guard `loadFromHistory` had.
+the same guard `loadFromHistory` had. A reconstitution factory that calls
+`setState` before `markRestored` fails for a row stored at version 0, and a
+constructor that records a creation event fails on every load; the
+aggregates guide names the fix.
 
 Kit-internal: the pending-event lifecycle capability now types its seam
 with `Version` and `PendingDomainEvent`, `committedVersion` is required, and
