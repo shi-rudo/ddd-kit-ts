@@ -311,9 +311,10 @@ export function assertStateInvariant<TState>(
 ): void {
 	const validateState = stateValidators.get(entity);
 	if (validateState === undefined) {
+		const id = (entity as { id?: unknown } | null)?.id;
 		throw new UnmanagedInstanceError(
 			"assertStateInvariant",
-			String((entity as { id?: unknown } | null)?.id),
+			id === undefined ? "an entity without an id" : `entity ${String(id)}`,
 		);
 	}
 	validateState(candidate);

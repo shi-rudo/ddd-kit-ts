@@ -29,6 +29,25 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: aggregate versions are validated where a number enters
+
+`toVersion(n)` is the new way to brand a stored row value as a `Version`. It
+accepts a safe integer of at least zero and throws `InvalidVersionError`
+(code `INVALID_VERSION`) for anything else. Use it in repository adapters
+instead of `row.version as Version`.
+
+`markRestored` and `setVersion` apply the same rule. Before this change a
+`NaN`, negative, or fractional version passed through, and a `NaN` version
+passed the `withCommit` unique-cursor guard because `NaN` compares false.
+`markRestored` also rejects a version below the current one, and it rejects
+an instance that already carries pending events (`UnreplayableAggregateError`),
+the same guard `loadFromHistory` had.
+
+Kit-internal: the pending-event lifecycle capability now types its seam
+with `Version` and `PendingDomainEvent`, `committedVersion` is required, and
+the registry key moved to `v5`. An aggregate constructed by a package copy
+with the old shape fails the enrollment check instead of half-working.
+
 ### Fixed: an event-sourced aggregate rejects setState
 
 `EventSourcedAggregate` overrides the inherited `setState` to throw

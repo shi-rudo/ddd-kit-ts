@@ -1,5 +1,5 @@
 import type { Result } from "@shirudo/result";
-import type { DomainError } from "../../errors/kit-errors";
+import { type DomainError, InvalidVersionError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 
@@ -9,6 +9,22 @@ export * from "../event/domain-event";
 // --- Aggregate types ---
 
 export type Version = number & { readonly __v: true };
+
+/**
+ * Brands a stored number as an aggregate {@link Version}. A version is a
+ * safe integer of at least zero. Use it in repository adapters instead of
+ * a cast, so a corrupt row value fails here with {@link InvalidVersionError}
+ * and never reaches the optimistic-concurrency cursor.
+ */
+export function toVersion(value: number): Version {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new InvalidVersionError(
+			value,
+			"is not a safe integer of at least zero",
+		);
+	}
+	return value as Version;
+}
 
 /**
  * Snapshot of an aggregate state at a specific point in time.

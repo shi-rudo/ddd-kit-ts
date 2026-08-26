@@ -268,9 +268,12 @@ function createCommitTokenScope<
 
 		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
 		if (!eventLifecycle) {
+			const id = (aggregate as { id?: unknown } | null)?.id;
 			throw new UnmanagedInstanceError(
 				"withCommit enrollment",
-				String((aggregate as { id?: unknown } | null)?.id),
+				id === undefined
+					? "an aggregate without an id"
+					: `aggregate ${String(id)}`,
 			);
 		}
 
@@ -301,9 +304,7 @@ function createCommitTokenScope<
 		// callers who omit enrollment options (the documented
 		// direct-withCommit style), and grounding the guard in data supplied
 		// by the very caller it checks would be circular.
-		const persistedVersion = eventLifecycle.persistedVersion() as
-			| Version
-			| undefined;
+		const persistedVersion = eventLifecycle.persistedVersion();
 		tokensByAggregate.set(aggregate, token);
 		recordsByToken.set(token, {
 			aggregate,
@@ -639,7 +640,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			if (disposition === "deleted") {
 				eventLifecycle.discardPendingEvents(committedEvents);
 			} else {
-				eventLifecycle.acknowledge(committedEvents, version as number);
+				eventLifecycle.acknowledge(committedEvents, version);
 				persistedObservations.push({ aggregate, version });
 			}
 		} catch (error) {

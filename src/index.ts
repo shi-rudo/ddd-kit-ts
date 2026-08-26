@@ -146,6 +146,7 @@ export {
 	type IAggregateRoot,
 	type IEventSourcedAggregate,
 	sameVersion,
+	toVersion,
 	type Version,
 } from "./domain/aggregate/aggregate";
 export type { AggregateAddress } from "./domain/aggregate/aggregate-address";
@@ -288,6 +289,7 @@ export {
 	type InMemoryCapacityExceededErrorOptions,
 	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
+	InvalidVersionError,
 	isDomainErrorLike,
 	isInfrastructureErrorLike,
 	type KitErrorCode,
