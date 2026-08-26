@@ -29,6 +29,23 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: replay routes a domain rejection from another package copy into the Result
+
+`loadFromHistory` recognized a `DomainError` with a plain `instanceof`, so a
+handler that runs in another loaded copy of the kit escaped the `Result`
+channel as a throw. It now routes by the copy-safe `isDomainErrorLike`, the
+check the snapshot seam already used.
+
+### Changed: the capability registry bootstrap fails loud
+
+The kit installs its capability registries on `globalThis` under versioned
+`Symbol.for` keys. Before this change a key that another module already held
+was silently overwritten when it was configurable, and a host that rejected
+the registration silently left the registry private to one package copy.
+Now a foreign value under a kit key throws `CapabilityRegistryConflictError`
+(code `CAPABILITY_REGISTRY_CONFLICT`) at bootstrap, and a private registry is
+named in the `UnmanagedInstanceError` that a later lookup produces.
+
 ### Fixed: state-stored aggregates check the event address
 
 `AggregateRoot.commit` and `addDomainEvent` now apply the address discipline
@@ -76,7 +93,8 @@ the same guard `loadFromHistory` had.
 
 Kit-internal: the pending-event lifecycle capability now types its seam
 with `Version` and `PendingDomainEvent`, `committedVersion` is required, and
-the registry key moved to `v5`. An aggregate constructed by a package copy
+the registry key moved from `v4` to `v5` (and on to `v6` with the address
+backstop above). An aggregate constructed by a package copy
 with the old shape fails the enrollment check instead of half-working.
 
 ### Fixed: an event-sourced aggregate rejects setState
@@ -89,9 +107,9 @@ changes only through `apply()`.
 
 ### Changed: coded errors on three aggregate wiring paths
 
-Three paths that threw a bare `Error` or `TypeError` now throw a kit wiring
-error with a stable code, so `onPersistError` observers and tests can match
-on `error.code`:
+Two paths that threw a bare `Error` now throw a kit wiring error with a
+stable code, so `onPersistError` observers and tests can match on
+`error.code`:
 
 - A post-commit acknowledgement whose batch is not the aggregate's pending
   prefix throws `PendingEventBatchMismatchError`
@@ -99,10 +117,17 @@ on `error.code`:
   and the pending length.
 - The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
   for a `null` or `undefined` id.
-- `recordPendingEvents`, `withCommit` enrollment, and the persistence
-  baseline functions throw `UnmanagedInstanceError` (`UNMANAGED_INSTANCE`)
-  for an aggregate or baseline that this package did not construct. The
-  `withCommit` case threw `EventHarvestError` before.
+
+### Changed (breaking): a non-kit instance is rejected with UNMANAGED_INSTANCE
+
+`recordPendingEvents`, `withCommit` enrollment, and the persistence baseline
+functions throw `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`) for an
+aggregate or baseline that this package did not construct: a repository DTO,
+a structural lookalike, or an instance from another package copy. Before this
+change the `withCommit` case threw `EventHarvestError`
+(`EVENT_HARVEST_FAILED`) and the other two threw a bare `TypeError`.
+Migration: an error mapper or a test that matched the old class or code for
+this case matches `UNMANAGED_INSTANCE` now.
 
 ### Changed (breaking): a subclass member named validateState is a compile error
 

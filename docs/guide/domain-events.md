@@ -513,7 +513,10 @@ On an `EventSourcedAggregate` there is no such path: `setState` throws
 Do not record first and mutate second. If the mutation throws, the aggregate would carry an event for a fact that never happened.
 The mutation must also advance the version before an already-persisted
 aggregate is harvested; otherwise two commits would share one projection
-position and `withCommit` rejects with `EventHarvestError`.
+position and `withCommit` rejects with `EventHarvestError`. An instance that
+this package did not construct (a repository DTO, a structural lookalike, or
+an aggregate from another package copy) is rejected at enrollment with
+`UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`).
 
 ## Naming Events
 

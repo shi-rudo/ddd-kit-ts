@@ -206,6 +206,27 @@ describe("adapter-owned snapshot models", () => {
 		);
 	});
 
+	it("lets an InvalidVersionError thrown by the factory itself propagate raw", () => {
+		// A factory that advances the version before markRestored is a wiring
+		// bug; wrapping it as corruption would refold the stream on every
+		// load, forever.
+		const wiredWrongModel = defineSnapshotModel({
+			...model,
+			reconstitute: (): Order => {
+				throw new InvalidVersionError(0, "is below the current version 1");
+			},
+		});
+
+		expect(() =>
+			reconstituteAggregateFromSnapshot(wiredWrongModel, "order-1" as OrderId, {
+				state: { status: "placed" },
+				version: 0 as Version,
+				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
+				schemaVersion: 2,
+			}),
+		).toThrow(InvalidVersionError);
+	});
+
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
 		// A factory that ignores the version parameter (a forgotten
 		// markRestored) is a wiring bug, not corruption: it must throw raw

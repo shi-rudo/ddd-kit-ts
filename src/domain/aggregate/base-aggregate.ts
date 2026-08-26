@@ -227,11 +227,11 @@ export abstract class BaseAggregate<
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
 	 * aggregates' `setState()` / `commit()` paths and by the event-sourced
-	 * `apply()` path. The increment of a valid version is valid, so this
-	 * hot path skips the guard.
+	 * `apply()` path. Routes through {@link setVersion}, so a subclass that
+	 * observes version writes there sees every increment.
 	 */
 	protected bumpVersion(): void {
-		this._version = (this._version + 1) as Version;
+		this.setVersion((this._version + 1) as Version);
 	}
 
 	/**

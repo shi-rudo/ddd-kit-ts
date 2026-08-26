@@ -1535,3 +1535,40 @@ describe("state changes only through events", () => {
 		expect((caught as DirectStateMutationError).aggregateId).toBe("test-1");
 	});
 });
+
+describe("replay routes a foreign-copy domain rejection into the Result", () => {
+	// Structurally a DomainError from another loaded kit copy: not
+	// instanceof this copy's class, but category "DOMAIN".
+	class ForeignCopyDomainError extends Error {
+		readonly category = "DOMAIN";
+		readonly code = "FOREIGN_COPY_REJECTION";
+	}
+
+	class ForeignCopyAggregate extends TestEventSourcedAggregate {
+		protected override readonly handlers = {
+			...testHandlers,
+			TestEventInvalid: (): TestState => {
+				throw new ForeignCopyDomainError("rejected by another copy");
+			},
+		};
+	}
+
+	it("returns Err and rolls back instead of throwing", () => {
+		const agg = new ForeignCopyAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		const result = agg.loadFromHistory([
+			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
+			createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		if (result.isErr()) {
+			expect(result.error).toBeInstanceOf(ForeignCopyDomainError);
+		}
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
+	});
+});

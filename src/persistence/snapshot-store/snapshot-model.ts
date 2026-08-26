@@ -13,18 +13,6 @@ import {
 import { isBuiltInObject } from "../../internal/structural/is-built-in";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 
-/**
- * Copy-safe membership check for the version error: the model factory may
- * run in another loaded copy of the kit, whose `InvalidVersionError` fails a
- * plain `instanceof`, so the check routes by the stable code.
- */
-function isInvalidVersionErrorLike(value: unknown): boolean {
-	return (
-		value instanceof Error &&
-		(value as { readonly code?: unknown }).code === "INVALID_VERSION"
-	);
-}
-
 interface SnapshotAggregate {
 	readonly id: Id<string>;
 	readonly version: Version;
@@ -126,8 +114,10 @@ export function captureAggregateSnapshot<
  * reconstitution factory) is surfaced as a {@link SnapshotCorruptedError}:
  * a snapshot is DERIVED data, so the caller's discard-and-refold branch must
  * see one catchable corruption channel instead of a raw domain rejection
- * escaping `getById` after a rule change. `SnapshotSchemaMismatchError`
- * (a configuration gap, not corruption) and non-domain throws propagate.
+ * escaping `getById` after a rule change. A stored version that is not a
+ * valid `Version` is surfaced the same way. `SnapshotSchemaMismatchError`
+ * (a configuration gap, not corruption) and non-domain throws propagate,
+ * including an `InvalidVersionError` the factory itself throws.
  */
 export function reconstituteAggregateFromSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -139,6 +129,23 @@ export function reconstituteAggregateFromSnapshot<
 ): TAggregate {
 	assertSnapshotModel(model);
 	const storedSchemaVersion = snapshot.schemaVersion ?? 1;
+	// A corrupt stored version is derived-data corruption like a bad blob:
+	// surfaced as SnapshotCorruptedError so the load recipe discards and
+	// refolds. Checked BEFORE the factory runs, so an InvalidVersionError
+	// thrown by the factory itself (a wiring bug such as a restore below a
+	// version the factory already advanced) stays a raw throw, like the
+	// version post-condition below.
+	let version: Version;
+	try {
+		version = toVersion(snapshot.version);
+	} catch (error) {
+		throw new SnapshotCorruptedError(
+			`Snapshot of ${model.aggregateType} ${String(id)} carries the ` +
+				`invalid version ${String(snapshot.version)}. Discard the derived ` +
+				"snapshot and refold from the stream.",
+			error,
+		);
+	}
 	let aggregate: TAggregate;
 	try {
 		let state: TSnapshotState;
@@ -156,15 +163,12 @@ export function reconstituteAggregateFromSnapshot<
 				actualSchemaVersion: storedSchemaVersion,
 			});
 		}
-		// A corrupt stored version is derived-data corruption like a bad
-		// blob: reject it here so the load recipe discards and refolds,
-		// instead of letting markRestored throw a raw wiring error.
-		aggregate = model.reconstitute(id, state, toVersion(snapshot.version));
+		aggregate = model.reconstitute(id, state, version);
 	} catch (error) {
 		// Copy-safe: the model factory may run in another loaded copy of the
 		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
 		// plain instanceof; the corruption channel must catch it regardless.
-		if (isDomainErrorLike(error) || isInvalidVersionErrorLike(error)) {
+		if (isDomainErrorLike(error)) {
 			throw new SnapshotCorruptedError(
 				`Snapshot of ${model.aggregateType} ${String(id)} (schema ` +
 					`${storedSchemaVersion}, version ${String(snapshot.version)}) was ` +
