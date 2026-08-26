@@ -1,9 +1,10 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
 	DirectStateMutationError,
-	DomainError,
+	type DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
+	isDomainErrorLike,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
 import {
@@ -296,7 +297,10 @@ export abstract class EventSourcedAggregate<
 			// so anything in it now came from a handler that recorded a
 			// decision during the fold; the rollback drops it too.
 			this.discardPendingDecisions();
-			if (e instanceof DomainError) return err(e);
+			// Copy-safe: a handler may run in another loaded copy of the kit,
+			// whose DomainError fails a plain instanceof; the Result channel
+			// must carry it regardless.
+			if (isDomainErrorLike(e)) return err(e);
 			throw e;
 		}
 		return ok();
