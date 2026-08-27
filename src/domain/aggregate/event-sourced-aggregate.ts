@@ -57,8 +57,8 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * react to corrupted event streams without try/catch.
  *
  * @template TState - The aggregate state (contains child entities and value objects)
- * @template TEvent - The union type of all domain events
  * @template TId    - The aggregate root identifier
+ * @template TEvent - The union type of all domain events
  *
  * @example
  * ```typescript

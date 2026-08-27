@@ -128,11 +128,11 @@ export interface DomainEvent<T extends string, P = void> {
 	readonly occurredAt: Date;
 
 	/**
-	 * Event schema schemaVersion for handling schema evolution.
+	 * Event schema version for handling schema evolution.
 	 * Required for safe schema migration in event-sourced systems.
-	 * Use 1 for the initial schema schemaVersion.
+	 * Use 1 for the initial schema version.
 	 *
-	 * This is the event PAYLOAD schema schemaVersion, not a persisted aggregate
+	 * This is the event PAYLOAD schema version, not a persisted aggregate
 	 * position. Commit positions live on `CommittedDomainEvent`.
 	 */
 	readonly schemaVersion: number;
@@ -158,7 +158,7 @@ export type AnyDomainEvent = DomainEvent<string, unknown>;
  * identity, recording time, or delivery metadata.
  *
  * The aggregate owns the event type, payload, source address, and payload
- * schema schemaVersion because those values describe the business fact it produced.
+ * schema version because those values describe the business fact it produced.
  * The application shell later turns this value into a {@link DomainEvent}.
  */
 export interface UncommittedDomainEvent<T extends string, P = void> {
@@ -217,7 +217,7 @@ export interface CreateDomainEventOptions {
 	occurredAt?: Date;
 
 	/**
-	 * Override for the default schema schemaVersion (1).
+	 * Override for the default schema version (1).
 	 */
 	schemaVersion?: number;
 
@@ -554,7 +554,7 @@ export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
  * Attaches shell-owned recording data to an accepted aggregate decision.
  *
  * The decision supplies the domain type, payload, source address, and payload
- * schema schemaVersion. The stamp supplies only event identity, recording time, and
+ * schema version. The stamp supplies only event identity, recording time, and
  * trace metadata.
  */
 export function recordDomainEvent<T extends string, P>(

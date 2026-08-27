@@ -506,9 +506,9 @@ A domain event says something happened. The state change must succeed before the
 The kit gives you safe paths:
 
 - `EventSourcedAggregate.apply(event)` validates and applies the event before recording it as pending.
-- `AggregateRoot.commit(newState, events)` validates and assigns state before appending events.
+- `AggregateRoot.setState(newState, events)` validates and assigns state, advances the version, and then appends the events.
 
-On an `AggregateRoot`, the lower-level `setState` and `addDomainEvent` methods are still available for special cases, but then the ordering is your responsibility:
+On an `AggregateRoot`, the lower-level `addDomainEvent` method is still available for special cases, but then the ordering is your responsibility:
 
 ```ts
 this.setState(nextState);

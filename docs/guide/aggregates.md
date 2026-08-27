@@ -289,7 +289,7 @@ This is where the theory matters most. Aggregate invariants are not just validat
 
 | Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, `setState`, and `apply()`; replay skips it |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, and `apply()`; replay skips it |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
