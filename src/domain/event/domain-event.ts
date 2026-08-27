@@ -439,11 +439,11 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
-// Every event createDomainEvent returns is registered here: an
-// unforgeable mint marker (nothing outside this module can add to the
-// set), so the aggregate recording paths can check "minted by the
-// constructor" directly instead of approximating it with frozen-ness
-// probes. Minted implies deeply frozen with owned payload/metadata
+// Every event createDomainEvent returns is registered here: the
+// module-private tier of the mint marker (nothing outside this module
+// can add to the set), so the aggregate recording paths can check
+// "minted by the constructor" directly instead of approximating it with
+// frozen-ness probes. Minted implies deeply frozen with owned payload/metadata
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
 const MINTED_EVENTS = new WeakSet<object>();
@@ -489,11 +489,12 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * Whether `event` came out of {@link createDomainEvent} (or a helper
  * built on it, such as the aggregate `createEvent` helper), i.e. is deeply frozen with
  * defensively copied payload and metadata. Two tiers: events of THIS
- * loaded copy of the kit are verified unforgeably via the module's
+ * loaded copy of the kit are verified through the module-private
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
- * CJS/ESM load) are recognized cooperatively via a global-registry
- * brand. Module-internal export for the aggregate recording paths;
- * not part of the package entries.
+ * CJS/ESM load) are recognized through a cooperative `Symbol.for`
+ * brand that code in the same process can fake. The gate catches
+ * accidents, not adversaries. Module-internal export for the aggregate
+ * recording paths; not part of the package entries.
  */
 export function isMintedEvent(event: object): event is AnyDomainEvent {
 	return (

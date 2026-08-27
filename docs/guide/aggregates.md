@@ -78,6 +78,17 @@ Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 `createEvent(...)` is the safer default. The application records the pending
 decision with `recordPendingEvents(...)` before persistence.
 
+Two wiring guards sit on the recording paths. An event that no kit
+constructor minted throws `UnmintedEventError` (code `UNMINTED_EVENT`). A
+state or payload root that carries an own `__proto__` key throws
+`HostileStateKeyError` (code `HOSTILE_STATE_KEY`). Both guard against
+accidents, not against code in the same process: the mint mark has a
+cooperative tier that another loaded copy of the kit can stamp, and the key
+guard looks at the root object only. Validate and strip untrusted input at
+the application edge. See
+[Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
+mint mark.
+
 ## Creating New Aggregates
 
 Prefer static factory methods over public constructors.
