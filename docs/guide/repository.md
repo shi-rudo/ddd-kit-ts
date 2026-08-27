@@ -112,7 +112,9 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 ```
 
 `markRestored` restores the current domain version. It does not create a
-persistence receipt on the aggregate and does not record events.
+persistence receipt on the aggregate and does not record events. It accepts
+only a clean instance at a version not above the restored one; see
+[Aggregate Roots -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
 
 The adapter tracks the result before returning it:
 

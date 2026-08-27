@@ -159,6 +159,22 @@ this version." It sets the aggregate's current version without recording an
 event. It does not remember a database baseline. The operation-scoped
 `UnitOfWork` owns that baseline.
 
+`markRestored` has two preconditions. The instance must carry no pending
+events, or it throws `UnreplayableAggregateError` (code
+`UNREPLAYABLE_AGGREGATE`). The current version must not be above the
+restored version, or it throws `InvalidVersionError` (code
+`INVALID_VERSION`). Two factory shapes break these rules:
+
+- A factory that calls `setState(rowState)` before `markRestored`. Every
+  `setState` advances the version, so the instance is at version 1 before
+  the restore, and a row stored at version 0 fails. Pass the stored state
+  through the constructor, as the example above does, or use
+  `setStateWithoutVersionBump` for a state change that is not a domain
+  decision.
+- A constructor that records a creation event. Every load then starts with a
+  pending event. Record creation events in the business factory
+  (`Order.place`) only; the constructor builds the instance and nothing else.
+
 A repository can then be straightforward:
 
 ```ts

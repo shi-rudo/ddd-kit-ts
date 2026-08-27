@@ -86,6 +86,15 @@ Reconstitution restores valid domain state and the current version without
 recording a new decision. Remove domain code that reads `persistedVersion`,
 `hasChanges`, or `changedKeys`. Those members no longer exist.
 
+`markRestored` accepts only a clean instance at a version not above the
+restored one. A factory that calls `setState` before `markRestored` puts the
+instance at version 1 first, so a row stored at version 0 fails with
+`InvalidVersionError`. A constructor that records a creation event fails
+with `UnreplayableAggregateError` on every load. Pass the stored state
+through the constructor, and record creation events in the business factory
+only. See
+[Aggregate Roots -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
+
 For event-sourced aggregates, keep a bare factory and load accepted history
 with `loadFromHistory`. A clean reconstituted aggregate can load a later tail
 additively.
@@ -408,9 +417,9 @@ from four review rounds on the persistence redesign:
   `DomainEventValidationError` or `SnapshotTimeValidationError`: `name` now
   equals `code`, like every other kit error. Code-based matching does not
   change.
-- Reconstitution factories must call `markRestored(version)`. The snapshot
-  restore path enforces the version post-condition and rejects a factory
-  that ignores it.
+- Reconstitution factories must call `markRestored(version)` on a clean
+  instance whose version is not above `version`. The snapshot restore path
+  enforces the version post-condition and rejects a factory that ignores it.
 - A `PersistenceModel.capture` must be deterministic for an unchanged
   aggregate. A capture that rebuilds object Set members or Map keys per
   call supplies the optional `captureEquals`.
