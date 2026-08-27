@@ -335,13 +335,19 @@ every snapshot restore throws. When the validator throws a `DomainError`, the
 restore maps it to `SnapshotCorruptedError` and refolds the stream on each
 load, with no signal except latency. Any other error propagates as is.
 
-A reconstitution factory therefore passes `trustInitialState: true`. The
-stored state is then a fact like the history: the validator does not run on
-it, and it runs on every new fact through `apply()`. With that option
-`validateState` can hold real rules on an event-sourced aggregate, and
-"replay from zero" and "snapshot plus tail" load the same way. Never pass the
-option for a new aggregate; a factory yields valid objects only. The
-`SnapshotModel` keeps the structural gate on the stored blob.
+The reconstitution factory of an event-sourced aggregate therefore passes
+`trustInitialState: true`. The stored state is then a fact like the history:
+the validator does not run on it, and it runs on every new fact through
+`apply()`. With that option `validateState` can hold real rules on an
+event-sourced aggregate, and "replay from zero" and "snapshot plus tail" load
+the same way. Never pass the option for a new aggregate; a factory yields
+valid objects only. The `SnapshotModel` keeps the structural gate on the
+stored blob.
+
+A state-stored factory keeps the default. Its row is the source of truth,
+so a row that fails today's rules is a finding, and the load fails loudly
+until the data is migrated. There is no stream to refold, so the option
+would only hide the finding.
 
 ```ts
 class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {

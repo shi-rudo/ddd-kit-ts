@@ -32,13 +32,15 @@ gives a before-and-after example for each breaking change.
 ### Added: trustInitialState for reconstitution factories
 
 `EntityConfig.trustInitialState` (and so `AggregateConfig`) tells the
-constructor that the initial state is a persisted fact: `validateState` does
-not run on it, and it runs on every later `setState` and `apply()`. A
-reconstitution factory passes the option; without it a rule that tightened
-after a snapshot was taken made every restore of that snapshot throw, map to
-`SnapshotCorruptedError`, and refold the stream on each load. With the
-option, `validateState` can hold real rules on an event-sourced aggregate.
-The structural gates (frozen copy, hostile own-key check) run regardless.
+constructor that the initial state is a persisted fact. `validateState` does
+not run on it, and it runs on every later `setState` and `apply()`. The
+snapshot factory of an event-sourced aggregate passes the option. Without it
+a rule that tightened after a snapshot was taken made every restore of that
+snapshot throw, map to `SnapshotCorruptedError`, and refold the stream on
+each load. With the option, `validateState` can hold real rules on an
+event-sourced aggregate. A state-stored factory keeps the default, because a
+row that fails today's rules is a finding. The structural gates (frozen copy,
+hostile own-key check) run regardless.
 
 ### Changed: the mint gate docs name the cooperative tier
 
@@ -55,9 +57,9 @@ A load recipe pins the stream head before its first page and checks the
 final aggregate version against it; on a mismatch it throws
 `ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`). Events carry no
 stream position, so `loadFromHistory` cannot detect a tail that overlaps
-the restored version: a snapshot at version 10 fed five events of which two
-were already folded ended at version 15 without an error. Both recipes in
-the event-sourcing guide carry the check.
+the restored version. A snapshot at version 10 fed five events, two of them
+already folded, ended at version 15 without an error. Both recipes in the
+event-sourcing guide carry the check.
 
 The event-sourced repository contract suite gains an optional harness hook
 `captureSnapshot(aggregate, environment)`. When present, the suite proves
@@ -116,9 +118,9 @@ replay.
 ### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an
-event handler (on `apply()` for every new fact, on replay once on the final
-folded state) and on the event payload in `createDomainEvent` and
-`createUncommittedDomainEvent`. Before this change
+event handler and on the event payload. On `apply()` it checks every new
+fact; on replay it checks the final folded state once. `createDomainEvent`
+and `createUncommittedDomainEvent` check the payload. Before this change
 only the entity constructor, `setState`, and the metadata helpers checked,
 so a handler that folded a hostile row into state stored the key. The check
 looks at the root object only, on plain objects, null-prototype objects, and
@@ -175,10 +177,10 @@ stable code, so `onPersistError` observers and tests can match on
 
 `recordPendingEvents`, `withCommit` enrollment, and the persistence baseline
 functions throw `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`) for an
-aggregate or baseline that this package did not construct: a repository DTO,
-a structural lookalike, or an instance from another package copy. Before this
-change the `withCommit` case threw `EventHarvestError`
-(`EVENT_HARVEST_FAILED`) and the other two threw a bare `TypeError`.
+aggregate or baseline that this package did not construct. That covers a
+repository DTO, a structural lookalike, and an instance from another package
+copy. Before this change the `withCommit` case threw `EventHarvestError`
+(`EVENT_HARVEST_FAILED`), and the other two threw a bare `TypeError`.
 Migration: an error mapper or a test that matched the old class or code for
 this case matches `UNMANAGED_INSTANCE` now.
 
