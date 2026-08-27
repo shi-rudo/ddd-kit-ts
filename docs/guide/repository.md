@@ -456,19 +456,17 @@ Loading creates a fresh aggregate. For event sourcing, replay the tail after
 stream head:
 
 ```ts
-const order = reconstituteAggregateFromSnapshot(
-  orderSnapshots,
-  orderId,
-  snapshot,
-);
-
 const tail = await eventStore.readStream(address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
 
-const replay = order.loadFromHistory(tail.events);
-if (replay.isErr()) throw replay.error;
+const restored = reconstituteFromHistory(
+  () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
+  tail.events,
+);
+if (restored.isErr()) throw restored.error;
+const order = restored.value;
 if (order.version !== tail.lastVersion) {
   throw new ReplayHeadMismatchError({
     ...address,

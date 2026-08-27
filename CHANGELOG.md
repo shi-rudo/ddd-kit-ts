@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: reconstituteFromHistory yields the aggregate only on success
+
+`reconstituteFromHistory(create, history)` builds the replay target through
+the factory you pass (a fresh instance, or one restored from a snapshot),
+folds the history into it, and returns `Result<Aggregate, DomainError>`.
+The instance exists only inside the call, so a rejected replay leaves the
+caller with nothing: a rolled-back instance cannot reach an identity map by
+an ignored `Result`. `loadFromHistory` stays for later catch-up pages on
+the instance. The guides use the factory in every load recipe.
+
 ### Added: trustInitialState for reconstitution factories
 
 `EntityConfig.trustInitialState` (and so `AggregateConfig`) tells the

@@ -304,6 +304,7 @@ const INDEX_SURFACE = [
 	"projectionFromHandlers",
 	"recapturePersistenceBaseline",
 	"reconstituteAggregateFromSnapshot",
+	"reconstituteFromHistory",
 	"recordDomainEvent",
 	"recordPendingEvents",
 	"removeEntityById",

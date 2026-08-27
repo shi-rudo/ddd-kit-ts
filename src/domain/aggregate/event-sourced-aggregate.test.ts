@@ -21,7 +21,10 @@ import {
 import type { Id } from "../identity/id";
 import { createDomainEvent, type DomainEvent, type Version } from "./aggregate";
 import type { AggregateConfig } from "./base-aggregate";
-import { EventSourcedAggregate as ProductionEventSourcedAggregate } from "./event-sourced-aggregate";
+import {
+	EventSourcedAggregate as ProductionEventSourcedAggregate,
+	reconstituteFromHistory,
+} from "./event-sourced-aggregate";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 
 function acknowledgePersisted(aggregate: object, version: Version): void {
@@ -1721,5 +1724,74 @@ describe("replay routes a foreign-copy domain rejection into the Result", () => 
 		}
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
+	});
+});
+
+describe("reconstituteFromHistory", () => {
+	const activated = (): TestEventActivated =>
+		createDomainEvent("TestEventActivated", {}) as TestEventActivated;
+	const updated = (newValue: number): TestEventUpdated =>
+		createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated;
+	const bare = (): TestEventSourcedAggregate =>
+		new TestEventSourcedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+	it("yields the folded aggregate on success", () => {
+		const result = reconstituteFromHistory(bare, [activated(), updated(5)]);
+
+		expect(result.isOk()).toBe(true);
+		if (!result.isOk()) return;
+		expect(result.value.state).toEqual({ value: 5, status: "active" });
+		expect(result.value.version).toBe(2);
+		expect(result.value.pendingEvents).toHaveLength(0);
+	});
+
+	it("yields nothing when a row is rejected: the caller holds no rolled-back instance", () => {
+		let built = 0;
+		const create = (): ValidatingAggregate => {
+			built += 1;
+			return new ValidatingAggregate("test-1" as TestId, {
+				value: 1,
+				status: "inactive",
+			});
+		};
+
+		const result = reconstituteFromHistory(create, [
+			activated(),
+			createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		expect(built).toBe(1);
+		expect(result).not.toHaveProperty("value");
+	});
+
+	it("throws for a foreign row, like loadFromHistory", () => {
+		const foreign = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 9 },
+			{ aggregateId: "other", aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+
+		expect(() => reconstituteFromHistory(bare, [foreign])).toThrow(
+			ForeignEventError,
+		);
+	});
+
+	it("folds a tail onto the instance the creator restored", () => {
+		const restoredAtTwo = (): TestEventSourcedAggregate => {
+			const agg = bare();
+			expect(agg.loadFromHistory([activated(), updated(2)]).isOk()).toBe(true);
+			return agg;
+		};
+
+		const result = reconstituteFromHistory(restoredAtTwo, [updated(3)]);
+
+		expect(result.isOk()).toBe(true);
+		if (!result.isOk()) return;
+		expect(result.value.version).toBe(3);
+		expect(result.value.state.value).toBe(3);
 	});
 });
