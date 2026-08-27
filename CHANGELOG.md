@@ -65,7 +65,9 @@ optimistic-concurrency version; integration and command messages keep
 their wire field `version`, and the boundary mappers translate. The
 migration guide (appendix rc.4 to rc.5) lists the one-to-one renames with
 the commands that apply them, and the aggregates guide carries the
-glossary. The entries below speak the new vocabulary.
+glossary. The entries below speak the new vocabulary. Kit-internal: the
+recording registry key moved to `v2`, because the event shape that crosses
+`record()` changed.
 
 ### Added: reconstituteAggregateFromHistory yields the aggregate only on success
 

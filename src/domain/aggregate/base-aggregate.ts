@@ -430,8 +430,10 @@ export abstract class BaseAggregate<
  *
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
- * disable the guard at every call site), and it checks the PUBLIC
- * `pendingEvents` getter, the same surface `withCommit` harvests.
+ * disable the guard at every call site). The callers pass the count of
+ * the private list; `withCommit` harvests the public `pendingEvents`
+ * getter, so a subclass that overrides the getter changes the harvest,
+ * not this guard.
  *
  * @internal Shared by the aggregate flavours in this package; not part of
  * the public API.

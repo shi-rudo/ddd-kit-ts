@@ -104,6 +104,18 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(readsAfterFirstFreeze);
 	});
 
+	it("re-walks a subtree that holds a pre-frozen Map, because its entries can still change", () => {
+		// A frozen Map takes no mutator shadows, so entries can still be
+		// added; the memo must not skip the graph that holds it.
+		const map = Object.freeze(new Map<string, { mutable: boolean }>());
+		deepFreeze({ map });
+		map.set("k", { mutable: true });
+
+		deepFreeze({ map });
+
+		expect(Object.isFrozen(map.get("k"))).toBe(true);
+	});
+
 	it("still walks a subtree that another freeze left shallow", () => {
 		const grandchild = { value: 1 };
 		const child = Object.freeze({ grandchild });
