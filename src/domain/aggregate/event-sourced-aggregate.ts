@@ -297,7 +297,7 @@ export abstract class EventSourcedAggregate<
 			// Inside the try on purpose: a handler that records a decision
 			// during the fold makes this throw, and the rollback below must
 			// cover that case too.
-			this.markRestored((startVersion + history.length) as Version);
+			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
 			this._state = previousState;
 			this.setVersion(startVersion);

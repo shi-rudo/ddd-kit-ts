@@ -699,7 +699,7 @@ describe("EventSourcedAggregate", () => {
 			const result = aggregate.replayHistory([]);
 
 			expect(result.isOk()).toBe(true);
-			// markRestored(0) would flip repository routing from INSERT to
+			// markReconstituted(0) would flip repository routing from INSERT to
 			// UPDATE against a row that does not exist.
 		});
 
@@ -1432,14 +1432,14 @@ describe("hostile own keys on the fold result", () => {
 	});
 });
 
-describe("markRestored on an event-sourced aggregate", () => {
+describe("markReconstituted on an event-sourced aggregate", () => {
 	class RestoringAggregate extends TestEventSourcedAggregate {
 		restore(version: number): void {
-			this.markRestored(version as Version);
+			this.markReconstituted(version as Version);
 		}
 	}
 
-	it("rejects markRestored while decisions are pending", () => {
+	it("rejects markReconstituted while decisions are pending", () => {
 		const agg = new RestoringAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",

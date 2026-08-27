@@ -51,7 +51,7 @@ class MockAggregate extends AggregateRoot<
 	) {
 		super(id, {});
 		if (restoredVersion !== undefined) {
-			this.markRestored(restoredVersion as Version);
+			this.markReconstituted(restoredVersion as Version);
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);

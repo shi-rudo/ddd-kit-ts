@@ -105,13 +105,13 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
 ```
 
-`markRestored` restores the current domain version. It does not create a
+`markReconstituted` restores the current domain version. It does not create a
 persistence receipt on the aggregate and does not record events. It accepts
 only a clean instance at a version not above the restored one; see
 [Aggregate Roots -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).

@@ -159,24 +159,24 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
 ```
 
-`markRestored(version)` tells the aggregate, "these are the domain facts at
+`markReconstituted(version)` tells the aggregate, "these are the domain facts at
 this version." It sets the aggregate's current version without recording an
 event. It does not remember a database baseline. The operation-scoped
 `UnitOfWork` owns that baseline.
 
-`markRestored` has two preconditions. The instance must carry no pending
+`markReconstituted` has two preconditions. The instance must carry no pending
 events, or it throws `UnreplayableAggregateError` (code
 `UNREPLAYABLE_AGGREGATE`). The current version must not be above the
 restored version, or it throws `InvalidVersionError` (code
 `INVALID_VERSION`). Two factory shapes break these rules:
 
-- A factory that calls `setState(rowState)` before `markRestored`. Every
+- A factory that calls `setState(rowState)` before `markReconstituted`. Every
   `setState` advances the version, so the instance is at version 1 before
   the restore, and a row stored at version 0 fails. Pass the stored state
   through the constructor, as the example above does, or use
@@ -361,7 +361,7 @@ class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
 
   static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
     const order = new Order(id, state, { trustInitialState: true });
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }

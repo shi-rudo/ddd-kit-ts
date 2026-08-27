@@ -73,7 +73,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		version: Version,
 	): ContractOrder {
 		const order = new ContractOrder(id, state);
-		order.markRestored(version);
+		order.markReconstituted(version);
 		return order;
 	}
 

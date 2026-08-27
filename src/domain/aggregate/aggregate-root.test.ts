@@ -64,7 +64,7 @@ describe("version guards", () => {
 		}
 
 		restore(version: number): void {
-			this.markRestored(version as Version);
+			this.markReconstituted(version as Version);
 		}
 
 		force(version: number): void {
@@ -86,16 +86,19 @@ describe("version guards", () => {
 		["NaN", Number.NaN],
 		["a negative number", -1],
 		["a fraction", 1.5],
-	])("rejects %s on markRestored and keeps the version", (_label, value) => {
-		const aggregate = fresh();
+	])(
+		"rejects %s on markReconstituted and keeps the version",
+		(_label, value) => {
+			const aggregate = fresh();
 
-		expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
+			expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
 
-		expect(aggregate.version).toBe(0);
-		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
-	});
+			expect(aggregate.version).toBe(0);
+			expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+		},
+	);
 
-	it("rejects a version below the current one on markRestored", () => {
+	it("rejects a version below the current one on markReconstituted", () => {
 		const aggregate = fresh();
 		aggregate.advance();
 		aggregate.advance();
@@ -124,7 +127,7 @@ describe("version guards", () => {
 		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
 	});
 
-	it("rejects markRestored while decisions are pending", () => {
+	it("rejects markReconstituted while decisions are pending", () => {
 		const aggregate = fresh();
 		aggregate.note(1);
 
@@ -483,7 +486,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				version: Version,
 			): DeepFrozenAggregate {
 				const aggregate = new DeepFrozenAggregate(id, state);
-				aggregate.markRestored(version);
+				aggregate.markReconstituted(version);
 				return aggregate;
 			}
 

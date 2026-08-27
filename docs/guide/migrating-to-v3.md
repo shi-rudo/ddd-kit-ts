@@ -76,7 +76,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
@@ -86,8 +86,8 @@ Reconstitution restores valid domain state and the current version without
 recording a new decision. Remove domain code that reads `persistedVersion`,
 `hasChanges`, or `changedKeys`. Those members no longer exist.
 
-`markRestored` accepts only a clean instance at a version not above the
-restored one. A factory that calls `setState` before `markRestored` puts the
+`markReconstituted` accepts only a clean instance at a version not above the
+restored one. A factory that calls `setState` before `markReconstituted` puts the
 instance at version 1 first, so a row stored at version 0 fails with
 `InvalidVersionError`. A constructor that records a creation event fails
 with `UnreplayableAggregateError` on every load. Pass the stored state
@@ -417,7 +417,7 @@ from four review rounds on the persistence redesign:
   `DomainEventValidationError` or `SnapshotTimeValidationError`: `name` now
   equals `code`, like every other kit error. Code-based matching does not
   change.
-- Reconstitution factories must call `markRestored(version)` on a clean
+- Reconstitution factories must call `markReconstituted(version)` on a clean
   instance whose version is not above `version`. The snapshot restore path
   enforces the version post-condition and rejects a factory that ignores it.
 - A `PersistenceModel.capture` must be deterministic for an unchanged

@@ -465,7 +465,7 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
     version: Version,
   ): Invoice {
     const invoice = new Invoice(id, state);
-    invoice.markRestored(version);
+    invoice.markReconstituted(version);
     return invoice;
   }
 

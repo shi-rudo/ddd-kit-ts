@@ -40,7 +40,7 @@ export class Order extends AggregateRoot<OrderState, OrderId> {
 	/** Reconstitutes persisted facts without recording a new decision. */
 	static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
 		const order = new Order(id, state);
-		order.markRestored(version);
+		order.markReconstituted(version);
 		return order;
 	}
 

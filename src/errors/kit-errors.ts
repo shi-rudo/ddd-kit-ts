@@ -471,7 +471,7 @@ export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
 
 /**
  * Thrown when a number that is not a valid aggregate version reaches the
- * kit: `toVersion`, `markRestored`, `setVersion`, and the post-commit
+ * kit: `toVersion`, `markReconstituted`, `setVersion`, and the post-commit
  * acknowledgement all reject it. A version is a safe integer of at least
  * zero, and a restore never moves below the current version. A wiring
  * error: an adapter passed a corrupt row value or a wrong number, and

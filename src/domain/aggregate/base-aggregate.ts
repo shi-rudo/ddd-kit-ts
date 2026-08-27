@@ -37,7 +37,7 @@ export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
  * identical across the two flavours: current version, pending-event
  * tracking, the kit-internal post-commit acknowledgement capability,
- * the `markRestored` post-load marker, and the `createEvent` helper
+ * the `markReconstituted` post-load marker, and the `createEvent` helper
  * that auto-injects `aggregateId` + `aggregateType` on every event the
  * aggregate emits. The application shell records the pending decisions
  * with `recordPendingEvents` before persistence.
@@ -89,7 +89,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Version the persistence layer last confirmed for this instance:
-	 * `undefined` until the aggregate is reconstituted (`markRestored`) or a
+	 * `undefined` until the aggregate is reconstituted (`markReconstituted`) or a
 	 * commit is acknowledged. Kit-internal via the lifecycle capability; it
 	 * grounds the `withCommit` unique-cursor guard so an eventful commit that
 	 * did not advance beyond the persisted row is rejected deterministically.
@@ -258,7 +258,7 @@ export abstract class BaseAggregate<
 	 * structurally: reconstitution stays inside the aggregate factory while
 	 * post-commit acknowledgement belongs to application commit orchestration.
 	 *
-	 * If you override this, call `super.markRestored(version)` so the current
+	 * If you override this, call `super.markReconstituted(version)` so the current
 	 * domain version remains aligned with the reconstituted facts.
 	 *
 	 * @param version - The version the row currently holds in the DB
@@ -267,12 +267,12 @@ export abstract class BaseAggregate<
 	 * ```ts
 	 * static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
 	 *   const order = new Order(id, state);
-	 *   order.markRestored(version);
+	 *   order.markReconstituted(version);
 	 *   return order;
 	 * }
 	 * ```
 	 */
-	protected markRestored(version: Version): void {
+	protected markReconstituted(version: Version): void {
 		assertReplayTargetHasNoPendingEvents(this);
 		const restored = toVersion(version);
 		if (restored < this._version) {
@@ -413,7 +413,7 @@ export abstract class BaseAggregate<
 }
 
 /**
- * Restore-target guard used by `markRestored` and by
+ * Restore-target guard used by `markReconstituted` and by
  * `EventSourcedAggregate.replayHistory`: a target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
  * moves. A restore advances the aggregate's current version, so unflushed

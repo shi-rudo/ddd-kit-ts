@@ -114,7 +114,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 		version: Version,
 	): ContractEsOrder {
 		const order = new ContractEsOrder(id, state, { trustInitialState: true });
-		order.markRestored(version);
+		order.markReconstituted(version);
 		return order;
 	}
 
