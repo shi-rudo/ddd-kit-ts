@@ -109,6 +109,18 @@ export interface EntityConfig<TState = unknown> {
 	 * shallow copy protects only the top-level input object).
 	 */
 	deepFreezeState?: boolean;
+
+	/**
+	 * For reconstitution factories only: the initial state is a persisted
+	 * fact, like an event history, so {@link validateState} does not run
+	 * on it. Every later {@link Entity.setState} call and every
+	 * event-sourced apply still runs the validator. Without this option a
+	 * rule that tightened after a snapshot was taken makes every restore of
+	 * that snapshot throw. Never pass it for a new aggregate: a factory
+	 * yields valid objects only. The structural gates (frozen copy, hostile
+	 * own-key check) run regardless.
+	 */
+	trustInitialState?: boolean;
 }
 
 /**
@@ -258,7 +270,9 @@ export abstract class Entity<TState, TId extends Id<string>>
 			shallowCopyOwned(initialState),
 			this._stateFreezeMode,
 		);
-		assertStateInvariant(this, initial);
+		if (!(config?.trustInitialState ?? false)) {
+			assertStateInvariant(this, initial);
+		}
 		this._state = initial;
 	}
 

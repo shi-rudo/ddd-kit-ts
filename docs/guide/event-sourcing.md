@@ -451,10 +451,11 @@ either: decode and upcast persisted events at the read boundary (see
 the current event shape. Replay does not run `validateState(...)` either:
 `loadFromHistory` stores each fold result as is, and only `apply(...)` runs
 both gates for new facts. The constructor runs `validateState` once on the
-initial state, so a `reconstitute` factory that passes a snapshot state to the
-constructor checks that state against today's rules. The section
-[Where Invariants Live](./aggregates.md#where-invariants-live) states which
-rules belong in `validateState` for an event-sourced aggregate. Snapshots do get their own
+initial state, unless the factory passes `trustInitialState: true`. A
+snapshot `reconstitute` factory does. The stored state is then a fact like
+the history, and a rule that tightened later does not break every restore.
+The section [Where Invariants Live](./aggregates.md#where-invariants-live)
+states the rule and the factory shape. Snapshots do get their own
 STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
 of the model could have produced (missing fields, wrong types) by throwing
 `SnapshotCorruptedError` from `migrate` or `reconstitute`. When a

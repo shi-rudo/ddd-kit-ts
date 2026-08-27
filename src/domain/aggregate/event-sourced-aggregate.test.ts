@@ -1178,6 +1178,28 @@ describe("validateState on the apply path", () => {
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
+	it("runs validateState on the initial state by default", () => {
+		expect(() => guarded({ value: -1, status: "inactive" })).toThrow(
+			NegativeValueError,
+		);
+	});
+
+	it("does not run validateState on a trusted initial state, but on the next fact", () => {
+		// A reconstitution factory passes the stored state as a fact: a rule
+		// that tightened after the snapshot was taken must not break every
+		// restore of that snapshot.
+		const restored = new TestEventSourcedAggregate(
+			"test-1" as TestId,
+			{ value: -3, status: "inactive" },
+			{ validateState: rejectNegativeValue, trustInitialState: true },
+		);
+
+		expect(restored.state.value).toBe(-3);
+		expect(() => restored.updateValue(-4)).toThrow(NegativeValueError);
+		restored.updateValue(4);
+		expect(restored.state.value).toBe(4);
+	});
+
 	it("replays history without running validateState", () => {
 		const agg = guarded({ value: 1, status: "inactive" });
 
