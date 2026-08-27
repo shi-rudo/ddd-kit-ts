@@ -96,15 +96,16 @@ replay.
 ### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an
-event handler, on `apply()` and on replay, and on the event payload in
-`createDomainEvent` and `createUncommittedDomainEvent`. Before this change
+event handler (on `apply()` for every new fact, on replay once on the final
+folded state) and on the event payload in `createDomainEvent` and
+`createUncommittedDomainEvent`. Before this change
 only the entity constructor, `setState`, and the metadata helpers checked,
 so a handler that folded a hostile row into state stored the key. The check
 looks at the root object only, on plain objects, null-prototype objects, and
 arrays; a class instance passes. It throws `HostileStateKeyError`, a wiring
 error: on replay, `loadFromHistory` throws it after the rollback instead of
 returning `Err`, the same posture as `MissingHandlerError`. A stored stream
-whose fold now hits the guard fails to load until the row is repaired.
+whose final fold now hits the guard fails to load until the row is repaired.
 
 ### Fixed: aggregate versions are validated where a number enters
 
