@@ -96,28 +96,39 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   const address = this.stream(id);
- *   const order = Order.reconstitute(id); // bare instance, no events
- *   let fromVersion = 0;
- *   let targetVersion: number | undefined;
- *   for (;;) {
+ *   const first = await this.eventStore.readStream(address, { limit: 256 });
+ *   if (!first.exists) return undefined;
+ *   const targetVersion = first.lastVersion; // pin the first observed head
+ *   const reconstituted = reconstituteAggregateFromHistory(
+ *     () => Order.reconstitute(id), // bare instance, no events
+ *     first.events,
+ *   );
+ *   if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
+ *   const order = reconstituted.value;
+ *   let fromVersion = first.events.length;
+ *   while (fromVersion < targetVersion) {
  *     const page = await this.eventStore.readStream(address, {
  *       fromVersion,
  *       toVersion: targetVersion,
  *       limit: 256,
  *     });
- *     if (!page.exists) return undefined;
- *     targetVersion ??= page.lastVersion; // pin the first observed head
- *     if (fromVersion === targetVersion) break;
- *     if (page.events.length === 0) {
+ *     if (!page.exists || page.events.length === 0) {
  *       throw new NonProgressingEventStreamPageError({
  *         ...address,
  *         fromVersion,
  *         targetVersion,
  *       });
  *     }
- *     const result = order.loadFromHistory(page.events);
- *     if (result.isErr()) throw result.error; // corrupt stream
+ *     const catchUp = order.loadFromHistory(page.events);
+ *     if (catchUp.isErr()) throw catchUp.error; // corrupt stream
  *     fromVersion += page.events.length;
+ *   }
+ *   if (order.version !== targetVersion) {
+ *     throw new ReplayHeadMismatchError({
+ *       ...address,
+ *       targetVersion,
+ *       actualVersion: order.version,
+ *     });
  *   }
  *   return this.tracking.trackLoaded(order);
  * }

@@ -342,21 +342,21 @@ export abstract class EventSourcedAggregate<
 
 /**
  * Reconstitutes an event-sourced aggregate from one page of history and
- * yields it only on success. `create` builds the replay target: a fresh
- * instance, or one restored from a snapshot. The instance exists only
- * inside this call, so a rejected replay leaves the caller with nothing;
- * a rolled-back instance cannot reach an identity map. Later catch-up
- * pages go through `loadFromHistory` on the value. A `DomainError` from
- * a handler rides the `Result`; wiring errors and a foreign row throw,
- * as in `loadFromHistory`.
+ * yields it only on success. `createReplayTarget` builds the instance: a
+ * fresh one, or one restored from a snapshot. The instance exists only
+ * inside this call. A rejected replay therefore leaves the caller with
+ * nothing to return by mistake. Later catch-up pages go through
+ * `loadFromHistory` on the value. A `DomainError` from a handler rides the
+ * `Result`; wiring errors and a foreign row throw, as in `loadFromHistory`.
+ * The creator runs outside the `Result`: what it throws propagates.
  */
-export function reconstituteFromHistory<
+export function reconstituteAggregateFromHistory<
 	TAggregate extends IEventSourcedAggregate<Id<string>, AnyDomainEvent>,
 >(
-	create: () => TAggregate,
+	createReplayTarget: () => TAggregate,
 	history: Parameters<TAggregate["loadFromHistory"]>[0],
 ): Result<TAggregate, DomainError> {
-	const aggregate = create();
+	const aggregate = createReplayTarget();
 	const replayed = aggregate.loadFromHistory(history);
 	if (replayed.isErr()) return err(replayed.error);
 	return ok(aggregate);

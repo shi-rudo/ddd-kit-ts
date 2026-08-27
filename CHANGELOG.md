@@ -29,9 +29,9 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
-### Added: reconstituteFromHistory yields the aggregate only on success
+### Added: reconstituteAggregateFromHistory yields the aggregate only on success
 
-`reconstituteFromHistory(create, history)` builds the replay target through
+`reconstituteAggregateFromHistory(create, history)` builds the replay target through
 the factory you pass (a fresh instance, or one restored from a snapshot),
 folds the history into it, and returns `Result<Aggregate, DomainError>`.
 The instance exists only inside the call, so a rejected replay leaves the
@@ -45,9 +45,10 @@ the instance. The guides use the factory in every load recipe.
 constructor that the initial state is a persisted fact. `validateState` does
 not run on it, and it runs on every later `setState` and `apply()`. The
 snapshot factory of an event-sourced aggregate passes the option. Without it
-a rule that tightened after a snapshot was taken made every restore of that
-snapshot throw, map to `SnapshotCorruptedError`, and refold the stream on
-each load. With the option, `validateState` can hold real rules on an
+a rule that tightened after the snapshot broke every restore of that
+snapshot: the restore threw, mapped to `SnapshotCorruptedError`, and
+refolded the stream on each load. With the option, `validateState` can hold
+real rules on an
 event-sourced aggregate. A state-stored factory keeps the default, because a
 row that fails today's rules is a finding. The structural gates (frozen copy,
 hostile own-key check) run regardless.

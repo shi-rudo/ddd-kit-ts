@@ -219,7 +219,7 @@ See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle
 
 ### Event-Sourced Aggregates
 
-For event-sourced aggregates, reconstitution means replaying history. Expose a factory for the empty replay target, then let the repository build the aggregate from history through `reconstituteFromHistory`:
+For event-sourced aggregates, reconstitution means replaying history. Expose a factory for the empty replay target, then let the repository build the aggregate from history through `reconstituteAggregateFromHistory`:
 
 ```ts
 class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
@@ -234,14 +234,14 @@ async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
 
-  const result = reconstituteFromHistory(() => Order.reconstitute(id), events);
+  const result = reconstituteAggregateFromHistory(() => Order.reconstitute(id), events);
   if (result.isErr()) throw result.error;
 
   return result.value;
 }
 ```
 
-`reconstituteFromHistory(create, events)` builds the replay target through your factory, folds the events into it, and yields the aggregate only in the `Ok`; a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `loadFromHistory(events)` on the instance.
+`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `loadFromHistory(events)` on the instance.
 
 The initial state should be inert: enough structure for your handlers to fold events into, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
 

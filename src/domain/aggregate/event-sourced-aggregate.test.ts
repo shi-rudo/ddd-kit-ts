@@ -23,7 +23,7 @@ import { createDomainEvent, type DomainEvent, type Version } from "./aggregate";
 import type { AggregateConfig } from "./base-aggregate";
 import {
 	EventSourcedAggregate as ProductionEventSourcedAggregate,
-	reconstituteFromHistory,
+	reconstituteAggregateFromHistory,
 } from "./event-sourced-aggregate";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 
@@ -1188,9 +1188,6 @@ describe("validateState on the apply path", () => {
 	});
 
 	it("does not run validateState on a trusted initial state, but on the next fact", () => {
-		// A reconstitution factory passes the stored state as a fact: a rule
-		// that tightened after the snapshot was taken must not break every
-		// restore of that snapshot.
 		const restored = new TestEventSourcedAggregate(
 			"test-1" as TestId,
 			{ value: -3, status: "inactive" },
@@ -1528,6 +1525,12 @@ describe("state changes only through events", () => {
 	});
 });
 
+const activated = (): TestEventActivated =>
+	createDomainEvent("TestEventActivated", {}) as TestEventActivated;
+
+const updated = (newValue: number): TestEventUpdated =>
+	createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated;
+
 describe("apply and replay bookkeeping", () => {
 	class ApplyingAggregate extends TestEventSourcedAggregate {
 		applyEvent(event: TestEvent): void {
@@ -1543,12 +1546,6 @@ describe("apply and replay bookkeeping", () => {
 		if (!capability) throw new Error("Missing test lifecycle capability");
 		return capability;
 	};
-
-	const activated = (): TestEventActivated =>
-		createDomainEvent("TestEventActivated", {}) as TestEventActivated;
-
-	const updated = (newValue: number): TestEventUpdated =>
-		createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated;
 
 	it("keeps a fully addressed new event as the same object", () => {
 		const agg = fresh();
@@ -1727,11 +1724,7 @@ describe("replay routes a foreign-copy domain rejection into the Result", () => 
 	});
 });
 
-describe("reconstituteFromHistory", () => {
-	const activated = (): TestEventActivated =>
-		createDomainEvent("TestEventActivated", {}) as TestEventActivated;
-	const updated = (newValue: number): TestEventUpdated =>
-		createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated;
+describe("reconstituteAggregateFromHistory", () => {
 	const bare = (): TestEventSourcedAggregate =>
 		new TestEventSourcedAggregate("test-1" as TestId, {
 			value: 1,
@@ -1739,7 +1732,10 @@ describe("reconstituteFromHistory", () => {
 		});
 
 	it("yields the folded aggregate on success", () => {
-		const result = reconstituteFromHistory(bare, [activated(), updated(5)]);
+		const result = reconstituteAggregateFromHistory(bare, [
+			activated(),
+			updated(5),
+		]);
 
 		expect(result.isOk()).toBe(true);
 		if (!result.isOk()) return;
@@ -1758,7 +1754,7 @@ describe("reconstituteFromHistory", () => {
 			});
 		};
 
-		const result = reconstituteFromHistory(create, [
+		const result = reconstituteAggregateFromHistory(create, [
 			activated(),
 			createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
 		]);
@@ -1768,6 +1764,22 @@ describe("reconstituteFromHistory", () => {
 		expect(result).not.toHaveProperty("value");
 	});
 
+	it("lets a throwing creator propagate: the creator runs outside the Result", () => {
+		const rejectAll = (): void => {
+			throw new NegativeValueError();
+		};
+		const createRejected = (): TestEventSourcedAggregate =>
+			new TestEventSourcedAggregate(
+				"test-1" as TestId,
+				{ value: -1, status: "inactive" },
+				{ validateState: rejectAll },
+			);
+
+		expect(() =>
+			reconstituteAggregateFromHistory(createRejected, [activated()]),
+		).toThrow(NegativeValueError);
+	});
+
 	it("throws for a foreign row, like loadFromHistory", () => {
 		const foreign = createDomainEvent(
 			"TestEventUpdated",
@@ -1775,7 +1787,7 @@ describe("reconstituteFromHistory", () => {
 			{ aggregateId: "other", aggregateType: "TestEventSourcedAggregate" },
 		) as TestEventUpdated;
 
-		expect(() => reconstituteFromHistory(bare, [foreign])).toThrow(
+		expect(() => reconstituteAggregateFromHistory(bare, [foreign])).toThrow(
 			ForeignEventError,
 		);
 	});
@@ -1787,7 +1799,9 @@ describe("reconstituteFromHistory", () => {
 			return agg;
 		};
 
-		const result = reconstituteFromHistory(restoredAtTwo, [updated(3)]);
+		const result = reconstituteAggregateFromHistory(restoredAtTwo, [
+			updated(3),
+		]);
 
 		expect(result.isOk()).toBe(true);
 		if (!result.isOk()) return;

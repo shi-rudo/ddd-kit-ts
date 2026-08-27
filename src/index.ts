@@ -156,7 +156,7 @@ export {
 } from "./domain/aggregate/aggregate-root";
 export {
 	EventSourcedAggregate,
-	reconstituteFromHistory,
+	reconstituteAggregateFromHistory,
 } from "./domain/aggregate/event-sourced-aggregate";
 // Entities
 export {

@@ -379,7 +379,7 @@ catch-up ends at the stream head and folds only the tail.
 ## Loading from history
 
 Reconstitution builds the aggregate from the first page through
-`reconstituteFromHistory` and folds later pages into it:
+`reconstituteAggregateFromHistory` and folds later pages into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
@@ -388,7 +388,7 @@ async function findById(id: OrderId): Promise<Order | null> {
   if (!first.exists) return null;
   const targetVersion = first.lastVersion;
 
-  const reconstituted = reconstituteFromHistory(
+  const reconstituted = reconstituteAggregateFromHistory(
     () => Order.reconstitute(id),
     first.events,
   );
@@ -427,15 +427,15 @@ async function findById(id: OrderId): Promise<Order | null> {
 ```
 
 The first page pins the authoritative head; subsequent pages replay only that
-prefix. `reconstituteFromHistory` builds the instance inside the call and
-yields it only when the first page folded, so a rejected replay leaves the
-repository with nothing to track. Each later page goes through
+prefix. `reconstituteAggregateFromHistory` builds the instance inside the
+call and yields it only when the first page folded. A rejected replay leaves
+the repository with nothing to track. Each later page goes through
 `loadFromHistory` on that instance, once per page, which keeps allocation
 bounded. If a later page fails, discard the local aggregate and do not place
 it in the identity map. Replay remains all-or-nothing per call, and no
 partially loaded instance escapes the repository.
 
-`reconstituteFromHistory(create, history)` returns
+`reconstituteAggregateFromHistory(create, history)` returns
 `Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a handler that rejects a
@@ -532,7 +532,7 @@ async function findOrderAsOfVersion(
     );
   }
 
-  const reconstituted = reconstituteFromHistory(
+  const reconstituted = reconstituteAggregateFromHistory(
     () => Order.reconstitute(id),
     page.events,
   );
@@ -609,7 +609,7 @@ async function findById(id: OrderId): Promise<Order | null> {
   let fromVersion = snapshot.version;
 
   try {
-    const restored = reconstituteFromHistory(
+    const restored = reconstituteAggregateFromHistory(
       () => reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot),
       tail.events,
     );
