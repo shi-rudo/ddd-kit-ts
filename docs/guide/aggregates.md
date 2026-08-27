@@ -548,3 +548,21 @@ A mutation that does not bump the version is invisible to optimistic concurrency
 
 That is why the method is named `setStateWithoutVersionBump`. Use it only for data where a lost update is acceptable.
 :::
+
+## Glossary
+
+One term per lifecycle step. Code, guides, and errors use these words and
+no synonyms.
+
+| Term | Meaning | Kit surface |
+| --- | --- | --- |
+| create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
+| setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
+| apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |
+| record | The application shell stamps identity and time on pending decisions. | `recordPendingEvents(aggregate, factory)` |
+| reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
+| replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
+| commit | The transaction that persists enrolled aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
+| version | The optimistic-concurrency version of the aggregate. | `aggregate.version`, `expectedVersion` |
+| schemaVersion | The payload schema version of one event or snapshot. | `event.schemaVersion`, `SnapshotModel.schemaVersion` |
+

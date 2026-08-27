@@ -465,8 +465,10 @@ this list if your code observes one of these paths:
 
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 
-Two source breaks, both at the entry points. No function and no type
-disappears.
+Source breaks at the entry points, on the event bus port, and in the
+aggregate vocabulary. The vocabulary renames are mechanical; the section
+[One lifecycle vocabulary](#one-lifecycle-vocabulary) lists them with the
+commands that apply them.
 
 ### The `utils` entry point is gone
 
@@ -531,3 +533,40 @@ Call it when the scope that owns the bus ends. After the call, `publish`,
 pending `once()` rejects instead of waiting for an event that cannot arrive.
 Closing releases the subscriptions. It does not stop a handler that is already
 running.
+
+### One lifecycle vocabulary
+
+One term per lifecycle step, and the same generic order on both aggregate
+flavours. No behavior changes; every rename is a one-to-one replacement.
+
+| Before | After |
+| --- | --- |
+| `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
+| `commit(newState, events)` | `setState(newState, events)` |
+| `loadFromHistory(history)` | `replayHistory(history)` |
+| `markRestored(version)` | `markReconstituted(version)` |
+| `stampNewEventAddress(event)` | `addressNewEvent(event)` |
+| `DomainEvent.version`, option `version` | `schemaVersion` |
+
+Apply the method renames with one command over your TypeScript sources:
+
+```sh
+sed -i '' \
+  -e 's/this\.commit(/this.setState(/g' \
+  -e 's/loadFromHistory/replayHistory/g' \
+  -e 's/markRestored/markReconstituted/g' \
+  -e 's/stampNewEventAddress/addressNewEvent/g' \
+  $(git ls-files '*.ts')
+```
+
+Then run the compiler. It flags every `EventSourcedAggregate` subclass
+whose type arguments are in the old order; swap the second and the third
+argument. It also flags every read of `event.version` and every event
+literal with a `version` field; rename them to `schemaVersion`. Do not
+touch the `version` field of an `IntegrationMessage` or a
+`CommandMessageContent`: those are wire contracts, and the boundary mappers
+translate between `schemaVersion` and `version`.
+
+`commit` is the transaction term only: `withCommit`, `committedVersion`,
+`CommittedDomainEvent`. `setState(newState)` without events is unchanged.
+
