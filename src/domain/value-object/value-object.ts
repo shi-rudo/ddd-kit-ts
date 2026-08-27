@@ -116,11 +116,20 @@ function shadowMutators(
  * unfrozen, because the spec forbids freezing a view with elements, and
  * freezing cannot protect the underlying buffer. Their contents remain mutable.
  */
+// Every object this module finished deep-freezing. A later walk stops at
+// such an object: nothing below it can change any more, so re-walking it
+// would only repeat work. A state written as `{ ...state, status }` costs
+// the root object, not the whole graph.
+const DEEP_FROZEN = new WeakSet<object>();
+
 export function deepFreeze<T>(
 	obj: T,
 	visited = new WeakSet<object>(),
 ): Readonly<T> {
 	if (obj === null || typeof obj !== "object") {
+		return obj as Readonly<T>;
+	}
+	if (DEEP_FROZEN.has(obj as object)) {
 		return obj as Readonly<T>;
 	}
 	// ArrayBuffer views are atomic: Object.freeze on a typed array with
@@ -169,7 +178,9 @@ export function deepFreeze<T>(
 		}
 	}
 
-	return Object.freeze(obj) as Readonly<T>;
+	const frozen = Object.freeze(obj) as Readonly<T>;
+	DEEP_FROZEN.add(obj as object);
+	return frozen;
 }
 
 /**

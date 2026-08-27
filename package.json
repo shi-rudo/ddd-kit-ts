@@ -45,6 +45,7 @@
 		"test:coverage": "vp test --coverage --coverage.include='src/**'",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
 		"audit:prod": "pnpm audit --prod",
+		"benchmark:aggregate-hot-path": "pnpm build && node --expose-gc benchmarks/aggregate-hot-path.mjs",
 		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",
 		"clean": "rm -rf dist",
 		"lint": "biome check .",

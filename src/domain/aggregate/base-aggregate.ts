@@ -225,6 +225,14 @@ export abstract class BaseAggregate<
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
+	/**
+	 * The number of pending events, without the frozen copy that
+	 * {@link pendingEvents} allocates per read.
+	 */
+	protected get pendingEventCount(): number {
+		return this._pendingEvents.length;
+	}
+
 	/** Sets the current version; rejects anything but a safe integer of at least zero. */
 	protected setVersion(version: Version): void {
 		this._version = toVersion(version);
@@ -273,7 +281,7 @@ export abstract class BaseAggregate<
 	 * ```
 	 */
 	protected markReconstituted(version: Version): void {
-		assertReplayTargetHasNoPendingEvents(this);
+		assertReplayTargetHasNoPendingEvents(this.id, this._pendingEvents.length);
 		const restored = toVersion(version);
 		if (restored < this._version) {
 			throw new InvalidVersionError(
@@ -428,14 +436,13 @@ export abstract class BaseAggregate<
  * @internal Shared by the aggregate flavours in this package; not part of
  * the public API.
  */
-export function assertReplayTargetHasNoPendingEvents(aggregate: {
-	readonly id: unknown;
-	readonly pendingEvents: ReadonlyArray<unknown>;
-}): void {
-	const pending = aggregate.pendingEvents.length;
+export function assertReplayTargetHasNoPendingEvents(
+	id: unknown,
+	pending: number,
+): void {
 	if (pending > 0) {
 		throw new UnreplayableAggregateError(
-			String(aggregate.id),
+			String(id),
 			`it carries ${pending} unflushed pending event(s) that are not ` +
 				"part of the persisted stream; discard this dirty instance and " +
 				"reconstitute a fresh aggregate before restoring persisted history",

@@ -29,6 +29,19 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: a deep freeze walks only what the write changed
+
+`deepFreeze` skips a subtree it already deep-froze, so a handler result or
+a new state written as `{ ...state, status }` costs the root object instead
+of the whole graph. Before this change every write and every replayed
+event with `deepFreezeState` walked the entire state. Measured with
+`npm run benchmark:aggregate-hot-path` (12 lines, nested attributes, Node
+24): a deep-mode `setState` or `apply` went from 24,000 to 96,000
+operations per second, level with the shallow mode; a deep-mode replay of
+2,000 events went from 16 to 990 replays per second. The shallow mode is
+unchanged. The replay guard reads the pending count without the frozen
+copy that the `pendingEvents` getter allocates.
+
 ### Changed (breaking): one lifecycle vocabulary
 
 One term per lifecycle step, and the same generic order on both aggregate

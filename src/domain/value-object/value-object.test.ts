@@ -86,6 +86,33 @@ function maskWithInheritedDataTag<T extends object>(value: T): T {
 }
 
 describe("deepFreeze", () => {
+	it("does not walk a subtree it already deep-froze", () => {
+		let reads = 0;
+		const child = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		deepFreeze(child);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...{}, child });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(readsAfterFirstFreeze);
+	});
+
+	it("still walks a subtree that another freeze left shallow", () => {
+		const grandchild = { value: 1 };
+		const child = Object.freeze({ grandchild });
+
+		deepFreeze({ child });
+
+		expect(Object.isFrozen(grandchild)).toBe(true);
+	});
+
 	it.each(mutableBuiltInCases)(
 		"blocks $name mutators with an own toStringTag accessor",
 		({ name, create, mutate }) => {
