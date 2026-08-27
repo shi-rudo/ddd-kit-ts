@@ -550,8 +550,7 @@ describe("EventSourcedAggregate", () => {
 			]);
 
 			expect(result.isErr()).toBe(true);
-			// The valid first event must not leak into state, the same
-			// all-or-nothing contract as restoreFromSnapshotWithEvents.
+			// The valid first event must not leak into state: all or nothing.
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 			expect(aggregate.version).toBe(0);
 		});
