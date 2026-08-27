@@ -40,7 +40,6 @@ class MockAggregate extends AggregateRoot<
 	TestEvent
 > {
 	protected readonly aggregateType = "MockOrder";
-	private _acknowledgementCount = 0;
 
 	constructor(
 		events: TestEvent[],
@@ -56,23 +55,6 @@ class MockAggregate extends AggregateRoot<
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
-		const lifecycle = pendingEventLifecycleCapabilityFor(this);
-		if (!lifecycle) throw new Error("missing aggregate event lifecycle");
-		registerPendingEventLifecycleCapability(this, {
-			acknowledge: (committedEvents, committedVersion) => {
-				lifecycle.acknowledge(committedEvents, committedVersion);
-				this._acknowledgementCount += 1;
-			},
-			discardPendingEvents: (committedEvents) =>
-				lifecycle.discardPendingEvents(committedEvents),
-			persistedVersion: () => lifecycle.persistedVersion(),
-			pendingEventCount: () => lifecycle.pendingEventCount(),
-			aggregateType: () => lifecycle.aggregateType(),
-		});
-	}
-
-	public get acknowledgementCount(): number {
-		return this._acknowledgementCount;
 	}
 
 	public advanceForObserverTest(): void {
@@ -172,6 +154,11 @@ function unstampedInstance(
 		aggregateType: () => "MockOrder",
 	});
 	return instance;
+}
+
+/** The version the kit acknowledged as persisted; a discard leaves it. */
+function persistedVersionOf(aggregate: object): Version | undefined {
+	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
 }
 
 function enrolledResult<R>(
@@ -409,7 +396,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("rejects a forged commit token before harvesting", async () => {
@@ -430,7 +417,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("rejects a token minted by an earlier withCommit invocation", async () => {
@@ -475,7 +462,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("seals enrollment before the outbox write begins", async () => {
@@ -816,7 +803,7 @@ describe("withCommit", () => {
 
 		// The callback failed before enrollment; acknowledgement must not run
 		// and pending events must survive.
-		expect(agg.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(agg)).not.toBe(agg.version);
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
@@ -855,8 +842,8 @@ describe("withCommit", () => {
 			async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [a, b]),
 		);
 
-		expect(a.acknowledgementCount).toBe(1);
-		expect(b.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(a)).toBe(a.version);
+		expect(persistedVersionOf(b)).toBe(b.version);
 		expect(a.pendingEvents).toHaveLength(0);
 		expect(b.pendingEvents).toHaveLength(0);
 	});
@@ -967,10 +954,10 @@ describe("withCommit", () => {
 			[stamped(savedEvent), stamped(deletionEvent)],
 		]);
 		// Saved aggregate: full post-commit lifecycle.
-		expect(savedAgg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(savedAgg)).toBe(savedAgg.version);
 		// Deleted aggregate: events cleared (no re-emission on a later
 		// commit), but no saved acknowledgement or application observer.
-		expect(deletedAgg.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(deletedAgg)).not.toBe(deletedAgg.version);
 		expect(deletedAgg.pendingEvents).toHaveLength(0);
 	});
 
@@ -1048,7 +1035,7 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([[stamped(event)]]);
 		expect(bus.published).toEqual([[event]]);
 		// Acknowledgement runs exactly once on the deduped aggregate.
-		expect(agg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(agg)).toBe(agg.version);
 	});
 
 	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
@@ -1140,7 +1127,7 @@ describe("withCommit", () => {
 		expect(bus.published).toHaveLength(0);
 		// Acknowledgement still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
-		expect(agg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(agg)).toBe(agg.version);
 	});
 
 	it("rejects an eventful persisted commit that did not advance aggregate version", async () => {
@@ -1254,7 +1241,7 @@ describe("withCommit", () => {
 			expect(result).toBe("ok");
 			expect(reported).toHaveLength(1);
 			expect(reported[0]?.aggregate).toBe(frozen);
-			expect(peer.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(peer)).toBe(peer.version);
 			expect(peer.pendingEvents).toEqual([]);
 			expect(observed).toEqual([peer]);
 			expect(bus.published).toHaveLength(1);
@@ -1293,7 +1280,7 @@ describe("withCommit", () => {
 			// Committed result survives; B's pending events were flushed
 			// (no double emission on the next commit); publish still ran.
 			expect(result).toBe("ok");
-			expect(aggB.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggB)).toBe(aggB.version);
 			expect(aggB.pendingEvents).toHaveLength(0);
 			expect(observed).toEqual([aggB]);
 			expect(bus.published).toHaveLength(1);
@@ -1598,7 +1585,7 @@ describe("withCommit", () => {
 
 			// Peer B is still marked; the committed write still resolves.
 			expect(result).toBe("ok");
-			expect(aggB.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggB)).toBe(aggB.version);
 			expect(aggB.pendingEvents).toHaveLength(0);
 		});
 
@@ -1625,7 +1612,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("ok");
 			expect(reported).toBe(0);
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
 		it("neutralises an async (rejecting) onPersistError instead of leaking an unhandled rejection", async () => {
@@ -1714,7 +1701,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("order-123");
 			// The commit lifecycle completed: pending events are flushed.
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
 		it("reports the publish error and the affected events via onPublishError", async () => {
@@ -1824,7 +1811,7 @@ describe("withCommit", () => {
 				expect(publishTimeoutMs).toBeLessThanOrEqual(5);
 				expect(reported).toHaveLength(1);
 				expect((reported[0] as Error).name).toBe("TimeoutError");
-				expect(agg.acknowledgementCount).toBe(1);
+				expect(persistedVersionOf(agg)).toBe(agg.version);
 			} finally {
 				vi.useRealTimers();
 			}
@@ -1847,7 +1834,7 @@ describe("withCommit", () => {
 				),
 			).rejects.toThrow("outbox write failed");
 			// Rolled back: pending events must survive for a retry.
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).not.toBe(agg.version);
 		});
 	});
 });
@@ -1884,7 +1871,7 @@ describe("commit enrollment lifecycle", () => {
 		// event was never part of the attested write.
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toEqual([first, later]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("treats an omitted expectedVersion on re-enrollment as no assertion", async () => {
@@ -1911,7 +1898,7 @@ describe("commit enrollment lifecycle", () => {
 		);
 
 		expect(outbox.added).toHaveLength(1);
-		expect(aggregate.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
 	it("acknowledges with the enrollment-time version, not the live version", async () => {
@@ -1992,8 +1979,8 @@ describe("commit enrollment lifecycle", () => {
 			},
 		);
 
-		// Acknowledged as SAVED: the mock counts acknowledge, not discard.
-		expect(aggregate.acknowledgementCount).toBe(1);
+		// Acknowledged as SAVED: the persisted version moves; a discard leaves it.
+		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
 	it("rejects re-enrollment that asserts a different expectedVersion", async () => {
@@ -2042,7 +2029,7 @@ describe("commit enrollment lifecycle", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 });
 
