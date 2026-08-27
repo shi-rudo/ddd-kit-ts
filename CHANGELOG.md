@@ -29,6 +29,17 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: trustInitialState for reconstitution factories
+
+`EntityConfig.trustInitialState` (and so `AggregateConfig`) tells the
+constructor that the initial state is a persisted fact: `validateState` does
+not run on it, and it runs on every later `setState` and `apply()`. A
+reconstitution factory passes the option; without it a rule that tightened
+after a snapshot was taken made every restore of that snapshot throw, map to
+`SnapshotCorruptedError`, and refold the stream on each load. With the
+option, `validateState` can hold real rules on an event-sourced aggregate.
+The structural gates (frozen copy, hostile own-key check) run regardless.
+
 ### Changed: the mint gate docs name the cooperative tier
 
 The TSDoc of `UnmintedEventError` and of the mint check said the marker is

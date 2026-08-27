@@ -291,7 +291,7 @@ This is where the theory matters most. Aggregate invariants are not just validat
 
 | Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction, `setState`, `commit`, and `apply()`; replay skips it |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, `commit`, and `apply()`; replay skips it |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
@@ -328,15 +328,43 @@ transitions and corrupt state loaded from persistence.
 
 On an event-sourced aggregate the validator has one more consequence. Replay
 does not run it; replay uses historical facts and pure event handlers rather
-than today's decision rules. A snapshot restore does run it, because the
-`reconstitute` factory passes the stored state to the constructor. If a rule
-in `validateState` later tightens, old streams still load from zero, but every
-snapshot restore throws. When the validator throws a `DomainError`, the
+than today's decision rules. A snapshot restore runs it by default, because
+the `reconstitute` factory passes the stored state to the constructor. If a
+rule in `validateState` later tightens, old streams still load from zero, but
+every snapshot restore throws. When the validator throws a `DomainError`, the
 restore maps it to `SnapshotCorruptedError` and refolds the stream on each
-load. Any other error propagates as is. So on an event-sourced aggregate, keep decision rules in
-`validateEvent` and keep `validateState` for rules that hold for every version
-of the state. This section is the one place that states this rule; the
-event-sourcing guide and the `SnapshotModel` docs point here.
+load, with no signal except latency. Any other error propagates as is.
+
+A reconstitution factory therefore passes `trustInitialState: true`. The
+stored state is then a fact like the history: the validator does not run on
+it, and it runs on every new fact through `apply()`. With that option
+`validateState` can hold real rules on an event-sourced aggregate, and
+"replay from zero" and "snapshot plus tail" load the same way. Never pass the
+option for a new aggregate; a factory yields valid objects only. The
+`SnapshotModel` keeps the structural gate on the stored blob.
+
+```ts
+class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+  protected readonly aggregateType = "Order";
+
+  private constructor(
+    id: OrderId,
+    state: OrderState,
+    config?: AggregateConfig<OrderState>,
+  ) {
+    super(id, state, { ...config, validateState: validateOrderState });
+  }
+
+  static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
+    const order = new Order(id, state, { trustInitialState: true });
+    order.markRestored(version);
+    return order;
+  }
+}
+```
+
+This section is the one place that states this rule; the event-sourcing
+guide and the `SnapshotModel` docs point here.
 
 ### Event-Sourced Invariants
 

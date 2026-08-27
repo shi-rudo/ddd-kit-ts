@@ -1034,6 +1034,52 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	});
 });
 
+describe("trustInitialState", () => {
+	class NegativeValueError extends Error {}
+	const rejectNegativeValue = (state: TestState): void => {
+		if (state.value < 0) throw new NegativeValueError();
+	};
+
+	class GuardedAggregate extends AggregateRoot<TestState, TestId> {
+		protected readonly aggregateType = "GuardedAggregate";
+
+		constructor(
+			id: TestId,
+			state: TestState,
+			config?: AggregateConfig<TestState>,
+		) {
+			super(id, state, { ...config, validateState: rejectNegativeValue });
+		}
+
+		change(value: number): void {
+			this.commit({ ...this.state, value });
+		}
+	}
+
+	it("runs validateState on the initial state by default", () => {
+		expect(
+			() =>
+				new GuardedAggregate("test-1" as TestId, {
+					value: -1,
+					status: "inactive",
+				}),
+		).toThrow(NegativeValueError);
+	});
+
+	it("skips validateState on a trusted initial state and runs it on the next transition", () => {
+		const restored = new GuardedAggregate(
+			"test-1" as TestId,
+			{ value: -1, status: "inactive" },
+			{ trustInitialState: true },
+		);
+
+		expect(restored.state.value).toBe(-1);
+		expect(() => restored.change(-2)).toThrow(NegativeValueError);
+		restored.change(2);
+		expect(restored.state.value).toBe(2);
+	});
+});
+
 describe("createEvent options and pending-event bookkeeping", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
