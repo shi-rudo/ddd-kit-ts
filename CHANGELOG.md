@@ -29,6 +29,22 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: ReplayHeadMismatchError and the snapshot catch-up contract proof
+
+A load recipe pins the stream head before its first page and checks the
+final aggregate version against it; on a mismatch it throws
+`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`). Events carry no
+stream position, so `loadFromHistory` cannot detect a tail that overlaps
+the restored version: a snapshot at version 10 fed five events of which two
+were already folded ended at version 15 without an error. Both recipes in
+the event-sourcing guide carry the check.
+
+The event-sourced repository contract suite gains an optional harness hook
+`captureSnapshot(aggregate, environment)`. When present, the suite proves
+that a snapshot at the head loads at the head and that a catch-up ends at
+the stream head with the same state as a full replay. The guide claimed
+this proof before it existed.
+
 ### Removed: the protected pendingEventCount getter on BaseAggregate
 
 No kit path read the getter. The pending-event lifecycle capability
@@ -80,15 +96,16 @@ replay.
 ### Changed (breaking): the hostile own-key guard covers the fold result and the payload
 
 The rejection of an own `"__proto__"` data key now runs on the result of an
-event handler, on `apply()` and on replay, and on the event payload in
-`createDomainEvent` and `createUncommittedDomainEvent`. Before this change
+event handler (on `apply()` for every new fact, on replay once on the final
+folded state) and on the event payload in `createDomainEvent` and
+`createUncommittedDomainEvent`. Before this change
 only the entity constructor, `setState`, and the metadata helpers checked,
 so a handler that folded a hostile row into state stored the key. The check
 looks at the root object only, on plain objects, null-prototype objects, and
 arrays; a class instance passes. It throws `HostileStateKeyError`, a wiring
 error: on replay, `loadFromHistory` throws it after the rollback instead of
 returning `Err`, the same posture as `MissingHandlerError`. A stored stream
-whose fold now hits the guard fails to load until the row is repaired.
+whose final fold now hits the guard fails to load until the row is repaired.
 
 ### Fixed: aggregate versions are validated where a number enters
 

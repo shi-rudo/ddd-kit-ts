@@ -482,7 +482,9 @@ mutates a live instance or records a new domain fact.
 Live aggregate state remains `protected`. Give the persistence adapter an
 explicit DTO projection such as `orderStateDto(order)` rather than exposing a
 generic public state getter. For event-sourced aggregates, restore the
-snapshot first and then call `loadFromHistory` with only the stream tail.
+snapshot first, call `loadFromHistory` with only the stream tail, and check
+that the final version equals the stream head (see
+[Event Sourcing -> Snapshots](./event-sourcing.md#snapshots)).
 
 ## When to Skip `commit`
 

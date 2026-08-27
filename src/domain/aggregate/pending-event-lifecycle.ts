@@ -41,9 +41,8 @@ export interface PendingEventLifecycleCapability {
 	 */
 	pendingEventCount(): number;
 	/**
-	 * The aggregate's declared type, for the harvest to check a recorded
-	 * event's address against the enrolled aggregate; the type is protected
-	 * on the aggregate and absent from `IAggregateRoot`.
+	 * The aggregate's declared type; it is protected on the aggregate and
+	 * absent from `IAggregateRoot`.
 	 */
 	aggregateType(): string;
 }
