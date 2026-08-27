@@ -267,7 +267,10 @@ export abstract class EventSourcedAggregate<
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
 	 * a reconstituted aggregate at v=P catching up on M newer events ends at
-	 * v=P+M.
+	 * v=P+M. Events carry no stream position, so an overlap with the current
+	 * version is invisible here: the caller passes only the events after
+	 * that version and checks the final version against the pinned stream
+	 * head ({@link ReplayHeadMismatchError}).
 	 *
 	 * The replay target must not carry pending decisions. Factory-vs-load
 	 * lifecycle is owned by the Unit of Work rather than inferred from an

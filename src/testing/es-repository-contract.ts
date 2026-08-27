@@ -66,6 +66,15 @@ export interface EsRepositoryContractHarness<
 	/** Applies exactly one event and advances the aggregate version by one. */
 	mutate(aggregate: TAggregate): void;
 	snapshotState?(aggregate: TAggregate): unknown;
+	/**
+	 * Persists a snapshot of the aggregate at its current version in the
+	 * environment's snapshot store, so the next load there starts from it.
+	 * Enables the snapshot catch-up proof.
+	 */
+	captureSnapshot?(
+		aggregate: TAggregate,
+		environment: EsRepositoryContractEnvironment<TAggregate, TEvent>,
+	): Promise<void>;
 }
 
 export type EsRepositoryContractTest = ContractTest;
@@ -91,6 +100,7 @@ export function createEsRepositoryContractTests<
 	const readAll = { limit: 100 } as const;
 	const createAggregateWithId = harness.createAggregateWithId;
 	const snapshotState = harness.snapshotState;
+	const captureSnapshot = harness.captureSnapshot;
 
 	const load = (
 		repository: EsContractRepository<TAggregate>,
@@ -459,6 +469,63 @@ export function createEsRepositoryContractTests<
 						deepEqual(ids(after.events), ids(before.events)),
 						"duplicate add must not modify the existing stream",
 					);
+				}),
+			},
+		),
+	);
+
+	tests.push(
+		gatedContractTest(
+			{
+				capability: "captureSnapshot",
+				satisfiedBy: Boolean(captureSnapshot),
+			},
+			{
+				name: "snapshot catch-up ends at the stream head and folds only the tail",
+				run: inEnvironment(async (environment) => {
+					assert(captureSnapshot !== undefined, "capability gate");
+					const seeded = await seed(environment);
+					await environment.run(async ({ repository }) => {
+						const loaded = await load(repository, seeded.id);
+						harness.mutate(loaded);
+						repository.update(loaded);
+					});
+					const snapshotted = await environment.run(({ repository }) =>
+						load(repository, seeded.id),
+					);
+					await captureSnapshot.call(harness, snapshotted, environment);
+
+					const atHead = await environment.run(({ repository }) =>
+						load(repository, seeded.id),
+					);
+					assert(
+						atHead.version === snapshotted.version,
+						`a snapshot at the head must load at the head ${snapshotted.version}, not beyond it; got ${atHead.version}`,
+					);
+
+					const winner = await environment.run(async ({ repository }) => {
+						const loaded = await load(repository, seeded.id);
+						harness.mutate(loaded);
+						harness.mutate(loaded);
+						repository.update(loaded);
+						return loaded;
+					});
+					const caughtUp = await environment.run(({ repository }) =>
+						load(repository, seeded.id),
+					);
+					assert(
+						caughtUp.version === winner.version,
+						`snapshot catch-up must end at the stream head ${winner.version}; got ${caughtUp.version}`,
+					);
+					if (snapshotState) {
+						assert(
+							deepEqual(
+								snapshotState.call(harness, caughtUp),
+								snapshotState.call(harness, winner),
+							),
+							"snapshot catch-up must fold only the tail after the snapshot",
+						);
+					}
 				}),
 			},
 		),

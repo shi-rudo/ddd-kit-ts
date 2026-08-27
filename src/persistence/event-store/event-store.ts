@@ -27,8 +27,9 @@ export interface ReadStreamOptions {
 	 * Return only events AFTER this stream position (1-based event count),
 	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
 	 * snapshot.version, limit: 256 })` yields the next page passed to
-	 * `aggregate.loadFromHistory`. Defaults to `0` (the first
-	 * stream page).
+	 * `aggregate.loadFromHistory`; the caller checks that the aggregate
+	 * ends at the pinned head ({@link ReplayHeadMismatchError}). Defaults
+	 * to `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;

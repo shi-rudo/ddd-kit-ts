@@ -29,6 +29,22 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: ReplayHeadMismatchError and the snapshot catch-up contract proof
+
+A load recipe pins the stream head before its first page and checks the
+final aggregate version against it; on a mismatch it throws
+`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`). Events carry no
+stream position, so `loadFromHistory` cannot detect a tail that overlaps
+the restored version: a snapshot at version 10 fed five events of which two
+were already folded ended at version 15 without an error. Both recipes in
+the event-sourcing guide carry the check.
+
+The event-sourced repository contract suite gains an optional harness hook
+`captureSnapshot(aggregate, environment)`. When present, the suite proves
+that a snapshot at the head loads at the head and that a catch-up ends at
+the stream head with the same state as a full replay. The guide claimed
+this proof before it existed.
+
 ### Removed: the protected pendingEventCount getter on BaseAggregate
 
 No kit path read the getter. The pending-event lifecycle capability

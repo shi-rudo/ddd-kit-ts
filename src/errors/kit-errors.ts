@@ -746,6 +746,51 @@ export class NonProgressingEventStreamPageError extends InfrastructureError<"NON
 	}
 }
 
+/** Constructor options for {@link ReplayHeadMismatchError}. */
+export interface ReplayHeadMismatchErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** Pinned inclusive stream head the replay had to reach. */
+	readonly targetVersion: number;
+	/** Version the aggregate holds after the replay. */
+	readonly actualVersion: number;
+}
+
+/**
+ * Thrown by a load recipe when the replayed aggregate does not end at the
+ * pinned stream head. Events carry no stream position, so the aggregate
+ * cannot detect a tail that overlaps the restored version or a page that
+ * lies outside the requested window; only the caller, which pinned the
+ * head, can compare. A snapshot catch-up passes only the events after the
+ * restored version, and the final version must equal the head.
+ *
+ * This is a non-retryable infrastructure error: the persistence adapter
+ * contradicted its port contract. Run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against the adapter and fix its
+ * windowing.
+ */
+export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly targetVersion: number;
+	readonly actualVersion: number;
+
+	constructor(options: ReplayHeadMismatchErrorOptions) {
+		super({
+			code: "REPLAY_HEAD_MISMATCH",
+			message:
+				`Replay of ${options.aggregateType}(${options.aggregateId}) ended at version ` +
+				`${options.actualVersion}, not at the pinned stream head ${options.targetVersion}. ` +
+				"The tail overlapped the restored version or a page lay outside the " +
+				"requested window; pass only the events after the restored version.",
+		});
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.targetVersion = options.targetVersion;
+		this.actualVersion = options.actualVersion;
+	}
+}
+
 /**
  * Thrown when an event harvested from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
@@ -1404,6 +1449,7 @@ export type KitErrorCode =
 	| "PUBLISH_DEPTH_EXCEEDED"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "REENTRANT_EVENT_RECORDING"
+	| "REPLAY_HEAD_MISMATCH"
 	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"

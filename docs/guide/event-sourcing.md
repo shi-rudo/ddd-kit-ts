@@ -372,8 +372,9 @@ The store suite proves qualified-key isolation, OCC/atomicity, stream-state
 reporting, per-page bounds, gapless continuation, ordering, and both position
 bounds. The repository suite covers append
 conflicts, duplicate creates, replay equality, rollback purity, commit
-lifecycle, snapshot catch-up, and point-in-time windows through the repository
-adapter.
+lifecycle, and point-in-time windows through the repository adapter. When the
+harness provides `captureSnapshot`, the suite also proves that a snapshot
+catch-up ends at the stream head and folds only the tail.
 
 ## Loading from history
 
@@ -409,6 +410,13 @@ async function findById(id: OrderId): Promise<Order | null> {
     fromVersion += page.events.length;
   }
 
+  if (order.version !== targetVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion,
+      actualVersion: order.version,
+    });
+  }
   return order;
 }
 ```
@@ -468,6 +476,13 @@ Version advances additively:
 - a fresh aggregate at version `0` loading three events ends at version `3`
 - a persisted aggregate at version `10` catching up on two newer events ends at
   version `12`
+
+Events carry no stream position, so the aggregate cannot detect a tail that
+overlaps its version: a snapshot at version `10` fed five events of which two
+were already folded ends at version `15`. The caller passes only the events
+after the restored version, pins the stream head before the first page, and
+checks the final version against it. On a mismatch the load recipe throws
+`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`).
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
 `loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
@@ -615,6 +630,13 @@ async function findById(id: OrderId): Promise<Order | null> {
     throw error;
   }
 
+  if (order.version !== targetVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion,
+      actualVersion: order.version,
+    });
+  }
   return order;
 }
 ```
