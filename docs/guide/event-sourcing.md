@@ -432,7 +432,9 @@ stream can be corrupt in ways the domain can name (a handler that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
 `Result`. The wiring errors `MissingHandlerError`, `HandlerReturnedNoStateError`,
 `HostileStateKeyError`, and `UnreplayableAggregateError` throw, after the
-rollback, because a code bug must not look like a corrupt stream. And an
+rollback, because a code bug must not look like a corrupt stream.
+`UnmintedEventError` belongs to `apply()` only: replay input comes from
+storage rows, and the mint gate does not run on it. And an
 event addressed to a different aggregate (`ForeignEventError`,
 when a history event carries an `aggregateId` or `aggregateType` that does not
 match the target) is an `InfrastructureError` and THROWS, because a wrong

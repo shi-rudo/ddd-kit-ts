@@ -29,6 +29,15 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: the mint gate docs name the cooperative tier
+
+The TSDoc of `UnmintedEventError` and of the mint check said the marker is
+unforgeable. Only the module-private tier is; the cooperative `Symbol.for`
+brand that a second loaded copy of the kit stamps can be faked by code in
+the same process. The docs now state both tiers and the posture: the gate
+catches accidents, not adversaries. The aggregates and domain-events guides
+name `UnmintedEventError` and `HostileStateKeyError` with that posture.
+
 ### Added: ReplayHeadMismatchError and the snapshot catch-up contract proof
 
 A load recipe pins the stream head before its first page and checks the

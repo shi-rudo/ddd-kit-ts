@@ -83,6 +83,16 @@ const event = createDomainEvent(
 
 The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
+The kit marks every event its constructors return as minted. The aggregate
+recording paths (`apply`, `commit`, `addDomainEvent`) accept only minted
+events; a hand-rolled literal throws `UnmintedEventError` (code
+`UNMINTED_EVENT`). The mark has two tiers. A module-private tier covers the
+events of this loaded copy of the kit. A cooperative `Symbol.for` brand
+covers events that a second loaded copy minted (a duplicate dependency, a
+dual CJS/ESM load). The brand catches accidents, not adversaries: code in the
+same process can fake it. The gate is not a security boundary; validate
+untrusted input at the application edge.
+
 Events should be plain structured-cloneable data. Functions, promises, `WeakMap`, and `WeakSet` do not belong in event payloads. A class instance may lose its prototype through structured cloning, so model event payloads as plain records.
 
 `createDomainEvent` reads the platform clock and Web Crypto when `occurredAt`

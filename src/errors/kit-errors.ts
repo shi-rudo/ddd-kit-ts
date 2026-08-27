@@ -578,12 +578,15 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
  * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or aggregate
  * event helpers
  * deep-freeze the event and defensively copy payload and metadata,
- * and register the result in an internal, unforgeable mint marker.
- * Anything else (a hand-rolled literal, a shallow-frozen copy with
- * mutable nested data) is rejected: a mutable event recorded next to
- * a state change can silently diverge from it afterwards. A wiring
- * error: deterministic bug at the call site, the remedy is minting
- * through the constructors.
+ * and mark the result as minted. The mark has two tiers: a
+ * module-private one for events of this loaded copy of the kit, and a
+ * cooperative `Symbol.for` brand that a second loaded copy stamps and
+ * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
+ * copy with mutable nested data) is rejected: a mutable event recorded
+ * next to a state change can silently diverge from it afterwards. A
+ * wiring error: deterministic bug at the call site, the remedy is
+ * minting through the constructors. The gate catches accidents, not
+ * adversaries: code in the same process can fake the brand.
  */
 export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 	constructor(eventType: string) {
