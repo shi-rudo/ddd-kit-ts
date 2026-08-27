@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
@@ -239,18 +239,18 @@ describe("recordPendingEvents", () => {
 		expect((caught as UnmanagedInstanceError).message).toContain("counter-1");
 	});
 
-	it("shares the recording capability registry across package copies", () => {
+	it("resolves the recording capability from a second copy of the module", async () => {
 		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
 
-		// The registry lives behind a Symbol.for key on globalThis, like the
-		// lifecycle registry: a second loaded copy of the kit resolves the
-		// same WeakMap instead of a module-local one it cannot see into.
-		const registry = Object.getOwnPropertyDescriptor(
-			globalThis,
-			Symbol.for("@shirudo/ddd-kit/pending-event-recording-registry/v1"),
-		)?.value as WeakMap<object, unknown> | undefined;
+		// A duplicate package installation re-evaluates the module; its
+		// copy must find the capability this copy registered.
+		vi.resetModules();
+		const foreignModule = await import(
+			"../../domain/aggregate/pending-event-recording"
+		);
 
-		expect(registry).toBeInstanceOf(WeakMap);
-		expect(registry?.has(aggregate)).toBe(true);
+		expect(
+			foreignModule.pendingEventRecordingCapabilityFor(aggregate),
+		).toBeDefined();
 	});
 });

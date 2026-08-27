@@ -979,3 +979,107 @@ describe("factory source strategy", () => {
 		expect(event.metadata?.source).toBeUndefined();
 	});
 });
+
+describe("metadata option", () => {
+	it("stores the metadata the call site names, standard and custom fields alike", () => {
+		const metadata: EventMetadata = {
+			correlationId: "corr-123",
+			causationId: "cmd-456",
+			userId: "user-789",
+			source: "order-service",
+			customField: "custom-value",
+		};
+
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "123" },
+			{ metadata },
+		);
+
+		expect(event.metadata).toEqual(metadata);
+	});
+
+	it("leaves metadata undefined when the call site names none", () => {
+		const event = createDomainEvent("OrderCreated", { orderId: "123" });
+
+		expect(event.metadata).toBeUndefined();
+	});
+});
+
+describe("copyMetadata", () => {
+	const sourceEvent = createDomainEvent(
+		"OrderCreated",
+		{ orderId: "123" },
+		{ metadata: { correlationId: "corr-123", userId: "user-456" } },
+	);
+
+	it("copies the metadata of the source event", () => {
+		const copied = copyMetadata(sourceEvent);
+
+		expect(copied).toEqual({ correlationId: "corr-123", userId: "user-456" });
+	});
+
+	it("adds the additional metadata and lets it override the source", () => {
+		const copied = copyMetadata(sourceEvent, {
+			causationId: "cmd-789",
+			userId: "user-999",
+		});
+
+		expect(copied).toEqual({
+			correlationId: "corr-123",
+			userId: "user-999",
+			causationId: "cmd-789",
+		});
+	});
+
+	it("returns only the additional metadata for a source without metadata", () => {
+		const bare = createDomainEvent("OrderCreated", { orderId: "123" });
+
+		const copied = copyMetadata(bare, { correlationId: "corr-123" });
+
+		expect(copied).toEqual({ correlationId: "corr-123" });
+	});
+
+	it("carries a correlation chain into a follow-up event", () => {
+		const followUp = createDomainEvent(
+			"OrderShipped",
+			{ orderId: "123" },
+			{
+				metadata: copyMetadata(sourceEvent, {
+					causationId: sourceEvent.type,
+				}),
+			},
+		);
+
+		expect(followUp.metadata?.correlationId).toBe("corr-123");
+		expect(followUp.metadata?.causationId).toBe("OrderCreated");
+		expect(followUp.metadata?.userId).toBe("user-456");
+	});
+});
+
+describe("mergeMetadata", () => {
+	it("merges several metadata objects and lets a later one override", () => {
+		const merged = mergeMetadata(
+			{ correlationId: "corr-123", userId: "user-456" },
+			{ userId: "user-999", source: "order-service" },
+		);
+
+		expect(merged).toEqual({
+			correlationId: "corr-123",
+			userId: "user-999",
+			source: "order-service",
+		});
+	});
+
+	it("skips undefined inputs", () => {
+		const merged = mergeMetadata({ correlationId: "corr-123" }, undefined, {
+			userId: "user-456",
+		});
+
+		expect(merged).toEqual({ correlationId: "corr-123", userId: "user-456" });
+	});
+
+	it("returns an empty object for no inputs", () => {
+		expect(mergeMetadata()).toEqual({});
+	});
+});

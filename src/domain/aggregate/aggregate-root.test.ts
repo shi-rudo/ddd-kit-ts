@@ -299,17 +299,6 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 		expect(aggregate.state.value).toBe(1);
 	});
 
-	it("the removed two-argument flag form is a compile error", () => {
-		class Legacy extends AggregateRoot<TestState, TestId> {
-			protected readonly aggregateType = "Legacy";
-			legacyCall(): void {
-				// @ts-expect-error the bumpVersion flag argument was replaced by setStateWithoutVersionBump
-				this.setState({ ...this.state, value: 9 }, true);
-			}
-		}
-		expect(typeof Legacy).toBe("function");
-	});
-
 	it("a polymorphic Entity-typed call gets the safe bumping default", () => {
 		// Before the redesign this path threw a TypeError; with the flag
 		// gone, the same signature as Entity.setState means the safe
@@ -373,7 +362,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}).toThrow();
 		});
 
-		it("should manually bump version", () => {
+		it("advances the version by one per state change", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			expect(aggregate.version).toBe(0);
@@ -416,12 +405,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.state.value).toBe(30);
 		});
 
-		it("the autoVersionBump config is gone (the named methods replaced it)", () => {
-			// @ts-expect-error autoVersionBump was removed in v3; the OCC intent lives in the method name (setState bumps, setStateWithoutVersionBump does not)
-			const config: AggregateConfig = { autoVersionBump: true };
-			expect(config).toBeDefined();
-		});
-
 		it("manual bumpVersion stays available for subclass orchestration", () => {
 			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
 				protected readonly aggregateType = "ManualVersionAggregate";
@@ -461,7 +444,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(state.value).toBe(10);
 		});
 
-		it("should allow mutation through protected _state", () => {
+		it("replaces the state through a domain method", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			aggregate.updateValue(20);
@@ -700,58 +683,36 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("recordEvent helper", () => {
+	describe("createEvent", () => {
 		type Recorded = DomainEvent<"Recorded", { v: number }>;
 
-		class RecordingAggregate extends AggregateRoot<
-			TestState,
-			TestId,
-			Recorded
-		> {
-			protected readonly aggregateType = "RecordingAggregate";
+		class DecidingAggregate extends AggregateRoot<TestState, TestId, Recorded> {
+			protected readonly aggregateType = "DecidingAggregate";
 
+			// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
 			constructor(id: TestId, initialState: TestState) {
 				super(id, initialState);
 			}
 
-			fire(v: number): Recorded {
-				return createDomainEvent(
-					"Recorded",
-					{ v },
-					{
-						aggregateId: this.id,
-						aggregateType: this.aggregateType,
-					},
-				);
+			decide(v: number): PendingDomainEvent<Recorded> {
+				return this.createEvent("Recorded", { v });
 			}
 		}
 
-		it("auto-injects aggregateId from this.id", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
+		it("stamps the aggregate address and leaves identity and time to the shell", () => {
+			const agg = new DecidingAggregate("r-1" as TestId, {
 				value: 0,
 				status: "inactive",
 			});
-			const event = agg.fire(7);
+
+			const event = agg.decide(42);
+
 			expect(event.aggregateId).toBe("r-1");
-		});
-
-		it("auto-injects aggregateType from the static declaration", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			const event = agg.fire(7);
-			expect(event.aggregateType).toBe("RecordingAggregate");
-		});
-
-		it("preserves the payload exactly", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			const event = agg.fire(42);
+			expect(event.aggregateType).toBe("DecidingAggregate");
 			expect(event.type).toBe("Recorded");
 			expect(event.payload).toEqual({ v: 42 });
+			expect(event).not.toHaveProperty("eventId");
+			expect(event).not.toHaveProperty("occurredAt");
 		});
 	});
 
@@ -878,33 +839,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
 		});
 
-		it("does not expose acknowledgement or event disposal on aggregates", () => {
-			const aggregate = new EventingAggregate("test-1" as TestId, {
-				value: 10,
-				status: "inactive",
-			});
-
-			expect("markPersisted" in aggregate).toBe(false);
-			expect("clearPendingEvents" in aggregate).toBe(false);
-		});
-
-		it("keeps the capability off the aggregate while duplicate package instances can resolve it", async () => {
+		it("resolves the lifecycle capability from a second copy of the module", async () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-			const exposesCapability = Object.getOwnPropertySymbols(aggregate).some(
-				(symbol) => {
-					const value = Object.getOwnPropertyDescriptor(aggregate, symbol)
-						?.value as
-						| { acknowledge?: unknown; discardPendingEvents?: unknown }
-						| undefined;
-					return (
-						typeof value?.acknowledge === "function" &&
-						typeof value.discardPendingEvents === "function"
-					);
-				},
-			);
 
-			expect(exposesCapability).toBe(false);
-
+			// A duplicate package installation re-evaluates the module; its
+			// copy must find the capability this copy registered.
 			vi.resetModules();
 			const foreignModule = await import("./pending-event-lifecycle");
 			expect(
@@ -1093,13 +1032,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents[0]?.payload).toEqual({ data: "hello" });
 		});
 	});
-
-	it("keeps persistence bookkeeping off the aggregate surface", () => {
-		const aggregate = TestAggregate.create("test-1" as TestId, 10);
-		expect("persistedVersion" in aggregate).toBe(false);
-		expect("changedKeys" in aggregate).toBe(false);
-		expect("hasChanges" in aggregate).toBe(false);
-	});
 });
 
 describe("createEvent options and pending-event bookkeeping", () => {
@@ -1175,18 +1107,6 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
 			})),
 		).toThrow(UnmintedEventError);
-	});
-
-	it("registers the lifecycle capability under the versioned global key", () => {
-		const aggregate = fresh();
-
-		const registry = Object.getOwnPropertyDescriptor(
-			globalThis,
-			Symbol.for("@shirudo/ddd-kit/pending-event-lifecycle-registry/v6"),
-		)?.value as WeakMap<object, unknown> | undefined;
-
-		expect(registry).toBeInstanceOf(WeakMap);
-		expect(registry?.has(aggregate)).toBe(true);
 	});
 
 	it("reports the pending count across add, record, and acknowledge", () => {

@@ -22,6 +22,19 @@ describe("createGlobalCapabilityRegistry", () => {
 		});
 	});
 
+	it("refuses a key that an accessor holds, even one that yields a WeakMap", () => {
+		const host = {};
+		const key = Symbol.for("@shirudo/ddd-kit/test-registry/accessor");
+		Object.defineProperty(host, key, {
+			get: () => new WeakMap(),
+			configurable: true,
+		});
+
+		expect(() => createGlobalCapabilityRegistry<Capability>(key, host)).toThrow(
+			CapabilityRegistryConflictError,
+		);
+	});
+
 	it("refuses a key that another module already holds with a foreign value", () => {
 		const host = {};
 		const key = Symbol.for("@shirudo/ddd-kit/test-registry/conflict");

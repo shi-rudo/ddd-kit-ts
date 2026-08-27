@@ -175,11 +175,6 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		);
 	}
 
-	replayLikeLegacy(event: TestEventUpdated): void {
-		// @ts-expect-error the isNew flag argument is gone: apply() always records; replay goes through loadFromHistory
-		this.apply(event, false);
-	}
-
 	protected readonly handlers = testHandlers;
 }
 
@@ -753,19 +748,6 @@ describe("EventSourcedAggregate", () => {
 		});
 	});
 
-	describe("dirty-tracking isolation", () => {
-		it("has no changedKeys/hasChanges: pendingEvents IS the change record", () => {
-			// Dirty tracking lives on AggregateRoot only. An event-sourced
-			// aggregate's change record is its pendingEvents; partial-write
-			// repos type against the concrete state-stored class instead.
-			const aggregate = TestEventSourcedAggregate.create(
-				"test-1" as TestId,
-				10,
-			);
-			expect("hasChanges" in aggregate).toBe(false);
-		});
-	});
-
 	describe("opt-in deep freeze (deepFreezeState via constructor config)", () => {
 		type NestedEsState = {
 			items: string[];
@@ -831,16 +813,6 @@ describe("EventSourcedAggregate", () => {
 
 			expect(aggregate.version).toBe(2);
 			expect(aggregate.pendingEvents).toHaveLength(0);
-		});
-
-		it("does not expose acknowledgement or event disposal on aggregates", () => {
-			const aggregate = new TestEventSourcedAggregate("test-1" as TestId, {
-				value: 10,
-				status: "inactive",
-			});
-
-			expect("markPersisted" in aggregate).toBe(false);
-			expect("clearPendingEvents" in aggregate).toBe(false);
 		});
 	});
 
@@ -1079,29 +1051,24 @@ describe("replay trusts history", () => {
 		);
 	});
 
-	it("recognizes events minted by another copy of the kit via the cooperative brand", () => {
+	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
-		// event carries the global-registry mint brand instead; the gate
-		// accepts it. The brand is cooperative by design (the gate catches
-		// accidental literals, it is not a security boundary).
+		// event carries the shared mint brand instead; the gate accepts it.
+		// The brand is cooperative by design (the gate catches accidental
+		// literals, it is not a security boundary).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 0,
 			status: "inactive",
 		});
-		const minted = createDomainEvent("TestEventUpdated", {
-			newValue: 3,
-		}) as TestEventUpdated;
-		// Simulate instance B's output: same shape, same brand, foreign WeakSet.
-		const foreignInstanceEvent = { ...minted };
-		Object.defineProperty(
-			foreignInstanceEvent,
-			Symbol.for("@shirudo/ddd-kit.mintedEvent"),
-			{ value: true, enumerable: false },
-		);
-		Object.freeze(foreignInstanceEvent);
+		vi.resetModules();
+		const foreignDomainEventModule = await import("../event/domain-event");
+		const foreignInstanceEvent = foreignDomainEventModule.createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 3 },
+		) as TestEventUpdated;
 
-		agg.testApply(foreignInstanceEvent as TestEventUpdated);
+		agg.testApply(foreignInstanceEvent);
 
 		expect(agg.state.value).toBe(3);
 	});

@@ -451,8 +451,9 @@ const snapshot = captureAggregateSnapshot(
 await snapshotStore.save(address, snapshot);
 ```
 
-Loading creates a fresh aggregate. For event sourcing, replay the tail on that
-fresh instance:
+Loading creates a fresh aggregate. For event sourcing, replay the tail after
+`snapshot.version` on that fresh instance and check that it ends at the
+stream head:
 
 ```ts
 const order = reconstituteAggregateFromSnapshot(
@@ -468,7 +469,19 @@ const tail = await eventStore.readStream(address, {
 
 const replay = order.loadFromHistory(tail.events);
 if (replay.isErr()) throw replay.error;
+if (order.version !== tail.lastVersion) {
+  throw new ReplayHeadMismatchError({
+    ...address,
+    targetVersion: tail.lastVersion,
+    actualVersion: order.version,
+  });
+}
 ```
+
+This reads one page. A tail longer than the page limit fails the head check
+instead of loading a truncated aggregate; the paged recipe with the pinned
+head and the refold fallback is in
+[Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
 detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,
