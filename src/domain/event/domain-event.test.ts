@@ -26,7 +26,7 @@ describe("DomainEvent", () => {
 				{
 					aggregateId: "customer-1",
 					aggregateType: "Customer",
-					version: 2,
+					schemaVersion: 2,
 				},
 			);
 
@@ -43,7 +43,7 @@ describe("DomainEvent", () => {
 				aggregateType: "Customer",
 				payload: { name: "Ada" },
 				occurredAt,
-				version: 2,
+				schemaVersion: 2,
 				metadata: { correlationId: "correlation-1" },
 			});
 			expect(event.occurredAt).not.toBe(occurredAt);
@@ -135,22 +135,23 @@ describe("DomainEvent", () => {
 
 		it.each([0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 			"rejects invalid payload schema version %s",
-			(version) => {
+			(schemaVersion) => {
 				const actions = [
-					() => createDomainEvent("Demo", undefined, { version }),
-					() => createUncommittedDomainEvent("Demo", undefined, { version }),
+					() => createDomainEvent("Demo", undefined, { schemaVersion }),
+					() =>
+						createUncommittedDomainEvent("Demo", undefined, { schemaVersion }),
 					() =>
 						createDomainEventFromFacts("Demo", undefined, {
 							eventId: "event-1",
 							occurredAt: new Date(0),
-							version,
+							schemaVersion,
 						}),
 				];
 				for (const action of actions) {
 					expect(action).toThrowError(
 						expect.objectContaining({
 							code: "EVENT_SCHEMA_VERSION_INVALID",
-							field: "version",
+							field: "schemaVersion",
 						}),
 					);
 				}
@@ -175,7 +176,7 @@ describe("DomainEvent", () => {
 			const unsupportedPayload = () => undefined;
 
 			expect(() =>
-				createDomainEvent("", unsupportedPayload, { version: 0 }),
+				createDomainEvent("", unsupportedPayload, { schemaVersion: 0 }),
 			).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_TYPE_INVALID",
@@ -186,14 +187,14 @@ describe("DomainEvent", () => {
 
 		it("exposes one stable error type without making full prose contractual", () => {
 			try {
-				createDomainEvent("Demo", undefined, { version: 0 });
+				createDomainEvent("Demo", undefined, { schemaVersion: 0 });
 				throw new Error("expected validation to fail");
 			} catch (error) {
 				expect(error).toBeInstanceOf(TypeError);
 				expect(error).toBeInstanceOf(DomainEventValidationError);
 				expect(error).toMatchObject({
 					code: "EVENT_SCHEMA_VERSION_INVALID",
-					field: "version",
+					field: "schemaVersion",
 				});
 			}
 		});
@@ -352,25 +353,25 @@ describe("DomainEvent", () => {
 			expect(event.occurredAt.getTime()).toBeLessThanOrEqual(after);
 		});
 
-		it("defaults version to 1", () => {
+		it("defaults schemaVersion to 1", () => {
 			const event = createDomainEvent("Demo", { x: 1 });
-			expect(event.version).toBe(1);
+			expect(event.schemaVersion).toBe(1);
 		});
 
-		it("honors explicit occurredAt / version overrides", () => {
+		it("honors explicit occurredAt / schemaVersion overrides", () => {
 			const when = new Date("2026-01-01T00:00:00Z");
 			const event = createDomainEvent(
 				"Demo",
 				{ x: 1 },
 				{
 					occurredAt: when,
-					version: 7,
+					schemaVersion: 7,
 				},
 			);
 			// Value equality, NOT identity: the event defensively copies the
 			// caller's Date so later mutation of `when` cannot bleed in.
 			expect(event.occurredAt.getTime()).toBe(when.getTime());
-			expect(event.version).toBe(7);
+			expect(event.schemaVersion).toBe(7);
 		});
 	});
 
@@ -382,7 +383,7 @@ describe("DomainEvent", () => {
 				occurredAt,
 				aggregateId: "order-1",
 				aggregateType: "Order",
-				version: 2,
+				schemaVersion: 2,
 				metadata: { correlationId: "corr-1" },
 			};
 
@@ -496,7 +497,7 @@ describe("DomainEvent", () => {
 			const factory = createDomainEventFactory();
 			const invalidCallMustNotCompile = (): void => {
 				// @ts-expect-error schema version belongs to the concrete event producer
-				factory.createStamp({ version: 2 });
+				factory.createStamp({ schemaVersion: 2 });
 			};
 
 			expect(invalidCallMustNotCompile).toBeTypeOf("function");
@@ -833,7 +834,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			type: "T",
 			aggregateType: "A",
 			occurredAt: new Date(),
-			version: 1,
+			schemaVersion: 1,
 			payload: {},
 			metadata: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
 				string,

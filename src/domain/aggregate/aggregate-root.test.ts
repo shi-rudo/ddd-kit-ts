@@ -1100,7 +1100,9 @@ describe("createEvent options and pending-event bookkeeping", () => {
 				this.createEvent(
 					"Noted",
 					{ value },
-					schemaVersion === undefined ? undefined : { version: schemaVersion },
+					schemaVersion === undefined
+						? undefined
+						: { schemaVersion: schemaVersion },
 				),
 			);
 		}
@@ -1126,15 +1128,19 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		aggregate.decide(1);
 		aggregate.decide(2, 3);
 
-		expect(aggregate.pendingEvents[0]?.version).toBe(1);
-		expect(aggregate.pendingEvents[1]?.version).toBe(3);
+		expect(aggregate.pendingEvents[0]?.schemaVersion).toBe(1);
+		expect(aggregate.pendingEvents[1]?.schemaVersion).toBe(3);
 	});
 
 	it("rejects a hand-rolled event on addDomainEvent", () => {
 		const aggregate = fresh();
 
 		expect(() =>
-			aggregate.appendRaw({ type: "Noted", payload: { value: 1 }, version: 1 }),
+			aggregate.appendRaw({
+				type: "Noted",
+				payload: { value: 1 },
+				schemaVersion: 1,
+			}),
 		).toThrow(UnmintedEventError);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
@@ -1147,7 +1153,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		aggregate.appendBypassingStamp({
 			type: "Noted",
 			payload: { value: 1 },
-			version: 1,
+			schemaVersion: 1,
 		});
 
 		expect(() =>

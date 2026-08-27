@@ -128,14 +128,14 @@ export interface DomainEvent<T extends string, P = void> {
 	readonly occurredAt: Date;
 
 	/**
-	 * Event schema version for handling schema evolution.
+	 * Event schema schemaVersion for handling schema evolution.
 	 * Required for safe schema migration in event-sourced systems.
-	 * Use 1 for the initial schema version.
+	 * Use 1 for the initial schema schemaVersion.
 	 *
-	 * This is the event PAYLOAD schema version, not a persisted aggregate
+	 * This is the event PAYLOAD schema schemaVersion, not a persisted aggregate
 	 * position. Commit positions live on `CommittedDomainEvent`.
 	 */
-	readonly version: number;
+	readonly schemaVersion: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -158,7 +158,7 @@ export type AnyDomainEvent = DomainEvent<string, unknown>;
  * identity, recording time, or delivery metadata.
  *
  * The aggregate owns the event type, payload, source address, and payload
- * schema version because those values describe the business fact it produced.
+ * schema schemaVersion because those values describe the business fact it produced.
  * The application shell later turns this value into a {@link DomainEvent}.
  */
 export interface UncommittedDomainEvent<T extends string, P = void> {
@@ -166,7 +166,7 @@ export interface UncommittedDomainEvent<T extends string, P = void> {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
 	readonly payload: P;
-	readonly version: number;
+	readonly schemaVersion: number;
 }
 
 /** Upper-bound alias for any uncommitted domain-event shape. */
@@ -187,7 +187,7 @@ export type PendingDomainEvent<TEvent extends AnyDomainEvent> =
 export interface CreateUncommittedDomainEventOptions {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
-	readonly version?: number;
+	readonly schemaVersion?: number;
 }
 
 /**
@@ -217,9 +217,9 @@ export interface CreateDomainEventOptions {
 	occurredAt?: Date;
 
 	/**
-	 * Override for the default schema version (1).
+	 * Override for the default schema schemaVersion (1).
 	 */
-	version?: number;
+	schemaVersion?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -241,7 +241,7 @@ export interface DomainEventStamp {
 export interface CreateDomainEventFromFactsOptions extends DomainEventStamp {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
-	readonly version?: number;
+	readonly schemaVersion?: number;
 }
 
 /** Overrides accepted when an application-shell factory creates a stamp. */
@@ -402,7 +402,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
 
 /**
  * Creates a domain event with default values.
- * Sets occurredAt to current date and version to 1 if not provided.
+ * Sets occurredAt to current date and schemaVersion to 1 if not provided.
  *
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
@@ -534,7 +534,7 @@ export function createUncommittedDomainEvent<T extends string, P>(
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: cloneOwnedEventData(payload as P, "payload"),
-		version: options?.version ?? 1,
+		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	stampUncommittedBrand(event);
 	const uncommitted = deepFreeze(event) as UncommittedDomainEvent<T, P>;
@@ -554,7 +554,7 @@ export function adoptUncommittedDomainEvent<T extends object>(copy: T): T {
  * Attaches shell-owned recording data to an accepted aggregate decision.
  *
  * The decision supplies the domain type, payload, source address, and payload
- * schema version. The stamp supplies only event identity, recording time, and
+ * schema schemaVersion. The stamp supplies only event identity, recording time, and
  * trace metadata.
  */
 export function recordDomainEvent<T extends string, P>(
@@ -613,7 +613,7 @@ function mintRecordedEvent<T extends string, P>(
 		aggregateType: event.aggregateType,
 		payload: event.payload,
 		occurredAt,
-		version: event.version,
+		schemaVersion: event.schemaVersion,
 		metadata,
 	};
 	stampMintBrand(recorded);
@@ -730,7 +730,7 @@ function mintDomainEvent<T extends string, P>(
 		options?.occurredAt === undefined
 			? readEventClock(clock)
 			: copyValidEventDate(options.occurredAt);
-	const version = options?.version ?? 1;
+	const schemaVersion = options?.schemaVersion ?? 1;
 	const event: DomainEvent<T, P> = {
 		eventId,
 		type,
@@ -746,7 +746,7 @@ function mintDomainEvent<T extends string, P>(
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
-		version,
+		schemaVersion,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
@@ -768,16 +768,16 @@ function assertProducerOwnedEventFields(
 		| undefined,
 ): void {
 	assertNonBlankEventField(type, "type", "EVENT_TYPE_INVALID");
-	const version = options?.version ?? 1;
+	const schemaVersion = options?.schemaVersion ?? 1;
 	if (
-		!Number.isSafeInteger(version) ||
-		typeof version !== "number" ||
-		version < 1
+		!Number.isSafeInteger(schemaVersion) ||
+		typeof schemaVersion !== "number" ||
+		schemaVersion < 1
 	) {
 		throw new DomainEventValidationError(
 			"EVENT_SCHEMA_VERSION_INVALID",
-			"version",
-			"domain-event version must be a safe integer greater than or equal to 1",
+			"schemaVersion",
+			"domain-event schemaVersion must be a safe integer greater than or equal to 1",
 		);
 	}
 	if (options?.aggregateId !== undefined) {

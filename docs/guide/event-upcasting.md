@@ -1,6 +1,6 @@
 # Event Upcasting
 
-`DomainEvent.version` is the schema version of the event payload.
+`DomainEvent.schemaVersion` is the schema version of the event payload.
 
 It is not the aggregate version. It does not say where the event sits in the
 stream. It answers one narrow question: "Which shape does this event payload
@@ -12,9 +12,9 @@ rewrite stored events, rebuild projections, or use a schema registry. The stable
 contract is simpler: aggregate handlers should receive the current event shape.
 Adapters decide how old events become that shape.
 
-## When to bump `event.version`
+## When to bump `event.schemaVersion`
 
-Bump `event.version` when you keep the same event type but change the payload
+Bump `event.schemaVersion` when you keep the same event type but change the payload
 shape.
 
 Example: `OrderCreated` originally had only `customerId`. Version 2 adds
@@ -42,12 +42,12 @@ this.apply(
       customerId,
       currency,
     },
-    { version: 2 },
+    { schemaVersion: 2 },
   ),
 );
 ```
 
-If you omit the producer-owned `version`, the event is written with the default version
+If you omit the producer-owned `schemaVersion`, the event is written with the default version
 `1`, even though the payload has the new shape. That makes old and new events
 ambiguous and forces consumers to infer schema from fields. Do not do that.
 
@@ -98,14 +98,14 @@ type OrderEvent = OrderCreated | OrderConfirmed | OrderShipped;
 ```
 
 It should not contain `OrderCreatedV1` handlers, migration branches, or checks
-like `if (event.version === 1)`. That logic belongs at the infrastructure
+like `if (event.schemaVersion === 1)`. That logic belongs at the infrastructure
 boundary. Otherwise every aggregate method slowly turns into an archive of old
 storage formats.
 
 ## A minimal upcaster
 
 An upcaster preserves the event envelope and changes only the schema fields it
-owns: usually `version` and `payload`.
+owns: usually `schemaVersion` and `payload`.
 
 Do not call `createDomainEvent(...)` to upcast a stored event. That would create
 a new `eventId`, `occurredAt`, and metadata unless you copied every option
@@ -134,7 +134,7 @@ function convertOrderCreatedV1ToV2(
 ): OrderCreatedV2 {
   return {
     ...event,
-    version: 2,
+    schemaVersion: 2,
     payload: {
       ...event.payload,
       currency: "EUR",
@@ -145,7 +145,7 @@ function convertOrderCreatedV1ToV2(
 function upcastOrderCreatedV1ToV2(
   event: AnyDomainEvent,
 ): AnyDomainEvent {
-  if (event.type !== "OrderCreated" || event.version !== 1) {
+  if (event.type !== "OrderCreated" || event.schemaVersion !== 1) {
     return event;
   }
 
@@ -155,9 +155,9 @@ function upcastOrderCreatedV1ToV2(
 function rejectUnknownOrderCreatedVersion(
   event: AnyDomainEvent,
 ): AnyDomainEvent {
-  if (event.type === "OrderCreated" && event.version !== 2) {
+  if (event.type === "OrderCreated" && event.schemaVersion !== 2) {
     throw new Error(
-      `Unsupported OrderCreated version ${event.version}`,
+      `Unsupported OrderCreated version ${event.schemaVersion}`,
     );
   }
 
@@ -193,9 +193,9 @@ const latestVersions = new Map<string, number>([
 
 const rejectUnknownOrderEventVersions: UpcastFn = (event) => {
   const latest = latestVersions.get(event.type);
-  if (latest !== undefined && event.version !== latest) {
+  if (latest !== undefined && event.schemaVersion !== latest) {
     throw new Error(
-      `Unsupported ${event.type} version ${event.version}`,
+      `Unsupported ${event.type} version ${event.schemaVersion}`,
     );
   }
 
@@ -210,7 +210,7 @@ const upcastOrderEvent = chain(
 );
 ```
 
-Each step should match exactly one `(type, version)` pair and return the event
+Each step should match exactly one `(type, schemaVersion)` pair and return the event
 unchanged when it does not apply. That keeps ordering boring and makes test
 fixtures easy to read.
 
@@ -301,13 +301,13 @@ const orderCreatedV1: OrderCreatedV1 = {
   aggregateType: "Order",
   payload: { customerId: "customer-1" },
   occurredAt: new Date("2026-01-01T00:00:00Z"),
-  version: 1,
+  schemaVersion: 1,
 };
 
 expect(upcastOrderEvent(orderCreatedV1)).toMatchObject({
   eventId: "evt-1",
   occurredAt: new Date("2026-01-01T00:00:00Z"),
-  version: 2,
+  schemaVersion: 2,
   payload: {
     customerId: "customer-1",
     currency: "EUR",
