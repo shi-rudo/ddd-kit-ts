@@ -16,10 +16,10 @@ These fail during type-checking. The fix is usually mechanical, but the underlyi
 
 ### Missing `aggregateType`
 
-Every concrete `AggregateRoot` and `EventSourcedAggregate` subclass needs an aggregate type:
+Every concrete `StateStoredAggregate` and `EventSourcedAggregate` subclass needs an aggregate type:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 }
 ```
@@ -34,14 +34,14 @@ Review signal: if an event consumer needs to guess the aggregate type from the e
 
 ### Forgetting the Event Generic
 
-`AggregateRoot` defaults its event type to `never`:
+`StateStoredAggregate` defaults its event type to `never`:
 
 ```ts
 // Wrong: events are locked to `never`
-class Order extends AggregateRoot<OrderState, OrderId> {}
+class Order extends StateStoredAggregate<OrderState, OrderId> {}
 
 // Right
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {}
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {}
 ```
 
 The symptom is an error on `addDomainEvent`, `setState(state, event)`, or `apply(event)` saying the event is not assignable to `never`.
@@ -53,7 +53,7 @@ The event union is also a design tool. It forces the aggregate to name the facts
 ```ts
 type OrderEvent = OrderConfirmed | OrderShipped;
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 }
 ```
@@ -150,7 +150,7 @@ That metadata is not incidental. It is how downstream code connects a fact back 
 
 `withCommit` has a harvest guard that catches events missing aggregate metadata. That guard is a last line of defense, not the preferred workflow. The preferred workflow is to record aggregate events through the aggregate so the metadata cannot be forgotten.
 
-Review signal: `createDomainEvent` inside a method on an `AggregateRoot` or `EventSourcedAggregate` should draw attention. Outside aggregates it can be correct; inside aggregates it is usually the wrong abstraction. See [Domain Events](./domain-events.md).
+Review signal: `createDomainEvent` inside a method on an `StateStoredAggregate` or `EventSourcedAggregate` should draw attention. Outside aggregates it can be correct; inside aggregates it is usually the wrong abstraction. See [Domain Events](./domain-events.md).
 
 ### Putting Post-Commit Behavior In The Aggregate
 

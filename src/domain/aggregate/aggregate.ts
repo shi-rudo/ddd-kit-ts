@@ -63,7 +63,7 @@ export interface AggregateSnapshot<TState> {
 
 /**
  * Public contract every Aggregate Root satisfies. Implemented by
- * `BaseAggregate` and inherited by both `AggregateRoot` and
+ * `BaseAggregate` and inherited by both `StateStoredAggregate` and
  * `EventSourcedAggregate`. Repository ports use this interface as their
  * aggregate type rather than depending on concrete base classes, so persistence
  * orchestration does not take a compile-time

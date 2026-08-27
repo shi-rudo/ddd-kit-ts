@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
-import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	createDomainEvent,
 	createDomainEventFactory,
@@ -17,7 +17,7 @@ import { recordPendingEvents } from "./record-pending-events";
 type CounterId = Id<"CounterId">;
 type CounterChanged = DomainEvent<"CounterChanged", { value: number }>;
 
-class Counter extends AggregateRoot<
+class Counter extends StateStoredAggregate<
 	{ readonly value: number },
 	CounterId,
 	CounterChanged

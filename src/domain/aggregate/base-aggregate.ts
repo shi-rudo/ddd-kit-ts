@@ -33,7 +33,7 @@ import {
 export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
 
 /**
- * Shared base for both `AggregateRoot` (state-stored) and
+ * Shared base for both `StateStoredAggregate` (state-stored) and
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
  * identical across the two flavours: current version, pending-event
  * tracking, the kit-internal post-commit acknowledgement capability,
@@ -43,7 +43,7 @@ export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
  * with `recordPendingEvents` before persistence.
  *
  * Consumers do NOT extend this class directly; extend
- * `AggregateRoot` for state-stored aggregates or
+ * `StateStoredAggregate` for state-stored aggregates or
  * `EventSourcedAggregate` for event-sourced ones. The split between
  * those two reflects the canonical Vernon §8 (state-stored) /
  * Vernon §11 + Greg Young (event-sourced) distinction in how state
@@ -70,7 +70,7 @@ export abstract class BaseAggregate<
 	 * Subclasses MUST declare this as a string literal:
 	 *
 	 * ```ts
-	 * class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+	 * class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 	 *   protected readonly aggregateType = "Order";
 	 * }
 	 * ```
@@ -298,7 +298,7 @@ export abstract class BaseAggregate<
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an address that names another
 	 * aggregate throws {@link MisaddressedEventError} before anything is
-	 * recorded. Prefer the higher-level `AggregateRoot.setState()`
+	 * recorded. Prefer the higher-level `StateStoredAggregate.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`

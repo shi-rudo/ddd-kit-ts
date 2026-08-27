@@ -32,7 +32,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
  *
- * Like `AggregateRoot`, this is both the root entity and the aggregate
+ * Like `StateStoredAggregate`, this is both the root entity and the aggregate
  * boundary. The difference is persistence: state is derived from events,
  * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.

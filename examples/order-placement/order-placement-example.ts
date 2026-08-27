@@ -9,7 +9,7 @@ import type {
 	WithIdempotentCommitDeps,
 } from "../../src/application/idempotency/idempotency";
 import { withIdempotentCommit } from "../../src/application/idempotency/idempotency";
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { AnyDomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/domain/value-object/money";
@@ -44,7 +44,7 @@ export class EmptyOrderError extends DomainError<"EMPTY_ORDER"> {
 	}
 }
 
-export class Order extends AggregateRoot<OrderState, OrderId> {
+export class Order extends StateStoredAggregate<OrderState, OrderId> {
 	protected readonly aggregateType = "Order";
 
 	static place(

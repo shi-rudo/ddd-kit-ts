@@ -14,7 +14,7 @@ export type { AggregateConfig } from "./base-aggregate";
  * its persistence projection through `PersistenceModel`; the Unit of Work
  * retains that opaque baseline and derives the adapter's change set at flush.
  */
-export abstract class AggregateRoot<
+export abstract class StateStoredAggregate<
 	TState,
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,

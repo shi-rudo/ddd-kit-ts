@@ -65,7 +65,7 @@ Keep business factories for new aggregates. Add or retain a separate factory
 for persisted facts:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   static create(id: OrderId, customerId: CustomerId): Order {
     return new Order(id, initialOrderState(customerId));
   }
@@ -541,12 +541,20 @@ flavours. No behavior changes; every rename is a one-to-one replacement.
 
 | Before | After |
 | --- | --- |
+| `AggregateRoot` (class) | `StateStoredAggregate` |
 | `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
 | `commit(newState, events)` | `setState(newState, events)` |
 | `loadFromHistory(history)` | `replayHistory(history)` |
 | `markRestored(version)` | `markReconstituted(version)` |
 | `stampNewEventAddress(event)` | `addressNewEvent(event)` |
 | `DomainEvent.version`, option `version` | `schemaVersion` |
+
+Apply the class rename with one command over your TypeScript sources
+(`IAggregateRoot`, the shared contract, keeps its name):
+
+```sh
+perl -pi -e 's/\bAggregateRoot\b/StateStoredAggregate/g' $(git ls-files '*.ts')
+```
 
 Apply the method renames with one command over your TypeScript sources:
 

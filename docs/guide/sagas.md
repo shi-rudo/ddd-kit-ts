@@ -77,7 +77,7 @@ uses an `AggregatePersistence` definition and `UnitOfWork`. A
 no transition after the payment arrives.
 
 ```ts
-class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
+class CheckoutSaga extends StateStoredAggregate<CheckoutSagaState, OrderId> {
   // The machine carries the process rules: which inputs are legal in
   // which state. See examples/saga/checkout-saga.ts for the full class.
   advanceToShipping(): void { /* transition stored process state */ }

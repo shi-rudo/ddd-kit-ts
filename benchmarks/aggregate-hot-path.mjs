@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import process from "node:process";
 import {
-	AggregateRoot,
+	StateStoredAggregate,
 	createDomainEvent,
 	EventSourcedAggregate,
 } from "../dist/index.js";
@@ -29,7 +29,7 @@ function nestedRecord(depth) {
 	return value;
 }
 
-class StateStoredOrder extends AggregateRoot {
+class StateStoredOrder extends StateStoredAggregate {
 	aggregateType = "BenchmarkOrder";
 
 	constructor(id, state, config) {

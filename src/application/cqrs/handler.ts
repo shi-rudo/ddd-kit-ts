@@ -1,9 +1,9 @@
 import type { Version } from "../../domain/aggregate/aggregate";
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
 	type PendingEventLifecycleCapability,
 	requirePendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
+import type { IAggregateRoot } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	isMintedEvent,
@@ -116,7 +116,7 @@ export interface AggregateCommitToken<
  * repository write, and return every resulting token in `commits`. Omitting
  * any token rejects the transaction: an enrolled write may not commit without
  * its event harvest and post-commit acknowledgement. Enrollable instances
- * must extend `AggregateRoot` or `EventSourcedAggregate`; structural
+ * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
  * `IAggregateRoot` lookalikes have no internal lifecycle capability and fail
  * before commit.
  */
@@ -555,7 +555,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
 							`did not advance its version beyond the persisted version ` +
 							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
-							`cursor; use AggregateRoot.setState(currentState, event) instead ` +
+							`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}

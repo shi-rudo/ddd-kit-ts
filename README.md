@@ -55,7 +55,7 @@ Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
   type DomainEvent,
   type Id,
@@ -85,7 +85,7 @@ class OrderAlreadyConfirmedError extends DomainError<
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   private constructor(id: OrderId, state: OrderState) {

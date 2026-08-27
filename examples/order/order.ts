@@ -1,5 +1,5 @@
 import type { Version } from "../../src/domain/aggregate/aggregate";
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { Id } from "../../src/domain/identity/id";
 import { addMoney, type Money } from "../../src/domain/value-object/money";
 
@@ -21,7 +21,7 @@ export type OrderState = {
  * Example of an Aggregate WITHOUT Event Sourcing.
  * This aggregate uses direct state mutation via setState().
  */
-export class Order extends AggregateRoot<OrderState, OrderId> {
+export class Order extends StateStoredAggregate<OrderState, OrderId> {
 	protected readonly aggregateType = "Order";
 
 	// The zero comes in from the caller, like every other Money: the

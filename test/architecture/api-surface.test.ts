@@ -116,7 +116,6 @@ void (undefined as unknown as DomainErrorClass);
 const INDEX_SURFACE = [
 	"AggregateDeletedError",
 	"AggregateNotFoundError",
-	"AggregateRoot",
 	"AggregateTrackingError",
 	"CapabilityRegistryConflictError",
 	"CommandBus",
@@ -190,6 +189,7 @@ const INDEX_SURFACE = [
 	"SnapshotSchemaMismatchError",
 	"SnapshotTimeValidationError",
 	"Specification",
+	"StateStoredAggregate",
 	"TransactionClosedError",
 	"UnenrolledChangesError",
 	"UnitOfWork",

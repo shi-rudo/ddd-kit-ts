@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../..";
 import type { Version } from "../../domain/aggregate/aggregate";
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { IAggregateRoot } from "../../domain/aggregate/state-stored-aggregate";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateNotFoundError,

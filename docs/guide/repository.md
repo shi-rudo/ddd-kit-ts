@@ -96,7 +96,7 @@ call it while loading old facts.
 For a state-stored aggregate, provide an explicit reconstitution factory:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static reconstitute(

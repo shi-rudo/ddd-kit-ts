@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { DomainError } from "../../src/errors/kit-errors";
@@ -41,7 +41,7 @@ export class ShipmentInWrongStateError extends DomainError<"SHIPMENT_IN_WRONG_ST
 	}
 }
 
-export class Shipment extends AggregateRoot<
+export class Shipment extends StateStoredAggregate<
 	ShipmentState,
 	ShipmentId,
 	ShippingEvent

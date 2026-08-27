@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { IAggregateRoot } from "../../domain/aggregate/state-stored-aggregate";
 import type { Id } from "../../domain/identity/id";
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
-import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { InfrastructureError } from "../../errors/kit-errors";
@@ -22,7 +22,7 @@ type PaymentEvent = DomainEvent<
 >;
 type OrderId = Id<"OrderId">;
 
-class Order extends AggregateRoot<
+class Order extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	OrderId,
 	OrderEvent
@@ -34,7 +34,7 @@ class Order extends AggregateRoot<
 	}
 }
 
-class Payment extends AggregateRoot<
+class Payment extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	OrderId,
 	PaymentEvent

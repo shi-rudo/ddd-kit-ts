@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/domain/value-object/money";
@@ -47,7 +47,7 @@ export class PaymentInWrongStateError extends DomainError<"PAYMENT_IN_WRONG_STAT
 	}
 }
 
-export class Payment extends AggregateRoot<
+export class Payment extends StateStoredAggregate<
 	PaymentState,
 	PaymentId,
 	PaymentEvent
