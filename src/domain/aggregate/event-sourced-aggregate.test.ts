@@ -49,9 +49,9 @@ function discardPendingEvents(aggregate: object): void {
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
 abstract class EventSourcedAggregate<
 	TState,
-	TEvent extends AnyDomainEvent,
 	TId extends Id<string>,
-> extends ProductionEventSourcedAggregate<TState, TEvent, TId> {
+	TEvent extends AnyDomainEvent,
+> extends ProductionEventSourcedAggregate<TState, TId, TEvent> {
 	public override get state(): TState {
 		return super.state;
 	}
@@ -135,8 +135,8 @@ const testHandlers = {
 
 class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
-	TestEvent,
-	TestId
+	TestId,
+	TestEvent
 > {
 	protected readonly aggregateType = "TestEventSourcedAggregate";
 
@@ -183,8 +183,8 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 
 class ValidatingAggregate extends EventSourcedAggregate<
 	TestState,
-	TestEvent,
-	TestId
+	TestId,
+	TestEvent
 > {
 	protected readonly aggregateType = "ValidatingAggregate";
 
@@ -286,8 +286,8 @@ describe("EventSourcedAggregate", () => {
 		it("should allow custom validation logic that throws DomainError", () => {
 			class CustomValidatingAggregate extends EventSourcedAggregate<
 				TestState,
-				TestEvent,
-				TestId
+				TestId,
+				TestEvent
 			> {
 				protected readonly aggregateType = "CustomValidatingAggregate";
 
@@ -327,8 +327,8 @@ describe("EventSourcedAggregate", () => {
 		it("should throw MissingHandlerError when no handler is registered", () => {
 			class HandlerlessAggregate extends EventSourcedAggregate<
 				TestState,
-				TestEvent,
-				TestId
+				TestId,
+				TestEvent
 			> {
 				protected readonly aggregateType = "HandlerlessAggregate";
 
@@ -377,8 +377,8 @@ describe("EventSourcedAggregate", () => {
 		it("MissingHandlerError thrown during replayHistory propagates (not caught as DomainError)", () => {
 			class HandlerlessReplay extends EventSourcedAggregate<
 				TestState,
-				TestEvent,
-				TestId
+				TestId,
+				TestEvent
 			> {
 				protected readonly aggregateType = "HandlerlessReplay";
 
@@ -411,8 +411,8 @@ describe("EventSourcedAggregate", () => {
 		it("should not mutate state if handler throws", () => {
 			class ThrowingHandlerAggregate extends EventSourcedAggregate<
 				TestState,
-				TestEvent,
-				TestId
+				TestId,
+				TestEvent
 			> {
 				protected readonly aggregateType = "ThrowingHandlerAggregate";
 
@@ -472,8 +472,8 @@ describe("EventSourcedAggregate", () => {
 		// corrupting state. All such types must yield MissingHandlerError.
 		class TrapAggregate extends EventSourcedAggregate<
 			TestState,
-			TestEvent,
-			TestId
+			TestId,
+			TestEvent
 		> {
 			protected readonly aggregateType = "TrapAggregate";
 
@@ -760,8 +760,8 @@ describe("EventSourcedAggregate", () => {
 
 		class DeepFrozenEsAggregate extends EventSourcedAggregate<
 			NestedEsState,
-			ItemAdded,
-			TestId
+			TestId,
+			ItemAdded
 		> {
 			protected readonly aggregateType = "DeepFrozenEsAggregate";
 
@@ -841,8 +841,8 @@ describe("replay trusts history", () => {
 	// existed. Replay must load it anyway: history is accepted fact.
 	class RuleTighteningAggregate extends EventSourcedAggregate<
 		TestState,
-		TestEvent,
-		TestId
+		TestId,
+		TestEvent
 	> {
 		protected readonly aggregateType = "RuleTighteningAggregate";
 
@@ -1254,8 +1254,8 @@ describe("validateState on the apply path", () => {
 describe("a handler that returns no state", () => {
 	class ForgetfulAggregate extends EventSourcedAggregate<
 		TestState,
-		TestEvent,
-		TestId
+		TestId,
+		TestEvent
 	> {
 		protected readonly aggregateType = "ForgetfulAggregate";
 
@@ -1661,8 +1661,8 @@ describe("apply and replay bookkeeping", () => {
 		type ItemAdded = DomainEvent<"ItemAdded", { sku: string }>;
 		class ShelfAggregate extends EventSourcedAggregate<
 			Shelf,
-			ItemAdded,
-			TestId
+			TestId,
+			ItemAdded
 		> {
 			protected readonly aggregateType = "ShelfAggregate";
 			constructor(id: TestId) {

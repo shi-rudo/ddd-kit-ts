@@ -444,8 +444,8 @@ describe("adapter-owned snapshot models", () => {
 		type Incremented = DomainEvent<"Incremented", { by: number }>;
 		class Counter extends EventSourcedAggregate<
 			{ readonly value: number },
-			Incremented,
-			CounterId
+			CounterId,
+			Incremented
 		> {
 			protected readonly aggregateType = "Counter";
 

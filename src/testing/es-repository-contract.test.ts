@@ -71,8 +71,8 @@ const streamMapKey = (stream: AggregateAddress): string =>
 
 class ContractEsOrder extends EventSourcedAggregate<
 	EsOrderState,
-	EsOrderEvent,
-	EsOrderId
+	EsOrderId,
+	EsOrderEvent
 > {
 	protected readonly aggregateType = "ContractEsOrder";
 

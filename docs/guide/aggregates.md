@@ -9,7 +9,7 @@ In DDD terms, the aggregate boundary is also a consistency boundary. Everything 
 The kit gives you two base classes:
 
 - **`AggregateRoot<TState, TId, TEvent>`** for aggregates whose current state is stored directly.
-- **`EventSourcedAggregate<TState, TEvent, TId>`** for aggregates whose state is rebuilt from events. See [Event Sourcing](./event-sourcing.md).
+- **`EventSourcedAggregate<TState, TId, TEvent>`** for aggregates whose state is rebuilt from events. See [Event Sourcing](./event-sourcing.md).
 
 <a id="state-version-domain-events"></a>
 
@@ -222,7 +222,7 @@ See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle
 For event-sourced aggregates, reconstitution means replaying history. Expose a factory for the empty replay target, then let the repository build the aggregate from history through `reconstituteAggregateFromHistory`:
 
 ```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static reconstitute(id: OrderId): Order {
@@ -348,7 +348,7 @@ until the data is migrated. There is no stream to refold, so the option
 would only hide the finding.
 
 ```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   private constructor(
@@ -375,7 +375,7 @@ guide and the `SnapshotModel` docs point here.
 Use `validateEvent` when an event must be valid against the aggregate's current state before it is applied.
 
 ```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   protected validateEvent(event: OrderEvent): void {

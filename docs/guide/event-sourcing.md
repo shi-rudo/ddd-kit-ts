@@ -1,6 +1,6 @@
 # Event Sourcing
 
-`EventSourcedAggregate<TState, TEvent, TId>` is the aggregate root for models
+`EventSourcedAggregate<TState, TId, TEvent>` is the aggregate root for models
 where events are the source of truth.
 
 The aggregate does not store its current state as the primary record. It derives
@@ -75,8 +75,8 @@ class OrderAlreadyConfirmedError extends DomainError<
 
 class Order extends EventSourcedAggregate<
   OrderState,
-  OrderEvent,
-  OrderId
+  OrderId,
+  OrderEvent
 > {
   protected readonly aggregateType = "Order";
 

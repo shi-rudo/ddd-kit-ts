@@ -68,7 +68,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  *   }
  * }
  *
- * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+ * class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
  *   protected readonly aggregateType = "Order";
  *
  *   confirm(): void {
@@ -94,8 +94,8 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  */
 export abstract class EventSourcedAggregate<
 		TState,
-		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
+		TEvent extends AnyDomainEvent,
 	>
 	extends BaseAggregate<TState, TId, TEvent>
 	implements IEventSourcedAggregate<TId, TEvent>
