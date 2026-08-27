@@ -36,7 +36,7 @@ export abstract class AggregateRoot<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		const stamped = eventBatch.map((event) => this.stampNewEventAddress(event));
+		const stamped = eventBatch.map((event) => this.addressNewEvent(event));
 
 		this.setState(newState);
 		for (const event of stamped) this.appendStampedEvent(event);

@@ -165,7 +165,7 @@ export abstract class EventSourcedAggregate<
 		// this, a mis-addressed event would mutate state, version, and
 		// pendingEvents and only fail later at harvest or on the next
 		// load, poisoning the own stream.
-		const stamped = this.stampNewEventAddress(event);
+		const stamped = this.addressNewEvent(event);
 		// Both gates live HERE, not in fold: only new facts are checked
 		// against current rules; replay trusts history. Freeze, validate,
 		// assign, in the order Entity.setState keeps: the object validated
@@ -209,7 +209,7 @@ export abstract class EventSourcedAggregate<
 	 * stream corruption) after the all-or-nothing rollback. History
 	 * events without the optional address fields pass unchecked (the
 	 * fields are optional on the event shape); NEW events are covered
-	 * by the stricter `stampNewEventAddress` on the apply path.
+	 * by the stricter `addressNewEvent` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =

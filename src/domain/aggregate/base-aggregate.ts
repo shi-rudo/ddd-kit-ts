@@ -300,12 +300,12 @@ export abstract class BaseAggregate<
 	 * rejects it; use `commit(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		this.appendStampedEvent(this.stampNewEventAddress(event));
+		this.appendStampedEvent(this.addressNewEvent(event));
 	}
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link stampNewEventAddress}. `commit()` and `apply()` stamp before the
+	 * {@link addressNewEvent}. `commit()` and `apply()` stamp before the
 	 * state moves and append afterwards, so the guard runs once per event.
 	 */
 	protected appendStampedEvent(event: PendingDomainEvent<TEvent>): void {
@@ -332,9 +332,7 @@ export abstract class BaseAggregate<
 	 * shared, already deep-frozen by the constructors); a fully addressed
 	 * event is returned as is.
 	 */
-	protected stampNewEventAddress<E extends PendingDomainEvent<TEvent>>(
-		event: E,
-	): E {
+	protected addressNewEvent<E extends PendingDomainEvent<TEvent>>(event: E): E {
 		this.assertMintedEvent(event);
 		const { aggregateId, aggregateType } = event;
 		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
