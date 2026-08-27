@@ -24,7 +24,10 @@ import {
 import type { Id } from "../identity/id";
 import { type IAggregateRoot, toVersion, type Version } from "./aggregate";
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
-import { registerPendingEventRecordingCapability } from "./pending-event-recording";
+import {
+	type PendingEventStampFactory,
+	registerPendingEventRecordingCapability,
+} from "./pending-event-recording";
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
 export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
@@ -113,47 +116,59 @@ export abstract class BaseAggregate<
 			aggregateType: () => this.aggregateType,
 		});
 		registerPendingEventRecordingCapability(this, {
-			record: (createStamp) => {
-				const stamped = this._pendingEvents;
-				const stampedCount = stamped.length;
-				const recorded: TEvent[] = stamped.map((event, index) => {
-					const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
-					if (isMintedEvent(candidate)) return candidate as TEvent;
-					if (!isUncommittedDomainEvent(candidate)) {
-						throw new UnmintedEventError(
-							(event as { readonly type: string }).type,
-						);
-					}
-					return recordDomainEvent(
-						candidate,
-						createStamp(candidate, index),
-					) as TEvent;
-				});
-				// A stamp provider that triggers a new decision on this aggregate
-				// grows or replaces the pending list mid-map; assigning `recorded`
-				// would silently discard that decision. Checked BEFORE the
-				// assignment, so recording stays atomic when the guard fires.
-				if (
-					this._pendingEvents !== stamped ||
-					this._pendingEvents.length !== stampedCount
-				) {
-					throw new ReentrantEventRecordingError(String(this.id));
-				}
-				// One identity per decision: a reused stamp would mint two facts
-				// sharing one eventId, and idempotent consumers keyed on it
-				// would silently drop one. Also checked before the assignment.
-				const seenEventIds = new Set<string>();
-				for (const event of recorded) {
-					const eventId = (event as AnyDomainEvent).eventId;
-					if (seenEventIds.has(eventId)) {
-						throw new DuplicateEventIdError(String(this.id), eventId);
-					}
-					seenEventIds.add(eventId);
-				}
-				this._pendingEvents = recorded;
-				return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
-			},
+			record: (createStamp) => this.recordPendingDecisions(createStamp),
 		});
+	}
+
+	/**
+	 * Stamps every uncommitted decision in the pending list with identity
+	 * and time from `createStamp`, passes an already recorded event through,
+	 * and replaces the list atomically. Three guards run before the
+	 * assignment: an event that no kit constructor minted is rejected
+	 * ({@link UnmintedEventError}); a stamp provider that recorded a new
+	 * decision on this aggregate mid-map is rejected
+	 * ({@link ReentrantEventRecordingError}); and two decisions that
+	 * received one eventId are rejected ({@link DuplicateEventIdError}).
+	 * When a guard fires, every decision stays unrecorded.
+	 */
+	private recordPendingDecisions(
+		createStamp: PendingEventStampFactory,
+	): ReadonlyArray<AnyDomainEvent> {
+		const stamped = this._pendingEvents;
+		const stampedCount = stamped.length;
+		const recorded: TEvent[] = stamped.map((event, index) => {
+			const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
+			if (isMintedEvent(candidate)) return candidate as TEvent;
+			if (!isUncommittedDomainEvent(candidate)) {
+				throw new UnmintedEventError((event as { readonly type: string }).type);
+			}
+			return recordDomainEvent(
+				candidate,
+				createStamp(candidate, index),
+			) as TEvent;
+		});
+		// A stamp provider that triggers a new decision on this aggregate
+		// grows or replaces the pending list mid-map; assigning `recorded`
+		// would silently discard that decision.
+		if (
+			this._pendingEvents !== stamped ||
+			this._pendingEvents.length !== stampedCount
+		) {
+			throw new ReentrantEventRecordingError(String(this.id));
+		}
+		// One identity per decision: a reused stamp would mint two facts
+		// sharing one eventId, and idempotent consumers keyed on it would
+		// silently drop one.
+		const seenEventIds = new Set<string>();
+		for (const event of recorded) {
+			const eventId = (event as AnyDomainEvent).eventId;
+			if (seenEventIds.has(eventId)) {
+				throw new DuplicateEventIdError(String(this.id), eventId);
+			}
+			seenEventIds.add(eventId);
+		}
+		this._pendingEvents = recorded;
+		return Object.freeze(recorded.slice()) as ReadonlyArray<AnyDomainEvent>;
 	}
 
 	private acknowledgePendingEvents(
