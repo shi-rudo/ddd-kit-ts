@@ -232,7 +232,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState()` / `commit()` paths and by the event-sourced
+	 * aggregates' `setState()` path and by the event-sourced
 	 * `apply()` path. Routes through {@link setVersion}, so a subclass that
 	 * observes version writes there sees every increment.
 	 */
@@ -290,14 +290,14 @@ export abstract class BaseAggregate<
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an address that names another
 	 * aggregate throws {@link MisaddressedEventError} before anything is
-	 * recorded. Prefer the higher-level `AggregateRoot.commit()`
+	 * recorded. Prefer the higher-level `AggregateRoot.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
 	 * directly is appropriate only after a version-advancing state mutation,
 	 * or while constructing a never-persisted aggregate. An event-only commit
 	 * on an already-persisted aggregate has no unique cursor and `withCommit`
-	 * rejects it; use `commit(currentState, event)`.
+	 * rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		this.appendStampedEvent(this.addressNewEvent(event));
@@ -305,7 +305,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link addressNewEvent}. `commit()` and `apply()` stamp before the
+	 * {@link addressNewEvent}. `setState()` and `apply()` stamp before the
 	 * state moves and append afterwards, so the guard runs once per event.
 	 */
 	protected appendStampedEvent(event: PendingDomainEvent<TEvent>): void {

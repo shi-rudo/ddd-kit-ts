@@ -140,7 +140,7 @@ export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 		);
 		const state = toSagaState(snapshot);
 		const saga = new CheckoutSaga(orderId, state);
-		saga.commit(state);
+		saga.setState(state);
 		return saga;
 	}
 
@@ -175,6 +175,6 @@ export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 			snapshot,
 			input,
 		);
-		this.commit(toSagaState(result.snapshot));
+		this.setState(toSagaState(result.snapshot));
 	}
 }

@@ -232,7 +232,7 @@ describe("withCommit", () => {
 			}
 
 			decide(): void {
-				this.commit(
+				this.setState(
 					{},
 					this.createEvent("OrderCreated", { orderId: "order-1" }),
 				);
@@ -298,7 +298,7 @@ describe("withCommit", () => {
 			}
 
 			place(orderId: string): void {
-				this.commit({}, this.createEvent("OrderCreated", { orderId }));
+				this.setState({}, this.createEvent("OrderCreated", { orderId }));
 			}
 		}
 		const factory = createDomainEventFactory({

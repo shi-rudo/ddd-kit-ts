@@ -169,7 +169,7 @@ If validation, handler lookup, state computation, or the state check throws,
 the aggregate does not record the event. This behavior is the event-sourcing safety rule. The
 aggregate must not publish a fact that did not change state.
 
-There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
+There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 Handlers must fold state from `type` and `payload` only. A live `apply(...)`

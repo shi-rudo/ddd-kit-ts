@@ -38,7 +38,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * changes go through `apply()` → handler.
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
- * `commit()`, and the inherited `setState()` throws
+ * `setState()`, and the inherited `setState()` throws
  * `DirectStateMutationError`: the only way to change state is an event
  * folded by a handler through `apply()`, so the instance never runs ahead
  * of its stream.

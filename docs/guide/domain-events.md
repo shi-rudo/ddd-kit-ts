@@ -84,7 +84,7 @@ const event = createDomainEvent(
 The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
 The kit marks every event its constructors return as minted. The aggregate
-recording paths (`apply`, `commit`, `addDomainEvent`) accept only minted
+recording paths (`apply`, `setState`, `addDomainEvent`) accept only minted
 events; a hand-rolled literal throws `UnmintedEventError` (code
 `UNMINTED_EVENT`). The mark has two tiers. A module-private tier covers the
 events of this loaded copy of the kit. A cooperative `Symbol.for` brand
@@ -123,7 +123,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(confirmedAt: Date): void {
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", {
         orderId: this.id,
@@ -252,7 +252,7 @@ DTO mappings stay outside the aggregate in an adapter-owned `SnapshotModel`.
 ```ts
 // Before
 confirm(facts: DomainEventFacts): void {
-  this.commit(
+  this.setState(
     nextState,
     this.recordEvent("OrderConfirmed", payload, facts),
   );
@@ -260,7 +260,7 @@ confirm(facts: DomainEventFacts): void {
 
 // Preferred v3 path
 confirm(): void {
-  this.commit(
+  this.setState(
     nextState,
     this.createEvent("OrderConfirmed", payload),
   );

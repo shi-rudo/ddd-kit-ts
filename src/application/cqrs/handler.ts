@@ -555,7 +555,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
 							`did not advance its version beyond the persisted version ` +
 							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
-							`cursor; use AggregateRoot.commit(currentState, event) instead ` +
+							`cursor; use AggregateRoot.setState(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}

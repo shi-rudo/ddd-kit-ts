@@ -64,7 +64,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );

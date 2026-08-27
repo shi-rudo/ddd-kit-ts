@@ -534,7 +534,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("commit(): record-after-mutation helper", () => {
+	describe("setState(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
 		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
@@ -544,7 +544,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				super(id, state);
 			}
 			update(value: number, ev: Ev | readonly Ev[] = []): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordOnly(ev: Ev): void {
 				// Forces "record before mutation", which would only be possible by
@@ -574,7 +574,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				});
 			}
 			tryCommit(value: number, ev: Ev): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
 				return createDomainEvent(
@@ -1055,7 +1055,7 @@ describe("trustInitialState", () => {
 		}
 
 		change(value: number): void {
-			this.commit({ ...this.state, value });
+			this.setState({ ...this.state, value });
 		}
 	}
 
@@ -1095,7 +1095,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		}
 
 		decide(value: number, schemaVersion?: number): void {
-			this.commit(
+			this.setState(
 				{ ...this.state, value },
 				this.createEvent(
 					"Noted",
@@ -1190,7 +1190,7 @@ describe("event address on the state-stored path", () => {
 		}
 
 		commitWith(event: PendingDomainEvent<Noted>): void {
-			this.commit({ ...this.state, value: this.state.value + 1 }, event);
+			this.setState({ ...this.state, value: this.state.value + 1 }, event);
 		}
 
 		record(event: PendingDomainEvent<Noted>): void {
@@ -1198,7 +1198,7 @@ describe("event address on the state-stored path", () => {
 		}
 
 		decide(value: number): void {
-			this.commit(
+			this.setState(
 				{ ...this.state, value },
 				this.createEvent("Noted", { value }),
 			);

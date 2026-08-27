@@ -30,12 +30,12 @@ class Counter extends AggregateRoot<
 	}
 
 	change(value: number): void {
-		this.commit({ value }, this.createEvent("CounterChanged", { value }));
+		this.setState({ value }, this.createEvent("CounterChanged", { value }));
 	}
 
 	/** A decision minted with its identity already, as a factory would. */
 	changeRecorded(value: number, eventId: string): void {
-		this.commit(
+		this.setState(
 			{ value },
 			createDomainEvent(
 				"CounterChanged",

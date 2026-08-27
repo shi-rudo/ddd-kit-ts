@@ -60,7 +60,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
@@ -253,32 +253,32 @@ A reconstituted aggregate is the same domain object it was before the process re
 
 That kind of spurious event can double-count projections, re-trigger process managers, or publish outbox messages for work that has already happened. The rule is simple: factories may record new facts; reconstitution must not.
 
-## Changing State with `commit`
+## Changing State with `setState`
 
-Use `commit(newState, events)` for normal aggregate changes.
+Use `setState(newState, events)` for normal aggregate changes.
 
 It does three things in order:
 
 1. Validates and assigns the new state.
-2. Records the event or events.
-3. Bumps the aggregate version.
+2. Bumps the aggregate version.
+3. Records the event or events.
 
-If state validation fails, no event is recorded and the version does not change. That makes `commit` safer than calling `setState` and `addDomainEvent` by hand.
+If state validation fails, no event is recorded and the version does not change. That makes `setState(newState, events)` safer than a state write followed by `addDomainEvent` by hand. Without events, `setState(newState)` is a plain versioned state change.
 
 ```ts
-this.commit(
+this.setState(
   { ...this.state, status: "confirmed" },
   this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 
-this.commit(newState, [eventA, eventB]);
-this.commit({ ...this.state, lastViewedAt: new Date() });
+this.setState(newState, [eventA, eventB]);
+this.setState({ ...this.state, lastViewedAt: new Date() });
 ```
 
 The last example changes state without recording an event, but still bumps the version.
 
-::: info `commit()` always bumps the version
-Changing aggregate state should normally move the version. If you deliberately need a mutation that does not participate in optimistic concurrency, use `setStateWithoutVersionBump(newState)` directly and do not call `commit`.
+::: info `setState()` always bumps the version
+Changing aggregate state should normally move the version. If you deliberately need a mutation that does not participate in optimistic concurrency, use `setStateWithoutVersionBump(newState)` directly and do not call `setState`.
 :::
 
 ## Where Invariants Live
@@ -289,7 +289,7 @@ This is where the theory matters most. Aggregate invariants are not just validat
 
 | Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, `commit`, and `apply()`; replay skips it |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, `setState`, and `apply()`; replay skips it |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
@@ -320,7 +320,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 ```
 
 The validator runs on construction, on every `setState` call (including calls
-made by `commit` and state-stored snapshot restoration), and on `apply()` of a
+made by `setState` and state-stored snapshot restoration), and on `apply()` of a
 new event-sourced fact. On a state-stored aggregate it catches both bad domain
 transitions and corrupt state loaded from persistence.
 
@@ -411,7 +411,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new CannotConfirmEmptyOrderError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
@@ -529,13 +529,13 @@ snapshot first, call `replayHistory` with only the stream tail, and check
 that the final version equals the stream head (see
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots)).
 
-## When to Skip `commit`
+## When to Skip the Version Bump
 
-`commit()` is the default for aggregate changes. Reach for lower-level methods only when you need behavior `commit` deliberately does not provide:
+`setState()` is the default for aggregate changes. Reach for lower-level methods only when you need behavior `setState` deliberately does not provide:
 
 - state changes that should not bump the version, such as cosmetic cache fields
 - audit-only events that do not change state still use
-  `commit({ ...this.state }, event)` so their persisted commit gets a unique
+  `setState({ ...this.state }, event)` so their persisted commit gets a unique
   version/cursor
 - a multi-step operation where you want exactly one version bump at the end
 

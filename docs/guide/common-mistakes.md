@@ -44,7 +44,7 @@ class Order extends AggregateRoot<OrderState, OrderId> {}
 class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {}
 ```
 
-The symptom is an error on `addDomainEvent`, `commit(state, event)`, or `apply(event)` saying the event is not assignable to `never`.
+The symptom is an error on `addDomainEvent`, `setState(state, event)`, or `apply(event)` saying the event is not assignable to `never`.
 
 This default is deliberate. Many aggregates do not emit events, and those aggregates should not be able to accidentally record one. For event-emitting aggregates, the third generic is how you opt into the event union.
 
@@ -138,7 +138,7 @@ These compile. Some even pass happy-path tests. They are more dangerous because 
 Inside aggregate methods, prefer `this.createEvent(type, payload)`.
 
 ```ts
-this.commit(
+this.setState(
   { ...this.state, status: "confirmed" },
   this.createEvent("OrderConfirmed", { orderId: this.id }),
 );

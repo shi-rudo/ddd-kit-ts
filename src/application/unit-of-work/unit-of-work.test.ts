@@ -68,12 +68,12 @@ class MockAggregate extends AggregateRoot<
 	}
 
 	public change(event?: TestEvent): void {
-		this.commit(this.state, event);
+		this.setState(this.state, event);
 	}
 
 	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
 	public changeWithUnrecordedEvent(orderId: string): void {
-		this.commit(this.state, this.createEvent("OrderCreated", { orderId }));
+		this.setState(this.state, this.createEvent("OrderCreated", { orderId }));
 	}
 }
 
@@ -361,7 +361,7 @@ describe("UnitOfWork", () => {
 				}
 
 				changeValue(value: number): void {
-					this.commit({ value });
+					this.setState({ value });
 				}
 
 				changePersistenceOnly(value: number): void {
@@ -369,7 +369,7 @@ describe("UnitOfWork", () => {
 				}
 
 				announce(event: TestEvent): void {
-					this.commit(this.state, event);
+					this.setState(this.state, event);
 				}
 			}
 
@@ -1913,7 +1913,7 @@ describe("UnitOfWork", () => {
 			}
 
 			public change(event: TestEvent): void {
-				this.commit(this.state, event);
+				this.setState(this.state, event);
 			}
 		}
 
@@ -2504,7 +2504,7 @@ describe("UnitOfWork", () => {
 				}
 
 				public record(event: TestEvent): void {
-					this.commit(this.state, event);
+					this.setState(this.state, event);
 				}
 
 				/** Appends a decision without a state change, so the version stays. */

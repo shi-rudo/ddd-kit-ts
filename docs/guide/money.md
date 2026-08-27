@@ -485,7 +485,7 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
   }
 
   issue(): void {
-    this.commit(
+    this.setState(
       { ...this.state, status: "issued" },
       this.createEvent("InvoiceIssued", {
         invoiceId: this.id,

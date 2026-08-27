@@ -38,7 +38,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	}
 
 	confirm(): void {
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "confirmed" },
 			createDomainEvent(
 				"OrderConfirmed",
