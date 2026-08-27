@@ -64,7 +64,7 @@ describe("version guards", () => {
 		}
 
 		restore(version: number): void {
-			this.markRestored(version as Version);
+			this.markReconstituted(version as Version);
 		}
 
 		force(version: number): void {
@@ -86,16 +86,19 @@ describe("version guards", () => {
 		["NaN", Number.NaN],
 		["a negative number", -1],
 		["a fraction", 1.5],
-	])("rejects %s on markRestored and keeps the version", (_label, value) => {
-		const aggregate = fresh();
+	])(
+		"rejects %s on markReconstituted and keeps the version",
+		(_label, value) => {
+			const aggregate = fresh();
 
-		expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
+			expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
 
-		expect(aggregate.version).toBe(0);
-		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
-	});
+			expect(aggregate.version).toBe(0);
+			expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+		},
+	);
 
-	it("rejects a version below the current one on markRestored", () => {
+	it("rejects a version below the current one on markReconstituted", () => {
 		const aggregate = fresh();
 		aggregate.advance();
 		aggregate.advance();
@@ -124,7 +127,7 @@ describe("version guards", () => {
 		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
 	});
 
-	it("rejects markRestored while decisions are pending", () => {
+	it("rejects markReconstituted while decisions are pending", () => {
 		const aggregate = fresh();
 		aggregate.note(1);
 
@@ -483,7 +486,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				version: Version,
 			): DeepFrozenAggregate {
 				const aggregate = new DeepFrozenAggregate(id, state);
-				aggregate.markRestored(version);
+				aggregate.markReconstituted(version);
 				return aggregate;
 			}
 
@@ -531,7 +534,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("commit(): record-after-mutation helper", () => {
+	describe("setState(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
 		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
@@ -541,7 +544,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				super(id, state);
 			}
 			update(value: number, ev: Ev | readonly Ev[] = []): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordOnly(ev: Ev): void {
 				// Forces "record before mutation", which would only be possible by
@@ -571,7 +574,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				});
 			}
 			tryCommit(value: number, ev: Ev): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
 				return createDomainEvent(
@@ -1052,7 +1055,7 @@ describe("trustInitialState", () => {
 		}
 
 		change(value: number): void {
-			this.commit({ ...this.state, value });
+			this.setState({ ...this.state, value });
 		}
 	}
 
@@ -1092,12 +1095,14 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		}
 
 		decide(value: number, schemaVersion?: number): void {
-			this.commit(
+			this.setState(
 				{ ...this.state, value },
 				this.createEvent(
 					"Noted",
 					{ value },
-					schemaVersion === undefined ? undefined : { version: schemaVersion },
+					schemaVersion === undefined
+						? undefined
+						: { schemaVersion: schemaVersion },
 				),
 			);
 		}
@@ -1123,15 +1128,19 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		aggregate.decide(1);
 		aggregate.decide(2, 3);
 
-		expect(aggregate.pendingEvents[0]?.version).toBe(1);
-		expect(aggregate.pendingEvents[1]?.version).toBe(3);
+		expect(aggregate.pendingEvents[0]?.schemaVersion).toBe(1);
+		expect(aggregate.pendingEvents[1]?.schemaVersion).toBe(3);
 	});
 
 	it("rejects a hand-rolled event on addDomainEvent", () => {
 		const aggregate = fresh();
 
 		expect(() =>
-			aggregate.appendRaw({ type: "Noted", payload: { value: 1 }, version: 1 }),
+			aggregate.appendRaw({
+				type: "Noted",
+				payload: { value: 1 },
+				schemaVersion: 1,
+			}),
 		).toThrow(UnmintedEventError);
 
 		expect(aggregate.pendingEvents).toHaveLength(0);
@@ -1144,7 +1153,7 @@ describe("createEvent options and pending-event bookkeeping", () => {
 		aggregate.appendBypassingStamp({
 			type: "Noted",
 			payload: { value: 1 },
-			version: 1,
+			schemaVersion: 1,
 		});
 
 		expect(() =>
@@ -1187,7 +1196,7 @@ describe("event address on the state-stored path", () => {
 		}
 
 		commitWith(event: PendingDomainEvent<Noted>): void {
-			this.commit({ ...this.state, value: this.state.value + 1 }, event);
+			this.setState({ ...this.state, value: this.state.value + 1 }, event);
 		}
 
 		record(event: PendingDomainEvent<Noted>): void {
@@ -1195,7 +1204,7 @@ describe("event address on the state-stored path", () => {
 		}
 
 		decide(value: number): void {
-			this.commit(
+			this.setState(
 				{ ...this.state, value },
 				this.createEvent("Noted", { value }),
 			);

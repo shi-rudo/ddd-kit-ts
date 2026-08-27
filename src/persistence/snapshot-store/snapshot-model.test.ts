@@ -207,7 +207,7 @@ describe("adapter-owned snapshot models", () => {
 	});
 
 	it("lets an InvalidVersionError thrown by the factory itself propagate raw", () => {
-		// A factory that advances the version before markRestored is a wiring
+		// A factory that advances the version before markReconstituted is a wiring
 		// bug; wrapping it as corruption would refold the stream on every
 		// load, forever.
 		const wiredWrongModel = defineSnapshotModel({
@@ -229,7 +229,7 @@ describe("adapter-owned snapshot models", () => {
 
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
 		// A factory that ignores the version parameter (a forgotten
-		// markRestored) is a wiring bug, not corruption: it must throw raw
+		// markReconstituted) is a wiring bug, not corruption: it must throw raw
 		// instead of feeding the discard-and-refold recovery forever.
 		const forgetfulModel = defineSnapshotModel({
 			...model,
@@ -444,8 +444,8 @@ describe("adapter-owned snapshot models", () => {
 		type Incremented = DomainEvent<"Incremented", { by: number }>;
 		class Counter extends EventSourcedAggregate<
 			{ readonly value: number },
-			Incremented,
-			CounterId
+			CounterId,
+			Incremented
 		> {
 			protected readonly aggregateType = "Counter";
 
@@ -459,7 +459,7 @@ describe("adapter-owned snapshot models", () => {
 				version: Version,
 			): Counter {
 				const counter = new Counter(id, state);
-				counter.markRestored(version);
+				counter.markReconstituted(version);
 				return counter;
 			}
 
@@ -489,9 +489,9 @@ describe("adapter-owned snapshot models", () => {
 			),
 		);
 		const full = Counter.bare(id);
-		expect(full.loadFromHistory(history).isOk()).toBe(true);
+		expect(full.replayHistory(history).isOk()).toBe(true);
 		const atVersionTwo = Counter.bare(id);
-		expect(atVersionTwo.loadFromHistory(history.slice(0, 2)).isOk()).toBe(true);
+		expect(atVersionTwo.replayHistory(history.slice(0, 2)).isOk()).toBe(true);
 		const snapshot = captureAggregateSnapshot(
 			counterModel,
 			atVersionTwo,
@@ -503,7 +503,7 @@ describe("adapter-owned snapshot models", () => {
 			id,
 			snapshot,
 		);
-		expect(fromSnapshot.loadFromHistory(history.slice(2)).isOk()).toBe(true);
+		expect(fromSnapshot.replayHistory(history.slice(2)).isOk()).toBe(true);
 
 		expect(fromSnapshot.value).toBe(full.value);
 		expect(fromSnapshot.version).toBe(full.version);

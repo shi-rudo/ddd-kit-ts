@@ -38,7 +38,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * changes go through `apply()` → handler.
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
- * `commit()`, and the inherited `setState()` throws
+ * `setState()`, and the inherited `setState()` throws
  * `DirectStateMutationError`: the only way to change state is an event
  * folded by a handler through `apply()`, so the instance never runs ahead
  * of its stream.
@@ -49,16 +49,16 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * Two gates guard a NEW fact: `validateEvent` checks the decision against
  * the current state before the fold, and the `validateState` function
  * from `AggregateConfig` checks the folded state after it, exactly as it
- * does for a state-stored `setState`. Replay through `loadFromHistory`
+ * does for a state-stored `setState`. Replay through `replayHistory`
  * runs neither, because history is already accepted fact and rules change
  * over time; a stream that was valid when written must stay loadable under
- * tomorrow's rules. The infrastructure-boundary method `loadFromHistory`
+ * tomorrow's rules. The infrastructure-boundary method `replayHistory`
  * returns `Result`: it catches `DomainError` during replay so callers can
  * react to corrupted event streams without try/catch.
  *
  * @template TState - The aggregate state (contains child entities and value objects)
- * @template TEvent - The union type of all domain events
  * @template TId    - The aggregate root identifier
+ * @template TEvent - The union type of all domain events
  *
  * @example
  * ```typescript
@@ -68,7 +68,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  *   }
  * }
  *
- * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+ * class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
  *   protected readonly aggregateType = "Order";
  *
  *   confirm(): void {
@@ -94,8 +94,8 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  */
 export abstract class EventSourcedAggregate<
 		TState,
-		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
+		TEvent extends AnyDomainEvent,
 	>
 	extends BaseAggregate<TState, TId, TEvent>
 	implements IEventSourcedAggregate<TId, TEvent>
@@ -151,7 +151,7 @@ export abstract class EventSourcedAggregate<
 	 * `apply()` is exclusively for NEW facts: it always records the event
 	 * and bumps the version (the former `isNew` flag argument is gone).
 	 * Replaying history is a different operation with its own entry
-	 * point, `loadFromHistory`.
+	 * point, `replayHistory`.
 	 *
 	 * @param event - The domain event to apply
 	 */
@@ -165,7 +165,7 @@ export abstract class EventSourcedAggregate<
 		// this, a mis-addressed event would mutate state, version, and
 		// pendingEvents and only fail later at harvest or on the next
 		// load, poisoning the own stream.
-		const stamped = this.stampNewEventAddress(event);
+		const stamped = this.addressNewEvent(event);
 		// Both gates live HERE, not in fold: only new facts are checked
 		// against current rules; replay trusts history. Freeze, validate,
 		// assign, in the order Entity.setState keeps: the object validated
@@ -188,7 +188,7 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Internal fold shared by `apply()` and `loadFromHistory`: locate the
+	 * Internal fold shared by `apply()` and `replayHistory`: locate the
 	 * handler and compute the next state. It deliberately does NOT assign
 	 * the state, record the event, bump the version, or run `validateEvent`
 	 * and `validateState`; `apply()` layers all of that on for new facts,
@@ -209,7 +209,7 @@ export abstract class EventSourcedAggregate<
 	 * stream corruption) after the all-or-nothing rollback. History
 	 * events without the optional address fields pass unchecked (the
 	 * fields are optional on the event shape); NEW events are covered
-	 * by the stricter `stampNewEventAddress` on the apply path.
+	 * by the stricter `addressNewEvent` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =
@@ -276,7 +276,7 @@ export abstract class EventSourcedAggregate<
 	 * lifecycle is owned by the Unit of Work rather than inferred from an
 	 * aggregate persistence flag.
 	 */
-	public loadFromHistory(
+	public replayHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
 		assertReplayTargetHasNoPendingEvents(this);
@@ -297,7 +297,7 @@ export abstract class EventSourcedAggregate<
 			// Inside the try on purpose: a handler that records a decision
 			// during the fold makes this throw, and the rollback below must
 			// cover that case too.
-			this.markRestored((startVersion + history.length) as Version);
+			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
 			this._state = previousState;
 			this.setVersion(startVersion);
@@ -346,18 +346,18 @@ export abstract class EventSourcedAggregate<
  * fresh one, or one restored from a snapshot. The instance exists only
  * inside this call. A rejected replay therefore leaves the caller with
  * nothing to return by mistake. Later catch-up pages go through
- * `loadFromHistory` on the value. A `DomainError` from a handler rides the
- * `Result`; wiring errors and a foreign row throw, as in `loadFromHistory`.
+ * `replayHistory` on the value. A `DomainError` from a handler rides the
+ * `Result`; wiring errors and a foreign row throw, as in `replayHistory`.
  * The creator runs outside the `Result`: what it throws propagates.
  */
 export function reconstituteAggregateFromHistory<
 	TAggregate extends IEventSourcedAggregate<Id<string>, AnyDomainEvent>,
 >(
 	createReplayTarget: () => TAggregate,
-	history: Parameters<TAggregate["loadFromHistory"]>[0],
+	history: Parameters<TAggregate["replayHistory"]>[0],
 ): Result<TAggregate, DomainError> {
 	const aggregate = createReplayTarget();
-	const replayed = aggregate.loadFromHistory(history);
+	const replayed = aggregate.replayHistory(history);
 	if (replayed.isErr()) return err(replayed.error);
 	return ok(aggregate);
 }

@@ -206,7 +206,7 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
- * replay through `loadFromHistory` also lets it propagate uncaught instead
+ * replay through `replayHistory` also lets it propagate uncaught instead
  * of wrapping it in `Result.Err`.
  *
  * Use `isBaseError(e)` from `@shirudo/base-error` to detect
@@ -233,7 +233,7 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
  * the fact anyway on the apply path, and leave every later fold working on
  * nothing. Same posture as {@link MissingHandlerError}: a deterministic bug
  * in the handler map, never a domain rejection, so it propagates through
- * `loadFromHistory` instead of riding its `Result`.
+ * `replayHistory` instead of riding its `Result`.
  */
 export class HandlerReturnedNoStateError extends KitWiringError<"HANDLER_RETURNED_NO_STATE"> {
 	constructor(public readonly eventType: string) {
@@ -471,7 +471,7 @@ export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
 
 /**
  * Thrown when a number that is not a valid aggregate version reaches the
- * kit: `toVersion`, `markRestored`, `setVersion`, and the post-commit
+ * kit: `toVersion`, `markReconstituted`, `setVersion`, and the post-commit
  * acknowledgement all reject it. A version is a safe integer of at least
  * zero, and a restore never moves below the current version. A wiring
  * error: an adapter passed a corrupt row value or a wrong number, and
@@ -493,7 +493,7 @@ export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
+ * Thrown by `EventSourcedAggregate.replayHistory` when the replay target
  * carries unflushed `pendingEvents`. Replaying persisted facts onto that
  * instance would advance the version underneath decisions made against an
  * older state and could later claim history the stream does not carry.
@@ -671,7 +671,7 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
 }
 
 /**
- * Thrown by persisted-event consumers (including `loadFromHistory` and
+ * Thrown by persisted-event consumers (including `replayHistory` and
  * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
  * the persisted row belongs to someone else (a miswired stream read,

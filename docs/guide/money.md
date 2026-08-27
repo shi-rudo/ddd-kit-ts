@@ -465,7 +465,7 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
     version: Version,
   ): Invoice {
     const invoice = new Invoice(id, state);
-    invoice.markRestored(version);
+    invoice.markReconstituted(version);
     return invoice;
   }
 
@@ -485,7 +485,7 @@ class Invoice extends AggregateRoot<InvoiceState, InvoiceId, InvoiceEvent> {
   }
 
   issue(): void {
-    this.commit(
+    this.setState(
       { ...this.state, status: "issued" },
       this.createEvent("InvoiceIssued", {
         invoiceId: this.id,

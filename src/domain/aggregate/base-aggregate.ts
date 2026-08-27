@@ -37,7 +37,7 @@ export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
  * `EventSourcedAggregate`. Carries the lifecycle machinery that's
  * identical across the two flavours: current version, pending-event
  * tracking, the kit-internal post-commit acknowledgement capability,
- * the `markRestored` post-load marker, and the `createEvent` helper
+ * the `markReconstituted` post-load marker, and the `createEvent` helper
  * that auto-injects `aggregateId` + `aggregateType` on every event the
  * aggregate emits. The application shell records the pending decisions
  * with `recordPendingEvents` before persistence.
@@ -89,7 +89,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Version the persistence layer last confirmed for this instance:
-	 * `undefined` until the aggregate is reconstituted (`markRestored`) or a
+	 * `undefined` until the aggregate is reconstituted (`markReconstituted`) or a
 	 * commit is acknowledged. Kit-internal via the lifecycle capability; it
 	 * grounds the `withCommit` unique-cursor guard so an eventful commit that
 	 * did not advance beyond the persisted row is rejected deterministically.
@@ -232,7 +232,7 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState()` / `commit()` paths and by the event-sourced
+	 * aggregates' `setState()` path and by the event-sourced
 	 * `apply()` path. Routes through {@link setVersion}, so a subclass that
 	 * observes version writes there sees every increment.
 	 */
@@ -258,7 +258,7 @@ export abstract class BaseAggregate<
 	 * structurally: reconstitution stays inside the aggregate factory while
 	 * post-commit acknowledgement belongs to application commit orchestration.
 	 *
-	 * If you override this, call `super.markRestored(version)` so the current
+	 * If you override this, call `super.markReconstituted(version)` so the current
 	 * domain version remains aligned with the reconstituted facts.
 	 *
 	 * @param version - The version the row currently holds in the DB
@@ -267,12 +267,12 @@ export abstract class BaseAggregate<
 	 * ```ts
 	 * static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
 	 *   const order = new Order(id, state);
-	 *   order.markRestored(version);
+	 *   order.markReconstituted(version);
 	 *   return order;
 	 * }
 	 * ```
 	 */
-	protected markRestored(version: Version): void {
+	protected markReconstituted(version: Version): void {
 		assertReplayTargetHasNoPendingEvents(this);
 		const restored = toVersion(version);
 		if (restored < this._version) {
@@ -290,22 +290,22 @@ export abstract class BaseAggregate<
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an address that names another
 	 * aggregate throws {@link MisaddressedEventError} before anything is
-	 * recorded. Prefer the higher-level `AggregateRoot.commit()`
+	 * recorded. Prefer the higher-level `AggregateRoot.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
 	 * directly is appropriate only after a version-advancing state mutation,
 	 * or while constructing a never-persisted aggregate. An event-only commit
 	 * on an already-persisted aggregate has no unique cursor and `withCommit`
-	 * rejects it; use `commit(currentState, event)`.
+	 * rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		this.appendStampedEvent(this.stampNewEventAddress(event));
+		this.appendStampedEvent(this.addressNewEvent(event));
 	}
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link stampNewEventAddress}. `commit()` and `apply()` stamp before the
+	 * {@link addressNewEvent}. `setState()` and `apply()` stamp before the
 	 * state moves and append afterwards, so the guard runs once per event.
 	 */
 	protected appendStampedEvent(event: PendingDomainEvent<TEvent>): void {
@@ -332,9 +332,7 @@ export abstract class BaseAggregate<
 	 * shared, already deep-frozen by the constructors); a fully addressed
 	 * event is returned as is.
 	 */
-	protected stampNewEventAddress<E extends PendingDomainEvent<TEvent>>(
-		event: E,
-	): E {
+	protected addressNewEvent<E extends PendingDomainEvent<TEvent>>(event: E): E {
 		this.assertMintedEvent(event);
 		const { aggregateId, aggregateType } = event;
 		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
@@ -413,8 +411,8 @@ export abstract class BaseAggregate<
 }
 
 /**
- * Restore-target guard used by `markRestored` and by
- * `EventSourcedAggregate.loadFromHistory`: a target carrying unflushed
+ * Restore-target guard used by `markReconstituted` and by
+ * `EventSourcedAggregate.replayHistory`: a target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
  * moves. A restore advances the aggregate's current version, so unflushed
  * events recorded against the old version would later be harvested claiming

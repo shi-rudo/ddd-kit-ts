@@ -58,7 +58,7 @@ export class Shipment extends AggregateRoot<
 
 	static request(id: ShipmentId, orderId: OrderId): Shipment {
 		const shipment = new Shipment(id, { id, orderId, status: "requested" });
-		shipment.commit(
+		shipment.setState(
 			{ id, orderId, status: "requested" },
 			shipment.createEvent("ShippingRequested", { orderId }),
 		);
@@ -73,7 +73,7 @@ export class Shipment extends AggregateRoot<
 				"complete",
 			);
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "shipped", trackingId },
 			this.createEvent("ShippingCompleted", {
 				orderId: this.state.orderId,
@@ -86,7 +86,7 @@ export class Shipment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new ShipmentInWrongStateError(this.id, this.state.status, "fail");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "failed", failureReason: reason },
 			this.createEvent("ShippingFailed", {
 				orderId: this.state.orderId,

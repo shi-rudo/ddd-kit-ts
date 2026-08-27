@@ -291,7 +291,7 @@ changeItemQuantity(itemId: ItemId, quantity: number): void {
     quantity,
   );
 
-  this.commit({
+  this.setState({
     ...this.state,
     items: replaceEntityById(this.state.items, itemId, replacement),
   });
@@ -301,10 +301,10 @@ changeItemQuantity(itemId: ItemId, quantity: number): void {
 The new array reference tells the root that the child collection changed. The
 new child instance avoids another subtle problem: if you mutate the existing
 child first and a later aggregate-level validation throws, the child has already
-moved. Replacement keeps the old aggregate state intact until `commit(...)`
+moved. Replacement keeps the old aggregate state intact until `setState(...)`
 accepts the new state.
 
-If the aggregate also needs to publish a domain event, pass it to `commit(...)`
+If the aggregate also needs to publish a domain event, pass it to `setState(...)`
 in the same call.
 
 The stronger rule is still the DDD rule: outside application code should not

@@ -73,7 +73,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		version: Version,
 	): ContractOrder {
 		const order = new ContractOrder(id, state);
-		order.markRestored(version);
+		order.markReconstituted(version);
 		return order;
 	}
 
@@ -86,7 +86,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	}
 
 	rename(name: string): void {
-		this.commit(
+		this.setState(
 			{ ...this.state, name },
 			createDomainEvent(
 				"OrderRenamed",
@@ -100,7 +100,7 @@ class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	}
 
 	addItem(item: string): void {
-		this.commit(
+		this.setState(
 			{ ...this.state, items: [...this.state.items, item] },
 			createDomainEvent(
 				"ItemAdded",

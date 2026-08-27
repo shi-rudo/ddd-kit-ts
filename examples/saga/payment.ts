@@ -65,7 +65,7 @@ export class Payment extends AggregateRoot<
 			amount,
 			status: "requested",
 		});
-		payment.commit(
+		payment.setState(
 			{ id, orderId, amount, status: "requested" },
 			payment.createEvent("PaymentRequested", { orderId, amount }),
 		);
@@ -76,7 +76,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "receive");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "received" },
 			this.createEvent("PaymentReceived", {
 				orderId: this.state.orderId,
@@ -89,7 +89,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "fail");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "failed", failureReason: reason },
 			this.createEvent("PaymentFailed", {
 				orderId: this.state.orderId,
@@ -102,7 +102,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "received") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "refund");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "refunded" },
 			this.createEvent("PaymentRefunded", {
 				orderId: this.state.orderId,

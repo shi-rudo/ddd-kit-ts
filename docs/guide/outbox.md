@@ -262,7 +262,7 @@ whose `position` carries the full projection cursor.
 
 The envelope fields have a specific meaning:
 
-- `envelope.event.version` is the event payload schema version used for upcasting.
+- `envelope.event.schemaVersion` is the event payload schema version used for upcasting.
 - `envelope.position.aggregateVersion` is the producing aggregate's state version at
   commit time.
 - `envelope.position.commitSequence` is the zero-based order of that event within the

@@ -15,7 +15,7 @@ class EdgeOrder extends AggregateRoot {
 	}
 
 	confirm() {
-		this.commit(
+		this.setState(
 			{ status: "confirmed" },
 			this.createEvent("EdgeOrderConfirmed", { orderId: this.id }),
 		);

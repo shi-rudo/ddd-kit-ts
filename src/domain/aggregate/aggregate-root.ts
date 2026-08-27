@@ -20,12 +20,13 @@ export abstract class AggregateRoot<
 	TEvent extends AnyDomainEvent = never,
 > extends BaseAggregate<TState, TId, TEvent> {
 	/**
-	 * Changes state and records the resulting facts in record-after-mutation
-	 * order. State validation, the event mint gate, and the event address
-	 * check run before the transition becomes observable, so a rejected
-	 * decision records nothing and moves nothing.
+	 * Replaces the state, advances the OCC version, and records the events
+	 * of the change, in that order. State validation, the event mint gate,
+	 * and the event address check run before the change becomes observable,
+	 * so a rejected decision records nothing and moves nothing. Without
+	 * events the call is a plain versioned state change.
 	 */
-	protected commit(
+	protected override setState(
 		newState: TState,
 		events:
 			| PendingDomainEvent<TEvent>
@@ -36,23 +37,18 @@ export abstract class AggregateRoot<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		const stamped = eventBatch.map((event) => this.stampNewEventAddress(event));
+		const stamped = eventBatch.map((event) => this.addressNewEvent(event));
 
-		this.setState(newState);
-		for (const event of stamped) this.appendStampedEvent(event);
-	}
-
-	/** Every normal domain-state transition advances the OCC version. */
-	protected override setState(newState: TState): void {
 		super.setState(newState);
 		this.bumpVersion();
+		for (const event of stamped) this.appendStampedEvent(event);
 	}
 
 	/**
 	 * Replaces loss-tolerant derived state without advancing the domain version.
 	 *
 	 * This is intentionally loud: concurrent writers may overwrite such a
-	 * change. Keep business facts on the normal `setState`/`commit` path.
+	 * change. Keep business facts on the normal `setState` path.
 	 */
 	protected setStateWithoutVersionBump(newState: TState): void {
 		super.setState(newState);

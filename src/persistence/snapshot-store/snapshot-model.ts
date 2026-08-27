@@ -181,7 +181,7 @@ export function reconstituteAggregateFromSnapshot<
 		throw error;
 	}
 	// Post-condition, not corruption: a factory that ignores the version
-	// parameter (a forgotten markRestored) is a deterministic model wiring
+	// parameter (a forgotten markReconstituted) is a deterministic model wiring
 	// bug. Routing it into the discard-and-refold channel would mask it as
 	// perpetual silent refolding, so it throws raw instead.
 	if (aggregate.version !== snapshot.version) {
@@ -189,7 +189,7 @@ export function reconstituteAggregateFromSnapshot<
 			`SnapshotModel.reconstitute for ${model.aggregateType} ${String(id)} ` +
 				`returned an aggregate at version ${String(aggregate.version)} for a ` +
 				`snapshot at version ${String(snapshot.version)}. Reconstitution must ` +
-				"restore the persisted version; call markRestored(version) inside " +
+				"restore the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
 	}

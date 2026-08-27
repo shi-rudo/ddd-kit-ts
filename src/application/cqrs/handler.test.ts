@@ -51,7 +51,7 @@ class MockAggregate extends AggregateRoot<
 	) {
 		super(id, {});
 		if (restoredVersion !== undefined) {
-			this.markRestored(restoredVersion as Version);
+			this.markReconstituted(restoredVersion as Version);
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
@@ -232,7 +232,7 @@ describe("withCommit", () => {
 			}
 
 			decide(): void {
-				this.commit(
+				this.setState(
 					{},
 					this.createEvent("OrderCreated", { orderId: "order-1" }),
 				);
@@ -298,7 +298,7 @@ describe("withCommit", () => {
 			}
 
 			place(orderId: string): void {
-				this.commit({}, this.createEvent("OrderCreated", { orderId }));
+				this.setState({}, this.createEvent("OrderCreated", { orderId }));
 			}
 		}
 		const factory = createDomainEventFactory({

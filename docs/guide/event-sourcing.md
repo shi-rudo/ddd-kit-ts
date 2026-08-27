@@ -1,12 +1,12 @@
 # Event Sourcing
 
-`EventSourcedAggregate<TState, TEvent, TId>` is the aggregate root for models
+`EventSourcedAggregate<TState, TId, TEvent>` is the aggregate root for models
 where events are the source of truth.
 
 The aggregate does not store its current state as the primary record. It derives
 state by applying events in order. New business methods record new facts by
 calling `apply(event)`. Reconstitution reads old facts and folds them back into
-state with `loadFromHistory(...)`. A snapshot model can create a fresh
+state with `replayHistory(...)`. A snapshot model can create a fresh
 aggregate from a stored state DTO before the stream tail is replayed.
 
 That split is the whole model:
@@ -75,8 +75,8 @@ class OrderAlreadyConfirmedError extends DomainError<
 
 class Order extends EventSourcedAggregate<
   OrderState,
-  OrderEvent,
-  OrderId
+  OrderId,
+  OrderEvent
 > {
   protected readonly aggregateType = "Order";
 
@@ -169,7 +169,7 @@ If validation, handler lookup, state computation, or the state check throws,
 the aggregate does not record the event. This behavior is the event-sourcing safety rule. The
 aggregate must not publish a fact that did not change state.
 
-There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
+There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 Handlers must fold state from `type` and `payload` only. A live `apply(...)`
@@ -410,7 +410,7 @@ async function findById(id: OrderId): Promise<Order | null> {
       });
     }
 
-    const catchUp = order.loadFromHistory(page.events);
+    const catchUp = order.replayHistory(page.events);
     if (catchUp.isErr()) throw catchUp.error;
     fromVersion += page.events.length;
   }
@@ -430,14 +430,14 @@ The first page pins the authoritative head; subsequent pages replay only that
 prefix. `reconstituteAggregateFromHistory` builds the instance inside the
 call and yields it only when the first page folded. A rejected replay leaves
 the repository with nothing to track. Each later page goes through
-`loadFromHistory` on that instance, once per page, which keeps allocation
+`replayHistory` on that instance, once per page, which keeps allocation
 bounded. If a later page fails, discard the local aggregate and do not place
 it in the identity map. Replay remains all-or-nothing per call, and no
 partially loaded instance escapes the repository.
 
 `reconstituteAggregateFromHistory(create, history)` returns
 `Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
-`loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
+`replayHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a handler that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
 `Result`. The wiring errors `MissingHandlerError`, `HandlerReturnedNoStateError`,
@@ -459,7 +459,7 @@ stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
 the current event shape. Replay does not run `validateState(...)` either:
-`loadFromHistory` stores each fold result as is, and only `apply(...)` runs
+`replayHistory` stores each fold result as is, and only `apply(...)` runs
 both gates for new facts. The constructor runs `validateState` once on the
 initial state, unless the factory passes `trustInitialState: true`. A
 snapshot `reconstitute` factory does. The stored state is then a fact like
@@ -498,7 +498,7 @@ checks the final version against it. On a mismatch the load recipe throws
 `ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`).
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
-`loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
+`replayHistory(...)` throws `UnreplayableAggregateError` before anything
 moves. The Unit of Work owns the factory-versus-load lifecycle, so the
 aggregate carries no persistence flag and replay does not check one.
 
@@ -552,7 +552,7 @@ async function findOrderAsOfVersion(
         targetVersion: toVersion,
       });
     }
-    const result = historical.loadFromHistory(page.events);
+    const result = historical.replayHistory(page.events);
     if (result.isErr()) throw result.error;
     fromVersion += page.events.length;
   }
@@ -633,7 +633,7 @@ async function findById(id: OrderId): Promise<Order | null> {
         return discardSnapshotAndRefold();
       }
 
-      const catchUp = order.loadFromHistory(tail.events);
+      const catchUp = order.replayHistory(tail.events);
       if (catchUp.isErr()) return discardSnapshotAndRefold();
       fromVersion += tail.events.length;
     }
@@ -670,7 +670,7 @@ return the partially restored aggregate. Reaching the target
 cursor proves every page bridged the snapshot to the pinned head without
 materializing the whole tail.
 
-`loadFromHistory(...)` keeps its `Result<void, DomainError>` boundary for
+`replayHistory(...)` keeps its `Result<void, DomainError>` boundary for
 invalid historical facts. Snapshot DTO validation, migration, and
 reconstitution belong to the adapter model and throw when stored data cannot
 be interpreted. The repository can discard that derived snapshot and replay

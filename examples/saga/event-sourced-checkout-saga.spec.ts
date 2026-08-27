@@ -196,7 +196,7 @@ describe("Event-sourced checkout saga", () => {
 		const history = recordPendingEvents(source, eventRecorder);
 
 		const restored = EventSourcedCheckoutSaga.reconstitute(orderId);
-		const replayed = restored.loadFromHistory(history);
+		const replayed = restored.replayHistory(history);
 
 		expect(replayed.isOk()).toBe(true);
 		expect(restored.step).toBe("awaiting-refund-after-shipping-failure");
@@ -343,7 +343,7 @@ describe("Event-sourced checkout saga", () => {
 		const commandsBeforeReplay = messagesIn(database.snapshot());
 
 		const restored = EventSourcedCheckoutSaga.reconstitute(orderId);
-		expect(restored.loadFromHistory(database.snapshot().history).isOk()).toBe(
+		expect(restored.replayHistory(database.snapshot().history).isOk()).toBe(
 			true,
 		);
 

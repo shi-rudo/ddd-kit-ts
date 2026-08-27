@@ -31,7 +31,7 @@ interface DomainEvent<T extends string, P = void> {
   aggregateType?: string;
   payload: P;
   occurredAt: Date;
-  version: number;
+  schemaVersion: number;
   metadata?: EventMetadata;
 }
 ```
@@ -45,10 +45,10 @@ The fields have different jobs:
 | `aggregateId` / `aggregateType` | Source aggregate. `createEvent` fills these in automatically. |
 | `payload` | Domain data for the fact that happened. |
 | `occurredAt` | Time the accepted fact was recorded by the application shell. It is not automatically a business timestamp. |
-| `version` | Event schema version, used for payload evolution and upcasting. |
+| `schemaVersion` | Event schema version, used for payload evolution and upcasting. |
 | `metadata` | Correlation, causation, user, source, and custom tracing fields. |
 
-`version` says which shape the event payload has. It is not an aggregate or
+`schemaVersion` says which shape the event payload has. It is not an aggregate or
 stream position; those values live in `CommittedDomainEvent.position`.
 
 ## Creating Events
@@ -84,7 +84,7 @@ const event = createDomainEvent(
 The returned event is deeply frozen. The payload and metadata are cloned before freezing, so the caller's original objects are not frozen and later mutations to them do not change the event.
 
 The kit marks every event its constructors return as minted. The aggregate
-recording paths (`apply`, `commit`, `addDomainEvent`) accept only minted
+recording paths (`apply`, `setState`, `addDomainEvent`) accept only minted
 events; a hand-rolled literal throws `UnmintedEventError` (code
 `UNMINTED_EVENT`). The mark has two tiers. A module-private tier covers the
 events of this loaded copy of the kit. A cooperative `Symbol.for` brand
@@ -123,7 +123,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(confirmedAt: Date): void {
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", {
         orderId: this.id,
@@ -136,7 +136,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 
 `createEvent` clones and freezes the payload and fills in `aggregateId` and
 `aggregateType`. It does not read a clock, generate an id, or attach tracing
-metadata. The optional `version` passed to `createEvent` is the payload schema
+metadata. The optional `schemaVersion` passed to `createEvent` is the payload schema
 version and stays next to the code that creates that payload.
 
 `confirmedAt` is present because it has business meaning. If the domain does
@@ -156,7 +156,7 @@ common fields when you omit them:
 | --- | --- | --- |
 | `eventId` | `crypto.randomUUID()` | `options.eventId` or an instance factory |
 | `occurredAt` | current clock time | `options.occurredAt` or an instance factory |
-| `version` | `1` | `options.version` |
+| `schemaVersion` | `1` | `options.schemaVersion` |
 | `metadata` | `undefined` | `options.metadata` |
 
 These defaults are intentionally convenient and nondeterministic. They are
@@ -252,7 +252,7 @@ DTO mappings stay outside the aggregate in an adapter-owned `SnapshotModel`.
 ```ts
 // Before
 confirm(facts: DomainEventFacts): void {
-  this.commit(
+  this.setState(
     nextState,
     this.recordEvent("OrderConfirmed", payload, facts),
   );
@@ -260,7 +260,7 @@ confirm(facts: DomainEventFacts): void {
 
 // Preferred v3 path
 confirm(): void {
-  this.commit(
+  this.setState(
     nextState,
     this.createEvent("OrderConfirmed", payload),
   );
@@ -295,9 +295,9 @@ event migration to `recordEventFromFactory(...)`. That retains the old event
 factory posture while making the hidden read explicit in the method name.
 
 `DomainEventFacts` and `createFacts()` remain deprecated aliases for
-`DomainEventStamp` and `createStamp()` during migration. A schema `version`
+`DomainEventStamp` and `createStamp()` during migration. A schema `schemaVersion`
 formerly supplied through facts must move to the concrete producer:
-`this.createEvent("NameChanged", payload, { version: 2 })`.
+`this.createEvent("NameChanged", payload, { schemaVersion: 2 })`.
 
 ## Deterministic tests
 
@@ -506,9 +506,9 @@ A domain event says something happened. The state change must succeed before the
 The kit gives you safe paths:
 
 - `EventSourcedAggregate.apply(event)` validates and applies the event before recording it as pending.
-- `AggregateRoot.commit(newState, events)` validates and assigns state before appending events.
+- `AggregateRoot.setState(newState, events)` validates and assigns state, advances the version, and then appends the events.
 
-On an `AggregateRoot`, the lower-level `setState` and `addDomainEvent` methods are still available for special cases, but then the ordering is your responsibility:
+On an `AggregateRoot`, the lower-level `addDomainEvent` method is still available for special cases, but then the ordering is your responsibility:
 
 ```ts
 this.setState(nextState);

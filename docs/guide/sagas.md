@@ -135,7 +135,7 @@ does not run that mapper:
 
 ```ts
 const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
-const replayed = saga.loadFromHistory(history);
+const replayed = saga.replayHistory(history);
 if (replayed.isErr()) throw replayed.error;
 
 // No command was enqueued and no pending fact was created by replay.

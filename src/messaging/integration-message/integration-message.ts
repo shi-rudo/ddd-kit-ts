@@ -143,7 +143,7 @@ export function integrationMessageToCommittedEvent<
 			aggregateId: stableMessage.source.aggregateId,
 			aggregateType: stableMessage.source.aggregateType,
 			occurredAt: new Date(stableMessage.occurredAt),
-			version: stableMessage.version,
+			schemaVersion: stableMessage.version,
 			metadata,
 		}),
 		source: stableMessage.source,
