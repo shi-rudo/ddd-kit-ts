@@ -154,7 +154,10 @@ export {
 	type AggregateConfig,
 	AggregateRoot,
 } from "./domain/aggregate/aggregate-root";
-export { EventSourcedAggregate } from "./domain/aggregate/event-sourced-aggregate";
+export {
+	EventSourcedAggregate,
+	reconstituteAggregateFromHistory,
+} from "./domain/aggregate/event-sourced-aggregate";
 // Entities
 export {
 	Entity,

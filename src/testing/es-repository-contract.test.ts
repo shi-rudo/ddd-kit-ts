@@ -9,7 +9,11 @@ import {
 } from "../application/unit-of-work/unit-of-work";
 import type { Version } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
-import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
+import type { AggregateConfig } from "../domain/aggregate/base-aggregate";
+import {
+	EventSourcedAggregate,
+	reconstituteAggregateFromHistory,
+} from "../domain/aggregate/event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -72,8 +76,12 @@ class ContractEsOrder extends EventSourcedAggregate<
 > {
 	protected readonly aggregateType = "ContractEsOrder";
 
-	protected constructor(id: EsOrderId, state?: EsOrderState) {
-		super(id, state ?? { name: "", items: [] });
+	protected constructor(
+		id: EsOrderId,
+		state?: EsOrderState,
+		config?: AggregateConfig<EsOrderState>,
+	) {
+		super(id, state ?? { name: "", items: [] }, config);
 	}
 
 	/** Fresh aggregate: applies exactly ONE creation event (version 1). */
@@ -105,7 +113,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 		state: EsOrderState,
 		version: Version,
 	): ContractEsOrder {
-		const order = new ContractEsOrder(id, state);
+		const order = new ContractEsOrder(id, state, { trustInitialState: true });
 		order.markRestored(version);
 		return order;
 	}
@@ -253,14 +261,18 @@ class InMemoryEsOrderRepository {
 		const history = this.db.streams.get(key);
 		if (!history || history.length === 0) return undefined;
 		const snapshot = this.db.snapshots.get(key);
-		const order = snapshot
-			? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
-			: ContractEsOrder.bare(id);
 		// Only the tail after the restored version; the aggregate cannot
 		// detect an overlap, so the head check below is the proof.
 		const tail = snapshot ? history.slice(snapshot.version) : history;
-		const result = order.loadFromHistory(tail);
-		if (result.isErr()) throw result.error; // corrupt stream
+		const reconstituted = reconstituteAggregateFromHistory(
+			() =>
+				snapshot
+					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
+					: ContractEsOrder.bare(id),
+			tail,
+		);
+		if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
+		const order = reconstituted.value;
 		if (order.version !== history.length) {
 			throw new ReplayHeadMismatchError({
 				...orderStream(id),

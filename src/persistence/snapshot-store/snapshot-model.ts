@@ -44,11 +44,12 @@ export interface SnapshotModel<
 	 *
 	 * A snapshot persisted under yesterday's decision rules must keep loading
 	 * after a rule change ("replay from zero equals snapshot plus tail"). The
-	 * aggregate constructor runs `validateState` on the state it receives;
-	 * the aggregates guide ("Where Invariants Live") states which rules
-	 * belong in that function. When the factory does reject the blob and
-	 * throws a `DomainError`, `reconstituteAggregateFromSnapshot` surfaces it
-	 * as a {@link SnapshotCorruptedError} so the documented load recipe can
+	 * factory passes `trustInitialState: true` to the constructor, so
+	 * `validateState` does not run on the stored state; the aggregates guide
+	 * ("Where Invariants Live") states the rule and the factory shape. When
+	 * a factory without the option rejects the blob with a `DomainError`,
+	 * `reconstituteAggregateFromSnapshot` surfaces it as a
+	 * {@link SnapshotCorruptedError} so the documented load recipe can
 	 * discard the derived snapshot and refold from the stream; the load then
 	 * still succeeds, at the cost of a full replay on every hit.
 	 */
@@ -110,8 +111,8 @@ export function captureAggregateSnapshot<
  * adapter model. A missing schema version denotes the original schema `1`.
  *
  * A `DomainError` thrown while interpreting the stored blob (the model's
- * `migrate`, or current `validateState` rules running inside the model's
- * reconstitution factory) is surfaced as a {@link SnapshotCorruptedError}:
+ * `migrate`, or `validateState` inside a reconstitution factory that does
+ * not pass `trustInitialState`) is surfaced as a {@link SnapshotCorruptedError}:
  * a snapshot is DERIVED data, so the caller's discard-and-refold branch must
  * see one catchable corruption channel instead of a raw domain rejection
  * escaping `getById` after a rule change. A stored version that is not a

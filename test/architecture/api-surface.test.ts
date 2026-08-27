@@ -303,6 +303,7 @@ const INDEX_SURFACE = [
 	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
 	"recapturePersistenceBaseline",
+	"reconstituteAggregateFromHistory",
 	"reconstituteAggregateFromSnapshot",
 	"recordDomainEvent",
 	"recordPendingEvents",

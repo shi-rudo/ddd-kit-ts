@@ -135,26 +135,30 @@ async findById(id: OrderId): Promise<Order | undefined> {
 }
 ```
 
-For event sourcing, construct a bare aggregate and replay a stable stream
-prefix:
+For event sourcing, build the aggregate from the first page through
+`reconstituteAggregateFromHistory` and replay the rest of the pinned prefix
+into it:
 
 ```ts
-const order = Order.bare(id);
-let fromVersion = 0;
-let toVersion: number | undefined;
+const first = await eventStore.readStream(address, { limit: 256 });
+if (!first.exists) return undefined;
+const toVersion = first.lastVersion;
 
-for (;;) {
+const reconstituted = reconstituteAggregateFromHistory(
+  () => Order.bare(id),
+  first.events,
+);
+if (reconstituted.isErr()) throw reconstituted.error;
+const order = reconstituted.value;
+let fromVersion = first.events.length;
+
+while (fromVersion < toVersion) {
   const page = await eventStore.readStream(address, {
     fromVersion,
     toVersion,
     limit: 256,
   });
-
-  if (!page.exists) return undefined;
-  toVersion ??= page.lastVersion;
-  if (fromVersion === toVersion) break;
-
-  if (page.events.length === 0) {
+  if (!page.exists || page.events.length === 0) {
     throw new NonProgressingEventStreamPageError({
       ...address,
       fromVersion,
@@ -167,8 +171,18 @@ for (;;) {
   fromVersion += page.events.length;
 }
 
+if (order.version !== toVersion) {
+  throw new ReplayHeadMismatchError({
+    ...address,
+    targetVersion: toVersion,
+    actualVersion: order.version,
+  });
+}
 return tracking.trackLoaded(order);
 ```
+
+The full recipe with the refold fallback is in
+[Event Sourcing -> Loading from history](./event-sourcing.md#loading-from-history).
 
 Pin the first page's `lastVersion` and page toward that fixed head. This gives
 the load one stable append-only prefix even if another writer appends while it
@@ -456,19 +470,17 @@ Loading creates a fresh aggregate. For event sourcing, replay the tail after
 stream head:
 
 ```ts
-const order = reconstituteAggregateFromSnapshot(
-  orderSnapshots,
-  orderId,
-  snapshot,
-);
-
 const tail = await eventStore.readStream(address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
 
-const replay = order.loadFromHistory(tail.events);
-if (replay.isErr()) throw replay.error;
+const restored = reconstituteAggregateFromHistory(
+  () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
+  tail.events,
+);
+if (restored.isErr()) throw restored.error;
+const order = restored.value;
 if (order.version !== tail.lastVersion) {
   throw new ReplayHeadMismatchError({
     ...address,

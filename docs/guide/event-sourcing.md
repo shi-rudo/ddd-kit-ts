@@ -378,26 +378,31 @@ catch-up ends at the stream head and folds only the tail.
 
 ## Loading from history
 
-Reconstitution starts with a blank aggregate and folds the stream into it:
+Reconstitution builds the aggregate from the first page through
+`reconstituteAggregateFromHistory` and folds later pages into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
-  const order = Order.reconstitute(id);
-  let fromVersion = 0;
-  let targetVersion: number | undefined;
+  const first = await eventStore.readStream(address, { limit: 256 });
+  if (!first.exists) return null;
+  const targetVersion = first.lastVersion;
 
-  for (;;) {
+  const reconstituted = reconstituteAggregateFromHistory(
+    () => Order.reconstitute(id),
+    first.events,
+  );
+  if (reconstituted.isErr()) throw reconstituted.error;
+  const order = reconstituted.value;
+  let fromVersion = first.events.length;
+
+  while (fromVersion < targetVersion) {
     const page = await eventStore.readStream(address, {
       fromVersion,
       toVersion: targetVersion,
       limit: 256,
     });
-    if (!page.exists) return null;
-
-    targetVersion ??= page.lastVersion;
-    if (fromVersion === targetVersion) break;
-    if (page.events.length === 0) {
+    if (!page.exists || page.events.length === 0) {
       throw new NonProgressingEventStreamPageError({
         ...address,
         fromVersion,
@@ -405,8 +410,8 @@ async function findById(id: OrderId): Promise<Order | null> {
       });
     }
 
-    const result = order.loadFromHistory(page.events);
-    if (result.isErr()) throw result.error;
+    const catchUp = order.loadFromHistory(page.events);
+    if (catchUp.isErr()) throw catchUp.error;
     fromVersion += page.events.length;
   }
 
@@ -422,11 +427,16 @@ async function findById(id: OrderId): Promise<Order | null> {
 ```
 
 The first page pins the authoritative head; subsequent pages replay only that
-prefix. Calling `loadFromHistory` once per page keeps allocation bounded. If a
-later page fails, discard the local aggregate and do not place it in the
-identity map. Replay remains all-or-nothing per call, and no partially loaded
-instance escapes the repository.
+prefix. `reconstituteAggregateFromHistory` builds the instance inside the
+call and yields it only when the first page folded. A rejected replay leaves
+the repository with nothing to track. Each later page goes through
+`loadFromHistory` on that instance, once per page, which keeps allocation
+bounded. If a later page fails, discard the local aggregate and do not place
+it in the identity map. Replay remains all-or-nothing per call, and no
+partially loaded instance escapes the repository.
 
+`reconstituteAggregateFromHistory(create, history)` returns
+`Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
 `loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a handler that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
@@ -522,9 +532,19 @@ async function findOrderAsOfVersion(
     );
   }
 
-  const historical = Order.reconstitute(id);
-  let fromVersion = 0;
+  const reconstituted = reconstituteAggregateFromHistory(
+    () => Order.reconstitute(id),
+    page.events,
+  );
+  if (reconstituted.isErr()) throw reconstituted.error;
+  const historical = reconstituted.value;
+  let fromVersion = page.events.length;
   while (fromVersion < toVersion) {
+    page = await eventStore.readStream(address, {
+      fromVersion,
+      toVersion,
+      limit: 256,
+    });
     if (!page.exists || page.events.length === 0) {
       throw new NonProgressingEventStreamPageError({
         ...address,
@@ -535,13 +555,6 @@ async function findOrderAsOfVersion(
     const result = historical.loadFromHistory(page.events);
     if (result.isErr()) throw result.error;
     fromVersion += page.events.length;
-    if (fromVersion < toVersion) {
-      page = await eventStore.readStream(address, {
-        fromVersion,
-        toVersion,
-        limit: 256,
-      });
-    }
   }
   return historical.toView();
 }
@@ -596,12 +609,14 @@ async function findById(id: OrderId): Promise<Order | null> {
   let fromVersion = snapshot.version;
 
   try {
-    order = reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot);
-    const result = order.loadFromHistory(tail.events);
-
-    if (result.isErr()) {
+    const restored = reconstituteAggregateFromHistory(
+      () => reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot),
+      tail.events,
+    );
+    if (restored.isErr()) {
       return discardSnapshotAndRefold();
     }
+    order = restored.value;
     fromVersion += tail.events.length;
 
     while (fromVersion < targetVersion) {
