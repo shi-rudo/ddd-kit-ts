@@ -37,7 +37,7 @@ Be precise about the APIs:
 - `withCommit(...)` returns the committed result `R`. It is a transaction
   orchestrator, not a `Result` wrapper.
 
-Event-sourced replay is a third case. `loadFromHistory` returns
+Event-sourced replay is a third case. `replayHistory` returns
 `Result<void, DomainError>` because a persisted stream can contain invalid
 historical facts. A repository can reject the load or refold from another
 source. Snapshot DTO migration and reconstitution live

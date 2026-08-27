@@ -414,7 +414,7 @@ export abstract class BaseAggregate<
 
 /**
  * Restore-target guard used by `markRestored` and by
- * `EventSourcedAggregate.loadFromHistory`: a target carrying unflushed
+ * `EventSourcedAggregate.replayHistory`: a target carrying unflushed
  * `pendingEvents` throws {@link UnreplayableAggregateError} BEFORE anything
  * moves. A restore advances the aggregate's current version, so unflushed
  * events recorded against the old version would later be harvested claiming

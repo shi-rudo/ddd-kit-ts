@@ -27,7 +27,7 @@ export interface ReadStreamOptions {
 	 * Return only events AFTER this stream position (1-based event count),
 	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
 	 * snapshot.version, limit: 256 })` yields the next page passed to
-	 * `aggregate.loadFromHistory`; the caller checks that the aggregate
+	 * `aggregate.replayHistory`; the caller checks that the aggregate
 	 * ends at the pinned head ({@link ReplayHeadMismatchError}). Defaults
 	 * to `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
@@ -119,7 +119,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *         targetVersion,
  *       });
  *     }
- *     const catchUp = order.loadFromHistory(page.events);
+ *     const catchUp = order.replayHistory(page.events);
  *     if (catchUp.isErr()) throw catchUp.error; // corrupt stream
  *     fromVersion += page.events.length;
  *   }
@@ -186,7 +186,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     append order and slicing; because the port cannot inject malformed
 	 *     physical rows, adapters add a store-specific corruption fixture that
 	 *     proves the duplicate/gap rejection. The repository then calls
-	 *     `loadFromHistory`, whose replay guard rejects any event carrying an
+	 *     `replayHistory`, whose replay guard rejects any event carrying an
 	 *     aggregate type or id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without

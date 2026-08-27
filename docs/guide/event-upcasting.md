@@ -79,7 +79,7 @@ for (;;) {
   }
 
   const current = page.events.map(upcastOrderEvent) as OrderEvent[];
-  const result = order.loadFromHistory(current);
+  const result = order.replayHistory(current);
   if (result.isErr()) throw result.error;
   fromVersion += page.events.length;
 }
@@ -224,7 +224,7 @@ Some changes cannot be derived from the old event alone. For example, an old
 event may need a customer country from another table to choose the right
 currency.
 
-Do not do that lookup inside `loadFromHistory(...)`.
+Do not do that lookup inside `replayHistory(...)`.
 
 Use one of these instead:
 

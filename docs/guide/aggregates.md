@@ -241,7 +241,7 @@ async findById(id: OrderId): Promise<Order | null> {
 }
 ```
 
-`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `loadFromHistory(events)` on the instance.
+`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `replayHistory(events)` on the instance.
 
 The initial state should be inert: enough structure for your handlers to fold events into, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
 
@@ -525,7 +525,7 @@ mutates a live instance or records a new domain fact.
 Live aggregate state remains `protected`. Give the persistence adapter an
 explicit DTO projection such as `orderStateDto(order)` rather than exposing a
 generic public state getter. For event-sourced aggregates, restore the
-snapshot first, call `loadFromHistory` with only the stream tail, and check
+snapshot first, call `replayHistory` with only the stream tail, and check
 that the final version equals the stream head (see
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots)).
 

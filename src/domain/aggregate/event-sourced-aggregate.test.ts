@@ -244,7 +244,7 @@ describe("EventSourcedAggregate", () => {
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			];
 
-			aggregate.loadFromHistory(history);
+			aggregate.replayHistory(history);
 
 			// Additive: version = startVersion + history.length (1 + 2 = 3)
 			expect(aggregate.version).toBe(initialVersion + history.length);
@@ -374,7 +374,7 @@ describe("EventSourcedAggregate", () => {
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
-		it("MissingHandlerError thrown during loadFromHistory propagates (not caught as DomainError)", () => {
+		it("MissingHandlerError thrown during replayHistory propagates (not caught as DomainError)", () => {
 			class HandlerlessReplay extends EventSourcedAggregate<
 				TestState,
 				TestEvent,
@@ -396,11 +396,11 @@ describe("EventSourcedAggregate", () => {
 				status: "inactive",
 			});
 
-			// loadFromHistory only catches DomainError; a MissingHandlerError
+			// replayHistory only catches DomainError; a MissingHandlerError
 			// (programming bug) should propagate up unwrapped, not get
 			// silently wrapped into Result.Err.
 			expect(() => {
-				aggregate.loadFromHistory([
+				aggregate.replayHistory([
 					createDomainEvent("TestEventCreated", {
 						value: 1,
 					}) as TestEventCreated,
@@ -518,7 +518,7 @@ describe("EventSourcedAggregate", () => {
 			});
 		}
 
-		it("propagates MissingHandlerError from loadFromHistory for a corrupt stream row", () => {
+		it("propagates MissingHandlerError from replayHistory for a corrupt stream row", () => {
 			const aggregate = new TrapAggregate("test-1" as TestId, {
 				value: 7,
 				status: "inactive",
@@ -528,21 +528,21 @@ describe("EventSourcedAggregate", () => {
 				evil: true,
 			}) as unknown as TestEvent;
 
-			expect(() => aggregate.loadFromHistory([corrupt])).toThrow(
+			expect(() => aggregate.replayHistory([corrupt])).toThrow(
 				MissingHandlerError,
 			);
 			expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
 		});
 	});
 
-	describe("loadFromHistory", () => {
+	describe("replayHistory", () => {
 		it("rolls back state when a mid-stream event throws a DomainError (all-or-nothing)", () => {
 			const aggregate = new ValidatingAggregate("test-1" as TestId, {
 				value: 10,
 				status: "inactive",
 			});
 
-			const result = aggregate.loadFromHistory([
+			const result = aggregate.replayHistory([
 				createDomainEvent("TestEventUpdated", {
 					newValue: 99,
 				}) as TestEventUpdated,
@@ -563,7 +563,7 @@ describe("EventSourcedAggregate", () => {
 			});
 
 			expect(() =>
-				aggregate.loadFromHistory([
+				aggregate.replayHistory([
 					createDomainEvent("TestEventUpdated", {
 						newValue: 99,
 					}) as TestEventUpdated,
@@ -592,7 +592,7 @@ describe("EventSourcedAggregate", () => {
 				}) as TestEventUpdated,
 			];
 
-			const result = aggregate.loadFromHistory(history);
+			const result = aggregate.replayHistory(history);
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(history.length); // 0 + 3 = 3
@@ -618,7 +618,7 @@ describe("EventSourcedAggregate", () => {
 
 			const thrown = ((): unknown => {
 				try {
-					aggregate.loadFromHistory(history);
+					aggregate.replayHistory(history);
 					return undefined;
 				} catch (e) {
 					return e;
@@ -642,7 +642,7 @@ describe("EventSourcedAggregate", () => {
 			discardPendingEvents(aggregate);
 			expect(aggregate.version).toBe(1);
 
-			const result = aggregate.loadFromHistory([
+			const result = aggregate.replayHistory([
 				createDomainEvent("TestEventUpdated", {
 					newValue: 20,
 				}) as TestEventUpdated,
@@ -670,7 +670,7 @@ describe("EventSourcedAggregate", () => {
 				}) as TestEventUpdated,
 			];
 
-			const result = aggregate.loadFromHistory(history);
+			const result = aggregate.replayHistory(history);
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(3); // 1 + 2, not 2 (the bug stomped it)
@@ -683,7 +683,7 @@ describe("EventSourcedAggregate", () => {
 				initialState,
 			);
 
-			const result = aggregate.loadFromHistory([]);
+			const result = aggregate.replayHistory([]);
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(0);
@@ -696,7 +696,7 @@ describe("EventSourcedAggregate", () => {
 				initialState,
 			);
 
-			const result = aggregate.loadFromHistory([]);
+			const result = aggregate.replayHistory([]);
 
 			expect(result.isOk()).toBe(true);
 			// markRestored(0) would flip repository routing from INSERT to
@@ -713,7 +713,7 @@ describe("EventSourcedAggregate", () => {
 			);
 			expect(aggregate.version).toBe(1);
 
-			expect(() => aggregate.loadFromHistory([])).toThrow(
+			expect(() => aggregate.replayHistory([])).toThrow(
 				UnreplayableAggregateError,
 			);
 		});
@@ -725,7 +725,7 @@ describe("EventSourcedAggregate", () => {
 			);
 			acknowledgePersisted(aggregate, aggregate.version);
 
-			const result = aggregate.loadFromHistory([]);
+			const result = aggregate.replayHistory([]);
 
 			expect(result.isOk()).toBe(true);
 			expect(aggregate.version).toBe(1); // 1 + 0 = 1
@@ -742,7 +742,7 @@ describe("EventSourcedAggregate", () => {
 				createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
 			];
 
-			const result = aggregate.loadFromHistory(history);
+			const result = aggregate.replayHistory(history);
 
 			expect(result.isErr()).toBe(true);
 			if (result.isErr()) {
@@ -872,7 +872,7 @@ describe("replay trusts history", () => {
 			status: "inactive",
 		});
 
-		const result = agg.loadFromHistory([
+		const result = agg.replayHistory([
 			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 		]);
@@ -905,7 +905,7 @@ describe("replay trusts history", () => {
 		// Result channel: a generic corrupted-stream Err handler must not
 		// absorb a wrong-stream read as an expected business rejection.
 		expect(() =>
-			agg.loadFromHistory([
+			agg.replayHistory([
 				createDomainEvent(
 					"TestEventUpdated",
 					{ newValue: 99 },
@@ -925,7 +925,7 @@ describe("replay trusts history", () => {
 		});
 
 		expect(() =>
-			agg.loadFromHistory([
+			agg.replayHistory([
 				createDomainEvent(
 					"TestEventUpdated",
 					{ newValue: 99 },
@@ -1129,7 +1129,7 @@ describe("replay trusts history", () => {
 		}) as TestEventUpdated;
 		const row = { ...minted, payload: { newValue: 7 } } as TestEventUpdated;
 
-		const result = agg.loadFromHistory([row]);
+		const result = agg.replayHistory([row]);
 
 		expect(result.isOk()).toBe(true);
 		expect(agg.state.value).toBe(7);
@@ -1141,7 +1141,7 @@ describe("replay trusts history", () => {
 			status: "inactive",
 		});
 
-		const result = agg.loadFromHistory([
+		const result = agg.replayHistory([
 			createDomainEvent(
 				"TestEventUpdated",
 				{ newValue: 99 },
@@ -1203,7 +1203,7 @@ describe("validateState on the apply path", () => {
 	it("replays history without running validateState", () => {
 		const agg = guarded({ value: 1, status: "inactive" });
 
-		const result = agg.loadFromHistory([
+		const result = agg.replayHistory([
 			createDomainEvent("TestEventUpdated", {
 				newValue: -9,
 			}) as TestEventUpdated,
@@ -1313,14 +1313,14 @@ describe("a handler that returns no state", () => {
 		);
 	});
 
-	it("propagates HandlerReturnedNoStateError from loadFromHistory after rolling back", () => {
+	it("propagates HandlerReturnedNoStateError from replayHistory after rolling back", () => {
 		const agg = new ForgetfulAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",
 		});
 
 		expect(() =>
-			agg.loadFromHistory([
+			agg.replayHistory([
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 				createDomainEvent("TestEventUpdated", {
 					newValue: 2,
@@ -1369,7 +1369,7 @@ describe("hostile own keys on the fold result", () => {
 		});
 
 		expect(() =>
-			agg.loadFromHistory([
+			agg.replayHistory([
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 				createDomainEvent("TestEventUpdated", {
 					newValue: 1,
@@ -1472,7 +1472,7 @@ describe("markRestored on an event-sourced aggregate", () => {
 		});
 
 		expect(() =>
-			agg.loadFromHistory([
+			agg.replayHistory([
 				createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			]),
 		).toThrow(UnreplayableAggregateError);
@@ -1596,14 +1596,14 @@ describe("apply and replay bookkeeping", () => {
 	it("keeps persistedVersion undefined after an empty history on a fresh aggregate", () => {
 		const agg = fresh();
 
-		expect(agg.loadFromHistory([]).isOk()).toBe(true);
+		expect(agg.replayHistory([]).isOk()).toBe(true);
 
 		expect(lifecycleOf(agg).persistedVersion()).toBeUndefined();
 	});
 
 	it("applies a new fact on top of a restored version", () => {
 		const agg = fresh();
-		expect(agg.loadFromHistory([activated(), updated(2)]).isOk()).toBe(true);
+		expect(agg.replayHistory([activated(), updated(2)]).isOk()).toBe(true);
 
 		agg.updateValue(4);
 
@@ -1615,14 +1615,14 @@ describe("apply and replay bookkeeping", () => {
 
 	it("rolls back a foreign row to the restored baseline after earlier rows folded", () => {
 		const agg = fresh();
-		expect(agg.loadFromHistory([activated()]).isOk()).toBe(true);
+		expect(agg.replayHistory([activated()]).isOk()).toBe(true);
 		const foreign = createDomainEvent(
 			"TestEventUpdated",
 			{ newValue: 9 },
 			{ aggregateId: "other", aggregateType: "TestEventSourcedAggregate" },
 		) as TestEventUpdated;
 
-		expect(() => agg.loadFromHistory([updated(5), foreign])).toThrow(
+		expect(() => agg.replayHistory([updated(5), foreign])).toThrow(
 			ForeignEventError,
 		);
 
@@ -1641,13 +1641,13 @@ describe("apply and replay bookkeeping", () => {
 				value: 1,
 				status: "inactive",
 			});
-			expect(agg.loadFromHistory([activated()]).isOk()).toBe(true);
+			expect(agg.replayHistory([activated()]).isOk()).toBe(true);
 			const invalid = createDomainEvent(
 				"TestEventInvalid",
 				{},
 			) as TestEventInvalid;
 
-			const result = agg.loadFromHistory(history(invalid));
+			const result = agg.replayHistory(history(invalid));
 
 			expect(result.isErr()).toBe(true);
 			expect(agg.state).toEqual({ value: 1, status: "active" });
@@ -1677,7 +1677,7 @@ describe("apply and replay bookkeeping", () => {
 		}
 		const shelf = new ShelfAggregate("shelf-1" as TestId);
 
-		const result = shelf.loadFromHistory([
+		const result = shelf.replayHistory([
 			createDomainEvent("ItemAdded", { sku: "sku-1" }) as ItemAdded,
 		]);
 
@@ -1710,7 +1710,7 @@ describe("replay routes a foreign-copy domain rejection into the Result", () => 
 			status: "inactive",
 		});
 
-		const result = agg.loadFromHistory([
+		const result = agg.replayHistory([
 			createDomainEvent("TestEventActivated", {}) as TestEventActivated,
 			createDomainEvent("TestEventInvalid", {}) as TestEventInvalid,
 		]);
@@ -1780,7 +1780,7 @@ describe("reconstituteAggregateFromHistory", () => {
 		).toThrow(NegativeValueError);
 	});
 
-	it("throws for a foreign row, like loadFromHistory", () => {
+	it("throws for a foreign row, like replayHistory", () => {
 		const foreign = createDomainEvent(
 			"TestEventUpdated",
 			{ newValue: 9 },
@@ -1795,7 +1795,7 @@ describe("reconstituteAggregateFromHistory", () => {
 	it("folds a tail onto the instance the creator restored", () => {
 		const restoredAtTwo = (): TestEventSourcedAggregate => {
 			const agg = bare();
-			expect(agg.loadFromHistory([activated(), updated(2)]).isOk()).toBe(true);
+			expect(agg.replayHistory([activated(), updated(2)]).isOk()).toBe(true);
 			return agg;
 		};
 

@@ -489,9 +489,9 @@ describe("adapter-owned snapshot models", () => {
 			),
 		);
 		const full = Counter.bare(id);
-		expect(full.loadFromHistory(history).isOk()).toBe(true);
+		expect(full.replayHistory(history).isOk()).toBe(true);
 		const atVersionTwo = Counter.bare(id);
-		expect(atVersionTwo.loadFromHistory(history.slice(0, 2)).isOk()).toBe(true);
+		expect(atVersionTwo.replayHistory(history.slice(0, 2)).isOk()).toBe(true);
 		const snapshot = captureAggregateSnapshot(
 			counterModel,
 			atVersionTwo,
@@ -503,7 +503,7 @@ describe("adapter-owned snapshot models", () => {
 			id,
 			snapshot,
 		);
-		expect(fromSnapshot.loadFromHistory(history.slice(2)).isOk()).toBe(true);
+		expect(fromSnapshot.replayHistory(history.slice(2)).isOk()).toBe(true);
 
 		expect(fromSnapshot.value).toBe(full.value);
 		expect(fromSnapshot.version).toBe(full.version);

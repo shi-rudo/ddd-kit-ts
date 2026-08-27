@@ -44,7 +44,7 @@ import {
  * The in-memory REFERENCE adapter for the event-sourced contract suite:
  * the example consumers copy when wiring their own harness. It follows
  * every documented pattern: identity-mapped reads, bare-instance
- * reconstitution through `loadFromHistory`, explicit add/update intent,
+ * reconstitution through `replayHistory`, explicit add/update intent,
  * exact event batches, and a real expected-version guard on append (the
  * `WHERE stream_version = ?` equivalent) against a store with genuine
  * transactional rollback.
@@ -555,7 +555,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 				if (!history || history.length === 0) return undefined;
 				const order = ContractEsOrder.bare(id);
 				// ❌ folds newest-first (a SELECT without ORDER BY, unlucky):
-				const result = order.loadFromHistory([...history].reverse());
+				const result = order.replayHistory([...history].reverse());
 				if (result.isErr()) throw result.error;
 				return this.tracking.trackLoaded(order);
 			}
@@ -586,7 +586,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 					: ContractEsOrder.bare(id);
 				// ❌ reads from position 0 although the snapshot already holds
 				// that prefix, and skips the head check:
-				const result = order.loadFromHistory(history);
+				const result = order.replayHistory(history);
 				if (result.isErr()) throw result.error;
 				return this.tracking.trackLoaded(order);
 			}

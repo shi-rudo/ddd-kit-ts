@@ -96,7 +96,7 @@ only. See
 [Aggregate Roots -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
 
 For event-sourced aggregates, keep a bare factory and load accepted history
-with `loadFromHistory`. A clean reconstituted aggregate can load a later tail
+with `replayHistory`. A clean reconstituted aggregate can load a later tail
 additively.
 
 ### 2. Replace repository contracts
@@ -285,7 +285,7 @@ const order = reconstituteAggregateFromSnapshot(
 ```
 
 For event sourcing, pass the events after `snapshot.version` to
-`order.loadFromHistory`. Snapshot timing, DTO mapping, schema migration,
+`order.replayHistory`. Snapshot timing, DTO mapping, schema migration,
 storage, and fallback-to-full-replay now belong to the adapter or application
 shell.
 

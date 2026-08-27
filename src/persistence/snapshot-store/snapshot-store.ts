@@ -5,7 +5,7 @@ import type { AggregateAddress } from "../../domain/aggregate/aggregate-address"
  * Driven port for aggregate snapshot persistence: the storage half of
  * the snapshot-plus-recent-events load path for event-sourced aggregates.
  * `SnapshotModel` owns projection, migration, and reconstitution;
- * `EventStore.readStream` supplies the catch-up tail to `loadFromHistory`.
+ * `EventStore.readStream` supplies the catch-up tail to `replayHistory`.
  *
  * **A snapshot is derived data, never authority.** The stream remains
  * the source of truth; a snapshot only shortens replay. That shapes

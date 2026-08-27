@@ -166,7 +166,7 @@ while (fromVersion < toVersion) {
     });
   }
 
-  const replay = order.loadFromHistory(page.events);
+  const replay = order.replayHistory(page.events);
   if (replay.isErr()) throw replay.error;
   fromVersion += page.events.length;
 }

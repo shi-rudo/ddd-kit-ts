@@ -102,7 +102,7 @@ export interface IEventSourcedAggregate<
 	 * `Result` because event-stream corruption is an expected
 	 * recoverable failure at the infrastructure boundary.
 	 */
-	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
+	replayHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
 }
 
 /**
