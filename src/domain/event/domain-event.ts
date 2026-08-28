@@ -413,7 +413,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * over.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
- * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
+ * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
  * consumers (outbox dispatchers, projection handlers, audit logs)

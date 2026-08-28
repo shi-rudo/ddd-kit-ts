@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
-import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -54,7 +54,7 @@ function persistedVersionOf(aggregate: object): Version | undefined {
 	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
 }
 
-class MockAggregate extends AggregateRoot<
+class MockAggregate extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	TestId,
 	TestEvent
@@ -162,7 +162,7 @@ class FakeOrderRepository {
 }
 
 function versionPersistenceModel<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 >(): PersistenceModel<TAggregate, Version, Version | undefined> {
 	return {
 		capture: (aggregate) => aggregate.version,
@@ -190,7 +190,7 @@ function mapTestRepositoryError(error: unknown): InfrastructureError {
 
 type TestRepositoryPort<
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
 > = Omit<TRepository, "add" | "update" | "remove"> &
 	AggregateWriteRegistration<TAggregate> &
@@ -199,7 +199,7 @@ type TestRepositoryPort<
 type TestRepositoryDefinitionOptions<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean,
@@ -232,7 +232,7 @@ type TestRepositoryDefinitionOptions<
 function defineTestRepository<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -348,7 +348,11 @@ describe("UnitOfWork", () => {
 	describe("v3 aggregate tracking", () => {
 		it("derives adapter changes at flush while preserving event-only commits", async () => {
 			type State = Readonly<{ value: number }>;
-			class ProjectedAggregate extends AggregateRoot<State, TestId, TestEvent> {
+			class ProjectedAggregate extends StateStoredAggregate<
+				State,
+				TestId,
+				TestEvent
+			> {
 				protected readonly aggregateType = "ProjectedAggregate";
 
 				constructor(id: TestId, value: number) {
@@ -955,9 +959,9 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("transaction lifecycle", () => {
-		it("supports a state-stored AggregateRoot without event sourcing", async () => {
+		it("supports a state-stored StateStoredAggregate without event sourcing", async () => {
 			type PlainState = Readonly<{ name: string }>;
-			class PlainAggregate extends AggregateRoot<PlainState, TestId> {
+			class PlainAggregate extends StateStoredAggregate<PlainState, TestId> {
 				protected readonly aggregateType = "PlainAggregate";
 
 				constructor(id: TestId) {
@@ -1900,7 +1904,7 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("identity map integration", () => {
-		class OrderAggregate extends AggregateRoot<
+		class OrderAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
 			TestEvent
@@ -2490,7 +2494,7 @@ describe("UnitOfWork", () => {
 	describe("enrollment guard: events recorded after load but never enrolled", () => {
 		/** A loadable state-stored aggregate with a test-only event recorder. */
 		function loadable(id: string, initialEvents: TestEvent[] = []) {
-			class LoadableAggregate extends AggregateRoot<
+			class LoadableAggregate extends StateStoredAggregate<
 				Readonly<Record<string, never>>,
 				TestId,
 				TestEvent

@@ -40,7 +40,8 @@ event with `deepFreezeState` walked the entire state. Measured with
 operations per second, level with the shallow mode; a deep-mode replay of
 2,000 events went from 16 to 990 replays per second. The shallow mode is
 unchanged. The replay guard reads the pending count without the frozen
-copy that the `pendingEvents` getter allocates.
+copy that the `pendingEvents` getter allocates. `deepFreeze` takes one
+argument now; the cycle tracking is internal.
 
 ### Changed (breaking): one lifecycle vocabulary
 
@@ -49,6 +50,9 @@ flavours. No behavior changes.
 
 | Before | After |
 | --- | --- |
+| `AggregateRoot` (class) | `StateStoredAggregate` |
+| `IAggregateRoot` (contract) | `Aggregate` |
+| `IEventSourcedAggregate` (contract) | `ReplayableAggregate` |
 | `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
 | `AggregateRoot.commit(newState, events)` | `setState(newState, events)` |
 | `loadFromHistory(history)` | `replayHistory(history)` |
@@ -56,6 +60,12 @@ flavours. No behavior changes.
 | `stampNewEventAddress(event)` | `addressNewEvent(event)` |
 | `DomainEvent.version`, option `version` | `schemaVersion` |
 
+The state-stored base class is `StateStoredAggregate`, the sibling of
+`EventSourcedAggregate`. The contract both share is `Aggregate` (`id`,
+`version`, `pendingEvents`), and `ReplayableAggregate` adds
+`replayHistory`; the `I` prefix leaves the kit with them. The class you
+write is the root of its aggregate; the kit calls it the aggregate, and
+`Entity` names the children inside it.
 `commit` now names the transaction only (`withCommit`, `committedVersion`,
 `CommittedDomainEvent`); the aggregate write helper is `setState`, with
 the events of the change as an optional second argument. `reconstitute`
@@ -143,7 +153,7 @@ named in the `UnmanagedInstanceError` that a later lookup produces.
 
 ### Fixed: state-stored aggregates check the event address
 
-`AggregateRoot.commit` and `addDomainEvent` now apply the address discipline
+`StateStoredAggregate.setState` and `addDomainEvent` now apply the address discipline
 that `EventSourcedAggregate.apply` already had: a missing `aggregateId` or
 `aggregateType` is stamped from the aggregate, and an event addressed to
 another aggregate throws `MisaddressedEventError` before the state moves.
@@ -656,7 +666,7 @@ Migration for aggregate operations:
 ```ts
 // Before: recording data leaked into the domain signature
 confirm(facts: DomainEventFacts): void {
-  this.commit(
+  this.setState(
     nextState,
     this.recordEvent("OrderConfirmed", payload, facts),
   );
@@ -667,7 +677,7 @@ order.confirm(domainEvents.createFacts());
 
 // After: pure decision in the aggregate
 confirm(): void {
-  this.commit(
+  this.setState(
     nextState,
     this.createEvent("OrderConfirmed", payload),
   );
@@ -1684,7 +1694,7 @@ the predecessor in durable source state; `OutboxRecord` exposes the committed
 envelope with dispatch state; the in-process `EventBus` still receives the bare
 event. An already-persisted aggregate with pending events must also advance its
 version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
-events) with `commit({ ...this.state }, event)` so the envelope has a unique
+events) with `setState({ ...this.state }, event)` so the envelope has a unique
 cursor.
 
 `OutboxContractEnvironment.addCommitted` and `addRolledBack` now receive the
@@ -2093,7 +2103,7 @@ options must be positive safe integers.
 
 #### 25. Aggregate persistence lifecycle moves to the Application Shell
 
-`IAggregateRoot` no longer exposes `markPersisted` or
+`Aggregate` no longer exposes `markPersisted` or
 `clearPendingEvents`, and aggregate subclasses no longer provide the
 `onPersisted(version)` Template Method. A public or overridable lifecycle
 mutator could skip pending-event cleanup, erase uncommitted facts, or move the
@@ -2107,7 +2117,7 @@ Application-Shell observer run for successfully acknowledged saved aggregates:
 
 ```ts
 // before: infrastructure behavior lived on the domain object
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected override onPersisted(version: Version): void {
     orderCache.evict(this.id, version);
   }
@@ -2117,10 +2127,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 const deps = {
   scope,
   outbox,
-  onPersisted: async (aggregate: IAggregateRoot<OrderId, OrderEvent>, version: Version) => {
+  onPersisted: async (aggregate: Aggregate<OrderId, OrderEvent>, version: Version) => {
     await orderCache.evict(aggregate.id, version);
   },
-  onPersistError: (error: unknown, aggregate: IAggregateRoot<OrderId, OrderEvent>) => {
+  onPersistError: (error: unknown, aggregate: Aggregate<OrderId, OrderEvent>) => {
     logger.error({ error, aggregateId: aggregate.id });
   },
 };
@@ -2139,12 +2149,12 @@ calling `super.markReconstituted(version)` first remains required, but they no
 longer run after a save. Move Post-Save logging, metrics, and cache invalidation
 to the Application-Shell `onPersisted` observer shown above.
 
-Custom structural implementations of `IAggregateRoot` can still satisfy
+Custom structural implementations of `Aggregate` can still satisfy
 repository ports, but cannot be enrolled in `withCommit` or `UnitOfWork`:
 enrollment rejects them inside the transaction because they have no internal
-acknowledgement capability. Extend `AggregateRoot` for state-stored domains or
+acknowledgement capability. Extend `StateStoredAggregate` for state-stored domains or
 `EventSourcedAggregate` for event-sourced domains. Event sourcing remains
-optional; ordinary `AggregateRoot` instances use the same Unit-of-Work path.
+optional; ordinary `StateStoredAggregate` instances use the same Unit-of-Work path.
 
 For deliberate in-memory abandonment, discard the dirty aggregate instance
 and reconstitute a fresh one. Public event disposal is no longer available.
@@ -2159,7 +2169,7 @@ ran. Pass a pure validator through `EntityConfig<TState>` or
 
 ```ts
 // before: virtual dispatch from Entity's constructor
-class Order extends AggregateRoot<OrderState, OrderId> {
+class Order extends StateStoredAggregate<OrderState, OrderId> {
   protected validateState(state: OrderState): void {
     if (state.items.length > 100) throw new TooManyItemsError();
   }
@@ -2170,7 +2180,7 @@ function validateOrderState(state: OrderState): void {
   if (state.items.length > 100) throw new TooManyItemsError();
 }
 
-class Order extends AggregateRoot<OrderState, OrderId> {
+class Order extends StateStoredAggregate<OrderState, OrderId> {
   constructor(id: OrderId, state: OrderState) {
     super(id, state, { validateState: validateOrderState });
   }
@@ -2307,7 +2317,7 @@ shape instead of silently accepting two relationship locations.
 
 ### Changed (breaking): aggregate persistence lifecycle is application-owned
 
-- Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
+- Removed `markPersisted` and `clearPendingEvents` from `Aggregate` and
   both aggregate base classes.
 - Removed the protected aggregate `onPersisted(version)` Template Method.
 - Added optional async `onPersisted(aggregate, version)` dependencies to
@@ -2989,7 +2999,7 @@ shape instead of silently accepting two relationship locations.
   migration is a find-and-replace on the two type names (the shapes are
   identical).
 
-### Changed (breaking): `AggregateRoot.setState` always bumps; the no-bump path is a named method
+### Changed (breaking): `StateStoredAggregate.setState` always bumps; the no-bump path is a named method
 
 - `setState(newState)` now ALWAYS advances the OCC version, and the
   rare non-bumping mutation moved to the deliberately loud
@@ -3280,7 +3290,7 @@ shape instead of silently accepting two relationship locations.
 
 ### Fixed: `restoreFromSnapshot` rejects targets carrying pending events
 
-- `AggregateRoot.restoreFromSnapshot` silently kept pre-restore
+- `StateStoredAggregate.restoreFromSnapshot` silently kept pre-restore
   `pendingEvents` while re-baselining the version via `markReconstituted`,
   so events recorded before the restore would later be harvested with
   a version baseline from a state lineage the snapshot had discarded.

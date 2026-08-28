@@ -107,7 +107,7 @@ allow-list decoder.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   type AnyDomainEvent,
   CommandBus,
   DomainError,
@@ -749,7 +749,7 @@ The kit does not ship a saga framework. The building blocks are already here:
 
 - `EventBus` or an outbox dispatcher receives domain events.
 - A process-manager handler loads or creates workflow state.
-- That state can be an `AggregateRoot` when it needs identity, versioning, and persistence.
+- That state can be an `StateStoredAggregate` when it needs identity, versioning, and persistence.
 - The handler dispatches the next command through `CommandBus`.
 - Idempotency and outbox dispatch protect retries and delivery.
 

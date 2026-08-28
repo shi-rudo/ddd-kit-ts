@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate";
+import type { Aggregate } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { InvalidRepositoryAdapterError } from "./errors";
@@ -13,15 +13,15 @@ import type { RuntimePersistenceDefinition } from "./persistence-contract";
 interface RepositoryFacadeSession<Evt extends AnyDomainEvent> {
 	assertOpen(operation: string): void;
 	add(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void;
 	update(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void;
 	remove(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void;
 }
@@ -187,7 +187,7 @@ function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 			value: (aggregate: unknown) => {
 				state.session.assertOpen(repositoryOperationName(operation));
 				state.session[operation](
-					aggregate as IAggregateRoot<Id<string>, Evt>,
+					aggregate as Aggregate<Id<string>, Evt>,
 					state.definition,
 				);
 			},

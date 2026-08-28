@@ -63,7 +63,7 @@ export interface AggregateSnapshot<TState> {
 
 /**
  * Public contract every Aggregate Root satisfies. Implemented by
- * `BaseAggregate` and inherited by both `AggregateRoot` and
+ * `BaseAggregate` and inherited by both `StateStoredAggregate` and
  * `EventSourcedAggregate`. Repository ports use this interface as their
  * aggregate type rather than depending on concrete base classes, so persistence
  * orchestration does not take a compile-time
@@ -77,7 +77,7 @@ export interface AggregateSnapshot<TState> {
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
  */
-export interface IAggregateRoot<
+export interface Aggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
 > {
@@ -88,15 +88,15 @@ export interface IAggregateRoot<
 
 /**
  * Public contract for Event-Sourced Aggregate Roots. Extends
- * `IAggregateRoot` with the replay-from-history boundary.
+ * `Aggregate` with the replay-from-history boundary.
  *
  * @template TId    - The aggregate root identifier
  * @template TEvent - The union type of all domain events
  */
-export interface IEventSourcedAggregate<
+export interface ReplayableAggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
-> extends IAggregateRoot<TId, TEvent> {
+> extends Aggregate<TId, TEvent> {
 	/**
 	 * Reconstitutes the aggregate from an event history. Returns
 	 * `Result` because event-stream corruption is an expected

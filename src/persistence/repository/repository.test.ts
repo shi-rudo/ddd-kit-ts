@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../..";
 import type { Version } from "../../domain/aggregate/aggregate";
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateNotFoundError,
@@ -30,14 +30,14 @@ const removedQueryContractMustStayAbsent =
 void removedQueryContractMustStayAbsent;
 
 type OrderId = Id<"OrderId">;
-type Order = IAggregateRoot<OrderId> & {
+type Order = Aggregate<OrderId> & {
 	readonly customerId: string;
 	readonly total: number;
 };
 
-describe("IAggregateRoot interface contract", () => {
+describe("Aggregate interface contract", () => {
 	it("exposes persistence facts without lifecycle mutation authority", () => {
-		const stub: IAggregateRoot<OrderId> = {
+		const stub: Aggregate<OrderId> = {
 			id: "o-1" as OrderId,
 			version: 0 as Version,
 			pendingEvents: [],

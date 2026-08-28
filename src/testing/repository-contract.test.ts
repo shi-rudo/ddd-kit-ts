@@ -8,7 +8,7 @@ import {
 	UnitOfWork,
 } from "../application/unit-of-work/unit-of-work";
 import type { Version } from "../domain/aggregate/aggregate";
-import { AggregateRoot } from "../domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../domain/aggregate/state-stored-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -53,7 +53,11 @@ type OrderEvent =
 	| DomainEvent<"OrderRenamed", { name: string }>
 	| DomainEvent<"ItemAdded", { item: string }>;
 
-class ContractOrder extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class ContractOrder extends StateStoredAggregate<
+	OrderState,
+	OrderId,
+	OrderEvent
+> {
 	protected readonly aggregateType = "ContractOrder";
 
 	// Protected on purpose: the reference exercises the kit's aggregate

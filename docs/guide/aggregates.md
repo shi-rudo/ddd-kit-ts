@@ -1,4 +1,4 @@
-# Aggregate Roots
+# Aggregates
 
 An aggregate root is the object your application loads, changes, and saves as one consistency boundary.
 
@@ -8,7 +8,7 @@ In DDD terms, the aggregate boundary is also a consistency boundary. Everything 
 
 The kit gives you two base classes:
 
-- **`AggregateRoot<TState, TId, TEvent>`** for aggregates whose current state is stored directly.
+- **`StateStoredAggregate<TState, TId, TEvent>`** for aggregates whose current state is stored directly.
 - **`EventSourcedAggregate<TState, TId, TEvent>`** for aggregates whose state is rebuilt from events. See [Event Sourcing](./event-sourcing.md).
 
 <a id="state-version-domain-events"></a>
@@ -17,7 +17,7 @@ The kit gives you two base classes:
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
   type DomainEvent,
   type Id,
@@ -48,7 +48,7 @@ class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> 
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static draft(id: OrderId, customerId: string): Order {
@@ -94,7 +94,7 @@ mint mark.
 Prefer static factory methods over public constructors.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static place(
@@ -118,7 +118,7 @@ A factory gives you one public path for creating a valid aggregate. It can rejec
 
 The library does not emit creation events automatically. Some bounded contexts care about `OrderPlaced` or `UserRegistered`; others do not. That choice belongs to your domain.
 
-`AggregateRoot` and `EventSourcedAggregate` use protected constructors, so application code cannot call `new Order(...)` directly. The factory is the public construction API.
+`StateStoredAggregate` and `EventSourcedAggregate` use protected constructors, so application code cannot call `new Order(...)` directly. The factory is the public construction API.
 
 This is the aggregate-root version of the Factory Method pattern. Vernon describes factories as the place to create whole, valid aggregates. A standalone factory class can still make sense when construction needs dependencies the aggregate should not know about, but most aggregates only need a named static method on the root.
 
@@ -139,7 +139,7 @@ For state-stored aggregates, add a static reconstitution method next to the fact
 ```ts
 import type { Version } from "@shirudo/ddd-kit";
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static place(
@@ -310,7 +310,7 @@ function validateOrderState(state: OrderState): void {
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   constructor(id: OrderId, state: OrderState) {
@@ -399,7 +399,7 @@ State-stored aggregates do not have `validateEvent`, because they do not apply e
 Most business rules live at the top of domain methods. The method checks whether the operation is allowed, then changes state.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(): void {
@@ -556,6 +556,7 @@ no synonyms.
 
 | Term | Meaning | Kit surface |
 | --- | --- | --- |
+| aggregate | The class you write is the root of its aggregate; the kit calls it the aggregate, and `Entity` names the children inside it. | `Aggregate` (the contract both flavours share), `ReplayableAggregate` (adds `replayHistory`), `StateStoredAggregate`, `EventSourcedAggregate` |
 | create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
 | setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
 | apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |

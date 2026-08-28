@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../domain/aggregate/aggregate";
+import type { Aggregate } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type {
 	AnyDomainEvent,
@@ -27,7 +27,7 @@ import {
 
 /** Event-sourced repositories normally expose no physical removal. */
 export interface EsContractRepository<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
 	add(aggregate: TAggregate): void;
@@ -35,7 +35,7 @@ export interface EsContractRepository<
 }
 
 export interface EsRepositoryContractEnvironment<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	run<R>(
@@ -53,7 +53,7 @@ export interface EsRepositoryContractEnvironment<
 }
 
 export interface EsRepositoryContractHarness<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	createEnvironment(): Promise<
@@ -88,7 +88,7 @@ export type EsRepositoryContractTest = ContractTest;
  * mandatory stale-writer proof exercises a real stream OCC predicate.
  */
 export function createEsRepositoryContractTests<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 >(
 	harness: EsRepositoryContractHarness<TAggregate, TEvent>,

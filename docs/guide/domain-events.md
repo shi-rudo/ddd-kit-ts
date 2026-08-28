@@ -119,7 +119,7 @@ headers, and recording timestamps do not help an order decide whether it can be
 confirmed, so they do not belong in `confirm(...)`.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(confirmedAt: Date): void {
@@ -145,7 +145,7 @@ business timestamp from the technical event stamp by accident.
 
 Use `createDomainEvent(...)` directly for events that do not come from an aggregate: system events, integration events, test fixtures, process-manager events, and adapter-level events.
 
-See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
+See [Aggregates -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
 ## Convenience Defaults
 
@@ -226,9 +226,9 @@ For small applications that prefer less plumbing, aggregate constructors can
 still forward a factory through `AggregateConfig`:
 
 ```ts
-import { AggregateRoot, type AggregateEventConvenienceFactory } from "@shirudo/ddd-kit";
+import { StateStoredAggregate, type AggregateEventConvenienceFactory } from "@shirudo/ddd-kit";
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   constructor(
@@ -506,9 +506,9 @@ A domain event says something happened. The state change must succeed before the
 The kit gives you safe paths:
 
 - `EventSourcedAggregate.apply(event)` validates and applies the event before recording it as pending.
-- `AggregateRoot.setState(newState, events)` validates and assigns state, advances the version, and then appends the events.
+- `StateStoredAggregate.setState(newState, events)` validates and assigns state, advances the version, and then appends the events.
 
-On an `AggregateRoot`, the lower-level `addDomainEvent` method is still available for special cases, but then the ordering is your responsibility:
+On an `StateStoredAggregate`, the lower-level `addDomainEvent` method is still available for special cases, but then the ordering is your responsibility:
 
 ```ts
 this.setState(nextState);

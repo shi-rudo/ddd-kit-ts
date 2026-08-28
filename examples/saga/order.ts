@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/domain/value-object/money";
@@ -35,7 +35,11 @@ export class OrderInWrongStateError extends DomainError<"ORDER_IN_WRONG_STATE"> 
 	}
 }
 
-export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+export class Order extends StateStoredAggregate<
+	OrderState,
+	OrderId,
+	OrderEvent
+> {
 	protected readonly aggregateType = "Order";
 
 	get status(): OrderState["status"] {

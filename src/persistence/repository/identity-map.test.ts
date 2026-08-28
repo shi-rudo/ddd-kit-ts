@@ -110,7 +110,7 @@ describe("IdentityMap", () => {
 	});
 
 	it("accepts classes with protected constructors as type keys (the kit's aggregate convention)", () => {
-		// AggregateRoot mandates `protected constructor` + static factories;
+		// StateStoredAggregate mandates `protected constructor` + static factories;
 		// a construct-signature key type would reject every guide-conformant
 		// aggregate at compile time (TS2345). The prototype-witness branch
 		// of AggregateClass is what makes this compile.

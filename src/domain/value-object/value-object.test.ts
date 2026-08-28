@@ -104,6 +104,29 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(readsAfterFirstFreeze);
 	});
 
+	it("memoizes a sibling subtree although a caller-frozen Date keeps its own subtree open", () => {
+		let reads = 0;
+		const lines = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		// A Date frozen by the caller takes no mutator shadows and stays
+		// mutable through setTime, so the object that holds it is walked
+		// again; the sibling subtree is not.
+		const state = { calendar: Object.freeze(new Date(0)), lines };
+		deepFreeze(state);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...state });
+		deepFreeze({ ...state });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(1);
+	});
+
 	it("re-walks a subtree that holds a pre-frozen Map, because its entries can still change", () => {
 		// A frozen Map takes no mutator shadows, so entries can still be
 		// added; the memo must not skip the graph that holds it.

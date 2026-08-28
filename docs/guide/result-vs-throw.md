@@ -42,7 +42,7 @@ typed error.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
 } from "@shirudo/ddd-kit";
 
@@ -56,7 +56,7 @@ class OrderAlreadyConfirmedError
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(): void {

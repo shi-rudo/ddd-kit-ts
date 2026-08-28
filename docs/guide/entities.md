@@ -13,7 +13,7 @@ The kit has two entity shapes:
 - `Identifiable<TId>` for plain records that only need an id
 
 Aggregate roots are entities too, but they need versioning, pending events, and
-repository lifecycle. Use `AggregateRoot` or `EventSourcedAggregate` for roots.
+repository lifecycle. Use `StateStoredAggregate` or `EventSourcedAggregate` for roots.
 Use `Entity` or `Identifiable` for children inside an aggregate boundary.
 
 ## When an object needs identity
@@ -389,7 +389,7 @@ JSON at the boundary before it reaches domain objects.
 | immutable concept compared by value | Value Object |
 | child record with id and simple data | `Identifiable<TId>` |
 | child object with id, state, and meaningful methods | `Entity<TState, TId>` |
-| root of a consistency boundary | `AggregateRoot` |
+| root of a consistency boundary | `StateStoredAggregate` |
 | root rebuilt from an event stream | `EventSourcedAggregate` |
 
 Review signals:

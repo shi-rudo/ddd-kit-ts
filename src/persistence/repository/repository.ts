@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
 import type { Id } from "../../domain/identity/id";
 
 /**
@@ -21,7 +21,7 @@ import type { Id } from "../../domain/identity/id";
  * @template TId - Branded aggregate identifier.
  */
 export interface AggregatePersistence<
-	TAggregate extends IAggregateRoot<TId>,
+	TAggregate extends Aggregate<TId>,
 	TId extends Id<string>,
 > {
 	/**
@@ -77,7 +77,7 @@ export interface AggregatePersistence<
  * port.
  */
 export interface Repository<
-	TAggregate extends IAggregateRoot<TId>,
+	TAggregate extends Aggregate<TId>,
 	TId extends Id<string>,
 > extends AggregatePersistence<TAggregate, TId> {
 	/**

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import {
-	AggregateRoot,
-	type IAggregateRoot,
-} from "../../domain/aggregate/aggregate-root";
-import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
+import {
+	type Aggregate,
+	StateStoredAggregate,
+} from "../../domain/aggregate/state-stored-aggregate";
 import {
 	createDomainEvent,
 	createDomainEventFactory,
@@ -34,7 +34,7 @@ import {
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
 
-class MockAggregate extends AggregateRoot<
+class MockAggregate extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	TestId,
 	TestEvent
@@ -140,7 +140,7 @@ function stamped(
  */
 function unstampedInstance(
 	events: ReadonlyArray<TestEvent>,
-): IAggregateRoot<TestId, TestEvent> {
+): Aggregate<TestId, TestEvent> {
 	const instance = {
 		id: "agg-1" as TestId,
 		version: 1 as Version,
@@ -164,8 +164,8 @@ function persistedVersionOf(aggregate: object): Version | undefined {
 function enrolledResult<R>(
 	enrollment: CommitEnrollment<TestEvent>,
 	result: R,
-	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>>,
-	deleted: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>> = [],
+	aggregates: ReadonlyArray<Aggregate<Id<string>, TestEvent>>,
+	deleted: ReadonlyArray<Aggregate<Id<string>, TestEvent>> = [],
 ): WithCommitWorkResult<TestEvent, R> {
 	const deletedSet = new Set(deleted);
 	return {
@@ -220,7 +220,7 @@ describe("withCommit", () => {
 	});
 
 	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
-		class DecisionAggregate extends AggregateRoot<
+		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
 			TestEvent
@@ -264,7 +264,7 @@ describe("withCommit", () => {
 				return result;
 			},
 		};
-		const lookalike: IAggregateRoot<TestId, TestEvent> = {
+		const lookalike: Aggregate<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
 			version: 1 as Version,
 			pendingEvents: [],
@@ -286,7 +286,7 @@ describe("withCommit", () => {
 		// The documented producer path end to end: the aggregate mints an
 		// uncommitted decision, the shell stamps it inside the transaction,
 		// withCommit harvests the recorded event and acknowledges it.
-		class ProducingAggregate extends AggregateRoot<
+		class ProducingAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
 			TestEvent

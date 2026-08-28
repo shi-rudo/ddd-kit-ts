@@ -118,88 +118,90 @@ function shadowMutators(
  * unfrozen, because the spec forbids freezing a view with elements, and
  * freezing cannot protect the underlying buffer. Their contents remain mutable.
  */
-// Every object this module finished deep-freezing inside a sealed walk. A
-// later walk stops at such an object: nothing below it can change any
-// more, so re-walking it would only repeat work. A state written as
-// `{ ...state, status }` costs the root object, not the whole graph. A walk
-// is sealed only when every Date, Map, and Set in it took its mutator
-// shadows: a built-in frozen before the walk takes none, its entries can
-// still change, and the graph that holds it must be walked again.
+// Every object whose whole subtree this module sealed: frozen, with every
+// Date, Map, and Set below it carrying the kit's mutator shadows. A later
+// walk stops at such an object, so a state written as `{ ...state, status }`
+// costs the root object, not the whole graph. A built-in frozen by the
+// caller takes no shadows and stays mutable through its prototype (a
+// frozen Date still answers setTime), so the objects that hold it are
+// walked again; their sealed siblings are not. A walk that meets a cycle
+// memoizes nothing, because a subtree's seal then depends on an ancestor
+// still in progress. The shadows are cooperative (see shadowMutators): a
+// member added through a prototype call that bypasses them is not seen by
+// a later walk either.
 const DEEP_FROZEN = new WeakSet<object>();
 
+// Built-ins whose mutator shadows this module installed. They are
+// non-extensible afterwards like a caller-frozen one, and this set is what
+// tells the two apart on the next walk.
+const KIT_SHADOWED = new WeakSet<object>();
+
 interface FreezeWalk {
-	sealed: boolean;
-	readonly frozen: object[];
+	cyclic: boolean;
+	readonly sealed: object[];
 }
 
-export function deepFreeze<T>(
-	obj: T,
-	visited = new WeakSet<object>(),
-): Readonly<T> {
-	const walk: FreezeWalk = { sealed: true, frozen: [] };
-	const frozen = freezeDeep(obj, visited, walk);
-	if (walk.sealed) {
-		for (const object of walk.frozen) DEEP_FROZEN.add(object);
+export function deepFreeze<T>(obj: T): Readonly<T> {
+	const walk: FreezeWalk = { cyclic: false, sealed: [] };
+	freezeDeep(obj, new WeakSet<object>(), walk);
+	if (!walk.cyclic) {
+		for (const object of walk.sealed) DEEP_FROZEN.add(object);
 	}
-	return frozen;
+	return obj as Readonly<T>;
 }
 
-function freezeDeep<T>(
-	obj: T,
+/** Freezes `obj` and its subtree; returns whether the subtree is sealed. */
+function freezeDeep(
+	obj: unknown,
 	visited: WeakSet<object>,
 	walk: FreezeWalk,
-): Readonly<T> {
+): boolean {
 	if (obj === null || typeof obj !== "object") {
-		return obj as Readonly<T>;
+		return true;
 	}
-	if (DEEP_FROZEN.has(obj as object)) {
-		return obj as Readonly<T>;
+	if (DEEP_FROZEN.has(obj)) {
+		return true;
 	}
 	// ArrayBuffer views are atomic: Object.freeze on a typed array with
 	// elements throws per spec, and freezing cannot protect the underlying
 	// buffer anyway, so views are returned as-is (their contents stay
 	// mutable). Mirrors deepEqual, which also treats views atomically.
 	if (ArrayBuffer.isView(obj)) {
-		return obj as Readonly<T>;
+		return true;
 	}
-	if (visited.has(obj as object)) {
-		return obj as Readonly<T>;
+	if (visited.has(obj)) {
+		walk.cyclic = true;
+		return true;
 	}
-	visited.add(obj as object);
+	visited.add(obj);
+	let sealed = true;
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
 	// own keys, so the key walk below would miss them). Internal-slot brand
 	// probes distinguish genuine built-ins without invoking toStringTag
 	// accessors; spoofed plain objects are frozen structurally.
-	const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(
-		obj as object,
-	);
+	const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(obj);
 	if (mutableBuiltInTag !== undefined) {
-		let shadowed = true;
+		let shadowed = KIT_SHADOWED.has(obj);
 		if (mutableBuiltInTag === "[object Date]") {
-			shadowed = shadowMutators(obj as object, "Date", DATE_MUTATORS);
+			shadowed = shadowMutators(obj, "Date", DATE_MUTATORS) || shadowed;
 		} else if (mutableBuiltInTag === "[object Map]") {
-			for (const [key, value] of obj as unknown as Map<unknown, unknown>) {
-				freezeDeep(key, visited, walk);
-				freezeDeep(value, visited, walk);
+			for (const [key, value] of obj as Map<unknown, unknown>) {
+				if (!freezeDeep(key, visited, walk)) sealed = false;
+				if (!freezeDeep(value, visited, walk)) sealed = false;
 			}
-			shadowed = shadowMutators(obj as object, "Map", [
-				"set",
-				"delete",
-				"clear",
-			]);
+			shadowed =
+				shadowMutators(obj, "Map", ["set", "delete", "clear"]) || shadowed;
 		} else if (mutableBuiltInTag === "[object Set]") {
-			for (const member of obj as unknown as Set<unknown>) {
-				freezeDeep(member, visited, walk);
+			for (const member of obj as Set<unknown>) {
+				if (!freezeDeep(member, visited, walk)) sealed = false;
 			}
-			shadowed = shadowMutators(obj as object, "Set", [
-				"add",
-				"delete",
-				"clear",
-			]);
+			shadowed =
+				shadowMutators(obj, "Set", ["add", "delete", "clear"]) || shadowed;
 		}
-		if (!shadowed) walk.sealed = false;
+		if (shadowed) KIT_SHADOWED.add(obj);
+		else sealed = false;
 	}
 
 	// Reflect.ownKeys returns both string and symbol own keys.
@@ -207,13 +209,13 @@ function freezeDeep<T>(
 	for (const key of keys) {
 		const value = (obj as Record<string | symbol, unknown>)[key];
 		if (value !== null && typeof value === "object") {
-			freezeDeep(value, visited, walk);
+			if (!freezeDeep(value, visited, walk)) sealed = false;
 		}
 	}
 
-	const frozen = Object.freeze(obj) as Readonly<T>;
-	walk.frozen.push(obj as object);
-	return frozen;
+	Object.freeze(obj);
+	if (sealed) walk.sealed.push(obj);
+	return sealed;
 }
 
 /**

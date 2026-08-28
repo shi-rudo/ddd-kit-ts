@@ -1,4 +1,4 @@
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
@@ -33,7 +33,7 @@ interface RuntimeRepositoryDefinition<Evt extends AnyDomainEvent, TCtx>
 	extends RuntimePersistenceDefinition<Evt> {
 	readonly create: (
 		transaction: TCtx,
-		tracking: RepositoryTracking<IAggregateRoot<Id<string>, Evt>>,
+		tracking: RepositoryTracking<Aggregate<Id<string>, Evt>>,
 	) => unknown;
 }
 
@@ -83,7 +83,7 @@ const repositoryDefinitionBrand: unique symbol = Symbol.for(
 export interface RepositoryDefinitionOptions<
 	TCtx,
 	TRepositoryPort extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -128,7 +128,7 @@ export interface RepositoryDefinitionOptions<
 export interface RepositoryDefinition<
 	TCtx,
 	TRepositoryPort extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -149,7 +149,7 @@ type CallableValue = (...args: never[]) => unknown;
 
 /** @inline */
 type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TCreate extends (
 		transaction: never,
 		tracking: RepositoryTracking<TAggregate>,
@@ -283,7 +283,7 @@ export type CompatibleRepositoryDefinitions<
 		infer _TChangeSet,
 		infer _TRemoval
 	>
-		? TAggregate extends IAggregateRoot<Id<string>, infer TDefinitionEvent>
+		? TAggregate extends Aggregate<Id<string>, infer TDefinitionEvent>
 			? [TDefinitionEvent] extends [Evt]
 				? TCtx extends TDefinitionContext
 					? TDefinitions[K]
@@ -308,7 +308,7 @@ type RepositoryFacadeOf<TDefinition> =
 
 /** Unit-of-Work-owned writes added to every application repository facade. */
 export interface AggregateWriteRegistration<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	add(aggregate: TAggregate): void;
 	update(aggregate: TAggregate): void;
@@ -316,7 +316,7 @@ export interface AggregateWriteRegistration<
 
 /** Optional physical removal added only by an explicit repository definition. */
 export interface PhysicalRemovalRegistration<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	remove(aggregate: TAggregate): void;
 }
@@ -343,7 +343,7 @@ export interface UnitOfWorkDeps<
 	 * carries the bounded post-commit execution signal and deadline.
 	 */
 	onPersisted?: (
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		version: Version,
 		context: ExecutionContext,
 	) => void | Promise<void>;
@@ -354,7 +354,7 @@ export interface UnitOfWorkDeps<
 	 */
 	onPersistError?: (
 		error: unknown,
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 	) => void;
 	/**
 	 * See `withCommit`: one total budget shared by the complete post-commit

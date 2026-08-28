@@ -42,7 +42,7 @@ export interface PendingEventLifecycleCapability {
 	pendingEventCount(): number;
 	/**
 	 * The aggregate's declared type; it is protected on the aggregate and
-	 * absent from `IAggregateRoot`.
+	 * absent from `Aggregate`.
 	 */
 	aggregateType(): string;
 }

@@ -15,12 +15,12 @@ import {
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
-import {
-	type AggregateConfig,
-	AggregateRoot as ProductionAggregateRoot,
-} from "./aggregate-root";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
+import {
+	type AggregateConfig,
+	StateStoredAggregate as ProductionAggregateRoot,
+} from "./state-stored-aggregate";
 
 function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
@@ -46,7 +46,11 @@ function discardPendingEvents(aggregate: object): void {
 describe("version guards", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
-	class RestorableAggregate extends AggregateRoot<TestState, TestId, Noted> {
+	class RestorableAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
 		protected readonly aggregateType = "RestorableAggregate";
 
 		constructor(id: TestId, initialState: TestState) {
@@ -183,7 +187,7 @@ describe("version guards", () => {
 });
 
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
-abstract class AggregateRoot<
+abstract class StateStoredAggregate<
 	TState,
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
@@ -200,7 +204,7 @@ type TestState = {
 	status: "active" | "inactive";
 };
 
-class TestAggregate extends AggregateRoot<TestState, TestId> {
+class TestAggregate extends StateStoredAggregate<TestState, TestId> {
 	protected readonly aggregateType = "TestAggregate";
 	constructor(
 		id: TestId,
@@ -236,7 +240,7 @@ class TestAggregate extends AggregateRoot<TestState, TestId> {
 }
 
 describe("setState OCC contract (named methods, no flag argument)", () => {
-	class NamedMethodsAggregate extends AggregateRoot<TestState, TestId> {
+	class NamedMethodsAggregate extends StateStoredAggregate<TestState, TestId> {
 		protected readonly aggregateType = "NamedMethodsAggregate";
 		constructor(
 			id: TestId,
@@ -318,7 +322,7 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 	});
 });
 
-describe("AggregateRoot (without Event Sourcing)", () => {
+describe("StateStoredAggregate (without Event Sourcing)", () => {
 	describe("Basic functionality", () => {
 		it("should create aggregate with id and initial state", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
@@ -378,7 +382,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("states the OCC intent in the method name: bump by default, loud opt-out", () => {
-			class ExplicitAggregate extends AggregateRoot<TestState, TestId> {
+			class ExplicitAggregate extends StateStoredAggregate<TestState, TestId> {
 				protected readonly aggregateType = "ExplicitAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -409,7 +413,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("manual bumpVersion stays available for subclass orchestration", () => {
-			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
+			class ManualVersionAggregate extends StateStoredAggregate<
+				TestState,
+				TestId
+			> {
 				protected readonly aggregateType = "ManualVersionAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -473,7 +480,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			items: Array<{ sku: string; qty: number }>;
 		};
 
-		class DeepFrozenAggregate extends AggregateRoot<NestedState, TestId> {
+		class DeepFrozenAggregate extends StateStoredAggregate<
+			NestedState,
+			TestId
+		> {
 			protected readonly aggregateType = "DeepFrozenAggregate";
 
 			constructor(id: TestId, initialState: NestedState) {
@@ -537,7 +547,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	describe("setState(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
-		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
+		class CommitAggregate extends StateStoredAggregate<TestState, TestId, Ev> {
 			protected readonly aggregateType = "CommitAggregate";
 
 			constructor(id: TestId, state: TestState) {
@@ -563,7 +573,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 		}
 
-		class FailingValidator extends AggregateRoot<TestState, TestId, Ev> {
+		class FailingValidator extends StateStoredAggregate<TestState, TestId, Ev> {
 			protected readonly aggregateType = "FailingValidator";
 
 			constructor(id: TestId, state: TestState) {
@@ -689,7 +699,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	describe("createEvent", () => {
 		type Recorded = DomainEvent<"Recorded", { v: number }>;
 
-		class DecidingAggregate extends AggregateRoot<TestState, TestId, Recorded> {
+		class DecidingAggregate extends StateStoredAggregate<
+			TestState,
+			TestId,
+			Recorded
+		> {
 			protected readonly aggregateType = "DecidingAggregate";
 
 			// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
@@ -722,7 +736,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 	describe("kit-internal persistence acknowledgement", () => {
 		type TestRecorded = DomainEvent<"TestRecorded", { value: number }>;
 
-		class EventingAggregate extends AggregateRoot<
+		class EventingAggregate extends StateStoredAggregate<
 			TestState,
 			TestId,
 			TestRecorded
@@ -882,7 +896,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("should validate state changes", () => {
-			class ValidatedAggregate extends AggregateRoot<TestState, TestId> {
+			class ValidatedAggregate extends StateStoredAggregate<TestState, TestId> {
 				protected readonly aggregateType = "ValidatedAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, {
@@ -908,7 +922,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should manage domain events", () => {
 			type EvT = DomainEvent<"SomethingHappened", void>;
-			class EventAggregate extends AggregateRoot<TestState, TestId, EvT> {
+			class EventAggregate extends StateStoredAggregate<
+				TestState,
+				TestId,
+				EvT
+			> {
 				protected readonly aggregateType = "EventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -942,7 +960,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				| DomainEvent<"ValueUpdated", { newValue: number }>
 				| DomainEvent<"Activated", void>;
 
-			class TypedEventAggregate extends AggregateRoot<
+			class TypedEventAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
 				TestEvent
@@ -998,7 +1016,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should reject wrong event types at compile time with TEvent", () => {
 			type StrictEvent = DomainEvent<"OnlyThis", { data: string }>;
 
-			class StrictAggregate extends AggregateRoot<
+			class StrictAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
 				StrictEvent
@@ -1043,7 +1061,7 @@ describe("trustInitialState", () => {
 		if (state.value < 0) throw new NegativeValueError();
 	};
 
-	class GuardedAggregate extends AggregateRoot<TestState, TestId> {
+	class GuardedAggregate extends StateStoredAggregate<TestState, TestId> {
 		protected readonly aggregateType = "GuardedAggregate";
 
 		constructor(
@@ -1086,7 +1104,11 @@ describe("trustInitialState", () => {
 describe("createEvent options and pending-event bookkeeping", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
-	class BookkeepingAggregate extends AggregateRoot<TestState, TestId, Noted> {
+	class BookkeepingAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
 		protected readonly aggregateType = "BookkeepingAggregate";
 
 		// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
@@ -1188,7 +1210,11 @@ describe("createEvent options and pending-event bookkeeping", () => {
 describe("event address on the state-stored path", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
-	class AddressedAggregate extends AggregateRoot<TestState, TestId, Noted> {
+	class AddressedAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
 		protected readonly aggregateType = "AddressedAggregate";
 
 		constructor(id: TestId, initialState: TestState) {

@@ -46,7 +46,7 @@ domain work. It must not mutate child state or event lists from the outside.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   createDomainEventFactory,
   DomainError,
   recordPendingEvents,
@@ -79,7 +79,7 @@ class OrderAlreadyConfirmedError extends DomainError<
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   private constructor(id: OrderId, state: OrderState) {

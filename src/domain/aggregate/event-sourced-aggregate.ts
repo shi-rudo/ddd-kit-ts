@@ -17,22 +17,23 @@ import type {
 	UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import type { IEventSourcedAggregate, Version } from "./aggregate";
+import type { ReplayableAggregate, Version } from "./aggregate";
 import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
+import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-// Re-export for backwards compatibility: `IEventSourcedAggregate` lives
+// Re-export for backwards compatibility: `ReplayableAggregate` lives
 // in `aggregate.ts` (the type hub).
-export type { IEventSourcedAggregate } from "./aggregate";
+export type { ReplayableAggregate } from "./aggregate";
 
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
  *
- * Like `AggregateRoot`, this is both the root entity and the aggregate
+ * Like `StateStoredAggregate`, this is both the root entity and the aggregate
  * boundary. The difference is persistence: state is derived from events,
  * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.
@@ -98,7 +99,7 @@ export abstract class EventSourcedAggregate<
 		TEvent extends AnyDomainEvent,
 	>
 	extends BaseAggregate<TState, TId, TEvent>
-	implements IEventSourcedAggregate<TId, TEvent>
+	implements ReplayableAggregate<TId, TEvent>
 {
 	/**
 	 * Validates a NEW event before `apply()` records it. Default is
@@ -279,7 +280,13 @@ export abstract class EventSourcedAggregate<
 	public replayHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		assertReplayTargetHasNoPendingEvents(this.id, this.pendingEventCount);
+		assertReplayTargetHasNoPendingEvents(
+			this.id,
+			requirePendingEventLifecycleCapability(
+				this,
+				"replayHistory",
+			).pendingEventCount(),
+		);
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 
@@ -351,7 +358,7 @@ export abstract class EventSourcedAggregate<
  * The creator runs outside the `Result`: what it throws propagates.
  */
 export function reconstituteAggregateFromHistory<
-	TAggregate extends IEventSourcedAggregate<Id<string>, AnyDomainEvent>,
+	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
 >(
 	createReplayTarget: () => TAggregate,
 	history: Parameters<TAggregate["replayHistory"]>[0],

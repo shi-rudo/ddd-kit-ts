@@ -7,7 +7,7 @@ import type {
 import { CommandBus } from "../../src/application/cqrs/command/command-bus";
 import { withCommit } from "../../src/application/cqrs/handler";
 import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
-import type { IAggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import type { Aggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	createDomainEventFactory,
@@ -33,7 +33,7 @@ import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 // ----------------------------------------------------------------------------
 
 interface ExampleAggregateStore<
-	TAgg extends IAggregateRoot<TId, AnyDomainEvent>,
+	TAgg extends Aggregate<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 > {
 	findById(id: TId): Promise<TAgg | undefined>;
@@ -43,7 +43,7 @@ interface ExampleAggregateStore<
 }
 
 function inMemoryStore<
-	TAgg extends IAggregateRoot<TId, AnyDomainEvent>,
+	TAgg extends Aggregate<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 >(name: string): ExampleAggregateStore<TAgg, TId> {
 	const store = new Map<TId, TAgg>();
