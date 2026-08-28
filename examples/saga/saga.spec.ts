@@ -7,7 +7,7 @@ import type {
 import { CommandBus } from "../../src/application/cqrs/command/command-bus";
 import { withCommit } from "../../src/application/cqrs/handler";
 import { recordPendingEvents } from "../../src/application/unit-of-work/record-pending-events";
-import type { Aggregate } from "../../src/domain/aggregate/state-stored-aggregate";
+import type { Aggregate } from "../../src/domain/aggregate/aggregate";
 import {
 	type AnyDomainEvent,
 	createDomainEventFactory,

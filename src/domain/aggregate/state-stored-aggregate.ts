@@ -2,9 +2,6 @@ import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { BaseAggregate } from "./base-aggregate";
 
-export type { Aggregate } from "./aggregate";
-export type { AggregateConfig } from "./base-aggregate";
-
 /**
  * OO-first Aggregate Root for state-stored domain models.
  *

@@ -24,10 +24,6 @@ import {
 } from "./base-aggregate";
 import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-// Re-export for backwards compatibility: `ReplayableAggregate` lives
-// in `aggregate.ts` (the type hub).
-export type { ReplayableAggregate } from "./aggregate";
-
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**

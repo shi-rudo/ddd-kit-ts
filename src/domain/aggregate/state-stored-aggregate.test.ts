@@ -15,12 +15,10 @@ import {
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
+import type { AggregateConfig } from "./base-aggregate";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
-import {
-	type AggregateConfig,
-	StateStoredAggregate as ProductionAggregateRoot,
-} from "./state-stored-aggregate";
+import { StateStoredAggregate as ProductionAggregateRoot } from "./state-stored-aggregate";
 
 function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
@@ -1304,6 +1302,25 @@ describe("event address on the state-stored path", () => {
 		expect(decision?.aggregateId).toBe("test-1");
 		expect(decision?.aggregateType).toBe("AddressedAggregate");
 		expect(aggregate.state.value).toBe(5);
+	});
+});
+
+describe("lifecycle capability boundary", () => {
+	it("keeps acknowledgement, disposal, and the persisted marker off the aggregate instance", () => {
+		// Post-commit acknowledgement belongs to the application shell; the
+		// capability is reachable through the registry only, never as a
+		// member domain code could call.
+		const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+		for (const member of [
+			"acknowledge",
+			"discardPendingEvents",
+			"persistedVersion",
+			"pendingEventCount",
+		]) {
+			expect(member in aggregate).toBe(false);
+		}
+		expect(lifecycleOf(aggregate)).toBeDefined();
 	});
 });
 
