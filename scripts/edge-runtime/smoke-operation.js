@@ -1,8 +1,8 @@
 import {
-	StateStoredAggregate,
 	CommandBus,
 	createDomainEventFactory,
 	recordPendingEvents,
+	StateStoredAggregate,
 } from "@shirudo/ddd-kit";
 import { addMoney, moneyOfMinor, moneyToDto } from "@shirudo/ddd-kit/money";
 import { ok } from "@shirudo/result";

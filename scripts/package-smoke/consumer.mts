@@ -1,4 +1,4 @@
-import { StateStoredAggregate, deepEqual } from "@shirudo/ddd-kit";
+import { deepEqual, StateStoredAggregate } from "@shirudo/ddd-kit";
 import { toProblemDetails } from "@shirudo/ddd-kit/http";
 import { parseMoneyInput } from "@shirudo/ddd-kit/money";
 import { createKitPublicErrors } from "@shirudo/ddd-kit/public-errors";
