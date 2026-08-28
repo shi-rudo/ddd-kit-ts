@@ -1306,3 +1306,64 @@ describe("event address on the state-stored path", () => {
 		expect(aggregate.state.value).toBe(5);
 	});
 });
+
+describe("one version write path", () => {
+	class ObservingAggregate extends StateStoredAggregate<TestState, TestId> {
+		protected readonly aggregateType = "ObservingAggregate";
+		readonly observed: number[] = [];
+
+		// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
+		constructor(id: TestId, state: TestState) {
+			super(id, state);
+		}
+
+		static reconstitute(
+			id: TestId,
+			state: TestState,
+			version: Version,
+		): ObservingAggregate {
+			const aggregate = new ObservingAggregate(id, state);
+			aggregate.markReconstituted(version);
+			return aggregate;
+		}
+
+		protected override setVersion(version: Version): void {
+			this.observed.push(version);
+			super.setVersion(version);
+		}
+
+		change(value: number): void {
+			this.setState({ ...this.state, value });
+		}
+
+		restoreAt(version: Version): void {
+			this.markReconstituted(version);
+		}
+	}
+
+	it("lets a setVersion override observe the reconstitution write and every bump", () => {
+		const aggregate = ObservingAggregate.reconstitute(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			7 as Version,
+		);
+
+		aggregate.change(2);
+
+		expect(aggregate.observed).toEqual([7, 8]);
+		expect(aggregate.version).toBe(8);
+	});
+
+	it("rejects a state change that would take the version past the safe range before the state moves", () => {
+		const aggregate = ObservingAggregate.reconstitute(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			Number.MAX_SAFE_INTEGER as Version,
+		);
+
+		expect(() => aggregate.change(2)).toThrow(InvalidVersionError);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(Number.MAX_SAFE_INTEGER);
+	});
+});

@@ -1808,3 +1808,62 @@ describe("reconstituteAggregateFromHistory", () => {
 		expect(result.value.state.value).toBe(3);
 	});
 });
+
+describe("one version write path", () => {
+	class ObservingAggregate extends TestEventSourcedAggregate {
+		readonly observed: number[] = [];
+
+		protected override setVersion(version: Version): void {
+			this.observed.push(version);
+			super.setVersion(version);
+		}
+	}
+
+	class LimitedAggregate extends TestEventSourcedAggregate {
+		protected override setVersion(version: Version): void {
+			if (version > 1) throw new Error("version limit");
+			super.setVersion(version);
+		}
+	}
+
+	it("lets a setVersion override observe the version a replay restores, once", () => {
+		const agg = new ObservingAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(agg.replayHistory([activated(), updated(2)]).isOk()).toBe(true);
+		agg.updateValue(3);
+
+		expect(agg.observed).toEqual([2, 3]);
+	});
+
+	it("leaves state, pending list, and version untouched when the version write throws on apply", () => {
+		const agg = new LimitedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+		agg.updateValue(2);
+
+		expect(() => agg.updateValue(3)).toThrow("version limit");
+
+		expect(agg.state.value).toBe(2);
+		expect(agg.version).toBe(1);
+		expect(agg.pendingEvents).toHaveLength(1);
+	});
+
+	it("rolls a replay back when the version write throws at its final marker", () => {
+		const agg = new LimitedAggregate("test-1" as TestId, {
+			value: 1,
+			status: "inactive",
+		});
+
+		expect(() => agg.replayHistory([activated(), updated(5)])).toThrow(
+			"version limit",
+		);
+
+		expect(agg.state).toEqual({ value: 1, status: "inactive" });
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+});

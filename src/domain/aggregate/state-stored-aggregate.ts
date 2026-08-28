@@ -38,9 +38,13 @@ export abstract class StateStoredAggregate<
 			? events
 			: [events as PendingDomainEvent<TEvent>];
 		const stamped = eventBatch.map((event) => this.addressNewEvent(event));
+		// The version number is validated before the state moves; the write
+		// itself comes after the state gates, so a rejected state leaves the
+		// version untouched.
+		const next = this.nextVersion();
 
 		super.setState(newState);
-		this.bumpVersion();
+		this.setVersion(next);
 		for (const event of stamped) this.appendStampedEvent(event);
 	}
 
