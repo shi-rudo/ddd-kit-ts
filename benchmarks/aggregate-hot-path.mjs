@@ -2,8 +2,11 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import {
 	createDomainEvent,
+	createDomainEventFactory,
 	EventSourcedAggregate,
+	recordPendingEvents,
 	StateStoredAggregate,
+	withCommit,
 } from "../dist/index.js";
 
 if (typeof global.gc !== "function") {
@@ -62,40 +65,61 @@ class EventSourcedOrder extends EventSourcedAggregate {
 	}
 }
 
-// The shell reads the pendingEvents getter twice per commit (enrollment
-// and harvest); the benchmark reads it the same number of times.
-function shellReads(aggregate) {
-	return aggregate.pendingEvents.length + aggregate.pendingEvents.length;
+const fixedTime = new Date("2027-04-05T06:07:08.000Z");
+let eventSequence = 0;
+const factory = createDomainEventFactory({
+	eventIdFactory: () => `event-${++eventSequence}`,
+	clock: () => fixedTime,
+});
+
+// The shell path of one commit, in memory: the domain method records a
+// decision, the shell stamps it, withCommit enrolls the aggregate,
+// harvests the event into the outbox, and acknowledges it. The outbox and
+// the transaction scope cost nothing, so the number is the kit's own cost.
+const outbox = {
+	add: async () => {},
+	getPending: async () => [],
+	markDispatched: async () => {},
+};
+const scope = {
+	transactional: (fn) => fn(undefined),
+};
+
+async function commitOne(order, sequence) {
+	order.touch(sequence);
+	await withCommit({ outbox, scope }, async (_ctx, enrollment) => {
+		recordPendingEvents(order, factory);
+		return { result: undefined, commits: [enrollment.enrollSaved(order)] };
+	});
 }
 
-function measure(name, iterations, setup, operation) {
+async function measure(name, iterations, setup, operation) {
 	let context = setup();
 	for (let index = 0; index < Math.min(iterations, 1_000); index += 1) {
-		context = operation(context, index) ?? context;
+		context = (await operation(context, index)) ?? context;
 	}
 	global.gc();
 	context = setup();
 	const heapBefore = process.memoryUsage().heapUsed;
 	const startedAt = performance.now();
-	let checksum = 0;
 	for (let index = 0; index < iterations; index += 1) {
-		const next = operation(context, index);
+		const next = await operation(context, index);
 		if (next !== undefined) context = next;
-		checksum += 1;
 	}
 	const elapsedMs = performance.now() - startedAt;
 	global.gc();
 	const heapAfter = process.memoryUsage().heapUsed;
-	checksum += context.version;
 	return {
 		name,
 		iterations,
 		operationsPerSecond: Math.round(iterations / (elapsedMs / 1_000)),
+		microsecondsPerOperation:
+			Math.round(((elapsedMs * 1_000) / iterations) * 100) / 100,
 		retainedBytesPerOperation: Math.max(
 			0,
 			Math.round((heapAfter - heapBefore) / iterations),
 		),
-		checksum,
+		version: context.version,
 	};
 }
 
@@ -110,50 +134,38 @@ const freshHistory = (count) =>
 
 const scenarios = [
 	{
-		name: "state-stored/setState-with-event/shallow",
+		name: "state-stored/commit/shallow",
 		iterations: 20_000,
 		setup: () => new StateStoredOrder("order-1", nestedState(12, 4)),
-		operation: (order, index) => {
-			order.touch(index);
-			shellReads(order);
-		},
+		operation: commitOne,
 	},
 	{
-		name: "state-stored/setState-with-event/deep",
+		name: "state-stored/commit/deep",
 		iterations: 20_000,
 		setup: () =>
 			new StateStoredOrder("order-1", nestedState(12, 4), {
 				deepFreezeState: true,
 			}),
-		operation: (order, index) => {
-			order.touch(index);
-			shellReads(order);
-		},
+		operation: commitOne,
 	},
 	{
-		name: "event-sourced/apply/shallow",
+		name: "event-sourced/commit/shallow",
 		iterations: 20_000,
 		setup: () => new EventSourcedOrder("order-1", nestedState(12, 4)),
-		operation: (order, index) => {
-			order.touch(index);
-			shellReads(order);
-		},
+		operation: commitOne,
 	},
 	{
-		name: "event-sourced/apply/deep",
+		name: "event-sourced/commit/deep",
 		iterations: 20_000,
 		setup: () =>
 			new EventSourcedOrder("order-1", nestedState(12, 4), {
 				deepFreezeState: true,
 			}),
-		operation: (order, index) => {
-			order.touch(index);
-			shellReads(order);
-		},
+		operation: commitOne,
 	},
 	{
 		name: "event-sourced/replayHistory-2000/shallow",
-		iterations: 40,
+		iterations: 100,
 		setup: () => freshHistory(2_000),
 		operation: (history) => {
 			const order = new EventSourcedOrder("order-1", nestedState(12, 4));
@@ -164,7 +176,7 @@ const scenarios = [
 	},
 	{
 		name: "event-sourced/replayHistory-2000/deep",
-		iterations: 40,
+		iterations: 100,
 		setup: () => freshHistory(2_000),
 		operation: (history) => {
 			const order = new EventSourcedOrder("order-1", nestedState(12, 4), {
@@ -177,14 +189,17 @@ const scenarios = [
 	},
 ];
 
-const results = scenarios.map((scenario) =>
-	measure(
-		scenario.name,
-		scenario.iterations,
-		scenario.setup,
-		scenario.operation,
-	),
-);
+const results = [];
+for (const scenario of scenarios) {
+	results.push(
+		await measure(
+			scenario.name,
+			scenario.iterations,
+			scenario.setup,
+			scenario.operation,
+		),
+	);
+}
 
 console.log(
 	JSON.stringify(
@@ -193,9 +208,10 @@ console.log(
 			platform: `${process.platform}/${process.arch}`,
 			metricNotes: {
 				operationsPerSecond:
-					"Warm process throughput: one aggregate write plus the shell's two pendingEvents reads, or one full replay",
+					"Warm process throughput: one full in-memory commit (domain method, recordPendingEvents, withCommit enrollment, harvest, acknowledgement), or one full replay",
+				microsecondsPerOperation: "Wall time per operation",
 				retainedBytesPerOperation:
-					"Heap delta after forced GC per operation; the pending list grows with every write, so writes retain by design",
+					"Heap delta after forced GC per operation; a commit leaves nothing pending, so a positive value is a leak",
 			},
 			results,
 		},
