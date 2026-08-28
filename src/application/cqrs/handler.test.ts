@@ -5,7 +5,7 @@ import {
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
-	type IAggregateRoot,
+	type Aggregate,
 	StateStoredAggregate,
 } from "../../domain/aggregate/state-stored-aggregate";
 import {
@@ -140,7 +140,7 @@ function stamped(
  */
 function unstampedInstance(
 	events: ReadonlyArray<TestEvent>,
-): IAggregateRoot<TestId, TestEvent> {
+): Aggregate<TestId, TestEvent> {
 	const instance = {
 		id: "agg-1" as TestId,
 		version: 1 as Version,
@@ -164,8 +164,8 @@ function persistedVersionOf(aggregate: object): Version | undefined {
 function enrolledResult<R>(
 	enrollment: CommitEnrollment<TestEvent>,
 	result: R,
-	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>>,
-	deleted: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>> = [],
+	aggregates: ReadonlyArray<Aggregate<Id<string>, TestEvent>>,
+	deleted: ReadonlyArray<Aggregate<Id<string>, TestEvent>> = [],
 ): WithCommitWorkResult<TestEvent, R> {
 	const deletedSet = new Set(deleted);
 	return {
@@ -264,7 +264,7 @@ describe("withCommit", () => {
 				return result;
 			},
 		};
-		const lookalike: IAggregateRoot<TestId, TestEvent> = {
+		const lookalike: Aggregate<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
 			version: 1 as Version,
 			pendingEvents: [],

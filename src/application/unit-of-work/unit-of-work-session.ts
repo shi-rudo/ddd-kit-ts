@@ -1,4 +1,4 @@
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
@@ -47,22 +47,16 @@ interface WriteRegistration<Evt extends AnyDomainEvent> {
 	readonly intent: AggregateWriteIntent;
 	readonly version: Version;
 	readonly events: ReadonlyArray<PendingDomainEvent<Evt>>;
-	readonly baseline: PersistenceBaseline<
-		IAggregateRoot<Id<string>, Evt>,
-		unknown
-	>;
+	readonly baseline: PersistenceBaseline<Aggregate<Id<string>, Evt>, unknown>;
 	readonly changes: PersistenceChanges<unknown>;
 }
 
 interface TrackedAggregate<Evt extends AnyDomainEvent> {
-	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	readonly aggregate: Aggregate<Id<string>, Evt>;
 	readonly lifecycle: AggregateLifecycle;
 	readonly expectedVersion: Version | undefined;
 	readonly definition: RuntimePersistenceDefinition<Evt>;
-	readonly baseline: PersistenceBaseline<
-		IAggregateRoot<Id<string>, Evt>,
-		unknown
-	>;
+	readonly baseline: PersistenceBaseline<Aggregate<Id<string>, Evt>, unknown>;
 	registration?: WriteRegistration<Evt>;
 }
 
@@ -92,7 +86,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		isDeleted: this._identityMap.isDeleted.bind(this._identityMap),
 	}) as UnitOfWorkIdentityMap;
 	private readonly _trackingByAggregate = new WeakMap<
-		IAggregateRoot<Id<string>, Evt>,
+		Aggregate<Id<string>, Evt>,
 		TrackedAggregate<Evt>
 	>();
 	private readonly _trackedAggregates = new Set<TrackedAggregate<Evt>>();
@@ -107,13 +101,13 @@ export class Session<Evt extends AnyDomainEvent> {
 
 	public trackingFor(
 		definition: RuntimePersistenceDefinition<Evt>,
-	): RepositoryTracking<IAggregateRoot<Id<string>, Evt>> {
+	): RepositoryTracking<Aggregate<Id<string>, Evt>> {
 		const session = this;
 		return Object.freeze({
 			get identityMap() {
 				return session.identityMap;
 			},
-			trackLoaded: (aggregate: IAggregateRoot<Id<string>, Evt>) =>
+			trackLoaded: (aggregate: Aggregate<Id<string>, Evt>) =>
 				session.trackLoaded(aggregate, definition),
 		});
 	}
@@ -123,7 +117,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		aggregate: object,
 	): WriteRegistration<Evt> | undefined {
 		return this._trackingByAggregate.get(
-			aggregate as IAggregateRoot<Id<string>, Evt>,
+			aggregate as Aggregate<Id<string>, Evt>,
 		)?.registration;
 	}
 
@@ -132,7 +126,7 @@ export class Session<Evt extends AnyDomainEvent> {
 		return this.registrationOf(aggregate)?.intent === "remove";
 	}
 
-	private trackLoaded<TAggregate extends IAggregateRoot<Id<string>, Evt>>(
+	private trackLoaded<TAggregate extends Aggregate<Id<string>, Evt>>(
 		aggregate: TAggregate,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TAggregate {
@@ -165,7 +159,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	public add(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.add");
@@ -225,7 +219,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	public update(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.update");
@@ -234,7 +228,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	public remove(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		this.assertOpen("repository.remove");
@@ -281,7 +275,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	private loadedEntryFor(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		operation: "update" | "remove",
 		definition: RuntimePersistenceDefinition<Evt>,
 	): TrackedAggregate<Evt> {
@@ -323,7 +317,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	private assertNotRemoved(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 	): void {
 		if (this._identityMap.isDeleted(definition.aggregate, aggregate.id)) {
@@ -399,7 +393,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	private registerSavedCommit(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
@@ -423,7 +417,7 @@ export class Session<Evt extends AnyDomainEvent> {
 	}
 
 	private registerRemovedCommit(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		definition: RuntimePersistenceDefinition<Evt>,
 		expectedVersion: Version | undefined,
 	): AggregateCommitToken<Evt> {
@@ -511,7 +505,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				version: registration.version,
 				changes: registration.changes,
 				events: registration.events,
-			}) as AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>;
+			}) as AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>;
 			try {
 				await entry.definition.flush(transaction, write);
 			} catch (error) {
@@ -545,7 +539,7 @@ export class Session<Evt extends AnyDomainEvent> {
 function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	definition: RuntimePersistenceDefinition<Evt>,
 	error: unknown,
-	write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
+	write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 ): InfrastructureError {
 	let mapped: unknown;
 	try {

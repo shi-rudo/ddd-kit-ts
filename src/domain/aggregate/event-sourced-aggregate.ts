@@ -17,16 +17,16 @@ import type {
 	UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import type { IEventSourcedAggregate, Version } from "./aggregate";
+import type { ReplayableAggregate, Version } from "./aggregate";
 import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
 import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-// Re-export for backwards compatibility: `IEventSourcedAggregate` lives
+// Re-export for backwards compatibility: `ReplayableAggregate` lives
 // in `aggregate.ts` (the type hub).
-export type { IEventSourcedAggregate } from "./aggregate";
+export type { ReplayableAggregate } from "./aggregate";
 
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
@@ -99,7 +99,7 @@ export abstract class EventSourcedAggregate<
 		TEvent extends AnyDomainEvent,
 	>
 	extends BaseAggregate<TState, TId, TEvent>
-	implements IEventSourcedAggregate<TId, TEvent>
+	implements ReplayableAggregate<TId, TEvent>
 {
 	/**
 	 * Validates a NEW event before `apply()` records it. Default is
@@ -358,7 +358,7 @@ export abstract class EventSourcedAggregate<
  * The creator runs outside the `Result`: what it throws propagates.
  */
 export function reconstituteAggregateFromHistory<
-	TAggregate extends IEventSourcedAggregate<Id<string>, AnyDomainEvent>,
+	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
 >(
 	createReplayTarget: () => TAggregate,
 	history: Parameters<TAggregate["replayHistory"]>[0],

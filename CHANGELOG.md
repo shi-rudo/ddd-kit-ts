@@ -51,6 +51,8 @@ flavours. No behavior changes.
 | Before | After |
 | --- | --- |
 | `AggregateRoot` (class) | `StateStoredAggregate` |
+| `IAggregateRoot` (contract) | `Aggregate` |
+| `IEventSourcedAggregate` (contract) | `ReplayableAggregate` |
 | `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
 | `AggregateRoot.commit(newState, events)` | `setState(newState, events)` |
 | `loadFromHistory(history)` | `replayHistory(history)` |
@@ -59,7 +61,11 @@ flavours. No behavior changes.
 | `DomainEvent.version`, option `version` | `schemaVersion` |
 
 The state-stored base class is `StateStoredAggregate`, the sibling of
-`EventSourcedAggregate`; `IAggregateRoot` stays the contract both share.
+`EventSourcedAggregate`. The contract both share is `Aggregate` (`id`,
+`version`, `pendingEvents`), and `ReplayableAggregate` adds
+`replayHistory`; the `I` prefix leaves the kit with them. The class you
+write is the root of its aggregate; the kit calls it the aggregate, and
+`Entity` names the children inside it.
 `commit` now names the transaction only (`withCommit`, `committedVersion`,
 `CommittedDomainEvent`); the aggregate write helper is `setState`, with
 the events of the change as an optional second argument. `reconstitute`
@@ -2097,7 +2103,7 @@ options must be positive safe integers.
 
 #### 25. Aggregate persistence lifecycle moves to the Application Shell
 
-`IAggregateRoot` no longer exposes `markPersisted` or
+`Aggregate` no longer exposes `markPersisted` or
 `clearPendingEvents`, and aggregate subclasses no longer provide the
 `onPersisted(version)` Template Method. A public or overridable lifecycle
 mutator could skip pending-event cleanup, erase uncommitted facts, or move the
@@ -2121,10 +2127,10 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 const deps = {
   scope,
   outbox,
-  onPersisted: async (aggregate: IAggregateRoot<OrderId, OrderEvent>, version: Version) => {
+  onPersisted: async (aggregate: Aggregate<OrderId, OrderEvent>, version: Version) => {
     await orderCache.evict(aggregate.id, version);
   },
-  onPersistError: (error: unknown, aggregate: IAggregateRoot<OrderId, OrderEvent>) => {
+  onPersistError: (error: unknown, aggregate: Aggregate<OrderId, OrderEvent>) => {
     logger.error({ error, aggregateId: aggregate.id });
   },
 };
@@ -2143,7 +2149,7 @@ calling `super.markReconstituted(version)` first remains required, but they no
 longer run after a save. Move Post-Save logging, metrics, and cache invalidation
 to the Application-Shell `onPersisted` observer shown above.
 
-Custom structural implementations of `IAggregateRoot` can still satisfy
+Custom structural implementations of `Aggregate` can still satisfy
 repository ports, but cannot be enrolled in `withCommit` or `UnitOfWork`:
 enrollment rejects them inside the transaction because they have no internal
 acknowledgement capability. Extend `StateStoredAggregate` for state-stored domains or
@@ -2311,7 +2317,7 @@ shape instead of silently accepting two relationship locations.
 
 ### Changed (breaking): aggregate persistence lifecycle is application-owned
 
-- Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
+- Removed `markPersisted` and `clearPendingEvents` from `Aggregate` and
   both aggregate base classes.
 - Removed the protected aggregate `onPersisted(version)` Template Method.
 - Added optional async `onPersisted(aggregate, version)` dependencies to

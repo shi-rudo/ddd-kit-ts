@@ -1,4 +1,4 @@
-# Aggregate Roots
+# Aggregates
 
 An aggregate root is the object your application loads, changes, and saves as one consistency boundary.
 
@@ -556,6 +556,7 @@ no synonyms.
 
 | Term | Meaning | Kit surface |
 | --- | --- | --- |
+| aggregate | The class you write is the root of its aggregate; the kit calls it the aggregate, and `Entity` names the children inside it. | `Aggregate` (the contract both flavours share), `ReplayableAggregate` (adds `replayHistory`), `StateStoredAggregate`, `EventSourcedAggregate` |
 | create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
 | setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
 | apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |

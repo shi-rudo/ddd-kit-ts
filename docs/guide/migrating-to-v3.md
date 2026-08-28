@@ -93,7 +93,7 @@ instance at version 1 first, so a row stored at version 0 fails with
 with `UnreplayableAggregateError` on every load. Pass the stored state
 through the constructor, and record creation events in the business factory
 only. See
-[Aggregate Roots -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
+[Aggregates -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
 
 For event-sourced aggregates, keep a bare factory and load accepted history
 with `replayHistory`. A clean reconstituted aggregate can load a later tail
@@ -542,6 +542,8 @@ flavours. No behavior changes; every rename is a one-to-one replacement.
 | Before | After |
 | --- | --- |
 | `AggregateRoot` (class) | `StateStoredAggregate` |
+| `IAggregateRoot` (contract) | `Aggregate` |
+| `IEventSourcedAggregate` (contract) | `ReplayableAggregate` |
 | `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
 | `commit(newState, events)` | `setState(newState, events)` |
 | `loadFromHistory(history)` | `replayHistory(history)` |
@@ -549,11 +551,16 @@ flavours. No behavior changes; every rename is a one-to-one replacement.
 | `stampNewEventAddress(event)` | `addressNewEvent(event)` |
 | `DomainEvent.version`, option `version` | `schemaVersion` |
 
-Apply the class rename with one command over your TypeScript sources
-(`IAggregateRoot`, the shared contract, keeps its name):
+Apply the class and contract renames with one command over your
+TypeScript sources; the order matters, because the contract takes the
+name the class gave up:
 
 ```sh
-perl -pi -e 's/\bAggregateRoot\b/StateStoredAggregate/g' $(git ls-files '*.ts')
+perl -pi \
+  -e 's/\bAggregateRoot\b/StateStoredAggregate/g;' \
+  -e 's/\bIAggregateRoot\b/Aggregate/g;' \
+  -e 's/\bIEventSourcedAggregate\b/ReplayableAggregate/g;' \
+  $(git ls-files '*.ts')
 ```
 
 Apply the method renames with one command over your TypeScript sources:

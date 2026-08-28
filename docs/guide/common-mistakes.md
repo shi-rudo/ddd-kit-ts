@@ -58,7 +58,7 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-Do not work around the error with `any`. That turns a useful compile-time boundary into a runtime surprise. If the aggregate records events, pass the event union as the third generic. See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
+Do not work around the error with `any`. That turns a useful compile-time boundary into a runtime surprise. If the aggregate records events, pass the event union as the third generic. See [Aggregates -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
 ### Using Old Domain Event Names
 

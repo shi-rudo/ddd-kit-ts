@@ -22,7 +22,7 @@ import {
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import { type IAggregateRoot, toVersion, type Version } from "./aggregate";
+import { type Aggregate, toVersion, type Version } from "./aggregate";
 import { registerPendingEventLifecycleCapability } from "./pending-event-lifecycle";
 import {
 	type PendingEventStampFactory,
@@ -61,7 +61,7 @@ export abstract class BaseAggregate<
 		TEvent extends AnyDomainEvent = never,
 	>
 	extends Entity<TState, TId>
-	implements IAggregateRoot<TId, TEvent>
+	implements Aggregate<TId, TEvent>
 {
 	/**
 	 * The aggregate's domain type as a string, used to populate

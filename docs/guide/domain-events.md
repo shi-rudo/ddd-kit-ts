@@ -145,7 +145,7 @@ business timestamp from the technical event stamp by accident.
 
 Use `createDomainEvent(...)` directly for events that do not come from an aggregate: system events, integration events, test fixtures, process-manager events, and adapter-level events.
 
-See [Aggregate Roots -> A Small Aggregate](./aggregates.md#state-version-domain-events).
+See [Aggregates -> A Small Aggregate](./aggregates.md#state-version-domain-events).
 
 ## Convenience Defaults
 

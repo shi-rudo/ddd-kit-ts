@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate";
+import type { Aggregate } from "../../domain/aggregate/aggregate";
 import { requirePendingEventRecordingCapability } from "../../domain/aggregate/pending-event-recording";
 import type {
 	AnyDomainEvent,
@@ -33,21 +33,21 @@ export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	factory: DomainEventStampFactory,
 ): ReadonlyArray<TEvent>;
 export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	createStamp: DomainEventStampProvider<TEvent>,
 ): ReadonlyArray<TEvent>;
 export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	source: DomainEventStampFactory | DomainEventStampProvider<TEvent>,
 ): ReadonlyArray<TEvent> {
 	const capability = requirePendingEventRecordingCapability(

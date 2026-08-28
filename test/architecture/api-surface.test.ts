@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+	Aggregate,
 	AggregatePersistence,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
 	DomainErrorClass,
 	DurableCommandMessage,
-	IAggregateRoot,
 	Id,
 	IntegrationMessageRelationships,
 	OutboxDispatcherObservers,
@@ -25,7 +25,7 @@ import * as testing from "../../src/testing";
 type PublicExecutionContext = import("../../src").ExecutionContext;
 type PublicEventMetadata = import("../../src").EventMetadata;
 type PublicContractRepository = import("../../src/testing").ContractRepository<
-	IAggregateRoot<Id<"ContractRepositorySurface">>
+	Aggregate<Id<"ContractRepositorySurface">>
 >;
 
 function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
@@ -62,13 +62,10 @@ void (undefined as unknown as PublicContractRepository);
 
 type PublicRepositoryContracts =
 	| AggregatePersistence<
-			IAggregateRoot<Id<"PersistenceSurface">>,
+			Aggregate<Id<"PersistenceSurface">>,
 			Id<"PersistenceSurface">
 	  >
-	| Repository<
-			IAggregateRoot<Id<"RepositorySurface">>,
-			Id<"RepositorySurface">
-	  >;
+	| Repository<Aggregate<Id<"RepositorySurface">>, Id<"RepositorySurface">>;
 void (undefined as unknown as PublicRepositoryContracts);
 
 type PublicUnitOfWorkContext = UnitOfWorkContext<{
@@ -79,7 +76,7 @@ type RemovedRawTransaction = PublicUnitOfWorkContext["rawTransaction"];
 // @ts-expect-error application work cannot access adapter tracking internals
 type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
 type PublicRepositoryTracking = RepositoryTracking<
-	IAggregateRoot<Id<"TrackingSurface">>
+	Aggregate<Id<"TrackingSurface">>
 >;
 // @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
 type RemovedEnrollSaved = PublicRepositoryTracking["enrollSaved"];

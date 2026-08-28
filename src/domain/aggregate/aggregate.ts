@@ -77,7 +77,7 @@ export interface AggregateSnapshot<TState> {
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
  */
-export interface IAggregateRoot<
+export interface Aggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
 > {
@@ -88,15 +88,15 @@ export interface IAggregateRoot<
 
 /**
  * Public contract for Event-Sourced Aggregate Roots. Extends
- * `IAggregateRoot` with the replay-from-history boundary.
+ * `Aggregate` with the replay-from-history boundary.
  *
  * @template TId    - The aggregate root identifier
  * @template TEvent - The union type of all domain events
  */
-export interface IEventSourcedAggregate<
+export interface ReplayableAggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
-> extends IAggregateRoot<TId, TEvent> {
+> extends Aggregate<TId, TEvent> {
 	/**
 	 * Reconstitutes the aggregate from an event history. Returns
 	 * `Result` because event-stream corruption is an expected

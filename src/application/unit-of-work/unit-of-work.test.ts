@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
@@ -162,7 +162,7 @@ class FakeOrderRepository {
 }
 
 function versionPersistenceModel<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 >(): PersistenceModel<TAggregate, Version, Version | undefined> {
 	return {
 		capture: (aggregate) => aggregate.version,
@@ -190,7 +190,7 @@ function mapTestRepositoryError(error: unknown): InfrastructureError {
 
 type TestRepositoryPort<
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
 > = Omit<TRepository, "add" | "update" | "remove"> &
 	AggregateWriteRegistration<TAggregate> &
@@ -199,7 +199,7 @@ type TestRepositoryPort<
 type TestRepositoryDefinitionOptions<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean,
@@ -232,7 +232,7 @@ type TestRepositoryDefinitionOptions<
 function defineTestRepository<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,

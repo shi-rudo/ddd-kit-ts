@@ -142,9 +142,9 @@ export {
 } from "./application/unit-of-work/unit-of-work";
 // Aggregates: type hub
 export {
+	type Aggregate,
 	type AggregateSnapshot,
-	type IAggregateRoot,
-	type IEventSourcedAggregate,
+	type ReplayableAggregate,
 	sameVersion,
 	toVersion,
 	type Version,

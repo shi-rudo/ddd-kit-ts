@@ -3,7 +3,7 @@ import {
 	type PendingEventLifecycleCapability,
 	requirePendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
-import type { IAggregateRoot } from "../../domain/aggregate/state-stored-aggregate";
+import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	isMintedEvent,
@@ -56,7 +56,7 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * owner cancellation and the configured post-commit deadline.
 	 */
 	onPersisted?: (
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		version: Version,
 		context: ExecutionContext,
 	) => void | Promise<void>;
@@ -73,7 +73,7 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 */
 	onPersistError?: (
 		error: unknown,
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 	) => void;
 	/**
 	 * Total time allotted to the complete post-commit application phase:
@@ -117,12 +117,12 @@ export interface AggregateCommitToken<
  * any token rejects the transaction: an enrolled write may not commit without
  * its event harvest and post-commit acknowledgement. Enrollable instances
  * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
- * `IAggregateRoot` lookalikes have no internal lifecycle capability and fail
+ * `Aggregate` lookalikes have no internal lifecycle capability and fail
  * before commit.
  */
 export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	enrollSaved(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
 	/**
@@ -131,7 +131,7 @@ export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	 * application `onPersisted` observer is not called.
 	 */
 	enrollDeleted(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
 }
@@ -157,7 +157,7 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 type CommitDisposition = "saved" | "deleted";
 
 interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
-	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	readonly aggregate: Aggregate<Id<string>, Evt>;
 	readonly eventLifecycle: PendingEventLifecycleCapability;
 	readonly version: Version;
 	readonly expectedVersion: Version | undefined;
@@ -200,14 +200,14 @@ function createCommitTokenScope<
 >(): CommitTokenScope<Evt> {
 	const recordsByToken = new WeakMap<object, AggregateCommitRecord<Evt>>();
 	const tokensByAggregate = new WeakMap<
-		IAggregateRoot<Id<string>, Evt>,
+		Aggregate<Id<string>, Evt>,
 		AggregateCommitToken<Evt>
 	>();
 	let mintedTokenCount = 0;
 	let open = true;
 
 	const enroll = (
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		disposition: CommitDisposition,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt> => {
@@ -313,11 +313,11 @@ function createCommitTokenScope<
 	return {
 		enrollment: Object.freeze({
 			enrollSaved: (
-				aggregate: IAggregateRoot<Id<string>, Evt>,
+				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitEnrollmentOptions,
 			) => enroll(aggregate, "saved", options),
 			enrollDeleted: (
-				aggregate: IAggregateRoot<Id<string>, Evt>,
+				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitEnrollmentOptions,
 			) => enroll(aggregate, "deleted", options),
 		}),
@@ -635,7 +635,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// "consumes" the in-memory pending events. A deleted row does not trigger
 	// the saved-only application observer.
 	const persistedObservations: Array<{
-		readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+		readonly aggregate: Aggregate<Id<string>, Evt>;
 		readonly version: Version;
 	}> = [];
 	for (const {
