@@ -139,11 +139,20 @@ const KIT_SHADOWED = new WeakSet<object>();
 interface FreezeWalk {
 	cyclic: boolean;
 	readonly sealed: object[];
+	/** Objects this walk finished, with the seal of their subtree. */
+	readonly done: Map<object, boolean>;
+	/** Objects this walk is still inside of: a repeat visit is a cycle. */
+	readonly inProgress: Set<object>;
 }
 
 export function deepFreeze<T>(obj: T): Readonly<T> {
-	const walk: FreezeWalk = { cyclic: false, sealed: [] };
-	freezeDeep(obj, new WeakSet<object>(), walk);
+	const walk: FreezeWalk = {
+		cyclic: false,
+		sealed: [],
+		done: new Map(),
+		inProgress: new Set(),
+	};
+	freezeDeep(obj, walk);
 	if (!walk.cyclic) {
 		for (const object of walk.sealed) DEEP_FROZEN.add(object);
 	}
@@ -151,11 +160,7 @@ export function deepFreeze<T>(obj: T): Readonly<T> {
 }
 
 /** Freezes `obj` and its subtree; returns whether the subtree is sealed. */
-function freezeDeep(
-	obj: unknown,
-	visited: WeakSet<object>,
-	walk: FreezeWalk,
-): boolean {
+function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 	if (obj === null || typeof obj !== "object") {
 		return true;
 	}
@@ -169,11 +174,18 @@ function freezeDeep(
 	if (ArrayBuffer.isView(obj)) {
 		return true;
 	}
-	if (visited.has(obj)) {
+	// A shared reference (two edges to one object) is finished on the first
+	// visit and answers with its seal; only an object still in progress is
+	// a cycle.
+	const finished = walk.done.get(obj);
+	if (finished !== undefined) {
+		return finished;
+	}
+	if (walk.inProgress.has(obj)) {
 		walk.cyclic = true;
 		return true;
 	}
-	visited.add(obj);
+	walk.inProgress.add(obj);
 	let sealed = true;
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
@@ -188,14 +200,14 @@ function freezeDeep(
 			shadowed = shadowMutators(obj, "Date", DATE_MUTATORS) || shadowed;
 		} else if (mutableBuiltInTag === "[object Map]") {
 			for (const [key, value] of obj as Map<unknown, unknown>) {
-				if (!freezeDeep(key, visited, walk)) sealed = false;
-				if (!freezeDeep(value, visited, walk)) sealed = false;
+				if (!freezeDeep(key, walk)) sealed = false;
+				if (!freezeDeep(value, walk)) sealed = false;
 			}
 			shadowed =
 				shadowMutators(obj, "Map", ["set", "delete", "clear"]) || shadowed;
 		} else if (mutableBuiltInTag === "[object Set]") {
 			for (const member of obj as Set<unknown>) {
-				if (!freezeDeep(member, visited, walk)) sealed = false;
+				if (!freezeDeep(member, walk)) sealed = false;
 			}
 			shadowed =
 				shadowMutators(obj, "Set", ["add", "delete", "clear"]) || shadowed;
@@ -209,11 +221,13 @@ function freezeDeep(
 	for (const key of keys) {
 		const value = (obj as Record<string | symbol, unknown>)[key];
 		if (value !== null && typeof value === "object") {
-			if (!freezeDeep(value, visited, walk)) sealed = false;
+			if (!freezeDeep(value, walk)) sealed = false;
 		}
 	}
 
 	Object.freeze(obj);
+	walk.inProgress.delete(obj);
+	walk.done.set(obj, sealed);
 	if (sealed) walk.sealed.push(obj);
 	return sealed;
 }

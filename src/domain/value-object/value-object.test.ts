@@ -139,6 +139,27 @@ describe("deepFreeze", () => {
 		expect(Object.isFrozen(map.get("k"))).toBe(true);
 	});
 
+	it("memoizes a graph that references one object twice", () => {
+		let reads = 0;
+		const lines = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		const address = { city: "Berlin" };
+		// Two edges to one object are not a cycle; the memo must hold.
+		const state = { billing: address, shipping: address, lines };
+		deepFreeze(state);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...state });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(1);
+	});
+
 	it("still walks a subtree that another freeze left shallow", () => {
 		const grandchild = { value: 1 };
 		const child = Object.freeze({ grandchild });
