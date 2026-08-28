@@ -40,7 +40,8 @@ event with `deepFreezeState` walked the entire state. Measured with
 operations per second, level with the shallow mode; a deep-mode replay of
 2,000 events went from 16 to 990 replays per second. The shallow mode is
 unchanged. The replay guard reads the pending count without the frozen
-copy that the `pendingEvents` getter allocates.
+copy that the `pendingEvents` getter allocates. `deepFreeze` takes one
+argument now; the cycle tracking is internal.
 
 ### Changed (breaking): one lifecycle vocabulary
 
@@ -146,7 +147,7 @@ named in the `UnmanagedInstanceError` that a later lookup produces.
 
 ### Fixed: state-stored aggregates check the event address
 
-`StateStoredAggregate.commit` and `addDomainEvent` now apply the address discipline
+`StateStoredAggregate.setState` and `addDomainEvent` now apply the address discipline
 that `EventSourcedAggregate.apply` already had: a missing `aggregateId` or
 `aggregateType` is stamped from the aggregate, and an event addressed to
 another aggregate throws `MisaddressedEventError` before the state moves.
@@ -659,7 +660,7 @@ Migration for aggregate operations:
 ```ts
 // Before: recording data leaked into the domain signature
 confirm(facts: DomainEventFacts): void {
-  this.commit(
+  this.setState(
     nextState,
     this.recordEvent("OrderConfirmed", payload, facts),
   );
@@ -670,7 +671,7 @@ order.confirm(domainEvents.createFacts());
 
 // After: pure decision in the aggregate
 confirm(): void {
-  this.commit(
+  this.setState(
     nextState,
     this.createEvent("OrderConfirmed", payload),
   );
@@ -1687,7 +1688,7 @@ the predecessor in durable source state; `OutboxRecord` exposes the committed
 envelope with dispatch state; the in-process `EventBus` still receives the bare
 event. An already-persisted aggregate with pending events must also advance its
 version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
-events) with `commit({ ...this.state }, event)` so the envelope has a unique
+events) with `setState({ ...this.state }, event)` so the envelope has a unique
 cursor.
 
 `OutboxContractEnvironment.addCommitted` and `addRolledBack` now receive the

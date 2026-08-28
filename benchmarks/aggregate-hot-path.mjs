@@ -1,9 +1,9 @@
 import { performance } from "node:perf_hooks";
 import process from "node:process";
 import {
-	StateStoredAggregate,
 	createDomainEvent,
 	EventSourcedAggregate,
+	StateStoredAggregate,
 } from "../dist/index.js";
 
 if (typeof global.gc !== "function") {

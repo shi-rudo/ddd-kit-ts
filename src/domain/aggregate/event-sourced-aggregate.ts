@@ -22,6 +22,7 @@ import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
+import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
 // Re-export for backwards compatibility: `IEventSourcedAggregate` lives
 // in `aggregate.ts` (the type hub).
@@ -279,7 +280,13 @@ export abstract class EventSourcedAggregate<
 	public replayHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		assertReplayTargetHasNoPendingEvents(this.id, this.pendingEventCount);
+		assertReplayTargetHasNoPendingEvents(
+			this.id,
+			requirePendingEventLifecycleCapability(
+				this,
+				"replayHistory",
+			).pendingEventCount(),
+		);
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 

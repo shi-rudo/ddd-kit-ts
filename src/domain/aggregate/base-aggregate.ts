@@ -225,14 +225,6 @@ export abstract class BaseAggregate<
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
-	/**
-	 * The number of pending events, without the frozen copy that
-	 * {@link pendingEvents} allocates per read.
-	 */
-	protected get pendingEventCount(): number {
-		return this._pendingEvents.length;
-	}
-
 	/** Sets the current version; rejects anything but a safe integer of at least zero. */
 	protected setVersion(version: Version): void {
 		this._version = toVersion(version);
