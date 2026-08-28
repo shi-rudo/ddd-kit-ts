@@ -279,7 +279,7 @@ export abstract class EventSourcedAggregate<
 	public replayHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		assertReplayTargetHasNoPendingEvents(this);
+		assertReplayTargetHasNoPendingEvents(this.id, this.pendingEventCount);
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 

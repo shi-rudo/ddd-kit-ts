@@ -96,9 +96,10 @@ export interface EntityConfig<TState = unknown> {
 	 * retained by constructor callers and against accidental in-place
 	 * writes inside the entity; live state itself is never public.
 	 *
-	 * Defaults to `false` (the documented shallow contract): deep freezing
-	 * costs a full state-graph walk on every state write, which is why it
-	 * is not the default on hot paths.
+	 * Defaults to `false` (the documented shallow contract). A deep freeze
+	 * walks the part of the graph the write changed: subtrees the kit
+	 * already deep-froze are skipped, so `{ ...state, status }` costs the
+	 * root object. A write that replaces a large subtree walks that subtree.
 	 *
 	 * **Only for plain-data states.** The deep freeze walks the entire
 	 * graph: a class-based child entity inside the state would be frozen

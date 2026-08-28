@@ -362,7 +362,7 @@ class DeepBox extends Entity<BoxState, ItemId> {
 }
 ```
 
-Use `deepFreezeState` only for plain data. It walks the whole graph. If your
+Use `deepFreezeState` only for plain data. It walks the part of the graph a write changes. If your
 state contains class-based child entities, those child instances are frozen too
 and their mutation methods can start throwing.
 
