@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
-import { CapabilityRegistryConflictError } from "../../../errors/kit-errors";
+import {
+	CapabilityRegistryConflictError,
+	UnmanagedInstanceError,
+} from "../../../errors/kit-errors";
 import { createGlobalCapabilityRegistry } from "./global-capability-registry";
 
 type Capability = { readonly name: string };
@@ -20,6 +23,46 @@ describe("createGlobalCapabilityRegistry", () => {
 			writable: false,
 			configurable: false,
 		});
+	});
+
+	it("resolves a registered capability and rejects an unknown or nullish instance with one coded error", () => {
+		const host = {};
+		const key = Symbol.for("@shirudo/ddd-kit/test-registry/require");
+		const { registry, require } = createGlobalCapabilityRegistry<Capability>(
+			key,
+			host,
+		);
+		const known = { id: "known-1" };
+		registry.set(known, { name: "known" });
+
+		expect(require(known, "operate", "aggregate").name).toBe("known");
+		for (const instance of [{ id: "unknown-1" }, null, undefined]) {
+			let caught: unknown;
+			try {
+				require(instance as unknown as object, "operate", "aggregate");
+			} catch (error) {
+				caught = error;
+			}
+			expect(caught).toBeInstanceOf(UnmanagedInstanceError);
+			expect((caught as UnmanagedInstanceError).code).toBe(
+				"UNMANAGED_INSTANCE",
+			);
+		}
+	});
+
+	it("names the private registry in the rejection when the host refused the registration", () => {
+		const host = Object.preventExtensions({});
+		const key = Symbol.for("@shirudo/ddd-kit/test-registry/require-private");
+		const { require } = createGlobalCapabilityRegistry<Capability>(key, host);
+
+		let caught: unknown;
+		try {
+			require({ id: "x" }, "operate", "aggregate");
+		} catch (error) {
+			caught = error;
+		}
+
+		expect((caught as UnmanagedInstanceError).message).toContain("private");
 	});
 
 	it("refuses a key that an accessor holds, even one that yields a WeakMap", () => {

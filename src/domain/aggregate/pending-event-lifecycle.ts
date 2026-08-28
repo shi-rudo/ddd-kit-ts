@@ -1,10 +1,6 @@
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Version } from "./aggregate";
-import {
-	createGlobalCapabilityRegistry,
-	LOCAL_REGISTRY_DETAIL,
-} from "./internal/global-capability-registry";
+import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 /**
  * Kit-internal authority for acknowledging one exact pending-event batch.
@@ -56,30 +52,17 @@ const persistenceCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v6",
 );
 
-const { registry: capabilities, shared } =
+const { registry: capabilities, require } =
 	createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
 		persistenceCapabilityRegistryKey,
 	);
 
-/**
- * Resolves the lifecycle capability or throws {@link UnmanagedInstanceError}
- * naming the operation and the instance. When the registry is private to
- * this package copy (a host that rejected the global registration), the
- * error says so, because that is the one reason an instance from another
- * copy cannot be recognized.
- */
+/** Resolves the lifecycle capability or throws `UnmanagedInstanceError`. */
 export function requirePendingEventLifecycleCapability(
 	aggregate: object,
 	operation: string,
 ): PendingEventLifecycleCapability {
-	const capability = capabilities.get(aggregate);
-	if (capability !== undefined) return capability;
-	throw new UnmanagedInstanceError(
-		operation,
-		"aggregate",
-		(aggregate as { id?: unknown }).id,
-		shared ? undefined : LOCAL_REGISTRY_DETAIL,
-	);
+	return require(aggregate, operation, "aggregate");
 }
 
 export function registerPendingEventLifecycleCapability(
