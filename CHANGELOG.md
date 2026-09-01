@@ -986,6 +986,17 @@ after the shell timeout.
 - CI now builds the docs on every push and pull request. Building is not
   publishing: the site stays offline, and `docs.yml` is unchanged.
 
+### Fixed: the API output no longer duplicates the Repository guide
+
+- A JSDoc comment in `identity-map.ts` pointed at `docs/guide/repository.md`
+  with a markdown link. Typedoc resolves such a link to the local file and
+  copies the whole file into `docs/api/_media/`. The built site carried the
+  Repository guide twice, and the copy kept the relative links of the
+  original. `./event-sourcing.md` has no sibling in `_media`, so the
+  documentation build failed with two dead links.
+- The comment now names the guide as text with its path. Typedoc copies
+  nothing, and the guide exists once.
+
 ### Added: automated edge-runtime compatibility smokes
 
 - Bundle the built package and execute its main and `money` entry points in
