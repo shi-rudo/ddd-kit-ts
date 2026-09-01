@@ -187,12 +187,6 @@ to `captureAggregateSnapshot(snapshotModel, aggregate, snapshotAt)`, while the
 adapter-owned model projects a plain persistence DTO. The aggregate neither
 reads a clock nor knows the stored snapshot schema.
 
-`AggregateConfig.domainEventFactory` remains available through the narrow
-`AggregateEventConvenienceFactory` role for the clearly named
-`recordEventFromFactory(...)` convenience method. It is useful in small
-applications, but deliberately retains an implicit dependency read. When no
-factory is injected, it uses the platform clock and Web Crypto defaults.
-
 `occurredAt` is recording information, not a universal business clock. If a
 time changes a business decision, pass it as a domain input. Put this time in
 the payload. The application can use the same instant for both roles. It then

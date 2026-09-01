@@ -174,8 +174,8 @@ definition in a small factory as shown above.
 
 Inputs are not automatically domain events. A machine input may be a command
 (`Cancel`), an observed fact (`PaymentReceived`), or an internal trigger. Domain
-events are still immutable facts recorded by aggregates with `recordEvent` and
-committed through the aggregate/outbox path.
+events are still immutable facts that aggregates record through `setState`
+or `apply` and that `withCommit` publishes through the outbox.
 
 Outputs are not domain events either. They are plain requested-work values: send
 a command, call an adapter, enqueue an outbox message, or notify another
