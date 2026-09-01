@@ -606,7 +606,7 @@ function makeContext<TRepos, Evt extends AnyDomainEvent>(
  * returns the error to throw rather than throwing itself, so `run()` reads
  * as orchestration and this decision is unit-testable in isolation.
  *
- * - `workThrew`: the work callback (or `assertAllChangesEnrolled`) threw.
+ * - `workThrew`: the work callback (or `assertReadyToCommit`) threw.
  *   The scope normally rethrows that error unchanged (rolled back, pass
  *   through so a `ConcurrencyConflictError` & co. stay catchable as-is); a
  *   scope that WRAPS the original is detected via the cause chain and also
