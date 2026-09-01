@@ -50,8 +50,8 @@ export interface AggregateSnapshot<TState> {
 	readonly snapshotAt: Date;
 
 	/**
-	 * Schema version of the stored `state` shape, declared by its adapter-owned
-	 * `SnapshotModel` and stamped by `captureAggregateSnapshot`. Distinct from
+	 * Schema version of the stored `state` shape, declared and stamped by
+	 * the persistence adapter that captures the snapshot. Distinct from
 	 * {@link version}, which counts mutations: this field says "which
 	 * shape does the stored state have", so a restore can detect a
 	 * snapshot written against an older DTO shape and migrate or
@@ -72,7 +72,7 @@ export interface AggregateSnapshot<TState> {
  * Full per-member documentation lives on the concrete `BaseAggregate`
  * class; the interface is intentionally terse to avoid drift. Persistence
  * facts are readable, but acknowledgement and pending-event disposal are not
- * part of this surface. `withCommit` and `UnitOfWork` hold that authority.
+ * part of this surface. The application shell holds that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
