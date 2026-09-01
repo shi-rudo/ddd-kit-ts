@@ -147,7 +147,10 @@ class Order extends EventSourcedAggregate<
 ```
 
 A domain method records a fact by creating an event and applying it. The fold
-is the only code that changes state for that fact.
+is the only code that changes state for that fact. A fold is a pure function
+from the current state and one event to the next state. The Decider pattern
+calls the same function `evolve`; the kit names it after the left fold that
+replay performs over the stream.
 
 `apply(event)` runs in this order:
 
