@@ -12,6 +12,7 @@ import {
 	DuplicateAggregateError,
 	EventHarvestError,
 	InfrastructureError,
+	MissingFoldError,
 	MissingHandlerError,
 	NonProgressingEventStreamPageError,
 	UnenrolledChangesError,
@@ -115,7 +116,7 @@ describe("InfrastructureError", () => {
 describe("MissingHandlerError", () => {
 	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
 		// `catch (e instanceof DomainError)` at the App layer must NOT
-		// swallow a forgotten event handler: that's a programming bug
+		// swallow a forgotten projection handler: that's a programming bug
 		// that should crash loud during development.
 		const e = new MissingHandlerError("OrderShipped");
 		expect(e).not.toBeInstanceOf(DomainError);
@@ -129,6 +130,27 @@ describe("MissingHandlerError", () => {
 	it("accepts a cause and preserves it in the chain", () => {
 		const root = new Error("registry lookup failed");
 		const e = new MissingHandlerError("OrderShipped", root);
+		expect(getRootCause(e)).toBe(root);
+	});
+});
+
+describe("MissingFoldError", () => {
+	it("is intentionally neither a DomainError nor an InfrastructureError", () => {
+		// `catch (e instanceof DomainError)` at the App layer must NOT
+		// swallow a forgotten fold: that's a programming bug that should
+		// crash loud during development.
+		const e = new MissingFoldError("OrderShipped");
+		expect(e).not.toBeInstanceOf(DomainError);
+		expect(e).not.toBeInstanceOf(InfrastructureError);
+		expect(isBaseError(e)).toBe(true);
+		expect(e.name).toBe("MISSING_FOLD");
+		expect(e.eventType).toBe("OrderShipped");
+		expect(e.message).toContain("OrderShipped");
+	});
+
+	it("accepts a cause and preserves it in the chain", () => {
+		const root = new Error("registry lookup failed");
+		const e = new MissingFoldError("OrderShipped", root);
 		expect(getRootCause(e)).toBe(root);
 	});
 });

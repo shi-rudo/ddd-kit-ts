@@ -467,7 +467,7 @@ describe("adapter-owned snapshot models", () => {
 				return this.state.value;
 			}
 
-			protected readonly handlers = {
+			protected readonly folds = {
 				Incremented: (
 					state: { readonly value: number },
 					event: UncommittedDomainEventOf<Incremented>,

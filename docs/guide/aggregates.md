@@ -243,7 +243,7 @@ async findById(id: OrderId): Promise<Order | null> {
 
 `reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `replayHistory(events)` on the instance.
 
-The initial state should be inert: enough structure for your handlers to fold events into, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
+The initial state should be inert: enough structure for your folds to build on, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
 
 For longer streams, see [Snapshots](./event-sourcing.md#snapshots).
 
@@ -325,7 +325,7 @@ new event-sourced fact. On a state-stored aggregate it catches both bad domain
 transitions and corrupt state loaded from persistence.
 
 On an event-sourced aggregate the validator has one more consequence. Replay
-does not run it; replay uses historical facts and pure event handlers rather
+does not run it; replay uses historical facts and pure folds rather
 than today's decision rules. A snapshot restore runs it by default, because
 the `reconstitute` factory passes the stored state to the constructor. If a
 rule in `validateState` later tightens, old streams still load from zero, but
@@ -390,7 +390,7 @@ class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`validateEvent` runs before the event handler calculates the next state. If it throws, state is unchanged and the event is not added to `pendingEvents`.
+`validateEvent` runs before the fold calculates the next state. If it throws, state is unchanged and the event is not added to `pendingEvents`.
 
 State-stored aggregates do not have `validateEvent`, because they do not apply events as the source of truth. Put the same kind of guard in the domain method instead.
 

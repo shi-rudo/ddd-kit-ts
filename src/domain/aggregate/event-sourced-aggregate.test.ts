@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	DirectStateMutationError,
 	DomainError,
+	FoldReturnedNoStateError,
 	ForeignEventError,
-	HandlerReturnedNoStateError,
 	HostileStateKeyError,
 	MisaddressedEventError,
-	MissingHandlerError,
+	MissingFoldError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -107,7 +107,7 @@ class NegativeValueError extends DomainError<"NEGATIVE_VALUE"> {
 	}
 }
 
-const testHandlers = {
+const testFolds = {
 	TestEventCreated: (
 		state: TestState,
 		event: TestEventCreatedDecision,
@@ -178,7 +178,7 @@ class TestEventSourcedAggregate extends EventSourcedAggregate<
 		);
 	}
 
-	protected readonly handlers = testHandlers;
+	protected readonly folds = testFolds;
 }
 
 class ValidatingAggregate extends EventSourcedAggregate<
@@ -198,12 +198,12 @@ class ValidatingAggregate extends EventSourcedAggregate<
 		}
 	}
 
-	// The handler throws too: replay does not run validateEvent, so the
+	// The fold throws too: replay does not run validateEvent, so the
 	// replay-corruption tests get their mid-stream DomainError from the
-	// handler (a corrupt row a handler can name), while the apply-path
+	// fold (a corrupt row a fold can name), while the apply-path
 	// tests still exercise validateEvent above.
-	protected readonly handlers = {
-		...testHandlers,
+	protected readonly folds = {
+		...testFolds,
 		TestEventInvalid: (): TestState => {
 			throw new InvalidTestEventError("forbidden event type");
 		},
@@ -308,7 +308,7 @@ describe("EventSourcedAggregate", () => {
 					this.apply(event);
 				}
 
-				protected readonly handlers = testHandlers;
+				protected readonly folds = testFolds;
 			}
 
 			const initialState: TestState = { value: 10, status: "active" };
@@ -324,13 +324,13 @@ describe("EventSourcedAggregate", () => {
 			}).toThrow(AlreadyActiveError);
 		});
 
-		it("should throw MissingHandlerError when no handler is registered", () => {
-			class HandlerlessAggregate extends EventSourcedAggregate<
+		it("should throw MissingFoldError when no fold is declared", () => {
+			class FoldlessAggregate extends EventSourcedAggregate<
 				TestState,
 				TestId,
 				TestEvent
 			> {
-				protected readonly aggregateType = "HandlerlessAggregate";
+				protected readonly aggregateType = "FoldlessAggregate";
 
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -340,8 +340,8 @@ describe("EventSourcedAggregate", () => {
 					this.apply(event);
 				}
 
-				// Intentionally missing handler for TestEventUpdated
-				protected readonly handlers = {
+				// Intentionally missing fold for TestEventUpdated
+				protected readonly folds = {
 					TestEventCreated: (s: TestState): TestState => s,
 				} as unknown as Record<
 					TestEvent["type"],
@@ -349,7 +349,7 @@ describe("EventSourcedAggregate", () => {
 				>;
 			}
 
-			const aggregate = new HandlerlessAggregate("test-1" as TestId, {
+			const aggregate = new FoldlessAggregate("test-1" as TestId, {
 				value: 0,
 				status: "inactive",
 			});
@@ -360,43 +360,43 @@ describe("EventSourcedAggregate", () => {
 						newValue: 1,
 					}) as TestEventUpdated,
 				);
-			}).toThrow(MissingHandlerError);
+			}).toThrow(MissingFoldError);
 		});
 
-		it("MissingHandlerError is a BaseError but NOT a DomainError (programming bug)", () => {
-			// MissingHandlerError signals a subclass forgot to register a
-			// handler: that's a configuration / programming error, not a
+		it("MissingFoldError is a BaseError but NOT a DomainError (programming bug)", () => {
+			// MissingFoldError signals a subclass forgot to declare a
+			// fold: that's a configuration / programming error, not a
 			// domain-invariant violation. It must not be catchable via
 			// `instanceof DomainError` at the App-Service boundary, so a
 			// 'catch domain errors → HTTP 400' handler can't mask the bug.
-			const error = new MissingHandlerError("Foo");
+			const error = new MissingFoldError("Foo");
 			expect(isBaseError(error)).toBe(true);
 			expect(error).not.toBeInstanceOf(DomainError);
 		});
 
-		it("MissingHandlerError thrown during replayHistory propagates (not caught as DomainError)", () => {
-			class HandlerlessReplay extends EventSourcedAggregate<
+		it("MissingFoldError thrown during replayHistory propagates (not caught as DomainError)", () => {
+			class FoldlessReplay extends EventSourcedAggregate<
 				TestState,
 				TestId,
 				TestEvent
 			> {
-				protected readonly aggregateType = "HandlerlessReplay";
+				protected readonly aggregateType = "FoldlessReplay";
 
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
-				protected readonly handlers = {} as unknown as Record<
+				protected readonly folds = {} as unknown as Record<
 					TestEvent["type"],
 					(s: TestState, e: TestEventDecision) => TestState
 				>;
 			}
 
-			const aggregate = new HandlerlessReplay("test-1" as TestId, {
+			const aggregate = new FoldlessReplay("test-1" as TestId, {
 				value: 0,
 				status: "inactive",
 			});
 
-			// replayHistory only catches DomainError; a MissingHandlerError
+			// replayHistory only catches DomainError; a MissingFoldError
 			// (programming bug) should propagate up unwrapped, not get
 			// silently wrapped into Result.Err.
 			expect(() => {
@@ -405,16 +405,16 @@ describe("EventSourcedAggregate", () => {
 						value: 1,
 					}) as TestEventCreated,
 				]);
-			}).toThrow(MissingHandlerError);
+			}).toThrow(MissingFoldError);
 		});
 
-		it("should not mutate state if handler throws", () => {
-			class ThrowingHandlerAggregate extends EventSourcedAggregate<
+		it("should not mutate state if the fold throws", () => {
+			class ThrowingFoldAggregate extends EventSourcedAggregate<
 				TestState,
 				TestId,
 				TestEvent
 			> {
-				protected readonly aggregateType = "ThrowingHandlerAggregate";
+				protected readonly aggregateType = "ThrowingFoldAggregate";
 
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -432,10 +432,10 @@ describe("EventSourcedAggregate", () => {
 					return this.version;
 				}
 
-				protected readonly handlers = {
+				protected readonly folds = {
 					TestEventCreated: (state: TestState): TestState => state,
 					TestEventUpdated: (): TestState => {
-						throw new Error("handler boom");
+						throw new Error("fold boom");
 					},
 					TestEventActivated: (state: TestState): TestState => state,
 					TestEventDeactivated: (state: TestState): TestState => state,
@@ -443,7 +443,7 @@ describe("EventSourcedAggregate", () => {
 				};
 			}
 
-			const aggregate = new ThrowingHandlerAggregate("test-1" as TestId, {
+			const aggregate = new ThrowingFoldAggregate("test-1" as TestId, {
 				value: 10,
 				status: "inactive",
 			});
@@ -456,7 +456,7 @@ describe("EventSourcedAggregate", () => {
 						newValue: 99,
 					}) as TestEventUpdated,
 				),
-			).toThrow("handler boom");
+			).toThrow("fold boom");
 
 			// State and version unchanged, no pending event added
 			expect(aggregate.stateSnapshot()).toEqual(before);
@@ -466,10 +466,10 @@ describe("EventSourcedAggregate", () => {
 	});
 
 	describe("corrupt event types colliding with Object.prototype members", () => {
-		// The handlers map is an object literal, so a naive property get for
+		// The folds map is an object literal, so a naive property get for
 		// event.type === "toString" returns Object.prototype.toString, which
-		// passes a truthiness check and gets invoked as a handler, silently
-		// corrupting state. All such types must yield MissingHandlerError.
+		// passes a truthiness check and gets invoked as a fold, silently
+		// corrupting state. All such types must yield MissingFoldError.
 		class TrapAggregate extends EventSourcedAggregate<
 			TestState,
 			TestId,
@@ -485,7 +485,7 @@ describe("EventSourcedAggregate", () => {
 				this.apply(event);
 			}
 
-			protected readonly handlers = {
+			protected readonly folds = {
 				TestEventCreated: (s: TestState): TestState => s,
 			} as unknown as Record<
 				TestEvent["type"],
@@ -502,7 +502,7 @@ describe("EventSourcedAggregate", () => {
 		] as const;
 
 		for (const corruptType of corruptTypes) {
-			it(`throws MissingHandlerError for event.type "${corruptType}" and leaves state intact`, () => {
+			it(`throws MissingFoldError for event.type "${corruptType}" and leaves state intact`, () => {
 				const aggregate = new TrapAggregate("test-1" as TestId, {
 					value: 7,
 					status: "inactive",
@@ -512,13 +512,13 @@ describe("EventSourcedAggregate", () => {
 					evil: true,
 				}) as unknown as TestEvent;
 
-				expect(() => aggregate.testApply(corrupt)).toThrow(MissingHandlerError);
+				expect(() => aggregate.testApply(corrupt)).toThrow(MissingFoldError);
 				expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
 				expect(aggregate.version).toBe(0);
 			});
 		}
 
-		it("propagates MissingHandlerError from replayHistory for a corrupt stream row", () => {
+		it("propagates MissingFoldError from replayHistory for a corrupt stream row", () => {
 			const aggregate = new TrapAggregate("test-1" as TestId, {
 				value: 7,
 				status: "inactive",
@@ -529,7 +529,7 @@ describe("EventSourcedAggregate", () => {
 			}) as unknown as TestEvent;
 
 			expect(() => aggregate.replayHistory([corrupt])).toThrow(
-				MissingHandlerError,
+				MissingFoldError,
 			);
 			expect(aggregate.state).toEqual({ value: 7, status: "inactive" });
 		});
@@ -566,10 +566,10 @@ describe("EventSourcedAggregate", () => {
 					createDomainEvent("TestEventUpdated", {
 						newValue: 99,
 					}) as TestEventUpdated,
-					// Unregistered type → MissingHandlerError (propagates, not err)
+					// Unregistered type → MissingFoldError (propagates, not err)
 					createDomainEvent("Bogus", {}) as unknown as TestEvent,
 				]),
-			).toThrow(MissingHandlerError);
+			).toThrow(MissingFoldError);
 
 			expect(aggregate.state).toEqual({ value: 10, status: "inactive" });
 		});
@@ -772,7 +772,7 @@ describe("EventSourcedAggregate", () => {
 				this.apply(createDomainEvent("ItemAdded", { item }) as ItemAdded);
 			}
 
-			protected readonly handlers = {
+			protected readonly folds = {
 				ItemAdded: (
 					state: NestedEsState,
 					event: UncommittedDomainEventOf<ItemAdded>,
@@ -783,7 +783,7 @@ describe("EventSourcedAggregate", () => {
 			};
 		}
 
-		it("deep-freezes handler-produced state so nested outside writes throw", () => {
+		it("deep-freezes fold-produced state so nested outside writes throw", () => {
 			const aggregate = new DeepFrozenEsAggregate("test-1" as TestId, {
 				items: [],
 				meta: { note: "n" },
@@ -862,7 +862,7 @@ describe("replay trusts history", () => {
 			this.apply(event);
 		}
 
-		protected readonly handlers = testHandlers;
+		protected readonly folds = testFolds;
 	}
 
 	it("replays history that today's decision rules would reject", () => {
@@ -1250,7 +1250,7 @@ describe("validateState on the apply path", () => {
 	});
 });
 
-describe("a handler that returns no state", () => {
+describe("a fold that returns no state", () => {
 	class ForgetfulAggregate extends EventSourcedAggregate<
 		TestState,
 		TestId,
@@ -1268,20 +1268,20 @@ describe("a handler that returns no state", () => {
 			);
 		}
 
-		protected readonly handlers = {
-			...testHandlers,
+		protected readonly folds = {
+			...testFolds,
 			// A fold without a return statement: the classic missing-return bug.
 			TestEventUpdated: (): TestState => undefined as unknown as TestState,
 		};
 	}
 
-	it("throws HandlerReturnedNoStateError from apply() and leaves the aggregate untouched", () => {
+	it("throws FoldReturnedNoStateError from apply() and leaves the aggregate untouched", () => {
 		const agg = new ForgetfulAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",
 		});
 
-		expect(() => agg.updateValue(2)).toThrow(HandlerReturnedNoStateError);
+		expect(() => agg.updateValue(2)).toThrow(FoldReturnedNoStateError);
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1301,18 +1301,18 @@ describe("a handler that returns no state", () => {
 			caught = error;
 		}
 
-		expect(caught).toBeInstanceOf(HandlerReturnedNoStateError);
+		expect(caught).toBeInstanceOf(FoldReturnedNoStateError);
 		expect(isBaseError(caught)).toBe(true);
 		expect(caught).not.toBeInstanceOf(DomainError);
-		expect((caught as HandlerReturnedNoStateError).code).toBe(
-			"HANDLER_RETURNED_NO_STATE",
+		expect((caught as FoldReturnedNoStateError).code).toBe(
+			"FOLD_RETURNED_NO_STATE",
 		);
-		expect((caught as HandlerReturnedNoStateError).eventType).toBe(
+		expect((caught as FoldReturnedNoStateError).eventType).toBe(
 			"TestEventUpdated",
 		);
 	});
 
-	it("propagates HandlerReturnedNoStateError from replayHistory after rolling back", () => {
+	it("propagates FoldReturnedNoStateError from replayHistory after rolling back", () => {
 		const agg = new ForgetfulAggregate("test-1" as TestId, {
 			value: 1,
 			status: "inactive",
@@ -1325,7 +1325,7 @@ describe("a handler that returns no state", () => {
 					newValue: 2,
 				}) as TestEventUpdated,
 			]),
-		).toThrow(HandlerReturnedNoStateError);
+		).toThrow(FoldReturnedNoStateError);
 
 		expect(agg.state).toEqual({ value: 1, status: "inactive" });
 		expect(agg.version).toBe(0);
@@ -1334,15 +1334,15 @@ describe("a handler that returns no state", () => {
 
 describe("hostile own keys on the fold result", () => {
 	// JSON.parse creates an own "__proto__" DATA key, the shape of a hostile
-	// stream row or request body that a handler folds into state.
+	// stream row or request body that a fold turns into state.
 	const hostileState = (): TestState =>
 		JSON.parse(
 			'{"value":1,"status":"inactive","__proto__":{"isAdmin":true}}',
 		) as TestState;
 
 	class HostileFoldAggregate extends TestEventSourcedAggregate {
-		protected override readonly handlers = {
-			...testHandlers,
+		protected override readonly folds = {
+			...testFolds,
 			TestEventUpdated: (): TestState => hostileState(),
 		};
 	}
@@ -1382,8 +1382,8 @@ describe("hostile own keys on the fold result", () => {
 
 	it("checks the root level only: a nested own __proto__ key passes", () => {
 		class NestedAggregate extends TestEventSourcedAggregate {
-			protected override readonly handlers = {
-				...testHandlers,
+			protected override readonly folds = {
+				...testFolds,
 				TestEventUpdated: (): TestState =>
 					({
 						value: 1,
@@ -1408,8 +1408,8 @@ describe("hostile own keys on the fold result", () => {
 			status: "active" | "inactive" = "inactive";
 		}
 		class InstanceAggregate extends TestEventSourcedAggregate {
-			protected override readonly handlers = {
-				...testHandlers,
+			protected override readonly folds = {
+				...testFolds,
 				TestEventUpdated: (): TestState => {
 					const state = new InstanceState();
 					Object.defineProperty(state, "__proto__", {
@@ -1451,10 +1451,10 @@ describe("markReconstituted on an event-sourced aggregate", () => {
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
-	it("rolls back state and version when a handler records a decision during replay", () => {
+	it("rolls back state and version when a fold records a decision during replay", () => {
 		class ReentrantAggregate extends TestEventSourcedAggregate {
-			protected override readonly handlers = {
-				...testHandlers,
+			protected override readonly folds = {
+				...testFolds,
 				TestEventActivated: (state: TestState): TestState => {
 					this.apply(
 						createDomainEvent("TestEventUpdated", {
@@ -1667,7 +1667,7 @@ describe("apply and replay bookkeeping", () => {
 			constructor(id: TestId) {
 				super(id, { items: [] }, { deepFreezeState: true });
 			}
-			protected readonly handlers = {
+			protected readonly folds = {
 				ItemAdded: (
 					state: Shelf,
 					event: UncommittedDomainEventOf<ItemAdded>,
@@ -1695,8 +1695,8 @@ describe("replay routes a foreign-copy domain rejection into the Result", () => 
 	}
 
 	class ForeignCopyAggregate extends TestEventSourcedAggregate {
-		protected override readonly handlers = {
-			...testHandlers,
+		protected override readonly folds = {
+			...testFolds,
 			TestEventInvalid: (): TestState => {
 				throw new ForeignCopyDomainError("rejected by another copy");
 			},

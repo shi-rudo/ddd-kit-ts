@@ -196,18 +196,15 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
 }
 
 /**
- * Thrown when event dispatch reaches a type with no own handler registration.
- * This covers `EventSourcedAggregate.apply()` and the exhaustive
- * `projectionFromHandlers` helper: the declared event union and its handler map
- * disagree at runtime, which is a programming / configuration bug rather than
- * a domain or infrastructure failure.
+ * Thrown when a projection built with `projectionFromHandlers` receives an
+ * event type with no own handler entry: the declared event union and the
+ * handler map disagree at runtime, which is a programming / configuration
+ * bug rather than a domain or infrastructure failure.
  *
  * Deliberately **not** on `DomainError` or `InfrastructureError`:
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
- * fail the calling Use Case so the bug surfaces in development. The
- * replay through `replayHistory` also lets it propagate uncaught instead
- * of wrapping it in `Result.Err`.
+ * fail the calling Use Case so the bug surfaces in development.
  *
  * Use `isBaseError(e)` from `@shirudo/base-error` to detect
  * "any structured error from the kit or any other BaseError-using
@@ -227,20 +224,37 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
 }
 
 /**
- * Thrown by an event-sourced aggregate when a handler returns `undefined`
+ * Thrown by an event-sourced aggregate when `apply()` or replay reaches an
+ * event type with no own entry in the `folds` map: the declared event union
+ * and the map disagree at runtime. Same posture as
+ * {@link MissingHandlerError}: a deterministic bug, never a domain
+ * rejection, so it propagates through `replayHistory` instead of riding its
+ * `Result`.
+ */
+export class MissingFoldError extends KitWiringError<"MISSING_FOLD"> {
+	constructor(
+		public readonly eventType: string,
+		cause?: unknown,
+	) {
+		super("MISSING_FOLD", `Missing fold for event type: ${eventType}`, cause);
+	}
+}
+
+/**
+ * Thrown by an event-sourced aggregate when a fold returns `undefined`
  * for an event, which is almost always a fold without a `return` statement.
  * Storing that result would set the aggregate state to `undefined`, record
  * the fact anyway on the apply path, and leave every later fold working on
- * nothing. Same posture as {@link MissingHandlerError}: a deterministic bug
- * in the handler map, never a domain rejection, so it propagates through
+ * nothing. Same posture as {@link MissingFoldError}: a deterministic bug
+ * in the folds map, never a domain rejection, so it propagates through
  * `replayHistory` instead of riding its `Result`.
  */
-export class HandlerReturnedNoStateError extends KitWiringError<"HANDLER_RETURNED_NO_STATE"> {
+export class FoldReturnedNoStateError extends KitWiringError<"FOLD_RETURNED_NO_STATE"> {
 	constructor(public readonly eventType: string) {
 		super(
-			"HANDLER_RETURNED_NO_STATE",
-			`The handler for event type "${eventType}" returned no state. ` +
-				"A handler must return the next state; check for a missing " +
+			"FOLD_RETURNED_NO_STATE",
+			`The fold for event type "${eventType}" returned no state. ` +
+				"A fold must return the next state; check for a missing " +
 				"return statement.",
 		);
 	}
@@ -1414,8 +1428,8 @@ export type KitErrorCode =
 	| "EVENT_OCCURRED_AT_REQUIRED"
 	| "EVENT_SCHEMA_VERSION_INVALID"
 	| "EVENT_TYPE_INVALID"
+	| "FOLD_RETURNED_NO_STATE"
 	| "FOREIGN_EVENT"
-	| "HANDLER_RETURNED_NO_STATE"
 	| "HOSTILE_STATE_KEY"
 	| "IDEMPOTENCY_CLAIM_LOST"
 	| "IDEMPOTENCY_COMPLETED_WITHOUT_CLAIM"
@@ -1438,6 +1452,7 @@ export type KitErrorCode =
 	| "INVALID_VERSION"
 	| "MISADDRESSED_EVENT"
 	| "MISSING_ENTITY_ID"
+	| "MISSING_FOLD"
 	| "MISSING_HANDLER"
 	| "MONEY_CURRENCY_MISMATCH"
 	| "MONEY_PRECISION_LOSS"

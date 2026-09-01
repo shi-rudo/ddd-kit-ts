@@ -115,7 +115,7 @@ export class RugbyMatch extends EventSourcedAggregate<
 		this.apply(this.createEvent<MatchFinished>("MatchFinished", {}));
 	}
 
-	protected readonly handlers = {
+	protected readonly folds = {
 		MatchScheduled: (
 			state: MatchState,
 			event: UncommittedDomainEventOf<MatchScheduled>,

@@ -130,7 +130,7 @@ class Order extends EventSourcedAggregate<
     }
   }
 
-  protected readonly handlers = {
+  protected readonly folds = {
     OrderCreated: (
       _state: OrderState,
       event: UncommittedDomainEventOf<OrderCreated>,
@@ -146,7 +146,7 @@ class Order extends EventSourcedAggregate<
 }
 ```
 
-A domain method records a fact by creating an event and applying it. The handler
+A domain method records a fact by creating an event and applying it. The fold
 is the only code that changes state for that fact.
 
 `apply(event)` runs in this order:
@@ -156,29 +156,30 @@ is the only code that changes state for that fact.
    recording. `ForeignEventError` is the replay error for persisted rows.
 2. `validateEvent(event)` decides whether this event is allowed in the current
    state.
-3. The handler for `event.type` is found.
-4. The handler computes the next state. A handler that returns `undefined`
-   throws `HandlerReturnedNoStateError`.
+3. The fold for `event.type` is found. A missing fold throws
+   `MissingFoldError`.
+4. The fold computes the next state. A fold that returns `undefined`
+   throws `FoldReturnedNoStateError`.
 5. The `validateState` function from the constructor config checks the next
    state. This is the same check that `setState` runs on a state-stored
    aggregate.
 6. The aggregate stores the new state, records the event in `pendingEvents`, and
    bumps the version.
 
-If validation, handler lookup, state computation, or the state check throws,
+If validation, fold lookup, state computation, or the state check throws,
 the aggregate does not record the event. This behavior is the event-sourcing safety rule. The
 aggregate must not publish a fact that did not change state.
 
 There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
-Handlers must fold state from `type` and `payload` only. A live `apply(...)`
+A fold must derive state from `type` and `payload` only. A live `apply(...)`
 folds the event before the shell records it, so `eventId` and
 `occurredAt` do not exist yet. Replay folds recorded events through the
-same handlers, so those fields are present there at runtime. The handler
+same map, so those fields are present there at runtime. The fold
 parameter type declares the uncommitted shape to keep them out of reach, but
-TypeScript cannot protect an `as any` cast or plain JavaScript. A handler
-that reads a stamp field folds `undefined` into live state and a value into
+TypeScript cannot protect an `as any` cast or plain JavaScript. A fold
+that reads a stamp field puts `undefined` into live state and a value into
 every replayed instance, and the two silently diverge. When a time changes a
 business decision, pass it in the payload as a domain input.
 
@@ -438,9 +439,9 @@ partially loaded instance escapes the repository.
 `reconstituteAggregateFromHistory(create, history)` returns
 `Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
 `replayHistory(...)` returns `Result<void, DomainError>` because a persisted
-stream can be corrupt in ways the domain can name (a handler that rejects a
+stream can be corrupt in ways the domain can name (a fold that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
-`Result`. The wiring errors `MissingHandlerError`, `HandlerReturnedNoStateError`,
+`Result`. The wiring errors `MissingFoldError`, `FoldReturnedNoStateError`,
 `HostileStateKeyError`, and `UnreplayableAggregateError` throw, after the
 rollback, because a code bug must not look like a corrupt stream.
 `UnmintedEventError` belongs to `apply()` only: replay input comes from
@@ -457,7 +458,7 @@ and decision rules change over time; a stream that was valid when written must
 stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 `apply(...)` path only. Old storage shapes are not a replay-validation concern
 either: decode and upcast persisted events at the read boundary (see
-[Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
+[Event Upcasting](./event-upcasting.md)) so the folds always receive
 the current event shape. Replay does not run `validateState(...)` either:
 `replayHistory` stores each fold result as is, and only `apply(...)` runs
 both gates for new facts. The constructor runs `validateState` once on the
@@ -476,8 +477,8 @@ refold from the stream. Rules and structure are different questions, and only
 the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
-`MissingHandlerError` and `HandlerReturnedNoStateError` also throw, because a
-forgotten event handler or a handler without a `return` is a code bug, not a
+`MissingFoldError` and `FoldReturnedNoStateError` also throw, because a
+forgotten fold or a fold without a `return` is a code bug, not a
 recoverable domain rejection.
 
 Replay is all-or-nothing. If an event in the middle fails with a `DomainError`,
@@ -838,7 +839,7 @@ sweeper. Different stores have different native snapshot facilities, and the
 right policy depends on stream length, latency budget, and operational tooling.
 
 When event schemas change, snapshots can need attention too. A snapshot is
-state derived from historical events and old handler code. Increment the
+state derived from historical events and old fold code. Increment the
 model's `schemaVersion` and provide a migration, discard incompatible
 snapshots, or rebuild them during the event-schema migration.
 
@@ -875,7 +876,7 @@ not ship a built-in upcaster because strategies differ by store and deployment
 style.
 
 The usual rule is simple: upcast at the infrastructure boundary before events
-reach the aggregate. Aggregate handlers should see the current event shape, not
+reach the aggregate. The folds should see the current event shape, not
 every historical shape the system has ever emitted.
 
 See [Event Upcasting](./event-upcasting.md).
