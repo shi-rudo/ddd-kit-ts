@@ -970,9 +970,9 @@ describe("replay trusts history", () => {
 	});
 
 	it("apply() stamps missing address fields, so recorded events are always fully addressed", () => {
-		// The recordEvent guarantee, now by construction on apply itself:
-		// an address-less event cannot mutate state and then fail later
-		// at harvest (withCommit) or on the next load (replay guard).
+		// Without the stamp an address-less event mutates state and then
+		// fails far away: at harvest (withCommit) or on the next load
+		// (replay guard).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
