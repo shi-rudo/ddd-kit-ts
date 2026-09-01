@@ -55,8 +55,8 @@ export interface AggregateSnapshot<TState> {
 	 * {@link version}, which counts mutations: this field says "which
 	 * shape does the stored state have", so a restore can detect a
 	 * snapshot written against an older DTO shape and migrate or
-	 * discard it instead of crashing later. Optional: absent on snapshots
-	 * written by older kit versions, which restore treats as schema `1`.
+	 * discard it instead of crashing later. Optional: a snapshot without
+	 * this field restores as schema `1`.
 	 */
 	readonly schemaVersion?: number;
 }
