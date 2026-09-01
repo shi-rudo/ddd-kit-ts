@@ -7,8 +7,13 @@ import {
 	defineRepository,
 	UnitOfWork,
 } from "../application/unit-of-work/unit-of-work";
+import type { Version } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
-import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
+import type { AggregateConfig } from "../domain/aggregate/base-aggregate";
+import {
+	EventSourcedAggregate,
+	reconstituteAggregateFromHistory,
+} from "../domain/aggregate/event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -19,6 +24,7 @@ import type { Id } from "../domain/identity/id";
 import {
 	ConcurrencyConflictError,
 	InfrastructureError,
+	ReplayHeadMismatchError,
 } from "../errors/kit-errors";
 import type {
 	CommittedDomainEvent,
@@ -30,6 +36,7 @@ import type { TransactionScope } from "../persistence/repository/scope";
 import {
 	createEsRepositoryContractTests,
 	type EsContractRepository,
+	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
 
@@ -37,7 +44,7 @@ import {
  * The in-memory REFERENCE adapter for the event-sourced contract suite:
  * the example consumers copy when wiring their own harness. It follows
  * every documented pattern: identity-mapped reads, bare-instance
- * reconstitution through `loadFromHistory`, explicit add/update intent,
+ * reconstitution through `replayHistory`, explicit add/update intent,
  * exact event batches, and a real expected-version guard on append (the
  * `WHERE stream_version = ?` equivalent) against a store with genuine
  * transactional rollback.
@@ -64,13 +71,17 @@ const streamMapKey = (stream: AggregateAddress): string =>
 
 class ContractEsOrder extends EventSourcedAggregate<
 	EsOrderState,
-	EsOrderEvent,
-	EsOrderId
+	EsOrderId,
+	EsOrderEvent
 > {
 	protected readonly aggregateType = "ContractEsOrder";
 
-	protected constructor(id: EsOrderId) {
-		super(id, { name: "", items: [] });
+	protected constructor(
+		id: EsOrderId,
+		state?: EsOrderState,
+		config?: AggregateConfig<EsOrderState>,
+	) {
+		super(id, state ?? { name: "", items: [] }, config);
 	}
 
 	/** Fresh aggregate: applies exactly ONE creation event (version 1). */
@@ -94,6 +105,17 @@ class ContractEsOrder extends EventSourcedAggregate<
 	/** Bare instance for replay: no events applied, version 0. */
 	static bare(id: EsOrderId): ContractEsOrder {
 		return new ContractEsOrder(id);
+	}
+
+	/** Restored from a snapshot: state and version, no events applied. */
+	static fromSnapshot(
+		id: EsOrderId,
+		state: EsOrderState,
+		version: Version,
+	): ContractEsOrder {
+		const order = new ContractEsOrder(id, state, { trustInitialState: true });
+		order.markReconstituted(version);
+		return order;
 	}
 
 	get name(): string {
@@ -156,6 +178,8 @@ class ContractEsOrder extends EventSourcedAggregate<
  */
 class InMemoryEsDb {
 	streams = new Map<string, EsOrderEvent[]>();
+	/** Latest snapshot per stream; written outside the transaction. */
+	snapshots = new Map<string, { state: EsOrderState; version: Version }>();
 	outbox: CommittedDomainEvent<EsOrderEvent>[] = [];
 	sourceHeads = new Map<string, number>();
 	commitPredecessors = new Map<string, number | null>();
@@ -233,11 +257,29 @@ class InMemoryEsOrderRepository {
 			return undefined;
 		}
 
-		const history = this.db.streams.get(streamMapKey(orderStream(id)));
+		const key = streamMapKey(orderStream(id));
+		const history = this.db.streams.get(key);
 		if (!history || history.length === 0) return undefined;
-		const order = ContractEsOrder.bare(id);
-		const result = order.loadFromHistory(history);
-		if (result.isErr()) throw result.error; // corrupt stream
+		const snapshot = this.db.snapshots.get(key);
+		// Only the tail after the restored version; the aggregate cannot
+		// detect an overlap, so the head check below is the proof.
+		const tail = snapshot ? history.slice(snapshot.version) : history;
+		const reconstituted = reconstituteAggregateFromHistory(
+			() =>
+				snapshot
+					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
+					: ContractEsOrder.bare(id),
+			tail,
+		);
+		if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
+		const order = reconstituted.value;
+		if (order.version !== history.length) {
+			throw new ReplayHeadMismatchError({
+				...orderStream(id),
+				targetVersion: history.length,
+				actualVersion: order.version,
+			});
+		}
 		return this.tracking.trackLoaded(order);
 	}
 }
@@ -299,12 +341,16 @@ function createInMemoryEsHarness(
 ): EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent> {
 	let mutationCounter = 0;
 	let idCounter = 0;
+	const databases = new WeakMap<object, InMemoryEsDb>();
 
 	return {
 		createEnvironment: async () => {
 			const db = new InMemoryEsDb();
 			let nextOutboxFailure: Error | undefined;
-			return {
+			const environment: EsRepositoryContractEnvironment<
+				ContractEsOrder,
+				EsOrderEvent
+			> = {
 				run: (work) => {
 					let activeTransaction: InMemoryEsTransaction | undefined;
 					const scope: TransactionScope<InMemoryEsTransaction> = {
@@ -386,6 +432,16 @@ function createInMemoryEsHarness(
 					};
 				},
 			};
+			databases.set(environment, db);
+			return environment;
+		},
+		captureSnapshot: async (order, environment) => {
+			const db = databases.get(environment);
+			if (!db) throw new Error("snapshot capture for an unknown environment");
+			db.snapshots.set(streamMapKey(orderStream(order.id)), {
+				state: { name: order.name, items: [...order.items] },
+				version: order.version,
+			});
 		},
 		streamKeyFor: orderStream,
 		createAggregate: () =>
@@ -499,7 +555,7 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 				if (!history || history.length === 0) return undefined;
 				const order = ContractEsOrder.bare(id);
 				// ❌ folds newest-first (a SELECT without ORDER BY, unlucky):
-				const result = order.loadFromHistory([...history].reverse());
+				const result = order.replayHistory([...history].reverse());
 				if (result.isErr()) throw result.error;
 				return this.tracking.trackLoaded(order);
 			}
@@ -511,6 +567,38 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			},
 			"replay preserves",
 			/replay must fold to the same state/,
+		);
+	});
+
+	it("the suite EXPOSES a double fold: replaying the whole stream on top of a snapshot fails the catch-up test", async () => {
+		class WholeStreamOnSnapshotRepository extends InMemoryEsOrderRepository {
+			override async findById(
+				id: EsOrderId,
+			): Promise<ContractEsOrder | undefined> {
+				const cached = this.tracking.identityMap.get(ContractEsOrder, id);
+				if (cached) return cached;
+				const key = streamMapKey(orderStream(id));
+				const history = this.db.streams.get(key);
+				if (!history || history.length === 0) return undefined;
+				const snapshot = this.db.snapshots.get(key);
+				const order = snapshot
+					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
+					: ContractEsOrder.bare(id);
+				// ❌ reads from position 0 although the snapshot already holds
+				// that prefix, and skips the head check:
+				const result = order.replayHistory(history);
+				if (result.isErr()) throw result.error;
+				return this.tracking.trackLoaded(order);
+			}
+		}
+
+		await expectMutantFails(
+			{
+				repoFactory: (db, tracking) =>
+					new WholeStreamOnSnapshotRepository(db, tracking),
+			},
+			"snapshot catch-up",
+			/must load at the head/,
 		);
 	});
 });

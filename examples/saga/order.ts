@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/domain/value-object/money";
@@ -35,7 +35,11 @@ export class OrderInWrongStateError extends DomainError<"ORDER_IN_WRONG_STATE"> 
 	}
 }
 
-export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+export class Order extends StateStoredAggregate<
+	OrderState,
+	OrderId,
+	OrderEvent
+> {
 	protected readonly aggregateType = "Order";
 
 	get status(): OrderState["status"] {
@@ -54,7 +58,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 			status: "placed",
 		});
 		// Bump version to 1 and record the placement event.
-		order.commit(
+		order.setState(
 			{ id, customerId, total, status: "placed" },
 			order.createEvent("OrderPlaced", { customerId, total }),
 		);
@@ -65,7 +69,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		if (this.state.status !== "placed") {
 			throw new OrderInWrongStateError(this.id, this.state.status, "confirm");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "confirmed" },
 			this.createEvent("OrderConfirmed", {
 				confirmedAt: confirmedAt.toISOString(),
@@ -78,7 +82,7 @@ export class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 		if (this.state.status === "confirmed") {
 			throw new OrderInWrongStateError(this.id, this.state.status, "cancel");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "cancelled", cancelReason: reason },
 			this.createEvent("OrderCancelled", { reason }),
 		);

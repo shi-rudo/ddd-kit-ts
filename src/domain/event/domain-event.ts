@@ -135,7 +135,7 @@ export interface DomainEvent<T extends string, P = void> {
 	 * This is the event PAYLOAD schema version, not a persisted aggregate
 	 * position. Commit positions live on `CommittedDomainEvent`.
 	 */
-	readonly version: number;
+	readonly schemaVersion: number;
 
 	/**
 	 * Optional metadata for traceability, correlation, and auditing.
@@ -166,7 +166,7 @@ export interface UncommittedDomainEvent<T extends string, P = void> {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
 	readonly payload: P;
-	readonly version: number;
+	readonly schemaVersion: number;
 }
 
 /** Upper-bound alias for any uncommitted domain-event shape. */
@@ -187,7 +187,7 @@ export type PendingDomainEvent<TEvent extends AnyDomainEvent> =
 export interface CreateUncommittedDomainEventOptions {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
-	readonly version?: number;
+	readonly schemaVersion?: number;
 }
 
 /**
@@ -219,7 +219,7 @@ export interface CreateDomainEventOptions {
 	/**
 	 * Override for the default schema version (1).
 	 */
-	version?: number;
+	schemaVersion?: number;
 
 	/**
 	 * Event metadata: correlation, causation, user, source, custom fields.
@@ -241,7 +241,7 @@ export interface DomainEventStamp {
 export interface CreateDomainEventFromFactsOptions extends DomainEventStamp {
 	readonly aggregateId?: string;
 	readonly aggregateType?: string;
-	readonly version?: number;
+	readonly schemaVersion?: number;
 }
 
 /** Overrides accepted when an application-shell factory creates a stamp. */
@@ -402,7 +402,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
 
 /**
  * Creates a domain event with default values.
- * Sets occurredAt to current date and version to 1 if not provided.
+ * Sets occurredAt to current date and schemaVersion to 1 if not provided.
  *
  * **Input ownership.** The event is deeply frozen, and `payload` and
  * `metadata` are deep-cloned first, so the caller's own objects are never
@@ -413,7 +413,7 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * over.
  *
  * **For aggregate-internal events, prefer `this.createEvent(...)` on
- * `AggregateRoot` / `EventSourcedAggregate`.** That helper auto-injects
+ * `StateStoredAggregate` / `EventSourcedAggregate`.** That helper auto-injects
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
  * consumers (outbox dispatchers, projection handlers, audit logs)
@@ -439,11 +439,11 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
-// Every event createDomainEvent returns is registered here: an
-// unforgeable mint marker (nothing outside this module can add to the
-// set), so the aggregate recording paths can check "minted by the
-// constructor" directly instead of approximating it with frozen-ness
-// probes. Minted implies deeply frozen with owned payload/metadata
+// Every event createDomainEvent returns is registered here: the
+// module-private tier of the mint marker (nothing outside this module
+// can add to the set), so the aggregate recording paths can check
+// "minted by the constructor" directly instead of approximating it with
+// frozen-ness probes. Minted implies deeply frozen with owned payload/metadata
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
 const MINTED_EVENTS = new WeakSet<object>();
@@ -489,11 +489,12 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * Whether `event` came out of {@link createDomainEvent} (or a helper
  * built on it, such as the aggregate `createEvent` helper), i.e. is deeply frozen with
  * defensively copied payload and metadata. Two tiers: events of THIS
- * loaded copy of the kit are verified unforgeably via the module's
+ * loaded copy of the kit are verified through the module-private
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
- * CJS/ESM load) are recognized cooperatively via a global-registry
- * brand. Module-internal export for the aggregate recording paths;
- * not part of the package entries.
+ * CJS/ESM load) are recognized through a cooperative `Symbol.for`
+ * brand that code in the same process can fake. The gate catches
+ * accidents, not adversaries. Module-internal export for the aggregate
+ * recording paths; not part of the package entries.
  */
 export function isMintedEvent(event: object): event is AnyDomainEvent {
 	return (
@@ -533,7 +534,7 @@ export function createUncommittedDomainEvent<T extends string, P>(
 		aggregateId: options?.aggregateId,
 		aggregateType: options?.aggregateType,
 		payload: cloneOwnedEventData(payload as P, "payload"),
-		version: options?.version ?? 1,
+		schemaVersion: options?.schemaVersion ?? 1,
 	};
 	stampUncommittedBrand(event);
 	const uncommitted = deepFreeze(event) as UncommittedDomainEvent<T, P>;
@@ -612,7 +613,7 @@ function mintRecordedEvent<T extends string, P>(
 		aggregateType: event.aggregateType,
 		payload: event.payload,
 		occurredAt,
-		version: event.version,
+		schemaVersion: event.schemaVersion,
 		metadata,
 	};
 	stampMintBrand(recorded);
@@ -729,7 +730,7 @@ function mintDomainEvent<T extends string, P>(
 		options?.occurredAt === undefined
 			? readEventClock(clock)
 			: copyValidEventDate(options.occurredAt);
-	const version = options?.version ?? 1;
+	const schemaVersion = options?.schemaVersion ?? 1;
 	const event: DomainEvent<T, P> = {
 		eventId,
 		type,
@@ -745,7 +746,7 @@ function mintDomainEvent<T extends string, P>(
 		// A caller-supplied occurredAt and a factory reading are both copied
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
-		version,
+		schemaVersion,
 		metadata: guardedMetadataClone(options?.metadata),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
@@ -767,16 +768,16 @@ function assertProducerOwnedEventFields(
 		| undefined,
 ): void {
 	assertNonBlankEventField(type, "type", "EVENT_TYPE_INVALID");
-	const version = options?.version ?? 1;
+	const schemaVersion = options?.schemaVersion ?? 1;
 	if (
-		!Number.isSafeInteger(version) ||
-		typeof version !== "number" ||
-		version < 1
+		!Number.isSafeInteger(schemaVersion) ||
+		typeof schemaVersion !== "number" ||
+		schemaVersion < 1
 	) {
 		throw new DomainEventValidationError(
 			"EVENT_SCHEMA_VERSION_INVALID",
-			"version",
-			"domain-event version must be a safe integer greater than or equal to 1",
+			"schemaVersion",
+			"domain-event schemaVersion must be a safe integer greater than or equal to 1",
 		);
 	}
 	if (options?.aggregateId !== undefined) {
@@ -844,6 +845,13 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	if (value === null || typeof value !== "object") {
 		return value;
 	}
+	// An own "__proto__" data key survives structuredClone and would
+	// re-arm prototype pollution in every [[Set]]-based consumer of the
+	// event; reject it at the root, the same contract as entity state.
+	assertNoHostileOwnProtoKey(
+		value,
+		field === "payload" ? "Event payload" : "Event metadata",
+	);
 	// Binary buffers are rejected BEFORE the clone: freezing cannot make
 	// them immutable (the spec forbids freezing a view with elements, and
 	// a frozen view still shares its mutable buffer), so accepting them

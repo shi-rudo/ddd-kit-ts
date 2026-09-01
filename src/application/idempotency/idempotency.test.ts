@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -30,7 +30,7 @@ type OrderId = Id<"OrderId">;
 type OrderEvent = DomainEvent<"OrderConfirmed", { orderId: string }>;
 type OrderState = { status: "open" | "confirmed" };
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 	protected readonly aggregateType = "Order";
 
 	constructor(id: OrderId) {
@@ -38,7 +38,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 	}
 
 	confirm(): void {
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "confirmed" },
 			createDomainEvent(
 				"OrderConfirmed",

@@ -1,5 +1,5 @@
 import type { Result } from "@shirudo/result";
-import type { DomainError } from "../../errors/kit-errors";
+import { type DomainError, InvalidVersionError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 
@@ -9,6 +9,22 @@ export * from "../event/domain-event";
 // --- Aggregate types ---
 
 export type Version = number & { readonly __v: true };
+
+/**
+ * Brands a stored number as an aggregate {@link Version}. A version is a
+ * safe integer of at least zero. Use it in repository adapters instead of
+ * a cast, so a corrupt row value fails here with {@link InvalidVersionError}
+ * and never reaches the optimistic-concurrency cursor.
+ */
+export function toVersion(value: number): Version {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new InvalidVersionError(
+			value,
+			"is not a safe integer of at least zero",
+		);
+	}
+	return value as Version;
+}
 
 /**
  * Snapshot of an aggregate state at a specific point in time.
@@ -47,7 +63,7 @@ export interface AggregateSnapshot<TState> {
 
 /**
  * Public contract every Aggregate Root satisfies. Implemented by
- * `BaseAggregate` and inherited by both `AggregateRoot` and
+ * `BaseAggregate` and inherited by both `StateStoredAggregate` and
  * `EventSourcedAggregate`. Repository ports use this interface as their
  * aggregate type rather than depending on concrete base classes, so persistence
  * orchestration does not take a compile-time
@@ -61,7 +77,7 @@ export interface AggregateSnapshot<TState> {
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
  * @template TEvent - The domain-event union, defaults to `never`
  */
-export interface IAggregateRoot<
+export interface Aggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
 > {
@@ -72,21 +88,21 @@ export interface IAggregateRoot<
 
 /**
  * Public contract for Event-Sourced Aggregate Roots. Extends
- * `IAggregateRoot` with the replay-from-history boundary.
+ * `Aggregate` with the replay-from-history boundary.
  *
  * @template TId    - The aggregate root identifier
  * @template TEvent - The union type of all domain events
  */
-export interface IEventSourcedAggregate<
+export interface ReplayableAggregate<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
-> extends IAggregateRoot<TId, TEvent> {
+> extends Aggregate<TId, TEvent> {
 	/**
 	 * Reconstitutes the aggregate from an event history. Returns
 	 * `Result` because event-stream corruption is an expected
 	 * recoverable failure at the infrastructure boundary.
 	 */
-	loadFromHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
+	replayHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
 }
 
 /**

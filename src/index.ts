@@ -142,18 +142,22 @@ export {
 } from "./application/unit-of-work/unit-of-work";
 // Aggregates: type hub
 export {
+	type Aggregate,
 	type AggregateSnapshot,
-	type IAggregateRoot,
-	type IEventSourcedAggregate,
+	type ReplayableAggregate,
 	sameVersion,
+	toVersion,
 	type Version,
 } from "./domain/aggregate/aggregate";
 export type { AggregateAddress } from "./domain/aggregate/aggregate-address";
 export {
+	EventSourcedAggregate,
+	reconstituteAggregateFromHistory,
+} from "./domain/aggregate/event-sourced-aggregate";
+export {
 	type AggregateConfig,
-	AggregateRoot,
-} from "./domain/aggregate/aggregate-root";
-export { EventSourcedAggregate } from "./domain/aggregate/event-sourced-aggregate";
+	StateStoredAggregate,
+} from "./domain/aggregate/state-stored-aggregate";
 // Entities
 export {
 	Entity,
@@ -259,6 +263,7 @@ export {
 	AggregateDeletedError,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,
+	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
 	DirectStateMutationError,
@@ -288,6 +293,7 @@ export {
 	type InMemoryCapacityExceededErrorOptions,
 	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
+	InvalidVersionError,
 	isDomainErrorLike,
 	isInfrastructureErrorLike,
 	type KitErrorCode,
@@ -303,6 +309,8 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
+	ReplayHeadMismatchError,
+	type ReplayHeadMismatchErrorOptions,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,

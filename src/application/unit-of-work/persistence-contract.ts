@@ -1,4 +1,4 @@
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import type { InfrastructureError } from "../../errors/kit-errors";
@@ -19,19 +19,19 @@ export type AggregateWriteIntent = "add" | "update" | "remove";
  * of the public API.
  */
 export interface RuntimePersistenceDefinition<Evt extends AnyDomainEvent> {
-	readonly aggregate: AggregateClass<IAggregateRoot<Id<string>, Evt>>;
+	readonly aggregate: AggregateClass<Aggregate<Id<string>, Evt>>;
 	readonly persistence: PersistenceModel<
-		IAggregateRoot<Id<string>, Evt>,
+		Aggregate<Id<string>, Evt>,
 		unknown,
 		unknown
 	>;
 	readonly flush: (
 		transaction: unknown,
-		write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
+		write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 	) => void | Promise<void>;
 	readonly mapError: (
 		error: unknown,
-		write: AggregatePersistenceWrite<IAggregateRoot<Id<string>, Evt>, unknown>,
+		write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 	) => InfrastructureError;
 	readonly physicalRemoval?: boolean;
 }
@@ -63,7 +63,7 @@ export type UnitOfWorkIdentityMap = Pick<
  *   would bypass the Unit of Work and violates the adapter contract.
  */
 export interface RepositoryTracking<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	/**
 	 * Registers an aggregate restored by a repository before returning it to
@@ -91,7 +91,7 @@ export interface RepositoryTracking<
  * and must not read mutable write state back from an aggregate reference.
  */
 export interface AggregatePersistenceWrite<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 > {
 	readonly intent: AggregateWriteIntent;

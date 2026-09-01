@@ -13,7 +13,7 @@ The kit has two entity shapes:
 - `Identifiable<TId>` for plain records that only need an id
 
 Aggregate roots are entities too, but they need versioning, pending events, and
-repository lifecycle. Use `AggregateRoot` or `EventSourcedAggregate` for roots.
+repository lifecycle. Use `StateStoredAggregate` or `EventSourcedAggregate` for roots.
 Use `Entity` or `Identifiable` for children inside an aggregate boundary.
 
 ## When an object needs identity
@@ -291,7 +291,7 @@ changeItemQuantity(itemId: ItemId, quantity: number): void {
     quantity,
   );
 
-  this.commit({
+  this.setState({
     ...this.state,
     items: replaceEntityById(this.state.items, itemId, replacement),
   });
@@ -301,10 +301,10 @@ changeItemQuantity(itemId: ItemId, quantity: number): void {
 The new array reference tells the root that the child collection changed. The
 new child instance avoids another subtle problem: if you mutate the existing
 child first and a later aggregate-level validation throws, the child has already
-moved. Replacement keeps the old aggregate state intact until `commit(...)`
+moved. Replacement keeps the old aggregate state intact until `setState(...)`
 accepts the new state.
 
-If the aggregate also needs to publish a domain event, pass it to `commit(...)`
+If the aggregate also needs to publish a domain event, pass it to `setState(...)`
 in the same call.
 
 The stronger rule is still the DDD rule: outside application code should not
@@ -362,7 +362,7 @@ class DeepBox extends Entity<BoxState, ItemId> {
 }
 ```
 
-Use `deepFreezeState` only for plain data. It walks the whole graph. If your
+Use `deepFreezeState` only for plain data. It walks the part of the graph a write changes. If your
 state contains class-based child entities, those child instances are frozen too
 and their mutation methods can start throwing.
 
@@ -376,8 +376,11 @@ The ownership rules are precise:
   place because copying it would strip its prototype
 
 The entity constructor and `setState(...)` reject an own `"__proto__"` data key
-on plain object, null-prototype object, or array state. Validate and normalize
-untrusted JSON at the boundary before it reaches domain objects.
+on plain object, null-prototype object, or array state. The event-sourced
+`apply(...)` and replay apply the same check to the handler result, and the
+event constructors apply it to the payload. The check looks at the root
+object only; nested objects are not walked. Validate and normalize untrusted
+JSON at the boundary before it reaches domain objects.
 
 ## Choosing the shape
 
@@ -386,7 +389,7 @@ untrusted JSON at the boundary before it reaches domain objects.
 | immutable concept compared by value | Value Object |
 | child record with id and simple data | `Identifiable<TId>` |
 | child object with id, state, and meaningful methods | `Entity<TState, TId>` |
-| root of a consistency boundary | `AggregateRoot` |
+| root of a consistency boundary | `StateStoredAggregate` |
 | root rebuilt from an event stream | `EventSourcedAggregate` |
 
 Review signals:

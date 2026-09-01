@@ -515,7 +515,7 @@ const result = transitionDomainState(
   },
 );
 
-this.commit(
+this.setState(
   {
     ...this.state,
     lifecycle: result.snapshot,

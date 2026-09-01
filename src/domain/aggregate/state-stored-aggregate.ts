@@ -2,7 +2,7 @@ import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import { BaseAggregate } from "./base-aggregate";
 
-export type { IAggregateRoot } from "./aggregate";
+export type { Aggregate } from "./aggregate";
 export type { AggregateConfig } from "./base-aggregate";
 
 /**
@@ -14,17 +14,19 @@ export type { AggregateConfig } from "./base-aggregate";
  * its persistence projection through `PersistenceModel`; the Unit of Work
  * retains that opaque baseline and derives the adapter's change set at flush.
  */
-export abstract class AggregateRoot<
+export abstract class StateStoredAggregate<
 	TState,
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
 > extends BaseAggregate<TState, TId, TEvent> {
 	/**
-	 * Changes state and records the resulting facts in record-after-mutation
-	 * order. Validation and event mint checks run before the transition becomes
-	 * observable, so a rejected decision records nothing.
+	 * Replaces the state, advances the OCC version, and records the events
+	 * of the change, in that order. State validation, the event mint gate,
+	 * and the event address check run before the change becomes observable,
+	 * so a rejected decision records nothing and moves nothing. Without
+	 * events the call is a plain versioned state change.
 	 */
-	protected commit(
+	protected override setState(
 		newState: TState,
 		events:
 			| PendingDomainEvent<TEvent>
@@ -35,23 +37,18 @@ export abstract class AggregateRoot<
 		)
 			? events
 			: [events as PendingDomainEvent<TEvent>];
-		for (const event of eventBatch) this.assertMintedEvent(event);
+		const stamped = eventBatch.map((event) => this.addressNewEvent(event));
 
-		this.setState(newState);
-		for (const event of eventBatch) this.addDomainEvent(event);
-	}
-
-	/** Every normal domain-state transition advances the OCC version. */
-	protected override setState(newState: TState): void {
 		super.setState(newState);
 		this.bumpVersion();
+		for (const event of stamped) this.appendStampedEvent(event);
 	}
 
 	/**
 	 * Replaces loss-tolerant derived state without advancing the domain version.
 	 *
 	 * This is intentionally loud: concurrent writers may overwrite such a
-	 * change. Keep business facts on the normal `setState`/`commit` path.
+	 * change. Keep business facts on the normal `setState` path.
 	 */
 	protected setStateWithoutVersionBump(newState: TState): void {
 		super.setState(newState);

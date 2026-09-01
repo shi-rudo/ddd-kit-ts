@@ -69,7 +69,7 @@ function recordWithFactory(payload, metadata) {
 	const decision = createUncommittedDomainEvent("BenchmarkEvent", payload, {
 		aggregateId: "aggregate-1",
 		aggregateType: "BenchmarkAggregate",
-		version: 2,
+		schemaVersion: 2,
 	});
 	return recordDomainEvent(decision, factory.createStamp({ metadata }));
 }
@@ -78,7 +78,7 @@ function recordWithHandBuiltStamp(payload, metadata) {
 	const decision = createUncommittedDomainEvent("BenchmarkEvent", payload, {
 		aggregateId: "aggregate-1",
 		aggregateType: "BenchmarkAggregate",
-		version: 2,
+		schemaVersion: 2,
 	});
 	return recordDomainEvent(decision, {
 		eventId: `event-${++eventSequence}`,
@@ -99,7 +99,7 @@ function measure(name, iterations, operation, payload, metadata) {
 	for (let index = 0; index < iterations; index += 1) {
 		const event = operation(payload, metadata);
 		retained[index] = event;
-		checksum += event.eventId.length + event.version;
+		checksum += event.eventId.length + event.schemaVersion;
 	}
 	const elapsedMs = performance.now() - startedAt;
 	global.gc();

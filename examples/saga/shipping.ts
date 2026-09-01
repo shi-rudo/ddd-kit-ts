@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import { DomainError } from "../../src/errors/kit-errors";
@@ -41,7 +41,7 @@ export class ShipmentInWrongStateError extends DomainError<"SHIPMENT_IN_WRONG_ST
 	}
 }
 
-export class Shipment extends AggregateRoot<
+export class Shipment extends StateStoredAggregate<
 	ShipmentState,
 	ShipmentId,
 	ShippingEvent
@@ -58,7 +58,7 @@ export class Shipment extends AggregateRoot<
 
 	static request(id: ShipmentId, orderId: OrderId): Shipment {
 		const shipment = new Shipment(id, { id, orderId, status: "requested" });
-		shipment.commit(
+		shipment.setState(
 			{ id, orderId, status: "requested" },
 			shipment.createEvent("ShippingRequested", { orderId }),
 		);
@@ -73,7 +73,7 @@ export class Shipment extends AggregateRoot<
 				"complete",
 			);
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "shipped", trackingId },
 			this.createEvent("ShippingCompleted", {
 				orderId: this.state.orderId,
@@ -86,7 +86,7 @@ export class Shipment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new ShipmentInWrongStateError(this.id, this.state.status, "fail");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "failed", failureReason: reason },
 			this.createEvent("ShippingFailed", {
 				orderId: this.state.orderId,

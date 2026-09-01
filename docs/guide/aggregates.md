@@ -1,4 +1,4 @@
-# Aggregate Roots
+# Aggregates
 
 An aggregate root is the object your application loads, changes, and saves as one consistency boundary.
 
@@ -8,8 +8,8 @@ In DDD terms, the aggregate boundary is also a consistency boundary. Everything 
 
 The kit gives you two base classes:
 
-- **`AggregateRoot<TState, TId, TEvent>`** for aggregates whose current state is stored directly.
-- **`EventSourcedAggregate<TState, TEvent, TId>`** for aggregates whose state is rebuilt from events. See [Event Sourcing](./event-sourcing.md).
+- **`StateStoredAggregate<TState, TId, TEvent>`** for aggregates whose current state is stored directly.
+- **`EventSourcedAggregate<TState, TId, TEvent>`** for aggregates whose state is rebuilt from events. See [Event Sourcing](./event-sourcing.md).
 
 <a id="state-version-domain-events"></a>
 
@@ -17,7 +17,7 @@ The kit gives you two base classes:
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
   type DomainEvent,
   type Id,
@@ -48,7 +48,7 @@ class OrderAlreadyConfirmedError extends DomainError<"ORDER_ALREADY_CONFIRMED"> 
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static draft(id: OrderId, customerId: string): Order {
@@ -60,7 +60,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
@@ -78,12 +78,23 @@ Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 `createEvent(...)` is the safer default. The application records the pending
 decision with `recordPendingEvents(...)` before persistence.
 
+Two wiring guards sit on the recording paths. An event that no kit
+constructor minted throws `UnmintedEventError` (code `UNMINTED_EVENT`). A
+state or payload root that carries an own `__proto__` key throws
+`HostileStateKeyError` (code `HOSTILE_STATE_KEY`). Both guard against
+accidents, not against code in the same process: the mint mark has a
+cooperative tier that another loaded copy of the kit can stamp, and the key
+guard looks at the root object only. Validate and strip untrusted input at
+the application edge. See
+[Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
+mint mark.
+
 ## Creating New Aggregates
 
 Prefer static factory methods over public constructors.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static place(
@@ -107,7 +118,7 @@ A factory gives you one public path for creating a valid aggregate. It can rejec
 
 The library does not emit creation events automatically. Some bounded contexts care about `OrderPlaced` or `UserRegistered`; others do not. That choice belongs to your domain.
 
-`AggregateRoot` and `EventSourcedAggregate` use protected constructors, so application code cannot call `new Order(...)` directly. The factory is the public construction API.
+`StateStoredAggregate` and `EventSourcedAggregate` use protected constructors, so application code cannot call `new Order(...)` directly. The factory is the public construction API.
 
 This is the aggregate-root version of the Factory Method pattern. Vernon describes factories as the place to create whole, valid aggregates. A standalone factory class can still make sense when construction needs dependencies the aggregate should not know about, but most aggregates only need a named static method on the root.
 
@@ -128,7 +139,7 @@ For state-stored aggregates, add a static reconstitution method next to the fact
 ```ts
 import type { Version } from "@shirudo/ddd-kit";
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static place(
@@ -148,16 +159,32 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
 ```
 
-`markRestored(version)` tells the aggregate, "these are the domain facts at
+`markReconstituted(version)` tells the aggregate, "these are the domain facts at
 this version." It sets the aggregate's current version without recording an
 event. It does not remember a database baseline. The operation-scoped
 `UnitOfWork` owns that baseline.
+
+`markReconstituted` has two preconditions. The instance must carry no pending
+events, or it throws `UnreplayableAggregateError` (code
+`UNREPLAYABLE_AGGREGATE`). The current version must not be above the
+restored version, or it throws `InvalidVersionError` (code
+`INVALID_VERSION`). Two factory shapes break these rules:
+
+- A factory that calls `setState(rowState)` before `markReconstituted`. Every
+  `setState` advances the version, so the instance is at version 1 before
+  the restore, and a row stored at version 0 fails. Pass the stored state
+  through the constructor, as the example above does, or use
+  `setStateWithoutVersionBump` for a state change that is not a domain
+  decision.
+- A constructor that records a creation event. Every load then starts with a
+  pending event. Record creation events in the business factory
+  (`Order.place`) only; the constructor builds the instance and nothing else.
 
 A repository can then be straightforward:
 
@@ -174,7 +201,7 @@ async findById(id: OrderId): Promise<Order | undefined> {
   const order = Order.reconstitute(
     row.id as OrderId,
     row.state as OrderState,
-    row.version as Version,
+    toVersion(row.version),
   );
 
   return this.tracking.trackLoaded(order);
@@ -192,10 +219,10 @@ See [Repository -> Explicit lifecycle intent](./repository.md#explicit-lifecycle
 
 ### Event-Sourced Aggregates
 
-For event-sourced aggregates, reconstitution means replaying history. Expose a factory for the empty replay target, then let the repository load history into it:
+For event-sourced aggregates, reconstitution means replaying history. Expose a factory for the empty replay target, then let the repository build the aggregate from history through `reconstituteAggregateFromHistory`:
 
 ```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static reconstitute(id: OrderId): Order {
@@ -207,16 +234,14 @@ async findById(id: OrderId): Promise<Order | null> {
   const events = await this.eventStore.read(id);
   if (events.length === 0) return null;
 
-  const order = Order.reconstitute(id);
-  const result = order.loadFromHistory(events);
-
+  const result = reconstituteAggregateFromHistory(() => Order.reconstitute(id), events);
   if (result.isErr()) throw result.error;
 
-  return order;
+  return result.value;
 }
 ```
 
-`loadFromHistory(events)` folds old events into state, advances the version, and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts.
+`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `replayHistory(events)` on the instance.
 
 The initial state should be inert: enough structure for your handlers to fold events into, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
 
@@ -228,32 +253,32 @@ A reconstituted aggregate is the same domain object it was before the process re
 
 That kind of spurious event can double-count projections, re-trigger process managers, or publish outbox messages for work that has already happened. The rule is simple: factories may record new facts; reconstitution must not.
 
-## Changing State with `commit`
+## Changing State with `setState`
 
-Use `commit(newState, events)` for normal aggregate changes.
+Use `setState(newState, events)` for normal aggregate changes.
 
 It does three things in order:
 
 1. Validates and assigns the new state.
-2. Records the event or events.
-3. Bumps the aggregate version.
+2. Bumps the aggregate version.
+3. Records the event or events.
 
-If state validation fails, no event is recorded and the version does not change. That makes `commit` safer than calling `setState` and `addDomainEvent` by hand.
+If state validation fails, no event is recorded and the version does not change. That makes `setState(newState, events)` safer than a state write followed by `addDomainEvent` by hand. Without events, `setState(newState)` is a plain versioned state change.
 
 ```ts
-this.commit(
+this.setState(
   { ...this.state, status: "confirmed" },
   this.createEvent("OrderConfirmed", { orderId: this.id }),
 );
 
-this.commit(newState, [eventA, eventB]);
-this.commit({ ...this.state, lastViewedAt: new Date() });
+this.setState(newState, [eventA, eventB]);
+this.setState({ ...this.state, lastViewedAt: new Date() });
 ```
 
 The last example changes state without recording an event, but still bumps the version.
 
-::: info `commit()` always bumps the version
-Changing aggregate state should normally move the version. If you deliberately need a mutation that does not participate in optimistic concurrency, use `setStateWithoutVersionBump(newState)` directly and do not call `commit`.
+::: info `setState()` always bumps the version
+Changing aggregate state should normally move the version. If you deliberately need a mutation that does not participate in optimistic concurrency, use `setStateWithoutVersionBump(newState)` directly and do not call `setState`.
 :::
 
 ## Where Invariants Live
@@ -264,7 +289,7 @@ This is where the theory matters most. Aggregate invariants are not just validat
 
 | Location | Use it for | Kit seam |
 | --- | --- | --- |
-| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction, `setState`, `commit`, and `apply()`; replay skips it |
+| `EntityConfig.validateState(newState)` | Rules that must be true for the state itself, such as non-empty ids or valid quantities | Runs during construction (unless `trustInitialState`), `setState`, and `apply()`; replay skips it |
 | `validateEvent(event)` | Event-sourced rules that must hold before an event is applied | Runs during `apply()` |
 | Domain method guard | Rules about whether this method can run now | Inline check before mutation |
 | Process manager / saga | Rules that span multiple aggregates | Event subscriber plus command dispatch |
@@ -285,7 +310,7 @@ function validateOrderState(state: OrderState): void {
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   constructor(id: OrderId, state: OrderState) {
@@ -295,28 +320,62 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 ```
 
 The validator runs on construction, on every `setState` call (including calls
-made by `commit` and state-stored snapshot restoration), and on `apply()` of a
+made by `setState` and state-stored snapshot restoration), and on `apply()` of a
 new event-sourced fact. On a state-stored aggregate it catches both bad domain
 transitions and corrupt state loaded from persistence.
 
 On an event-sourced aggregate the validator has one more consequence. Replay
 does not run it; replay uses historical facts and pure event handlers rather
-than today's decision rules. A snapshot restore does run it, because the
-`reconstitute` factory passes the stored state to the constructor. If a rule
-in `validateState` later tightens, old streams still load from zero, but every
-snapshot restore throws. When the validator throws a `DomainError`, the
+than today's decision rules. A snapshot restore runs it by default, because
+the `reconstitute` factory passes the stored state to the constructor. If a
+rule in `validateState` later tightens, old streams still load from zero, but
+every snapshot restore throws. When the validator throws a `DomainError`, the
 restore maps it to `SnapshotCorruptedError` and refolds the stream on each
-load. Any other error propagates as is. So on an event-sourced aggregate, keep decision rules in
-`validateEvent` and keep `validateState` for rules that hold for every version
-of the state. This section is the one place that states this rule; the
-event-sourcing guide and the `SnapshotModel` docs point here.
+load, with no signal except latency. Any other error propagates as is.
+
+The reconstitution factory of an event-sourced aggregate therefore passes
+`trustInitialState: true`. The stored state is then a fact like the history:
+the validator does not run on it, and it runs on every new fact through
+`apply()`. With that option `validateState` can hold real rules on an
+event-sourced aggregate, and "replay from zero" and "snapshot plus tail" load
+the same way. Never pass the option for a new aggregate; a factory yields
+valid objects only. The `SnapshotModel` keeps the structural gate on the
+stored blob.
+
+A state-stored factory keeps the default. Its row is the source of truth,
+so a row that fails today's rules is a finding, and the load fails loudly
+until the data is migrated. There is no stream to refold, so the option
+would only hide the finding.
+
+```ts
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
+  protected readonly aggregateType = "Order";
+
+  private constructor(
+    id: OrderId,
+    state: OrderState,
+    config?: AggregateConfig<OrderState>,
+  ) {
+    super(id, state, { ...config, validateState: validateOrderState });
+  }
+
+  static reconstitute(id: OrderId, state: OrderState, version: Version): Order {
+    const order = new Order(id, state, { trustInitialState: true });
+    order.markReconstituted(version);
+    return order;
+  }
+}
+```
+
+This section is the one place that states this rule; the event-sourcing
+guide and the `SnapshotModel` docs point here.
 
 ### Event-Sourced Invariants
 
 Use `validateEvent` when an event must be valid against the aggregate's current state before it is applied.
 
 ```ts
-class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   protected validateEvent(event: OrderEvent): void {
@@ -340,7 +399,7 @@ State-stored aggregates do not have `validateEvent`, because they do not apply e
 Most business rules live at the top of domain methods. The method checks whether the operation is allowed, then changes state.
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(): void {
@@ -352,7 +411,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new CannotConfirmEmptyOrderError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
@@ -466,15 +525,17 @@ mutates a live instance or records a new domain fact.
 Live aggregate state remains `protected`. Give the persistence adapter an
 explicit DTO projection such as `orderStateDto(order)` rather than exposing a
 generic public state getter. For event-sourced aggregates, restore the
-snapshot first and then call `loadFromHistory` with only the stream tail.
+snapshot first, call `replayHistory` with only the stream tail, and check
+that the final version equals the stream head (see
+[Event Sourcing -> Snapshots](./event-sourcing.md#snapshots)).
 
-## When to Skip `commit`
+## When to Skip the Version Bump
 
-`commit()` is the default for aggregate changes. Reach for lower-level methods only when you need behavior `commit` deliberately does not provide:
+`setState()` is the default for aggregate changes. Reach for lower-level methods only when you need behavior `setState` deliberately does not provide:
 
 - state changes that should not bump the version, such as cosmetic cache fields
 - audit-only events that do not change state still use
-  `commit({ ...this.state }, event)` so their persisted commit gets a unique
+  `setState({ ...this.state }, event)` so their persisted commit gets a unique
   version/cursor
 - a multi-step operation where you want exactly one version bump at the end
 
@@ -487,3 +548,22 @@ A mutation that does not bump the version is invisible to optimistic concurrency
 
 That is why the method is named `setStateWithoutVersionBump`. Use it only for data where a lost update is acceptable.
 :::
+
+## Glossary
+
+One term per lifecycle step. Code, guides, and errors use these words and
+no synonyms.
+
+| Term | Meaning | Kit surface |
+| --- | --- | --- |
+| aggregate | The class you write is the root of its aggregate; the kit calls it the aggregate, and `Entity` names the children inside it. | `Aggregate` (the contract both flavours share), `ReplayableAggregate` (adds `replayHistory`), `StateStoredAggregate`, `EventSourcedAggregate` |
+| create | A business factory makes a new aggregate and records its first facts. | `Order.place(...)`, `this.createEvent(...)` |
+| setState | A state-stored aggregate replaces its state, advances its version, and records the events of the change. | `setState(newState, events)` |
+| apply | An event-sourced aggregate folds a new fact into its state and records it. | `apply(event)` |
+| record | The application shell stamps identity and time on pending decisions. | `recordPendingEvents(aggregate, factory)` |
+| reconstitute | A factory builds an aggregate from persisted facts and yields it only on success. | `reconstituteAggregateFromHistory`, `reconstituteAggregateFromSnapshot`, `markReconstituted` |
+| replay | A built aggregate folds a later page of history into itself. | `replayHistory(history)` |
+| commit | The transaction that persists enrolled aggregates and publishes their events. | `withCommit`, `committedVersion`, `CommittedDomainEvent` |
+| version | The optimistic-concurrency version of the aggregate. | `aggregate.version`, `expectedVersion` |
+| schemaVersion | The payload schema version of one event or snapshot. | `event.schemaVersion`, `SnapshotModel.schemaVersion` |
+

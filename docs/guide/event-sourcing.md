@@ -1,12 +1,12 @@
 # Event Sourcing
 
-`EventSourcedAggregate<TState, TEvent, TId>` is the aggregate root for models
+`EventSourcedAggregate<TState, TId, TEvent>` is the aggregate root for models
 where events are the source of truth.
 
 The aggregate does not store its current state as the primary record. It derives
 state by applying events in order. New business methods record new facts by
 calling `apply(event)`. Reconstitution reads old facts and folds them back into
-state with `loadFromHistory(...)`. A snapshot model can create a fresh
+state with `replayHistory(...)`. A snapshot model can create a fresh
 aggregate from a stored state DTO before the stream tail is replayed.
 
 That split is the whole model:
@@ -75,8 +75,8 @@ class OrderAlreadyConfirmedError extends DomainError<
 
 class Order extends EventSourcedAggregate<
   OrderState,
-  OrderEvent,
-  OrderId
+  OrderId,
+  OrderEvent
 > {
   protected readonly aggregateType = "Order";
 
@@ -169,7 +169,7 @@ If validation, handler lookup, state computation, or the state check throws,
 the aggregate does not record the event. This behavior is the event-sourcing safety rule. The
 aggregate must not publish a fact that did not change state.
 
-There is no `commit(...)` helper on `EventSourcedAggregate`. `apply(...)`
+There is no `setState(...)` helper on `EventSourcedAggregate`. `apply(...)`
 already ties the event and the state transition together.
 
 Handlers must fold state from `type` and `payload` only. A live `apply(...)`
@@ -372,31 +372,37 @@ The store suite proves qualified-key isolation, OCC/atomicity, stream-state
 reporting, per-page bounds, gapless continuation, ordering, and both position
 bounds. The repository suite covers append
 conflicts, duplicate creates, replay equality, rollback purity, commit
-lifecycle, snapshot catch-up, and point-in-time windows through the repository
-adapter.
+lifecycle, and point-in-time windows through the repository adapter. When the
+harness provides `captureSnapshot`, the suite also proves that a snapshot
+catch-up ends at the stream head and folds only the tail.
 
 ## Loading from history
 
-Reconstitution starts with a blank aggregate and folds the stream into it:
+Reconstitution builds the aggregate from the first page through
+`reconstituteAggregateFromHistory` and folds later pages into it:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
-  const order = Order.reconstitute(id);
-  let fromVersion = 0;
-  let targetVersion: number | undefined;
+  const first = await eventStore.readStream(address, { limit: 256 });
+  if (!first.exists) return null;
+  const targetVersion = first.lastVersion;
 
-  for (;;) {
+  const reconstituted = reconstituteAggregateFromHistory(
+    () => Order.reconstitute(id),
+    first.events,
+  );
+  if (reconstituted.isErr()) throw reconstituted.error;
+  const order = reconstituted.value;
+  let fromVersion = first.events.length;
+
+  while (fromVersion < targetVersion) {
     const page = await eventStore.readStream(address, {
       fromVersion,
       toVersion: targetVersion,
       limit: 256,
     });
-    if (!page.exists) return null;
-
-    targetVersion ??= page.lastVersion;
-    if (fromVersion === targetVersion) break;
-    if (page.events.length === 0) {
+    if (!page.exists || page.events.length === 0) {
       throw new NonProgressingEventStreamPageError({
         ...address,
         fromVersion,
@@ -404,25 +410,42 @@ async function findById(id: OrderId): Promise<Order | null> {
       });
     }
 
-    const result = order.loadFromHistory(page.events);
-    if (result.isErr()) throw result.error;
+    const catchUp = order.replayHistory(page.events);
+    if (catchUp.isErr()) throw catchUp.error;
     fromVersion += page.events.length;
   }
 
+  if (order.version !== targetVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion,
+      actualVersion: order.version,
+    });
+  }
   return order;
 }
 ```
 
 The first page pins the authoritative head; subsequent pages replay only that
-prefix. Calling `loadFromHistory` once per page keeps allocation bounded. If a
-later page fails, discard the local aggregate and do not place it in the
-identity map. Replay remains all-or-nothing per call, and no partially loaded
-instance escapes the repository.
+prefix. `reconstituteAggregateFromHistory` builds the instance inside the
+call and yields it only when the first page folded. A rejected replay leaves
+the repository with nothing to track. Each later page goes through
+`replayHistory` on that instance, once per page, which keeps allocation
+bounded. If a later page fails, discard the local aggregate and do not place
+it in the identity map. Replay remains all-or-nothing per call, and no
+partially loaded instance escapes the repository.
 
-`loadFromHistory(...)` returns `Result<void, DomainError>` because a persisted
+`reconstituteAggregateFromHistory(create, history)` returns
+`Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
+`replayHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a handler that rejects a
-payload it cannot map). One corruption class deliberately does NOT ride the
-`Result`: an event addressed to a different aggregate (`ForeignEventError`,
+payload it cannot map). Two groups of failures deliberately do NOT ride the
+`Result`. The wiring errors `MissingHandlerError`, `HandlerReturnedNoStateError`,
+`HostileStateKeyError`, and `UnreplayableAggregateError` throw, after the
+rollback, because a code bug must not look like a corrupt stream.
+`UnmintedEventError` belongs to `apply()` only: replay input comes from
+storage rows, and the mint gate does not run on it. And an
+event addressed to a different aggregate (`ForeignEventError`,
 when a history event carries an `aggregateId` or `aggregateType` that does not
 match the target) is an `InfrastructureError` and THROWS, because a wrong
 stream read is wiring or data corruption, never an expected business
@@ -436,12 +459,13 @@ stay loadable under tomorrow's rules. `validateEvent` guards new facts on the
 either: decode and upcast persisted events at the read boundary (see
 [Event Upcasting](./event-upcasting.md)) so handlers and replay always receive
 the current event shape. Replay does not run `validateState(...)` either:
-`loadFromHistory` stores each fold result as is, and only `apply(...)` runs
+`replayHistory` stores each fold result as is, and only `apply(...)` runs
 both gates for new facts. The constructor runs `validateState` once on the
-initial state, so a `reconstitute` factory that passes a snapshot state to the
-constructor checks that state against today's rules. The section
-[Where Invariants Live](./aggregates.md#where-invariants-live) states which
-rules belong in `validateState` for an event-sourced aggregate. Snapshots do get their own
+initial state, unless the factory passes `trustInitialState: true`. A
+snapshot `reconstitute` factory does. The stored state is then a fact like
+the history, and a rule that tightened later does not break every restore.
+The section [Where Invariants Live](./aggregates.md#where-invariants-live)
+states the rule and the factory shape. Snapshots do get their own
 STRUCTURAL gate: the adapter-owned `SnapshotModel` rejects blobs no version
 of the model could have produced (missing fields, wrong types) by throwing
 `SnapshotCorruptedError` from `migrate` or `reconstitute`. When a
@@ -466,8 +490,15 @@ Version advances additively:
 - a persisted aggregate at version `10` catching up on two newer events ends at
   version `12`
 
+Events carry no stream position, so the aggregate cannot detect a tail that
+overlaps its version: a snapshot at version `10` fed five events of which two
+were already folded ends at version `15`. The caller passes only the events
+after the restored version, pins the stream head before the first page, and
+checks the final version against it. On a mismatch the load recipe throws
+`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`).
+
 The replay target must be clean. If it carries unflushed `pendingEvents`,
-`loadFromHistory(...)` throws `UnreplayableAggregateError` before anything
+`replayHistory(...)` throws `UnreplayableAggregateError` before anything
 moves. The Unit of Work owns the factory-versus-load lifecycle, so the
 aggregate carries no persistence flag and replay does not check one.
 
@@ -501,9 +532,19 @@ async function findOrderAsOfVersion(
     );
   }
 
-  const historical = Order.reconstitute(id);
-  let fromVersion = 0;
+  const reconstituted = reconstituteAggregateFromHistory(
+    () => Order.reconstitute(id),
+    page.events,
+  );
+  if (reconstituted.isErr()) throw reconstituted.error;
+  const historical = reconstituted.value;
+  let fromVersion = page.events.length;
   while (fromVersion < toVersion) {
+    page = await eventStore.readStream(address, {
+      fromVersion,
+      toVersion,
+      limit: 256,
+    });
     if (!page.exists || page.events.length === 0) {
       throw new NonProgressingEventStreamPageError({
         ...address,
@@ -511,16 +552,9 @@ async function findOrderAsOfVersion(
         targetVersion: toVersion,
       });
     }
-    const result = historical.loadFromHistory(page.events);
+    const result = historical.replayHistory(page.events);
     if (result.isErr()) throw result.error;
     fromVersion += page.events.length;
-    if (fromVersion < toVersion) {
-      page = await eventStore.readStream(address, {
-        fromVersion,
-        toVersion,
-        limit: 256,
-      });
-    }
   }
   return historical.toView();
 }
@@ -575,12 +609,14 @@ async function findById(id: OrderId): Promise<Order | null> {
   let fromVersion = snapshot.version;
 
   try {
-    order = reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot);
-    const result = order.loadFromHistory(tail.events);
-
-    if (result.isErr()) {
+    const restored = reconstituteAggregateFromHistory(
+      () => reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot),
+      tail.events,
+    );
+    if (restored.isErr()) {
       return discardSnapshotAndRefold();
     }
+    order = restored.value;
     fromVersion += tail.events.length;
 
     while (fromVersion < targetVersion) {
@@ -597,7 +633,7 @@ async function findById(id: OrderId): Promise<Order | null> {
         return discardSnapshotAndRefold();
       }
 
-      const catchUp = order.loadFromHistory(tail.events);
+      const catchUp = order.replayHistory(tail.events);
       if (catchUp.isErr()) return discardSnapshotAndRefold();
       fromVersion += tail.events.length;
     }
@@ -612,6 +648,13 @@ async function findById(id: OrderId): Promise<Order | null> {
     throw error;
   }
 
+  if (order.version !== targetVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion,
+      actualVersion: order.version,
+    });
+  }
   return order;
 }
 ```
@@ -627,7 +670,7 @@ return the partially restored aggregate. Reaching the target
 cursor proves every page bridged the snapshot to the pinned head without
 materializing the whole tail.
 
-`loadFromHistory(...)` keeps its `Result<void, DomainError>` boundary for
+`replayHistory(...)` keeps its `Result<void, DomainError>` boundary for
 invalid historical facts. Snapshot DTO validation, migration, and
 reconstitution belong to the adapter model and throw when stored data cannot
 be interpreted. The repository can discard that derived snapshot and replay

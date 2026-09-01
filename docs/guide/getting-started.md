@@ -46,7 +46,7 @@ domain work. It must not mutate child state or event lists from the outside.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   createDomainEventFactory,
   DomainError,
   recordPendingEvents,
@@ -79,7 +79,7 @@ class OrderAlreadyConfirmedError extends DomainError<
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   private constructor(id: OrderId, state: OrderState) {
@@ -102,7 +102,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       {
         ...this.state,
         status: "confirmed",
@@ -130,7 +130,7 @@ This example shows the core conventions:
 - `createEvent(...)` fills `aggregateId` and `aggregateType` without reading a
   clock or id generator. `recordPendingEvents(...)` adds the technical stamp in
   the application shell.
-- `commit(newState, events)` changes state first, records events after the
+- `setState(newState, events)` changes state first, records events after the
   state is valid, and bumps the aggregate version once.
 - Domain rules throw `DomainError` subclasses. Application boundaries decide
   whether to turn selected errors into `Result` with `domainErrorToResult`, map

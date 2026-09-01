@@ -150,8 +150,8 @@ export class CheckoutProcessInWrongStateError extends DomainError<"CHECKOUT_PROC
  */
 export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 	EventSourcedCheckoutSagaState,
-	EventSourcedCheckoutSagaEvent,
-	OrderId
+	OrderId,
+	EventSourcedCheckoutSagaEvent
 > {
 	protected readonly aggregateType = "EventSourcedCheckoutSaga";
 

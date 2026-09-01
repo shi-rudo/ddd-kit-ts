@@ -45,6 +45,7 @@
 		"test:coverage": "vp test --coverage --coverage.include='src/**'",
 		"test:edge-runtime": "pnpm build && node scripts/run-edge-runtime-smoke.mjs",
 		"audit:prod": "pnpm audit --prod",
+		"benchmark:aggregate-hot-path": "pnpm build && node --expose-gc benchmarks/aggregate-hot-path.mjs",
 		"benchmark:event-stamping": "pnpm build && node --expose-gc benchmarks/domain-event-stamping.mjs",
 		"clean": "rm -rf dist",
 		"lint": "biome check .",
@@ -55,6 +56,7 @@
 		"docs:dev": "typedoc && vitepress dev docs",
 		"docs:build": "typedoc && vitepress build docs",
 		"docs:preview": "vitepress preview docs",
+		"mutate:aggregate": "stryker run stryker.aggregate.json",
 		"mutate:money": "stryker run stryker.money.json"
 	},
 	"keywords": [

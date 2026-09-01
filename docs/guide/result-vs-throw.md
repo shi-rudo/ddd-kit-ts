@@ -28,7 +28,7 @@ about boundaries:
 | `QueryBus.executeUnsafe` | `R` | throws |
 | `withCommit` | `R` | throws |
 | `UnitOfWork.run` | `R` | throws |
-| `loadFromHistory` / snapshot replay | `Result<void, DomainError>` | `Err<DomainError>` for domain-nameable corruption; wiring and infrastructure corruption still throws (`ForeignEventError`, `SnapshotSchemaMismatchError`) |
+| `replayHistory` / snapshot replay | `Result<void, DomainError>` | `Err<DomainError>` for domain-nameable corruption; wiring and infrastructure corruption still throws (`ForeignEventError`, `SnapshotSchemaMismatchError`) |
 
 The old mental shortcut "app-service boundary returns Result" is too broad.
 Bus results carry explicit expected failures, but unclassified exceptions still
@@ -42,7 +42,7 @@ typed error.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
 } from "@shirudo/ddd-kit";
 
@@ -56,7 +56,7 @@ class OrderAlreadyConfirmedError
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   confirm(): void {
@@ -64,7 +64,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { ...this.state, status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );

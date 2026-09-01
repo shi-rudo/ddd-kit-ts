@@ -241,13 +241,14 @@ describe("Entity", () => {
 			if (state.quantity < 0) throw new Error("negative quantity");
 		};
 
-		it("keeps the injected validator when a subclass declares a validateState field", () => {
+		it("rejects a subclass validateState field at compile time and keeps the injected validator at runtime", () => {
 			class FieldShadowingEntity extends Entity<
 				{ quantity: number },
 				Id<"FieldShadowingId">
 			> {
 				// A field initializer runs after super(); it must not replace the
 				// injected validator on any path.
+				// @ts-expect-error state validation is constructor-injected, not shadowable
 				protected readonly validateState = (): void => {};
 
 				constructor(id: Id<"FieldShadowingId">, state: { quantity: number }) {
@@ -273,7 +274,7 @@ describe("Entity", () => {
 			expect(entity.state.quantity).toBe(1);
 		});
 
-		it("keeps the injected validator when a subclass declares a validateState method", () => {
+		it("rejects a subclass validateState method at compile time and keeps the injected validator at runtime", () => {
 			class MethodShadowingEntity extends Entity<
 				{ quantity: number },
 				Id<"MethodShadowingId">
@@ -282,6 +283,7 @@ describe("Entity", () => {
 					super(id, state, { validateState: rejectNegativeQuantity });
 				}
 
+				// @ts-expect-error state validation is constructor-injected, not overridable
 				protected validateState(_state: { quantity: number }): void {}
 
 				set(quantity: number): void {

@@ -11,7 +11,7 @@ export type DomainEventValidationField =
 	| "eventId"
 	| "type"
 	| "occurredAt"
-	| "version"
+	| "schemaVersion"
 	| "aggregateId"
 	| "aggregateType";
 

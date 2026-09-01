@@ -77,7 +77,7 @@ uses an `AggregatePersistence` definition and `UnitOfWork`. A
 no transition after the payment arrives.
 
 ```ts
-class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
+class CheckoutSaga extends StateStoredAggregate<CheckoutSagaState, OrderId> {
   // The machine carries the process rules: which inputs are legal in
   // which state. See examples/saga/checkout-saga.ts for the full class.
   advanceToShipping(): void { /* transition stored process state */ }
@@ -135,7 +135,7 @@ does not run that mapper:
 
 ```ts
 const saga = EventSourcedCheckoutSaga.reconstitute(orderId);
-const replayed = saga.loadFromHistory(history);
+const replayed = saga.replayHistory(history);
 if (replayed.isErr()) throw replayed.error;
 
 // No command was enqueued and no pending fact was created by replay.

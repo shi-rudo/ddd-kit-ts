@@ -96,7 +96,7 @@ call it while loading old facts.
 For a state-stored aggregate, provide an explicit reconstitution factory:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   static reconstitute(
@@ -105,14 +105,16 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
 ```
 
-`markRestored` restores the current domain version. It does not create a
-persistence receipt on the aggregate and does not record events.
+`markReconstituted` restores the current domain version. It does not create a
+persistence receipt on the aggregate and does not record events. It accepts
+only a clean instance at a version not above the restored one; see
+[Aggregates -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
 
 The adapter tracks the result before returning it:
 
@@ -133,26 +135,30 @@ async findById(id: OrderId): Promise<Order | undefined> {
 }
 ```
 
-For event sourcing, construct a bare aggregate and replay a stable stream
-prefix:
+For event sourcing, build the aggregate from the first page through
+`reconstituteAggregateFromHistory` and replay the rest of the pinned prefix
+into it:
 
 ```ts
-const order = Order.bare(id);
-let fromVersion = 0;
-let toVersion: number | undefined;
+const first = await eventStore.readStream(address, { limit: 256 });
+if (!first.exists) return undefined;
+const toVersion = first.lastVersion;
 
-for (;;) {
+const reconstituted = reconstituteAggregateFromHistory(
+  () => Order.bare(id),
+  first.events,
+);
+if (reconstituted.isErr()) throw reconstituted.error;
+const order = reconstituted.value;
+let fromVersion = first.events.length;
+
+while (fromVersion < toVersion) {
   const page = await eventStore.readStream(address, {
     fromVersion,
     toVersion,
     limit: 256,
   });
-
-  if (!page.exists) return undefined;
-  toVersion ??= page.lastVersion;
-  if (fromVersion === toVersion) break;
-
-  if (page.events.length === 0) {
+  if (!page.exists || page.events.length === 0) {
     throw new NonProgressingEventStreamPageError({
       ...address,
       fromVersion,
@@ -160,13 +166,23 @@ for (;;) {
     });
   }
 
-  const replay = order.loadFromHistory(page.events);
+  const replay = order.replayHistory(page.events);
   if (replay.isErr()) throw replay.error;
   fromVersion += page.events.length;
 }
 
+if (order.version !== toVersion) {
+  throw new ReplayHeadMismatchError({
+    ...address,
+    targetVersion: toVersion,
+    actualVersion: order.version,
+  });
+}
 return tracking.trackLoaded(order);
 ```
+
+The full recipe with the refold fallback is in
+[Event Sourcing -> Loading from history](./event-sourcing.md#loading-from-history).
 
 Pin the first page's `lastVersion` and page toward that fixed head. This gives
 the load one stable append-only prefix even if another writer appends while it
@@ -449,24 +465,35 @@ const snapshot = captureAggregateSnapshot(
 await snapshotStore.save(address, snapshot);
 ```
 
-Loading creates a fresh aggregate. For event sourcing, replay the tail on that
-fresh instance:
+Loading creates a fresh aggregate. For event sourcing, replay the tail after
+`snapshot.version` on that fresh instance and check that it ends at the
+stream head:
 
 ```ts
-const order = reconstituteAggregateFromSnapshot(
-  orderSnapshots,
-  orderId,
-  snapshot,
-);
-
 const tail = await eventStore.readStream(address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
 
-const replay = order.loadFromHistory(tail.events);
-if (replay.isErr()) throw replay.error;
+const restored = reconstituteAggregateFromHistory(
+  () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
+  tail.events,
+);
+if (restored.isErr()) throw restored.error;
+const order = restored.value;
+if (order.version !== tail.lastVersion) {
+  throw new ReplayHeadMismatchError({
+    ...address,
+    targetVersion: tail.lastVersion,
+    actualVersion: order.version,
+  });
+}
 ```
+
+This reads one page. A tail longer than the page limit fails the head check
+instead of loading a truncated aggregate; the paged recipe with the pinned
+head and the refold fallback is in
+[Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It
 detaches the DTO and rejects functions, promises, errors, symbol-keyed fields,

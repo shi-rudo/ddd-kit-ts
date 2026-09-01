@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 import type {
+	Aggregate,
 	AggregatePersistence,
 	DeadlineProcessorObservers,
 	DeliveryFailureAssessment,
 	DeliveryFailureClassifier,
 	DomainErrorClass,
 	DurableCommandMessage,
-	IAggregateRoot,
 	Id,
 	IntegrationMessageRelationships,
 	OutboxDispatcherObservers,
@@ -24,41 +24,9 @@ import * as testing from "../../src/testing";
 
 type PublicExecutionContext = import("../../src").ExecutionContext;
 type PublicEventMetadata = import("../../src").EventMetadata;
-// @ts-expect-error EffectContext was replaced by the runtime-oriented ExecutionContext name in v3
-type RemovedEffectContext = import("../../src").EffectContext;
-// @ts-expect-error IRepository was removed instead of retained as a deprecated alias
-type RemovedIRepository = import("../../src").IRepository;
-// @ts-expect-error IUnitOfWorkRepository was removed with the legacy save/delete protocol
-type RemovedIUnitOfWorkRepository = import("../../src").IUnitOfWorkRepository;
-// @ts-expect-error the unscoped write-capable session was replaced by read-only RepositoryTracking
-type RemovedUnitOfWorkSession = import("../../src").UnitOfWorkSession;
 type PublicContractRepository = import("../../src/testing").ContractRepository<
-	IAggregateRoot<Id<"RemovedRepositoryContract">>
+	Aggregate<Id<"ContractRepositorySurface">>
 >;
-
-type IndexModule = typeof import("../../src");
-// @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
-type RemovedResetClockFactory = IndexModule["resetClockFactory"];
-// @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
-type RemovedResetEventIdFactory = IndexModule["resetEventIdFactory"];
-// @ts-expect-error module-level clock mutation was removed in favour of instance-bound factories
-type RemovedSetClockFactory = IndexModule["setClockFactory"];
-// @ts-expect-error module-level event-id mutation was removed in favour of instance-bound factories
-type RemovedSetEventIdFactory = IndexModule["setEventIdFactory"];
-// @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
-type RemovedWithClockFactory = IndexModule["withClockFactory"];
-// @ts-expect-error scoped module mutation was removed in favour of instance-bound factories
-type RemovedWithEventIdFactory = IndexModule["withEventIdFactory"];
-
-type RemovedFactoryMutationSurface =
-	| RemovedResetClockFactory
-	| RemovedResetEventIdFactory
-	| RemovedSetClockFactory
-	| RemovedSetEventIdFactory
-	| RemovedWithClockFactory
-	| RemovedWithEventIdFactory;
-
-void (undefined as unknown as RemovedFactoryMutationSurface);
 
 function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
 	// @ts-expect-error event metadata is immutable at the TypeScript boundary
@@ -67,35 +35,6 @@ function assertReadonlyEventMetadata(metadata: PublicEventMetadata): void {
 	metadata.custom = "changed";
 }
 void assertReadonlyEventMetadata;
-
-type LifecycleSurface = IAggregateRoot<Id<"ApiSurface">>;
-// @ts-expect-error persistence acknowledgement belongs to the application shell
-type RemovedMarkPersisted = LifecycleSurface["markPersisted"];
-// @ts-expect-error pending-event disposal is a kit-internal persistence capability
-type RemovedClearPendingEvents = LifecycleSurface["clearPendingEvents"];
-
-void (undefined as unknown as RemovedMarkPersisted);
-void (undefined as unknown as RemovedClearPendingEvents);
-
-type StateAggregateSurface = import("../../src").AggregateRoot<
-	unknown,
-	Id<"StateAggregateSurface">
->;
-// @ts-expect-error snapshot envelope construction belongs to the adapter model
-type RemovedCreateSnapshot = StateAggregateSurface["createSnapshot"];
-// @ts-expect-error snapshot reconstitution creates a fresh aggregate through the adapter model
-type RemovedRestoreFromSnapshot = StateAggregateSurface["restoreFromSnapshot"];
-type EventSourcedAggregateSurface = import("../../src").EventSourcedAggregate<
-	unknown,
-	never,
-	Id<"EventSourcedAggregateSurface">
->;
-type RemovedRestoreFromSnapshotWithEvents =
-	// @ts-expect-error snapshot-plus-tail loading is composed by the repository adapter
-	EventSourcedAggregateSurface["restoreFromSnapshotWithEvents"];
-void (undefined as unknown as RemovedCreateSnapshot);
-void (undefined as unknown as RemovedRestoreFromSnapshot);
-void (undefined as unknown as RemovedRestoreFromSnapshotWithEvents);
 
 const publicStateValidator: StateValidator<{ value: number }> = (state) => {
 	void state.value;
@@ -119,21 +58,14 @@ void publicDeadlineObservers;
 void publicDeliveryClassifier;
 void publicDeliveryAssessment;
 void (undefined as unknown as PublicExecutionContext);
-void (undefined as unknown as RemovedEffectContext);
-void (undefined as unknown as RemovedIRepository);
-void (undefined as unknown as RemovedIUnitOfWorkRepository);
-void (undefined as unknown as RemovedUnitOfWorkSession);
 void (undefined as unknown as PublicContractRepository);
 
 type PublicRepositoryContracts =
 	| AggregatePersistence<
-			IAggregateRoot<Id<"PersistenceSurface">>,
+			Aggregate<Id<"PersistenceSurface">>,
 			Id<"PersistenceSurface">
 	  >
-	| Repository<
-			IAggregateRoot<Id<"RepositorySurface">>,
-			Id<"RepositorySurface">
-	  >;
+	| Repository<Aggregate<Id<"RepositorySurface">>, Id<"RepositorySurface">>;
 void (undefined as unknown as PublicRepositoryContracts);
 
 type PublicUnitOfWorkContext = UnitOfWorkContext<{
@@ -144,7 +76,7 @@ type RemovedRawTransaction = PublicUnitOfWorkContext["rawTransaction"];
 // @ts-expect-error application work cannot access adapter tracking internals
 type RemovedTrackingSession = PublicUnitOfWorkContext["session"];
 type PublicRepositoryTracking = RepositoryTracking<
-	IAggregateRoot<Id<"TrackingSurface">>
+	Aggregate<Id<"TrackingSurface">>
 >;
 // @ts-expect-error legacy enrollment cannot bypass explicit add/update intent
 type RemovedEnrollSaved = PublicRepositoryTracking["enrollSaved"];
@@ -181,8 +113,8 @@ void (undefined as unknown as DomainErrorClass);
 const INDEX_SURFACE = [
 	"AggregateDeletedError",
 	"AggregateNotFoundError",
-	"AggregateRoot",
 	"AggregateTrackingError",
+	"CapabilityRegistryConflictError",
 	"CommandBus",
 	"CommitError",
 	"ConcurrencyConflictError",
@@ -229,6 +161,7 @@ const INDEX_SURFACE = [
 	"InvalidIntegrationMessageError",
 	"InvalidRepositoryAdapterError",
 	"InvalidRepositoryDefinitionError",
+	"InvalidVersionError",
 	"MisaddressedEventError",
 	"MissingEntityIdError",
 	"MissingHandlerError",
@@ -245,6 +178,7 @@ const INDEX_SURFACE = [
 	"QueryBus",
 	"ReentrantDomainStateMachineEvaluationError",
 	"ReentrantEventRecordingError",
+	"ReplayHeadMismatchError",
 	"RepositoryErrorMappingFailedError",
 	"RetryingTransactionScope",
 	"RollbackError",
@@ -252,6 +186,7 @@ const INDEX_SURFACE = [
 	"SnapshotSchemaMismatchError",
 	"SnapshotTimeValidationError",
 	"Specification",
+	"StateStoredAggregate",
 	"TransactionClosedError",
 	"UnenrolledChangesError",
 	"UnitOfWork",
@@ -300,6 +235,7 @@ const INDEX_SURFACE = [
 	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
 	"recapturePersistenceBaseline",
+	"reconstituteAggregateFromHistory",
 	"reconstituteAggregateFromSnapshot",
 	"recordDomainEvent",
 	"recordPendingEvents",
@@ -309,6 +245,7 @@ const INDEX_SURFACE = [
 	"sameEntity",
 	"sameVersion",
 	"specification",
+	"toVersion",
 	"transitionDomainState",
 	"updateEntityById",
 	"vo",

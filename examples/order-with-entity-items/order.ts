@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import { findEntityById } from "../../src/domain/entity/entity";
 import type { Id } from "../../src/domain/identity/id";
 import { addMoney, type Money } from "../../src/domain/value-object/money";
@@ -38,7 +38,7 @@ function validateOrderState(state: OrderState): void {
  * - The Aggregate Root enforcing aggregate-wide invariants
  * - How child entity logic is accessed through the Aggregate Root
  */
-export class Order extends AggregateRoot<OrderState, OrderId> {
+export class Order extends StateStoredAggregate<OrderState, OrderId> {
 	protected readonly aggregateType = "Order";
 
 	private itemCounter = 0;

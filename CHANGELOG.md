@@ -29,6 +29,190 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: a deep freeze walks only what the write changed
+
+`deepFreeze` skips a subtree it already deep-froze, so a handler result or
+a new state written as `{ ...state, status }` costs the root object instead
+of the whole graph. Before this change every write and every replayed
+event with `deepFreezeState` walked the entire state. Measured with
+`npm run benchmark:aggregate-hot-path` (12 lines, nested attributes, Node
+24): a deep-mode `setState` or `apply` went from 24,000 to 96,000
+operations per second, level with the shallow mode; a deep-mode replay of
+2,000 events went from 16 to 990 replays per second. The shallow mode is
+unchanged. The replay guard reads the pending count without the frozen
+copy that the `pendingEvents` getter allocates. `deepFreeze` takes one
+argument now; the cycle tracking is internal.
+
+### Changed (breaking): one lifecycle vocabulary
+
+One term per lifecycle step, and the same generic order on both aggregate
+flavours. No behavior changes.
+
+| Before | After |
+| --- | --- |
+| `AggregateRoot` (class) | `StateStoredAggregate` |
+| `IAggregateRoot` (contract) | `Aggregate` |
+| `IEventSourcedAggregate` (contract) | `ReplayableAggregate` |
+| `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
+| `AggregateRoot.commit(newState, events)` | `setState(newState, events)` |
+| `loadFromHistory(history)` | `replayHistory(history)` |
+| `markRestored(version)` | `markReconstituted(version)` |
+| `stampNewEventAddress(event)` | `addressNewEvent(event)` |
+| `DomainEvent.version`, option `version` | `schemaVersion` |
+
+The state-stored base class is `StateStoredAggregate`, the sibling of
+`EventSourcedAggregate`. The contract both share is `Aggregate` (`id`,
+`version`, `pendingEvents`), and `ReplayableAggregate` adds
+`replayHistory`; the `I` prefix leaves the kit with them. The class you
+write is the root of its aggregate; the kit calls it the aggregate, and
+`Entity` names the children inside it.
+`commit` now names the transaction only (`withCommit`, `committedVersion`,
+`CommittedDomainEvent`); the aggregate write helper is `setState`, with
+the events of the change as an optional second argument. `reconstitute`
+is the factory step, `replay` the fold onto a built instance. The event
+field says `schemaVersion` because the aggregate `version` is the
+optimistic-concurrency version; integration and command messages keep
+their wire field `version`, and the boundary mappers translate. The
+migration guide (appendix rc.4 to rc.5) lists the one-to-one renames with
+the commands that apply them, and the aggregates guide carries the
+glossary. The entries below speak the new vocabulary. Kit-internal: the
+recording registry key moved to `v2`, because the event shape that crosses
+`record()` changed.
+
+### Added: reconstituteAggregateFromHistory yields the aggregate only on success
+
+`reconstituteAggregateFromHistory(create, history)` builds the replay target through
+the factory you pass (a fresh instance, or one restored from a snapshot),
+folds the history into it, and returns `Result<Aggregate, DomainError>`.
+The instance exists only inside the call, so a rejected replay leaves the
+caller with nothing: a rolled-back instance cannot reach an identity map by
+an ignored `Result`. `replayHistory` stays for later catch-up pages on
+the instance. The guides use the factory in every load recipe.
+
+### Added: trustInitialState for reconstitution factories
+
+`EntityConfig.trustInitialState` (and so `AggregateConfig`) tells the
+constructor that the initial state is a persisted fact. `validateState` does
+not run on it, and it runs on every later `setState` and `apply()`. The
+snapshot factory of an event-sourced aggregate passes the option. Without it
+a rule that tightened after the snapshot broke every restore of that
+snapshot: the restore threw, mapped to `SnapshotCorruptedError`, and
+refolded the stream on each load. With the option, `validateState` can hold
+real rules on an
+event-sourced aggregate. A state-stored factory keeps the default, because a
+row that fails today's rules is a finding. The structural gates (frozen copy,
+hostile own-key check) run regardless.
+
+### Changed: the mint gate docs name the cooperative tier
+
+The TSDoc of `UnmintedEventError` and of the mint check said the marker is
+unforgeable. Only the module-private tier is; the cooperative `Symbol.for`
+brand that a second loaded copy of the kit stamps can be faked by code in
+the same process. The docs now state both tiers and the posture: the gate
+catches accidents, not adversaries. The aggregates and domain-events guides
+name `UnmintedEventError` and `HostileStateKeyError` with that posture.
+
+### Added: ReplayHeadMismatchError and the snapshot catch-up contract proof
+
+A load recipe pins the stream head before its first page and checks the
+final aggregate version against it; on a mismatch it throws
+`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`). Events carry no
+stream position, so `replayHistory` cannot detect a tail that overlaps
+the restored version. A snapshot at version 10 fed five events, two of them
+already folded, ended at version 15 without an error. Both recipes in the
+event-sourcing guide carry the check.
+
+The event-sourced repository contract suite gains an optional harness hook
+`captureSnapshot(aggregate, environment)`. When present, the suite proves
+that a snapshot at the head loads at the head and that a catch-up ends at
+the stream head with the same state as a full replay. The guide claimed
+this proof before it existed.
+
+### Removed: the protected pendingEventCount getter on BaseAggregate
+
+No kit path read the getter. The pending-event lifecycle capability
+reports the count to the unit of work, and a subclass reads
+`pendingEvents.length`.
+
+### Fixed: replay routes a domain rejection from another package copy into the Result
+
+`replayHistory` recognized a `DomainError` with a plain `instanceof`, so a
+handler that runs in another loaded copy of the kit escaped the `Result`
+channel as a throw. It now routes by the copy-safe `isDomainErrorLike`, the
+check the snapshot seam already used.
+
+### Changed: the capability registry bootstrap fails loud
+
+The kit installs its capability registries on `globalThis` under versioned
+`Symbol.for` keys. Before this change a key that another module already held
+was silently overwritten when it was configurable, and a host that rejected
+the registration silently left the registry private to one package copy.
+Now a foreign value under a kit key throws `CapabilityRegistryConflictError`
+(code `CAPABILITY_REGISTRY_CONFLICT`) at bootstrap, and a private registry is
+named in the `UnmanagedInstanceError` that a later lookup produces.
+
+### Fixed: state-stored aggregates check the event address
+
+`StateStoredAggregate.setState` and `addDomainEvent` now apply the address discipline
+that `EventSourcedAggregate.apply` already had: a missing `aggregateId` or
+`aggregateType` is stamped from the aggregate, and an event addressed to
+another aggregate throws `MisaddressedEventError` before the state moves.
+Before this change a state-stored aggregate recorded a foreign-addressed
+event, and `withCommit` published it as this aggregate's commit because the
+envelope source is copied from the event. `withCommit` now also rejects a
+harvested event whose `aggregateId` or `aggregateType` differs from the
+enrolled aggregate, as a backstop for instances from another package copy.
+Kit-internal: the lifecycle capability exposes `aggregateType()` for that
+check, and the registry key moved to `v6`.
+
+Two observable details of the protected surface changed with it. An event
+that carries only part of its address is stored as a stamped copy, so
+`pendingEvents[0] === event` holds only for a fully addressed event.
+`setState` stamps and appends its events itself and no longer calls
+`addDomainEvent`; an override of `addDomainEvent` sees only the events
+passed to it directly.
+
+`replayHistory` now also drops a pending decision that a handler recorded
+during the fold when it rolls back, so the instance is clean after a failed
+replay.
+
+### Changed (breaking): the hostile own-key guard covers the fold result and the payload
+
+The rejection of an own `"__proto__"` data key now runs on the result of an
+event handler and on the event payload. On `apply()` it checks every new
+fact; on replay it checks the final folded state once. `createDomainEvent`
+and `createUncommittedDomainEvent` check the payload. Before this change
+only the entity constructor, `setState`, and the metadata helpers checked,
+so a handler that folded a hostile row into state stored the key. The check
+looks at the root object only, on plain objects, null-prototype objects, and
+arrays; a class instance passes. It throws `HostileStateKeyError`, a wiring
+error: on replay, `replayHistory` throws it after the rollback instead of
+returning `Err`, the same posture as `MissingHandlerError`. A stored stream
+whose final fold now hits the guard fails to load until the row is repaired.
+
+### Fixed: aggregate versions are validated where a number enters
+
+`toVersion(n)` is the new way to brand a stored row value as a `Version`. It
+accepts a safe integer of at least zero and throws `InvalidVersionError`
+(code `INVALID_VERSION`) for anything else. Use it in repository adapters
+instead of `row.version as Version`.
+
+`markReconstituted` and `setVersion` apply the same rule. Before this change a
+`NaN`, negative, or fractional version passed through, and a `NaN` version
+passed the `withCommit` unique-cursor guard because `NaN` compares false.
+`markReconstituted` also rejects a version below the current one, and it rejects
+an instance that already carries pending events (`UnreplayableAggregateError`),
+the same guard `replayHistory` had. A reconstitution factory that calls
+`setState` before `markReconstituted` fails for a row stored at version 0, and a
+constructor that records a creation event fails on every load; the
+aggregates guide names the fix.
+
+Kit-internal: the pending-event lifecycle capability now types its seam
+with `Version` and `PendingDomainEvent`, `committedVersion` is required, and
+the registry key moved from `v4` to `v5` (and on to `v6` with the address
+backstop above). An aggregate constructed by a package copy
+with the old shape fails the enrollment check instead of half-working.
+
 ### Fixed: an event-sourced aggregate rejects setState
 
 `EventSourcedAggregate` overrides the inherited `setState` to throw
@@ -39,9 +223,9 @@ changes only through `apply()`.
 
 ### Changed: coded errors on three aggregate wiring paths
 
-Three paths that threw a bare `Error` or `TypeError` now throw a kit wiring
-error with a stable code, so `onPersistError` observers and tests can match
-on `error.code`:
+Two paths that threw a bare `Error` now throw a kit wiring error with a
+stable code, so `onPersistError` observers and tests can match on
+`error.code`:
 
 - A post-commit acknowledgement whose batch is not the aggregate's pending
   prefix throws `PendingEventBatchMismatchError`
@@ -49,14 +233,25 @@ on `error.code`:
   and the pending length.
 - The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
   for a `null` or `undefined` id.
-- `recordPendingEvents`, `withCommit` enrollment, and the persistence
-  baseline functions throw `UnmanagedInstanceError` (`UNMANAGED_INSTANCE`)
-  for an aggregate or baseline that this package did not construct. The
-  `withCommit` case threw `EventHarvestError` before.
 
-`Entity` now validates a candidate state before it freezes it, on
-construction and on `setState`. A rejected candidate leaves no shared object
-frozen behind. The object validated is still the object stored.
+### Changed (breaking): a non-kit instance is rejected with UNMANAGED_INSTANCE
+
+`recordPendingEvents`, `withCommit` enrollment, and the persistence baseline
+functions throw `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`) for an
+aggregate or baseline that this package did not construct. That covers a
+repository DTO, a structural lookalike, and an instance from another package
+copy. Before this change the `withCommit` case threw `EventHarvestError`
+(`EVENT_HARVEST_FAILED`), and the other two threw a bare `TypeError`.
+Migration: an error mapper or a test that matched the old class or code for
+this case matches `UNMANAGED_INSTANCE` now.
+
+### Changed (breaking): a subclass member named validateState is a compile error
+
+`Entity` declares a private `validateState` member that is never assigned.
+A subclass that declares a method or a field with that name fails to compile.
+Before this change such a member compiled and was silently ignored; the
+validator is passed through the constructor config. Migration: rename the
+member, or move its rule into `EntityConfig.validateState`.
 
 ### Fixed: event-sourced aggregates check the folded state
 
@@ -64,7 +259,7 @@ frozen behind. The object validated is still the object stored.
 the constructor config against the folded state before it stores the state
 and records the event. Before this change the function ran only in the
 constructor, so an event-sourced aggregate accepted a state that its own
-validator rejects. Replay through `loadFromHistory` still skips both gates.
+validator rejects. Replay through `replayHistory` still skips both gates.
 
 ### Changed (breaking): an event handler must return a state
 
@@ -72,9 +267,12 @@ A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
 (code `HANDLER_RETURNED_NO_STATE`) on the apply path and on replay. Before
 this change the aggregate stored `undefined` as its state and, on the apply
 path, recorded the event. A state type that includes `undefined` is no longer
-supported for event-sourced aggregates. Migration: model an absent state as
-`null` or as a status field, and change every handler that returned
-`undefined` on purpose before you load streams that contain those events.
+supported for event-sourced aggregates. On replay, `replayHistory` throws
+the error after the rollback instead of returning `Err`, so a stored stream
+whose handler now returns `undefined` fails to load. Migration: model an
+absent state as `null` or as a status field, and change every handler that
+returned `undefined` on purpose before you load streams that contain those
+events.
 
 ### Added: tests for two guarantees the bus already gave
 
@@ -468,7 +666,7 @@ Migration for aggregate operations:
 ```ts
 // Before: recording data leaked into the domain signature
 confirm(facts: DomainEventFacts): void {
-  this.commit(
+  this.setState(
     nextState,
     this.recordEvent("OrderConfirmed", payload, facts),
   );
@@ -479,7 +677,7 @@ order.confirm(domainEvents.createFacts());
 
 // After: pure decision in the aggregate
 confirm(): void {
-  this.commit(
+  this.setState(
     nextState,
     this.createEvent("OrderConfirmed", payload),
   );
@@ -936,7 +1134,7 @@ inside the same breaking window.
   must fold state from `type` and `payload` only.
 - `reconstituteAggregateFromSnapshot` enforces a post-condition: the
   reconstituted aggregate must carry `snapshot.version`. A factory that
-  forgets `markRestored` now fails loudly. Before, it fed the
+  forgets `markReconstituted` now fails loudly. Before, it fed the
   discard-and-refold recovery forever.
 - The repository facade method cache keys validity on the current source
   function. Adapter methods run with `this` bound to the raw source. A
@@ -1211,7 +1409,7 @@ Remove `autoVersionBump` from configs. `AggregateConfig` retains
 `domainEventFactory`; aggregates that had `autoVersionBump` set to `true`
 change nothing else. On the event-sourced side, `apply(event)` lost its
 optional `isNew` flag the same way: replay goes through
-`loadFromHistory` / `restoreFromSnapshotWithEvents`, and `apply` is
+`replayHistory` / `restoreFromSnapshotWithEvents`, and `apply` is
 only for new facts.
 
 #### 3. Buses throw `UnregisteredHandlerError` (runtime change)
@@ -1326,7 +1524,7 @@ repository-specific prefixes. Behavior and test names are unchanged.
 
 #### 11. Replay trusts history: `validateEvent` and `validateState` no longer judge it (runtime change)
 
-`loadFromHistory` and `restoreFromSnapshotWithEvents` stop invoking
+`replayHistory` and `restoreFromSnapshotWithEvents` stop invoking
 `validateEvent`, and the snapshot path stops running `validateState` on
 the restored state; both guard NEW facts on the `apply()` path only.
 History is already accepted fact, and decision rules change over time;
@@ -1509,7 +1707,7 @@ the predecessor in durable source state; `OutboxRecord` exposes the committed
 envelope with dispatch state; the in-process `EventBus` still receives the bare
 event. An already-persisted aggregate with pending events must also advance its
 version; replace event-only `addDomainEvent(event)` calls (notably hard-delete
-events) with `commit({ ...this.state }, event)` so the envelope has a unique
+events) with `setState({ ...this.state }, event)` so the envelope has a unique
 cursor.
 
 `OutboxContractEnvironment.addCommitted` and `addRolledBack` now receive the
@@ -1806,7 +2004,7 @@ Every call supplies a positive safe-integer `limit`; `fromVersion` and
 ```ts
 // before: one allocation can grow with the complete stream
 const stream = await eventStore.readStream(address);
-order.loadFromHistory(stream.events);
+order.replayHistory(stream.events);
 
 // after: pin the first observed head and replay bounded pages
 let fromVersion = 0;
@@ -1827,7 +2025,7 @@ for (;;) {
       targetVersion,
     });
   }
-  const replay = order.loadFromHistory(page.events);
+  const replay = order.replayHistory(page.events);
   if (replay.isErr()) throw replay.error;
   fromVersion += page.events.length;
 }
@@ -1918,7 +2116,7 @@ options must be positive safe integers.
 
 #### 25. Aggregate persistence lifecycle moves to the Application Shell
 
-`IAggregateRoot` no longer exposes `markPersisted` or
+`Aggregate` no longer exposes `markPersisted` or
 `clearPendingEvents`, and aggregate subclasses no longer provide the
 `onPersisted(version)` Template Method. A public or overridable lifecycle
 mutator could skip pending-event cleanup, erase uncommitted facts, or move the
@@ -1932,7 +2130,7 @@ Application-Shell observer run for successfully acknowledged saved aggregates:
 
 ```ts
 // before: infrastructure behavior lived on the domain object
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected override onPersisted(version: Version): void {
     orderCache.evict(this.id, version);
   }
@@ -1942,10 +2140,10 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
 const deps = {
   scope,
   outbox,
-  onPersisted: async (aggregate: IAggregateRoot<OrderId, OrderEvent>, version: Version) => {
+  onPersisted: async (aggregate: Aggregate<OrderId, OrderEvent>, version: Version) => {
     await orderCache.evict(aggregate.id, version);
   },
-  onPersistError: (error: unknown, aggregate: IAggregateRoot<OrderId, OrderEvent>) => {
+  onPersistError: (error: unknown, aggregate: Aggregate<OrderId, OrderEvent>) => {
     logger.error({ error, aggregateId: aggregate.id });
   },
 };
@@ -1957,19 +2155,19 @@ committed write look failed. The same observer reports a rare runtime failure
 of internal acknowledgement or disposal while peer aggregates continue.
 Deleted aggregates do not trigger `onPersisted`.
 
-Behavioral change for existing `markRestored` overrides: post-commit
+Behavioral change for existing `markReconstituted` overrides: post-commit
 acknowledgement no longer calls that overridable Post-Load marker. Such
 overrides continue to run for reconstitution and snapshot restoration, where
-calling `super.markRestored(version)` first remains required, but they no
+calling `super.markReconstituted(version)` first remains required, but they no
 longer run after a save. Move Post-Save logging, metrics, and cache invalidation
 to the Application-Shell `onPersisted` observer shown above.
 
-Custom structural implementations of `IAggregateRoot` can still satisfy
+Custom structural implementations of `Aggregate` can still satisfy
 repository ports, but cannot be enrolled in `withCommit` or `UnitOfWork`:
 enrollment rejects them inside the transaction because they have no internal
-acknowledgement capability. Extend `AggregateRoot` for state-stored domains or
+acknowledgement capability. Extend `StateStoredAggregate` for state-stored domains or
 `EventSourcedAggregate` for event-sourced domains. Event sourcing remains
-optional; ordinary `AggregateRoot` instances use the same Unit-of-Work path.
+optional; ordinary `StateStoredAggregate` instances use the same Unit-of-Work path.
 
 For deliberate in-memory abandonment, discard the dirty aggregate instance
 and reconstitute a fresh one. Public event disposal is no longer available.
@@ -1984,7 +2182,7 @@ ran. Pass a pure validator through `EntityConfig<TState>` or
 
 ```ts
 // before: virtual dispatch from Entity's constructor
-class Order extends AggregateRoot<OrderState, OrderId> {
+class Order extends StateStoredAggregate<OrderState, OrderId> {
   protected validateState(state: OrderState): void {
     if (state.items.length > 100) throw new TooManyItemsError();
   }
@@ -1995,7 +2193,7 @@ function validateOrderState(state: OrderState): void {
   if (state.items.length > 100) throw new TooManyItemsError();
 }
 
-class Order extends AggregateRoot<OrderState, OrderId> {
+class Order extends StateStoredAggregate<OrderState, OrderId> {
   constructor(id: OrderId, state: OrderState) {
     super(id, state, { validateState: validateOrderState });
   }
@@ -2132,7 +2330,7 @@ shape instead of silently accepting two relationship locations.
 
 ### Changed (breaking): aggregate persistence lifecycle is application-owned
 
-- Removed `markPersisted` and `clearPendingEvents` from `IAggregateRoot` and
+- Removed `markPersisted` and `clearPendingEvents` from `Aggregate` and
   both aggregate base classes.
 - Removed the protected aggregate `onPersisted(version)` Template Method.
 - Added optional async `onPersisted(aggregate, version)` dependencies to
@@ -2252,7 +2450,7 @@ shape instead of silently accepting two relationship locations.
   rejection, and detached read arrays. The event-sourced repository suite now
   makes its qualified stream address explicit through `streamKeyFor` and proves
   the same missing-vs-empty distinction through `committedStreamEvents`.
-- Replay remains independently defensive: `loadFromHistory` rejects a
+- Replay remains independently defensive: `replayHistory` rejects a
   persisted event whose present aggregate type or id contradicts the target,
   while storage adapters remain responsible for ordered, contiguous persisted
   stream positions.
@@ -2331,7 +2529,7 @@ shape instead of silently accepting two relationship locations.
 
 ### Changed (breaking): replay trusts history
 
-- `EventSourcedAggregate`: replay (`loadFromHistory`,
+- `EventSourcedAggregate`: replay (`replayHistory`,
   `restoreFromSnapshotWithEvents`) no longer runs `validateEvent`, and
   the snapshot path no longer runs `validateState` on the restored
   state; both guard new facts on the `apply()` path only. Re-checking
@@ -2814,7 +3012,7 @@ shape instead of silently accepting two relationship locations.
   migration is a find-and-replace on the two type names (the shapes are
   identical).
 
-### Changed (breaking): `AggregateRoot.setState` always bumps; the no-bump path is a named method
+### Changed (breaking): `StateStoredAggregate.setState` always bumps; the no-bump path is a named method
 
 - `setState(newState)` now ALWAYS advances the OCC version, and the
   rare non-bumping mutation moved to the deliberately loud
@@ -2846,7 +3044,7 @@ shape instead of silently accepting two relationship locations.
 - `EventSourcedAggregate.apply(event)` drops its optional `isNew`
   boolean (the same flag-argument cleanup as `setState`): `apply()`
   always records the event and bumps the version. Replaying history is
-  a different operation with its own entry points, `loadFromHistory`
+  a different operation with its own entry points, `replayHistory`
   and `restoreFromSnapshotWithEvents`; internally both share the
   record-free `dispatch` transition path. No known consumer passed
   `isNew` explicitly; call sites using `this.apply(event)` are
@@ -3105,8 +3303,8 @@ shape instead of silently accepting two relationship locations.
 
 ### Fixed: `restoreFromSnapshot` rejects targets carrying pending events
 
-- `AggregateRoot.restoreFromSnapshot` silently kept pre-restore
-  `pendingEvents` while re-baselining the version via `markRestored`,
+- `StateStoredAggregate.restoreFromSnapshot` silently kept pre-restore
+  `pendingEvents` while re-baselining the version via `markReconstituted`,
   so events recorded before the restore would later be harvested with
   a version baseline from a state lineage the snapshot had discarded.
   The event-sourced replay methods already guarded against exactly

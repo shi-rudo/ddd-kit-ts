@@ -1,6 +1,7 @@
-import type {
-	AggregateSnapshot,
-	Version,
+import {
+	type AggregateSnapshot,
+	toVersion,
+	type Version,
 } from "../../domain/aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
@@ -43,11 +44,12 @@ export interface SnapshotModel<
 	 *
 	 * A snapshot persisted under yesterday's decision rules must keep loading
 	 * after a rule change ("replay from zero equals snapshot plus tail"). The
-	 * aggregate constructor runs `validateState` on the state it receives;
-	 * the aggregates guide ("Where Invariants Live") states which rules
-	 * belong in that function. When the factory does reject the blob and
-	 * throws a `DomainError`, `reconstituteAggregateFromSnapshot` surfaces it
-	 * as a {@link SnapshotCorruptedError} so the documented load recipe can
+	 * factory passes `trustInitialState: true` to the constructor, so
+	 * `validateState` does not run on the stored state; the aggregates guide
+	 * ("Where Invariants Live") states the rule and the factory shape. When
+	 * a factory without the option rejects the blob with a `DomainError`,
+	 * `reconstituteAggregateFromSnapshot` surfaces it as a
+	 * {@link SnapshotCorruptedError} so the documented load recipe can
 	 * discard the derived snapshot and refold from the stream; the load then
 	 * still succeeds, at the cost of a full replay on every hit.
 	 */
@@ -109,12 +111,14 @@ export function captureAggregateSnapshot<
  * adapter model. A missing schema version denotes the original schema `1`.
  *
  * A `DomainError` thrown while interpreting the stored blob (the model's
- * `migrate`, or current `validateState` rules running inside the model's
- * reconstitution factory) is surfaced as a {@link SnapshotCorruptedError}:
+ * `migrate`, or `validateState` inside a reconstitution factory that does
+ * not pass `trustInitialState`) is surfaced as a {@link SnapshotCorruptedError}:
  * a snapshot is DERIVED data, so the caller's discard-and-refold branch must
  * see one catchable corruption channel instead of a raw domain rejection
- * escaping `getById` after a rule change. `SnapshotSchemaMismatchError`
- * (a configuration gap, not corruption) and non-domain throws propagate.
+ * escaping `getById` after a rule change. A stored version that is not a
+ * valid `Version` is surfaced the same way. `SnapshotSchemaMismatchError`
+ * (a configuration gap, not corruption) and non-domain throws propagate,
+ * including an `InvalidVersionError` the factory itself throws.
  */
 export function reconstituteAggregateFromSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -126,6 +130,23 @@ export function reconstituteAggregateFromSnapshot<
 ): TAggregate {
 	assertSnapshotModel(model);
 	const storedSchemaVersion = snapshot.schemaVersion ?? 1;
+	// A corrupt stored version is derived-data corruption like a bad blob:
+	// surfaced as SnapshotCorruptedError so the load recipe discards and
+	// refolds. Checked BEFORE the factory runs, so an InvalidVersionError
+	// thrown by the factory itself (a wiring bug such as a restore below a
+	// version the factory already advanced) stays a raw throw, like the
+	// version post-condition below.
+	let version: Version;
+	try {
+		version = toVersion(snapshot.version);
+	} catch (error) {
+		throw new SnapshotCorruptedError(
+			`Snapshot of ${model.aggregateType} ${String(id)} carries the ` +
+				`invalid version ${String(snapshot.version)}. Discard the derived ` +
+				"snapshot and refold from the stream.",
+			error,
+		);
+	}
 	let aggregate: TAggregate;
 	try {
 		let state: TSnapshotState;
@@ -143,7 +164,7 @@ export function reconstituteAggregateFromSnapshot<
 				actualSchemaVersion: storedSchemaVersion,
 			});
 		}
-		aggregate = model.reconstitute(id, state, snapshot.version);
+		aggregate = model.reconstitute(id, state, version);
 	} catch (error) {
 		// Copy-safe: the model factory may run in another loaded copy of the
 		// kit (adapter package, dual CJS/ESM load), whose DomainError fails a
@@ -160,7 +181,7 @@ export function reconstituteAggregateFromSnapshot<
 		throw error;
 	}
 	// Post-condition, not corruption: a factory that ignores the version
-	// parameter (a forgotten markRestored) is a deterministic model wiring
+	// parameter (a forgotten markReconstituted) is a deterministic model wiring
 	// bug. Routing it into the discard-and-refold channel would mask it as
 	// perpetual silent refolding, so it throws raw instead.
 	if (aggregate.version !== snapshot.version) {
@@ -168,7 +189,7 @@ export function reconstituteAggregateFromSnapshot<
 			`SnapshotModel.reconstitute for ${model.aggregateType} ${String(id)} ` +
 				`returned an aggregate at version ${String(aggregate.version)} for a ` +
 				`snapshot at version ${String(snapshot.version)}. Reconstitution must ` +
-				"restore the persisted version; call markRestored(version) inside " +
+				"restore the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
 	}

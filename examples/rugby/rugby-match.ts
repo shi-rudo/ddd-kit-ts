@@ -46,8 +46,8 @@ export type MatchView = Readonly<{
 
 export class RugbyMatch extends EventSourcedAggregate<
 	MatchState,
-	RugbyMatchEvent,
-	MatchId
+	MatchId,
+	RugbyMatchEvent
 > {
 	protected readonly aggregateType = "RugbyMatch";
 

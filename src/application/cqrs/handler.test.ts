@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import {
-	AggregateRoot,
-	type IAggregateRoot,
-} from "../../domain/aggregate/aggregate-root";
-import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
+	type Aggregate,
+	StateStoredAggregate,
+} from "../../domain/aggregate/state-stored-aggregate";
+import {
 	createDomainEvent,
+	createDomainEventFactory,
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -22,6 +23,7 @@ import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { recordPendingEvents } from "../unit-of-work/record-pending-events";
 import {
 	type AggregateCommitToken,
 	type CommitEnrollment,
@@ -32,37 +34,27 @@ import {
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
 
-class MockAggregate extends AggregateRoot<
+class MockAggregate extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	TestId,
 	TestEvent
 > {
 	protected readonly aggregateType = "MockOrder";
-	private _acknowledgementCount = 0;
 
-	constructor(events: TestEvent[], version: number, restoredVersion?: number) {
-		super("agg-1" as TestId, {});
+	constructor(
+		events: TestEvent[],
+		version: number,
+		restoredVersion?: number,
+		// The aggregate takes the address its events carry, so a fixture
+		// event addressed "first" builds aggregate "first".
+		id: TestId = (events[0]?.aggregateId ?? "agg-1") as TestId,
+	) {
+		super(id, {});
 		if (restoredVersion !== undefined) {
-			this.markRestored(restoredVersion as Version);
+			this.markReconstituted(restoredVersion as Version);
 		}
 		this.setVersion(version as Version);
 		for (const event of events) this.addDomainEvent(event);
-		const lifecycle = pendingEventLifecycleCapabilityFor(this);
-		if (!lifecycle) throw new Error("missing aggregate event lifecycle");
-		registerPendingEventLifecycleCapability(this, {
-			acknowledge: (committedEvents, committedVersion) => {
-				lifecycle.acknowledge(committedEvents, committedVersion);
-				this._acknowledgementCount += 1;
-			},
-			discardPendingEvents: (committedEvents) =>
-				lifecycle.discardPendingEvents(committedEvents),
-			persistedVersion: () => lifecycle.persistedVersion(),
-			pendingEventCount: () => lifecycle.pendingEventCount(),
-		});
-	}
-
-	public get acknowledgementCount(): number {
-		return this._acknowledgementCount;
 	}
 
 	public advanceForObserverTest(): void {
@@ -79,8 +71,9 @@ function createMockAggregate(
 	events: TestEvent[],
 	version = 1,
 	restoredVersion?: number,
+	id?: TestId,
 ): MockAggregate {
-	return new MockAggregate(events, version, restoredVersion);
+	return new MockAggregate(events, version, restoredVersion, id);
 }
 
 function createMockScope(): TransactionScope<undefined> {
@@ -139,11 +132,40 @@ function stamped(
 	};
 }
 
+/**
+ * An instance with the kit's lifecycle capability but without the address
+ * stamping of the aggregate base classes: the shape of an aggregate from
+ * another package copy. Only such an instance can carry an unstamped or
+ * foreign-addressed event into the harvest.
+ */
+function unstampedInstance(
+	events: ReadonlyArray<TestEvent>,
+): Aggregate<TestId, TestEvent> {
+	const instance = {
+		id: "agg-1" as TestId,
+		version: 1 as Version,
+		pendingEvents: events,
+	};
+	registerPendingEventLifecycleCapability(instance, {
+		acknowledge: () => {},
+		discardPendingEvents: () => {},
+		persistedVersion: () => undefined,
+		pendingEventCount: () => events.length,
+		aggregateType: () => "MockOrder",
+	});
+	return instance;
+}
+
+/** The version the kit acknowledged as persisted; a discard leaves it. */
+function persistedVersionOf(aggregate: object): Version | undefined {
+	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
+}
+
 function enrolledResult<R>(
 	enrollment: CommitEnrollment<TestEvent>,
 	result: R,
-	aggregates: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>>,
-	deleted: ReadonlyArray<IAggregateRoot<Id<string>, TestEvent>> = [],
+	aggregates: ReadonlyArray<Aggregate<Id<string>, TestEvent>>,
+	deleted: ReadonlyArray<Aggregate<Id<string>, TestEvent>> = [],
 ): WithCommitWorkResult<TestEvent, R> {
 	const deletedSet = new Set(deleted);
 	return {
@@ -184,7 +206,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -198,7 +220,7 @@ describe("withCommit", () => {
 	});
 
 	it("rejects an unrecorded aggregate decision before writing the outbox", async () => {
-		class DecisionAggregate extends AggregateRoot<
+		class DecisionAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
 			TestEvent
@@ -210,7 +232,7 @@ describe("withCommit", () => {
 			}
 
 			decide(): void {
-				this.commit(
+				this.setState(
 					{},
 					this.createEvent("OrderCreated", { orderId: "order-1" }),
 				);
@@ -242,7 +264,7 @@ describe("withCommit", () => {
 				return result;
 			},
 		};
-		const lookalike: IAggregateRoot<TestId, TestEvent> = {
+		const lookalike: Aggregate<TestId, TestEvent> = {
 			id: "lookalike" as TestId,
 			version: 1 as Version,
 			pendingEvents: [],
@@ -260,12 +282,105 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([]);
 	});
 
+	it("records createEvent decisions in the shell and harvests them with their stamps", async () => {
+		// The documented producer path end to end: the aggregate mints an
+		// uncommitted decision, the shell stamps it inside the transaction,
+		// withCommit harvests the recorded event and acknowledges it.
+		class ProducingAggregate extends StateStoredAggregate<
+			Readonly<Record<string, never>>,
+			TestId,
+			TestEvent
+		> {
+			protected readonly aggregateType = "MockOrder";
+
+			constructor() {
+				super("agg-1" as TestId, {});
+			}
+
+			place(orderId: string): void {
+				this.setState({}, this.createEvent("OrderCreated", { orderId }));
+			}
+		}
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => "evt-1",
+			clock: () => new Date("2027-01-01T00:00:00.000Z"),
+		});
+		const aggregate = new ProducingAggregate();
+		aggregate.place("o-1");
+		expect(aggregate.pendingEvents[0]).not.toHaveProperty("eventId");
+		const outbox = createMockOutbox();
+
+		await withCommit(
+			{ outbox, scope: createMockScope() },
+			async (_ctx, enrollment) => {
+				recordPendingEvents(aggregate, factory);
+				return enrolledResult(enrollment, "ok", [aggregate]);
+			},
+		);
+
+		const harvested = outbox.added[0]?.[0];
+		expect(harvested?.event.eventId).toBe("evt-1");
+		expect(harvested?.event.occurredAt.toISOString()).toBe(
+			"2027-01-01T00:00:00.000Z",
+		);
+		expect(harvested?.source).toEqual({
+			aggregateId: "agg-1",
+			aggregateType: "MockOrder",
+		});
+		expect(harvested?.position.aggregateVersion).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {
+		// The aggregate base classes stamp and check the address themselves;
+		// this backstop covers an instance whose recording path did not.
+		const stray = unstampedInstance([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "agg-2", aggregateType: "MockOrder" },
+			),
+		]);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
+			),
+		).rejects.toThrow(/addressed to MockOrder agg-2/);
+
+		expect(outbox.added).toEqual([]);
+	});
+
+	it("rejects a harvested event of another aggregate type than the enrolled one", async () => {
+		const stray = unstampedInstance([
+			createDomainEvent(
+				"OrderCreated",
+				{ orderId: "o-1" },
+				{ aggregateId: "agg-1", aggregateType: "Customer" },
+			),
+		]);
+		const outbox = createMockOutbox();
+
+		await expect(
+			withCommit(
+				{ outbox, scope: createMockScope() },
+				async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [stray]),
+			),
+		).rejects.toThrow(
+			/addressed to Customer agg-1 but was enrolled under MockOrder agg-1/,
+		);
+
+		expect(outbox.added).toEqual([]);
+	});
+
 	it("rejects a fresh aggregate that was never enrolled by persistence", async () => {
 		const outbox = createMockOutbox();
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 
@@ -281,7 +396,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("rejects a forged commit token before harvesting", async () => {
@@ -289,7 +404,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 		const forged = Object.freeze({}) as AggregateCommitToken<TestEvent>;
@@ -302,7 +417,7 @@ describe("withCommit", () => {
 		).rejects.toBeInstanceOf(EventHarvestError);
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("rejects a token minted by an earlier withCommit invocation", async () => {
@@ -331,7 +446,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-omitted" },
-			{ aggregateId: "order-omitted", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const aggregate = createMockAggregate([event]);
 
@@ -347,7 +462,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added).toEqual([]);
 		expect(aggregate.pendingEvents).toEqual([event]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("seals enrollment before the outbox write begins", async () => {
@@ -369,7 +484,7 @@ describe("withCommit", () => {
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-late" },
-				{ aggregateId: "order-late", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			),
 		]);
 		let leaked: CommitEnrollment<TestEvent> | undefined;
@@ -396,7 +511,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event], 7, 5);
 
@@ -407,7 +522,7 @@ describe("withCommit", () => {
 
 		expect(outbox.added[0]?.[0]).toEqual({
 			event,
-			source: { aggregateId: "order-1", aggregateType: "MockOrder" },
+			source: { aggregateId: "agg-1", aggregateType: "MockOrder" },
 			position: {
 				aggregateVersion: 7,
 				commitSequence: 0,
@@ -422,7 +537,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event], 7, 5);
 
@@ -446,7 +561,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -464,7 +579,7 @@ describe("withCommit", () => {
 		const event = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "order-1" },
-			{ aggregateId: "order-1", aggregateType: "MockOrder" },
+			{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 		);
 		const agg = createMockAggregate([event]);
 
@@ -519,7 +634,7 @@ describe("withCommit", () => {
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-1" },
-				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			),
 		]);
 
@@ -688,7 +803,7 @@ describe("withCommit", () => {
 
 		// The callback failed before enrollment; acknowledgement must not run
 		// and pending events must survive.
-		expect(agg.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(agg)).not.toBe(agg.version);
 		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
@@ -727,8 +842,8 @@ describe("withCommit", () => {
 			async (_ctx, enrollment) => enrolledResult(enrollment, "ok", [a, b]),
 		);
 
-		expect(a.acknowledgementCount).toBe(1);
-		expect(b.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(a)).toBe(a.version);
+		expect(persistedVersionOf(b)).toBe(b.version);
 		expect(a.pendingEvents).toHaveLength(0);
 		expect(b.pendingEvents).toHaveLength(0);
 	});
@@ -839,10 +954,10 @@ describe("withCommit", () => {
 			[stamped(savedEvent), stamped(deletionEvent)],
 		]);
 		// Saved aggregate: full post-commit lifecycle.
-		expect(savedAgg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(savedAgg)).toBe(savedAgg.version);
 		// Deleted aggregate: events cleared (no re-emission on a later
 		// commit), but no saved acknowledgement or application observer.
-		expect(deletedAgg.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(deletedAgg)).not.toBe(deletedAgg.version);
 		expect(deletedAgg.pendingEvents).toHaveLength(0);
 	});
 
@@ -852,22 +967,22 @@ describe("withCommit", () => {
 		const e1 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "a-evt-1" },
-			{ aggregateId: "a-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "a", aggregateType: "MockOrder" },
 		);
 		const e2 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "a-evt-2" },
-			{ aggregateId: "a-evt-2", aggregateType: "MockOrder" },
+			{ aggregateId: "a", aggregateType: "MockOrder" },
 		);
 		const e3 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "b-evt-1" },
-			{ aggregateId: "b-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "b", aggregateType: "MockOrder" },
 		);
 		const e4 = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "c-evt-1" },
-			{ aggregateId: "c-evt-1", aggregateType: "MockOrder" },
+			{ aggregateId: "c", aggregateType: "MockOrder" },
 		);
 
 		const aggA = createMockAggregate([e1, e2]);
@@ -920,14 +1035,14 @@ describe("withCommit", () => {
 		expect(outbox.added).toEqual([[stamped(event)]]);
 		expect(bus.published).toEqual([[event]]);
 		// Acknowledgement runs exactly once on the deduped aggregate.
-		expect(agg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(agg)).toBe(agg.version);
 	});
 
-	it("throws if a harvested event is missing aggregateId (recordEvent guard)", async () => {
-		// A direct createDomainEvent without aggregateId would silently
-		// break downstream routing. The guard catches it at the harvest
-		// boundary with a diagnostic message naming the event type and
-		// the missing field.
+	it("throws if a harvested event is missing aggregateId (harvest guard)", async () => {
+		// The aggregate base classes stamp a missing address; an instance
+		// from another package copy may not. The harvest guard catches the
+		// gap with a diagnostic message naming the event type and the
+		// missing field, because downstream routing relies on the source.
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
@@ -936,7 +1051,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -954,7 +1069,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		const rejection = await withCommit(
 			{ outbox: createMockOutbox(), scope: createMockScope() },
@@ -965,16 +1080,16 @@ describe("withCommit", () => {
 		expect(rejection).not.toBeInstanceOf(InfrastructureError);
 	});
 
-	it("throws if a harvested event is missing aggregateType (recordEvent guard)", async () => {
+	it("throws if a harvested event is missing aggregateType (harvest guard)", async () => {
 		const badEvent = createDomainEvent(
 			"OrderCreated",
 			{ orderId: "x" },
 			{
-				aggregateId: "x",
+				aggregateId: "agg-1",
 				// aggregateType missing → guard rejects
 			},
 		);
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -986,7 +1101,7 @@ describe("withCommit", () => {
 
 	it("guard error message names the event type and lists both missing fields", async () => {
 		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" });
-		const agg = createMockAggregate([badEvent]);
+		const agg = unstampedInstance([badEvent]);
 
 		await expect(
 			withCommit(
@@ -1012,7 +1127,7 @@ describe("withCommit", () => {
 		expect(bus.published).toHaveLength(0);
 		// Acknowledgement still runs; keeps the lifecycle consistent even
 		// for empty-event commits.
-		expect(agg.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(agg)).toBe(agg.version);
 	});
 
 	it("rejects an eventful persisted commit that did not advance aggregate version", async () => {
@@ -1126,7 +1241,7 @@ describe("withCommit", () => {
 			expect(result).toBe("ok");
 			expect(reported).toHaveLength(1);
 			expect(reported[0]?.aggregate).toBe(frozen);
-			expect(peer.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(peer)).toBe(peer.version);
 			expect(peer.pendingEvents).toEqual([]);
 			expect(observed).toEqual([peer]);
 			expect(bus.published).toHaveLength(1);
@@ -1165,7 +1280,7 @@ describe("withCommit", () => {
 			// Committed result survives; B's pending events were flushed
 			// (no double emission on the next commit); publish still ran.
 			expect(result).toBe("ok");
-			expect(aggB.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggB)).toBe(aggB.version);
 			expect(aggB.pendingEvents).toHaveLength(0);
 			expect(observed).toEqual([aggB]);
 			expect(bus.published).toHaveLength(1);
@@ -1470,7 +1585,7 @@ describe("withCommit", () => {
 
 			// Peer B is still marked; the committed write still resolves.
 			expect(result).toBe("ok");
-			expect(aggB.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggB)).toBe(aggB.version);
 			expect(aggB.pendingEvents).toHaveLength(0);
 		});
 
@@ -1497,7 +1612,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("ok");
 			expect(reported).toBe(0);
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
 		it("neutralises an async (rejecting) onPersistError instead of leaking an unhandled rejection", async () => {
@@ -1563,7 +1678,7 @@ describe("withCommit", () => {
 			const event = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "order-1" },
-				{ aggregateId: "order-1", aggregateType: "MockOrder" },
+				{ aggregateId: "agg-1", aggregateType: "MockOrder" },
 			);
 			return createMockAggregate([event]);
 		}
@@ -1586,7 +1701,7 @@ describe("withCommit", () => {
 
 			expect(result).toBe("order-123");
 			// The commit lifecycle completed: pending events are flushed.
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
 		it("reports the publish error and the affected events via onPublishError", async () => {
@@ -1696,7 +1811,7 @@ describe("withCommit", () => {
 				expect(publishTimeoutMs).toBeLessThanOrEqual(5);
 				expect(reported).toHaveLength(1);
 				expect((reported[0] as Error).name).toBe("TimeoutError");
-				expect(agg.acknowledgementCount).toBe(1);
+				expect(persistedVersionOf(agg)).toBe(agg.version);
 			} finally {
 				vi.useRealTimers();
 			}
@@ -1719,7 +1834,7 @@ describe("withCommit", () => {
 				),
 			).rejects.toThrow("outbox write failed");
 			// Rolled back: pending events must survive for a retry.
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).not.toBe(agg.version);
 		});
 	});
 });
@@ -1756,7 +1871,7 @@ describe("commit enrollment lifecycle", () => {
 		// event was never part of the attested write.
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toEqual([first, later]);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 
 	it("treats an omitted expectedVersion on re-enrollment as no assertion", async () => {
@@ -1783,7 +1898,7 @@ describe("commit enrollment lifecycle", () => {
 		);
 
 		expect(outbox.added).toHaveLength(1);
-		expect(aggregate.acknowledgementCount).toBe(1);
+		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
 	it("acknowledges with the enrollment-time version, not the live version", async () => {
@@ -1864,8 +1979,8 @@ describe("commit enrollment lifecycle", () => {
 			},
 		);
 
-		// Acknowledged as SAVED: the mock counts acknowledge, not discard.
-		expect(aggregate.acknowledgementCount).toBe(1);
+		// Acknowledged as SAVED: the persisted version moves; a discard leaves it.
+		expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 	});
 
 	it("rejects re-enrollment that asserts a different expectedVersion", async () => {
@@ -1914,7 +2029,7 @@ describe("commit enrollment lifecycle", () => {
 
 		expect(outbox.added).toHaveLength(0);
 		expect(aggregate.pendingEvents).toHaveLength(1);
-		expect(aggregate.acknowledgementCount).toBe(0);
+		expect(persistedVersionOf(aggregate)).not.toBe(aggregate.version);
 	});
 });
 

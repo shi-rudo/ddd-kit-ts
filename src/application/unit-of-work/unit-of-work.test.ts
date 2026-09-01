@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { IAggregateRoot, Version } from "../../domain/aggregate/aggregate";
-import { AggregateRoot } from "../../domain/aggregate/aggregate-root";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
@@ -49,51 +49,31 @@ import {
 type TestEvent = DomainEvent<"OrderCreated", { orderId: string }>;
 type TestId = Id<"TestId">;
 
-function observeAcknowledgements(
-	aggregate: object,
-	onAcknowledge: () => void,
-): void {
-	const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
-	if (!lifecycle) throw new Error("missing aggregate event lifecycle");
-	registerPendingEventLifecycleCapability(aggregate, {
-		acknowledge: (events, committedVersion) => {
-			lifecycle.acknowledge(events, committedVersion);
-			onAcknowledge();
-		},
-		discardPendingEvents: (events) => lifecycle.discardPendingEvents(events),
-		persistedVersion: () => lifecycle.persistedVersion(),
-		pendingEventCount: () => lifecycle.pendingEventCount(),
-	});
+/** The version the kit acknowledged as persisted; undefined until a commit. */
+function persistedVersionOf(aggregate: object): Version | undefined {
+	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
 }
 
-class MockAggregate extends AggregateRoot<
+class MockAggregate extends StateStoredAggregate<
 	Readonly<Record<string, never>>,
 	TestId,
 	TestEvent
 > {
 	protected readonly aggregateType = "MockOrder";
-	private _acknowledgementCount = 0;
 
 	constructor(id: string, events: TestEvent[]) {
 		super(id as TestId, {});
 		this.setVersion(1 as Version);
 		for (const event of events) this.addDomainEvent(event);
-		observeAcknowledgements(this, () => {
-			this._acknowledgementCount += 1;
-		});
-	}
-
-	public get acknowledgementCount(): number {
-		return this._acknowledgementCount;
 	}
 
 	public change(event?: TestEvent): void {
-		this.commit(this.state, event);
+		this.setState(this.state, event);
 	}
 
 	/** Records a decision the shell has NOT yet stamped via recordPendingEvents. */
 	public changeWithUnrecordedEvent(orderId: string): void {
-		this.commit(this.state, this.createEvent("OrderCreated", { orderId }));
+		this.setState(this.state, this.createEvent("OrderCreated", { orderId }));
 	}
 }
 
@@ -102,6 +82,28 @@ function createMockAggregate(
 	events: TestEvent[] = [],
 ): MockAggregate {
 	return new MockAggregate(id, events);
+}
+
+/**
+ * An instance with the kit's lifecycle capability but without the address
+ * stamping of the aggregate base classes: the shape of an aggregate from
+ * another package copy. Only such an instance can carry an unstamped event
+ * into the harvest guard.
+ */
+function unstampedInstance(id: string, events: TestEvent[]): MockAggregate {
+	const instance = {
+		id: id as TestId,
+		version: 1 as Version,
+		pendingEvents: events,
+	};
+	registerPendingEventLifecycleCapability(instance, {
+		acknowledge: () => {},
+		discardPendingEvents: () => {},
+		persistedVersion: () => undefined,
+		pendingEventCount: () => events.length,
+		aggregateType: () => "MockOrder",
+	});
+	return instance as unknown as MockAggregate;
 }
 
 function testEvent(orderId: string): TestEvent {
@@ -160,7 +162,7 @@ class FakeOrderRepository {
 }
 
 function versionPersistenceModel<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 >(): PersistenceModel<TAggregate, Version, Version | undefined> {
 	return {
 		capture: (aggregate) => aggregate.version,
@@ -188,7 +190,7 @@ function mapTestRepositoryError(error: unknown): InfrastructureError {
 
 type TestRepositoryPort<
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
 > = Omit<TRepository, "add" | "update" | "remove"> &
 	AggregateWriteRegistration<TAggregate> &
@@ -197,7 +199,7 @@ type TestRepositoryPort<
 type TestRepositoryDefinitionOptions<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean,
@@ -230,7 +232,7 @@ type TestRepositoryDefinitionOptions<
 function defineTestRepository<
 	TCtx,
 	TRepository extends object,
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
@@ -346,7 +348,11 @@ describe("UnitOfWork", () => {
 	describe("v3 aggregate tracking", () => {
 		it("derives adapter changes at flush while preserving event-only commits", async () => {
 			type State = Readonly<{ value: number }>;
-			class ProjectedAggregate extends AggregateRoot<State, TestId, TestEvent> {
+			class ProjectedAggregate extends StateStoredAggregate<
+				State,
+				TestId,
+				TestEvent
+			> {
 				protected readonly aggregateType = "ProjectedAggregate";
 
 				constructor(id: TestId, value: number) {
@@ -359,7 +365,7 @@ describe("UnitOfWork", () => {
 				}
 
 				changeValue(value: number): void {
-					this.commit({ value });
+					this.setState({ value });
 				}
 
 				changePersistenceOnly(value: number): void {
@@ -367,7 +373,7 @@ describe("UnitOfWork", () => {
 				}
 
 				announce(event: TestEvent): void {
-					this.commit(this.state, event);
+					this.setState(this.state, event);
 				}
 			}
 
@@ -393,7 +399,11 @@ describe("UnitOfWork", () => {
 				"unregistered" as TestId,
 				1,
 			);
-			const event = testEvent("event");
+			const event = createDomainEvent(
+				"OrderCreated",
+				{ orderId: "event" },
+				{ aggregateId: "event", aggregateType: "ProjectedAggregate" },
+			);
 			const outbox = createMockOutbox();
 			const uow = new UnitOfWork({
 				scope: createMockScope(),
@@ -515,7 +525,7 @@ describe("UnitOfWork", () => {
 				"mutated_after_registration",
 			);
 			expect(outbox.added).toHaveLength(0);
-			expect(aggregate.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(aggregate)).toBeUndefined();
 		});
 
 		it("captures the expected version when an aggregate is loaded", async () => {
@@ -584,7 +594,7 @@ describe("UnitOfWork", () => {
 			expect(adapterAddCalls).toBe(0);
 			expect(adapterRemoveCalls).toBe(0);
 			expect(outbox.added).toEqual([[stamped(event)]]);
-			expect(aggregate.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 		});
 
 		it("does not flush when commit enrollment rejects and the caller catches it", async () => {
@@ -949,9 +959,9 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("transaction lifecycle", () => {
-		it("supports a state-stored AggregateRoot without event sourcing", async () => {
+		it("supports a state-stored StateStoredAggregate without event sourcing", async () => {
 			type PlainState = Readonly<{ name: string }>;
-			class PlainAggregate extends AggregateRoot<PlainState, TestId> {
+			class PlainAggregate extends StateStoredAggregate<PlainState, TestId> {
 				protected readonly aggregateType = "PlainAggregate";
 
 				constructor(id: TestId) {
@@ -1022,7 +1032,7 @@ describe("UnitOfWork", () => {
 				}),
 			).rejects.toBe(boom);
 
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 			expect(agg.pendingEvents).toHaveLength(1);
 		});
 
@@ -1334,7 +1344,7 @@ describe("UnitOfWork", () => {
 				).added,
 			).toEqual([]);
 			expect(aggregate.pendingEvents).toEqual([event]);
-			expect(aggregate.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(aggregate)).toBeUndefined();
 		});
 
 		it("saved aggregates: events harvested, application observer after commit, publish last", async () => {
@@ -1511,7 +1521,7 @@ describe("UnitOfWork", () => {
 					}
 				).added,
 			).toEqual([[stamped(event)]]);
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 
 		it("deleted aggregates: recorded deletion events are harvested into the outbox", async () => {
@@ -1600,7 +1610,7 @@ describe("UnitOfWork", () => {
 			).rejects.toBeInstanceOf(AggregateDeletedError);
 
 			// The violation aborted the unit of work: nothing was committed.
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
 		it("repository add registration stays inside the Unit of Work", async () => {
@@ -1620,7 +1630,7 @@ describe("UnitOfWork", () => {
 					}
 				).added,
 			).toEqual([[stamped(event)]]);
-			expect(agg.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(agg)).toBe(agg.version);
 		});
 	});
 
@@ -1705,8 +1715,10 @@ describe("UnitOfWork", () => {
 			// Only the committed attempt's events were harvested; the
 			// rolled-back attempt's enrollment did not leak into the retry.
 			expect(outbox.added).toEqual([[stamped(event2)]]);
-			expect(attempt1Aggregate.acknowledgementCount).toBe(0);
-			expect(attempt2Aggregate.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(attempt1Aggregate)).toBeUndefined();
+			expect(persistedVersionOf(attempt2Aggregate)).toBe(
+				attempt2Aggregate.version,
+			);
 		});
 
 		it("reuses the same immutable event identity when the transaction retries after flush", async () => {
@@ -1737,7 +1749,7 @@ describe("UnitOfWork", () => {
 			expect(outbox.added).toHaveLength(1);
 			expect(outbox.added[0]?.[0]?.event).toBe(event);
 			expect(aggregate.pendingEvents).toHaveLength(0);
-			expect(aggregate.acknowledgementCount).toBe(1);
+			expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 		});
 	});
 
@@ -1865,7 +1877,7 @@ describe("UnitOfWork", () => {
 				}),
 			).rejects.toBeInstanceOf(NestedUnitOfWorkError);
 
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 			expect(agg.pendingEvents).toHaveLength(1);
 		});
 
@@ -1892,29 +1904,20 @@ describe("UnitOfWork", () => {
 	});
 
 	describe("identity map integration", () => {
-		class OrderAggregate extends AggregateRoot<
+		class OrderAggregate extends StateStoredAggregate<
 			Readonly<Record<string, never>>,
 			TestId,
 			TestEvent
 		> {
 			protected readonly aggregateType = "MockOrder";
-			private _acknowledgementCount = 0;
 
-			constructor(id: TestId, events: TestEvent[] = []) {
+			constructor(id: TestId) {
 				super(id, {});
 				this.setVersion(1 as Version);
-				void events;
-				observeAcknowledgements(this, () => {
-					this._acknowledgementCount += 1;
-				});
 			}
 
 			public change(event: TestEvent): void {
-				this.commit(this.state, event);
-			}
-
-			public get acknowledgementCount(): number {
-				return this._acknowledgementCount;
+				this.setState(this.state, event);
 			}
 		}
 
@@ -1944,7 +1947,7 @@ describe("UnitOfWork", () => {
 				const row = this.rows.get(id);
 				if (!row) return null;
 				this.hydrations += 1;
-				const order = new OrderAggregate(id, row);
+				const order = new OrderAggregate(id);
 				return this.tracking.trackLoaded(order);
 			}
 		}
@@ -2086,7 +2089,7 @@ describe("UnitOfWork", () => {
 			expect(outbox.added).toEqual([[stamped(event, 2)]]);
 			// ...but the saved-aggregate lifecycle did NOT run for the deleted
 			// aggregate: no saved acknowledgement or cache-fill observer lie.
-			expect(deletedOrder.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(deletedOrder)).toBeUndefined();
 			// Pending events are still cleared so a later commit cannot
 			// re-emit them.
 			expect(deletedOrder.pendingEvents).toHaveLength(0);
@@ -2118,7 +2121,7 @@ describe("UnitOfWork", () => {
 
 			expect(rejection).toBeInstanceOf(CommitError);
 			expect((rejection as CommitError).cause).toBe(outboxError);
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
 		it("a commit-phase failure (callback resolved, transactional rejected) surfaces as CommitError", async () => {
@@ -2154,7 +2157,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = createMockAggregate("x", [badEvent]);
+			const agg = unstampedInstance("x", [badEvent]);
 			const { uow } = createUow();
 
 			const rejection = await uow
@@ -2170,7 +2173,7 @@ describe("UnitOfWork", () => {
 			expect(rejection).toBeInstanceOf(EventHarvestError);
 			expect(rejection).not.toBeInstanceOf(CommitError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 		});
 
 		it("a wrapping scope that nests the harvest-guard error still surfaces EventHarvestError, not CommitError", async () => {
@@ -2194,7 +2197,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = createMockAggregate("x", [badEvent]);
+			const agg = unstampedInstance("x", [badEvent]);
 			const { uow } = createUow({ scope });
 
 			const rejection = await uow
@@ -2477,7 +2480,7 @@ describe("UnitOfWork", () => {
 				),
 			).rejects.toThrow("deadline exceeded");
 
-			expect(agg.acknowledgementCount).toBe(0);
+			expect(persistedVersionOf(agg)).toBeUndefined();
 			expect(outbox.added).toHaveLength(0);
 		});
 
@@ -2491,7 +2494,7 @@ describe("UnitOfWork", () => {
 	describe("enrollment guard: events recorded after load but never enrolled", () => {
 		/** A loadable state-stored aggregate with a test-only event recorder. */
 		function loadable(id: string, initialEvents: TestEvent[] = []) {
-			class LoadableAggregate extends AggregateRoot<
+			class LoadableAggregate extends StateStoredAggregate<
 				Readonly<Record<string, never>>,
 				TestId,
 				TestEvent
@@ -2505,7 +2508,12 @@ describe("UnitOfWork", () => {
 				}
 
 				public record(event: TestEvent): void {
-					this.commit(this.state, event);
+					this.setState(this.state, event);
+				}
+
+				/** Appends a decision without a state change, so the version stays. */
+				public note(event: TestEvent): void {
+					this.addDomainEvent(event);
 				}
 			}
 
@@ -2549,6 +2557,27 @@ describe("UnitOfWork", () => {
 
 			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
 			expect(rejection).not.toBeInstanceOf(InfrastructureError);
+		});
+
+		it("throws UnenrolledChangesError when a decision is added after load without a version change", async () => {
+			// The version net cannot see this one: addDomainEvent alone leaves
+			// the version untouched, so only the pending-count net catches it.
+			const agg = loadable("o-1");
+			const uow = createLoadableUow(agg);
+
+			const rejection = await uow
+				.run(async ({ repositories }) => {
+					repositories.orders.trackLoaded(agg);
+					agg.note(testEvent("o-1"));
+					return undefined;
+				})
+				.then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+
+			expect(agg.version).toBe(1);
+			expect(rejection).toBeInstanceOf(UnenrolledChangesError);
 		});
 
 		it("does not throw when the mutated aggregate was enrolled", async () => {

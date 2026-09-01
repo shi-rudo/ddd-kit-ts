@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import type { DomainEvent } from "../../src/domain/event/domain-event";
 import type { Id } from "../../src/domain/identity/id";
 import type { Money } from "../../src/domain/value-object/money";
@@ -47,7 +47,7 @@ export class PaymentInWrongStateError extends DomainError<"PAYMENT_IN_WRONG_STAT
 	}
 }
 
-export class Payment extends AggregateRoot<
+export class Payment extends StateStoredAggregate<
 	PaymentState,
 	PaymentId,
 	PaymentEvent
@@ -65,7 +65,7 @@ export class Payment extends AggregateRoot<
 			amount,
 			status: "requested",
 		});
-		payment.commit(
+		payment.setState(
 			{ id, orderId, amount, status: "requested" },
 			payment.createEvent("PaymentRequested", { orderId, amount }),
 		);
@@ -76,7 +76,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "receive");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "received" },
 			this.createEvent("PaymentReceived", {
 				orderId: this.state.orderId,
@@ -89,7 +89,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "requested") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "fail");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "failed", failureReason: reason },
 			this.createEvent("PaymentFailed", {
 				orderId: this.state.orderId,
@@ -102,7 +102,7 @@ export class Payment extends AggregateRoot<
 		if (this.state.status !== "received") {
 			throw new PaymentInWrongStateError(this.id, this.state.status, "refund");
 		}
-		this.commit(
+		this.setState(
 			{ ...this.state, status: "refunded" },
 			this.createEvent("PaymentRefunded", {
 				orderId: this.state.orderId,

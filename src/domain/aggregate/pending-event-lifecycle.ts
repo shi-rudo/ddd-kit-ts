@@ -1,4 +1,10 @@
-import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
+import { UnmanagedInstanceError } from "../../errors/kit-errors";
+import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
+import type { Version } from "./aggregate";
+import {
+	createGlobalCapabilityRegistry,
+	LOCAL_REGISTRY_DETAIL,
+} from "./internal/global-capability-registry";
 
 /**
  * Kit-internal authority for acknowledging one exact pending-event batch.
@@ -15,35 +21,66 @@ export interface PendingEventLifecycleCapability {
 	 * so un-awaited concurrent work mutating the instance in the post-commit
 	 * window cannot desync the marker.
 	 */
-	acknowledge(events: ReadonlyArray<unknown>, committedVersion?: number): void;
-	discardPendingEvents(events: ReadonlyArray<unknown>): void;
+	acknowledge(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+		committedVersion: Version,
+	): void;
+	discardPendingEvents(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+	): void;
 	/**
 	 * Version the persistence layer last confirmed for the aggregate, or
 	 * `undefined` for a never-persisted instance. Grounds the `withCommit`
 	 * unique-cursor guard.
 	 */
-	persistedVersion(): number | undefined;
+	persistedVersion(): Version | undefined;
 	/**
 	 * Count of unflushed pending events. The public `pendingEvents` getter
 	 * allocates and freezes a defensive copy per read, which count-only
 	 * consumers (the identity map's end-of-run scan) do not need.
 	 */
 	pendingEventCount(): number;
+	/**
+	 * The aggregate's declared type; it is protected on the aggregate and
+	 * absent from `Aggregate`.
+	 */
+	aggregateType(): string;
 }
 
 // The key version stamps the capability SHAPE. Bump it whenever the
 // interface above changes: registrations made under another key stay
 // invisible, so an aggregate constructed by an incompatible package copy
-// fails the generic "no kit-managed persistence lifecycle" check instead of
+// fails the UnmanagedInstanceError check at enrollment instead of
 // half-working through a shape it does not fully implement.
 const persistenceCapabilityRegistryKey = Symbol.for(
-	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v4",
+	"@shirudo/ddd-kit/pending-event-lifecycle-registry/v6",
 );
 
-const capabilities =
+const { registry: capabilities, shared } =
 	createGlobalCapabilityRegistry<PendingEventLifecycleCapability>(
 		persistenceCapabilityRegistryKey,
 	);
+
+/**
+ * Resolves the lifecycle capability or throws {@link UnmanagedInstanceError}
+ * naming the operation and the instance. When the registry is private to
+ * this package copy (a host that rejected the global registration), the
+ * error says so, because that is the one reason an instance from another
+ * copy cannot be recognized.
+ */
+export function requirePendingEventLifecycleCapability(
+	aggregate: object,
+	operation: string,
+): PendingEventLifecycleCapability {
+	const capability = capabilities.get(aggregate);
+	if (capability !== undefined) return capability;
+	throw new UnmanagedInstanceError(
+		operation,
+		"aggregate",
+		(aggregate as { id?: unknown }).id,
+		shared ? undefined : LOCAL_REGISTRY_DETAIL,
+	);
+}
 
 export function registerPendingEventLifecycleCapability(
 	aggregate: object,

@@ -1,41 +1,193 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+	InvalidVersionError,
+	MisaddressedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
 	UnmintedEventError,
+	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
 	createDomainEvent,
 	type DomainEvent,
+	type PendingDomainEvent,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
+import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
+import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
 import {
 	type AggregateConfig,
-	AggregateRoot as ProductionAggregateRoot,
-} from "./aggregate-root";
-import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
+	StateStoredAggregate as ProductionAggregateRoot,
+} from "./state-stored-aggregate";
 
-function acknowledgePersisted(aggregate: object, version: Version): void {
+function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
 	if (!capability) throw new Error("Missing test persistence capability");
-	void version;
-	capability.acknowledge(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+	return capability;
+}
+
+function acknowledgePersisted(aggregate: object, version: Version): void {
+	lifecycleOf(aggregate).acknowledge(
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
+		version,
 	);
 }
 
 function discardPendingEvents(aggregate: object): void {
-	const capability = pendingEventLifecycleCapabilityFor(aggregate);
-	if (!capability) throw new Error("Missing test persistence capability");
-	capability.discardPendingEvents(
-		(aggregate as { pendingEvents: ReadonlyArray<unknown> }).pendingEvents,
+	lifecycleOf(aggregate).discardPendingEvents(
+		(aggregate as { pendingEvents: ReadonlyArray<AnyDomainEvent> })
+			.pendingEvents,
 	);
 }
 
+describe("version guards", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class RestorableAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
+		protected readonly aggregateType = "RestorableAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		note(value: number): void {
+			this.addDomainEvent(
+				createDomainEvent(
+					"Noted",
+					{ value },
+					{ aggregateId: this.id, aggregateType: this.aggregateType },
+				),
+			);
+		}
+
+		restore(version: number): void {
+			this.markReconstituted(version as Version);
+		}
+
+		force(version: number): void {
+			this.setVersion(version as Version);
+		}
+
+		advance(): void {
+			this.bumpVersion();
+		}
+	}
+
+	const fresh = (): RestorableAggregate =>
+		new RestorableAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+
+	it.each([
+		["NaN", Number.NaN],
+		["a negative number", -1],
+		["a fraction", 1.5],
+	])(
+		"rejects %s on markReconstituted and keeps the version",
+		(_label, value) => {
+			const aggregate = fresh();
+
+			expect(() => aggregate.restore(value)).toThrow(InvalidVersionError);
+
+			expect(aggregate.version).toBe(0);
+			expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+		},
+	);
+
+	it("rejects a version below the current one on markReconstituted", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.advance();
+
+		expect(() => aggregate.restore(1)).toThrow(InvalidVersionError);
+
+		expect(aggregate.version).toBe(2);
+	});
+
+	it("restores a row persisted at version zero onto a fresh instance", () => {
+		const aggregate = fresh();
+
+		aggregate.restore(0);
+
+		expect(aggregate.version).toBe(0);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(0);
+	});
+
+	it("accepts a restore at the current version", () => {
+		const aggregate = fresh();
+		aggregate.restore(5);
+
+		aggregate.restore(5);
+
+		expect(aggregate.version).toBe(5);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
+	});
+
+	it("rejects markReconstituted while decisions are pending", () => {
+		const aggregate = fresh();
+		aggregate.note(1);
+
+		expect(() => aggregate.restore(5)).toThrow(UnreplayableAggregateError);
+
+		expect(aggregate.version).toBe(0);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("records a valid restore as the persisted version", () => {
+		const aggregate = fresh();
+
+		aggregate.restore(5);
+
+		expect(aggregate.version).toBe(5);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(5);
+	});
+
+	it("rejects an invalid version on setVersion", () => {
+		const aggregate = fresh();
+
+		expect(() => aggregate.force(Number.NaN)).toThrow(InvalidVersionError);
+
+		expect(aggregate.version).toBe(0);
+	});
+
+	it("rejects an invalid committed version on acknowledge", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.note(1);
+
+		expect(() =>
+			lifecycleOf(aggregate).acknowledge(
+				aggregate.pendingEvents,
+				Number.NaN as Version,
+			),
+		).toThrow(InvalidVersionError);
+
+		expect(aggregate.pendingEvents).toHaveLength(1);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBeUndefined();
+	});
+
+	it("records the committed version as persisted on acknowledge", () => {
+		const aggregate = fresh();
+		aggregate.advance();
+		aggregate.note(1);
+
+		lifecycleOf(aggregate).acknowledge(aggregate.pendingEvents, 1 as Version);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+		expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
+	});
+});
+
 /** White-box fixture only: production aggregate subclasses keep `state` protected. */
-abstract class AggregateRoot<
+abstract class StateStoredAggregate<
 	TState,
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent = never,
@@ -52,7 +204,7 @@ type TestState = {
 	status: "active" | "inactive";
 };
 
-class TestAggregate extends AggregateRoot<TestState, TestId> {
+class TestAggregate extends StateStoredAggregate<TestState, TestId> {
 	protected readonly aggregateType = "TestAggregate";
 	constructor(
 		id: TestId,
@@ -88,7 +240,7 @@ class TestAggregate extends AggregateRoot<TestState, TestId> {
 }
 
 describe("setState OCC contract (named methods, no flag argument)", () => {
-	class NamedMethodsAggregate extends AggregateRoot<TestState, TestId> {
+	class NamedMethodsAggregate extends StateStoredAggregate<TestState, TestId> {
 		protected readonly aggregateType = "NamedMethodsAggregate";
 		constructor(
 			id: TestId,
@@ -154,17 +306,6 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 		expect(aggregate.state.value).toBe(1);
 	});
 
-	it("the removed two-argument flag form is a compile error", () => {
-		class Legacy extends AggregateRoot<TestState, TestId> {
-			protected readonly aggregateType = "Legacy";
-			legacyCall(): void {
-				// @ts-expect-error the bumpVersion flag argument was replaced by setStateWithoutVersionBump
-				this.setState({ ...this.state, value: 9 }, true);
-			}
-		}
-		expect(typeof Legacy).toBe("function");
-	});
-
 	it("a polymorphic Entity-typed call gets the safe bumping default", () => {
 		// Before the redesign this path threw a TypeError; with the flag
 		// gone, the same signature as Entity.setState means the safe
@@ -181,7 +322,7 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 	});
 });
 
-describe("AggregateRoot (without Event Sourcing)", () => {
+describe("StateStoredAggregate (without Event Sourcing)", () => {
 	describe("Basic functionality", () => {
 		it("should create aggregate with id and initial state", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
@@ -228,7 +369,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}).toThrow();
 		});
 
-		it("should manually bump version", () => {
+		it("advances the version by one per state change", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			expect(aggregate.version).toBe(0);
@@ -241,7 +382,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("states the OCC intent in the method name: bump by default, loud opt-out", () => {
-			class ExplicitAggregate extends AggregateRoot<TestState, TestId> {
+			class ExplicitAggregate extends StateStoredAggregate<TestState, TestId> {
 				protected readonly aggregateType = "ExplicitAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -271,14 +412,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.state.value).toBe(30);
 		});
 
-		it("the autoVersionBump config is gone (the named methods replaced it)", () => {
-			// @ts-expect-error autoVersionBump was removed in v3; the OCC intent lives in the method name (setState bumps, setStateWithoutVersionBump does not)
-			const config: AggregateConfig = { autoVersionBump: true };
-			expect(config).toBeDefined();
-		});
-
 		it("manual bumpVersion stays available for subclass orchestration", () => {
-			class ManualVersionAggregate extends AggregateRoot<TestState, TestId> {
+			class ManualVersionAggregate extends StateStoredAggregate<
+				TestState,
+				TestId
+			> {
 				protected readonly aggregateType = "ManualVersionAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -316,7 +454,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(state.value).toBe(10);
 		});
 
-		it("should allow mutation through protected _state", () => {
+		it("replaces the state through a domain method", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			aggregate.updateValue(20);
@@ -342,7 +480,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			items: Array<{ sku: string; qty: number }>;
 		};
 
-		class DeepFrozenAggregate extends AggregateRoot<NestedState, TestId> {
+		class DeepFrozenAggregate extends StateStoredAggregate<
+			NestedState,
+			TestId
+		> {
 			protected readonly aggregateType = "DeepFrozenAggregate";
 
 			constructor(id: TestId, initialState: NestedState) {
@@ -355,7 +496,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				version: Version,
 			): DeepFrozenAggregate {
 				const aggregate = new DeepFrozenAggregate(id, state);
-				aggregate.markRestored(version);
+				aggregate.markReconstituted(version);
 				return aggregate;
 			}
 
@@ -403,17 +544,17 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("commit(): record-after-mutation helper", () => {
+	describe("setState(): record-after-mutation helper", () => {
 		type Ev = DomainEvent<"Updated", { value: number }>;
 
-		class CommitAggregate extends AggregateRoot<TestState, TestId, Ev> {
+		class CommitAggregate extends StateStoredAggregate<TestState, TestId, Ev> {
 			protected readonly aggregateType = "CommitAggregate";
 
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
 			update(value: number, ev: Ev | readonly Ev[] = []): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordOnly(ev: Ev): void {
 				// Forces "record before mutation", which would only be possible by
@@ -432,7 +573,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			}
 		}
 
-		class FailingValidator extends AggregateRoot<TestState, TestId, Ev> {
+		class FailingValidator extends StateStoredAggregate<TestState, TestId, Ev> {
 			protected readonly aggregateType = "FailingValidator";
 
 			constructor(id: TestId, state: TestState) {
@@ -443,7 +584,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				});
 			}
 			tryCommit(value: number, ev: Ev): void {
-				this.commit({ ...this.state, value }, ev);
+				this.setState({ ...this.state, value }, ev);
 			}
 			recordTestEvent(value: number): Ev {
 				return createDomainEvent(
@@ -555,65 +696,47 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("recordEvent helper", () => {
+	describe("createEvent", () => {
 		type Recorded = DomainEvent<"Recorded", { v: number }>;
 
-		class RecordingAggregate extends AggregateRoot<
+		class DecidingAggregate extends StateStoredAggregate<
 			TestState,
 			TestId,
 			Recorded
 		> {
-			protected readonly aggregateType = "RecordingAggregate";
+			protected readonly aggregateType = "DecidingAggregate";
 
+			// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
 			constructor(id: TestId, initialState: TestState) {
 				super(id, initialState);
 			}
 
-			fire(v: number): Recorded {
-				return createDomainEvent(
-					"Recorded",
-					{ v },
-					{
-						aggregateId: this.id,
-						aggregateType: this.aggregateType,
-					},
-				);
+			decide(v: number): PendingDomainEvent<Recorded> {
+				return this.createEvent("Recorded", { v });
 			}
 		}
 
-		it("auto-injects aggregateId from this.id", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
+		it("stamps the aggregate address and leaves identity and time to the shell", () => {
+			const agg = new DecidingAggregate("r-1" as TestId, {
 				value: 0,
 				status: "inactive",
 			});
-			const event = agg.fire(7);
+
+			const event = agg.decide(42);
+
 			expect(event.aggregateId).toBe("r-1");
-		});
-
-		it("auto-injects aggregateType from the static declaration", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			const event = agg.fire(7);
-			expect(event.aggregateType).toBe("RecordingAggregate");
-		});
-
-		it("preserves the payload exactly", () => {
-			const agg = new RecordingAggregate("r-1" as TestId, {
-				value: 0,
-				status: "inactive",
-			});
-			const event = agg.fire(42);
+			expect(event.aggregateType).toBe("DecidingAggregate");
 			expect(event.type).toBe("Recorded");
 			expect(event.payload).toEqual({ v: 42 });
+			expect(event).not.toHaveProperty("eventId");
+			expect(event).not.toHaveProperty("occurredAt");
 		});
 	});
 
 	describe("kit-internal persistence acknowledgement", () => {
 		type TestRecorded = DomainEvent<"TestRecorded", { value: number }>;
 
-		class EventingAggregate extends AggregateRoot<
+		class EventingAggregate extends StateStoredAggregate<
 			TestState,
 			TestId,
 			TestRecorded
@@ -659,12 +782,6 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(aggregate.pendingEvents).toHaveLength(0);
 		});
 
-		function lifecycleOf(aggregate: object) {
-			const capability = pendingEventLifecycleCapabilityFor(aggregate);
-			if (!capability) throw new Error("Missing test persistence capability");
-			return capability;
-		}
-
 		it("rejects an acknowledged batch in a different order than the pending prefix", () => {
 			const aggregate = new EventingAggregate("test-1" as TestId, {
 				value: 10,
@@ -672,10 +789,10 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			});
 			aggregate.addTestEvent(1);
 			aggregate.addTestEvent(2);
-			const [first, second] = aggregate.pendingEvents;
+			const reversed = [...aggregate.pendingEvents].reverse();
 
 			expect(() =>
-				lifecycleOf(aggregate).acknowledge([second, first], 1),
+				lifecycleOf(aggregate).acknowledge(reversed, 1 as Version),
 			).toThrow(PendingEventBatchMismatchError);
 
 			expect(aggregate.pendingEvents).toHaveLength(2);
@@ -687,11 +804,14 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 			aggregate.addTestEvent(1);
-			const [only] = aggregate.pendingEvents;
+			const pending = aggregate.pendingEvents;
 
 			let caught: unknown;
 			try {
-				lifecycleOf(aggregate).acknowledge([only, only], 1);
+				lifecycleOf(aggregate).acknowledge(
+					[...pending, ...pending],
+					1 as Version,
+				);
 			} catch (error) {
 				caught = error;
 			}
@@ -729,40 +849,18 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			const enrolled = aggregate.pendingEvents;
 			aggregate.addTestEvent(2);
 
-			lifecycleOf(aggregate).acknowledge(enrolled, 1);
+			lifecycleOf(aggregate).acknowledge(enrolled, 1 as Version);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
 			expect(aggregate.pendingEvents[0]?.payload.value).toBe(2);
 			expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
 		});
 
-		it("does not expose acknowledgement or event disposal on aggregates", () => {
-			const aggregate = new EventingAggregate("test-1" as TestId, {
-				value: 10,
-				status: "inactive",
-			});
-
-			expect("markPersisted" in aggregate).toBe(false);
-			expect("clearPendingEvents" in aggregate).toBe(false);
-		});
-
-		it("keeps the capability off the aggregate while duplicate package instances can resolve it", async () => {
+		it("resolves the lifecycle capability from a second copy of the module", async () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-			const exposesCapability = Object.getOwnPropertySymbols(aggregate).some(
-				(symbol) => {
-					const value = Object.getOwnPropertyDescriptor(aggregate, symbol)
-						?.value as
-						| { acknowledge?: unknown; discardPendingEvents?: unknown }
-						| undefined;
-					return (
-						typeof value?.acknowledge === "function" &&
-						typeof value.discardPendingEvents === "function"
-					);
-				},
-			);
 
-			expect(exposesCapability).toBe(false);
-
+			// A duplicate package installation re-evaluates the module; its
+			// copy must find the capability this copy registered.
 			vi.resetModules();
 			const foreignModule = await import("./pending-event-lifecycle");
 			expect(
@@ -798,7 +896,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		});
 
 		it("should validate state changes", () => {
-			class ValidatedAggregate extends AggregateRoot<TestState, TestId> {
+			class ValidatedAggregate extends StateStoredAggregate<TestState, TestId> {
 				protected readonly aggregateType = "ValidatedAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState, {
@@ -824,7 +922,11 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 
 		it("should manage domain events", () => {
 			type EvT = DomainEvent<"SomethingHappened", void>;
-			class EventAggregate extends AggregateRoot<TestState, TestId, EvT> {
+			class EventAggregate extends StateStoredAggregate<
+				TestState,
+				TestId,
+				EvT
+			> {
 				protected readonly aggregateType = "EventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
@@ -858,7 +960,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 				| DomainEvent<"ValueUpdated", { newValue: number }>
 				| DomainEvent<"Activated", void>;
 
-			class TypedEventAggregate extends AggregateRoot<
+			class TypedEventAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
 				TestEvent
@@ -914,7 +1016,7 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 		it("should reject wrong event types at compile time with TEvent", () => {
 			type StrictEvent = DomainEvent<"OnlyThis", { data: string }>;
 
-			class StrictAggregate extends AggregateRoot<
+			class StrictAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
 				StrictEvent
@@ -951,11 +1053,256 @@ describe("AggregateRoot (without Event Sourcing)", () => {
 			expect(agg.pendingEvents[0]?.payload).toEqual({ data: "hello" });
 		});
 	});
+});
 
-	it("keeps persistence bookkeeping off the aggregate surface", () => {
-		const aggregate = TestAggregate.create("test-1" as TestId, 10);
-		expect("persistedVersion" in aggregate).toBe(false);
-		expect("changedKeys" in aggregate).toBe(false);
-		expect("hasChanges" in aggregate).toBe(false);
+describe("trustInitialState", () => {
+	class NegativeValueError extends Error {}
+	const rejectNegativeValue = (state: TestState): void => {
+		if (state.value < 0) throw new NegativeValueError();
+	};
+
+	class GuardedAggregate extends StateStoredAggregate<TestState, TestId> {
+		protected readonly aggregateType = "GuardedAggregate";
+
+		constructor(
+			id: TestId,
+			state: TestState,
+			config?: AggregateConfig<TestState>,
+		) {
+			super(id, state, { ...config, validateState: rejectNegativeValue });
+		}
+
+		change(value: number): void {
+			this.setState({ ...this.state, value });
+		}
+	}
+
+	it("runs validateState on the initial state by default", () => {
+		expect(
+			() =>
+				new GuardedAggregate("test-1" as TestId, {
+					value: -1,
+					status: "inactive",
+				}),
+		).toThrow(NegativeValueError);
+	});
+
+	it("skips validateState on a trusted initial state and runs it on the next transition", () => {
+		const restored = new GuardedAggregate(
+			"test-1" as TestId,
+			{ value: -1, status: "inactive" },
+			{ trustInitialState: true },
+		);
+
+		expect(restored.state.value).toBe(-1);
+		expect(() => restored.change(-2)).toThrow(NegativeValueError);
+		restored.change(2);
+		expect(restored.state.value).toBe(2);
+	});
+});
+
+describe("createEvent options and pending-event bookkeeping", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class BookkeepingAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
+		protected readonly aggregateType = "BookkeepingAggregate";
+
+		// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		decide(value: number, schemaVersion?: number): void {
+			this.setState(
+				{ ...this.state, value },
+				this.createEvent(
+					"Noted",
+					{ value },
+					schemaVersion === undefined
+						? undefined
+						: { schemaVersion: schemaVersion },
+				),
+			);
+		}
+
+		appendRaw(event: unknown): void {
+			this.addDomainEvent(event as PendingDomainEvent<Noted>);
+		}
+
+		appendBypassingStamp(event: unknown): void {
+			this.appendStampedEvent(event as PendingDomainEvent<Noted>);
+		}
+	}
+
+	const fresh = (): BookkeepingAggregate =>
+		new BookkeepingAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+	it("passes the payload schema version through createEvent", () => {
+		const aggregate = fresh();
+
+		aggregate.decide(1);
+		aggregate.decide(2, 3);
+
+		expect(aggregate.pendingEvents[0]?.schemaVersion).toBe(1);
+		expect(aggregate.pendingEvents[1]?.schemaVersion).toBe(3);
+	});
+
+	it("rejects a hand-rolled event on addDomainEvent", () => {
+		const aggregate = fresh();
+
+		expect(() =>
+			aggregate.appendRaw({
+				type: "Noted",
+				payload: { value: 1 },
+				schemaVersion: 1,
+			}),
+		).toThrow(UnmintedEventError);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects a pending event that bypassed stamping when recording", () => {
+		const aggregate = fresh();
+		const recording = pendingEventRecordingCapabilityFor(aggregate);
+		if (!recording) throw new Error("Missing test recording capability");
+		aggregate.appendBypassingStamp({
+			type: "Noted",
+			payload: { value: 1 },
+			schemaVersion: 1,
+		});
+
+		expect(() =>
+			recording.record((_event, index) => ({
+				eventId: `event-${index}`,
+				occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+			})),
+		).toThrow(UnmintedEventError);
+	});
+
+	it("reports the pending count across add, record, and acknowledge", () => {
+		const aggregate = fresh();
+		const lifecycle = lifecycleOf(aggregate);
+		const recording = pendingEventRecordingCapabilityFor(aggregate);
+		if (!recording) throw new Error("Missing test recording capability");
+
+		aggregate.decide(1);
+		aggregate.decide(2);
+		expect(lifecycle.pendingEventCount()).toBe(2);
+
+		recording.record((_event, index) => ({
+			eventId: `event-${index}`,
+			occurredAt: new Date("2027-04-05T06:07:08.000Z"),
+		}));
+		expect(lifecycle.pendingEventCount()).toBe(2);
+
+		lifecycle.acknowledge(aggregate.pendingEvents.slice(0, 1), 2 as Version);
+		expect(lifecycle.pendingEventCount()).toBe(1);
+	});
+});
+
+describe("event address on the state-stored path", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class AddressedAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
+		protected readonly aggregateType = "AddressedAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		commitWith(event: PendingDomainEvent<Noted>): void {
+			this.setState({ ...this.state, value: this.state.value + 1 }, event);
+		}
+
+		record(event: PendingDomainEvent<Noted>): void {
+			this.addDomainEvent(event);
+		}
+
+		decide(value: number): void {
+			this.setState(
+				{ ...this.state, value },
+				this.createEvent("Noted", { value }),
+			);
+		}
+	}
+
+	const fresh = (): AddressedAggregate =>
+		new AddressedAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+	it("rejects a committed event addressed to another aggregate before the state moves", () => {
+		const aggregate = fresh();
+		const foreign = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "someone-else", aggregateType: "AddressedAggregate" },
+		);
+
+		expect(() => aggregate.commitWith(foreign)).toThrow(MisaddressedEventError);
+
+		expect(aggregate.state.value).toBe(0);
+		expect(aggregate.version).toBe(0);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects an appended event of another aggregate type", () => {
+		const aggregate = fresh();
+		const foreign = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "test-1", aggregateType: "Other" },
+		);
+
+		expect(() => aggregate.record(foreign)).toThrow(MisaddressedEventError);
+
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("stamps a missing address from the aggregate on commit", () => {
+		const aggregate = fresh();
+
+		aggregate.commitWith(createDomainEvent("Noted", { value: 1 }));
+
+		const recorded = aggregate.pendingEvents[0];
+		expect(recorded?.aggregateId).toBe("test-1");
+		expect(recorded?.aggregateType).toBe("AddressedAggregate");
+		expect(recorded?.payload).toEqual({ value: 1 });
+	});
+
+	it("keeps a fully addressed event as the same object", () => {
+		const aggregate = fresh();
+		const addressed = createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ aggregateId: "test-1", aggregateType: "AddressedAggregate" },
+		);
+
+		aggregate.record(addressed);
+
+		expect(aggregate.pendingEvents[0]).toBe(addressed);
+	});
+
+	it("keeps a createEvent decision as the same object", () => {
+		const aggregate = fresh();
+
+		aggregate.decide(5);
+
+		const decision = aggregate.pendingEvents[0];
+		expect(decision?.aggregateId).toBe("test-1");
+		expect(decision?.aggregateType).toBe("AddressedAggregate");
+		expect(aggregate.state.value).toBe(5);
 	});
 });

@@ -55,7 +55,7 @@ Cloudflare Workers, Vercel Edge, Deno, and Bun.
 
 ```ts
 import {
-  AggregateRoot,
+  StateStoredAggregate,
   DomainError,
   type DomainEvent,
   type Id,
@@ -85,7 +85,7 @@ class OrderAlreadyConfirmedError extends DomainError<
   }
 }
 
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   protected readonly aggregateType = "Order";
 
   private constructor(id: OrderId, state: OrderState) {
@@ -105,7 +105,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
       throw new OrderAlreadyConfirmedError(this.id);
     }
 
-    this.commit(
+    this.setState(
       { status: "confirmed" },
       this.createEvent("OrderConfirmed", { orderId: this.id }),
     );
@@ -125,7 +125,7 @@ That example is deliberately small, but it shows the core shape:
 
 - The aggregate owns the rule.
 - The domain throws an error when an invariant is broken.
-- `commit(...)` changes the state and records the event together.
+- `setState(...)` changes the state and records the event together.
 - `createEvent(...)` captures the immutable domain decision and aggregate source.
 - The application shell adds event identity, recording time, and trace metadata.
 - Persistence stays outside the aggregate.

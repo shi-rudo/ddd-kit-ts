@@ -1,45 +1,45 @@
 import { err, ok, type Result } from "@shirudo/result";
 import {
 	DirectStateMutationError,
-	DomainError,
+	type DomainError,
 	ForeignEventError,
 	HandlerReturnedNoStateError,
-	MisaddressedEventError,
+	isDomainErrorLike,
 	MissingHandlerError,
 } from "../../errors/kit-errors";
-import { assertStateInvariant } from "../entity/entity";
 import {
-	type AnyDomainEvent,
-	type AnyUncommittedDomainEvent,
-	adoptMintedEvent,
-	adoptUncommittedDomainEvent,
-	isMintedEvent,
-	type PendingDomainEvent,
-	type UncommittedDomainEventOf,
+	assertStateHasNoHostileOwnKey,
+	assertStateInvariant,
+} from "../entity/entity";
+import type {
+	AnyDomainEvent,
+	PendingDomainEvent,
+	UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import type { IEventSourcedAggregate, Version } from "./aggregate";
+import type { ReplayableAggregate, Version } from "./aggregate";
 import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
+import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-// Re-export for backwards compatibility: `IEventSourcedAggregate` lives
+// Re-export for backwards compatibility: `ReplayableAggregate` lives
 // in `aggregate.ts` (the type hub).
-export type { IEventSourcedAggregate } from "./aggregate";
+export type { ReplayableAggregate } from "./aggregate";
 
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
  *
- * Like `AggregateRoot`, this is both the root entity and the aggregate
+ * Like `StateStoredAggregate`, this is both the root entity and the aggregate
  * boundary. The difference is persistence: state is derived from events,
  * not stored directly. Events are the single source of truth: all state
  * changes go through `apply()` → handler.
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
- * `commit()`, and the inherited `setState()` throws
+ * `setState()`, and the inherited `setState()` throws
  * `DirectStateMutationError`: the only way to change state is an event
  * folded by a handler through `apply()`, so the instance never runs ahead
  * of its stream.
@@ -50,16 +50,16 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * Two gates guard a NEW fact: `validateEvent` checks the decision against
  * the current state before the fold, and the `validateState` function
  * from `AggregateConfig` checks the folded state after it, exactly as it
- * does for a state-stored `setState`. Replay through `loadFromHistory`
+ * does for a state-stored `setState`. Replay through `replayHistory`
  * runs neither, because history is already accepted fact and rules change
  * over time; a stream that was valid when written must stay loadable under
- * tomorrow's rules. The infrastructure-boundary method `loadFromHistory`
+ * tomorrow's rules. The infrastructure-boundary method `replayHistory`
  * returns `Result`: it catches `DomainError` during replay so callers can
  * react to corrupted event streams without try/catch.
  *
  * @template TState - The aggregate state (contains child entities and value objects)
- * @template TEvent - The union type of all domain events
  * @template TId    - The aggregate root identifier
+ * @template TEvent - The union type of all domain events
  *
  * @example
  * ```typescript
@@ -69,7 +69,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  *   }
  * }
  *
- * class Order extends EventSourcedAggregate<OrderState, OrderEvent, OrderId> {
+ * class Order extends EventSourcedAggregate<OrderState, OrderId, OrderEvent> {
  *   protected readonly aggregateType = "Order";
  *
  *   confirm(): void {
@@ -95,11 +95,11 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  */
 export abstract class EventSourcedAggregate<
 		TState,
-		TEvent extends AnyDomainEvent,
 		TId extends Id<string>,
+		TEvent extends AnyDomainEvent,
 	>
 	extends BaseAggregate<TState, TId, TEvent>
-	implements IEventSourcedAggregate<TId, TEvent>
+	implements ReplayableAggregate<TId, TEvent>
 {
 	/**
 	 * Validates a NEW event before `apply()` records it. Default is
@@ -152,7 +152,7 @@ export abstract class EventSourcedAggregate<
 	 * `apply()` is exclusively for NEW facts: it always records the event
 	 * and bumps the version (the former `isNew` flag argument is gone).
 	 * Replaying history is a different operation with its own entry
-	 * point, `loadFromHistory`.
+	 * point, `replayHistory`.
 	 *
 	 * @param event - The domain event to apply
 	 */
@@ -166,76 +166,30 @@ export abstract class EventSourcedAggregate<
 		// this, a mis-addressed event would mutate state, version, and
 		// pendingEvents and only fail later at harvest or on the next
 		// load, poisoning the own stream.
-		const stamped = this.stampNewEventAddress(event);
+		const stamped = this.addressNewEvent(event);
 		// Both gates live HERE, not in fold: only new facts are checked
-		// against current rules; replay trusts history. Validate, then
-		// freeze, then assign, in the order Entity.setState keeps: the object
-		// validated IS the object stored, a rejected fold result leaves
-		// nothing frozen behind, and nothing below assigns until both gates
-		// passed. Unlike setState there is no defensive copy: the fold result
-		// is the aggregate's own next state.
-		// TODO: run the hostile own-key guard on the fold result as well
-		// (ddd-kit-ts-rhxi.7).
+		// against current rules; replay trusts history. Freeze, validate,
+		// assign, in the order Entity.setState keeps: the object validated
+		// IS the frozen object stored, and nothing below assigns until both
+		// gates passed. Unlike setState there is no defensive copy: the fold
+		// result is the aggregate's own next state, so a rejected result is
+		// left frozen. The hostile own-key guard runs below on every new
+		// fact; replay runs it once on the final state. The event was
+		// stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
-		const next = this.fold(stamped);
+		const next = this.freezeState(this.fold(stamped));
+		// A hostile row can reach the handler through the payload or its own
+		// construction; the guard runs at the same depth and on the same
+		// shapes as setState, on the state that is about to be stored.
+		assertStateHasNoHostileOwnKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
-		this._state = this.freezeState(next);
-		this.addDomainEvent(stamped);
+		this._state = next;
+		this.appendStampedEvent(stamped);
 		this.bumpVersion();
 	}
 
 	/**
-	 * Address discipline for NEW facts: a present-but-foreign
-	 * `aggregateId` / `aggregateType` is a wiring bug and throws
-	 * {@link MisaddressedEventError}; missing fields are filled in from
-	 * the aggregate, so an applied event is always fully addressed and
-	 * can never fail the harvest or the replay guard later. The
-	 * stamped copy is frozen like the original (payload and metadata
-	 * are shared, already deep-frozen by `createDomainEvent`).
-	 */
-	private stampNewEventAddress<K extends TEvent["type"]>(
-		event: PendingDomainEvent<Extract<TEvent, { type: K }>>,
-	): PendingDomainEvent<Extract<TEvent, { type: K }>> {
-		// Immutability first: runs before validate/fold so a rejected
-		// event cannot leave mutated state behind (addDomainEvent would
-		// catch it too, but only after the handler already committed).
-		this.assertMintedEvent(event);
-		const { aggregateId, aggregateType } = event;
-		const idForeign = aggregateId !== undefined && aggregateId !== this.id;
-		const typeForeign =
-			aggregateType !== undefined && aggregateType !== this.aggregateType;
-		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				aggregateId,
-				aggregateType,
-			);
-		}
-		if (aggregateId !== undefined && aggregateType !== undefined) {
-			return event;
-		}
-		// The spread preserves the event's structural shape; TS cannot
-		// prove it against the generic Extract, so the copy goes through
-		// the event's own wider type. `aggregateId`/`aggregateType` are
-		// `string | undefined` on DomainEvent; filling them in cannot
-		// leave the declared shape.
-		const copy = {
-			...event,
-			aggregateId: this.id,
-			aggregateType: this.aggregateType,
-		};
-		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
-			event,
-		)
-			? adoptMintedEvent(copy)
-			: adoptUncommittedDomainEvent(copy);
-		return stamped as PendingDomainEvent<Extract<TEvent, { type: K }>>;
-	}
-
-	/**
-	 * Internal fold shared by `apply()` and `loadFromHistory`: locate the
+	 * Internal fold shared by `apply()` and `replayHistory`: locate the
 	 * handler and compute the next state. It deliberately does NOT assign
 	 * the state, record the event, bump the version, or run `validateEvent`
 	 * and `validateState`; `apply()` layers all of that on for new facts,
@@ -256,7 +210,7 @@ export abstract class EventSourcedAggregate<
 	 * stream corruption) after the all-or-nothing rollback. History
 	 * events without the optional address fields pass unchecked (the
 	 * fields are optional on the event shape); NEW events are covered
-	 * by the stricter `stampNewEventAddress` on the apply path.
+	 * by the stricter `addressNewEvent` on the apply path.
 	 */
 	private assertReplayedEventBelongsHere(event: TEvent): void {
 		const idMismatch =
@@ -305,41 +259,65 @@ export abstract class EventSourcedAggregate<
 	 * infrastructure boundary, where event-stream corruption is an expected
 	 * recoverable failure. Unexpected (non-DomainError) throws propagate.
 	 *
-	 * All-or-nothing: if any event mid-stream throws, the aggregate's state
-	 * is rolled back to its pre-call value, the same contract as
-	 * every replay path. Partial replay is never observable.
-	 * (Version needs no rollback: replay goes through `fold`, which
-	 * never bumps it; only the final `markRestored` advances it.)
+	 * All-or-nothing: if any event mid-stream throws, or the final restore
+	 * marker is rejected, the aggregate's state, version, and pending list
+	 * are rolled back to their pre-call values. Partial replay is never
+	 * observable. A handler that records a decision during the fold is the
+	 * one way to make the marker throw.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
 	 * a reconstituted aggregate at v=P catching up on M newer events ends at
-	 * v=P+M.
+	 * v=P+M. Events carry no stream position, so an overlap with the current
+	 * version is invisible here: the caller passes only the events after
+	 * that version and checks the final version against the pinned stream
+	 * head ({@link ReplayHeadMismatchError}).
 	 *
 	 * The replay target must not carry pending decisions. Factory-vs-load
 	 * lifecycle is owned by the Unit of Work rather than inferred from an
 	 * aggregate persistence flag.
 	 */
-	public loadFromHistory(
+	public replayHistory(
 		history: ReadonlyArray<TEvent>,
 	): Result<void, DomainError> {
-		assertReplayTargetHasNoPendingEvents(this);
+		assertReplayTargetHasNoPendingEvents(
+			this.id,
+			requirePendingEventLifecycleCapability(
+				this,
+				"replayHistory",
+			).pendingEventCount(),
+		);
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 
 		const previousState = this._state;
 		const startVersion = this.version;
-		for (const event of history) {
-			try {
+		try {
+			for (const event of history) {
 				this.assertReplayedEventBelongsHere(event);
 				this._state = this.freezeState(this.fold(event));
-			} catch (e) {
-				this._state = previousState;
-				if (e instanceof DomainError) return err(e);
-				throw e;
 			}
+			// Only the final fold result is stored, so the hostile own-key
+			// guard runs once here instead of once per replayed event; a
+			// rejection rolls back below like any other replay failure.
+			assertStateHasNoHostileOwnKey(this._state, "Aggregate state");
+			// Inside the try on purpose: a handler that records a decision
+			// during the fold makes this throw, and the rollback below must
+			// cover that case too.
+			this.markReconstituted((startVersion + history.length) as Version);
+		} catch (e) {
+			this._state = previousState;
+			this.setVersion(startVersion);
+			// The guard above proved the pending list empty before the loop,
+			// so anything in it now came from a handler that recorded a
+			// decision during the fold; the rollback drops it too.
+			this.discardPendingDecisions();
+			// Copy-safe: a handler may run in another loaded copy of the kit,
+			// whose DomainError fails a plain instanceof; the Result channel
+			// must carry it regardless.
+			if (isDomainErrorLike(e)) return err(e);
+			throw e;
 		}
-		this.markRestored((startVersion + history.length) as Version);
 		return ok();
 	}
 
@@ -367,4 +345,26 @@ export abstract class EventSourcedAggregate<
 			UncommittedDomainEventOf<Extract<TEvent, { type: K }>>
 		>;
 	};
+}
+
+/**
+ * Reconstitutes an event-sourced aggregate from one page of history and
+ * yields it only on success. `createReplayTarget` builds the instance: a
+ * fresh one, or one restored from a snapshot. The instance exists only
+ * inside this call. A rejected replay therefore leaves the caller with
+ * nothing to return by mistake. Later catch-up pages go through
+ * `replayHistory` on the value. A `DomainError` from a handler rides the
+ * `Result`; wiring errors and a foreign row throw, as in `replayHistory`.
+ * The creator runs outside the `Result`: what it throws propagates.
+ */
+export function reconstituteAggregateFromHistory<
+	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
+>(
+	createReplayTarget: () => TAggregate,
+	history: Parameters<TAggregate["replayHistory"]>[0],
+): Result<TAggregate, DomainError> {
+	const aggregate = createReplayTarget();
+	const replayed = aggregate.replayHistory(history);
+	if (replayed.isErr()) return err(replayed.error);
+	return ok(aggregate);
 }

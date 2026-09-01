@@ -65,7 +65,7 @@ Keep business factories for new aggregates. Add or retain a separate factory
 for persisted facts:
 
 ```ts
-class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
   static create(id: OrderId, customerId: CustomerId): Order {
     return new Order(id, initialOrderState(customerId));
   }
@@ -76,7 +76,7 @@ class Order extends AggregateRoot<OrderState, OrderId, OrderEvent> {
     version: Version,
   ): Order {
     const order = new Order(id, state);
-    order.markRestored(version);
+    order.markReconstituted(version);
     return order;
   }
 }
@@ -86,8 +86,17 @@ Reconstitution restores valid domain state and the current version without
 recording a new decision. Remove domain code that reads `persistedVersion`,
 `hasChanges`, or `changedKeys`. Those members no longer exist.
 
+`markReconstituted` accepts only a clean instance at a version not above the
+restored one. A factory that calls `setState` before `markReconstituted` puts the
+instance at version 1 first, so a row stored at version 0 fails with
+`InvalidVersionError`. A constructor that records a creation event fails
+with `UnreplayableAggregateError` on every load. Pass the stored state
+through the constructor, and record creation events in the business factory
+only. See
+[Aggregates -> State-Stored Aggregates](./aggregates.md#state-stored-aggregates).
+
 For event-sourced aggregates, keep a bare factory and load accepted history
-with `loadFromHistory`. A clean reconstituted aggregate can load a later tail
+with `replayHistory`. A clean reconstituted aggregate can load a later tail
 additively.
 
 ### 2. Replace repository contracts
@@ -276,7 +285,7 @@ const order = reconstituteAggregateFromSnapshot(
 ```
 
 For event sourcing, pass the events after `snapshot.version` to
-`order.loadFromHistory`. Snapshot timing, DTO mapping, schema migration,
+`order.replayHistory`. Snapshot timing, DTO mapping, schema migration,
 storage, and fallback-to-full-replay now belong to the adapter or application
 shell.
 
@@ -408,16 +417,16 @@ from four review rounds on the persistence redesign:
   `DomainEventValidationError` or `SnapshotTimeValidationError`: `name` now
   equals `code`, like every other kit error. Code-based matching does not
   change.
-- Reconstitution factories must call `markRestored(version)`. The snapshot
-  restore path enforces the version post-condition and rejects a factory
-  that ignores it.
+- Reconstitution factories must call `markReconstituted(version)` on a clean
+  instance whose version is not above `version`. The snapshot restore path
+  enforces the version post-condition and rejects a factory that ignores it.
 - A `PersistenceModel.capture` must be deterministic for an unchanged
   aggregate. A capture that rebuilds object Set members or Map keys per
   call supplies the optional `captureEquals`.
 - Run one kit version per process during the cutover. The internal
   capability registry keys changed with the capability shape, so an
   aggregate built by an rc.2 copy fails enrollment under an rc.3 copy with
-  the generic "no kit-managed persistence lifecycle" error.
+  `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`).
 
 Behavior changes that need no code change: a repeated `remove` of the same
 instance is an accepted no-op, and a repeated enrollment without
@@ -456,8 +465,10 @@ this list if your code observes one of these paths:
 
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 
-Two source breaks, both at the entry points. No function and no type
-disappears.
+Source breaks at the entry points, on the event bus port, and in the
+aggregate vocabulary. The vocabulary renames are mechanical; the section
+[One lifecycle vocabulary](#one-lifecycle-vocabulary) lists them with the
+commands that apply them.
 
 ### The `utils` entry point is gone
 
@@ -522,3 +533,55 @@ Call it when the scope that owns the bus ends. After the call, `publish`,
 pending `once()` rejects instead of waiting for an event that cannot arrive.
 Closing releases the subscriptions. It does not stop a handler that is already
 running.
+
+### One lifecycle vocabulary
+
+One term per lifecycle step, and the same generic order on both aggregate
+flavours. No behavior changes; every rename is a one-to-one replacement.
+
+| Before | After |
+| --- | --- |
+| `AggregateRoot` (class) | `StateStoredAggregate` |
+| `IAggregateRoot` (contract) | `Aggregate` |
+| `IEventSourcedAggregate` (contract) | `ReplayableAggregate` |
+| `EventSourcedAggregate<TState, TEvent, TId>` | `EventSourcedAggregate<TState, TId, TEvent>` |
+| `commit(newState, events)` | `setState(newState, events)` |
+| `loadFromHistory(history)` | `replayHistory(history)` |
+| `markRestored(version)` | `markReconstituted(version)` |
+| `stampNewEventAddress(event)` | `addressNewEvent(event)` |
+| `DomainEvent.version`, option `version` | `schemaVersion` |
+
+Apply the class and contract renames with one command over your
+TypeScript sources; the order matters, because the contract takes the
+name the class gave up:
+
+```sh
+perl -pi \
+  -e 's/\bAggregateRoot\b/StateStoredAggregate/g;' \
+  -e 's/\bIAggregateRoot\b/Aggregate/g;' \
+  -e 's/\bIEventSourcedAggregate\b/ReplayableAggregate/g;' \
+  $(git ls-files '*.ts')
+```
+
+Apply the method renames with one command over your TypeScript sources:
+
+```sh
+sed -i '' \
+  -e 's/this\.commit(/this.setState(/g' \
+  -e 's/loadFromHistory/replayHistory/g' \
+  -e 's/markRestored/markReconstituted/g' \
+  -e 's/stampNewEventAddress/addressNewEvent/g' \
+  $(git ls-files '*.ts')
+```
+
+Then run the compiler. It flags every `EventSourcedAggregate` subclass
+whose type arguments are in the old order; swap the second and the third
+argument. It also flags every read of `event.version` and every event
+literal with a `version` field; rename them to `schemaVersion`. Do not
+touch the `version` field of an `IntegrationMessage` or a
+`CommandMessageContent`: those are wire contracts, and the boundary mappers
+translate between `schemaVersion` and `version`.
+
+`commit` is the transaction term only: `withCommit`, `committedVersion`,
+`CommittedDomainEvent`. `setState(newState)` without events is unchanged.
+

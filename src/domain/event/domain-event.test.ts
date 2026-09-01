@@ -26,7 +26,7 @@ describe("DomainEvent", () => {
 				{
 					aggregateId: "customer-1",
 					aggregateType: "Customer",
-					version: 2,
+					schemaVersion: 2,
 				},
 			);
 
@@ -43,7 +43,7 @@ describe("DomainEvent", () => {
 				aggregateType: "Customer",
 				payload: { name: "Ada" },
 				occurredAt,
-				version: 2,
+				schemaVersion: 2,
 				metadata: { correlationId: "correlation-1" },
 			});
 			expect(event.occurredAt).not.toBe(occurredAt);
@@ -135,22 +135,23 @@ describe("DomainEvent", () => {
 
 		it.each([0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 			"rejects invalid payload schema version %s",
-			(version) => {
+			(schemaVersion) => {
 				const actions = [
-					() => createDomainEvent("Demo", undefined, { version }),
-					() => createUncommittedDomainEvent("Demo", undefined, { version }),
+					() => createDomainEvent("Demo", undefined, { schemaVersion }),
+					() =>
+						createUncommittedDomainEvent("Demo", undefined, { schemaVersion }),
 					() =>
 						createDomainEventFromFacts("Demo", undefined, {
 							eventId: "event-1",
 							occurredAt: new Date(0),
-							version,
+							schemaVersion,
 						}),
 				];
 				for (const action of actions) {
 					expect(action).toThrowError(
 						expect.objectContaining({
 							code: "EVENT_SCHEMA_VERSION_INVALID",
-							field: "version",
+							field: "schemaVersion",
 						}),
 					);
 				}
@@ -175,7 +176,7 @@ describe("DomainEvent", () => {
 			const unsupportedPayload = () => undefined;
 
 			expect(() =>
-				createDomainEvent("", unsupportedPayload, { version: 0 }),
+				createDomainEvent("", unsupportedPayload, { schemaVersion: 0 }),
 			).toThrowError(
 				expect.objectContaining({
 					code: "EVENT_TYPE_INVALID",
@@ -186,14 +187,14 @@ describe("DomainEvent", () => {
 
 		it("exposes one stable error type without making full prose contractual", () => {
 			try {
-				createDomainEvent("Demo", undefined, { version: 0 });
+				createDomainEvent("Demo", undefined, { schemaVersion: 0 });
 				throw new Error("expected validation to fail");
 			} catch (error) {
 				expect(error).toBeInstanceOf(TypeError);
 				expect(error).toBeInstanceOf(DomainEventValidationError);
 				expect(error).toMatchObject({
 					code: "EVENT_SCHEMA_VERSION_INVALID",
-					field: "version",
+					field: "schemaVersion",
 				});
 			}
 		});
@@ -352,25 +353,25 @@ describe("DomainEvent", () => {
 			expect(event.occurredAt.getTime()).toBeLessThanOrEqual(after);
 		});
 
-		it("defaults version to 1", () => {
+		it("defaults schemaVersion to 1", () => {
 			const event = createDomainEvent("Demo", { x: 1 });
-			expect(event.version).toBe(1);
+			expect(event.schemaVersion).toBe(1);
 		});
 
-		it("honors explicit occurredAt / version overrides", () => {
+		it("honors explicit occurredAt / schemaVersion overrides", () => {
 			const when = new Date("2026-01-01T00:00:00Z");
 			const event = createDomainEvent(
 				"Demo",
 				{ x: 1 },
 				{
 					occurredAt: when,
-					version: 7,
+					schemaVersion: 7,
 				},
 			);
 			// Value equality, NOT identity: the event defensively copies the
 			// caller's Date so later mutation of `when` cannot bleed in.
 			expect(event.occurredAt.getTime()).toBe(when.getTime());
-			expect(event.version).toBe(7);
+			expect(event.schemaVersion).toBe(7);
 		});
 	});
 
@@ -382,7 +383,7 @@ describe("DomainEvent", () => {
 				occurredAt,
 				aggregateId: "order-1",
 				aggregateType: "Order",
-				version: 2,
+				schemaVersion: 2,
 				metadata: { correlationId: "corr-1" },
 			};
 
@@ -496,7 +497,7 @@ describe("DomainEvent", () => {
 			const factory = createDomainEventFactory();
 			const invalidCallMustNotCompile = (): void => {
 				// @ts-expect-error schema version belongs to the concrete event producer
-				factory.createStamp({ version: 2 });
+				factory.createStamp({ schemaVersion: 2 });
 			};
 
 			expect(invalidCallMustNotCompile).toBeTypeOf("function");
@@ -739,6 +740,36 @@ describe("DomainEvent", () => {
 		});
 	});
 
+	describe("payload prototype-pollution safety", () => {
+		const hostilePayload = (): Record<string, unknown> =>
+			JSON.parse('{"amount":1,"__proto__":{"isAdmin":true}}') as Record<
+				string,
+				unknown
+			>;
+
+		it("rejects a payload carrying an own __proto__ key at mint", () => {
+			expect(() => createDomainEvent("OrderPlaced", hostilePayload())).toThrow(
+				HostileStateKeyError,
+			);
+			expect(() =>
+				createUncommittedDomainEvent("OrderPlaced", hostilePayload()),
+			).toThrow(HostileStateKeyError);
+			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+		});
+
+		it("checks the payload root only: a nested own __proto__ key is cloned as data", () => {
+			const event = createDomainEvent("OrderPlaced", {
+				line: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
+					string,
+					unknown
+				>,
+			});
+
+			expect(Object.hasOwn(event.payload.line, "__proto__")).toBe(true);
+			expect(({} as Record<string, unknown>).isAdmin).toBeUndefined();
+		});
+	});
+
 	describe("copyMetadata interaction", () => {
 		it("does not copy eventId or aggregateId fields (those are per-event identity, not metadata)", () => {
 			const previous: DomainEvent<"Prev", { v: number }> = createDomainEvent(
@@ -803,7 +834,7 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 			type: "T",
 			aggregateType: "A",
 			occurredAt: new Date(),
-			version: 1,
+			schemaVersion: 1,
 			payload: {},
 			metadata: JSON.parse('{"__proto__":{"isAdmin":true}}') as Record<
 				string,
@@ -947,5 +978,109 @@ describe("factory source strategy", () => {
 		const event = factory.create("OrderPlaced", { orderId: "o-1" });
 
 		expect(event.metadata?.source).toBeUndefined();
+	});
+});
+
+describe("metadata option", () => {
+	it("stores the metadata the call site names, standard and custom fields alike", () => {
+		const metadata: EventMetadata = {
+			correlationId: "corr-123",
+			causationId: "cmd-456",
+			userId: "user-789",
+			source: "order-service",
+			customField: "custom-value",
+		};
+
+		const event = createDomainEvent(
+			"OrderCreated",
+			{ orderId: "123" },
+			{ metadata },
+		);
+
+		expect(event.metadata).toEqual(metadata);
+	});
+
+	it("leaves metadata undefined when the call site names none", () => {
+		const event = createDomainEvent("OrderCreated", { orderId: "123" });
+
+		expect(event.metadata).toBeUndefined();
+	});
+});
+
+describe("copyMetadata", () => {
+	const sourceEvent = createDomainEvent(
+		"OrderCreated",
+		{ orderId: "123" },
+		{ metadata: { correlationId: "corr-123", userId: "user-456" } },
+	);
+
+	it("copies the metadata of the source event", () => {
+		const copied = copyMetadata(sourceEvent);
+
+		expect(copied).toEqual({ correlationId: "corr-123", userId: "user-456" });
+	});
+
+	it("adds the additional metadata and lets it override the source", () => {
+		const copied = copyMetadata(sourceEvent, {
+			causationId: "cmd-789",
+			userId: "user-999",
+		});
+
+		expect(copied).toEqual({
+			correlationId: "corr-123",
+			userId: "user-999",
+			causationId: "cmd-789",
+		});
+	});
+
+	it("returns only the additional metadata for a source without metadata", () => {
+		const bare = createDomainEvent("OrderCreated", { orderId: "123" });
+
+		const copied = copyMetadata(bare, { correlationId: "corr-123" });
+
+		expect(copied).toEqual({ correlationId: "corr-123" });
+	});
+
+	it("carries a correlation chain into a follow-up event", () => {
+		const followUp = createDomainEvent(
+			"OrderShipped",
+			{ orderId: "123" },
+			{
+				metadata: copyMetadata(sourceEvent, {
+					causationId: sourceEvent.type,
+				}),
+			},
+		);
+
+		expect(followUp.metadata?.correlationId).toBe("corr-123");
+		expect(followUp.metadata?.causationId).toBe("OrderCreated");
+		expect(followUp.metadata?.userId).toBe("user-456");
+	});
+});
+
+describe("mergeMetadata", () => {
+	it("merges several metadata objects and lets a later one override", () => {
+		const merged = mergeMetadata(
+			{ correlationId: "corr-123", userId: "user-456" },
+			{ userId: "user-999", source: "order-service" },
+		);
+
+		expect(merged).toEqual({
+			correlationId: "corr-123",
+			userId: "user-999",
+			source: "order-service",
+		});
+	});
+
+	it("skips undefined inputs", () => {
+		const merged = mergeMetadata({ correlationId: "corr-123" }, undefined, {
+			userId: "user-456",
+		});
+
+		expect(merged).toEqual({ correlationId: "corr-123", userId: "user-456" });
+	});
+
+	it("returns an empty object for no inputs", () => {
+		expect(mergeMetadata()).toEqual({});
 	});
 });

@@ -27,8 +27,9 @@ export interface ReadStreamOptions {
 	 * Return only events AFTER this stream position (1-based event count),
 	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
 	 * snapshot.version, limit: 256 })` yields the next page passed to
-	 * `aggregate.loadFromHistory`. Defaults to `0` (the first
-	 * stream page).
+	 * `aggregate.replayHistory`; the caller checks that the aggregate
+	 * ends at the pinned head ({@link ReplayHeadMismatchError}). Defaults
+	 * to `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;
@@ -95,28 +96,39 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
  *   const address = this.stream(id);
- *   const order = Order.reconstitute(id); // bare instance, no events
- *   let fromVersion = 0;
- *   let targetVersion: number | undefined;
- *   for (;;) {
+ *   const first = await this.eventStore.readStream(address, { limit: 256 });
+ *   if (!first.exists) return undefined;
+ *   const targetVersion = first.lastVersion; // pin the first observed head
+ *   const reconstituted = reconstituteAggregateFromHistory(
+ *     () => Order.reconstitute(id), // bare instance, no events
+ *     first.events,
+ *   );
+ *   if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
+ *   const order = reconstituted.value;
+ *   let fromVersion = first.events.length;
+ *   while (fromVersion < targetVersion) {
  *     const page = await this.eventStore.readStream(address, {
  *       fromVersion,
  *       toVersion: targetVersion,
  *       limit: 256,
  *     });
- *     if (!page.exists) return undefined;
- *     targetVersion ??= page.lastVersion; // pin the first observed head
- *     if (fromVersion === targetVersion) break;
- *     if (page.events.length === 0) {
+ *     if (!page.exists || page.events.length === 0) {
  *       throw new NonProgressingEventStreamPageError({
  *         ...address,
  *         fromVersion,
  *         targetVersion,
  *       });
  *     }
- *     const result = order.loadFromHistory(page.events);
- *     if (result.isErr()) throw result.error; // corrupt stream
+ *     const catchUp = order.replayHistory(page.events);
+ *     if (catchUp.isErr()) throw catchUp.error; // corrupt stream
  *     fromVersion += page.events.length;
+ *   }
+ *   if (order.version !== targetVersion) {
+ *     throw new ReplayHeadMismatchError({
+ *       ...address,
+ *       targetVersion,
+ *       actualVersion: order.version,
+ *     });
  *   }
  *   return this.tracking.trackLoaded(order);
  * }
@@ -174,7 +186,7 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *     append order and slicing; because the port cannot inject malformed
 	 *     physical rows, adapters add a store-specific corruption fixture that
 	 *     proves the duplicate/gap rejection. The repository then calls
-	 *     `loadFromHistory`, whose replay guard rejects any event carrying an
+	 *     `replayHistory`, whose replay guard rejects any event carrying an
 	 *     aggregate type or id that contradicts this stream key.
 	 *
 	 * An empty `events` array is a no-op; implementations resolve without

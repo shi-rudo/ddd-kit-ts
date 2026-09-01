@@ -62,7 +62,7 @@ Per Vernon §12, a Process Manager has identity, durable state, and a lifecycle,
 so aggregate mechanics are a useful implementation shape. Conceptually it
 coordinates process invariants rather than owning the immediate business
 invariants of `Order`, `Payment`, or `Shipment`. `CheckoutSaga` extends
-`AggregateRoot<CheckoutSagaState, OrderId>` and uses the same explicit
+`StateStoredAggregate<CheckoutSagaState, OrderId>` and uses the same explicit
 aggregate persistence lifecycle as participant aggregates. Its identifier is
 the `OrderId` (one saga per order).
 

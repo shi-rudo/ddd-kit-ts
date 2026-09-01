@@ -1,19 +1,16 @@
 import type { Version } from "../../domain/aggregate/aggregate";
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate-root";
 import {
 	type PendingEventLifecycleCapability,
-	pendingEventLifecycleCapabilityFor,
+	requirePendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
+import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	isMintedEvent,
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import {
-	EventHarvestError,
-	UnmanagedInstanceError,
-} from "../../errors/kit-errors";
+import { EventHarvestError } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import {
 	DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -59,7 +56,7 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 * owner cancellation and the configured post-commit deadline.
 	 */
 	onPersisted?: (
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		version: Version,
 		context: ExecutionContext,
 	) => void | Promise<void>;
@@ -76,7 +73,7 @@ export interface WithCommitDeps<Evt extends AnyDomainEvent, TCtx> {
 	 */
 	onPersistError?: (
 		error: unknown,
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 	) => void;
 	/**
 	 * Total time allotted to the complete post-commit application phase:
@@ -119,13 +116,13 @@ export interface AggregateCommitToken<
  * repository write, and return every resulting token in `commits`. Omitting
  * any token rejects the transaction: an enrolled write may not commit without
  * its event harvest and post-commit acknowledgement. Enrollable instances
- * must extend `AggregateRoot` or `EventSourcedAggregate`; structural
- * `IAggregateRoot` lookalikes have no internal lifecycle capability and fail
+ * must extend `StateStoredAggregate` or `EventSourcedAggregate`; structural
+ * `Aggregate` lookalikes have no internal lifecycle capability and fail
  * before commit.
  */
 export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	enrollSaved(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
 	/**
@@ -134,7 +131,7 @@ export interface CommitEnrollment<Evt extends AnyDomainEvent> {
 	 * application `onPersisted` observer is not called.
 	 */
 	enrollDeleted(
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt>;
 }
@@ -160,7 +157,7 @@ export interface WithCommitWorkResult<Evt extends AnyDomainEvent, R> {
 type CommitDisposition = "saved" | "deleted";
 
 interface AggregateCommitRecord<Evt extends AnyDomainEvent> {
-	readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+	readonly aggregate: Aggregate<Id<string>, Evt>;
 	readonly eventLifecycle: PendingEventLifecycleCapability;
 	readonly version: Version;
 	readonly expectedVersion: Version | undefined;
@@ -203,14 +200,14 @@ function createCommitTokenScope<
 >(): CommitTokenScope<Evt> {
 	const recordsByToken = new WeakMap<object, AggregateCommitRecord<Evt>>();
 	const tokensByAggregate = new WeakMap<
-		IAggregateRoot<Id<string>, Evt>,
+		Aggregate<Id<string>, Evt>,
 		AggregateCommitToken<Evt>
 	>();
 	let mintedTokenCount = 0;
 	let open = true;
 
 	const enroll = (
-		aggregate: IAggregateRoot<Id<string>, Evt>,
+		aggregate: Aggregate<Id<string>, Evt>,
 		disposition: CommitDisposition,
 		options?: CommitEnrollmentOptions,
 	): AggregateCommitToken<Evt> => {
@@ -266,13 +263,10 @@ function createCommitTokenScope<
 			return existing;
 		}
 
-		const eventLifecycle = pendingEventLifecycleCapabilityFor(aggregate);
-		if (!eventLifecycle) {
-			throw new UnmanagedInstanceError(
-				"withCommit enrollment",
-				String((aggregate as { id?: unknown } | null)?.id),
-			);
-		}
+		const eventLifecycle = requirePendingEventLifecycleCapability(
+			aggregate,
+			"withCommit enrollment",
+		);
 
 		const token = Object.freeze(
 			Object.create(null),
@@ -301,9 +295,7 @@ function createCommitTokenScope<
 		// callers who omit enrollment options (the documented
 		// direct-withCommit style), and grounding the guard in data supplied
 		// by the very caller it checks would be circular.
-		const persistedVersion = eventLifecycle.persistedVersion() as
-			| Version
-			| undefined;
+		const persistedVersion = eventLifecycle.persistedVersion();
 		tokensByAggregate.set(aggregate, token);
 		recordsByToken.set(token, {
 			aggregate,
@@ -321,11 +313,11 @@ function createCommitTokenScope<
 	return {
 		enrollment: Object.freeze({
 			enrollSaved: (
-				aggregate: IAggregateRoot<Id<string>, Evt>,
+				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitEnrollmentOptions,
 			) => enroll(aggregate, "saved", options),
 			enrollDeleted: (
-				aggregate: IAggregateRoot<Id<string>, Evt>,
+				aggregate: Aggregate<Id<string>, Evt>,
 				options?: CommitEnrollmentOptions,
 			) => enroll(aggregate, "deleted", options),
 		}),
@@ -563,7 +555,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 						`withCommit: aggregate ${String(agg.id)} recorded events but ` +
 							`did not advance its version beyond the persisted version ` +
 							`(${String(record.persistedVersion)}). An eventful commit needs a unique ` +
-							`cursor; use AggregateRoot.commit(currentState, event) instead ` +
+							`cursor; use StateStoredAggregate.setState(currentState, event) instead ` +
 							`of addDomainEvent(event) alone.`,
 					);
 				}
@@ -592,6 +584,24 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 								`instead of createDomainEvent(...); createEvent auto-injects ` +
 								`aggregateId and aggregateType. Outbox dispatchers and ` +
 								`projection handlers rely on the envelope source.`,
+							recordedEvent.type,
+						);
+					}
+					// Backstop behind the aggregate's own address check: the
+					// envelope source is copied from the event, so an event that
+					// names another aggregate must never become this commit.
+					const enrolledType = record.eventLifecycle.aggregateType();
+					if (
+						aggregateId !== String(agg.id) ||
+						aggregateType !== enrolledType
+					) {
+						throw new EventHarvestError(
+							`withCommit: event "${recordedEvent.type}" is addressed to ` +
+								`${aggregateType} ${aggregateId} but was enrolled under ` +
+								`${enrolledType} ${String(agg.id)}. The aggregate base ` +
+								"classes stamp the address on every recording path; an " +
+								"instance from another package copy must stamp it the " +
+								"same way.",
 							recordedEvent.type,
 						);
 					}
@@ -625,7 +635,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 	// "consumes" the in-memory pending events. A deleted row does not trigger
 	// the saved-only application observer.
 	const persistedObservations: Array<{
-		readonly aggregate: IAggregateRoot<Id<string>, Evt>;
+		readonly aggregate: Aggregate<Id<string>, Evt>;
 		readonly version: Version;
 	}> = [];
 	for (const {
@@ -639,7 +649,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 			if (disposition === "deleted") {
 				eventLifecycle.discardPendingEvents(committedEvents);
 			} else {
-				eventLifecycle.acknowledge(committedEvents, version as number);
+				eventLifecycle.acknowledge(committedEvents, version);
 				persistedObservations.push({ aggregate, version });
 			}
 		} catch (error) {

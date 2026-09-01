@@ -1,4 +1,4 @@
-import type { IAggregateRoot } from "../domain/aggregate/aggregate";
+import type { Aggregate } from "../domain/aggregate/aggregate";
 import type {
 	AnyDomainEvent,
 	PendingDomainEvent,
@@ -22,7 +22,7 @@ import {
 
 /** Application-facing state-stored repository exercised by the suite. */
 export interface ContractRepository<
-	TAggregate extends IAggregateRoot<Id<string>, AnyDomainEvent>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
 	add(aggregate: TAggregate): void;
@@ -33,7 +33,7 @@ export interface ContractRepository<
 
 /** One isolated real-adapter environment. `run` must permit overlapping calls. */
 export interface RepositoryContractEnvironment<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	run<R>(
@@ -49,7 +49,7 @@ export interface RepositoryContractEnvironment<
 
 /** Fixtures and observable projections supplied by an adapter package. */
 export interface RepositoryContractHarness<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	createEnvironment(): Promise<
@@ -99,7 +99,7 @@ export type RepositoryContractTest = ContractTest;
  * because `add` or `update` writes early is not a conforming implementation.
  */
 export function createRepositoryContractTests<
-	TAggregate extends IAggregateRoot<Id<string>, TEvent>,
+	TAggregate extends Aggregate<Id<string>, TEvent>,
 	TEvent extends AnyDomainEvent = AnyDomainEvent,
 >(
 	harness: RepositoryContractHarness<TAggregate, TEvent>,

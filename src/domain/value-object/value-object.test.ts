@@ -86,6 +86,68 @@ function maskWithInheritedDataTag<T extends object>(value: T): T {
 }
 
 describe("deepFreeze", () => {
+	it("does not walk a subtree it already deep-froze", () => {
+		let reads = 0;
+		const child = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		deepFreeze(child);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...{}, child });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(readsAfterFirstFreeze);
+	});
+
+	it("memoizes a sibling subtree although a caller-frozen Date keeps its own subtree open", () => {
+		let reads = 0;
+		const lines = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		// A Date frozen by the caller takes no mutator shadows and stays
+		// mutable through setTime, so the object that holds it is walked
+		// again; the sibling subtree is not.
+		const state = { calendar: Object.freeze(new Date(0)), lines };
+		deepFreeze(state);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...state });
+		deepFreeze({ ...state });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(1);
+	});
+
+	it("re-walks a subtree that holds a pre-frozen Map, because its entries can still change", () => {
+		// A frozen Map takes no mutator shadows, so entries can still be
+		// added; the memo must not skip the graph that holds it.
+		const map = Object.freeze(new Map<string, { mutable: boolean }>());
+		deepFreeze({ map });
+		map.set("k", { mutable: true });
+
+		deepFreeze({ map });
+
+		expect(Object.isFrozen(map.get("k"))).toBe(true);
+	});
+
+	it("still walks a subtree that another freeze left shallow", () => {
+		const grandchild = { value: 1 };
+		const child = Object.freeze({ grandchild });
+
+		deepFreeze({ child });
+
+		expect(Object.isFrozen(grandchild)).toBe(true);
+	});
+
 	it.each(mutableBuiltInCases)(
 		"blocks $name mutators with an own toStringTag accessor",
 		({ name, create, mutate }) => {

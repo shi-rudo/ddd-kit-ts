@@ -7,6 +7,7 @@ import type {
 import {
 	AggregateDeletedError,
 	AggregateNotFoundError,
+	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	DirectStateMutationError,
 	DomainError,
@@ -19,6 +20,7 @@ import {
 	InMemoryCapacityExceededError,
 	InvalidCommandMessageError,
 	InvalidIntegrationMessageError,
+	InvalidVersionError,
 	type KitErrorCode,
 	MissingEntityIdError,
 	MissingHandlerError,
@@ -28,6 +30,7 @@ import {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	ReplayHeadMismatchError,
 	SnapshotSchemaMismatchError,
 	UnenrolledChangesError,
 	UnmanagedInstanceError,
@@ -125,8 +128,24 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new UnmanagedInstanceError("recordPendingEvents", "order-1"),
+		error: () =>
+			new UnmanagedInstanceError("recordPendingEvents", "aggregate", "order-1"),
 		code: "UNMANAGED_INSTANCE",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new CapabilityRegistryConflictError(
+				Symbol.for("@shirudo/ddd-kit/test-registry/v1"),
+			),
+		code: "CAPABILITY_REGISTRY_CONFLICT",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () => new InvalidVersionError(-1, "is not a safe integer"),
+		code: "INVALID_VERSION",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -139,6 +158,18 @@ const concreteCases: ReadonlyArray<{
 				targetVersion: 12,
 			}),
 		code: "NON_PROGRESSING_EVENT_STREAM_PAGE",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ReplayHeadMismatchError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				targetVersion: 12,
+				actualVersion: 15,
+			}),
+		code: "REPLAY_HEAD_MISMATCH",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -272,6 +303,24 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		expect(status).toBe(409);
 	});
 
+	it("UnmanagedInstanceError appends the registry detail when given one", () => {
+		const withDetail = new UnmanagedInstanceError(
+			"recordPendingEvents",
+			"aggregate",
+			"order-1",
+			"The registry is private.",
+		);
+		const withoutDetail = new UnmanagedInstanceError(
+			"recordPendingEvents",
+			"aggregate",
+			"order-1",
+		);
+
+		expect(withDetail.message).toContain("aggregate order-1");
+		expect(withDetail.message.endsWith("The registry is private.")).toBe(true);
+		expect(withoutDetail.message).not.toContain("private");
+	});
+
 	it("further structured kit errors carry their codes", () => {
 		expect(
 			new EventHarvestError("event without aggregateId", "OrderConfirmed").code,
@@ -374,6 +423,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 		type _Checks = [
 			AssertKitCode<AggregateDeletedError["code"]>,
 			AssertKitCode<AggregateNotFoundError["code"]>,
+			AssertKitCode<CapabilityRegistryConflictError["code"]>,
 			AssertKitCode<ConcurrencyConflictError["code"]>,
 			AssertKitCode<DirectStateMutationError["code"]>,
 			AssertKitCode<DuplicateAggregateError["code"]>,
@@ -384,9 +434,11 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
+			AssertKitCode<InvalidVersionError["code"]>,
 			AssertKitCode<MissingEntityIdError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,
+			AssertKitCode<ReplayHeadMismatchError["code"]>,
 			AssertKitCode<PendingEventBatchMismatchError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
 			AssertKitCode<EventBusClosedError["code"]>,

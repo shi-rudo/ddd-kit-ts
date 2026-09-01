@@ -5,7 +5,7 @@
  *
  * 1. **Aggregate Root Entity**: The parent Entity of an aggregate.
  *    - Has identity (id), state, and version
- *    - Implemented by classes extending `AggregateRoot` or `EventSourcedAggregate`
+ *    - Implemented by classes extending `StateStoredAggregate` or `EventSourcedAggregate`
  *    - Represents the aggregate externally
  *    - Loaded/saved through repositories
  *
@@ -54,7 +54,7 @@
  * };
  *
  * // Aggregate Root (Entity with version)
- * class Order extends AggregateRoot<OrderState, OrderId> {
+ * class Order extends StateStoredAggregate<OrderState, OrderId> {
  *   // Order is an Aggregate Root Entity
  *   // OrderState contains OrderItem child entities
  * }
@@ -78,8 +78,10 @@ export type StateValidator<TState> = (state: TState) => void;
 export interface EntityConfig<TState = unknown> {
 	/**
 	 * Pure state-invariant validator captured by the entity instance. It runs
-	 * against the exact frozen state stored during construction and every
-	 * {@link Entity.setState} call. Throw to reject the candidate state.
+	 * against the exact frozen copy the entity stores, during construction,
+	 * every {@link Entity.setState} call, and the event-sourced apply path.
+	 * Throw to reject the candidate state. A validator that tries to mutate
+	 * the candidate fails loudly, because the candidate is already frozen.
 	 *
 	 * Passing validation as data avoids virtual dispatch from the base
 	 * constructor: the function cannot observe partly initialised subclass
@@ -94,9 +96,10 @@ export interface EntityConfig<TState = unknown> {
 	 * retained by constructor callers and against accidental in-place
 	 * writes inside the entity; live state itself is never public.
 	 *
-	 * Defaults to `false` (the documented shallow contract): deep freezing
-	 * costs a full state-graph walk on every state write, which is why it
-	 * is not the default on hot paths.
+	 * Defaults to `false` (the documented shallow contract). A deep freeze
+	 * walks the part of the graph the write changed: subtrees the kit
+	 * already deep-froze are skipped, so `{ ...state, status }` costs the
+	 * root object. A write that replaces a large subtree walks that subtree.
 	 *
 	 * **Only for plain-data states.** The deep freeze walks the entire
 	 * graph: a class-based child entity inside the state would be frozen
@@ -107,6 +110,18 @@ export interface EntityConfig<TState = unknown> {
 	 * shallow copy protects only the top-level input object).
 	 */
 	deepFreezeState?: boolean;
+
+	/**
+	 * For reconstitution factories only: the initial state is a persisted
+	 * fact, like an event history, so {@link validateState} does not run
+	 * on it. Every later {@link Entity.setState} call and every
+	 * event-sourced apply still runs the validator. Without this option a
+	 * rule that tightened after a snapshot was taken makes every restore of
+	 * that snapshot throw. Never pass it for a new aggregate: a factory
+	 * yields valid objects only. The structural gates (frozen copy, hostile
+	 * own-key check) run regardless.
+	 */
+	trustInitialState?: boolean;
 }
 
 /**
@@ -209,6 +224,15 @@ export abstract class Entity<TState, TId extends Id<string>>
 	private readonly _stateFreezeMode: StateFreezeMode;
 
 	/**
+	 * Declared and never assigned: a subclass that declares a member named
+	 * `validateState` (a method or a field) fails to compile against this
+	 * private member. The validator itself lives in a module-level map, so
+	 * the runtime ignores such a member anyway; this declaration turns the
+	 * silent no-op into a compile error.
+	 */
+	private declare readonly validateState: never;
+
+	/**
 	 * **State ownership.** Plain-object and array states are shallow-copied
 	 * before the freeze, so the caller's own object stays mutable. A CLASS
 	 * INSTANCE passed as state is an ownership transfer: it is frozen
@@ -237,15 +261,20 @@ export abstract class Entity<TState, TId extends Id<string>>
 			this,
 			(config?.validateState ?? noStateValidation) as StateValidator<unknown>,
 		);
-		// Copy, validate, freeze, assign: the object validated IS the object
-		// stored (the freeze is in place), and a rejected candidate leaves
-		// nothing frozen behind. The validator lives in a module-level map
-		// keyed by instance, and the freeze helper is a module function, so a
-		// same-named member in a JavaScript subclass cannot turn this
-		// constructor call into virtual dispatch.
-		const initial = shallowCopyOwned(initialState);
-		assertStateInvariant(this, initial);
-		this._state = freezeStateByMode(initial, this._stateFreezeMode);
+		// Copy, freeze, validate, assign: the object validated IS the frozen
+		// object stored, so a validator that tries to mutate it fails loudly.
+		// The validator lives in a module-level map keyed by instance, and
+		// the freeze helper is a module function, so a same-named member in a
+		// JavaScript subclass cannot turn this constructor call into virtual
+		// dispatch.
+		const initial = freezeStateByMode(
+			shallowCopyOwned(initialState),
+			this._stateFreezeMode,
+		);
+		if (!(config?.trustInitialState ?? false)) {
+			assertStateInvariant(this, initial);
+		}
+		this._state = initial;
 	}
 
 	/**
@@ -276,12 +305,12 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `"__proto__"` data key; the previous state is kept.
 	 */
 	protected setState(newState: TState): void {
-		// Same copy-validate-freeze-assign order as the constructor: the
-		// object validated IS the object stored, and a validation throw
-		// leaves the previous state untouched and nothing frozen behind.
-		const next = shallowCopyOwned(newState);
+		// Same copy-freeze-validate-assign order as the constructor: the
+		// object validated IS the frozen object stored, and a validation
+		// throw leaves the previous state untouched.
+		const next = this.freezeState(shallowCopyOwned(newState));
 		assertStateInvariant(this, next);
-		this._state = this.freezeState(next);
+		this._state = next;
 	}
 }
 
@@ -294,8 +323,8 @@ const stateValidators = new WeakMap<object, StateValidator<unknown>>();
  * Runs the entity's instance-bound {@link EntityConfig.validateState}
  * against a candidate state. The constructor, {@link Entity.setState}, and
  * the event-sourced apply path all use it. Replay skips it because history
- * is accepted fact. Call it before the freeze, with the object that will
- * be stored.
+ * is accepted fact. Call it with the exact frozen object that will be
+ * stored, so a validator that tries to mutate it fails loudly.
  *
  * Deliberately a module-level function with a per-instance lookup. A
  * method could be overridden. A property could be shadowed by a subclass
@@ -313,7 +342,8 @@ export function assertStateInvariant<TState>(
 	if (validateState === undefined) {
 		throw new UnmanagedInstanceError(
 			"assertStateInvariant",
-			String((entity as { id?: unknown } | null)?.id),
+			"entity",
+			(entity as { id?: unknown } | null)?.id,
 		);
 	}
 	validateState(candidate);
@@ -350,6 +380,31 @@ export function freezeShallow<T>(value: T): T {
 }
 
 /**
+ * The hostile own-key guard for a state value that is about to be stored.
+ * It checks the root object only, and only the shapes a JSON row can
+ * produce: a plain object, a null-prototype object, or an array. A class
+ * instance is an ownership transfer and passes. The constructor,
+ * {@link Entity.setState}, and the event-sourced fold all use it, so the
+ * depth and the shape rule cannot drift between the paths.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export function assertStateHasNoHostileOwnKey(
+	state: unknown,
+	subject: string,
+): void {
+	if (state === null || typeof state !== "object") return;
+	if (Array.isArray(state)) {
+		assertNoHostileOwnProtoKey(state, subject);
+		return;
+	}
+	const proto = Object.getPrototypeOf(state);
+	if (proto !== Object.prototype && proto !== null) return;
+	assertNoHostileOwnProtoKey(state, subject);
+}
+
+/**
  * Returns a shallow copy for plain objects and arrays so the subsequent
  * `freezeShallow` never locks the caller's own object in place (their later
  * writes to it would throw in strict mode). Class instances and primitives
@@ -359,8 +414,8 @@ export function freezeShallow<T>(value: T): T {
  */
 function shallowCopyOwned<T>(value: T): T {
 	if (value === null || typeof value !== "object") return value;
+	assertStateHasNoHostileOwnKey(value, "Entity state");
 	if (Array.isArray(value)) {
-		assertNoHostileOwnProtoKey(value, "Entity state");
 		// Spread copies only iterated index elements; transfer own
 		// enumerable NON-INDEX keys (items.total = 5 style annotations) as
 		// data properties too, mirroring the plain-object branch, so the
@@ -381,7 +436,6 @@ function shallowCopyOwned<T>(value: T): T {
 	}
 	const proto = Object.getPrototypeOf(value);
 	if (proto !== Object.prototype && proto !== null) return value;
-	assertNoHostileOwnProtoKey(value, "Entity state");
 	// Copy as data properties, never through [[Set]]: object spread uses
 	// CreateDataProperty, so even without the guard above no key could
 	// reach the `__proto__` setter the way Object.assign onto an

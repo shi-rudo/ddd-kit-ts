@@ -1,5 +1,5 @@
-import type { IAggregateRoot } from "../../domain/aggregate/aggregate";
-import { pendingEventRecordingCapabilityFor } from "../../domain/aggregate/pending-event-recording";
+import type { Aggregate } from "../../domain/aggregate/aggregate";
+import { requirePendingEventRecordingCapability } from "../../domain/aggregate/pending-event-recording";
 import type {
 	AnyDomainEvent,
 	DomainEventFactory,
@@ -7,7 +7,6 @@ import type {
 	UncommittedDomainEventOf,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
 
 /** Minimal shell role accepted by {@link recordPendingEvents}. */
 export type DomainEventStampFactory = Pick<DomainEventFactory, "createStamp">;
@@ -34,30 +33,27 @@ export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	factory: DomainEventStampFactory,
 ): ReadonlyArray<TEvent>;
 export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	createStamp: DomainEventStampProvider<TEvent>,
 ): ReadonlyArray<TEvent>;
 export function recordPendingEvents<
 	TId extends Id<string>,
 	TEvent extends AnyDomainEvent,
 >(
-	aggregate: IAggregateRoot<TId, TEvent>,
+	aggregate: Aggregate<TId, TEvent>,
 	source: DomainEventStampFactory | DomainEventStampProvider<TEvent>,
 ): ReadonlyArray<TEvent> {
-	const capability = pendingEventRecordingCapabilityFor(aggregate);
-	if (!capability) {
-		throw new UnmanagedInstanceError(
-			"recordPendingEvents",
-			String((aggregate as { id?: unknown } | null)?.id),
-		);
-	}
+	const capability = requirePendingEventRecordingCapability(
+		aggregate,
+		"recordPendingEvents",
+	);
 	const createStamp: DomainEventStampProvider<TEvent> =
 		typeof source === "function" ? source : () => source.createStamp();
 	return capability.record((event, index) =>

@@ -37,7 +37,7 @@ Be precise about the APIs:
 - `withCommit(...)` returns the committed result `R`. It is a transaction
   orchestrator, not a `Result` wrapper.
 
-Event-sourced replay is a third case. `loadFromHistory` returns
+Event-sourced replay is a third case. `replayHistory` returns
 `Result<void, DomainError>` because a persisted stream can contain invalid
 historical facts. A repository can reject the load or refold from another
 source. Snapshot DTO migration and reconstitution live
@@ -91,21 +91,15 @@ If validation, handler lookup, or state computation fails, the aggregate is unch
 
 That is the important event-sourcing rule in code form: an event is a fact that happened. The aggregate must not record an event for a transition that did not successfully change state.
 
-State-stored aggregates get the same safety through `commit(newState, events)`. Lower-level `setState` and `addDomainEvent` stay available for unusual cases, but the normal path should be `commit` because it preserves the order: state first, event second, version with the transition.
+State-stored aggregates get the same safety through `setState(newState, events)`. Lower-level `addDomainEvent` stays available for unusual cases, but the normal path is `setState` with the events of the change, because it preserves the order: state first, version bump, events last.
 
-## `commit()` keeps its transaction-flavored name
+## One write helper per flavour: `setState(newState, events)` and `apply(event)`
 
-The name `commit()` is intentionally a little mechanical.
+The public aggregate API should be domain language: `confirm()`, `cancel()`, `ship()`, `register()`. Inside those methods, one protected helper says "this state change, this version bump, and these events land together": `setState(newState, events)` on a state-stored aggregate, `apply(event)` on an event-sourced one.
 
-The public aggregate API should be domain language: `confirm()`, `cancel()`, `ship()`, `register()`. Inside those methods, `commit()` is the protected helper that says "this state change, these events, and this version bump land together."
+The state-stored helper is the same `setState` that every entity has; the events are an optional second argument, not a second name. A second name would carry no difference the parameter does not already state.
 
-Alternatives were worse:
-
-- `record()` sounds like it only records an event.
-- `applyChange()` collides conceptually with event-sourced `apply()`.
-- a domain-specific name cannot work for a shared base-class helper.
-
-The method name communicates atomicity. It is protected, so it does not leak into the application-facing aggregate API.
+`commit` stays the transaction term: `withCommit`, `committedVersion`, `CommittedDomainEvent`. One word, one meaning.
 
 ## Events are deeply frozen at construction
 
@@ -320,7 +314,7 @@ cost to every internal read and write. Many models do not need that guarantee.
 
 The contract is:
 
-- Replace state through `setState`, `commit`, or event-sourced `apply`.
+- Replace state through `setState`, `setState`, or event-sourced `apply`.
 - Do not widen the protected `state` accessor in a concrete entity.
 - Expose domain queries or detached immutable read DTOs to consumers.
 - Model deeply immutable data with `vo()` or `ValueObject`.

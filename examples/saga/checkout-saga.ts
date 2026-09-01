@@ -1,4 +1,4 @@
-import { AggregateRoot } from "../../src/domain/aggregate/aggregate-root";
+import { StateStoredAggregate } from "../../src/domain/aggregate/state-stored-aggregate";
 import {
 	createInitialDomainMachineSnapshot,
 	type DomainMachineDefinition,
@@ -118,7 +118,10 @@ function toSagaState(
 
 // TEvent stays at the default `never`: machine transitions are private process
 // state, and this compact state-stored variant publishes no progress events.
-export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
+export class CheckoutSaga extends StateStoredAggregate<
+	CheckoutSagaState,
+	OrderId
+> {
 	protected readonly aggregateType = "CheckoutSaga";
 
 	get step(): CheckoutSagaStep {
@@ -140,7 +143,7 @@ export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 		);
 		const state = toSagaState(snapshot);
 		const saga = new CheckoutSaga(orderId, state);
-		saga.commit(state);
+		saga.setState(state);
 		return saga;
 	}
 
@@ -175,6 +178,6 @@ export class CheckoutSaga extends AggregateRoot<CheckoutSagaState, OrderId> {
 			snapshot,
 			input,
 		);
-		this.commit(toSagaState(result.snapshot));
+		this.setState(toSagaState(result.snapshot));
 	}
 }

@@ -206,7 +206,7 @@ export class InMemoryCapacityExceededError extends InfrastructureError<"IN_MEMOR
  * a generic `catch (e instanceof DomainError)` handler at the App
  * layer must not mask a forgotten handler; this should crash loud and
  * fail the calling Use Case so the bug surfaces in development. The
- * replay through `loadFromHistory` also lets it propagate uncaught instead
+ * replay through `replayHistory` also lets it propagate uncaught instead
  * of wrapping it in `Result.Err`.
  *
  * Use `isBaseError(e)` from `@shirudo/base-error` to detect
@@ -233,7 +233,7 @@ export class MissingHandlerError extends KitWiringError<"MISSING_HANDLER"> {
  * the fact anyway on the apply path, and leave every later fold working on
  * nothing. Same posture as {@link MissingHandlerError}: a deterministic bug
  * in the handler map, never a domain rejection, so it propagates through
- * `loadFromHistory` instead of riding its `Result`.
+ * `replayHistory` instead of riding its `Result`.
  */
 export class HandlerReturnedNoStateError extends KitWiringError<"HANDLER_RETURNED_NO_STATE"> {
 	constructor(public readonly eventType: string) {
@@ -422,16 +422,19 @@ export class InvalidCommandMessageError extends InfrastructureError<"INVALID_COM
 }
 
 /**
- * Thrown by `Entity` (constructor and `setState`) and by the event
- * metadata helpers (`createDomainEvent`'s `options.metadata`,
- * `mergeMetadata`, `copyMetadata`) when the value carries an own
- * `"__proto__"` data key:
+ * Thrown by `Entity` (constructor and `setState`), by the event-sourced
+ * fold (`apply` and replay), by the event constructors for the payload,
+ * and by the event metadata helpers (`createDomainEvent`'s
+ * `options.metadata`, `mergeMetadata`, `copyMetadata`) when the value
+ * carries an own `"__proto__"` data key:
  * the shape `JSON.parse` produces for hostile DB rows or request bodies
  * handed to reconstitute factories. Such a key can never be legitimate
  * domain state; accepting it would hand a prototype-pollution payload to
  * every downstream consumer that copies the state through `[[Set]]`
  * (`Object.assign`, for-in assignment loops), and dropping it would be
- * silent data mutation.
+ * silent data mutation. The check looks at the root object only; nested
+ * objects are not walked, and a class instance is an ownership transfer
+ * that passes.
  *
  * Deliberately **not** a `DomainError` or `InfrastructureError` (same
  * posture as {@link MissingHandlerError}): untrusted input reaching the
@@ -467,7 +470,30 @@ export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
 }
 
 /**
- * Thrown by `EventSourcedAggregate.loadFromHistory` when the replay target
+ * Thrown when a number that is not a valid aggregate version reaches the
+ * kit: `toVersion`, `markReconstituted`, `setVersion`, and the post-commit
+ * acknowledgement all reject it. A version is a safe integer of at least
+ * zero, and a restore never moves below the current version. A wiring
+ * error: an adapter passed a corrupt row value or a wrong number, and
+ * the optimistic-concurrency cursor must not carry it. Not retryable.
+ */
+export class InvalidVersionError extends KitWiringError<"INVALID_VERSION"> {
+	constructor(
+		public readonly value: unknown,
+		/** Why the value was rejected, for example "is not a safe integer". */
+		public readonly reason: string,
+	) {
+		super(
+			"INVALID_VERSION",
+			`Version ${String(value)} ${reason}. A version is a safe integer of ` +
+				"at least zero; create one with toVersion(n) from the stored " +
+				"row value.",
+		);
+	}
+}
+
+/**
+ * Thrown by `EventSourcedAggregate.replayHistory` when the replay target
  * carries unflushed `pendingEvents`. Replaying persisted facts onto that
  * instance would advance the version underneath decisions made against an
  * older state and could later claim history the stream does not carry.
@@ -552,12 +578,15 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
  * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or aggregate
  * event helpers
  * deep-freeze the event and defensively copy payload and metadata,
- * and register the result in an internal, unforgeable mint marker.
- * Anything else (a hand-rolled literal, a shallow-frozen copy with
- * mutable nested data) is rejected: a mutable event recorded next to
- * a state change can silently diverge from it afterwards. A wiring
- * error: deterministic bug at the call site, the remedy is minting
- * through the constructors.
+ * and mark the result as minted. The mark has two tiers: a
+ * module-private one for events of this loaded copy of the kit, and a
+ * cooperative `Symbol.for` brand that a second loaded copy stamps and
+ * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
+ * copy with mutable nested data) is rejected: a mutable event recorded
+ * next to a state change can silently diverge from it afterwards. A
+ * wiring error: deterministic bug at the call site, the remedy is
+ * minting through the constructors. The gate catches accidents, not
+ * adversaries: code in the same process can fake the brand.
  */
 export class UnmintedEventError extends KitWiringError<"UNMINTED_EVENT"> {
 	constructor(eventType: string) {
@@ -642,7 +671,7 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
 }
 
 /**
- * Thrown by persisted-event consumers (including `loadFromHistory` and
+ * Thrown by persisted-event consumers (including `replayHistory` and
  * `Projector`) when an event carries an
  * `aggregateId` or `aggregateType` that names a different aggregate:
  * the persisted row belongs to someone else (a miswired stream read,
@@ -720,6 +749,51 @@ export class NonProgressingEventStreamPageError extends InfrastructureError<"NON
 	}
 }
 
+/** Constructor options for {@link ReplayHeadMismatchError}. */
+export interface ReplayHeadMismatchErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** Pinned inclusive stream head the replay had to reach. */
+	readonly targetVersion: number;
+	/** Version the aggregate holds after the replay. */
+	readonly actualVersion: number;
+}
+
+/**
+ * Thrown by a load recipe when the replayed aggregate does not end at the
+ * pinned stream head. Events carry no stream position, so the aggregate
+ * cannot detect a tail that overlaps the restored version or a page that
+ * lies outside the requested window; only the caller, which pinned the
+ * head, can compare. A snapshot catch-up passes only the events after the
+ * restored version, and the final version must equal the head.
+ *
+ * This is a non-retryable infrastructure error: the persistence adapter
+ * contradicted its port contract. Run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against the adapter and fix its
+ * windowing.
+ */
+export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly targetVersion: number;
+	readonly actualVersion: number;
+
+	constructor(options: ReplayHeadMismatchErrorOptions) {
+		super({
+			code: "REPLAY_HEAD_MISMATCH",
+			message:
+				`Replay of ${options.aggregateType}(${options.aggregateId}) ended at version ` +
+				`${options.actualVersion}, not at the pinned stream head ${options.targetVersion}. ` +
+				"The tail overlapped the restored version or a page lay outside the " +
+				"requested window; pass only the events after the restored version.",
+		});
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.targetVersion = options.targetVersion;
+		this.actualVersion = options.actualVersion;
+	}
+}
+
 /**
  * Thrown when an event harvested from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
@@ -750,6 +824,24 @@ export class EventHarvestError extends KitWiringError<"EVENT_HARVEST_FAILED"> {
 }
 
 /**
+ * Thrown at bootstrap when the global key of a kit capability registry
+ * already holds a value that is not a registry: another module claimed
+ * the key. The kit neither shares that value nor overwrites it, because a
+ * silent replacement would break whichever module owned the key first. A
+ * wiring error in the host process; the remedy is one owner per key.
+ */
+export class CapabilityRegistryConflictError extends KitWiringError<"CAPABILITY_REGISTRY_CONFLICT"> {
+	constructor(public readonly key: symbol) {
+		super(
+			"CAPABILITY_REGISTRY_CONFLICT",
+			`The global key ${String(key)} holds a value that is not a ` +
+				"capability registry of this package. Another module claimed the " +
+				"key; the kit refuses to share or overwrite it.",
+		);
+	}
+}
+
+/**
  * Thrown when a kit operation receives an instance that this package did
  * not construct: a structural lookalike, a repository DTO, or an instance
  * from an incompatible copy of the package. Such an instance carries none
@@ -760,15 +852,21 @@ export class UnmanagedInstanceError extends KitWiringError<"UNMANAGED_INSTANCE">
 	constructor(
 		/** The kit operation that rejected the instance. */
 		public readonly operation: string,
-		/** The rejected instance: its id, or a description when it has none. */
-		public readonly instance: string,
+		/** What was rejected: "aggregate", "entity", "the persistence baseline". */
+		public readonly subject: string,
+		/** The rejected instance's id, when it has one. */
+		public readonly instanceId?: unknown,
+		/** One extra sentence about the registry state, when it explains the rejection. */
+		detail?: string,
 	) {
 		super(
 			"UNMANAGED_INSTANCE",
 			`${operation} requires an instance constructed by this package; ` +
-				`${instance} carries no kit-managed capability. Extend the ` +
-				"kit's base classes; a structural lookalike or an instance from " +
-				"an incompatible package copy cannot be managed.",
+				`${instanceId === undefined ? subject : `${subject} ${String(instanceId)}`} ` +
+				"carries no kit-managed capability. Construct it through this " +
+				"package and run one compatible package copy; a structural " +
+				"lookalike or an instance from another copy cannot be managed." +
+				(detail === undefined ? "" : ` ${detail}`),
 		);
 	}
 }
@@ -1298,6 +1396,7 @@ export type KitErrorCode =
 	| "AGGREGATE_DELETED"
 	| "AGGREGATE_NOT_FOUND"
 	| "AGGREGATE_TRACKING"
+	| "CAPABILITY_REGISTRY_CONFLICT"
 	| "COMMIT_FAILED"
 	| "CONCURRENCY_CONFLICT"
 	| "DIRECT_STATE_MUTATION"
@@ -1336,6 +1435,7 @@ export type KitErrorCode =
 	| "INVALID_MONEY"
 	| "INVALID_REPOSITORY_ADAPTER"
 	| "INVALID_REPOSITORY_DEFINITION"
+	| "INVALID_VERSION"
 	| "MISADDRESSED_EVENT"
 	| "MISSING_ENTITY_ID"
 	| "MISSING_HANDLER"
@@ -1352,6 +1452,7 @@ export type KitErrorCode =
 	| "PUBLISH_DEPTH_EXCEEDED"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "REENTRANT_EVENT_RECORDING"
+	| "REPLAY_HEAD_MISMATCH"
 	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"
