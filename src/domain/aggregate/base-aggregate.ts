@@ -380,14 +380,15 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Immutability gate for every recording path: only events minted by
-	 * the kit's constructors (`createDomainEvent`,
-	 * `createDomainEventFromFacts`, `createEvent`) pass,
-	 * checked against the constructor's internal, unforgeable mint
-	 * marker. Minted implies deeply frozen with defensively copied
-	 * payload and metadata, a guarantee no frozen-ness probe can
-	 * establish (a shallow-frozen literal with mutable nested data
-	 * would fool it). O(1): one WeakSet lookup.
+	 * Mint gate for every recording path: only an event that a kit
+	 * constructor produced passes. The kit marks two shapes: a recorded
+	 * event carries the mint brand (`createDomainEvent`,
+	 * `createDomainEventFromFacts`) and a decision carries the uncommitted
+	 * brand (`createUncommittedDomainEvent`, the aggregate `createEvent`
+	 * helper). Either brand implies deeply frozen with defensively copied
+	 * payload and metadata, a guarantee no frozen-ness probe can establish
+	 * (a shallow-frozen literal with mutable nested data would fool it).
+	 * O(1): one brand check per shape.
 	 */
 	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
 		if (!isMintedEvent(event) && !isUncommittedDomainEvent(event)) {

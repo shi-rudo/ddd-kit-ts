@@ -573,12 +573,12 @@ export class SnapshotCorruptedError extends InfrastructureError<"SNAPSHOT_CORRUP
 
 /**
  * Thrown when an event reaches the aggregate's recording paths
- * (`apply`, `commit`, `addDomainEvent`) without having been minted by
+ * (`apply`, `setState`, `addDomainEvent`) without having been minted by
  * the kit's constructors: `createDomainEvent`,
- * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or aggregate
- * event helpers
- * deep-freeze the event and defensively copy payload and metadata,
- * and mark the result as minted. The mark has two tiers: a
+ * `createDomainEventFromFacts`, `createUncommittedDomainEvent`, or the
+ * aggregate `createEvent` helper. Those constructors deep-freeze the
+ * event, defensively copy payload and metadata, and mark the result as
+ * minted. The mark has two tiers: a
  * module-private one for events of this loaded copy of the kit, and a
  * cooperative `Symbol.for` brand that a second loaded copy stamps and
  * recognizes. Anything else (a hand-rolled literal, a shallow-frozen
