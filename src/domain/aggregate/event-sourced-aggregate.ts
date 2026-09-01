@@ -24,10 +24,6 @@ import {
 } from "./base-aggregate";
 import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-// Re-export for backwards compatibility: `ReplayableAggregate` lives
-// in `aggregate.ts` (the type hub).
-export type { ReplayableAggregate } from "./aggregate";
-
 type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
@@ -183,9 +179,11 @@ export abstract class EventSourcedAggregate<
 		// shapes as setState, on the state that is about to be stored.
 		assertStateHasNoHostileOwnKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
+		// The version write is the last step that can throw (an override of
+		// setVersion), so it runs before the two assignments, which cannot.
+		this.bumpVersion();
 		this._state = next;
 		this.appendStampedEvent(stamped);
-		this.bumpVersion();
 	}
 
 	/**
@@ -307,6 +305,9 @@ export abstract class EventSourcedAggregate<
 			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
 			this._state = previousState;
+			// The fold itself never writes the version, but a handler that
+			// records a decision mid-fold bumps it through apply(); the
+			// rollback writes the start version back through the same path.
 			this.setVersion(startVersion);
 			// The guard above proved the pending list empty before the loop,
 			// so anything in it now came from a handler that recorded a

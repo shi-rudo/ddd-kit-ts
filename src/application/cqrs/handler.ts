@@ -1,9 +1,8 @@
-import type { Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
 	type PendingEventLifecycleCapability,
 	requirePendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
-import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
 	isMintedEvent,

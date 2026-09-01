@@ -15,12 +15,10 @@ import {
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
 import type { Version } from "./aggregate";
+import type { AggregateConfig } from "./base-aggregate";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
 import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
-import {
-	type AggregateConfig,
-	StateStoredAggregate as ProductionAggregateRoot,
-} from "./state-stored-aggregate";
+import { StateStoredAggregate as ProductionAggregateRoot } from "./state-stored-aggregate";
 
 function lifecycleOf(aggregate: object) {
 	const capability = pendingEventLifecycleCapabilityFor(aggregate);
@@ -1304,5 +1302,85 @@ describe("event address on the state-stored path", () => {
 		expect(decision?.aggregateId).toBe("test-1");
 		expect(decision?.aggregateType).toBe("AddressedAggregate");
 		expect(aggregate.state.value).toBe(5);
+	});
+});
+
+describe("lifecycle capability boundary", () => {
+	it("keeps acknowledgement, disposal, and the persisted marker off the aggregate instance", () => {
+		// Post-commit acknowledgement belongs to the application shell; the
+		// capability is reachable through the registry only, never as a
+		// member domain code could call.
+		const aggregate = TestAggregate.create("test-1" as TestId, 10);
+
+		for (const member of [
+			"acknowledge",
+			"discardPendingEvents",
+			"persistedVersion",
+			"pendingEventCount",
+		]) {
+			expect(member in aggregate).toBe(false);
+		}
+		expect(lifecycleOf(aggregate)).toBeDefined();
+	});
+});
+
+describe("one version write path", () => {
+	class ObservingAggregate extends StateStoredAggregate<TestState, TestId> {
+		protected readonly aggregateType = "ObservingAggregate";
+		readonly observed: number[] = [];
+
+		// biome-ignore lint/complexity/noUselessConstructor: the protected base constructor must be exposed to this test
+		constructor(id: TestId, state: TestState) {
+			super(id, state);
+		}
+
+		static reconstitute(
+			id: TestId,
+			state: TestState,
+			version: Version,
+		): ObservingAggregate {
+			const aggregate = new ObservingAggregate(id, state);
+			aggregate.markReconstituted(version);
+			return aggregate;
+		}
+
+		protected override setVersion(version: Version): void {
+			this.observed.push(version);
+			super.setVersion(version);
+		}
+
+		change(value: number): void {
+			this.setState({ ...this.state, value });
+		}
+
+		restoreAt(version: Version): void {
+			this.markReconstituted(version);
+		}
+	}
+
+	it("lets a setVersion override observe the reconstitution write and every bump", () => {
+		const aggregate = ObservingAggregate.reconstitute(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			7 as Version,
+		);
+
+		aggregate.change(2);
+
+		expect(aggregate.observed).toEqual([7, 8]);
+		expect(aggregate.version).toBe(8);
+	});
+
+	it("rejects a state change that would take the version past the safe range before the state moves", () => {
+		const aggregate = ObservingAggregate.reconstitute(
+			"test-1" as TestId,
+			{ value: 1, status: "inactive" },
+			Number.MAX_SAFE_INTEGER as Version,
+		);
+
+		expect(() => aggregate.change(2)).toThrow(InvalidVersionError);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(Number.MAX_SAFE_INTEGER);
 	});
 });

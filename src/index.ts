@@ -150,14 +150,12 @@ export {
 	type Version,
 } from "./domain/aggregate/aggregate";
 export type { AggregateAddress } from "./domain/aggregate/aggregate-address";
+export type { AggregateConfig } from "./domain/aggregate/base-aggregate";
 export {
 	EventSourcedAggregate,
 	reconstituteAggregateFromHistory,
 } from "./domain/aggregate/event-sourced-aggregate";
-export {
-	type AggregateConfig,
-	StateStoredAggregate,
-} from "./domain/aggregate/state-stored-aggregate";
+export { StateStoredAggregate } from "./domain/aggregate/state-stored-aggregate";
 // Entities
 export {
 	Entity,

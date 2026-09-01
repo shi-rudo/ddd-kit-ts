@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { Version } from "../../domain/aggregate/aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
 	pendingEventLifecycleCapabilityFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
-import {
-	type Aggregate,
-	StateStoredAggregate,
-} from "../../domain/aggregate/state-stored-aggregate";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	createDomainEvent,
 	createDomainEventFactory,

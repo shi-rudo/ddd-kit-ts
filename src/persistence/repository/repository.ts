@@ -1,4 +1,4 @@
-import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
+import type { Aggregate } from "../../domain/aggregate/aggregate";
 import type { Id } from "../../domain/identity/id";
 
 /**

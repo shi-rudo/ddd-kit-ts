@@ -1,13 +1,9 @@
-import { UnmanagedInstanceError } from "../../errors/kit-errors";
 import type {
 	AnyDomainEvent,
 	AnyUncommittedDomainEvent,
 	DomainEventStamp,
 } from "../event/domain-event";
-import {
-	createGlobalCapabilityRegistry,
-	LOCAL_REGISTRY_DETAIL,
-} from "./internal/global-capability-registry";
+import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 export type PendingEventStampFactory = (
 	event: AnyUncommittedDomainEvent,
@@ -30,30 +26,17 @@ const recordingCapabilityRegistryKey = Symbol.for(
 	"@shirudo/ddd-kit/pending-event-recording-registry/v2",
 );
 
-const { registry: capabilities, shared } =
+const { registry: capabilities, require } =
 	createGlobalCapabilityRegistry<PendingEventRecordingCapability>(
 		recordingCapabilityRegistryKey,
 	);
 
-/**
- * Resolves the recording capability or throws {@link UnmanagedInstanceError}
- * naming the operation and the instance. When the registry is private to
- * this package copy (a host that rejected the global registration), the
- * error says so, because that is the one reason an instance from another
- * copy cannot be recognized.
- */
+/** Resolves the recording capability or throws `UnmanagedInstanceError`. */
 export function requirePendingEventRecordingCapability(
 	aggregate: object,
 	operation: string,
 ): PendingEventRecordingCapability {
-	const capability = capabilities.get(aggregate);
-	if (capability !== undefined) return capability;
-	throw new UnmanagedInstanceError(
-		operation,
-		"aggregate",
-		(aggregate as { id?: unknown }).id,
-		shared ? undefined : LOCAL_REGISTRY_DETAIL,
-	);
+	return require(aggregate, operation, "aggregate");
 }
 
 export function registerPendingEventRecordingCapability(

@@ -29,6 +29,18 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: one version write path
+
+Every version write goes through the protected `setVersion`: each bump and
+each reconstitution (`markReconstituted`), so a subclass that overrides it
+observes every write. Before this change the reconstitution wrote the field
+directly and an override never saw it. `apply()` on an event-sourced
+aggregate writes the version before it moves state and appends the event,
+so a throw from the version write leaves the instance unchanged. The
+state-stored `setState` validates the next version number before the state
+moves, so a version past the safe range rejects with `InvalidVersionError`
+and the state stays. An override of `setVersion` must not throw: it observes.
+
 ### Changed: a deep freeze walks only what the write changed
 
 `deepFreeze` skips a subtree it already deep-froze, so a handler result or
@@ -242,6 +254,8 @@ aggregate or baseline that this package did not construct. That covers a
 repository DTO, a structural lookalike, and an instance from another package
 copy. Before this change the `withCommit` case threw `EventHarvestError`
 (`EVENT_HARVEST_FAILED`), and the other two threw a bare `TypeError`.
+A nullish instance is rejected with the same coded error instead of a
+`TypeError` from the lookup.
 Migration: an error mapper or a test that matched the old class or code for
 this case matches `UNMANAGED_INSTANCE` now.
 

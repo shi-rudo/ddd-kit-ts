@@ -1,7 +1,11 @@
-import { CapabilityRegistryConflictError } from "../../../errors/kit-errors";
+import {
+	CapabilityRegistryConflictError,
+	UnmanagedInstanceError,
+} from "../../../errors/kit-errors";
 
 /**
- * A capability registry with the outcome of its bootstrap.
+ * A capability registry with the outcome of its bootstrap and the one
+ * lookup-or-reject every capability module uses.
  */
 export interface CapabilityRegistry<TCapability extends object> {
 	readonly registry: WeakMap<object, TCapability>;
@@ -11,6 +15,15 @@ export interface CapabilityRegistry<TCapability extends object> {
 	 * another copy cannot be recognized.
 	 */
 	readonly shared: boolean;
+	/**
+	 * Resolves the capability of `instance` or throws
+	 * {@link UnmanagedInstanceError} naming the operation, the subject, and
+	 * the instance id. When the registry is private to this package copy,
+	 * the error says so, because that is the one reason an instance from
+	 * another copy cannot be recognized. A nullish instance is rejected the
+	 * same way.
+	 */
+	require(instance: object, operation: string, subject: string): TCapability;
 }
 
 /**
@@ -18,7 +31,7 @@ export interface CapabilityRegistry<TCapability extends object> {
  * registry is private to this copy, so the reader learns why an instance
  * from another package copy was not recognized.
  */
-export const LOCAL_REGISTRY_DETAIL =
+const LOCAL_REGISTRY_DETAIL =
 	"The capability registry of this package copy is private because the " +
 	"host rejected the global registration, so an instance from another " +
 	"package copy cannot be recognized.";
@@ -50,10 +63,10 @@ export function createGlobalCapabilityRegistry<TCapability extends object>(
 	const descriptor = Object.getOwnPropertyDescriptor(host, key);
 	if (descriptor !== undefined) {
 		if (descriptor.value instanceof WeakMap) {
-			return {
-				registry: descriptor.value as WeakMap<object, TCapability>,
-				shared: true,
-			};
+			return withRequire(
+				descriptor.value as WeakMap<object, TCapability>,
+				true,
+			);
 		}
 		throw new CapabilityRegistryConflictError(key);
 	}
@@ -66,8 +79,31 @@ export function createGlobalCapabilityRegistry<TCapability extends object>(
 			writable: false,
 			configurable: false,
 		});
-		return { registry, shared: true };
+		return withRequire(registry, true);
 	} catch {
-		return { registry, shared: false };
+		return withRequire(registry, false);
 	}
+}
+
+function withRequire<TCapability extends object>(
+	registry: WeakMap<object, TCapability>,
+	shared: boolean,
+): CapabilityRegistry<TCapability> {
+	return {
+		registry,
+		shared,
+		require: (instance, operation, subject) => {
+			const capability =
+				instance === null || instance === undefined
+					? undefined
+					: registry.get(instance);
+			if (capability !== undefined) return capability;
+			throw new UnmanagedInstanceError(
+				operation,
+				subject,
+				(instance as { id?: unknown } | null | undefined)?.id,
+				shared ? undefined : LOCAL_REGISTRY_DETAIL,
+			);
+		},
+	};
 }

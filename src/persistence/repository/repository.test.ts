@@ -3,8 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 // @ts-expect-error IQueryableRepository was removed from the public API;
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../..";
-import type { Version } from "../../domain/aggregate/aggregate";
-import type { Aggregate } from "../../domain/aggregate/state-stored-aggregate";
+import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateNotFoundError,

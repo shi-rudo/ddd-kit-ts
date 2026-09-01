@@ -225,19 +225,30 @@ export abstract class BaseAggregate<
 		return Object.freeze(this._pendingEvents.slice());
 	}
 
-	/** Sets the current version; rejects anything but a safe integer of at least zero. */
+	/**
+	 * The one write path of the version: every bump and every
+	 * reconstitution goes through here, so a subclass that overrides it
+	 * observes every write. Rejects anything but a safe integer of at least
+	 * zero. An override must not throw: the callers write the version after
+	 * they validated the change, and a throw then leaves a state-stored
+	 * state already moved. The event-sourced `apply()` writes the version
+	 * before it moves state, so a throw there leaves nothing changed.
+	 */
 	protected setVersion(version: Version): void {
 		this._version = toVersion(version);
 	}
 
 	/**
-	 * Manually bumps the aggregate version. Used by state-stored
-	 * aggregates' `setState()` path and by the event-sourced
-	 * `apply()` path. Routes through {@link setVersion}, so a subclass that
-	 * observes version writes there sees every increment.
+	 * Advances the version by one. Used by the state-stored `setState()`
+	 * path and by the event-sourced `apply()` path.
 	 */
 	protected bumpVersion(): void {
-		this.setVersion((this._version + 1) as Version);
+		this.setVersion(this.nextVersion());
+	}
+
+	/** The version the next change writes; throws before anything moves. */
+	protected nextVersion(): Version {
+		return toVersion(this._version + 1);
 	}
 
 	/**
@@ -281,7 +292,7 @@ export abstract class BaseAggregate<
 				`is below the current version ${this._version}`,
 			);
 		}
-		this._version = restored;
+		this.setVersion(restored);
 		this._persistedVersion = restored;
 	}
 
