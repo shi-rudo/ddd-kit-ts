@@ -2146,10 +2146,10 @@ describe("UnitOfWork", () => {
 		});
 
 		it("a deterministic harvest-guard violation surfaces as EventHarvestError, not a retryable CommitError", async () => {
-			// An event missing aggregateId is a recordEvent/createDomainEvent
-			// misuse: deterministic, fails identically on every retry. It must
-			// NOT be wrapped in CommitError (an InfrastructureError a retry
-			// loop would spin on forever).
+			// An event missing aggregateId is a createDomainEvent misuse:
+			// deterministic, fails identically on every retry. It must NOT be
+			// wrapped in CommitError (an InfrastructureError a retry loop
+			// would spin on forever).
 			const badEvent = createDomainEvent(
 				"OrderCreated",
 				{ orderId: "x" },
