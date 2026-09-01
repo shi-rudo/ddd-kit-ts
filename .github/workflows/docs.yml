@@ -1,27 +1,30 @@
 name: Deploy Docs
 
-# Deployment disabled 2026-05-23. A docs site operated from Germany
-# requires a legal-notice page (Germany's TMG §5) and a privacy notice
-# (GDPR Art. 13) once it is publicly reachable. Until those are in
-# place, the site stays offline; the docs source remains in the repo
-# and works locally via `pnpm docs:dev`.
+# The documentation site is offline. German law requires a legal notice
+# (TMG §5) and a privacy notice (GDPR Art. 13) for a publicly reachable
+# site. Neither page exists yet. The docs source stays in the repository
+# and runs locally with `pnpm docs:dev`.
 #
-# To re-enable:
-#  1. Add docs/legal/legal-notice.md and docs/legal/privacy.md, then
-#     link them from .vitepress/config.ts (themeConfig.footer + sidebar).
-#  2. Re-enable GitHub Pages in repo Settings → Pages → Source:
-#     "GitHub Actions".
-#  3. Restore the `push:` trigger below (uncomment the lines).
+# One guard holds the site offline. This workflow starts only by hand,
+# and the build job runs only if the operator confirms the legal pages.
+# The job trusts that confirmation. It does not look for the files.
+#
+# GitHub Pages is configured for this repository, with GitHub Actions as
+# the source. No run has filled it, so the URL answers 404 today. One
+# successful run of this workflow makes the site public.
+#
+# To publish:
+#  1. Add docs/legal/legal-notice.md and docs/legal/privacy.md. Link them
+#     from .vitepress/config.ts (themeConfig.footer and sidebar).
+#  2. Start this workflow by hand and confirm the legal pages.
+#  3. To publish every push to main, uncomment the `push:` trigger below.
 
 on:
   # push:
   #   branches: [main]
 
-  # Manual-only trigger with an explicit acknowledgement gate so the
-  # build job cannot run without a human confirming the legal pages
-  # are in place. The deployment will fail anyway while Pages is
-  # disabled in repo settings, but this guard prevents accidental
-  # uploads in case Pages gets re-enabled before the pages exist.
+  # Manual start only. The build job needs an explicit acknowledgement
+  # that the legal pages exist.
   workflow_dispatch:
     inputs:
       legal_pages_in_place:
