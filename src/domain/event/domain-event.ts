@@ -417,10 +417,10 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * `aggregateId` (from `this.id`) and `aggregateType` (from the
  * aggregate's declared `aggregateType` property), which downstream
  * consumers (outbox dispatchers, projection handlers, audit logs)
- * route by. The `withCommit` harvest boundary now validates both fields
- * are present and throws if they're missing, so a direct
- * `createDomainEvent(...)` call inside an aggregate that forgets the
- * options is caught at runtime. Record pending decisions in the application
+ * route by. The commit boundary validates that both fields are present
+ * and throws if they are missing, so a direct `createDomainEvent(...)`
+ * call inside an aggregate that forgets the options is caught at
+ * runtime. Record pending decisions in the application
  * shell before repository persistence or outbox harvest.
  *
  * Use `createDomainEvent(...)` directly for events that don't belong to

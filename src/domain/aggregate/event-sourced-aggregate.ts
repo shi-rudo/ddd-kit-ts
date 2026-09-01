@@ -146,9 +146,8 @@ export abstract class EventSourcedAggregate<
 	 * with no `as` cast required at the call site.
 	 *
 	 * `apply()` is exclusively for NEW facts: it always records the event
-	 * and bumps the version (the former `isNew` flag argument is gone).
-	 * Replaying history is a different operation with its own entry
-	 * point, `replayHistory`.
+	 * and bumps the version. Replaying history is a different operation
+	 * with its own entry point, `replayHistory`.
 	 *
 	 * @param event - The domain event to apply
 	 */

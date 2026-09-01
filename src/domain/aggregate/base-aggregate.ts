@@ -91,8 +91,9 @@ export abstract class BaseAggregate<
 	 * Version the persistence layer last confirmed for this instance:
 	 * `undefined` until the aggregate is reconstituted (`markReconstituted`) or a
 	 * commit is acknowledged. Kit-internal via the lifecycle capability; it
-	 * grounds the `withCommit` unique-cursor guard so an eventful commit that
-	 * did not advance beyond the persisted row is rejected deterministically.
+	 * grounds the application shell's unique-cursor guard, so an eventful
+	 * commit that did not advance beyond the persisted row is rejected
+	 * deterministically.
 	 */
 	private _persistedVersion: Version | undefined;
 
@@ -307,8 +308,8 @@ export abstract class BaseAggregate<
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
 	 * directly is appropriate only after a version-advancing state mutation,
 	 * or while constructing a never-persisted aggregate. An event-only commit
-	 * on an already-persisted aggregate has no unique cursor and `withCommit`
-	 * rejects it; use `setState(currentState, event)`.
+	 * on an already-persisted aggregate has no unique cursor and the
+	 * application shell rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		this.appendStampedEvent(this.addressNewEvent(event));
@@ -380,14 +381,15 @@ export abstract class BaseAggregate<
 	}
 
 	/**
-	 * Immutability gate for every recording path: only events minted by
-	 * the kit's constructors (`createDomainEvent`,
-	 * `createDomainEventFromFacts`, `createEvent`) pass,
-	 * checked against the constructor's internal, unforgeable mint
-	 * marker. Minted implies deeply frozen with defensively copied
-	 * payload and metadata, a guarantee no frozen-ness probe can
-	 * establish (a shallow-frozen literal with mutable nested data
-	 * would fool it). O(1): one WeakSet lookup.
+	 * Mint gate for every recording path: only an event that a kit
+	 * constructor produced passes. The kit marks two shapes: a recorded
+	 * event carries the mint brand (`createDomainEvent`,
+	 * `createDomainEventFromFacts`) and a decision carries the uncommitted
+	 * brand (`createUncommittedDomainEvent`, the aggregate `createEvent`
+	 * helper). Either brand implies deeply frozen with defensively copied
+	 * payload and metadata, a guarantee no frozen-ness probe can establish
+	 * (a shallow-frozen literal with mutable nested data would fool it).
+	 * O(1): one brand check per shape.
 	 */
 	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
 		if (!isMintedEvent(event) && !isUncommittedDomainEvent(event)) {
@@ -434,7 +436,7 @@ export abstract class BaseAggregate<
  * Deliberately a module-level function, not a class method: it MUST not be
  * overridable by consumer subclasses (a no-op override would silently
  * disable the guard at every call site). The callers pass the count of
- * the private list; `withCommit` harvests the public `pendingEvents`
+ * the private list; the commit harvest reads the public `pendingEvents`
  * getter, so a subclass that overrides the getter changes the harvest,
  * not this guard.
  *

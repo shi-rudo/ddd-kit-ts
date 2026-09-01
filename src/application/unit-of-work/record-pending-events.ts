@@ -20,6 +20,10 @@ export type DomainEventStampProvider<TEvent extends AnyDomainEvent> = (
 /**
  * Records every still-unstamped event accepted by an aggregate.
  *
+ * The function is a command that also returns the recorded batch, a
+ * deliberate exception to command-query separation: the caller hands the
+ * batch on to persistence and needs no second read of `pendingEvents`.
+ *
  * Recording is atomic with respect to the aggregate's pending list: if stamp
  * creation or validation fails, every decision remains unrecorded. A
  * successful second call returns the same event objects and does not read the

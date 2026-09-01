@@ -26,14 +26,14 @@ export interface PendingEventLifecycleCapability {
 	): void;
 	/**
 	 * Version the persistence layer last confirmed for the aggregate, or
-	 * `undefined` for a never-persisted instance. Grounds the `withCommit`
-	 * unique-cursor guard.
+	 * `undefined` for a never-persisted instance. Grounds the application
+	 * shell's unique-cursor guard.
 	 */
 	persistedVersion(): Version | undefined;
 	/**
 	 * Count of unflushed pending events. The public `pendingEvents` getter
-	 * allocates and freezes a defensive copy per read, which count-only
-	 * consumers (the identity map's end-of-run scan) do not need.
+	 * allocates and freezes a defensive copy per read, which a count-only
+	 * consumer does not need.
 	 */
 	pendingEventCount(): number;
 	/**

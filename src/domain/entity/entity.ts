@@ -204,10 +204,9 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * `TState` publicly would expose the aggregate's live object graph and
 	 * let nested mutation bypass behavior, validation, versioning, and
 	 * dirty tracking. Concrete entities should expose business-meaningful queries or
-	 * detached immutable DTOs. Snapshot projection belongs to an adapter-owned
-	 * `SnapshotModel`; persistence code captures an aggregate with
-	 * `captureAggregateSnapshot(model, aggregate, snapshotAt)` rather than
-	 * asking the entity to create its own persistence memento.
+	 * detached immutable DTOs. Snapshot projection belongs to the persistence
+	 * adapter, which captures the aggregate from outside rather than asking
+	 * the entity to create its own persistence memento.
 	 */
 	protected get state(): TState {
 		return this._state;
