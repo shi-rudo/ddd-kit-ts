@@ -203,9 +203,9 @@ metadata. It cannot select the payload schema version. The factory also exposes
 `create(...)` for non-aggregate convenience events and `now()` for
 infrastructure such as snapshot policies.
 
-## Factory-backed aggregate convenience
+## No factory inside the aggregate
 
-The preferred path does not inject a factory into the aggregate:
+The aggregate does not hold a factory, a clock, or an id generator:
 
 ```ts
 const order = await loadOrder(orderId);
@@ -220,84 +220,9 @@ await snapshots.save(
 
 This keeps the aggregate's result a function of its visible inputs. Repositories
 do not need to forward a clock or id generator through every reconstitution
-path.
-
-For small applications that prefer less plumbing, aggregate constructors can
-still forward a factory through `AggregateConfig`:
-
-```ts
-import { StateStoredAggregate, type AggregateEventConvenienceFactory } from "@shirudo/ddd-kit";
-
-class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
-  protected readonly aggregateType = "Order";
-
-  constructor(
-    id: OrderId,
-    state: OrderState,
-    domainEventFactory: AggregateEventConvenienceFactory,
-  ) {
-    super(id, state, { domainEventFactory });
-  }
-}
-```
-
-That factory is used only when the aggregate deliberately calls
-`recordEventFromFactory(...)`. If no factory is configured, that method uses
-the immutable default and therefore reads Web Crypto and the platform clock.
-Its name makes that trade-off visible at the call site. Snapshot clocks and
-DTO mappings stay outside the aggregate in an adapter-owned `SnapshotModel`.
-
-## Migrating from event facts
-
-```ts
-// Before
-confirm(facts: DomainEventFacts): void {
-  this.setState(
-    nextState,
-    this.recordEvent("OrderConfirmed", payload, facts),
-  );
-}
-
-// Preferred v3 path
-confirm(): void {
-  this.setState(
-    nextState,
-    this.createEvent("OrderConfirmed", payload),
-  );
-}
-```
-
-The application handler records the accepted decision before repository
-persistence or outbox harvest:
-
-```ts
-const domainEvents = createDomainEventFactory({
-  eventIdFactory: () => uuidv7(),
-  clock: requestClock,
-});
-
-await uow.run(async ({ repositories }) => {
-  const order = await repositories.orders.getById(command.orderId);
-  order.confirm();
-  recordPendingEvents(order, () =>
-    domainEvents.createStamp({
-      metadata: { correlationId: command.correlationId },
-    }),
-  );
-  repositories.orders.update(order);
-});
-```
-
-Move aggregate snapshot methods to an adapter-owned `SnapshotModel`, then call
-`captureAggregateSnapshot(model, aggregate, snapshotAt)` with a timestamp from
-the application or snapshot policy. Existing aggregates can make the smaller
-event migration to `recordEventFromFactory(...)`. That retains the old event
-factory posture while making the hidden read explicit in the method name.
-
-`DomainEventFacts` and `createFacts()` remain deprecated aliases for
-`DomainEventStamp` and `createStamp()` during migration. A schema `schemaVersion`
-formerly supplied through facts must move to the concrete producer:
-`this.createEvent("NameChanged", payload, { schemaVersion: 2 })`.
+path. Snapshot clocks and DTO mappings stay outside the aggregate in an
+adapter-owned `SnapshotModel`. The payload schema version is the one value
+the producer owns: `this.createEvent("NameChanged", payload, { schemaVersion: 2 })`.
 
 ## Deterministic tests
 

@@ -26,7 +26,7 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 
 If you omit it, TypeScript reports that the class does not implement the inherited abstract member `aggregateType`.
 
-This field is not decoration and it is not only for logging. It is part of the event routing contract. When an aggregate records an event through `recordEvent`, the kit writes both the aggregate id and the aggregate type into the event metadata. Outbox dispatchers, projection handlers, audit loggers, and cross-cutting subscribers can then route by "this event came from an `Order` with id `order-123`", not just by the event name.
+This field is not decoration and it is not only for logging. It is part of the event routing contract. When an aggregate mints an event through `createEvent`, the kit writes both the aggregate id and the aggregate type into the event. Outbox dispatchers, projection handlers, audit loggers, and cross-cutting subscribers can then route by "this event came from an `Order` with id `order-123`", not just by the event name.
 
 Use the canonical domain name for the aggregate. If your domain calls it `Order`, write `"Order"`. Avoid infrastructure names such as `"orders_table"` or `"OrderAggregateRoot"`. Those names leak implementation details into events, and events tend to outlive implementation details.
 
