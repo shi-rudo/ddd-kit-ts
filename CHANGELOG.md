@@ -973,6 +973,30 @@ after the shell timeout.
   separately triaged toolchain concern documented in
   `docs/development/dependency-audits.md`.
 
+### Added: CI builds the documentation
+
+- `docs:build` resolves the VitePress snippet includes, the typedoc output and
+  every internal link. No gate ran it: not the per-commit checks, not CI, not
+  `prepublishOnly`.
+- Two moves during the source reorganization proved the cost. A file that went
+  one directory deeper took a depth-relative link in its JSDoc with it, and an
+  example that moved to `examples/` left two snippet includes pointing at the
+  old path. Typecheck, the full suite, lint, build and the edge smoke all
+  stayed green through both.
+- CI now builds the docs on every push and pull request. Building is not
+  publishing: the site stays offline, and `docs.yml` is unchanged.
+
+### Fixed: the API output no longer duplicates the Repository guide
+
+- A JSDoc comment in `identity-map.ts` pointed at `docs/guide/repository.md`
+  with a markdown link. Typedoc resolves such a link to the local file and
+  copies the whole file into `docs/api/_media/`. The built site carried the
+  Repository guide twice, and the copy kept the relative links of the
+  original. `./event-sourcing.md` has no sibling in `_media`, so the
+  documentation build failed with two dead links.
+- The comment now names the guide as text with its path. Typedoc copies
+  nothing, and the guide exists once.
+
 ### Added: automated edge-runtime compatibility smokes
 
 - Bundle the built package and execute its main and `money` entry points in

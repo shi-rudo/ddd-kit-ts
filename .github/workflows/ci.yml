@@ -57,6 +57,32 @@ jobs:
           npx tsc consumer.mts --strict --skipLibCheck false --target ES2022 --module NodeNext --moduleResolution NodeNext --outDir dist
           node dist/consumer.mjs
 
+  docs:
+    # Building the docs is not publishing them. The site stays offline
+    # (see docs.yml), and this job only resolves what nothing else checks:
+    # the VitePress snippet includes, the typedoc output, and every
+    # internal link. Two moves during the src reorganization broke a link
+    # and two includes while typecheck, tests, lint, build and the edge
+    # smoke all stayed green.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Docs resolve their includes, links and API output
+        run: pnpm docs:build
+
   edge-runtime-smoke:
     runs-on: ubuntu-latest
     steps:
