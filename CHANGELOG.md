@@ -54,13 +54,6 @@ and the aggregate rejects it with `UnmintedEventError`. Before this change
 the brand was read through the prototype chain, so such a lookalike passed
 the gate.
 
-### Changed: the entity id guard covers the empty string and non-strings
-
-The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
-for an empty string and for a non-string value too, not only for `null` and
-`undefined`. The constructor of the error takes the rejected value, and the
-message names it: `received ""`, `received number 0`.
-
 ### Documentation: one fact per append on the pending list
 
 The `addDomainEvent` doc states what an append means. Each append is one
@@ -304,7 +297,9 @@ stable code, so `onPersistError` observers and tests can match on
   (`PENDING_EVENT_BATCH_MISMATCH`) with the aggregate id, the batch length,
   and the pending length.
 - The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
-  for a `null` or `undefined` id.
+  for an id that is not a non-blank string: `null`, `undefined`, a blank
+  string, or a non-string value. The error takes the rejected value, and
+  the message names it: `received ""`, `received number 0`.
 
 ### Changed (breaking): a non-kit instance is rejected with UNMANAGED_INSTANCE
 

@@ -472,9 +472,9 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 }
 
 /**
- * Thrown by the `Entity` constructor when the id is not a non-empty
- * string: `null`, `undefined`, the empty string, or a non-string value
- * that reached the constructor through plain JavaScript or a cast. An
+ * Thrown by the `Entity` constructor when the id is not a non-blank
+ * string. That covers `null`, `undefined`, a blank string, and a
+ * non-string value that reached the constructor through a cast. An
  * entity without a usable identity cannot be tracked, compared, or
  * persisted, so the construction fails before any state is stored. A
  * wiring error: a deterministic bug at the call site, never a domain
@@ -487,15 +487,20 @@ export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
 	) {
 		super(
 			"MISSING_ENTITY_ID",
-			`Entity ID must be a non-empty string; received ${describeRejectedId(received)}.`,
+			`Entity ID must be a non-blank string; received ${describeRejectedId(received)}.`,
 		);
 	}
 }
 
+// Never throws: an object with no primitive conversion is described by
+// its kind, so the coded error reaches the caller for every input.
 function describeRejectedId(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
 	if (value === null) return "null";
 	if (value === undefined) return "undefined";
-	if (typeof value === "string") return `"${value}"`;
+	if (typeof value === "object")
+		return Array.isArray(value) ? "array" : "object";
+	if (typeof value === "function") return "function";
 	return `${typeof value} ${String(value)}`;
 }
 

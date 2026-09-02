@@ -229,6 +229,36 @@ describe("Entity", () => {
 			);
 		});
 
+		it("rejects a whitespace-only id", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity("   " as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				'received "   "',
+			);
+		});
+
+		it("rejects an id with no primitive conversion with the coded error", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity(Object.create(null) as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				"received object",
+			);
+		});
+
 		it("rejects a prototype-chain lookalike that changes state", () => {
 			const entity = new OrderItemEntity("id-1" as ItemId, "p1", 1);
 			const lookalike: OrderItemEntity = Object.create(entity);
