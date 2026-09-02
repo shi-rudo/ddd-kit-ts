@@ -13,6 +13,7 @@ import {
 	InvalidVersionError,
 	SnapshotCorruptedError,
 	type SnapshotSchemaMismatchError,
+	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
 import {
 	captureAggregateSnapshot,
@@ -243,8 +244,9 @@ describe("adapter-owned snapshot models", () => {
 
 	it("rejects a reconstitution that does not restore the snapshot version", () => {
 		// A factory that ignores the version parameter (a forgotten
-		// markReconstituted) is a wiring bug, not corruption: it must throw raw
-		// instead of feeding the discard-and-refold recovery forever.
+		// markReconstituted) is a wiring bug, not corruption: it must surface
+		// as a wiring error instead of feeding the discard-and-refold recovery
+		// forever.
 		const forgetfulModel = defineSnapshotModel({
 			...model,
 			reconstitute: (
@@ -253,14 +255,28 @@ describe("adapter-owned snapshot models", () => {
 			): Order => ({ id, state, version: 0 as Version }),
 		});
 
-		expect(() =>
+		let thrown: unknown;
+		try {
 			reconstituteAggregateFromSnapshot(forgetfulModel, "order-1" as OrderId, {
 				state: { status: "placed" },
 				version: 7 as Version,
 				snapshotAt: new Date("2026-07-29T10:00:00.000Z"),
 				schemaVersion: 2,
-			}),
-		).toThrow(/must restore the persisted version/);
+			});
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(SnapshotVersionNotRestoredError);
+		const error = thrown as SnapshotVersionNotRestoredError;
+		expect(error.code).toBe("SNAPSHOT_VERSION_NOT_RESTORED");
+		expect(error.message).toContain("markReconstituted");
+		expect(error).toMatchObject({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			snapshotVersion: 7,
+			restoredVersion: 0,
+		});
 	});
 
 	it("surfaces a domain rejection during reconstitution as snapshot corruption", () => {
