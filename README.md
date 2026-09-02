@@ -23,22 +23,6 @@ clear boundaries around persistence and side effects.
 ![npm version](https://img.shields.io/npm/v/@shirudo/ddd-kit)
 ![license](https://img.shields.io/npm/l/@shirudo/ddd-kit)
 
-## When This Helps
-
-Use this kit when your TypeScript code has domain rules that deserve more than
-DTOs and service functions:
-
-- an order can only be confirmed once
-- a booking must stay inside an allowed date range
-- money must never lose precision at a JSON boundary
-- optimistic concurrency conflicts must be handled deliberately
-- domain events must be persisted and dispatched reliably
-- repository adapters must prove they enforce the same contract
-
-The library is intentionally boring at the edges. It does not ship an ORM, a
-message broker, decorators, a dependency-injection container, or a web
-framework. Those choices belong to the application.
-
 ## Installation
 
 ```bash
