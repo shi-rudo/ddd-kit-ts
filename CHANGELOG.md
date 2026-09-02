@@ -29,6 +29,22 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: shared stamp options on recordPendingEvents
+
+`recordPendingEvents(aggregate, factory, stampOptions)` passes `stampOptions`
+to `factory.createStamp` for every decision of the recording. The options
+carry an `occurredAt` and metadata that the whole batch shares, such as the
+correlation id of the request. The `eventId` stays per fact, so the type
+`SharedDomainEventStampOptions` omits it. Before this change the factory
+overload recorded no metadata, and a shared correlation id needed the
+callback overload.
+
+### Fixed: the copyMetadata example points causationId at the eventId
+
+The `copyMetadata` doc example set `causationId` to the type of the previous
+event. The field contract names the `eventId` of the cause, and the example
+now does the same.
+
 ### Changed: a forgotten markReconstituted is a coded error
 
 `reconstituteAggregateFromSnapshot` checks that the factory restored the

@@ -153,6 +153,35 @@ describe("recordPendingEvents", () => {
 		}
 	});
 
+	it("stamps every decision with the shared metadata of the recording", () => {
+		let id = 0;
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => `event-${++id}`,
+			clock: () => new Date("2027-04-05T06:07:09.000Z"),
+		});
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+		aggregate.change(2);
+
+		const recorded = recordPendingEvents(aggregate, factory, {
+			occurredAt: recordedAt,
+			metadata: { correlationId: "request-7" },
+		});
+
+		expect(recorded.map(({ eventId }) => eventId)).toEqual([
+			"event-1",
+			"event-2",
+		]);
+		expect(recorded.map(({ metadata }) => metadata?.correlationId)).toEqual([
+			"request-7",
+			"request-7",
+		]);
+		expect(recorded.map(({ occurredAt }) => occurredAt)).toEqual([
+			recordedAt,
+			recordedAt,
+		]);
+	});
+
 	it("records two facts with distinct eventIds when the same decision is appended twice", () => {
 		let id = 0;
 		const factory = createDomainEventFactory({

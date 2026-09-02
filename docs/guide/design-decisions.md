@@ -166,11 +166,9 @@ const domainEvents = createDomainEventFactory({
 await uow.run(async ({ repositories }) => {
   const order = await repositories.orders.getById(command.orderId);
   order.confirm();
-  recordPendingEvents(order, () =>
-    domainEvents.createStamp({
-      metadata: { correlationId: command.correlationId },
-    }),
-  );
+  recordPendingEvents(order, domainEvents, {
+    metadata: { correlationId: command.correlationId },
+  });
   repositories.orders.update(order);
 });
 ```

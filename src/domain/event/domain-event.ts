@@ -945,7 +945,7 @@ function assertNoBinaryData(
  * const newEvent = createDomainEvent(
  *   "OrderShipped",
  *   { orderId: "123" },
- *   { metadata: copyMetadata(previousEvent, { causationId: previousEvent.type }) }
+ *   { metadata: copyMetadata(previousEvent, { causationId: previousEvent.eventId }) }
  * );
  * ```
  */

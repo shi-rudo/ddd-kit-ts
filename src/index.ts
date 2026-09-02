@@ -126,6 +126,7 @@ export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
 	recordPendingEvents,
+	type SharedDomainEventStampOptions,
 } from "./application/unit-of-work/record-pending-events";
 export {
 	type AggregateWriteRegistration,
