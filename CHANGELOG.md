@@ -29,6 +29,46 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: a forgotten markReconstituted is a coded error
+
+`reconstituteAggregateFromSnapshot` checks that the factory restored the
+snapshot version. A factory that forgets `markReconstituted(version)` now
+throws `SnapshotVersionNotRestoredError` (code
+`SNAPSHOT_VERSION_NOT_RESTORED`) with the aggregate type, the aggregate id,
+the snapshot version, and the restored version. Before this change the check
+threw a bare `TypeError`. A test or an error mapper that matched the
+`TypeError` matches the code now.
+
+### Fixed: the snapshot time is frozen
+
+`captureAggregateSnapshot` returns a `snapshotAt` that rejects mutation:
+`snapshot.snapshotAt.setTime(0)` throws a `TypeError`. Before this change
+the snapshot object was frozen but the `Date` inside it was not.
+
+### Fixed: the mint gate reads the event brands as own properties
+
+`isMintedEvent` and `isUncommittedDomainEvent` read the brand as an own
+property of the event. An object that inherits a minted event through its
+prototype and overrides fields with its own values is not a minted event,
+and the aggregate rejects it with `UnmintedEventError`. Before this change
+the brand was read through the prototype chain, so such a lookalike passed
+the gate.
+
+### Changed: the entity id guard covers the empty string and non-strings
+
+The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
+for an empty string and for a non-string value too, not only for `null` and
+`undefined`. The constructor of the error takes the rejected value, and the
+message names it: `received ""`, `received number 0`.
+
+### Documentation: one fact per append on the pending list
+
+The `addDomainEvent` doc states what an append means. Each append is one
+fact. A decision appended twice becomes two facts with distinct ids; a
+recorded event appended twice is rejected at recording with
+`DuplicateEventIdError`, whose message now names both causes. Tests pin
+both.
+
 ### Changed (breaking): an event-sourced aggregate declares folds
 
 The state function of an event-sourced aggregate is a fold: a pure function
