@@ -302,7 +302,10 @@ export abstract class BaseAggregate<
 	 * by a kit constructor; a missing `aggregateId` or `aggregateType` is
 	 * stamped from this aggregate, and an address that names another
 	 * aggregate throws {@link MisaddressedEventError} before anything is
-	 * recorded. Prefer the higher-level `StateStoredAggregate.setState()`
+	 * recorded. Each append is one fact. A decision appended twice becomes
+	 * two facts with distinct ids; a recorded event appended twice is
+	 * rejected at recording ({@link DuplicateEventIdError}). Prefer the
+	 * higher-level `StateStoredAggregate.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`

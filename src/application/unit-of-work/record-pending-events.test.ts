@@ -35,17 +35,30 @@ class Counter extends StateStoredAggregate<
 
 	/** A decision minted with its identity already, as a factory would. */
 	changeRecorded(value: number, eventId: string): void {
-		this.setState(
+		this.setState({ value }, this.recordedChange(value, eventId));
+	}
+
+	/** One decision object appended twice in one state change. */
+	changeAppendingTwice(value: number): void {
+		const decision = this.createEvent("CounterChanged", { value });
+		this.setState({ value }, [decision, decision]);
+	}
+
+	/** One recorded event appended twice in one state change. */
+	changeRecordedAppendingTwice(value: number, eventId: string): void {
+		const recorded = this.recordedChange(value, eventId);
+		this.setState({ value }, [recorded, recorded]);
+	}
+
+	private recordedChange(value: number, eventId: string): CounterChanged {
+		return createDomainEvent(
+			"CounterChanged",
 			{ value },
-			createDomainEvent(
-				"CounterChanged",
-				{ value },
-				{
-					eventId,
-					aggregateId: this.id,
-					aggregateType: this.aggregateType,
-				},
-			),
+			{
+				eventId,
+				aggregateId: this.id,
+				aggregateType: this.aggregateType,
+			},
 		);
 	}
 }
@@ -144,6 +157,45 @@ describe("recordPendingEvents", () => {
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");
 		}
+	});
+
+	it("records two facts with distinct eventIds when the same decision is appended twice", () => {
+		let id = 0;
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => `event-${++id}`,
+			clock: () => recordedAt,
+		});
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.changeAppendingTwice(1);
+
+		const recorded = recordPendingEvents(aggregate, factory);
+
+		expect(recorded).toHaveLength(2);
+		expect(recorded.map(({ eventId }) => eventId)).toEqual([
+			"event-1",
+			"event-2",
+		]);
+		expect(recorded.map(({ type }) => type)).toEqual([
+			"CounterChanged",
+			"CounterChanged",
+		]);
+		expect(recorded.map(({ payload }) => payload)).toEqual([
+			{ value: 1 },
+			{ value: 1 },
+		]);
+	});
+
+	it("rejects one recorded event appended twice at recording", () => {
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.changeRecordedAppendingTwice(1, "pre-minted");
+		const record = () =>
+			recordPendingEvents(aggregate, createDomainEventFactory());
+
+		expect(record).toThrow(DuplicateEventIdError);
+		expect(record).toThrow(
+			expect.objectContaining({ code: "DUPLICATE_EVENT_ID" }),
+		);
+		expect(record).toThrow(/append a recorded event once/);
 	});
 
 	it("shares the frozen payload instead of re-cloning it when recording", () => {
