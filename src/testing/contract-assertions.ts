@@ -3,7 +3,7 @@
  * repository contract suites (state-stored and event-sourced). Internal
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
-import { isMintedEvent } from "../domain/event/domain-event";
+import { isRecordedDomainEvent } from "../domain/event/domain-event";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -141,7 +141,9 @@ export function mintedPendingEventIds(
 ): string[] {
 	return events.map((event) => {
 		assert(
-			typeof event === "object" && event !== null && isMintedEvent(event),
+			typeof event === "object" &&
+				event !== null &&
+				isRecordedDomainEvent(event),
 			requirement,
 		);
 		return (event as { readonly eventId: string }).eventId;

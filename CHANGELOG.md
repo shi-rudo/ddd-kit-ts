@@ -74,8 +74,7 @@ inside it.
 
 ### Fixed: the mint gate reads the event brands as own properties
 
-`isMintedEvent` and `isUncommittedDomainEvent` read the brand as an own
-property of the event. An object that inherits a minted event through its
+The mint gate reads the event brands as own properties of the event. An object that inherits a minted event through its
 prototype is not minted, even when it carries its own field values. The
 aggregate rejects it with `UnmintedEventError`. Before this change the
 probes read the brand through the prototype chain, so such a lookalike

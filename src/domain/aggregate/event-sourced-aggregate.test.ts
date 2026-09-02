@@ -17,7 +17,7 @@ import {
 	createDomainEvent,
 	createUncommittedDomainEvent,
 	type DomainEvent,
-	isMintedEvent,
+	isRecordedDomainEvent,
 	isUncommittedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
@@ -1012,7 +1012,7 @@ describe("replay trusts history", () => {
 		expect(pending).not.toHaveProperty("eventId");
 		expect(pending).not.toHaveProperty("occurredAt");
 		expect(isUncommittedDomainEvent(pending as object)).toBe(true);
-		expect(isMintedEvent(pending as object)).toBe(false);
+		expect(isRecordedDomainEvent(pending as object)).toBe(false);
 	});
 
 	it("rejects a hand-rolled mutable event before anything moves", () => {
@@ -1071,7 +1071,7 @@ describe("replay trusts history", () => {
 			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
 		}) as TestEventUpdated;
 
-		expect(isMintedEvent(lookalike)).toBe(false);
+		expect(isRecordedDomainEvent(lookalike)).toBe(false);
 		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
@@ -1152,9 +1152,9 @@ describe("replay trusts history", () => {
 		vi.resetModules();
 		const foreignDomainEventModule = await import("../event/domain-event");
 
-		expect(foreignDomainEventModule.isMintedEvent(stamped as TestEvent)).toBe(
-			true,
-		);
+		expect(
+			foreignDomainEventModule.isRecordedDomainEvent(stamped as TestEvent),
+		).toBe(true);
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {
@@ -1631,7 +1631,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(recorded).not.toBe(event);
 		expect(recorded?.aggregateType).toBe("TestEventSourcedAggregate");
 		expect((recorded as TestEventUpdated).eventId).toBe("evt-partial");
-		expect(isMintedEvent(recorded as object)).toBe(true);
+		expect(isRecordedDomainEvent(recorded as object)).toBe(true);
 	});
 
 	it("stamps the missing id of a partial address that names only the type", () => {

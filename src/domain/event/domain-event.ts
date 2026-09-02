@@ -440,14 +440,14 @@ export const defaultDomainEventFactory: DomainEventFactory =
  * const event = createDomainEvent("OrderCreated", { orderId: "123" });
  * ```
  */
-// Every event createDomainEvent returns is registered here: the
-// module-private tier of the mint marker (nothing outside this module
-// can add to the set), so the aggregate recording paths can check
+// Every recorded event a kit constructor returns is registered here: the
+// module-private tier of the recorded-event marker (nothing outside this
+// module can add to the set), so the aggregate recording paths can check
 // "minted by the constructor" directly instead of approximating it with
 // frozen-ness probes. Minted implies deeply frozen with owned payload/metadata
 // (binary buffers, which cannot be frozen, are rejected at the door).
 // WeakSet entries do not keep events alive.
-const MINTED_EVENTS = new WeakSet<object>();
+const RECORDED_EVENTS = new WeakSet<object>();
 const UNCOMMITTED_EVENTS = new WeakSet<object>();
 const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
@@ -463,11 +463,11 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // brand inside the same process. The probes read the brand as an OWN
 // property. An object that inherits a minted event through its prototype
 // can carry mutable own overrides, so it is not minted.
-const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
+const RECORDED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
-function stampMintBrand(event: object): void {
-	Object.defineProperty(event, MINT_BRAND, {
+function stampRecordedBrand(event: object): void {
+	Object.defineProperty(event, RECORDED_BRAND, {
 		value: true,
 		enumerable: false,
 		writable: false,
@@ -489,9 +489,11 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 }
 
 /**
- * Whether `event` came out of {@link createDomainEvent} (or a helper
- * built on it, such as the aggregate `createEvent` helper), i.e. is deeply frozen with
- * defensively copied payload and metadata. Two tiers: events of THIS
+ * Whether `event` is a recorded domain event: it came out of
+ * {@link createDomainEvent}, {@link createDomainEventFromFacts}, or
+ * {@link recordDomainEvent}, so it is deeply frozen with defensively copied
+ * payload and metadata. An uncommitted decision carries the other brand; see
+ * {@link isUncommittedDomainEvent}. Two tiers: events of THIS
  * loaded copy of the kit are verified through the module-private
  * WeakSet; events minted by ANOTHER copy (duplicate dependency, dual
  * CJS/ESM load) are recognized through a cooperative `Symbol.for`
@@ -499,11 +501,11 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  * accidents, not adversaries. Module-internal export for the aggregate
  * recording paths; not part of the package entries.
  */
-export function isMintedEvent(event: object): event is AnyDomainEvent {
+export function isRecordedDomainEvent(event: object): event is AnyDomainEvent {
 	return (
-		MINTED_EVENTS.has(event) ||
-		(Object.hasOwn(event, MINT_BRAND) &&
-			(event as Record<symbol, unknown>)[MINT_BRAND] === true)
+		RECORDED_EVENTS.has(event) ||
+		(Object.hasOwn(event, RECORDED_BRAND) &&
+			(event as Record<symbol, unknown>)[RECORDED_BRAND] === true)
 	);
 }
 
@@ -621,25 +623,25 @@ function mintRecordedEvent<T extends string, P>(
 		schemaVersion: event.schemaVersion,
 		metadata,
 	};
-	stampMintBrand(recorded);
+	stampRecordedBrand(recorded);
 	Object.freeze(recorded);
-	MINTED_EVENTS.add(recorded);
+	RECORDED_EVENTS.add(recorded);
 	return recorded;
 }
 
 /**
- * Brands, freezes, and registers a kit-derived copy of a minted event
- * (e.g. the address-stamped copy `apply()` creates) as minted itself.
+ * Brands, freezes, and registers a kit-derived copy of a recorded event
+ * (e.g. the address-stamped copy `apply()` creates) as recorded itself.
  * The copy shares the already-frozen payload/metadata of its source,
  * so the mint guarantee carries over. Stamping the cooperative brand
  * before freezing keeps the copy recognizable by another loaded kit
  * instance as well as by this instance's WeakSet. Module-internal
  * export; not part of the package entries.
  */
-export function adoptMintedEvent<T extends object>(copy: T): T {
-	stampMintBrand(copy);
+export function adoptRecordedDomainEvent<T extends object>(copy: T): T {
+	stampRecordedBrand(copy);
 	Object.freeze(copy);
-	MINTED_EVENTS.add(copy);
+	RECORDED_EVENTS.add(copy);
 	return copy;
 }
 
@@ -759,9 +761,9 @@ function mintDomainEvent<T extends string, P>(
 	// (Vernon, IDDD §8).
 	// Brand BEFORE the freeze (a frozen object rejects new properties);
 	// non-enumerable, so spreads, JSON, and equality never see it.
-	stampMintBrand(event);
+	stampRecordedBrand(event);
 	const minted = deepFreeze(event) as DomainEvent<T, P>;
-	MINTED_EVENTS.add(minted);
+	RECORDED_EVENTS.add(minted);
 	return minted;
 }
 
