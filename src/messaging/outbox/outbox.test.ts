@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
-} from "../../domain/aggregate/aggregate";
+} from "../../domain/event/domain-event";
 import {
 	EventHarvestError,
 	InMemoryCapacityExceededError,

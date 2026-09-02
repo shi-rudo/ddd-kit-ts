@@ -14,13 +14,15 @@ import {
 } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
+	createDomainEvent,
 	createUncommittedDomainEvent,
+	type DomainEvent,
 	isMintedEvent,
 	isUncommittedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import { createDomainEvent, type DomainEvent, type Version } from "./aggregate";
+import type { Version } from "./aggregate";
 import type { AggregateConfig } from "./base-aggregate";
 import {
 	EventSourcedAggregate as ProductionEventSourcedAggregate,

@@ -3,9 +3,6 @@ import { type DomainError, InvalidVersionError } from "../../errors/kit-errors";
 import type { AnyDomainEvent, PendingDomainEvent } from "../event/domain-event";
 import type { Id } from "../identity/id";
 
-// Re-export domain event types for convenience
-export * from "../event/domain-event";
-
 // --- Aggregate types ---
 
 export type Version = number & { readonly __v: true };
