@@ -152,7 +152,7 @@ class ContractEsOrder extends EventSourcedAggregate<
 		);
 	}
 
-	protected readonly handlers = {
+	protected readonly folds = {
 		EsOrderCreated: (
 			state: EsOrderState,
 			event: UncommittedDomainEventOf<EsOrderCreated>,

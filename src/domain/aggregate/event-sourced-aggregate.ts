@@ -2,10 +2,10 @@ import { err, ok, type Result } from "@shirudo/result";
 import {
 	DirectStateMutationError,
 	type DomainError,
+	FoldReturnedNoStateError,
 	ForeignEventError,
-	HandlerReturnedNoStateError,
 	isDomainErrorLike,
-	MissingHandlerError,
+	MissingFoldError,
 } from "../../errors/kit-errors";
 import {
 	assertStateHasNoHostileOwnKey,
@@ -24,7 +24,7 @@ import {
 } from "./base-aggregate";
 import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
 
-type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
+type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
 /**
  * Base class for Event-Sourced Aggregate Roots (Vernon, IDDD Chapter 8).
@@ -32,12 +32,12 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  * Like `StateStoredAggregate`, this is both the root entity and the aggregate
  * boundary. The difference is persistence: state is derived from events,
  * not stored directly. Events are the single source of truth: all state
- * changes go through `apply()` → handler.
+ * changes go through `apply()` and a fold.
  *
  * Extends `BaseAggregate` (the shared lifecycle machinery) but offers no
  * `setState()`, and the inherited `setState()` throws
  * `DirectStateMutationError`: the only way to change state is an event
- * folded by a handler through `apply()`, so the instance never runs ahead
+ * folded through `apply()`, so the instance never runs ahead
  * of its stream.
  *
  * `apply()` and `validateEvent()` throw `DomainError`-derived exceptions
@@ -80,7 +80,7 @@ type Handler<TState, TEvent> = (state: TState, event: TEvent) => TState;
  *     }
  *   }
  *
- *   protected readonly handlers = {
+ *   protected readonly folds = {
  *     OrderConfirmed: (state: OrderState): OrderState => ({
  *       ...state,
  *       status: "confirmed",
@@ -108,8 +108,8 @@ export abstract class EventSourcedAggregate<
 	 * against today's rules would make legitimately persisted streams
 	 * unloadable after a rule change. Old storage shapes are not a
 	 * validation concern either: decode and upcast persisted events at
-	 * the read boundary (see the event-upcasting guide) so handlers
-	 * and replay always receive the current event shape.
+	 * the read boundary (see the event-upcasting guide) so the folds
+	 * always receive the current event shape.
 	 */
 	protected validateEvent(_event: UncommittedDomainEventOf<TEvent>): void {}
 
@@ -123,26 +123,26 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * Applies an event: validates the decision, locates the handler, folds
+	 * Applies an event: validates the decision, locates the fold, computes
 	 * the next state, validates that state, then commits state + pending
 	 * event + version bump atomically.
 	 *
 	 * Throws `DomainError` (or a subclass) when `validateEvent` rejects the
 	 * decision. Throws whatever the `validateState` function throws when it
 	 * rejects the folded state.
-	 * Throws `MissingHandlerError` if no handler is registered for `event.type`.
-	 * Throws `HandlerReturnedNoStateError` (wiring) when the handler returns
+	 * Throws `MissingFoldError` if no fold is declared for `event.type`.
+	 * Throws `FoldReturnedNoStateError` (wiring) when the fold returns
 	 * `undefined`, the signature of a fold without a `return`.
 	 * Throws `MisaddressedEventError` (wiring) when the event carries an
 	 * `aggregateId` or `aggregateType` naming a different aggregate;
 	 * missing address fields are stamped from the aggregate instead.
 	 *
-	 * State is not mutated if any step throws: the handler is invoked into
+	 * State is not mutated if any step throws: the fold is invoked into
 	 * a local and only assigned to `_state` once all checks pass.
 	 *
 	 * The method is generic in the event tag `K`, so concrete callers
 	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
-	 * handler is typed as `Handler<TState, Extract<TEvent, { type: K }>>`,
+	 * fold is typed as `Fold<TState, Extract<TEvent, { type: K }>>`,
 	 * with no `as` cast required at the call site.
 	 *
 	 * `apply()` is exclusively for NEW facts: it always records the event
@@ -173,7 +173,7 @@ export abstract class EventSourcedAggregate<
 		// stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
 		const next = this.freezeState(this.fold(stamped));
-		// A hostile row can reach the handler through the payload or its own
+		// A hostile row can reach the fold through the payload or its own
 		// construction; the guard runs at the same depth and on the same
 		// shapes as setState, on the state that is about to be stored.
 		assertStateHasNoHostileOwnKey(next, "Aggregate state");
@@ -187,7 +187,7 @@ export abstract class EventSourcedAggregate<
 
 	/**
 	 * Internal fold shared by `apply()` and `replayHistory`: locate the
-	 * handler and compute the next state. It deliberately does NOT assign
+	 * fold and compute the next state. It deliberately does NOT assign
 	 * the state, record the event, bump the version, or run `validateEvent`
 	 * and `validateState`; `apply()` layers all of that on for new facts,
 	 * while replay assigns the fold result as is (the history is already
@@ -196,7 +196,7 @@ export abstract class EventSourcedAggregate<
 	 * The replay loop iterates over `TEvent[]` and therefore cannot
 	 * supply a narrowed `K` generic, so this helper accepts `TEvent`
 	 * and the discriminator is resolved via the (statically-sound)
-	 * `handlers` map.
+	 * `folds` map.
 	 *
 	 * Replay address check: a history event that names a DIFFERENT
 	 * aggregate id or type is a persisted row that belongs to someone
@@ -227,25 +227,25 @@ export abstract class EventSourcedAggregate<
 	}
 
 	private fold(event: TEvent | UncommittedDomainEventOf<TEvent>): TState {
-		// Own-key guard: the handlers map is an object literal, so a plain
+		// Own-key guard: the folds map is an object literal, so a plain
 		// property get for event.type === "toString" / "constructor" /
 		// "__proto__" (a corrupt or adversarial stream row) would resolve
-		// through Object.prototype and invoke a non-handler.
-		const handler = Object.hasOwn(this.handlers, event.type)
-			? (this.handlers[event.type as keyof typeof this.handlers] as Handler<
+		// through Object.prototype and invoke a non-fold.
+		const fold = Object.hasOwn(this.folds, event.type)
+			? (this.folds[event.type as keyof typeof this.folds] as Fold<
 					TState,
 					TEvent | UncommittedDomainEventOf<TEvent>
 				>)
 			: undefined;
-		if (!handler) {
-			throw new MissingHandlerError(event.type);
+		if (!fold) {
+			throw new MissingFoldError(event.type);
 		}
 
-		const nextState = handler(this._state, event);
+		const nextState = fold(this._state, event);
 		// Only `undefined` is rejected: a primitive or `null` state is a
 		// legal TState, a missing `return` is not.
 		if (nextState === undefined) {
-			throw new HandlerReturnedNoStateError(event.type);
+			throw new FoldReturnedNoStateError(event.type);
 		}
 		return nextState;
 	}
@@ -259,8 +259,8 @@ export abstract class EventSourcedAggregate<
 	 * All-or-nothing: if any event mid-stream throws, or the final restore
 	 * marker is rejected, the aggregate's state, version, and pending list
 	 * are rolled back to their pre-call values. Partial replay is never
-	 * observable. A handler that records a decision during the fold is the
-	 * one way to make the marker throw.
+	 * observable. A fold that records a decision is the one way to make
+	 * the marker throw.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;
@@ -298,21 +298,21 @@ export abstract class EventSourcedAggregate<
 			// guard runs once here instead of once per replayed event; a
 			// rejection rolls back below like any other replay failure.
 			assertStateHasNoHostileOwnKey(this._state, "Aggregate state");
-			// Inside the try on purpose: a handler that records a decision
-			// during the fold makes this throw, and the rollback below must
-			// cover that case too.
+			// Inside the try on purpose: a fold that records a decision
+			// makes this throw, and the rollback below must cover that case
+			// too.
 			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
 			this._state = previousState;
-			// The fold itself never writes the version, but a handler that
-			// records a decision mid-fold bumps it through apply(); the
-			// rollback writes the start version back through the same path.
+			// The fold itself never writes the version, but a fold that
+			// records a decision bumps it through apply(); the rollback
+			// writes the start version back through the same path.
 			this.setVersion(startVersion);
 			// The guard above proved the pending list empty before the loop,
-			// so anything in it now came from a handler that recorded a
-			// decision during the fold; the rollback drops it too.
+			// so anything in it now came from a fold that recorded a
+			// decision; the rollback drops it too.
 			this.discardPendingDecisions();
-			// Copy-safe: a handler may run in another loaded copy of the kit,
+			// Copy-safe: a fold may run in another loaded copy of the kit,
 			// whose DomainError fails a plain instanceof; the Result channel
 			// must carry it regardless.
 			if (isDomainErrorLike(e)) return err(e);
@@ -322,25 +322,25 @@ export abstract class EventSourcedAggregate<
 	}
 
 	/**
-	 * A map of event types to their corresponding handlers.
-	 * Subclasses MUST implement this property.
+	 * One fold per event type: a pure function from the current state and
+	 * the event to the next state. Subclasses MUST implement this property.
 	 *
-	 * A handler returns the next state. `undefined` is rejected on both the
+	 * A fold returns the next state. `undefined` is rejected on both the
 	 * apply and the replay path as a missing `return`, so model an absent
 	 * state as `null` or as a status field, never as `undefined`.
 	 *
-	 * Handlers MUST fold state from `type` and `payload` only. The
+	 * A fold MUST derive state from `type` and `payload` only. The
 	 * parameter is typed as the uncommitted shape because a live `apply()`
 	 * folds the event BEFORE the shell records it: `eventId` and
 	 * `occurredAt` do not exist yet. Replay folds recorded events
-	 * through the same handlers, so those fields ARE present at runtime
-	 * there. A handler that reads them through an escape hatch (`as any`,
-	 * plain JavaScript) folds `undefined` live and a value on replay,
+	 * through the same map, so those fields ARE present at runtime
+	 * there. A fold that reads them through an escape hatch (`as any`,
+	 * plain JavaScript) sees `undefined` live and a value on replay,
 	 * producing silently divergent state. When a time or identity changes a
 	 * business decision, pass it in the payload.
 	 */
-	protected abstract readonly handlers: {
-		[K in TEvent["type"]]: Handler<
+	protected abstract readonly folds: {
+		[K in TEvent["type"]]: Fold<
 			TState,
 			UncommittedDomainEventOf<Extract<TEvent, { type: K }>>
 		>;
@@ -353,7 +353,7 @@ export abstract class EventSourcedAggregate<
  * fresh one, or one restored from a snapshot. The instance exists only
  * inside this call. A rejected replay therefore leaves the caller with
  * nothing to return by mistake. Later catch-up pages go through
- * `replayHistory` on the value. A `DomainError` from a handler rides the
+ * `replayHistory` on the value. A `DomainError` from a fold rides the
  * `Result`; wiring errors and a foreign row throw, as in `replayHistory`.
  * The creator runs outside the `Result`: what it throws propagates.
  */

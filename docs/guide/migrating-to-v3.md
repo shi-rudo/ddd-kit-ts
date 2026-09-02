@@ -466,9 +466,9 @@ this list if your code observes one of these paths:
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 
 Source breaks at the entry points, on the event bus port, and in the
-aggregate vocabulary. The vocabulary renames are mechanical; the section
-[One lifecycle vocabulary](#one-lifecycle-vocabulary) lists them with the
-commands that apply them.
+aggregate vocabulary. The vocabulary renames are mechanical; the sections
+[One lifecycle vocabulary](#one-lifecycle-vocabulary) and [Folds](#folds)
+list them with the commands that apply them.
 
 ### The `utils` entry point is gone
 
@@ -585,3 +585,32 @@ translate between `schemaVersion` and `version`.
 `commit` is the transaction term only: `withCommit`, `committedVersion`,
 `CommittedDomainEvent`. `setState(newState)` without events is unchanged.
 
+### Folds
+
+The state function of an event-sourced aggregate is a fold, and the kit
+names it so. "Handler" stays the term for command handlers, query handlers,
+projection handlers, and bus subscribers. No behavior changes.
+
+| Before | After |
+| --- | --- |
+| `protected readonly handlers = { ... }` | `protected readonly folds = { ... }` |
+| `MissingHandlerError` from `apply()` or replay | `MissingFoldError` (code `MISSING_FOLD`) |
+| `HandlerReturnedNoStateError` (code `HANDLER_RETURNED_NO_STATE`) | `FoldReturnedNoStateError` (code `FOLD_RETURNED_NO_STATE`) |
+
+Apply the member rename and the class rename with one command over your
+TypeScript sources:
+
+```sh
+perl -pi \
+  -e 's/\breadonly handlers\b/readonly folds/g;' \
+  -e 's/\bHandlerReturnedNoStateError\b/FoldReturnedNoStateError/g;' \
+  -e 's/\bHANDLER_RETURNED_NO_STATE\b/FOLD_RETURNED_NO_STATE/g;' \
+  $(git ls-files '*.ts')
+```
+
+Then run the compiler. It flags every event-sourced aggregate that still
+declares `handlers`, and every catch that names the removed class.
+`MissingHandlerError` still exists for `projectionFromHandlers`, so the
+compiler does not flag it: search for `MissingHandlerError` and
+`MISSING_HANDLER` and change the sites that guard an aggregate to
+`MissingFoldError` and `MISSING_FOLD`.

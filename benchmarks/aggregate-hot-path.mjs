@@ -49,7 +49,7 @@ class StateStoredOrder extends StateStoredAggregate {
 
 class EventSourcedOrder extends EventSourcedAggregate {
 	aggregateType = "BenchmarkEsOrder";
-	handlers = {
+	folds = {
 		OrderTouched: (state, event) => ({
 			...state,
 			status: `status-${event.payload.sequence}`,

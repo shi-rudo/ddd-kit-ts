@@ -9,7 +9,7 @@ have?"
 The kit does not ship a built-in upcaster pipeline. That is intentional.
 Different stores and teams choose different migration points: upcast on read,
 rewrite stored events, rebuild projections, or use a schema registry. The stable
-contract is simpler: aggregate handlers should receive the current event shape.
+contract is simpler: the aggregate's folds should receive the current event shape.
 Adapters decide how old events become that shape.
 
 ## When to bump `event.schemaVersion`
@@ -97,7 +97,7 @@ The aggregate only handles the current union:
 type OrderEvent = OrderCreated | OrderConfirmed | OrderShipped;
 ```
 
-It should not contain `OrderCreatedV1` handlers, migration branches, or checks
+It should not contain `OrderCreatedV1` folds, migration branches, or checks
 like `if (event.schemaVersion === 1)`. That logic belongs at the infrastructure
 boundary. Otherwise every aggregate method slowly turns into an archive of old
 storage formats.
@@ -275,7 +275,7 @@ the migration cost is measurable.
 
 ## Snapshots need a plan too
 
-Snapshots are state derived from events. If a handler change or event migration
+Snapshots are state derived from events. If a fold change or event migration
 would produce different state from a full replay, an old snapshot may no longer
 match current code.
 

@@ -146,7 +146,7 @@ export class CheckoutProcessInWrongStateError extends DomainError<"CHECKOUT_PROC
  *
  * Its stream records process decisions. Those events rebuild process state and
  * can be mapped to participant commands after the commit/outbox boundary.
- * Event handlers only evolve state: replay never dispatches commands.
+ * The folds only evolve state: replay never dispatches commands.
  */
 export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 	EventSourcedCheckoutSagaState,
@@ -362,7 +362,7 @@ export class EventSourcedCheckoutSaga extends EventSourcedAggregate<
 		return this.state.failureReason;
 	}
 
-	protected readonly handlers = {
+	protected readonly folds = {
 		CheckoutStartedAwaitingPayment: (
 			state: EventSourcedCheckoutSagaState,
 			event: UncommittedDomainEventOf<CheckoutStartedAwaitingPayment>,

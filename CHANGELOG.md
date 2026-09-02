@@ -29,6 +29,26 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): an event-sourced aggregate declares folds
+
+The state function of an event-sourced aggregate is a fold: a pure function
+from the current state and one event to the next state. The kit now names
+it so. "Handler" stays the term for command handlers, query handlers,
+projection handlers, and bus subscribers, which perform effects. No behavior
+changes.
+
+| Before | After |
+| --- | --- |
+| `protected readonly handlers` | `protected readonly folds` |
+| `MissingHandlerError` thrown by `apply()` and replay | `MissingFoldError` (code `MISSING_FOLD`) |
+| `HandlerReturnedNoStateError` (code `HANDLER_RETURNED_NO_STATE`) | `FoldReturnedNoStateError` (code `FOLD_RETURNED_NO_STATE`) |
+
+`MissingHandlerError` (code `MISSING_HANDLER`) remains and now belongs to
+`projectionFromHandlers` only. A catch or a test that matched
+`MISSING_HANDLER` for an aggregate must match `MISSING_FOLD`. The
+[v3 migration guide](docs/guide/migrating-to-v3.md#folds) gives the
+commands.
+
 ### Fixed: one version write path
 
 Every version write goes through the protected `setVersion`: each bump and
