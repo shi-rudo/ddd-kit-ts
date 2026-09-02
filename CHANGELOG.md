@@ -56,8 +56,9 @@ the constructors took five positional strings, and the errors exposed
 to `factory.createStamp` for every decision of the recording. The options
 carry an `occurredAt` and metadata that the whole batch shares, such as the
 correlation id of the request. The `eventId` stays per fact, so the type
-`SharedDomainEventStampOptions` omits it. Before this change the factory
-overload recorded no metadata, and a shared correlation id needed the
+`SharedDomainEventStampOptions` omits it, and the implementation forwards
+only `occurredAt` and `metadata`. Before this change the factory overload
+called `createStamp` without options, so a shared correlation id needed the
 callback overload.
 
 ### Fixed: the copyMetadata example points causationId at the eventId

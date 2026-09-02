@@ -72,10 +72,15 @@ export function recordPendingEvents<
 		aggregate,
 		"recordPendingEvents",
 	);
+	// Only the two shared fields reach the factory. The type omits eventId,
+	// but a wider options object passes the structural check with one at
+	// runtime, and one fixed id on every decision would collide.
+	const shared = {
+		occurredAt: stampOptions?.occurredAt,
+		metadata: stampOptions?.metadata,
+	};
 	const createStamp: DomainEventStampProvider<TEvent> =
-		typeof source === "function"
-			? source
-			: () => source.createStamp(stampOptions);
+		typeof source === "function" ? source : () => source.createStamp(shared);
 	return capability.record((event, index) =>
 		createStamp(event as UncommittedDomainEventOf<TEvent>, index),
 	) as ReadonlyArray<TEvent>;
