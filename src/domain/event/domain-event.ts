@@ -459,7 +459,9 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // never leaks into spreads, JSON, or equality). The brand is forgeable
 // BY DESIGN: the mint gate catches accidental hand-rolled literals, it
 // is not a security boundary against code that deliberately fakes the
-// brand inside the same process.
+// brand inside the same process. The probes read the brand as an OWN
+// property: an object that inherits a minted event through its
+// prototype carries mutable own overrides and is not minted.
 const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
@@ -499,7 +501,8 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 export function isMintedEvent(event: object): event is AnyDomainEvent {
 	return (
 		MINTED_EVENTS.has(event) ||
-		(event as Record<symbol, unknown>)[MINT_BRAND] === true
+		(Object.hasOwn(event, MINT_BRAND) &&
+			(event as Record<symbol, unknown>)[MINT_BRAND] === true)
 	);
 }
 
@@ -509,7 +512,8 @@ export function isUncommittedDomainEvent(
 ): event is AnyUncommittedDomainEvent {
 	return (
 		UNCOMMITTED_EVENTS.has(event) ||
-		(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true
+		(Object.hasOwn(event, UNCOMMITTED_BRAND) &&
+			(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true)
 	);
 }
 
