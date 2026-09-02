@@ -22,7 +22,7 @@ import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
+import { requirePendingEventLifecycleReadView } from "./pending-event-lifecycle";
 
 type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
@@ -281,7 +281,7 @@ export abstract class EventSourcedAggregate<
 	): Result<void, DomainError> {
 		assertReplayTargetHasNoPendingEvents(
 			this.id,
-			requirePendingEventLifecycleCapability(
+			requirePendingEventLifecycleReadView(
 				this,
 				"replayHistory",
 			).pendingEventCount(),

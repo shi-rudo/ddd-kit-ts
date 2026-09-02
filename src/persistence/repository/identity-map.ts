@@ -1,4 +1,4 @@
-import { pendingEventLifecycleCapabilityFor } from "../../domain/aggregate/pending-event-lifecycle";
+import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import type { Id } from "../../domain/identity/id";
 import { AggregateDeletedError } from "../../errors/kit-errors";
 
@@ -235,14 +235,14 @@ export class IdentityMap {
  * not aggregate-shaped. Single source of truth so the load-time capture in
  * {@link IdentityMap.set} and the end-of-run scan in
  * {@link IdentityMap.instancesWithNewPendingEvents} cannot drift apart.
- * The kit-internal count capability avoids the public `pendingEvents`
+ * The kit-internal lifecycle read view avoids the public `pendingEvents`
  * getter, which allocates and freezes a defensive copy per read; the getter
  * stays as the fallback for structural lookalikes.
  */
 function pendingEventCountOf(value: unknown): number | undefined {
 	if (value === null || typeof value !== "object") return undefined;
-	const capability = pendingEventLifecycleCapabilityFor(value);
-	if (capability !== undefined) return capability.pendingEventCount();
+	const lifecycle = pendingEventLifecycleReadViewFor(value);
+	if (lifecycle !== undefined) return lifecycle.pendingEventCount();
 	const pending = (value as { pendingEvents?: unknown }).pendingEvents;
 	return Array.isArray(pending) ? pending.length : undefined;
 }
