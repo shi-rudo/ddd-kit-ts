@@ -14,6 +14,7 @@ import {
 	removeEntityById,
 	replaceEntityById,
 	sameEntity,
+	storeTrustedState,
 	updateEntityById,
 } from "./entity";
 
@@ -284,7 +285,6 @@ describe("Entity", () => {
 			const raw: TrappyState = { quantity: 5 };
 			const validated: TrappyState[] = [];
 			let virtualCalls = 0;
-			let virtualFreezeCalls = 0;
 
 			class TrappyEntity extends Entity<TrappyState, Id<"TrappyId">> {
 				constructor(id: Id<"TrappyId">, state: TrappyState) {
@@ -294,24 +294,17 @@ describe("Entity", () => {
 				}
 			}
 
-			// JavaScript consumers can still attach same-named prototype methods.
-			// Base construction must not dispatch through either extension point.
+			// JavaScript consumers can still attach a same-named prototype
+			// method. Base construction must not dispatch through it.
 			Object.defineProperty(TrappyEntity.prototype, "validateState", {
 				value: () => {
 					virtualCalls += 1;
-				},
-			});
-			Object.defineProperty(TrappyEntity.prototype, "freezeState", {
-				value: (state: TrappyState) => {
-					virtualFreezeCalls += 1;
-					return state;
 				},
 			});
 
 			new TrappyEntity("t-1" as Id<"TrappyId">, raw);
 
 			expect(virtualCalls).toBe(0);
-			expect(virtualFreezeCalls).toBe(0);
 			expect(validated).toHaveLength(1);
 			expect(validated[0]).not.toBe(raw);
 			expect(Object.isFrozen(validated[0])).toBe(true);
@@ -725,7 +718,7 @@ describe("validation sees the stored copy on both paths", () => {
 	});
 });
 
-describe("setTrustedState stores an accepted fact", () => {
+describe("storeTrustedState stores an accepted fact", () => {
 	type TrustedState = { q: number; meta: { name: string } };
 
 	class TrustingEntity extends Entity<TrustedState, ItemId> {
@@ -741,16 +734,13 @@ describe("setTrustedState stores an accepted fact", () => {
 			});
 			this.validated = validated;
 		}
-		trust(next: TrustedState): void {
-			this.setTrustedState(next);
-		}
 	}
 
 	it("skips the validator and stores the value itself, frozen", () => {
 		const entity = new TrustingEntity({ q: 1, meta: { name: "a" } });
 		const replayed = { q: -5, meta: { name: "b" } };
 
-		entity.trust(replayed);
+		storeTrustedState(entity, replayed);
 
 		expect(entity.state).toBe(replayed);
 		expect(Object.isFrozen(entity.state)).toBe(true);
@@ -761,7 +751,7 @@ describe("setTrustedState stores an accepted fact", () => {
 	it("freezes the trusted value by the configured deep mode", () => {
 		const entity = new TrustingEntity({ q: 1, meta: { name: "a" } }, true);
 
-		entity.trust({ q: 2, meta: { name: "b" } });
+		storeTrustedState(entity, { q: 2, meta: { name: "b" } });
 
 		expect(Object.isFrozen(entity.state.meta)).toBe(true);
 	});
@@ -772,7 +762,7 @@ describe("setTrustedState stores an accepted fact", () => {
 				super("item-1" as ItemId, { q: 1, meta: { name: "a" } });
 			}
 			assign(next: TrustedState): void {
-				// @ts-expect-error the state field is private; use setState or setTrustedState
+				// @ts-expect-error the state field is private; a subclass writes through setState
 				this._state = next;
 			}
 		}

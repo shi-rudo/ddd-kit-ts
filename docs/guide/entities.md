@@ -115,11 +115,10 @@ The important details:
 - `EntityConfig.validateState(state)` is a pure function receiving the state to check
 
 Use `setState(...)` for ordinary entity mutations. The state field is private,
-so a subclass cannot assign it. The base offers one more writer,
-`setTrustedState(...)`, for an accepted fact such as replayed history. It
-freezes the value by the configured mode and skips the validator. The kit's own
-event-sourced `apply(...)` runs the injected validator on its path and then
-stores through it; consumer code uses `setState(...)`.
+so a subclass cannot assign it. Every write validates and freezes the next
+state. The kit's own event-sourced replay stores history through a kit-internal
+writer that skips the validator, because history is accepted fact. For a
+persisted state, pass `trustInitialState` in the reconstitution factory.
 
 ### Validation is constructor-injected
 

@@ -31,13 +31,14 @@ gives a before-and-after example for each breaking change.
 
 ### Changed (breaking): the entity state field is private
 
-`Entity` no longer exposes `_state` to subclasses. A subclass writes state
-through `setState`, which validates and freezes, or through the new protected
-`setTrustedState`, which freezes an accepted fact such as replayed history and
-skips the validator. A subclass that assigned `this._state` directly no longer
-compiles. Where that skip was deliberate, call `setTrustedState`. The kit's
-event-sourced aggregate stores through the same writer, so no write path can
-skip the configured freeze mode.
+`Entity` no longer exposes `_state` and `freezeState` to subclasses. A
+subclass writes state through `setState`, which validates and freezes. A
+subclass that assigned `this._state` directly no longer compiles. For a
+persisted state, pass `trustInitialState` in the reconstitution factory. The
+kit's event-sourced aggregate stores replayed history through a kit-internal
+writer that skips the validator. The writer is not a method, so a subclass
+cannot redirect it, and it cannot throw. Before this change a subclass could
+assign the field and skip the validator and the configured freeze mode.
 
 ### Changed: MisaddressedEventError and ForeignEventError take an options object
 
