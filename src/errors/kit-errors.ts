@@ -699,14 +699,15 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 }
 
 /**
- * Thrown by `recordPendingEvents` when two events in one aggregate's pending
- * batch carry the same `eventId`. Two causes: a stamp provider that returns
- * one reused stamp (or repeats an explicit id), and one already recorded
- * event appended twice. Either would mint two distinct facts sharing one
- * identity, and downstream idempotent consumers keyed on `eventId`
- * silently drop one of them. A wiring error: deterministic bug at the
- * append site or in the stamp provider, the remedy is one fresh identity
- * per fact.
+ * Thrown when two facts of one aggregate would carry the same `eventId`.
+ * Two causes, two sites: the aggregate rejects a recorded event that is
+ * already pending at the append, before the state moves; and
+ * `recordPendingEvents` rejects a stamp provider that returns one reused
+ * stamp (or repeats an explicit id). Either would mint two distinct facts
+ * sharing one identity, and downstream idempotent consumers keyed on
+ * `eventId` silently drop one of them. A wiring error: deterministic bug at
+ * the append site or in the stamp provider, the remedy is one fresh
+ * identity per fact.
  */
 export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
 	constructor(

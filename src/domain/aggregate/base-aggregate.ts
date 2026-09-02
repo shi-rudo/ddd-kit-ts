@@ -303,9 +303,9 @@ export abstract class BaseAggregate<
 	 * stamped from this aggregate, and an address that names another
 	 * aggregate throws {@link MisaddressedEventError} before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
-	 * two facts with distinct ids; a recorded event appended twice is
-	 * rejected at recording ({@link DuplicateEventIdError}). Prefer the
-	 * higher-level `StateStoredAggregate.setState()`
+	 * two facts with distinct ids. A recorded event that is already pending
+	 * throws {@link DuplicateEventIdError} before anything is recorded.
+	 * Prefer the higher-level `StateStoredAggregate.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
@@ -315,7 +315,32 @@ export abstract class BaseAggregate<
 	 * application shell rejects it; use `setState(currentState, event)`.
 	 */
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
-		this.appendStampedEvent(this.addressNewEvent(event));
+		const stamped = this.addressNewEvent(event);
+		this.assertEventIdsNotPending([stamped]);
+		this.appendStampedEvent(stamped);
+	}
+
+	/**
+	 * One identity per fact, checked before the change becomes observable:
+	 * a recorded event whose `eventId` is already pending, or appears twice
+	 * in one batch, throws {@link DuplicateEventIdError}. A decision has no
+	 * `eventId` yet, so a stamp provider that reuses one is caught at
+	 * recording instead.
+	 */
+	protected assertEventIdsNotPending(
+		batch: readonly PendingDomainEvent<TEvent>[],
+	): void {
+		const pendingIds = new Set<string>();
+		for (const pending of this._pendingEvents) {
+			if (isMintedEvent(pending)) pendingIds.add(pending.eventId);
+		}
+		for (const event of batch) {
+			if (!isMintedEvent(event)) continue;
+			if (pendingIds.has(event.eventId)) {
+				throw new DuplicateEventIdError(String(this.id), event.eventId);
+			}
+			pendingIds.add(event.eventId);
+		}
 	}
 
 	/**

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	DirectStateMutationError,
 	DomainError,
+	DuplicateEventIdError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
 	HostileStateKeyError,
@@ -1596,6 +1597,22 @@ describe("apply and replay bookkeeping", () => {
 		agg.applyEvent(event);
 
 		expect(agg.pendingEvents[0]).toBe(event);
+	});
+
+	it("rejects a recorded event that is already pending before anything moves", () => {
+		const agg = fresh();
+		const event = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 2 },
+			{ aggregateId: "test-1", aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+		agg.applyEvent(event);
+
+		expect(() => agg.applyEvent(event)).toThrow(DuplicateEventIdError);
+
+		expect(agg.state.value).toBe(2);
+		expect(agg.version).toBe(1);
+		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
 	it("stamps the missing half of a partial address and keeps the identity", () => {

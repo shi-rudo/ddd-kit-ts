@@ -44,12 +44,6 @@ class Counter extends StateStoredAggregate<
 		this.setState({ value }, [decision, decision]);
 	}
 
-	/** One recorded event appended twice in one state change. */
-	changeRecordedAppendingTwice(value: number, eventId: string): void {
-		const recorded = this.recordedChange(value, eventId);
-		this.setState({ value }, [recorded, recorded]);
-	}
-
 	private recordedChange(value: number, eventId: string): CounterChanged {
 		return createDomainEvent(
 			"CounterChanged",
@@ -183,19 +177,6 @@ describe("recordPendingEvents", () => {
 			{ value: 1 },
 			{ value: 1 },
 		]);
-	});
-
-	it("rejects one recorded event appended twice at recording", () => {
-		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
-		aggregate.changeRecordedAppendingTwice(1, "pre-minted");
-		const record = () =>
-			recordPendingEvents(aggregate, createDomainEventFactory());
-
-		expect(record).toThrow(DuplicateEventIdError);
-		expect(record).toThrow(
-			expect.objectContaining({ code: "DUPLICATE_EVENT_ID" }),
-		);
-		expect(record).toThrow(/append a recorded event once/);
 	});
 
 	it("shares the frozen payload instead of re-cloning it when recording", () => {

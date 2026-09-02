@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+	DuplicateEventIdError,
 	InvalidVersionError,
 	MisaddressedEventError,
 	MissingEntityIdError,
@@ -1302,6 +1303,93 @@ describe("event address on the state-stored path", () => {
 		expect(decision?.aggregateId).toBe("test-1");
 		expect(decision?.aggregateType).toBe("AddressedAggregate");
 		expect(aggregate.state.value).toBe(5);
+	});
+});
+
+describe("one identity per pending fact on the state-stored path", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class IdentityAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
+		protected readonly aggregateType = "IdentityAggregate";
+
+		constructor(id: TestId, initialState: TestState) {
+			super(id, initialState);
+		}
+
+		commitWith(...events: PendingDomainEvent<Noted>[]): void {
+			this.setState({ ...this.state, value: this.state.value + 1 }, events);
+		}
+
+		record(event: PendingDomainEvent<Noted>): void {
+			this.addDomainEvent(event);
+		}
+	}
+
+	const fresh = (): IdentityAggregate =>
+		new IdentityAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+	const noted = (eventId: string): Noted =>
+		createDomainEvent(
+			"Noted",
+			{ value: 1 },
+			{ eventId, aggregateId: "test-1", aggregateType: "IdentityAggregate" },
+		);
+
+	it("rejects a recorded event appended twice in one batch before the state moves", () => {
+		const aggregate = fresh();
+		const recorded = noted("fact-1");
+
+		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
+			DuplicateEventIdError,
+		);
+		expect(() => aggregate.commitWith(recorded, recorded)).toThrow(
+			/append a recorded event once/,
+		);
+
+		expect(aggregate.state.value).toBe(0);
+		expect(aggregate.version).toBe(0);
+		expect(aggregate.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects a recorded event that is already pending before the state moves", () => {
+		const aggregate = fresh();
+		const recorded = noted("fact-1");
+		aggregate.commitWith(recorded);
+
+		expect(() => aggregate.commitWith(recorded)).toThrow(
+			expect.objectContaining({ code: "DUPLICATE_EVENT_ID" }),
+		);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("rejects a recorded event that is already pending on addDomainEvent", () => {
+		const aggregate = fresh();
+		const recorded = noted("fact-1");
+		aggregate.record(recorded);
+
+		expect(() => aggregate.record(recorded)).toThrow(DuplicateEventIdError);
+
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("accepts recorded events with distinct ids in one batch", () => {
+		const aggregate = fresh();
+
+		aggregate.commitWith(noted("fact-1"), noted("fact-2"));
+
+		expect(
+			aggregate.pendingEvents.map((event) => (event as Noted).eventId),
+		).toEqual(["fact-1", "fact-2"]);
 	});
 });
 

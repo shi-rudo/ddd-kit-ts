@@ -162,6 +162,7 @@ export abstract class EventSourcedAggregate<
 		// pendingEvents and only fail later at harvest or on the next
 		// load, poisoning the own stream.
 		const stamped = this.addressNewEvent(event);
+		this.assertEventIdsNotPending([stamped]);
 		// Both gates live HERE, not in fold: only new facts are checked
 		// against current rules; replay trusts history. Freeze, validate,
 		// assign, in the order Entity.setState keeps: the object validated
