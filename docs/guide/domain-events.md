@@ -188,13 +188,17 @@ recordPendingEvents(order, domainEvents, {
 ```
 
 The third argument holds the stamp options that every decision of the
-recording shares. Pass a callback instead of the factory when the metadata
-depends on the concrete decision:
+recording shares. Pass a callback instead of the factory when the stamp
+depends on the concrete decision. The callback receives the uncommitted
+decision and its position in the batch:
 
 ```ts
-recordPendingEvents(order, (decision) =>
+recordPendingEvents(order, (decision, index) =>
   domainEvents.createStamp({
-    metadata: { correlationId: request.id, causationId: commandIdFor(decision) },
+    metadata: {
+      correlationId: request.id,
+      source: index === 0 ? "checkout" : `checkout/${decision.type}`,
+    },
   }),
 );
 ```
