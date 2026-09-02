@@ -466,8 +466,9 @@ this list if your code observes one of these paths:
 
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 
-Source breaks at the entry points, on the event bus port, and in the
-aggregate vocabulary. The vocabulary renames are mechanical; the sections
+Source breaks at the entry points, on the event bus port, in the aggregate
+vocabulary, on the entity state field, and on two error constructors. The
+vocabulary renames are mechanical; the sections
 [One lifecycle vocabulary](#one-lifecycle-vocabulary) and [Folds](#folds)
 list them with the commands that apply them.
 
@@ -615,3 +616,34 @@ declares `handlers`, and every catch that names the removed class.
 compiler does not flag it: search for `MissingHandlerError` and
 `MISSING_HANDLER` and change the sites that guard an aggregate to
 `MissingFoldError` and `MISSING_FOLD`.
+
+### The entity state field is private
+
+`Entity` no longer exposes `_state` and `freezeState` to a subclass. Every
+write goes through `setState`, which validates and freezes the next state.
+The compiler flags each direct assignment.
+
+| Before | After |
+| --- | --- |
+| `this._state = next` in a domain method | `this.setState(next)` |
+| `this._state = this.freezeState(restored)` in a reconstitution override | `super(id, restored, { trustInitialState: true })` in the reconstitution factory |
+
+`trustInitialState` skips the validator for a persisted state, because the
+state is accepted fact. The structural gates still run. There is no
+consumer-facing writer that skips the validator after construction.
+
+### Address mismatch errors take an options object
+
+`MisaddressedEventError` and `ForeignEventError` take one options object and
+expose the same three fields. Only test doubles and catch blocks that read
+the old fields change.
+
+| Before | After |
+| --- | --- |
+| `new ForeignEventError(expectedId, expectedType, eventType, actualId, actualType)` | `new ForeignEventError({ expected: { aggregateType, aggregateId }, actual: { aggregateType, aggregateId }, eventType })` |
+| `error.expectedAggregateId`, `error.expectedAggregateType` | `error.expected.aggregateId`, `error.expected.aggregateType` |
+| `error.actualAggregateId`, `error.actualAggregateType` | `error.actual.aggregateId`, `error.actual.aggregateType` |
+
+`actual` names only the address fields the event carries. A missing field on
+the event matches the receiving aggregate by default, so an `actual` field
+can be `undefined`, as the old optional fields could.

@@ -126,6 +126,7 @@ export {
 	type DomainEventStampFactory,
 	type DomainEventStampProvider,
 	recordPendingEvents,
+	type SharedDomainEventStampOptions,
 } from "./application/unit-of-work/record-pending-events";
 export {
 	type AggregateWriteRegistration,
@@ -258,6 +259,7 @@ export {
 export { voValidated } from "./domain/value-object/vo-validated";
 // Errors
 export {
+	type AggregateAddressMismatchOptions,
 	AggregateDeletedError,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,

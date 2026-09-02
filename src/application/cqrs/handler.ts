@@ -5,7 +5,7 @@ import {
 } from "../../domain/aggregate/pending-event-lifecycle";
 import {
 	type AnyDomainEvent,
-	isMintedEvent,
+	isRecordedDomainEvent,
 	type PendingDomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
@@ -279,7 +279,7 @@ function createCommitTokenScope<
 		// flush, and a non-transactional event store would already have
 		// appended the unstamped batch durably.
 		for (const event of events) {
-			if (!isMintedEvent(event)) {
+			if (!isRecordedDomainEvent(event)) {
 				throw new EventHarvestError(
 					`withCommit: event "${(event as { readonly type: string }).type}" ` +
 						"has not been recorded. Call recordPendingEvents(aggregate, " +
@@ -559,7 +559,7 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					);
 				}
 				return record.events.map((event, index) => {
-					if (!isMintedEvent(event)) {
+					if (!isRecordedDomainEvent(event)) {
 						throw new EventHarvestError(
 							`withCommit: event "${event.type}" has not been recorded. ` +
 								"Call recordPendingEvents(aggregate, createStamp) in the " +

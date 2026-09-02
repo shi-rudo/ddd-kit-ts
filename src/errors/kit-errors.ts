@@ -561,6 +561,32 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
 }
 
 /**
+ * Constructor options for {@link MisaddressedEventError} and
+ * {@link ForeignEventError}: the address of the aggregate that received the
+ * event, and the address fields the event carries. A missing field on the
+ * event matches by default, so `actual` names only what the event states.
+ */
+export interface AggregateAddressMismatchOptions {
+	readonly expected: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	readonly actual: {
+		readonly aggregateType?: string;
+		readonly aggregateId?: string;
+	};
+	readonly eventType: string;
+}
+
+/** The address the event names; a missing field falls back to the receiving aggregate. */
+function describeEventAddress(
+	options: AggregateAddressMismatchOptions,
+): string {
+	const { expected, actual } = options;
+	return `${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId}`;
+}
+
+/**
  * Thrown by `EventSourcedAggregate.apply()` when a NEW event carries an
  * `aggregateId` or `aggregateType` naming a different aggregate: a
  * deterministic programming bug at the call site (a hand-built or
@@ -573,20 +599,23 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
  * infrastructure, and handlers for one must not absorb the other.
  */
 export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
-	constructor(
-		public readonly expectedAggregateId: string,
-		public readonly expectedAggregateType: string,
-		public readonly eventType: string,
-		public readonly actualAggregateId?: string,
-		public readonly actualAggregateType?: string,
-	) {
+	/** Address of the aggregate that received the event. */
+	readonly expected: AggregateAddressMismatchOptions["expected"];
+	/** Address fields the event carries. */
+	readonly actual: AggregateAddressMismatchOptions["actual"];
+	readonly eventType: string;
+
+	constructor(options: AggregateAddressMismatchOptions) {
 		super(
 			"MISADDRESSED_EVENT",
-			`New event "${eventType}" is addressed to ` +
-				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
-				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
+			`New event "${options.eventType}" is addressed to ` +
+				`${describeEventAddress(options)} but was applied on ` +
+				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
 				"fix the call site (createEvent stamps the right address).",
 		);
+		this.expected = options.expected;
+		this.actual = options.actual;
+		this.eventType = options.eventType;
 	}
 }
 
@@ -768,21 +797,24 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * {@link MisaddressedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
-	constructor(
-		public readonly expectedAggregateId: string,
-		public readonly expectedAggregateType: string,
-		public readonly eventType: string,
-		public readonly actualAggregateId?: string,
-		public readonly actualAggregateType?: string,
-	) {
+	/** Address of the aggregate that received the event. */
+	readonly expected: AggregateAddressMismatchOptions["expected"];
+	/** Address fields the event carries. */
+	readonly actual: AggregateAddressMismatchOptions["actual"];
+	readonly eventType: string;
+
+	constructor(options: AggregateAddressMismatchOptions) {
 		super({
 			code: "FOREIGN_EVENT",
 			message:
-				`Persisted event "${eventType}" belongs to ` +
-				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId}, ` +
-				`not to ${expectedAggregateType} ${expectedAggregateId}: ` +
+				`Persisted event "${options.eventType}" belongs to ` +
+				`${describeEventAddress(options)}, not to ` +
+				`${options.expected.aggregateType} ${options.expected.aggregateId}: ` +
 				"the stream row addresses a different aggregate.",
 		});
+		this.expected = options.expected;
+		this.actual = options.actual;
+		this.eventType = options.eventType;
 	}
 }
 

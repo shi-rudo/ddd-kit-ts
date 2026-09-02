@@ -114,12 +114,11 @@ The important details:
 - if validation throws, the previous state remains in place
 - `EntityConfig.validateState(state)` is a pure function receiving the state to check
 
-Use `setState(...)` for ordinary entity mutations. Direct `_state` assignment
-always skips the instance-bound validator and can also skip the configured
-freeze mode. The base keeps that field protected for specialised derivation
-machinery such as event replay, where bypassing today's decision rules is
-deliberate. The kit's own event-sourced `apply(...)` runs the injected
-validator on its path internally; consumer code uses `setState(...)`.
+Use `setState(...)` for ordinary entity mutations. The state field is private,
+so a subclass cannot assign it. Every write validates and freezes the next
+state. The kit's own event-sourced replay stores history through a kit-internal
+writer that skips the validator, because history is accepted fact. For a
+persisted state, pass `trustInitialState` in the reconstitution factory.
 
 ### Validation is constructor-injected
 

@@ -15,6 +15,7 @@ import {
 	ErrorMapperFailedError,
 	EventHarvestError,
 	FoldReturnedNoStateError,
+	ForeignEventError,
 	HostileStateKeyError,
 	InfrastructureError,
 	InMemoryCapacityExceededError,
@@ -22,6 +23,7 @@ import {
 	InvalidIntegrationMessageError,
 	InvalidVersionError,
 	type KitErrorCode,
+	MisaddressedEventError,
 	MissingEntityIdError,
 	MissingFoldError,
 	MissingHandlerError,
@@ -118,6 +120,17 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
+		error: () =>
+			new MisaddressedEventError({
+				expected: { aggregateType: "Order", aggregateId: "o-1" },
+				actual: { aggregateId: "o-2" },
+				eventType: "OrderConfirmed",
+			}),
+		code: "MISADDRESSED_EVENT",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
 		error: () => new MissingFoldError("OrderConfirmed"),
 		code: "MISSING_FOLD",
 		category: "WIRING",
@@ -167,6 +180,17 @@ const concreteCases: ReadonlyArray<{
 		error: () => new InvalidVersionError(-1, "is not a safe integer"),
 		code: "INVALID_VERSION",
 		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ForeignEventError({
+				expected: { aggregateType: "Order", aggregateId: "o-1" },
+				actual: { aggregateType: "Invoice", aggregateId: "o-1" },
+				eventType: "OrderConfirmed",
+			}),
+		code: "FOREIGN_EVENT",
+		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
 	{
@@ -450,11 +474,13 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ErrorMapperFailedError["code"]>,
 			AssertKitCode<EventHarvestError["code"]>,
 			AssertKitCode<FoldReturnedNoStateError["code"]>,
+			AssertKitCode<ForeignEventError["code"]>,
 			AssertKitCode<HostileStateKeyError["code"]>,
 			AssertKitCode<InMemoryCapacityExceededError["code"]>,
 			AssertKitCode<InvalidCommandMessageError["code"]>,
 			AssertKitCode<InvalidIntegrationMessageError["code"]>,
 			AssertKitCode<InvalidVersionError["code"]>,
+			AssertKitCode<MisaddressedEventError["code"]>,
 			AssertKitCode<MissingEntityIdError["code"]>,
 			AssertKitCode<MissingFoldError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,

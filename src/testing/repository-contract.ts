@@ -16,7 +16,7 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
-	mintedPendingEventIds,
+	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
 
@@ -146,7 +146,7 @@ export function createRepositoryContractTests<
 	const pendingEventIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		mintedPendingEventIds(
+		recordedPendingEventIds(
 			events,
 			"the harness must record pending events before persistence",
 		);

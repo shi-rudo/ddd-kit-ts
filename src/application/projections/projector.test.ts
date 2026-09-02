@@ -1011,8 +1011,8 @@ describe("Projector", () => {
 			projector.project([validPrefix, mismatched]),
 		).rejects.toMatchObject({
 			code: "FOREIGN_EVENT",
-			expectedAggregateId: "o-envelope",
-			actualAggregateId: "o-event",
+			expected: { aggregateType: "Order", aggregateId: "o-envelope" },
+			actual: { aggregateType: "Order", aggregateId: "o-event" },
 		});
 		expect(rows).toEqual([]);
 		await expect(

@@ -14,6 +14,7 @@ import {
 	removeEntityById,
 	replaceEntityById,
 	sameEntity,
+	storeTrustedState,
 	updateEntityById,
 } from "./entity";
 
@@ -284,7 +285,6 @@ describe("Entity", () => {
 			const raw: TrappyState = { quantity: 5 };
 			const validated: TrappyState[] = [];
 			let virtualCalls = 0;
-			let virtualFreezeCalls = 0;
 
 			class TrappyEntity extends Entity<TrappyState, Id<"TrappyId">> {
 				constructor(id: Id<"TrappyId">, state: TrappyState) {
@@ -294,24 +294,17 @@ describe("Entity", () => {
 				}
 			}
 
-			// JavaScript consumers can still attach same-named prototype methods.
-			// Base construction must not dispatch through either extension point.
+			// JavaScript consumers can still attach a same-named prototype
+			// method. Base construction must not dispatch through it.
 			Object.defineProperty(TrappyEntity.prototype, "validateState", {
 				value: () => {
 					virtualCalls += 1;
-				},
-			});
-			Object.defineProperty(TrappyEntity.prototype, "freezeState", {
-				value: (state: TrappyState) => {
-					virtualFreezeCalls += 1;
-					return state;
 				},
 			});
 
 			new TrappyEntity("t-1" as Id<"TrappyId">, raw);
 
 			expect(virtualCalls).toBe(0);
-			expect(virtualFreezeCalls).toBe(0);
 			expect(validated).toHaveLength(1);
 			expect(validated[0]).not.toBe(raw);
 			expect(Object.isFrozen(validated[0])).toBe(true);
@@ -722,6 +715,59 @@ describe("validation sees the stored copy on both paths", () => {
 
 		expect(() => entity.set({ q: -5 })).toThrow("must not be negative");
 		expect(entity.state.q).toBe(1);
+	});
+});
+
+describe("storeTrustedState stores an accepted fact", () => {
+	type TrustedState = { q: number; meta: { name: string } };
+
+	class TrustingEntity extends Entity<TrustedState, ItemId> {
+		readonly validated: TrustedState[];
+		constructor(initial: TrustedState, deepFreezeState = false) {
+			const validated: TrustedState[] = [];
+			super("item-1" as ItemId, initial, {
+				deepFreezeState,
+				validateState: (state) => {
+					validated.push(state);
+					if (state.q < 0) throw new Error("q must not be negative");
+				},
+			});
+			this.validated = validated;
+		}
+	}
+
+	it("skips the validator and stores the value itself, frozen", () => {
+		const entity = new TrustingEntity({ q: 1, meta: { name: "a" } });
+		const replayed = { q: -5, meta: { name: "b" } };
+
+		storeTrustedState(entity, replayed);
+
+		expect(entity.state).toBe(replayed);
+		expect(Object.isFrozen(entity.state)).toBe(true);
+		expect(Object.isFrozen(entity.state.meta)).toBe(false);
+		expect(entity.validated).toHaveLength(1);
+	});
+
+	it("freezes the trusted value by the configured deep mode", () => {
+		const entity = new TrustingEntity({ q: 1, meta: { name: "a" } }, true);
+
+		storeTrustedState(entity, { q: 2, meta: { name: "b" } });
+
+		expect(Object.isFrozen(entity.state.meta)).toBe(true);
+	});
+
+	it("keeps the state field private, so a subclass cannot assign it", () => {
+		class AssigningEntity extends Entity<TrustedState, ItemId> {
+			constructor() {
+				super("item-1" as ItemId, { q: 1, meta: { name: "a" } });
+			}
+			assign(next: TrustedState): void {
+				// @ts-expect-error the state field is private; a subclass writes through setState
+				this._state = next;
+			}
+		}
+
+		expect(typeof new AssigningEntity().assign).toBe("function");
 	});
 });
 

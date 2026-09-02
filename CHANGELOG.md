@@ -29,6 +29,44 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): the entity state field is private
+
+`Entity` no longer exposes `_state` and `freezeState` to subclasses. A
+subclass writes state through `setState`, which validates and freezes. A
+subclass that assigned `this._state` directly no longer compiles. For a
+persisted state, pass `trustInitialState` in the reconstitution factory. The
+kit's event-sourced aggregate stores replayed history through a kit-internal
+writer that skips the validator. The writer is not a method, so a subclass
+cannot redirect it, and it cannot throw. Before this change a subclass could
+assign the field and skip the validator and the configured freeze mode.
+
+### Changed: MisaddressedEventError and ForeignEventError take an options object
+
+Both constructors take `{ expected, actual, eventType }`
+(`AggregateAddressMismatchOptions`). `expected` is the address of the
+aggregate that received the event; `actual` holds the address fields the
+event carries. The errors expose the same three fields. Before this change
+the constructors took five positional strings, and the errors exposed
+`expectedAggregateId`, `expectedAggregateType`, `actualAggregateId`, and
+`actualAggregateType`.
+
+### Added: shared stamp options on recordPendingEvents
+
+`recordPendingEvents(aggregate, factory, stampOptions)` passes `stampOptions`
+to `factory.createStamp` for every decision of the recording. The options
+carry an `occurredAt` and metadata that the whole batch shares, such as the
+correlation id of the request. The `eventId` stays per fact, so the type
+`SharedDomainEventStampOptions` omits it, and the implementation forwards
+only `occurredAt` and `metadata`. Before this change the factory overload
+called `createStamp` without options, so a shared correlation id needed the
+callback overload.
+
+### Fixed: the copyMetadata example points causationId at the eventId
+
+The `copyMetadata` doc example set `causationId` to the type of the previous
+event. The field contract names the `eventId` of the cause, and the example
+now does the same.
+
 ### Changed: a forgotten markReconstituted is a coded error
 
 `reconstituteAggregateFromSnapshot` checks that the factory restored the
@@ -48,8 +86,7 @@ inside it.
 
 ### Fixed: the mint gate reads the event brands as own properties
 
-`isMintedEvent` and `isUncommittedDomainEvent` read the brand as an own
-property of the event. An object that inherits a minted event through its
+The mint gate reads the event brands as own properties of the event. An object that inherits a minted event through its
 prototype is not minted, even when it carries its own field values. The
 aggregate rejects it with `UnmintedEventError`. Before this change the
 probes read the brand through the prototype chain, so such a lookalike

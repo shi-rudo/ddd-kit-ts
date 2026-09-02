@@ -36,8 +36,7 @@
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     // setState runs validateState and re-freezes; a direct
- *     // `this._state = ...` assignment would skip both.
+ *     // setState validates the next state and freezes it.
  *     this.setState({ ...this.state, quantity });
  *   }
  *
@@ -157,6 +156,42 @@ export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
 }
 
 /**
+ * Freezes `value` by the entity's configured mode. The default is a
+ * shallow freeze. When {@link EntityConfig.deepFreezeState} was enabled
+ * at construction, the mode is `deepFreeze`. It does not store the value.
+ * The event-sourced `apply` freezes the fold result first, then validates
+ * it. So the object that passed validation is the object that
+ * {@link storeTrustedState} stores.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export let freezeEntityState: <TState>(
+	entity: Entity<TState, Id<string>>,
+	value: TState,
+) => TState;
+
+/**
+ * Stores a state that is accepted fact. The event-sourced replay stores
+ * history through it. The event-sourced `apply` stores a state that it
+ * validated on its own path. The instance-bound
+ * {@link EntityConfig.validateState} does not run. The value is frozen by
+ * the configured mode and becomes the entity's own state without a copy.
+ * A value that is frozen already is stored as is. So the write cannot
+ * throw, and a caller may write the version first and store second.
+ *
+ * Bound in the static block of {@link Entity}, so it reaches the private
+ * fields. A subclass cannot redirect it, unlike a protected method.
+ *
+ * @internal Shared by the kit's own entity subclasses; not part of the
+ * public API.
+ */
+export let storeTrustedState: <TState>(
+	entity: Entity<TState, Id<string>>,
+	trusted: TState,
+) => void;
+
+/**
  * Abstract base class for Entities with state.
  *
  * Provides:
@@ -185,8 +220,7 @@ export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     // setState runs validateState and re-freezes; a direct
- *     // `this._state = ...` assignment would skip both.
+ *     // setState validates the next state and freezes it.
  *     this.setState({ ...this.state, quantity });
  *   }
  * }
@@ -213,14 +247,23 @@ export abstract class Entity<TState, TId extends Id<string>>
 	}
 
 	/**
-	 * The state is `protected` so that only the subclass can modify it.
-	 * Ordinary entity behavior must use {@link setState}; direct assignment
-	 * skips instance-bound validation (see {@link assertStateInvariant} for
-	 * the paths that assign directly and still owe the check).
+	 * Private, so a subclass writes only through {@link setState}. The
+	 * kit's own replay path stores accepted history through
+	 * {@link storeTrustedState}, which skips the validator.
 	 */
-	protected _state: TState;
+	private _state: TState;
 
 	private readonly _stateFreezeMode: StateFreezeMode;
+
+	// The kit-internal writers reach the private fields from here. A
+	// subclass cannot override or observe them, unlike a protected method.
+	static {
+		freezeEntityState = (entity, value) =>
+			freezeStateByMode(value, entity._stateFreezeMode);
+		storeTrustedState = (entity, trusted) => {
+			entity._state = freezeStateByMode(trusted, entity._stateFreezeMode);
+		};
+	}
 
 	/**
 	 * Declared and never assigned: a subclass that declares a member named
@@ -278,19 +321,6 @@ export abstract class Entity<TState, TId extends Id<string>>
 	}
 
 	/**
-	 * Freezes a state value according to this entity's configured freeze
-	 * mode: the default shallow freeze, or `deepFreeze` when
-	 * {@link EntityConfig.deepFreezeState} was enabled at construction.
-	 * Infrastructure-style subclass code that deliberately assigns
-	 * `this._state` directly must freeze through this method, not
-	 * `freezeShallow`, or the opt-in silently degrades to shallow for that
-	 * path. Ordinary domain behavior should use {@link setState} instead.
-	 */
-	protected freezeState(value: TState): TState {
-		return freezeStateByMode(value, this._stateFreezeMode);
-	}
-
-	/**
 	 * Sets the state of the entity.
 	 * This is a convenience method for state mutations.
 	 * Automatically validates `newState` with the instance-bound
@@ -308,7 +338,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 		// Same copy-freeze-validate-assign order as the constructor: the
 		// object validated IS the frozen object stored, and a validation
 		// throw leaves the previous state untouched.
-		const next = this.freezeState(shallowCopyOwned(newState));
+		const next = freezeStateByMode(
+			shallowCopyOwned(newState),
+			this._stateFreezeMode,
+		);
 		assertStateInvariant(this, next);
 		this._state = next;
 	}
@@ -362,15 +395,13 @@ function freezeStateByMode<TState>(
 /**
  * Shallow-freezes `value` when it's a non-null object or array, so that
  * direct property writes throw in strict mode. Returns the value as-is for
- * primitives. Used internally by `Entity` (via `freezeState`, which picks
- * shallow or deep per the `deepFreezeState` config) to prevent outside
- * mutation of state read through the `state` getter without paying the
- * cost of a deep clone on every read.
+ * primitives. `Entity` picks this or {@link deepFreeze} per the
+ * `deepFreezeState` config, so state read through the `state` getter
+ * cannot be mutated from outside, without a deep clone on every read.
  *
- * Subclass code that assigns `this._state` directly should freeze through
- * the protected `freezeState(value)` method rather than calling this
- * helper, so the configured freeze mode is honored. The export remains
- * for consumers using it as a standalone utility.
+ * Subclass code stores state through `setState`, which freezes by the
+ * configured mode. The export remains for consumers using it as a
+ * standalone utility.
  */
 export function freezeShallow<T>(value: T): T {
 	if (value !== null && typeof value === "object") {

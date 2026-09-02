@@ -17,7 +17,7 @@ import {
 import {
 	createDomainEvent,
 	type DomainEvent,
-	isMintedEvent,
+	isRecordedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
@@ -468,7 +468,7 @@ function flushEsOrder(
 			actualVersion: stream.length,
 		});
 	}
-	if (!write.events.every(isMintedEvent)) {
+	if (!write.events.every(isRecordedDomainEvent)) {
 		throw new Error("repository received an unrecorded domain event");
 	}
 	if (write.events.length === 0) return;

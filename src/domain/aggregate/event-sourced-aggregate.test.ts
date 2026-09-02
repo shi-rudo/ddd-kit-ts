@@ -14,13 +14,15 @@ import {
 } from "../../errors/kit-errors";
 import {
 	type AnyDomainEvent,
+	createDomainEvent,
 	createUncommittedDomainEvent,
-	isMintedEvent,
+	type DomainEvent,
+	isRecordedDomainEvent,
 	isUncommittedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
-import { createDomainEvent, type DomainEvent, type Version } from "./aggregate";
+import type { Version } from "./aggregate";
 import type { AggregateConfig } from "./base-aggregate";
 import {
 	EventSourcedAggregate as ProductionEventSourcedAggregate,
@@ -1010,7 +1012,7 @@ describe("replay trusts history", () => {
 		expect(pending).not.toHaveProperty("eventId");
 		expect(pending).not.toHaveProperty("occurredAt");
 		expect(isUncommittedDomainEvent(pending as object)).toBe(true);
-		expect(isMintedEvent(pending as object)).toBe(false);
+		expect(isRecordedDomainEvent(pending as object)).toBe(false);
 	});
 
 	it("rejects a hand-rolled mutable event before anything moves", () => {
@@ -1069,7 +1071,7 @@ describe("replay trusts history", () => {
 			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
 		}) as TestEventUpdated;
 
-		expect(isMintedEvent(lookalike)).toBe(false);
+		expect(isRecordedDomainEvent(lookalike)).toBe(false);
 		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
 		expect(agg.state.value).toBe(10);
 		expect(agg.pendingEvents).toHaveLength(0);
@@ -1096,7 +1098,7 @@ describe("replay trusts history", () => {
 	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
-		// event carries the shared mint brand instead; the gate accepts it.
+		// event carries the shared recorded brand instead; the gate accepts it.
 		// The brand is cooperative by design (the gate catches accidental
 		// literals, it is not a security boundary).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
@@ -1131,7 +1133,7 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
 	});
 
-	it("preserves the cooperative mint brand on address-stamped copies", async () => {
+	it("preserves the cooperative recorded brand on address-stamped copies", async () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 0,
 			status: "inactive",
@@ -1150,9 +1152,9 @@ describe("replay trusts history", () => {
 		vi.resetModules();
 		const foreignDomainEventModule = await import("../event/domain-event");
 
-		expect(foreignDomainEventModule.isMintedEvent(stamped as TestEvent)).toBe(
-			true,
-		);
+		expect(
+			foreignDomainEventModule.isRecordedDomainEvent(stamped as TestEvent),
+		).toBe(true);
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {
@@ -1629,7 +1631,7 @@ describe("apply and replay bookkeeping", () => {
 		expect(recorded).not.toBe(event);
 		expect(recorded?.aggregateType).toBe("TestEventSourcedAggregate");
 		expect((recorded as TestEventUpdated).eventId).toBe("evt-partial");
-		expect(isMintedEvent(recorded as object)).toBe(true);
+		expect(isRecordedDomainEvent(recorded as object)).toBe(true);
 	});
 
 	it("stamps the missing id of a partial address that names only the type", () => {

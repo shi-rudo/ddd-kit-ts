@@ -10,6 +10,8 @@ import {
 import {
 	assertStateHasNoHostileOwnKey,
 	assertStateInvariant,
+	freezeEntityState,
+	storeTrustedState,
 } from "../entity/entity";
 import type {
 	AnyDomainEvent,
@@ -22,7 +24,7 @@ import {
 	assertReplayTargetHasNoPendingEvents,
 	BaseAggregate,
 } from "./base-aggregate";
-import { requirePendingEventLifecycleCapability } from "./pending-event-lifecycle";
+import { requirePendingEventLifecycleReadView } from "./pending-event-lifecycle";
 
 type Fold<TState, TEvent> = (state: TState, event: TEvent) => TState;
 
@@ -138,7 +140,7 @@ export abstract class EventSourcedAggregate<
 	 * missing address fields are stamped from the aggregate instead.
 	 *
 	 * State is not mutated if any step throws: the fold is invoked into
-	 * a local and only assigned to `_state` once all checks pass.
+	 * a local and only stored once all checks pass.
 	 *
 	 * The method is generic in the event tag `K`, so concrete callers
 	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
@@ -163,26 +165,27 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.addressNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
-		// Both gates live HERE, not in fold: only new facts are checked
-		// against current rules; replay trusts history. Freeze, validate,
-		// assign, in the order Entity.setState keeps: the object validated
-		// IS the frozen object stored, and nothing below assigns until both
-		// gates passed. Unlike setState there is no defensive copy: the fold
-		// result is the aggregate's own next state, so a rejected result is
-		// left frozen. The hostile own-key guard runs below on every new
-		// fact; replay runs it once on the final state. The event was
-		// stamped above, so it is appended as is.
+		// Both gates run here, not in fold: apply checks only new facts
+		// against the current rules, and replay trusts history. The order
+		// is the one Entity.setState keeps: freeze, validate, store. The
+		// object that passed validation is the object stored, and no step
+		// below stores until both gates passed. Unlike setState there is
+		// no defensive copy: the fold result is the aggregate's own next
+		// state, so a rejected result stays frozen. The hostile own-key
+		// guard runs on every new fact; replay runs it once on the final
+		// state. The event was stamped above, so it is appended as is.
 		this.validateEvent(stamped as UncommittedDomainEventOf<TEvent>);
-		const next = this.freezeState(this.fold(stamped));
+		const next = freezeEntityState(this, this.fold(stamped));
 		// A hostile row can reach the fold through the payload or its own
 		// construction; the guard runs at the same depth and on the same
 		// shapes as setState, on the state that is about to be stored.
 		assertStateHasNoHostileOwnKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
 		// The version write is the last step that can throw (an override of
-		// setVersion), so it runs before the two assignments, which cannot.
+		// setVersion). The store and the append run after it and cannot
+		// throw.
 		this.bumpVersion();
-		this._state = next;
+		storeTrustedState(this, next);
 		this.appendStampedEvent(stamped);
 	}
 
@@ -217,13 +220,14 @@ export abstract class EventSourcedAggregate<
 			event.aggregateType !== undefined &&
 			event.aggregateType !== this.aggregateType;
 		if (idMismatch || typeMismatch) {
-			throw new ForeignEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				event.aggregateId,
-				event.aggregateType,
-			);
+			throw new ForeignEventError({
+				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
+				actual: {
+					aggregateType: event.aggregateType,
+					aggregateId: event.aggregateId,
+				},
+				eventType: event.type,
+			});
 		}
 	}
 
@@ -242,7 +246,7 @@ export abstract class EventSourcedAggregate<
 			throw new MissingFoldError(event.type);
 		}
 
-		const nextState = fold(this._state, event);
+		const nextState = fold(this.state, event);
 		// Only `undefined` is rejected: a primitive or `null` state is a
 		// legal TState, a missing `return` is not.
 		if (nextState === undefined) {
@@ -280,7 +284,7 @@ export abstract class EventSourcedAggregate<
 	): Result<void, DomainError> {
 		assertReplayTargetHasNoPendingEvents(
 			this.id,
-			requirePendingEventLifecycleCapability(
+			requirePendingEventLifecycleReadView(
 				this,
 				"replayHistory",
 			).pendingEventCount(),
@@ -288,23 +292,23 @@ export abstract class EventSourcedAggregate<
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 
-		const previousState = this._state;
+		const previousState = this.state;
 		const startVersion = this.version;
 		try {
 			for (const event of history) {
 				this.assertReplayedEventBelongsHere(event);
-				this._state = this.freezeState(this.fold(event));
+				storeTrustedState(this, this.fold(event));
 			}
 			// Only the final fold result is stored, so the hostile own-key
 			// guard runs once here instead of once per replayed event; a
 			// rejection rolls back below like any other replay failure.
-			assertStateHasNoHostileOwnKey(this._state, "Aggregate state");
+			assertStateHasNoHostileOwnKey(this.state, "Aggregate state");
 			// Inside the try on purpose: a fold that records a decision
 			// makes this throw, and the rollback below must cover that case
 			// too.
 			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
-			this._state = previousState;
+			storeTrustedState(this, previousState);
 			// The fold itself never writes the version, but a fold that
 			// records a decision bumps it through apply(); the rollback
 			// writes the start version back through the same path.

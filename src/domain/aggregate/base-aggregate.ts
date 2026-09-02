@@ -11,11 +11,11 @@ import { Entity, type EntityConfig } from "../entity/entity";
 import {
 	type AnyDomainEvent,
 	type AnyUncommittedDomainEvent,
-	adoptMintedEvent,
+	adoptRecordedDomainEvent,
 	adoptUncommittedDomainEvent,
 	type CreateUncommittedDomainEventOptions,
 	createUncommittedDomainEvent,
-	isMintedEvent,
+	isRecordedDomainEvent,
 	isUncommittedDomainEvent,
 	type PendingDomainEvent,
 	recordDomainEvent,
@@ -139,7 +139,7 @@ export abstract class BaseAggregate<
 		const stampedCount = stamped.length;
 		const recorded: TEvent[] = stamped.map((event, index) => {
 			const candidate = event as AnyDomainEvent | AnyUncommittedDomainEvent;
-			if (isMintedEvent(candidate)) return candidate as TEvent;
+			if (isRecordedDomainEvent(candidate)) return candidate as TEvent;
 			if (!isUncommittedDomainEvent(candidate)) {
 				throw new UnmintedEventError((event as { readonly type: string }).type);
 			}
@@ -332,10 +332,10 @@ export abstract class BaseAggregate<
 	): void {
 		const pendingIds = new Set<string>();
 		for (const pending of this._pendingEvents) {
-			if (isMintedEvent(pending)) pendingIds.add(pending.eventId);
+			if (isRecordedDomainEvent(pending)) pendingIds.add(pending.eventId);
 		}
 		for (const event of batch) {
-			if (!isMintedEvent(event)) continue;
+			if (!isRecordedDomainEvent(event)) continue;
 			if (pendingIds.has(event.eventId)) {
 				throw new DuplicateEventIdError(String(this.id), event.eventId);
 			}
@@ -379,13 +379,11 @@ export abstract class BaseAggregate<
 		const typeForeign =
 			aggregateType !== undefined && aggregateType !== this.aggregateType;
 		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				aggregateId,
-				aggregateType,
-			);
+			throw new MisaddressedEventError({
+				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
+				actual: { aggregateType, aggregateId },
+				eventType: event.type,
+			});
 		}
 		if (aggregateId !== undefined && aggregateType !== undefined) {
 			return event;
@@ -400,18 +398,17 @@ export abstract class BaseAggregate<
 			aggregateId: this.id,
 			aggregateType: this.aggregateType,
 		};
-		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent = isMintedEvent(
-			event,
-		)
-			? adoptMintedEvent(copy)
-			: adoptUncommittedDomainEvent(copy);
+		const stamped: AnyDomainEvent | AnyUncommittedDomainEvent =
+			isRecordedDomainEvent(event)
+				? adoptRecordedDomainEvent(copy)
+				: adoptUncommittedDomainEvent(copy);
 		return stamped as E;
 	}
 
 	/**
 	 * Mint gate for every recording path: only an event that a kit
 	 * constructor produced passes. The kit marks two shapes: a recorded
-	 * event carries the mint brand (`createDomainEvent`,
+	 * event carries the recorded brand (`createDomainEvent`,
 	 * `createDomainEventFromFacts`) and a decision carries the uncommitted
 	 * brand (`createUncommittedDomainEvent`, the aggregate `createEvent`
 	 * helper). Either brand implies deeply frozen with defensively copied
@@ -420,7 +417,7 @@ export abstract class BaseAggregate<
 	 * O(1): one brand check per shape.
 	 */
 	protected assertMintedEvent(event: PendingDomainEvent<TEvent>): void {
-		if (!isMintedEvent(event) && !isUncommittedDomainEvent(event)) {
+		if (!isRecordedDomainEvent(event) && !isUncommittedDomainEvent(event)) {
 			throw new UnmintedEventError(
 				(event as AnyDomainEvent | AnyUncommittedDomainEvent).type,
 			);

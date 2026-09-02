@@ -181,10 +181,24 @@ const domainEvents = createDomainEventFactory({
 });
 
 order.confirm(confirmedAt);
-recordPendingEvents(order, () =>
+recordPendingEvents(order, domainEvents, {
+  occurredAt: confirmedAt,
+  metadata: { correlationId: request.id },
+});
+```
+
+The third argument holds the stamp options that every decision of the
+recording shares. Pass a callback instead of the factory when the stamp
+depends on the concrete decision. The callback receives the uncommitted
+decision and its position in the batch:
+
+```ts
+recordPendingEvents(order, (decision, index) =>
   domainEvents.createStamp({
-    occurredAt: confirmedAt,
-    metadata: { correlationId: request.id },
+    metadata: {
+      correlationId: request.id,
+      source: index === 0 ? "checkout" : `checkout/${decision.type}`,
+    },
   }),
 );
 ```

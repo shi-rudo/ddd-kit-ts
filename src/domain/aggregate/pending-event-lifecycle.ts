@@ -3,27 +3,12 @@ import type { Version } from "./aggregate";
 import { createGlobalCapabilityRegistry } from "./internal/global-capability-registry";
 
 /**
- * Kit-internal authority for acknowledging one exact pending-event batch.
- *
- * Kept out of every package entry point: repositories may inspect aggregate
- * state and pending events, but only application commit orchestration may
- * acknowledge or discard them after the surrounding transaction commits.
+ * Kit-internal read view of the pending-event lifecycle. Kept out of every
+ * package entry point. The type exposes no acknowledge or discard, so a
+ * reader such as the repository identity map or the replay path cannot
+ * change the batch.
  */
-export interface PendingEventLifecycleCapability {
-	/**
-	 * Acknowledges the committed batch. `committedVersion` is the version the
-	 * commit actually persisted (captured at enrollment); the aggregate syncs
-	 * its persisted-version marker from it rather than from its live version,
-	 * so un-awaited concurrent work mutating the instance in the post-commit
-	 * window cannot desync the marker.
-	 */
-	acknowledge(
-		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
-		committedVersion: Version,
-	): void;
-	discardPendingEvents(
-		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
-	): void;
+export interface PendingEventLifecycleReadView {
 	/**
 	 * Version the persistence layer last confirmed for the aggregate, or
 	 * `undefined` for a never-persisted instance. Grounds the application
@@ -43,6 +28,31 @@ export interface PendingEventLifecycleCapability {
 	aggregateType(): string;
 }
 
+/**
+ * Kit-internal authority for acknowledging one exact pending-event batch.
+ *
+ * Only application commit orchestration holds it: it acknowledges or
+ * discards the batch after the surrounding transaction commits. Every other
+ * reader takes the {@link PendingEventLifecycleReadView}.
+ */
+export interface PendingEventLifecycleCapability
+	extends PendingEventLifecycleReadView {
+	/**
+	 * Acknowledges the committed batch. `committedVersion` is the version the
+	 * commit actually persisted (captured at enrollment); the aggregate syncs
+	 * its persisted-version marker from it rather than from its live version,
+	 * so un-awaited concurrent work mutating the instance in the post-commit
+	 * window cannot desync the marker.
+	 */
+	acknowledge(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+		committedVersion: Version,
+	): void;
+	discardPendingEvents(
+		events: ReadonlyArray<PendingDomainEvent<AnyDomainEvent>>,
+	): void;
+}
+
 // The key version stamps the capability SHAPE. Bump it whenever the
 // interface above changes: registrations made under another key stay
 // invisible, so an aggregate constructed by an incompatible package copy
@@ -57,7 +67,7 @@ const { registry: capabilities, require } =
 		persistenceCapabilityRegistryKey,
 	);
 
-/** Resolves the lifecycle capability or throws `UnmanagedInstanceError`. */
+/** Resolves the lifecycle authority or throws `UnmanagedInstanceError`. */
 export function requirePendingEventLifecycleCapability(
 	aggregate: object,
 	operation: string,
@@ -77,4 +87,21 @@ export function pendingEventLifecycleCapabilityFor(
 	aggregate: object,
 ): PendingEventLifecycleCapability | undefined {
 	return capabilities.get(aggregate);
+}
+
+// The read-view accessors narrow the same registration to the read type.
+// A reader that resolves through them cannot reach acknowledge or discard.
+
+/** Resolves the lifecycle read view or throws `UnmanagedInstanceError`. */
+export function requirePendingEventLifecycleReadView(
+	aggregate: object,
+	operation: string,
+): PendingEventLifecycleReadView {
+	return requirePendingEventLifecycleCapability(aggregate, operation);
+}
+
+export function pendingEventLifecycleReadViewFor(
+	aggregate: object,
+): PendingEventLifecycleReadView | undefined {
+	return pendingEventLifecycleCapabilityFor(aggregate);
 }

@@ -21,7 +21,7 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
-	mintedPendingEventIds,
+	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
 
@@ -112,19 +112,19 @@ export function createEsRepositoryContractTests<
 			"the stream was not appended or replayed correctly",
 		);
 	const streamFor = (id: TAggregate["id"]) => harness.streamKeyFor(id);
-	// Pre-flush identities: the in-memory batch must be recorded (minted)
-	// before the adapter may flush it.
+	// Pre-flush identities: the in-memory batch must be recorded before
+	// the adapter may flush it.
 	const recordedIds = (
 		events: ReadonlyArray<PendingDomainEvent<TEvent>>,
 	): string[] =>
-		mintedPendingEventIds(
+		recordedPendingEventIds(
 			events,
 			"pending events must be recorded before flush",
 		);
 	// Read-back identities: adapters may serialize committed events to rows
 	// and decode them on read. A decoded event does not carry the in-memory
-	// mint brand, and no contract demands re-minting on read, so only the
-	// persisted identity is asserted here.
+	// recorded brand, and no contract demands a re-mint on read, so only
+	// the persisted identity is asserted here.
 	const ids = (events: ReadonlyArray<TEvent>): string[] =>
 		events.map((event) => {
 			assert(

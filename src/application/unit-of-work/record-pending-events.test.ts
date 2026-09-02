@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
+	type CreateDomainEventStampOptions,
 	createDomainEvent,
 	createDomainEventFactory,
 	type DomainEvent,
@@ -151,6 +152,61 @@ describe("recordPendingEvents", () => {
 		for (const event of aggregate.pendingEvents) {
 			expect(event).not.toHaveProperty("eventId");
 		}
+	});
+
+	it("stamps every decision with the shared metadata of the recording", () => {
+		let id = 0;
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => `event-${++id}`,
+			clock: () => new Date("2027-04-05T06:07:09.000Z"),
+		});
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+		aggregate.change(2);
+
+		const recorded = recordPendingEvents(aggregate, factory, {
+			occurredAt: recordedAt,
+			metadata: { correlationId: "request-7" },
+		});
+
+		expect(recorded.map(({ eventId }) => eventId)).toEqual([
+			"event-1",
+			"event-2",
+		]);
+		expect(recorded.map(({ metadata }) => metadata?.correlationId)).toEqual([
+			"request-7",
+			"request-7",
+		]);
+		expect(recorded.map(({ occurredAt }) => occurredAt)).toEqual([
+			recordedAt,
+			recordedAt,
+		]);
+	});
+
+	it("mints a fresh eventId per decision when a wider options object carries one", () => {
+		let id = 0;
+		const factory = createDomainEventFactory({
+			eventIdFactory: () => `event-${++id}`,
+			clock: () => recordedAt,
+		});
+		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
+		aggregate.change(1);
+		aggregate.change(2);
+		const options: CreateDomainEventStampOptions = {
+			eventId: "command-9",
+			metadata: { correlationId: "request-9" },
+		};
+
+		const recorded = recordPendingEvents(aggregate, factory, options);
+
+		expect(recorded.map(({ eventId }) => eventId)).toEqual([
+			"event-1",
+			"event-2",
+		]);
+		expect(recorded.map(({ metadata }) => metadata?.correlationId)).toEqual([
+			"request-9",
+			"request-9",
+		]);
 	});
 
 	it("records two facts with distinct eventIds when the same decision is appended twice", () => {
