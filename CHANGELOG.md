@@ -43,28 +43,29 @@ threw a bare `TypeError`. A test or an error mapper that matched the
 
 `captureAggregateSnapshot` returns a `snapshotAt` that rejects mutation:
 `snapshot.snapshotAt.setTime(0)` throws a `TypeError`. Before this change
-the snapshot object was frozen but the `Date` inside it was not.
+`captureAggregateSnapshot` froze the snapshot object but not the `Date`
+inside it.
 
 ### Fixed: the mint gate reads the event brands as own properties
 
 `isMintedEvent` and `isUncommittedDomainEvent` read the brand as an own
 property of the event. An object that inherits a minted event through its
-prototype and overrides fields with its own values is not a minted event,
-and the aggregate rejects it with `UnmintedEventError`. Before this change
-the brand was read through the prototype chain, so such a lookalike passed
-the gate.
+prototype is not minted, even when it carries its own field values. The
+aggregate rejects it with `UnmintedEventError`. Before this change the
+probes read the brand through the prototype chain, so such a lookalike
+passed the gate.
 
 ### Fixed: a recorded event that is already pending fails before the state moves
 
 `setState`, `apply()`, and `addDomainEvent` throw `DuplicateEventIdError`
 (code `DUPLICATE_EVENT_ID`) for a recorded event whose `eventId` is already
-pending, or that appears twice in one batch. The check runs with the mint
-gate and the address check, so a rejected event moves nothing. Before this
-change `recordPendingEvents` found the duplicate after the state, the
-version, and the pending list had moved. A decision carries no `eventId`
-until recording, so a decision appended twice stays two facts with distinct
-ids; the `addDomainEvent` doc states this rule. The error message names
-both causes.
+pending. The same applies to an event that appears twice in one batch. The
+check runs with the mint gate and the address check, so a rejected event
+moves nothing. Before this change `recordPendingEvents` found the duplicate
+after the state, the version, and the pending list had moved. A decision
+carries no `eventId` until recording. A decision appended twice stays two
+facts with distinct ids; the `addDomainEvent` doc states this rule. The
+error message names both causes.
 
 ### Changed (breaking): an event-sourced aggregate declares folds
 

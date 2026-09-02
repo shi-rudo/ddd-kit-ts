@@ -517,8 +517,8 @@ const fresh = reconstituteAggregateFromSnapshot(
 ```
 
 `captureAggregateSnapshot` rejects an invalid application-supplied time. It also
-detaches the persistence DTO and freezes `snapshotAt`, so later mutations cannot
-alter stored snapshot data.
+detaches the persistence DTO and freezes `snapshotAt`. A later change to the
+aggregate, or to the DTO that `capture` returned, cannot alter the snapshot.
 Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact. A factory that forgets
 `markReconstituted(version)` returns an aggregate at the wrong version; the
