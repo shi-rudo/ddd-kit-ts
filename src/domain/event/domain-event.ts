@@ -372,8 +372,9 @@ export function createDomainEventFactory(
 		const eventId = stampOptions.eventId ?? eventIdFactory();
 		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
-		const metadata = guardedMetadataClone(
+		const metadata = cloneOwnedEventData(
 			withFactorySource(stampOptions, source).metadata,
+			"metadata",
 		);
 		const stamp: DomainEventStamp = {
 			eventId,
@@ -585,7 +586,7 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = guardedMetadataClone(stamp.metadata);
+	const metadata = cloneOwnedEventData(stamp.metadata, "metadata");
 	return mintRecordedEvent(
 		event,
 		stamp.eventId,
@@ -751,7 +752,7 @@ function mintDomainEvent<T extends string, P>(
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
 		schemaVersion,
-		metadata: guardedMetadataClone(options?.metadata),
+		metadata: cloneOwnedEventData(options?.metadata, "metadata"),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -997,19 +998,4 @@ export function mergeMetadata(
 		}
 	}
 	return merged as EventMetadata;
-}
-
-/**
- * Clones event metadata with the loud `__proto__` rejection applied at
- * the SOURCE: structuredClone preserves an own `__proto__` data key, so
- * without this guard a hostile envelope would ride into the frozen
- * event and re-arm downstream.
- */
-function guardedMetadataClone(
-	metadata: EventMetadata | undefined,
-): EventMetadata | undefined {
-	if (metadata !== undefined) {
-		assertNoHostileOwnProtoKey(metadata, "Event metadata");
-	}
-	return cloneOwnedEventData(metadata, "metadata") as EventMetadata | undefined;
 }

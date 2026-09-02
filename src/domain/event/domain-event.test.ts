@@ -809,14 +809,49 @@ describe("clock ownership: a shared Date from the factory is never frozen or ali
 });
 
 describe("createDomainEvent metadata is guarded at the source", () => {
-	it("rejects options.metadata carrying an own __proto__ key", () => {
-		const hostile = JSON.parse(
-			'{"correlationId":"c-1","__proto__":{"isAdmin":true}}',
-		) as Record<string, unknown>;
+	const hostileMetadata = (): Record<string, unknown> =>
+		JSON.parse('{"correlationId":"c-1","__proto__":{"isAdmin":true}}');
 
+	it("rejects options.metadata carrying an own __proto__ key", () => {
 		expect(() =>
-			createDomainEvent("Ticked", {}, { metadata: hostile }),
+			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
 		).toThrow(HostileStateKeyError);
+		expect(() =>
+			createDomainEvent("Ticked", {}, { metadata: hostileMetadata() }),
+		).toThrow(/Event metadata/);
+	});
+
+	it("createDomainEventFromFacts rejects metadata carrying an own __proto__ key", () => {
+		const mint = () =>
+			createDomainEventFromFacts("Ticked", undefined, {
+				eventId: "event-1",
+				occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+				metadata: hostileMetadata(),
+			});
+
+		expect(mint).toThrow(HostileStateKeyError);
+		expect(mint).toThrow(/Event metadata/);
+	});
+
+	it("createStamp rejects metadata carrying an own __proto__ key", () => {
+		const factory = createDomainEventFactory();
+		const stamp = () => factory.createStamp({ metadata: hostileMetadata() });
+
+		expect(stamp).toThrow(HostileStateKeyError);
+		expect(stamp).toThrow(/Event metadata/);
+	});
+
+	it("recordDomainEvent rejects a caller-built stamp whose metadata carries an own __proto__ key", () => {
+		const decision = createUncommittedDomainEvent("Ticked", {});
+		const record = () =>
+			recordDomainEvent(decision, {
+				eventId: "event-1",
+				occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+				metadata: hostileMetadata(),
+			});
+
+		expect(record).toThrow(HostileStateKeyError);
+		expect(record).toThrow(/Event metadata/);
 	});
 
 	it("copyMetadata rejects hostile ADDITIONAL metadata", () => {
