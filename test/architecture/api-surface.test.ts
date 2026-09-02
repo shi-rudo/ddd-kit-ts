@@ -186,6 +186,7 @@ const INDEX_SURFACE = [
 	"SnapshotCorruptedError",
 	"SnapshotSchemaMismatchError",
 	"SnapshotTimeValidationError",
+	"SnapshotVersionNotRestoredError",
 	"Specification",
 	"StateStoredAggregate",
 	"TransactionClosedError",

@@ -251,7 +251,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 		config?: EntityConfig<TState>,
 	) {
 		if (id === null || id === undefined) {
-			throw new MissingEntityIdError();
+			throw new MissingEntityIdError(id);
 		}
 		this.id = id;
 		this._stateFreezeMode =

@@ -472,15 +472,31 @@ export class HostileStateKeyError extends KitWiringError<"HOSTILE_STATE_KEY"> {
 }
 
 /**
- * Thrown by the `Entity` constructor when the id is `null` or `undefined`.
- * An entity without an identity cannot be tracked, compared, or persisted,
- * so the construction fails before any state is stored. A wiring error: a
- * deterministic bug at the call site, never a domain rejection.
+ * Thrown by the `Entity` constructor when the id is not a non-empty
+ * string: `null`, `undefined`, the empty string, or a non-string value
+ * that reached the constructor through plain JavaScript or a cast. An
+ * entity without a usable identity cannot be tracked, compared, or
+ * persisted, so the construction fails before any state is stored. A
+ * wiring error: a deterministic bug at the call site, never a domain
+ * rejection.
  */
 export class MissingEntityIdError extends KitWiringError<"MISSING_ENTITY_ID"> {
-	constructor() {
-		super("MISSING_ENTITY_ID", "Entity ID cannot be null or undefined.");
+	constructor(
+		/** The rejected value, for the message only; never a usable id. */
+		received: unknown,
+	) {
+		super(
+			"MISSING_ENTITY_ID",
+			`Entity ID must be a non-empty string; received ${describeRejectedId(received)}.`,
+		);
 	}
+}
+
+function describeRejectedId(value: unknown): string {
+	if (value === null) return "null";
+	if (value === undefined) return "undefined";
+	if (typeof value === "string") return `"${value}"`;
+	return `${typeof value} ${String(value)}`;
 }
 
 /**
@@ -570,6 +586,46 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 }
 
 /**
+ * Thrown by `reconstituteAggregateFromSnapshot` when the model's
+ * `reconstitute` factory returns an aggregate at a different version than
+ * the snapshot carries: the factory ignored the version parameter, usually
+ * a forgotten `markReconstituted(version)`. A wiring error in the snapshot
+ * model, never snapshot corruption: routing it into the discard-and-refold
+ * channel would mask it as perpetual silent refolding.
+ */
+export interface SnapshotVersionNotRestoredErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** The version the snapshot carries. */
+	readonly snapshotVersion: number;
+	/** The version the factory's aggregate reports. */
+	readonly restoredVersion: number;
+}
+
+export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly snapshotVersion: number;
+	readonly restoredVersion: number;
+
+	constructor(options: SnapshotVersionNotRestoredErrorOptions) {
+		super(
+			"SNAPSHOT_VERSION_NOT_RESTORED",
+			`SnapshotModel.reconstitute for ${options.aggregateType} ` +
+				`${options.aggregateId} returned an aggregate at version ` +
+				`${String(options.restoredVersion)} for a snapshot at version ` +
+				`${String(options.snapshotVersion)}. Reconstitution must restore ` +
+				"the persisted version; call markReconstituted(version) inside " +
+				"the aggregate factory.",
+		);
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.snapshotVersion = options.snapshotVersion;
+		this.restoredVersion = options.restoredVersion;
+	}
+}
+
+/**
  * The structural-integrity rejection for a stored snapshot. A consumer's
  * adapter-owned `SnapshotModel` may throw it from migration or reconstitution
  * when the blob could not have been produced by any version of the model
@@ -639,11 +695,13 @@ export class ReentrantEventRecordingError extends KitWiringError<"REENTRANT_EVEN
 
 /**
  * Thrown by `recordPendingEvents` when two events in one aggregate's pending
- * batch carry the same `eventId`: a stamp provider that returns one reused
- * stamp (or repeats an explicit id) would otherwise mint two distinct facts
- * sharing one identity, and downstream idempotent consumers keyed on
- * `eventId` silently drop one of them. A wiring error: deterministic bug in
- * the stamp provider, the remedy is one fresh identity per decision.
+ * batch carry the same `eventId`. Two causes: a stamp provider that returns
+ * one reused stamp (or repeats an explicit id), and one already recorded
+ * event appended twice. Either would mint two distinct facts sharing one
+ * identity, and downstream idempotent consumers keyed on `eventId`
+ * silently drop one of them. A wiring error: deterministic bug at the
+ * append site or in the stamp provider, the remedy is one fresh identity
+ * per fact.
  */
 export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> {
 	constructor(
@@ -654,8 +712,9 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 		super(
 			"DUPLICATE_EVENT_ID",
 			`Two pending events of aggregate ${aggregateId} carry the same ` +
-				`eventId "${eventId}". Each decision needs its own identity; ` +
-				"return a fresh stamp per event from the stamp provider.",
+				`eventId "${eventId}". Each fact needs its own identity: append ` +
+				"a recorded event once, and return a fresh stamp per decision " +
+				"from the stamp provider.",
 		);
 	}
 }
@@ -1473,6 +1532,7 @@ export type KitErrorCode =
 	| "SNAPSHOT_CORRUPTED"
 	| "SNAPSHOT_SCHEMA_MISMATCH"
 	| "SNAPSHOT_TIME_INVALID"
+	| "SNAPSHOT_VERSION_NOT_RESTORED"
 	| "TRANSACTION_CLOSED"
 	| "UNENROLLED_CHANGES"
 	| "UNKNOWN_CURRENCY"
