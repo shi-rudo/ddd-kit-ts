@@ -461,8 +461,8 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // BY DESIGN: the mint gate catches accidental hand-rolled literals, it
 // is not a security boundary against code that deliberately fakes the
 // brand inside the same process. The probes read the brand as an OWN
-// property: an object that inherits a minted event through its
-// prototype carries mutable own overrides and is not minted.
+// property. An object that inherits a minted event through its prototype
+// can carry mutable own overrides, so it is not minted.
 const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 

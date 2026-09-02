@@ -590,14 +590,7 @@ export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT">
 	}
 }
 
-/**
- * Thrown by `reconstituteAggregateFromSnapshot` when the model's
- * `reconstitute` factory returns an aggregate at a different version than
- * the snapshot carries: the factory ignored the version parameter, usually
- * a forgotten `markReconstituted(version)`. A wiring error in the snapshot
- * model, never snapshot corruption: routing it into the discard-and-refold
- * channel would mask it as perpetual silent refolding.
- */
+/** Constructor options for {@link SnapshotVersionNotRestoredError}. */
 export interface SnapshotVersionNotRestoredErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
@@ -607,6 +600,14 @@ export interface SnapshotVersionNotRestoredErrorOptions {
 	readonly restoredVersion: number;
 }
 
+/**
+ * Thrown by `reconstituteAggregateFromSnapshot` when the `reconstitute`
+ * factory returns an aggregate at a version other than the snapshot
+ * version. The factory ignored the version parameter, usually a forgotten
+ * `markReconstituted(version)`. A wiring error in the snapshot model,
+ * never snapshot corruption: routing it into the discard-and-refold
+ * channel would mask it as perpetual silent refolding.
+ */
 export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
@@ -618,8 +619,8 @@ export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VE
 			"SNAPSHOT_VERSION_NOT_RESTORED",
 			`SnapshotModel.reconstitute for ${options.aggregateType} ` +
 				`${options.aggregateId} returned an aggregate at version ` +
-				`${String(options.restoredVersion)} for a snapshot at version ` +
-				`${String(options.snapshotVersion)}. Reconstitution must restore ` +
+				`${options.restoredVersion} for a snapshot at version ` +
+				`${options.snapshotVersion}. Reconstitution must restore ` +
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
