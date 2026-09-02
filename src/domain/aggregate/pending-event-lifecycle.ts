@@ -4,8 +4,9 @@ import { createGlobalCapabilityRegistry } from "./internal/global-capability-reg
 
 /**
  * Kit-internal read view of the pending-event lifecycle. Kept out of every
- * package entry point. A repository identity map and a replay path read the
- * pending count through it; neither can acknowledge or discard through it.
+ * package entry point. The type exposes no acknowledge or discard, so a
+ * reader such as the repository identity map or the replay path cannot
+ * change the batch.
  */
 export interface PendingEventLifecycleReadView {
 	/**
@@ -74,20 +75,6 @@ export function requirePendingEventLifecycleCapability(
 	return require(aggregate, operation, "aggregate");
 }
 
-/** Resolves the lifecycle read view or throws `UnmanagedInstanceError`. */
-export function requirePendingEventLifecycleReadView(
-	aggregate: object,
-	operation: string,
-): PendingEventLifecycleReadView {
-	return require(aggregate, operation, "aggregate");
-}
-
-export function pendingEventLifecycleReadViewFor(
-	aggregate: object,
-): PendingEventLifecycleReadView | undefined {
-	return capabilities.get(aggregate);
-}
-
 export function registerPendingEventLifecycleCapability(
 	aggregate: object,
 	capability: PendingEventLifecycleCapability,
@@ -100,4 +87,21 @@ export function pendingEventLifecycleCapabilityFor(
 	aggregate: object,
 ): PendingEventLifecycleCapability | undefined {
 	return capabilities.get(aggregate);
+}
+
+// The read-view accessors narrow the same registration to the read type.
+// A reader that resolves through them cannot reach acknowledge or discard.
+
+/** Resolves the lifecycle read view or throws `UnmanagedInstanceError`. */
+export function requirePendingEventLifecycleReadView(
+	aggregate: object,
+	operation: string,
+): PendingEventLifecycleReadView {
+	return requirePendingEventLifecycleCapability(aggregate, operation);
+}
+
+export function pendingEventLifecycleReadViewFor(
+	aggregate: object,
+): PendingEventLifecycleReadView | undefined {
+	return pendingEventLifecycleCapabilityFor(aggregate);
 }

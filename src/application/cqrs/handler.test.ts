@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
-	pendingEventLifecycleCapabilityFor,
+	pendingEventLifecycleReadViewFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
@@ -155,7 +155,7 @@ function unstampedInstance(
 
 /** The version the kit acknowledged as persisted; a discard leaves it. */
 function persistedVersionOf(aggregate: object): Version | undefined {
-	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
+	return pendingEventLifecycleReadViewFor(aggregate)?.persistedVersion();
 }
 
 function enrolledResult<R>(
@@ -1925,7 +1925,7 @@ describe("commit enrollment lifecycle", () => {
 
 		// The marker reflects what the commit persisted (7), not the version
 		// the concurrent mutation pushed the instance to (8).
-		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		const lifecycle = pendingEventLifecycleReadViewFor(aggregate);
 		expect(lifecycle?.persistedVersion()).toBe(7);
 	});
 
@@ -1947,7 +1947,7 @@ describe("commit enrollment lifecycle", () => {
 
 		// The row is gone: stamping the marker from the live instance would
 		// trip the unique-cursor guard on a later legitimate re-enrollment.
-		const lifecycle = pendingEventLifecycleCapabilityFor(aggregate);
+		const lifecycle = pendingEventLifecycleReadViewFor(aggregate);
 		expect(lifecycle?.persistedVersion()).toBe(5);
 		expect(aggregate.pendingEvents).toHaveLength(0);
 	});

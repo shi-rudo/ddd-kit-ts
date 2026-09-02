@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
 import {
-	pendingEventLifecycleCapabilityFor,
+	pendingEventLifecycleReadViewFor,
 	registerPendingEventLifecycleCapability,
 } from "../../domain/aggregate/pending-event-lifecycle";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
@@ -51,7 +51,7 @@ type TestId = Id<"TestId">;
 
 /** The version the kit acknowledged as persisted; undefined until a commit. */
 function persistedVersionOf(aggregate: object): Version | undefined {
-	return pendingEventLifecycleCapabilityFor(aggregate)?.persistedVersion();
+	return pendingEventLifecycleReadViewFor(aggregate)?.persistedVersion();
 }
 
 class MockAggregate extends StateStoredAggregate<
