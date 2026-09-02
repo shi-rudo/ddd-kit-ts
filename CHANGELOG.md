@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): the entity state field is private
+
+`Entity` no longer exposes `_state` to subclasses. A subclass writes state
+through `setState`, which validates and freezes, or through the new protected
+`setTrustedState`, which freezes an accepted fact such as replayed history and
+skips the validator. A subclass that assigned `this._state` directly no longer
+compiles. Where that skip was deliberate, call `setTrustedState`. The kit's
+event-sourced aggregate stores through the same writer, so no write path can
+skip the configured freeze mode.
+
 ### Changed: MisaddressedEventError and ForeignEventError take an options object
 
 Both constructors take `{ expected, actual, eventType }`

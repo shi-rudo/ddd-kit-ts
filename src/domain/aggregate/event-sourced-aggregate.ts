@@ -138,7 +138,7 @@ export abstract class EventSourcedAggregate<
 	 * missing address fields are stamped from the aggregate instead.
 	 *
 	 * State is not mutated if any step throws: the fold is invoked into
-	 * a local and only assigned to `_state` once all checks pass.
+	 * a local and only stored once all checks pass.
 	 *
 	 * The method is generic in the event tag `K`, so concrete callers
 	 * (`this.apply(orderCreated)`) narrow to the literal tag and the
@@ -180,9 +180,11 @@ export abstract class EventSourcedAggregate<
 		assertStateHasNoHostileOwnKey(next, "Aggregate state");
 		assertStateInvariant(this, next);
 		// The version write is the last step that can throw (an override of
-		// setVersion), so it runs before the two assignments, which cannot.
+		// setVersion), so it runs before the two writes, which cannot: the
+		// state was frozen and validated above, so the store is a plain
+		// assignment.
 		this.bumpVersion();
-		this._state = next;
+		this.setTrustedState(next);
 		this.appendStampedEvent(stamped);
 	}
 
@@ -243,7 +245,7 @@ export abstract class EventSourcedAggregate<
 			throw new MissingFoldError(event.type);
 		}
 
-		const nextState = fold(this._state, event);
+		const nextState = fold(this.state, event);
 		// Only `undefined` is rejected: a primitive or `null` state is a
 		// legal TState, a missing `return` is not.
 		if (nextState === undefined) {
@@ -289,23 +291,23 @@ export abstract class EventSourcedAggregate<
 		// Empty stream: nothing was loaded, so preserve current state and version.
 		if (history.length === 0) return ok();
 
-		const previousState = this._state;
+		const previousState = this.state;
 		const startVersion = this.version;
 		try {
 			for (const event of history) {
 				this.assertReplayedEventBelongsHere(event);
-				this._state = this.freezeState(this.fold(event));
+				this.setTrustedState(this.fold(event));
 			}
 			// Only the final fold result is stored, so the hostile own-key
 			// guard runs once here instead of once per replayed event; a
 			// rejection rolls back below like any other replay failure.
-			assertStateHasNoHostileOwnKey(this._state, "Aggregate state");
+			assertStateHasNoHostileOwnKey(this.state, "Aggregate state");
 			// Inside the try on purpose: a fold that records a decision
 			// makes this throw, and the rollback below must cover that case
 			// too.
 			this.markReconstituted((startVersion + history.length) as Version);
 		} catch (e) {
-			this._state = previousState;
+			this.setTrustedState(previousState);
 			// The fold itself never writes the version, but a fold that
 			// records a decision bumps it through apply(); the rollback
 			// writes the start version back through the same path.

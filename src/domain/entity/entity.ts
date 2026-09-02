@@ -36,8 +36,7 @@
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     // setState runs validateState and re-freezes; a direct
- *     // `this._state = ...` assignment would skip both.
+ *     // setState validates the next state and freezes it.
  *     this.setState({ ...this.state, quantity });
  *   }
  *
@@ -185,8 +184,7 @@ export interface IEntity<TId extends Id<string>> extends Identifiable<TId> {
  *   }
  *
  *   updateQuantity(quantity: number): void {
- *     // setState runs validateState and re-freezes; a direct
- *     // `this._state = ...` assignment would skip both.
+ *     // setState validates the next state and freezes it.
  *     this.setState({ ...this.state, quantity });
  *   }
  * }
@@ -213,12 +211,10 @@ export abstract class Entity<TState, TId extends Id<string>>
 	}
 
 	/**
-	 * The state is `protected` so that only the subclass can modify it.
-	 * Ordinary entity behavior must use {@link setState}; direct assignment
-	 * skips instance-bound validation (see {@link assertStateInvariant} for
-	 * the paths that assign directly and still owe the check).
+	 * Private, so every write goes through a named writer: {@link setState}
+	 * validates, {@link setTrustedState} stores an accepted fact.
 	 */
-	protected _state: TState;
+	private _state: TState;
 
 	private readonly _stateFreezeMode: StateFreezeMode;
 
@@ -281,13 +277,26 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * Freezes a state value according to this entity's configured freeze
 	 * mode: the default shallow freeze, or `deepFreeze` when
 	 * {@link EntityConfig.deepFreezeState} was enabled at construction.
-	 * Infrastructure-style subclass code that deliberately assigns
-	 * `this._state` directly must freeze through this method, not
-	 * `freezeShallow`, or the opt-in silently degrades to shallow for that
-	 * path. Ordinary domain behavior should use {@link setState} instead.
+	 * Subclass code that validates a state before it stores it freezes the
+	 * value through this method first, so the object validated is the
+	 * object stored, and then stores it through {@link setTrustedState}.
+	 * Ordinary domain behavior should use {@link setState} instead.
 	 */
 	protected freezeState(value: TState): TState {
 		return freezeStateByMode(value, this._stateFreezeMode);
+	}
+
+	/**
+	 * Stores a state that is accepted fact: replayed history, a rollback
+	 * to a state that passed the validator when it was stored, or a state
+	 * the caller validated on its own path. The instance-bound
+	 * {@link EntityConfig.validateState} does not run. The value is
+	 * frozen by the configured mode and becomes the entity's own state
+	 * without a copy, so the caller must not mutate it afterwards.
+	 * Ordinary domain behavior uses {@link setState}.
+	 */
+	protected setTrustedState(trusted: TState): void {
+		this._state = this.freezeState(trusted);
 	}
 
 	/**
@@ -367,10 +376,9 @@ function freezeStateByMode<TState>(
  * mutation of state read through the `state` getter without paying the
  * cost of a deep clone on every read.
  *
- * Subclass code that assigns `this._state` directly should freeze through
- * the protected `freezeState(value)` method rather than calling this
- * helper, so the configured freeze mode is honored. The export remains
- * for consumers using it as a standalone utility.
+ * Subclass code stores state through `setState` or `setTrustedState`,
+ * which freeze by the configured mode. The export remains for consumers
+ * using it as a standalone utility.
  */
 export function freezeShallow<T>(value: T): T {
 	if (value !== null && typeof value === "object") {
