@@ -199,6 +199,35 @@ describe("Entity", () => {
 			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
 		});
 
+		it("rejects an empty-string id", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity("" as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain('received ""');
+		});
+
+		it("rejects a non-string id", () => {
+			let caught: unknown;
+			try {
+				// @ts-expect-error - testing invalid input
+				new OrderItemEntity(0, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				"received number 0",
+			);
+		});
+
 		it("uses the configured pure validator instead of virtual constructor dispatch", () => {
 			type TrappyState = { quantity: number };
 			const raw: TrappyState = { quantity: 5 };
