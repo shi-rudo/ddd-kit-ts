@@ -94,6 +94,20 @@ describe("adapter-owned snapshot models", () => {
 		expect(snapshot.snapshotAt).not.toBe(snapshotAt);
 	});
 
+	it("returns a snapshotAt that rejects mutation", () => {
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
+		const snapshotAt = new Date("2026-07-29T10:00:00.000Z");
+
+		const snapshot = captureAggregateSnapshot(model, order, snapshotAt);
+
+		expect(() => snapshot.snapshotAt.setTime(0)).toThrow(TypeError);
+		expect(snapshot.snapshotAt.getTime()).toBe(snapshotAt.getTime());
+	});
+
 	it("rejects invalid or non-Date snapshot times", () => {
 		const order: Order = {
 			id: "order-1" as OrderId,

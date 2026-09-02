@@ -5,6 +5,7 @@ import {
 } from "../../domain/aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
+import { deepFreeze } from "../../domain/value-object/value-object";
 import {
 	isDomainErrorLike,
 	SnapshotCorruptedError,
@@ -85,7 +86,8 @@ export function defineSnapshotModel<
 /**
  * Captures a detached persistence envelope at an application-supplied time.
  * The application decides when snapshotting is worthwhile; this function does
- * not read a clock or perform I/O.
+ * not read a clock or perform I/O. The envelope and its `snapshotAt` are
+ * frozen: a `Date` mutator on the returned time throws.
  */
 export function captureAggregateSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -101,7 +103,7 @@ export function captureAggregateSnapshot<
 	return Object.freeze({
 		state,
 		version: aggregate.version,
-		snapshotAt: recordedAt,
+		snapshotAt: deepFreeze(recordedAt),
 		schemaVersion: model.schemaVersion,
 	});
 }
