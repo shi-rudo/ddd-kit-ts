@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	HostileStateKeyError,
 	MissingEntityIdError,
+	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
@@ -197,6 +198,85 @@ describe("Entity", () => {
 				caught = error;
 			}
 			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+		});
+
+		it("rejects an empty-string id", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity("" as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain('received ""');
+		});
+
+		it("rejects a non-string id", () => {
+			let caught: unknown;
+			try {
+				// @ts-expect-error - testing invalid input
+				new OrderItemEntity(0, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				"received number 0",
+			);
+		});
+
+		it("rejects a whitespace-only id", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity("   " as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				'received "   "',
+			);
+		});
+
+		it("rejects an id with no primitive conversion with the coded error", () => {
+			let caught: unknown;
+			try {
+				new OrderItemEntity(Object.create(null) as ItemId, "p1", 1);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(MissingEntityIdError);
+			expect((caught as MissingEntityIdError).code).toBe("MISSING_ENTITY_ID");
+			expect((caught as MissingEntityIdError).message).toContain(
+				"received object",
+			);
+		});
+
+		it("rejects a prototype-chain lookalike that changes state", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "p1", 1);
+			const lookalike: OrderItemEntity = Object.create(entity);
+
+			let caught: unknown;
+			try {
+				lookalike.updateQuantity(2);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(UnmanagedInstanceError);
+			expect((caught as UnmanagedInstanceError).code).toBe(
+				"UNMANAGED_INSTANCE",
+			);
+			expect((caught as UnmanagedInstanceError).subject).toBe("entity");
+			expect((caught as UnmanagedInstanceError).instanceId).toBe("id-1");
+			expect(entity.state.quantity).toBe(1);
 		});
 
 		it("uses the configured pure validator instead of virtual constructor dispatch", () => {

@@ -241,6 +241,7 @@ export abstract class Entity<TState, TId extends Id<string>>
 	 * {@link EntityConfig.deepFreezeState} enabled, the ownership transfer
 	 * widens to the whole graph: NESTED objects are frozen in place too.
 	 *
+	 * @throws MissingEntityIdError when `id` is not a non-blank string.
 	 * @throws HostileStateKeyError when a plain-object, null-prototype,
 	 * or array state carries an own `"__proto__"` data key; validate and
 	 * strip untrusted input at the boundary.
@@ -250,8 +251,8 @@ export abstract class Entity<TState, TId extends Id<string>>
 		initialState: TState,
 		config?: EntityConfig<TState>,
 	) {
-		if (id === null || id === undefined) {
-			throw new MissingEntityIdError();
+		if (typeof id !== "string" || id.trim() === "") {
+			throw new MissingEntityIdError(id);
 		}
 		this.id = id;
 		this._stateFreezeMode =

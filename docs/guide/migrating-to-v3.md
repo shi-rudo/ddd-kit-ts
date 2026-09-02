@@ -419,7 +419,8 @@ from four review rounds on the persistence redesign:
   change.
 - Reconstitution factories must call `markReconstituted(version)` on a clean
   instance whose version is not above `version`. The snapshot restore path
-  enforces the version post-condition and rejects a factory that ignores it.
+  enforces the version post-condition and rejects a factory that ignores it
+  with `SnapshotVersionNotRestoredError` (code `SNAPSHOT_VERSION_NOT_RESTORED`).
 - A `PersistenceModel.capture` must be deterministic for an unchanged
   aggregate. A capture that rebuilds object Set members or Map keys per
   call supplies the optional `captureEquals`.

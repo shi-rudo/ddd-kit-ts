@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	DirectStateMutationError,
 	DomainError,
+	DuplicateEventIdError,
 	FoldReturnedNoStateError,
 	ForeignEventError,
 	HostileStateKeyError,
@@ -1053,6 +1054,45 @@ describe("replay trusts history", () => {
 		);
 	});
 
+	it("rejects a lookalike that inherits a minted event through its prototype", () => {
+		// The brand is a non-enumerable own property. A prototype-chain
+		// lookalike inherits it while carrying mutable own overrides, so the
+		// probe reads the own property only.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const minted = createDomainEvent("TestEventUpdated", {
+			newValue: 99,
+		}) as TestEventUpdated;
+		const lookalike = Object.create(minted, {
+			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
+		}) as TestEventUpdated;
+
+		expect(isMintedEvent(lookalike)).toBe(false);
+		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
+		expect(agg.state.value).toBe(10);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
+	it("rejects a lookalike that inherits an uncommitted decision through its prototype", () => {
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const decision = createUncommittedDomainEvent("TestEventUpdated", {
+			newValue: 99,
+		});
+		const lookalike = Object.create(decision, {
+			payload: { value: { newValue: 99 }, enumerable: true, writable: true },
+		}) as unknown as TestEventUpdated;
+
+		expect(isUncommittedDomainEvent(lookalike)).toBe(false);
+		expect(() => agg.testApply(lookalike)).toThrow(UnmintedEventError);
+		expect(agg.state.value).toBe(10);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
 	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
@@ -1557,6 +1597,22 @@ describe("apply and replay bookkeeping", () => {
 		agg.applyEvent(event);
 
 		expect(agg.pendingEvents[0]).toBe(event);
+	});
+
+	it("rejects a recorded event that is already pending before anything moves", () => {
+		const agg = fresh();
+		const event = createDomainEvent(
+			"TestEventUpdated",
+			{ newValue: 2 },
+			{ aggregateId: "test-1", aggregateType: "TestEventSourcedAggregate" },
+		) as TestEventUpdated;
+		agg.applyEvent(event);
+
+		expect(() => agg.applyEvent(event)).toThrow(DuplicateEventIdError);
+
+		expect(agg.state.value).toBe(2);
+		expect(agg.version).toBe(1);
+		expect(agg.pendingEvents).toHaveLength(1);
 	});
 
 	it("stamps the missing half of a partial address and keeps the identity", () => {

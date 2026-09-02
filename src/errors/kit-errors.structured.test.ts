@@ -33,6 +33,7 @@ import {
 	ProjectionReceiptViolationError,
 	ReplayHeadMismatchError,
 	SnapshotSchemaMismatchError,
+	SnapshotVersionNotRestoredError,
 	UnenrolledChangesError,
 	UnmanagedInstanceError,
 	UnprojectableEventError,
@@ -99,6 +100,18 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
+		error: () =>
+			new SnapshotVersionNotRestoredError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				snapshotVersion: 7,
+				restoredVersion: 0,
+			}),
+		code: "SNAPSHOT_VERSION_NOT_RESTORED",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
 		error: () => new MissingHandlerError("OrderConfirmed"),
 		code: "MISSING_HANDLER",
 		category: "WIRING",
@@ -123,7 +136,7 @@ const concreteCases: ReadonlyArray<{
 		retryable: false,
 	},
 	{
-		error: () => new MissingEntityIdError(),
+		error: () => new MissingEntityIdError(undefined),
 		code: "MISSING_ENTITY_ID",
 		category: "WIRING",
 		retryable: false,
@@ -455,6 +468,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<ProjectionOrderViolationError["code"]>,
 			AssertKitCode<ProjectionReceiptViolationError["code"]>,
 			AssertKitCode<SnapshotSchemaMismatchError["code"]>,
+			AssertKitCode<SnapshotVersionNotRestoredError["code"]>,
 			AssertKitCode<UnenrolledChangesError["code"]>,
 			AssertKitCode<UnmanagedInstanceError["code"]>,
 			AssertKitCode<UnprojectableEventError["code"]>,

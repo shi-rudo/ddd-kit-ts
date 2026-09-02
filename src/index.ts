@@ -313,6 +313,8 @@ export {
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
+	SnapshotVersionNotRestoredError,
+	type SnapshotVersionNotRestoredErrorOptions,
 	UnenrolledChangesError,
 	UnmanagedInstanceError,
 	UnmintedEventError,

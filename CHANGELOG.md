@@ -29,6 +29,44 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: a forgotten markReconstituted is a coded error
+
+`reconstituteAggregateFromSnapshot` checks that the factory restored the
+snapshot version. A factory that forgets `markReconstituted(version)` now
+throws `SnapshotVersionNotRestoredError` (code
+`SNAPSHOT_VERSION_NOT_RESTORED`) with the aggregate type, the aggregate id,
+the snapshot version, and the restored version. Before this change the check
+threw a bare `TypeError`. A test or an error mapper that matched the
+`TypeError` matches the code now.
+
+### Fixed: the snapshot time is frozen
+
+`captureAggregateSnapshot` returns a `snapshotAt` that rejects mutation:
+`snapshot.snapshotAt.setTime(0)` throws a `TypeError`. Before this change
+`captureAggregateSnapshot` froze the snapshot object but not the `Date`
+inside it.
+
+### Fixed: the mint gate reads the event brands as own properties
+
+`isMintedEvent` and `isUncommittedDomainEvent` read the brand as an own
+property of the event. An object that inherits a minted event through its
+prototype is not minted, even when it carries its own field values. The
+aggregate rejects it with `UnmintedEventError`. Before this change the
+probes read the brand through the prototype chain, so such a lookalike
+passed the gate.
+
+### Fixed: a recorded event that is already pending fails before the state moves
+
+`setState`, `apply()`, and `addDomainEvent` throw `DuplicateEventIdError`
+(code `DUPLICATE_EVENT_ID`) for a recorded event whose `eventId` is already
+pending. The same applies to an event that appears twice in one batch. The
+check runs with the mint gate and the address check, so a rejected event
+moves nothing. Before this change `recordPendingEvents` found the duplicate
+after the state, the version, and the pending list had moved. A decision
+carries no `eventId` until recording. A decision appended twice stays two
+facts with distinct ids; the `addDomainEvent` doc states this rule. The
+error message names both causes.
+
 ### Changed (breaking): an event-sourced aggregate declares folds
 
 The state function of an event-sourced aggregate is a fold: a pure function
@@ -264,7 +302,9 @@ stable code, so `onPersistError` observers and tests can match on
   (`PENDING_EVENT_BATCH_MISMATCH`) with the aggregate id, the batch length,
   and the pending length.
 - The `Entity` constructor throws `MissingEntityIdError` (`MISSING_ENTITY_ID`)
-  for a `null` or `undefined` id.
+  for an id that is not a non-blank string: `null`, `undefined`, a blank
+  string, or a non-string value. The error takes the rejected value, and
+  the message names it: `received ""`, `received number 0`.
 
 ### Changed (breaking): a non-kit instance is rejected with UNMANAGED_INSTANCE
 

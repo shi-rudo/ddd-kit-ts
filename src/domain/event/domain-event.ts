@@ -372,8 +372,9 @@ export function createDomainEventFactory(
 		const eventId = stampOptions.eventId ?? eventIdFactory();
 		assertNonBlankEventField(eventId, "eventId", "EVENT_ID_INVALID");
 		const occurredAt = explicitOccurredAt ?? readEventClock(clock);
-		const metadata = guardedMetadataClone(
+		const metadata = cloneOwnedEventData(
 			withFactorySource(stampOptions, source).metadata,
+			"metadata",
 		);
 		const stamp: DomainEventStamp = {
 			eventId,
@@ -459,7 +460,9 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // never leaks into spreads, JSON, or equality). The brand is forgeable
 // BY DESIGN: the mint gate catches accidental hand-rolled literals, it
 // is not a security boundary against code that deliberately fakes the
-// brand inside the same process.
+// brand inside the same process. The probes read the brand as an OWN
+// property. An object that inherits a minted event through its prototype
+// can carry mutable own overrides, so it is not minted.
 const MINT_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
@@ -499,7 +502,8 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
 export function isMintedEvent(event: object): event is AnyDomainEvent {
 	return (
 		MINTED_EVENTS.has(event) ||
-		(event as Record<symbol, unknown>)[MINT_BRAND] === true
+		(Object.hasOwn(event, MINT_BRAND) &&
+			(event as Record<symbol, unknown>)[MINT_BRAND] === true)
 	);
 }
 
@@ -509,7 +513,8 @@ export function isUncommittedDomainEvent(
 ): event is AnyUncommittedDomainEvent {
 	return (
 		UNCOMMITTED_EVENTS.has(event) ||
-		(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true
+		(Object.hasOwn(event, UNCOMMITTED_BRAND) &&
+			(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true)
 	);
 }
 
@@ -581,7 +586,7 @@ export function recordDomainEvent<T extends string, P>(
 	// the stamp fields before they enter the immutable event.
 	assertNonBlankEventField(stamp.eventId, "eventId", "EVENT_ID_INVALID");
 	const occurredAt = deepFreeze(copyValidEventDate(stamp.occurredAt)) as Date;
-	const metadata = guardedMetadataClone(stamp.metadata);
+	const metadata = cloneOwnedEventData(stamp.metadata, "metadata");
 	return mintRecordedEvent(
 		event,
 		stamp.eventId,
@@ -747,7 +752,7 @@ function mintDomainEvent<T extends string, P>(
 		// before the event is frozen, so neither aliases caller-owned state.
 		occurredAt,
 		schemaVersion,
-		metadata: guardedMetadataClone(options?.metadata),
+		metadata: cloneOwnedEventData(options?.metadata, "metadata"),
 	};
 	// Deep-freeze so a mutating subscriber cannot poison subsequent
 	// handlers: events are facts of the past and must be immutable
@@ -840,6 +845,13 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 	if (typeof value === "function") {
 		throw new TypeError(
 			`createDomainEvent: ${field} must not be a function: domain events are plain data`,
+		);
+	}
+	// Metadata is an object or absent; a null from a JSON envelope would
+	// mint and then fail every metadata read far from the producer.
+	if (value === null && field === "metadata") {
+		throw new TypeError(
+			"createDomainEvent: metadata must be an object or undefined; received null",
 		);
 	}
 	if (value === null || typeof value !== "object") {
@@ -993,19 +1005,4 @@ export function mergeMetadata(
 		}
 	}
 	return merged as EventMetadata;
-}
-
-/**
- * Clones event metadata with the loud `__proto__` rejection applied at
- * the SOURCE: structuredClone preserves an own `__proto__` data key, so
- * without this guard a hostile envelope would ride into the frozen
- * event and re-arm downstream.
- */
-function guardedMetadataClone(
-	metadata: EventMetadata | undefined,
-): EventMetadata | undefined {
-	if (metadata !== undefined) {
-		assertNoHostileOwnProtoKey(metadata, "Event metadata");
-	}
-	return cloneOwnedEventData(metadata, "metadata") as EventMetadata | undefined;
 }

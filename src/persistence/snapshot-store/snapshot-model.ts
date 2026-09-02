@@ -5,10 +5,12 @@ import {
 } from "../../domain/aggregate/aggregate";
 import { SnapshotTimeValidationError } from "../../domain/event/domain-event-errors";
 import type { Id } from "../../domain/identity/id";
+import { deepFreeze } from "../../domain/value-object/value-object";
 import {
 	isDomainErrorLike,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
+	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
 import { isBuiltInObject } from "../../internal/structural/is-built-in";
 import { assertPositiveSafeInteger } from "../../internal/validate";
@@ -85,7 +87,8 @@ export function defineSnapshotModel<
 /**
  * Captures a detached persistence envelope at an application-supplied time.
  * The application decides when snapshotting is worthwhile; this function does
- * not read a clock or perform I/O.
+ * not read a clock or perform I/O. The envelope and its `snapshotAt` are
+ * frozen: a `Date` mutator on the returned time throws.
  */
 export function captureAggregateSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -101,7 +104,7 @@ export function captureAggregateSnapshot<
 	return Object.freeze({
 		state,
 		version: aggregate.version,
-		snapshotAt: recordedAt,
+		snapshotAt: deepFreeze(recordedAt),
 		schemaVersion: model.schemaVersion,
 	});
 }
@@ -118,7 +121,9 @@ export function captureAggregateSnapshot<
  * escaping `getById` after a rule change. A stored version that is not a
  * valid `Version` is surfaced the same way. `SnapshotSchemaMismatchError`
  * (a configuration gap, not corruption) and non-domain throws propagate,
- * including an `InvalidVersionError` the factory itself throws.
+ * including an `InvalidVersionError` the factory itself throws. A factory
+ * that returns an aggregate at a version other than the snapshot version
+ * fails with a {@link SnapshotVersionNotRestoredError}.
  */
 export function reconstituteAggregateFromSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -134,7 +139,7 @@ export function reconstituteAggregateFromSnapshot<
 	// surfaced as SnapshotCorruptedError so the load recipe discards and
 	// refolds. Checked BEFORE the factory runs, so an InvalidVersionError
 	// thrown by the factory itself (a wiring bug such as a restore below a
-	// version the factory already advanced) stays a raw throw, like the
+	// version the factory already advanced) propagates unwrapped, like the
 	// version post-condition below.
 	let version: Version;
 	try {
@@ -183,15 +188,14 @@ export function reconstituteAggregateFromSnapshot<
 	// Post-condition, not corruption: a factory that ignores the version
 	// parameter (a forgotten markReconstituted) is a deterministic model wiring
 	// bug. Routing it into the discard-and-refold channel would mask it as
-	// perpetual silent refolding, so it throws raw instead.
+	// perpetual silent refolding, so it surfaces as a wiring error instead.
 	if (aggregate.version !== snapshot.version) {
-		throw new TypeError(
-			`SnapshotModel.reconstitute for ${model.aggregateType} ${String(id)} ` +
-				`returned an aggregate at version ${String(aggregate.version)} for a ` +
-				`snapshot at version ${String(snapshot.version)}. Reconstitution must ` +
-				"restore the persisted version; call markReconstituted(version) inside " +
-				"the aggregate factory.",
-		);
+		throw new SnapshotVersionNotRestoredError({
+			aggregateType: model.aggregateType,
+			aggregateId: String(id),
+			snapshotVersion: snapshot.version,
+			restoredVersion: aggregate.version,
+		});
 	}
 	return aggregate;
 }
