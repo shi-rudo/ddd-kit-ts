@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
 	HostileStateKeyError,
 	MissingEntityIdError,
+	UnmanagedInstanceError,
 } from "../../errors/kit-errors";
 import type { Id } from "../identity/id";
 import {
@@ -226,6 +227,26 @@ describe("Entity", () => {
 			expect((caught as MissingEntityIdError).message).toContain(
 				"received number 0",
 			);
+		});
+
+		it("rejects a prototype-chain lookalike that changes state", () => {
+			const entity = new OrderItemEntity("id-1" as ItemId, "p1", 1);
+			const lookalike: OrderItemEntity = Object.create(entity);
+
+			let caught: unknown;
+			try {
+				lookalike.updateQuantity(2);
+			} catch (error) {
+				caught = error;
+			}
+
+			expect(caught).toBeInstanceOf(UnmanagedInstanceError);
+			expect((caught as UnmanagedInstanceError).code).toBe(
+				"UNMANAGED_INSTANCE",
+			);
+			expect((caught as UnmanagedInstanceError).subject).toBe("entity");
+			expect((caught as UnmanagedInstanceError).instanceId).toBe("id-1");
+			expect(entity.state.quantity).toBe(1);
 		});
 
 		it("uses the configured pure validator instead of virtual constructor dispatch", () => {
