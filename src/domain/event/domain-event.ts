@@ -463,6 +463,9 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 // brand inside the same process. The probes read the brand as an OWN
 // property. An object that inherits a minted event through its prototype
 // can carry mutable own overrides, so it is not minted.
+// The key strings are the cross-copy wire contract: every kit copy in a
+// process reads and stamps the same keys. The constant names follow the
+// shapes; the keys never change.
 const RECORDED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 

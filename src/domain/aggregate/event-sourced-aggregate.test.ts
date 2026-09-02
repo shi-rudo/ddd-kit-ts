@@ -1098,7 +1098,7 @@ describe("replay trusts history", () => {
 	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
-		// event carries the shared mint brand instead; the gate accepts it.
+		// event carries the shared recorded brand instead; the gate accepts it.
 		// The brand is cooperative by design (the gate catches accidental
 		// literals, it is not a security boundary).
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
@@ -1133,7 +1133,7 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
 	});
 
-	it("preserves the cooperative mint brand on address-stamped copies", async () => {
+	it("preserves the cooperative recorded brand on address-stamped copies", async () => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 0,
 			status: "inactive",

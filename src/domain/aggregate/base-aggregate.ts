@@ -408,7 +408,7 @@ export abstract class BaseAggregate<
 	/**
 	 * Mint gate for every recording path: only an event that a kit
 	 * constructor produced passes. The kit marks two shapes: a recorded
-	 * event carries the mint brand (`createDomainEvent`,
+	 * event carries the recorded brand (`createDomainEvent`,
 	 * `createDomainEventFromFacts`) and a decision carries the uncommitted
 	 * brand (`createUncommittedDomainEvent`, the aggregate `createEvent`
 	 * helper). Either brand implies deeply frozen with defensively copied

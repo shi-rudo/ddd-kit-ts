@@ -132,10 +132,11 @@ export function gatedContractTest(
 
 /**
  * Identities of an in-memory pending batch, with the shared precondition
- * that every event is recorded (minted). The `requirement` names the
- * suite-specific rule the harness violated when an event is unminted.
+ * that every event carries the recorded brand. The `requirement` names
+ * the suite-specific rule the harness violated when an event is not
+ * recorded.
  */
-export function mintedPendingEventIds(
+export function recordedPendingEventIds(
 	events: ReadonlyArray<unknown>,
 	requirement: string,
 ): string[] {
