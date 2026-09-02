@@ -847,6 +847,13 @@ function cloneOwnedEventData<T>(value: T, field: "payload" | "metadata"): T {
 			`createDomainEvent: ${field} must not be a function: domain events are plain data`,
 		);
 	}
+	// Metadata is an object or absent; a null from a JSON envelope would
+	// mint and then fail every metadata read far from the producer.
+	if (value === null && field === "metadata") {
+		throw new TypeError(
+			"createDomainEvent: metadata must be an object or undefined; received null",
+		);
+	}
 	if (value === null || typeof value !== "object") {
 		return value;
 	}

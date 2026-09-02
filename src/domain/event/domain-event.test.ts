@@ -854,6 +854,38 @@ describe("createDomainEvent metadata is guarded at the source", () => {
 		expect(record).toThrow(/Event metadata/);
 	});
 
+	it.each([
+		[
+			"createDomainEvent",
+			() => createDomainEvent("Ticked", {}, { metadata: null as never }),
+		],
+		[
+			"createDomainEventFromFacts",
+			() =>
+				createDomainEventFromFacts("Ticked", undefined, {
+					eventId: "event-1",
+					occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+					metadata: null as never,
+				}),
+		],
+		[
+			"createStamp",
+			() => createDomainEventFactory().createStamp({ metadata: null as never }),
+		],
+		[
+			"recordDomainEvent",
+			() =>
+				recordDomainEvent(createUncommittedDomainEvent("Ticked", {}), {
+					eventId: "event-1",
+					occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+					metadata: null as never,
+				}),
+		],
+	])("%s rejects null metadata at the producer", (_producer, mint) => {
+		expect(mint).toThrow(TypeError);
+		expect(mint).toThrow(/metadata must be an object or undefined/);
+	});
+
 	it("copyMetadata rejects hostile ADDITIONAL metadata", () => {
 		const event = createDomainEvent("Ticked", {});
 		const hostile = JSON.parse(
