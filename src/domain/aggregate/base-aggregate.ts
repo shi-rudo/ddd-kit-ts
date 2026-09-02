@@ -379,13 +379,11 @@ export abstract class BaseAggregate<
 		const typeForeign =
 			aggregateType !== undefined && aggregateType !== this.aggregateType;
 		if (idForeign || typeForeign) {
-			throw new MisaddressedEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				aggregateId,
-				aggregateType,
-			);
+			throw new MisaddressedEventError({
+				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
+				actual: { aggregateType, aggregateId },
+				eventType: event.type,
+			});
 		}
 		if (aggregateId !== undefined && aggregateType !== undefined) {
 			return event;

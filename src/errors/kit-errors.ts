@@ -573,21 +573,43 @@ export class UnreplayableAggregateError extends KitWiringError<"UNREPLAYABLE_AGG
  * infrastructure, and handlers for one must not absorb the other.
  */
 export class MisaddressedEventError extends KitWiringError<"MISADDRESSED_EVENT"> {
-	constructor(
-		public readonly expectedAggregateId: string,
-		public readonly expectedAggregateType: string,
-		public readonly eventType: string,
-		public readonly actualAggregateId?: string,
-		public readonly actualAggregateType?: string,
-	) {
+	/** Address of the aggregate that received the event. */
+	public readonly expected: AggregateAddressMismatchOptions["expected"];
+	/** Address fields the event carries. */
+	public readonly actual: AggregateAddressMismatchOptions["actual"];
+	public readonly eventType: string;
+
+	constructor(options: AggregateAddressMismatchOptions) {
+		const { expected, actual, eventType } = options;
 		super(
 			"MISADDRESSED_EVENT",
 			`New event "${eventType}" is addressed to ` +
-				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId} ` +
-				`but was applied on ${expectedAggregateType} ${expectedAggregateId}: ` +
+				`${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId} ` +
+				`but was applied on ${expected.aggregateType} ${expected.aggregateId}: ` +
 				"fix the call site (createEvent stamps the right address).",
 		);
+		this.expected = expected;
+		this.actual = actual;
+		this.eventType = eventType;
 	}
+}
+
+/**
+ * Constructor options for {@link MisaddressedEventError} and
+ * {@link ForeignEventError}: the address of the aggregate that received the
+ * event, and the address fields the event carries. A missing field on the
+ * event matches by default, so `actual` names only what the event states.
+ */
+export interface AggregateAddressMismatchOptions {
+	readonly expected: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
+	readonly actual: {
+		readonly aggregateType?: string;
+		readonly aggregateId?: string;
+	};
+	readonly eventType: string;
 }
 
 /** Constructor options for {@link SnapshotVersionNotRestoredError}. */
@@ -768,21 +790,25 @@ export class PendingEventBatchMismatchError extends KitWiringError<"PENDING_EVEN
  * {@link MisaddressedEventError}.
  */
 export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
-	constructor(
-		public readonly expectedAggregateId: string,
-		public readonly expectedAggregateType: string,
-		public readonly eventType: string,
-		public readonly actualAggregateId?: string,
-		public readonly actualAggregateType?: string,
-	) {
+	/** Address of the aggregate that received the event. */
+	public readonly expected: AggregateAddressMismatchOptions["expected"];
+	/** Address fields the event carries. */
+	public readonly actual: AggregateAddressMismatchOptions["actual"];
+	public readonly eventType: string;
+
+	constructor(options: AggregateAddressMismatchOptions) {
+		const { expected, actual, eventType } = options;
 		super({
 			code: "FOREIGN_EVENT",
 			message:
 				`Persisted event "${eventType}" belongs to ` +
-				`${actualAggregateType ?? expectedAggregateType} ${actualAggregateId ?? expectedAggregateId}, ` +
-				`not to ${expectedAggregateType} ${expectedAggregateId}: ` +
+				`${actual.aggregateType ?? expected.aggregateType} ${actual.aggregateId ?? expected.aggregateId}, ` +
+				`not to ${expected.aggregateType} ${expected.aggregateId}: ` +
 				"the stream row addresses a different aggregate.",
 		});
+		this.expected = expected;
+		this.actual = actual;
+		this.eventType = eventType;
 	}
 }
 

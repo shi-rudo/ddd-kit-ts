@@ -203,13 +203,14 @@ export class Projector<Evt extends AnyDomainEvent, TCtx = unknown> {
 				event.aggregateType !== undefined &&
 				event.aggregateType !== aggregateType;
 			if (idContradictsSource || typeContradictsSource) {
-				throw new ForeignEventError(
-					aggregateId,
-					aggregateType,
-					event.type,
-					event.aggregateId,
-					event.aggregateType,
-				);
+				throw new ForeignEventError({
+					expected: { aggregateType, aggregateId },
+					actual: {
+						aggregateType: event.aggregateType,
+						aggregateId: event.aggregateId,
+					},
+					eventType: event.type,
+				});
 			}
 			const address: AggregateAddress = { aggregateType, aggregateId };
 			return { event, position, address };

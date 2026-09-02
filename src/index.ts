@@ -259,6 +259,7 @@ export {
 export { voValidated } from "./domain/value-object/vo-validated";
 // Errors
 export {
+	type AggregateAddressMismatchOptions,
 	AggregateDeletedError,
 	AggregateNotFoundError,
 	type AggregateNotFoundErrorOptions,

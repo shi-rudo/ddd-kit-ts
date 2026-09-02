@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: MisaddressedEventError and ForeignEventError take an options object
+
+Both constructors take `{ expected, actual, eventType }`
+(`AggregateAddressMismatchOptions`). `expected` is the address of the
+aggregate that received the event; `actual` holds the address fields the
+event carries. The errors expose the same three fields. Before this change
+the constructors took five positional strings, and the errors exposed
+`expectedAggregateId`, `expectedAggregateType`, `actualAggregateId`, and
+`actualAggregateType`.
+
 ### Added: shared stamp options on recordPendingEvents
 
 `recordPendingEvents(aggregate, factory, stampOptions)` passes `stampOptions`

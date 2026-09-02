@@ -217,13 +217,14 @@ export abstract class EventSourcedAggregate<
 			event.aggregateType !== undefined &&
 			event.aggregateType !== this.aggregateType;
 		if (idMismatch || typeMismatch) {
-			throw new ForeignEventError(
-				this.id,
-				this.aggregateType,
-				event.type,
-				event.aggregateId,
-				event.aggregateType,
-			);
+			throw new ForeignEventError({
+				expected: { aggregateType: this.aggregateType, aggregateId: this.id },
+				actual: {
+					aggregateType: event.aggregateType,
+					aggregateId: event.aggregateId,
+				},
+				eventType: event.type,
+			});
 		}
 	}
 
