@@ -305,6 +305,8 @@ export {
 	NonProgressingEventStreamPageError,
 	type NonProgressingEventStreamPageErrorOptions,
 	PendingEventBatchMismatchError,
+	PendingEventLimitExceededError,
+	type PendingEventLimitExceededErrorOptions,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,

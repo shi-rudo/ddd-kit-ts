@@ -107,6 +107,13 @@ export interface EntityConfig<TState = unknown> {
 	 * Note that the ownership transfer widens accordingly: nested objects
 	 * passed into the constructor or `setState` are frozen IN PLACE (the
 	 * shallow copy protects only the top-level input object).
+	 *
+	 * Under the shallow freeze a nested object of the state stays open. A
+	 * fold or a validator that writes into it in place changes the state
+	 * the entity already holds, and no gate sees the write. The
+	 * event-sourced replay rollback restores the previous state object by
+	 * reference, so such a write survives the rollback. The deep freeze
+	 * makes the write throw at the write site.
 	 */
 	deepFreezeState?: boolean;
 

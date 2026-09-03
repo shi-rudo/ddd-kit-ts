@@ -1,3 +1,5 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	CapabilityRegistryConflictError,
@@ -63,6 +65,47 @@ describe("createGlobalCapabilityRegistry", () => {
 		}
 
 		expect((caught as UnmanagedInstanceError).message).toContain("private");
+	});
+
+	it("reuses a registry that a kit copy in another realm installed", () => {
+		const host = {};
+		const key = Symbol.for("@shirudo/ddd-kit/test-registry/other-realm");
+		const foreignRegistry = runInNewContext("new WeakMap()") as WeakMap<
+			object,
+			Capability
+		>;
+		Object.defineProperty(host, key, {
+			value: foreignRegistry,
+			configurable: true,
+		});
+		const instance = {};
+		foreignRegistry.set(instance, { name: "foreign" });
+
+		const { registry, shared } = createGlobalCapabilityRegistry<Capability>(
+			key,
+			host,
+		);
+
+		expect(foreignRegistry).not.toBeInstanceOf(WeakMap);
+		expect(shared).toBe(true);
+		expect(registry).toBe(foreignRegistry);
+		expect(registry.get(instance)?.name).toBe("foreign");
+	});
+
+	it("refuses a key that holds a plain object claiming the WeakMap tag", () => {
+		const host = {};
+		const key = Symbol.for("@shirudo/ddd-kit/test-registry/spoofed");
+		const lookalike = {
+			[Symbol.toStringTag]: "WeakMap",
+			get: () => undefined,
+			set: () => lookalike,
+			has: () => false,
+		};
+		Object.defineProperty(host, key, { value: lookalike, configurable: true });
+
+		expect(() => createGlobalCapabilityRegistry<Capability>(key, host)).toThrow(
+			CapabilityRegistryConflictError,
+		);
 	});
 
 	it("refuses a key that an accessor holds, even one that yields a WeakMap", () => {

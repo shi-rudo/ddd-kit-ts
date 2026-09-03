@@ -29,6 +29,7 @@ import {
 	MissingHandlerError,
 	NonProgressingEventStreamPageError,
 	PendingEventBatchMismatchError,
+	PendingEventLimitExceededError,
 	ProjectionGapError,
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
@@ -157,6 +158,19 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () => new PendingEventBatchMismatchError("order-1", 2, 1),
 		code: "PENDING_EVENT_BATCH_MISMATCH",
+		category: "WIRING",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new PendingEventLimitExceededError({
+				aggregateType: "Order",
+				aggregateId: "order-1",
+				limit: 2,
+				pending: 2,
+				added: 1,
+			}),
+		code: "PENDING_EVENT_LIMIT_EXCEEDED",
 		category: "WIRING",
 		retryable: false,
 	},
@@ -487,6 +501,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,
 			AssertKitCode<ReplayHeadMismatchError["code"]>,
 			AssertKitCode<PendingEventBatchMismatchError["code"]>,
+			AssertKitCode<PendingEventLimitExceededError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
 			AssertKitCode<EventBusClosedError["code"]>,
 			AssertKitCode<PublishDepthExceededError["code"]>,

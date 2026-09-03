@@ -486,7 +486,10 @@ recoverable domain rejection.
 
 Replay is all-or-nothing. If an event in the middle fails with a `DomainError`,
 the aggregate rolls back to its pre-replay state and version before returning
-`Err`.
+`Err`. The rollback restores the previous state object by reference. Under the
+default shallow freeze, a fold that writes into a nested object of that state
+in place is not detected, and the write survives the rollback. Folds return a
+new state; `deepFreezeState` makes such a write throw at the write site.
 
 Version advances additively:
 
@@ -736,6 +739,9 @@ model's DTO contains values that cannot restore faithfully:
 - `Promise`, `WeakMap`, or `WeakSet`
 - `Error` instances
 - symbol-keyed state
+
+A `RegExp` restores with its pattern and flags. Its `lastIndex` restores as
+0: the scan state of a global or sticky pattern is not domain data.
 
 If live state contains class-based child entities, define a plain snapshot DTO
 and map both directions:

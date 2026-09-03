@@ -160,6 +160,27 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(1);
 	});
 
+	it("memoizes a graph that references one RegExp twice", () => {
+		let reads = 0;
+		const lines = Object.defineProperty({}, "leaf", {
+			enumerable: true,
+			get: () => {
+				reads += 1;
+				return { value: 1 };
+			},
+		});
+		const skuPattern = /sku-\d+/;
+		// A RegExp passes through the freeze; two edges to it are not a cycle.
+		const state = { skuPattern, fallbackPattern: skuPattern, lines };
+		deepFreeze(state);
+		const readsAfterFirstFreeze = reads;
+
+		deepFreeze({ ...state });
+
+		expect(readsAfterFirstFreeze).toBe(1);
+		expect(reads).toBe(1);
+	});
+
 	it("still walks a subtree that another freeze left shallow", () => {
 		const grandchild = { value: 1 };
 		const child = Object.freeze({ grandchild });
@@ -230,6 +251,16 @@ describe("deepFreeze", () => {
 			expect(() => mutate(value)).toThrow(TypeError);
 		},
 	);
+
+	it.each([
+		["global", /a/g],
+		["sticky", /a/y],
+	])("keeps a %s RegExp matching after the freeze", (_flag, pattern) => {
+		const state = deepFreeze({ pattern });
+
+		expect(state.pattern.test("a")).toBe(true);
+		expect(Object.isFrozen(state)).toBe(true);
+	});
 
 	it("does not invoke inherited toStringTag accessors", () => {
 		let accessorInvoked = false;

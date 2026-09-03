@@ -2,6 +2,7 @@ import {
 	CapabilityRegistryConflictError,
 	UnmanagedInstanceError,
 } from "../../../errors/kit-errors";
+import { isWeakMap } from "../../../internal/structural/is-built-in";
 
 /**
  * A capability registry with the outcome of its bootstrap and the one
@@ -62,7 +63,9 @@ export function createGlobalCapabilityRegistry<TCapability extends object>(
 ): CapabilityRegistry<TCapability> {
 	const descriptor = Object.getOwnPropertyDescriptor(host, key);
 	if (descriptor !== undefined) {
-		if (descriptor.value instanceof WeakMap) {
+		// Brand-checked, not instanceof: a registry that a kit copy installed
+		// from another realm must not read as a conflict.
+		if (isWeakMap(descriptor.value)) {
 			return withRequire(
 				descriptor.value as WeakMap<object, TCapability>,
 				true,

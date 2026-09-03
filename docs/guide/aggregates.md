@@ -89,6 +89,15 @@ the application edge. See
 [Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
 mint mark.
 
+`AggregateConfig.maxPendingEvents` limits the pending list. A recording that
+would grow the list past the limit throws `PendingEventLimitExceededError`
+(code `PENDING_EVENT_LIMIT_EXCEEDED`) before the state moves, on `setState`,
+`apply`, and `addDomainEvent`. Replayed history does not count. The default
+is unlimited. Treat the limit as a modelling signal, not as a budget to
+raise: a decision that emits hundreds of facts in one command points at a
+missing aggregate boundary. Split the aggregate, or emit one fact per
+decision.
+
 ## Creating New Aggregates
 
 Prefer static factory methods over public constructors.
@@ -517,8 +526,13 @@ const fresh = reconstituteAggregateFromSnapshot(
 ```
 
 `captureAggregateSnapshot` rejects an invalid application-supplied time. It also
-detaches the persistence DTO and freezes `snapshotAt`. A later change to the
-aggregate, or to the DTO that `capture` returned, cannot alter the snapshot.
+detaches the persistence DTO and deep-freezes the snapshot, its `state` and
+`snapshotAt` included. A later change to the aggregate, or to the DTO that
+`capture` returned, cannot alter the snapshot. A write into the snapshot
+between capture and save throws a `TypeError`. The freeze cannot seal every
+built-in. A typed array, a `DataView`, or a `RegExp` in the DTO passes
+through unfrozen. A `Map` or `Set` blocks only the mutators the kit knows.
+See `deepFreeze` for the list.
 Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact. A factory that forgets
 `markReconstituted(version)` returns an aggregate at the wrong version; the

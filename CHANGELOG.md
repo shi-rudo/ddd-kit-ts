@@ -29,6 +29,62 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: deepFreeze keeps a RegExp matching
+
+`deepFreeze` passes a `RegExp` through unfrozen, as it does an ArrayBuffer
+view. Pattern and flags of a `RegExp` live in immutable internal slots. Its
+only own data property, `lastIndex`, is scan state that every global or
+sticky match writes. Before this change the freeze made `lastIndex`
+read-only. A global or sticky pattern inside deep-frozen state then threw
+on its first match, far from the freeze. Deep-frozen state includes entity
+state under `deepFreezeState`, an event payload, and a captured snapshot.
+`vo()` still rejects a global or sticky `RegExp` at admission: a value
+object carries no scan state.
+
+### Added: maxPendingEvents limits the pending list
+
+`AggregateConfig.maxPendingEvents` sets a limit on the pending list of an
+aggregate. A recording that would grow the list past the limit throws
+`PendingEventLimitExceededError` (code `PENDING_EVENT_LIMIT_EXCEEDED`)
+before the state moves, so the rejected decision records nothing and moves
+nothing. The check runs on `setState`, `apply`, and `addDomainEvent`.
+Replayed history does not count. The default stays unlimited. The limit is a
+modelling signal: a decision that emits hundreds of facts points at a
+missing aggregate boundary.
+
+### Changed: one probe for every cooperative brand
+
+The kit marks a minted event, an uncommitted decision, and a repository
+definition with a cooperative `Symbol.for` brand, so a second loaded copy of
+the kit recognizes them. One probe now reads every brand with one rule: an
+own, non-enumerable, non-writable, non-configurable `true` on a frozen
+carrier. Every kit constructor freezes the carrier after the stamp, so a
+kit-produced object passes unchanged. Before this change the mint gate
+accepted an own brand on an open object, while the repository definition
+check required the frozen carrier. A hand-rolled object that carried the
+event brand without a freeze passed the mint gate; it now throws
+`UnmintedEventError`.
+
+### Changed: the captured snapshot is deep-frozen
+
+`captureAggregateSnapshot` deep-freezes the snapshot it returns, the `state`
+DTO included. A write into `snapshot.state` between capture and save throws
+a `TypeError` instead of reaching the store. Before this change the envelope
+and `snapshotAt` were frozen, and the state DTO stayed open. The freeze walks
+the DTO once per capture. It cannot seal every built-in. A typed array, a
+`DataView`, or a `RegExp` passes through unfrozen. A `Map` or `Set` blocks
+only the mutators the kit knows. See `deepFreeze` for the list.
+
+### Fixed: the capability registry recognizes a WeakMap from another realm
+
+The registry bootstrap reads the value installed under a kit key on
+`globalThis`. A kit copy that runs in another realm (a `vm` context, an
+iframe) installs a `WeakMap` of that realm. Before this change the bootstrap
+checked the value with `instanceof WeakMap`, which is bound to one realm, so
+it threw `CapabilityRegistryConflictError` for a registry the other copy
+installed. The check now reads the internal slot of the value, which gives
+the same answer in every realm.
+
 ### Changed (breaking): the entity state field is private
 
 `Entity` no longer exposes `_state` and `freezeState` to subclasses. A

@@ -1,5 +1,7 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
-import { isBuiltInObject } from "./is-built-in";
+import { isBuiltInObject, isWeakMap } from "./is-built-in";
 
 function tag(o: object): string {
 	return Object.prototype.toString.call(o);
@@ -76,5 +78,32 @@ describe("isBuiltInObject", () => {
 			const d = new Date("2026-01-01");
 			expect(isBuiltInObject(d, tag(d))).toBe(false);
 		});
+	});
+});
+
+describe("isWeakMap", () => {
+	it("recognizes a WeakMap of this realm", () => {
+		expect(isWeakMap(new WeakMap())).toBe(true);
+	});
+
+	it("recognizes a WeakMap from another realm", () => {
+		const foreign: unknown = runInNewContext("new WeakMap()");
+
+		expect(foreign instanceof WeakMap).toBe(false);
+		expect(isWeakMap(foreign)).toBe(true);
+	});
+
+	it("rejects a plain object that spoofs the WeakMap tag", () => {
+		const spoofed = { [Symbol.toStringTag]: "WeakMap" };
+
+		expect(Object.prototype.toString.call(spoofed)).toBe("[object WeakMap]");
+		expect(isWeakMap(spoofed)).toBe(false);
+	});
+
+	it("rejects other collections and non-objects", () => {
+		expect(isWeakMap(new WeakSet())).toBe(false);
+		expect(isWeakMap(new Map())).toBe(false);
+		expect(isWeakMap(null)).toBe(false);
+		expect(isWeakMap(undefined)).toBe(false);
 	});
 });

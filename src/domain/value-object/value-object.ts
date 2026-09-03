@@ -8,7 +8,6 @@ import {
 	builtInTagWithoutInvokingAccessors,
 	hasIntrinsicPrototypeChain,
 	isIntrinsicConstructorPrototype,
-	mutableBuiltInTagWithoutInvokingAccessors,
 } from "../../internal/structural/is-built-in";
 
 // ============================================================================
@@ -114,9 +113,15 @@ function shadowMutators(
  * until the list is updated. Treat the mutator blocking as a guard rail,
  * not a security boundary.
  *
- * Limitation: ArrayBuffer views (TypedArrays, DataView) are passed through
- * unfrozen, because the spec forbids freezing a view with elements, and
- * freezing cannot protect the underlying buffer. Their contents remain mutable.
+ * Two kinds of built-in pass through unfrozen. ArrayBuffer views
+ * (TypedArrays, DataView): the spec forbids freezing a view with elements,
+ * and a freeze cannot protect the underlying buffer, so their contents stay
+ * mutable. RegExp: pattern and flags live in immutable internal slots, and
+ * the only own data property, `lastIndex`, is scan state that every global
+ * or sticky match writes. A frozen RegExp protects nothing and throws on
+ * the first such match, so the RegExp keeps matching instead. A view or a
+ * RegExp passes through whole: an expando property on it stays open, and
+ * the walk does not enter its subtree.
  */
 // Every object whose whole subtree this module sealed: frozen, with every
 // Date, Map, and Set below it carrying the kit's mutator shadows. A later
@@ -185,27 +190,38 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 		walk.cyclic = true;
 		return true;
 	}
+
+	// Internal-slot brand probes distinguish genuine built-ins without
+	// invoking toStringTag accessors; spoofed plain objects are frozen
+	// structurally.
+	const builtInTag = builtInTagWithoutInvokingAccessors(obj);
+	// Atomic like a view, and like a view never bookkept: see the deepFreeze
+	// doc.
+	if (builtInTag === "[object RegExp]") {
+		return true;
+	}
 	walk.inProgress.add(obj);
 	let sealed = true;
 
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
-	// own keys, so the key walk below would miss them). Internal-slot brand
-	// probes distinguish genuine built-ins without invoking toStringTag
-	// accessors; spoofed plain objects are frozen structurally.
-	const mutableBuiltInTag = mutableBuiltInTagWithoutInvokingAccessors(obj);
-	if (mutableBuiltInTag !== undefined) {
+	// own keys, so the key walk below would miss them).
+	if (
+		builtInTag === "[object Date]" ||
+		builtInTag === "[object Map]" ||
+		builtInTag === "[object Set]"
+	) {
 		let shadowed = KIT_SHADOWED.has(obj);
-		if (mutableBuiltInTag === "[object Date]") {
+		if (builtInTag === "[object Date]") {
 			shadowed = shadowMutators(obj, "Date", DATE_MUTATORS) || shadowed;
-		} else if (mutableBuiltInTag === "[object Map]") {
+		} else if (builtInTag === "[object Map]") {
 			for (const [key, value] of obj as Map<unknown, unknown>) {
 				if (!freezeDeep(key, walk)) sealed = false;
 				if (!freezeDeep(value, walk)) sealed = false;
 			}
 			shadowed =
 				shadowMutators(obj, "Map", ["set", "delete", "clear"]) || shadowed;
-		} else if (mutableBuiltInTag === "[object Set]") {
+		} else if (builtInTag === "[object Set]") {
 			for (const member of obj as Set<unknown>) {
 				if (!freezeDeep(member, walk)) sealed = false;
 			}
@@ -351,10 +367,10 @@ function cloneForVo(
 		if (tag === "[object RegExp]") {
 			// A global or sticky RegExp carries observable mutable scan state:
 			// every test()/exec() writes lastIndex, so it is a stateful object,
-			// not a value. Deep-freezing it makes lastIndex non-writable and
-			// crashes matching, so reject it instead of admitting a half-frozen
-			// value. A plain (non-global, non-sticky) RegExp never touches
-			// lastIndex and stays a genuine immutable value.
+			// not a value. deepFreeze passes a RegExp through, so nothing else
+			// stops that write; reject it at admission. A plain (non-global,
+			// non-sticky) RegExp never touches lastIndex and stays a genuine
+			// immutable value.
 			const regExp = obj as RegExp;
 			if (regExp.global || regExp.sticky) {
 				throw new TypeError(

@@ -5,6 +5,7 @@ import {
 	MisaddressedEventError,
 	MissingEntityIdError,
 	PendingEventBatchMismatchError,
+	PendingEventLimitExceededError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -1390,6 +1391,112 @@ describe("one identity per pending fact on the state-stored path", () => {
 		expect(
 			aggregate.pendingEvents.map((event) => (event as Noted).eventId),
 		).toEqual(["fact-1", "fact-2"]);
+	});
+});
+
+describe("maxPendingEvents on the state-stored path", () => {
+	type Noted = DomainEvent<"Noted", { value: number }>;
+
+	class LimitedAggregate extends StateStoredAggregate<
+		TestState,
+		TestId,
+		Noted
+	> {
+		protected readonly aggregateType = "LimitedAggregate";
+
+		constructor(id: TestId, config?: AggregateConfig<TestState>) {
+			super(id, { value: 0, status: "inactive" }, config);
+		}
+
+		note(count: number): void {
+			const events = Array.from({ length: count }, (_, value) =>
+				this.createEvent("Noted", { value }),
+			);
+			this.setState({ ...this.state, value: this.state.value + count }, events);
+		}
+
+		record(): void {
+			this.addDomainEvent(this.createEvent("Noted", { value: 0 }));
+		}
+	}
+
+	const limited = (maxPendingEvents: number): LimitedAggregate =>
+		new LimitedAggregate("test-1" as TestId, { maxPendingEvents });
+
+	it("rejects a batch that would grow the pending list past the limit before the state moves", () => {
+		const aggregate = limited(2);
+		aggregate.note(1);
+
+		expect(() => aggregate.note(2)).toThrow(PendingEventLimitExceededError);
+		expect(() => aggregate.note(2)).toThrow(
+			expect.objectContaining({
+				code: "PENDING_EVENT_LIMIT_EXCEEDED",
+				aggregateType: "LimitedAggregate",
+				aggregateId: "test-1",
+				limit: 2,
+				pending: 1,
+				added: 2,
+			}),
+		);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("accepts a batch that fills the pending list exactly", () => {
+		const aggregate = limited(3);
+		aggregate.note(1);
+
+		aggregate.note(2);
+
+		expect(aggregate.pendingEvents).toHaveLength(3);
+		expect(aggregate.version).toBe(2);
+	});
+
+	it("rejects a single event on a full pending list at addDomainEvent", () => {
+		const aggregate = limited(1);
+		aggregate.record();
+
+		expect(() => aggregate.record()).toThrow(PendingEventLimitExceededError);
+
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("leaves the pending list unlimited without maxPendingEvents", () => {
+		const aggregate = new LimitedAggregate("test-1" as TestId);
+
+		aggregate.note(500);
+
+		expect(aggregate.pendingEvents).toHaveLength(500);
+	});
+
+	it("rejects a limit that is not a positive safe integer at construction", () => {
+		for (const limit of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+			expect(() => limited(limit)).toThrow(RangeError);
+		}
+	});
+
+	it("rejects an invalid limit before the initial state is frozen", () => {
+		type NestedState = { readonly tags: { readonly names: string[] } };
+		class NestedAggregate extends StateStoredAggregate<NestedState, TestId> {
+			protected readonly aggregateType = "NestedAggregate";
+
+			constructor(state: NestedState, config: AggregateConfig<NestedState>) {
+				super("test-1" as TestId, state, config);
+			}
+		}
+		const tags = { names: ["fresh"] };
+
+		expect(
+			() =>
+				new NestedAggregate(
+					{ tags },
+					{ deepFreezeState: true, maxPendingEvents: 0 },
+				),
+		).toThrow(RangeError);
+
+		expect(Object.isFrozen(tags)).toBe(false);
 	});
 });
 

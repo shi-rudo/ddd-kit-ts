@@ -165,6 +165,7 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.addressNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
+		this.assertPendingEventLimit(1);
 		// Both gates run here, not in fold: apply checks only new facts
 		// against the current rules, and replay trusts history. The order
 		// is the one Entity.setState keeps: freeze, validate, store. The
@@ -265,7 +266,10 @@ export abstract class EventSourcedAggregate<
 	 * marker is rejected, the aggregate's state, version, and pending list
 	 * are rolled back to their pre-call values. Partial replay is never
 	 * observable. A fold that records a decision is the one way to make
-	 * the marker throw.
+	 * the marker throw. The rollback restores the previous state object by
+	 * reference. Under the default shallow freeze a fold that writes into a
+	 * nested object of that state in place is not detected, and the write
+	 * survives the rollback; see `AggregateConfig.deepFreezeState`.
 	 *
 	 * Version advances additively: the aggregate's pre-existing version plus
 	 * `history.length`. A fresh aggregate (v=0) loading 3 events ends at v=3;

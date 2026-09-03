@@ -274,11 +274,6 @@ export function findPropertyDescriptor(
 	return undefined;
 }
 
-export type MutableBuiltInTag =
-	| "[object Date]"
-	| "[object Map]"
-	| "[object Set]";
-
 export function builtInTagWithoutInvokingAccessors(
 	value: object,
 ): string | undefined {
@@ -298,17 +293,6 @@ export function builtInTagWithoutInvokingAccessors(
 		return tag;
 	}
 	return descriptor === undefined ? undefined : builtInTagFromBrand(value);
-}
-
-export function mutableBuiltInTagWithoutInvokingAccessors(
-	value: object,
-): MutableBuiltInTag | undefined {
-	const tag = builtInTagWithoutInvokingAccessors(value);
-	return tag === "[object Date]" ||
-		tag === "[object Map]" ||
-		tag === "[object Set]"
-		? tag
-		: undefined;
 }
 
 function builtInTagFromBrand(value: object): string | undefined {
@@ -427,4 +411,19 @@ export function isBuiltInObject(obj: object, tag: string): boolean {
 	// A built-in-looking TypedArray tag WITHOUT the view brand is spoofed.
 	if (tag.endsWith("Array]")) return false;
 	return BUILT_IN_TAGS.has(tag) && hasBrand(obj, tag);
+}
+
+/**
+ * Brand-verified `WeakMap` check that holds across realms. `instanceof
+ * WeakMap` binds to the constructor of one realm, so a WeakMap from a `vm`
+ * context or an iframe reads as a foreign value. The internal-slot probe
+ * answers the same in every realm, and a plain object cannot spoof it
+ * through `Symbol.toStringTag`.
+ */
+export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		hasBrand(value, "[object WeakMap]")
+	);
 }

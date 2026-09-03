@@ -558,6 +558,8 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 							`of addDomainEvent(event) alone.`,
 					);
 				}
+				const enrolledId = String(agg.id);
+				const enrolledType = record.eventLifecycle.aggregateType();
 				return record.events.map((event, index) => {
 					if (!isRecordedDomainEvent(event)) {
 						throw new EventHarvestError(
@@ -589,15 +591,11 @@ export async function withCommit<Evt extends AnyDomainEvent, R, TCtx>(
 					// Backstop behind the aggregate's own address check: the
 					// envelope source is copied from the event, so an event that
 					// names another aggregate must never become this commit.
-					const enrolledType = record.eventLifecycle.aggregateType();
-					if (
-						aggregateId !== String(agg.id) ||
-						aggregateType !== enrolledType
-					) {
+					if (aggregateId !== enrolledId || aggregateType !== enrolledType) {
 						throw new EventHarvestError(
 							`withCommit: event "${recordedEvent.type}" is addressed to ` +
 								`${aggregateType} ${aggregateId} but was enrolled under ` +
-								`${enrolledType} ${String(agg.id)}. The aggregate base ` +
+								`${enrolledType} ${enrolledId}. The aggregate base ` +
 								"classes stamp the address on every recording path; an " +
 								"instance from another package copy must stamp it the " +
 								"same way.",

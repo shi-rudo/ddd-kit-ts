@@ -9,6 +9,7 @@ import {
 	HostileStateKeyError,
 	MisaddressedEventError,
 	MissingFoldError,
+	PendingEventLimitExceededError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -1095,6 +1096,34 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
+	it("rejects an open literal that carries the recorded brand as an own property", () => {
+		// The cooperative tier accepts a brand on a frozen carrier only: an
+		// open object can change after the stamp, so it is not what a kit
+		// constructor produced.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const literal = {
+			type: "TestEventUpdated",
+			payload: { newValue: 99 },
+			schemaVersion: 1,
+		};
+		Object.defineProperty(literal, Symbol.for("@shirudo/ddd-kit.mintedEvent"), {
+			value: true,
+			enumerable: false,
+			writable: false,
+			configurable: false,
+		});
+
+		expect(isRecordedDomainEvent(literal)).toBe(false);
+		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(
+			UnmintedEventError,
+		);
+		expect(agg.state.value).toBe(10);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
 	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
@@ -1274,6 +1303,66 @@ describe("validateState on the apply path", () => {
 		expect(agg.state.value).toBe(1);
 		expect(agg.version).toBe(0);
 		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
+	it("freezes the fold result before the validator rejects it under deepFreezeState", () => {
+		// The order is freeze, validate, store: the object the validator
+		// sees is the object that would be stored. A fold that hands an
+		// instance-held mutable object to the result gets it frozen on the
+		// accept path as well, so a rejection does not change when a later
+		// write to that object throws.
+		type Draft = { readonly items: string[] };
+		type DraftCommitted = DomainEvent<"DraftCommitted", { count: number }>;
+		class TooManyItemsError extends DomainError<"TOO_MANY_ITEMS"> {
+			constructor() {
+				super({ code: "TOO_MANY_ITEMS", message: "Too many items" });
+			}
+		}
+		class DraftingAggregate extends EventSourcedAggregate<
+			Draft,
+			TestId,
+			DraftCommitted
+		> {
+			protected readonly aggregateType = "DraftingAggregate";
+			readonly draft: string[] = ["a", "b"];
+
+			constructor(id: TestId) {
+				super(
+					id,
+					{ items: [] },
+					{
+						deepFreezeState: true,
+						validateState: (state) => {
+							if (state.items.length > 1) throw new TooManyItemsError();
+						},
+					},
+				);
+			}
+
+			commitDraft(): void {
+				this.apply(
+					createDomainEvent("DraftCommitted", {
+						count: this.draft.length,
+					}) as DraftCommitted,
+				);
+			}
+
+			protected readonly folds = {
+				DraftCommitted: (state: Draft): Draft => ({
+					...state,
+					items: this.draft,
+				}),
+			};
+		}
+		const agg = new DraftingAggregate("test-1" as TestId);
+		const stateBefore = agg.state;
+
+		expect(() => agg.commitDraft()).toThrow(TooManyItemsError);
+
+		expect(agg.state).toBe(stateBefore);
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+		expect(Object.isFrozen(agg.draft)).toBe(true);
 	});
 
 	it("keeps the injected validator on apply() when a prototype member shares its name", () => {
@@ -1741,6 +1830,125 @@ describe("apply and replay bookkeeping", () => {
 		expect(result.isOk()).toBe(true);
 		expect(Object.isFrozen(shelf.state.items)).toBe(true);
 		expect(Object.isFrozen(shelf.state.items[0])).toBe(true);
+	});
+});
+
+describe("maxPendingEvents on the apply path", () => {
+	it("rejects the apply that would grow the pending list past the limit before anything moves", () => {
+		const aggregate = new TestEventSourcedAggregate(
+			"test-1" as TestId,
+			{ value: 0, status: "inactive" },
+			{ maxPendingEvents: 1 },
+		);
+		aggregate.updateValue(1);
+
+		expect(() => aggregate.updateValue(2)).toThrow(
+			PendingEventLimitExceededError,
+		);
+		expect(() => aggregate.updateValue(2)).toThrow(
+			expect.objectContaining({
+				code: "PENDING_EVENT_LIMIT_EXCEEDED",
+				limit: 1,
+				pending: 1,
+				added: 1,
+			}),
+		);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("does not count replayed history against the limit", () => {
+		const aggregate = new TestEventSourcedAggregate(
+			"test-1" as TestId,
+			{ value: 0, status: "inactive" },
+			{ maxPendingEvents: 1 },
+		);
+		const history = [1, 2, 3].map(
+			(newValue) =>
+				createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
+		);
+
+		const replayed = aggregate.replayHistory(history);
+		aggregate.updateValue(4);
+
+		expect(replayed.isOk()).toBe(true);
+		expect(aggregate.version).toBe(4);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+});
+
+describe("a fold that writes into nested state in place", () => {
+	type Shelf = { readonly items: string[] };
+	type ItemShelved = DomainEvent<"ItemShelved", { sku: string }>;
+	type ShelfClosed = DomainEvent<"ShelfClosed", Record<string, never>>;
+	class ShelfClosedError extends DomainError<"SHELF_CLOSED"> {
+		constructor() {
+			super({ code: "SHELF_CLOSED", message: "The shelf is closed" });
+		}
+	}
+
+	class MutatingShelfAggregate extends EventSourcedAggregate<
+		Shelf,
+		TestId,
+		ItemShelved | ShelfClosed
+	> {
+		protected readonly aggregateType = "MutatingShelfAggregate";
+
+		constructor(id: TestId, config?: AggregateConfig<Shelf>) {
+			super(id, { items: [] }, config);
+		}
+
+		protected readonly folds = {
+			// The fold writes into the nested array of the current state
+			// instead of building a new one: the defect both tests describe.
+			ItemShelved: (
+				state: Shelf,
+				event: UncommittedDomainEventOf<ItemShelved>,
+			): Shelf => {
+				state.items.push(event.payload.sku);
+				return { ...state };
+			},
+			ShelfClosed: (): Shelf => {
+				throw new ShelfClosedError();
+			},
+		};
+	}
+
+	it("rejects the write at the write site under deepFreezeState", () => {
+		const shelf = new MutatingShelfAggregate("shelf-1" as TestId, {
+			deepFreezeState: true,
+		});
+		const stateBefore = shelf.state;
+
+		expect(() =>
+			shelf.replayHistory([
+				createDomainEvent("ItemShelved", { sku: "sku-1" }) as ItemShelved,
+			]),
+		).toThrow(TypeError);
+
+		expect(shelf.state).toBe(stateBefore);
+		expect(shelf.state.items).toEqual([]);
+		expect(shelf.version).toBe(0);
+	});
+
+	it("keeps the write after a replay rollback under the default shallow freeze", () => {
+		// The rollback restores the previous state object by reference. The
+		// shallow freeze leaves its nested array open, so the fold's write
+		// survives the rollback; deepFreezeState is the remedy.
+		const shelf = new MutatingShelfAggregate("shelf-1" as TestId);
+		const stateBefore = shelf.state;
+
+		const result = shelf.replayHistory([
+			createDomainEvent("ItemShelved", { sku: "sku-1" }) as ItemShelved,
+			createDomainEvent("ShelfClosed", {}) as ShelfClosed,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		expect(shelf.state).toBe(stateBefore);
+		expect(shelf.version).toBe(0);
+		expect(shelf.state.items).toEqual(["sku-1"]);
 	});
 });
 

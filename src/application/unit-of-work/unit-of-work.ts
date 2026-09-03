@@ -8,6 +8,10 @@ import {
 } from "../../errors/kit-errors";
 import { abortReason } from "../../internal/async/abort";
 import type { ExecutionContext } from "../../internal/async/execution";
+import {
+	hasCooperativeBrand,
+	stampCooperativeBrand,
+} from "../../internal/cooperative-brand";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { OutboxWriter } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
@@ -244,12 +248,7 @@ export function defineRepository<TRepositoryPort extends object>(): Extract<
 		// non-enumerable members vanish silently. Without this check, the
 		// loss surfaces as a bare TypeError deep inside the first run().
 		assertRepositoryDefinitionMembers(branded as Record<PropertyKey, unknown>);
-		Object.defineProperty(branded, repositoryDefinitionBrand, {
-			configurable: false,
-			enumerable: false,
-			value: true,
-			writable: false,
-		});
+		stampCooperativeBrand(branded, repositoryDefinitionBrand);
 		return Object.freeze(branded);
 	};
 	return builder as unknown as Extract<
@@ -566,22 +565,7 @@ export class UnitOfWork<
 }
 
 function isRepositoryDefinition(value: unknown): value is object {
-	if (value === null || typeof value !== "object") return false;
-	try {
-		const marker = Reflect.getOwnPropertyDescriptor(
-			value,
-			repositoryDefinitionBrand,
-		);
-		return (
-			marker?.value === true &&
-			marker.configurable === false &&
-			marker.enumerable === false &&
-			marker.writable === false &&
-			Object.isFrozen(value)
-		);
-	} catch {
-		return false;
-	}
+	return hasCooperativeBrand(value, repositoryDefinitionBrand);
 }
 
 function makeContext<TRepos, Evt extends AnyDomainEvent>(
