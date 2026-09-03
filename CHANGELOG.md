@@ -48,8 +48,8 @@ propagate after the rollback.
 `examples/order` threw a bare `Error` and typed `customerId` and
 `productId` as `string`. It now throws `OrderInWrongStateError` and
 `EmptyOrderError`, both `DomainError` subclasses with a stable code, and
-the spec matches on the class. The ids carry the `Id` brand like the other
-examples.
+the spec matches on the class. A second `cancel()` is a wrong-state error
+too. The ids carry the `Id` brand like the other examples.
 
 ### Fixed: deepFreeze keeps a RegExp matching
 
