@@ -29,6 +29,16 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: the capability registry recognizes a WeakMap from another realm
+
+The registry bootstrap reads the value installed under a kit key on
+`globalThis`. A kit copy that runs in another realm (a `vm` context, an
+iframe) installs a `WeakMap` of that realm. Before this change the bootstrap
+checked the value with `instanceof WeakMap`, which is bound to one realm, so
+it threw `CapabilityRegistryConflictError` for a registry the other copy
+installed. The check now reads the internal slot of the value, which gives
+the same answer in every realm.
+
 ### Changed (breaking): the entity state field is private
 
 `Entity` no longer exposes `_state` and `freezeState` to subclasses. A
