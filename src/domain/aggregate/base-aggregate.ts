@@ -394,8 +394,10 @@ export abstract class BaseAggregate<
 
 	/**
 	 * Appends an event that the caller already passed through
-	 * {@link addressNewEvent}. `setState()` and `apply()` stamp before the
-	 * state moves and append afterwards, so the guard runs once per event.
+	 * {@link addressNewEvent}, {@link assertEventIdsNotPending} and
+	 * {@link assertPendingEventLimit}. `setState()` and `apply()` run the
+	 * three before the state moves and append afterwards, so each gate
+	 * runs once per event.
 	 */
 	protected appendStampedEvent(event: PendingDomainEvent<TEvent>): void {
 		this._pendingEvents.push(event);
