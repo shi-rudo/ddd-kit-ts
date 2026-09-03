@@ -1772,6 +1772,79 @@ describe("apply and replay bookkeeping", () => {
 	});
 });
 
+describe("a fold that writes into nested state in place", () => {
+	type Shelf = { readonly items: string[] };
+	type ItemShelved = DomainEvent<"ItemShelved", { sku: string }>;
+	type ShelfClosed = DomainEvent<"ShelfClosed", Record<string, never>>;
+	class ShelfClosedError extends DomainError<"SHELF_CLOSED"> {
+		constructor() {
+			super({ code: "SHELF_CLOSED", message: "The shelf is closed" });
+		}
+	}
+
+	class MutatingShelfAggregate extends EventSourcedAggregate<
+		Shelf,
+		TestId,
+		ItemShelved | ShelfClosed
+	> {
+		protected readonly aggregateType = "MutatingShelfAggregate";
+
+		constructor(id: TestId, config?: AggregateConfig<Shelf>) {
+			super(id, { items: [] }, config);
+		}
+
+		protected readonly folds = {
+			// The fold writes into the nested array of the current state
+			// instead of building a new one: the defect both tests describe.
+			ItemShelved: (
+				state: Shelf,
+				event: UncommittedDomainEventOf<ItemShelved>,
+			): Shelf => {
+				state.items.push(event.payload.sku);
+				return { ...state };
+			},
+			ShelfClosed: (): Shelf => {
+				throw new ShelfClosedError();
+			},
+		};
+	}
+
+	it("rejects the write at the write site under deepFreezeState", () => {
+		const shelf = new MutatingShelfAggregate("shelf-1" as TestId, {
+			deepFreezeState: true,
+		});
+		const stateBefore = shelf.state;
+
+		expect(() =>
+			shelf.replayHistory([
+				createDomainEvent("ItemShelved", { sku: "sku-1" }) as ItemShelved,
+			]),
+		).toThrow(TypeError);
+
+		expect(shelf.state).toBe(stateBefore);
+		expect(shelf.state.items).toEqual([]);
+		expect(shelf.version).toBe(0);
+	});
+
+	it("keeps the write after a replay rollback under the default shallow freeze", () => {
+		// The rollback restores the previous state object by reference. The
+		// shallow freeze leaves its nested array open, so the fold's write
+		// survives the rollback; deepFreezeState is the remedy.
+		const shelf = new MutatingShelfAggregate("shelf-1" as TestId);
+		const stateBefore = shelf.state;
+
+		const result = shelf.replayHistory([
+			createDomainEvent("ItemShelved", { sku: "sku-1" }) as ItemShelved,
+			createDomainEvent("ShelfClosed", {}) as ShelfClosed,
+		]);
+
+		expect(result.isErr()).toBe(true);
+		expect(shelf.state).toBe(stateBefore);
+		expect(shelf.version).toBe(0);
+		expect(shelf.state.items).toEqual(["sku-1"]);
+	});
+});
+
 describe("replay routes a foreign-copy domain rejection into the Result", () => {
 	// Structurally a DomainError from another loaded kit copy: not
 	// instanceof this copy's class, but category "DOMAIN".

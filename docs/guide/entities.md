@@ -370,7 +370,8 @@ The ownership rules are precise:
 
 - plain object and array state is shallow-copied before freezing, so the
   caller's top-level object remains mutable
-- nested objects remain shared under the default shallow freeze
+- nested objects remain shared under the default shallow freeze, so an
+  in-place write into one of them changes the state without a gate
 - with `deepFreezeState`, nested objects are frozen in place
 - class instance state is treated as an ownership transfer and is frozen in
   place because copying it would strip its prototype
