@@ -1496,8 +1496,6 @@ describe("maxPendingEvents on the state-stored path", () => {
 				),
 		).toThrow(RangeError);
 
-		// The config check runs before the entity constructor, so the rejected
-		// construction leaves the caller's nested state untouched.
 		expect(Object.isFrozen(tags)).toBe(false);
 	});
 });

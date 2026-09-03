@@ -120,9 +120,9 @@ export abstract class BaseAggregate<
 		initialState: TState,
 		config?: AggregateConfig<TState>,
 	) {
-		// Before super(): the entity constructor freezes the initial state,
-		// under deepFreezeState in place, so a rejected config must not
-		// leave the caller's state graph frozen.
+		// The entity constructor freezes the initial state in place under
+		// deepFreezeState. The config check runs before super(), so a
+		// rejected config leaves the caller's state graph open.
 		if (config?.maxPendingEvents !== undefined) {
 			assertPositiveSafeInteger(
 				"Aggregate",
