@@ -442,6 +442,37 @@ The event-driven model does not replay the call stack. Persisted saga state
 must identify the work that needs compensation. Thus, the state machine owns
 the process position instead of a local variable.
 
+## Changing a running process
+
+A process lives longer than a request and longer than a deploy. When a deploy
+changes the steps, instances that started under the old steps are still in
+flight. Their stored state or event stream encodes the old sequence. Loaded
+into the new class, such an instance can sit in a state the new machine does
+not know, or receive a reply to a command the new logic never sends.
+
+Never edit the handlers of a running process in place. Two changes preserve
+the in-flight instances:
+
+1. **A new `aggregateType` for a new step sequence.** Deploy the changed
+   process as a second class with its own `aggregateType`, for example
+   `CheckoutSagaV2`. New processes start under the new type. Old instances
+   complete under the old class, and the old class leaves the codebase when
+   its last instance is done. Subscribe both classes on the bus during that
+   time; each one reacts only to its own instances.
+2. **A schema bump for a changed shape.** When the steps stay the same and
+   only the stored shape changes, keep the class. An event-sourced process
+   bumps the `schemaVersion` of the changed process event and upcasts old
+   rows at the read boundary, as
+   [Migrating command-shaped process events](#migrating-command-shaped-process-events)
+   describes. A state-stored process migrates its row like any other table,
+   before the new class loads it.
+
+Both changes rest on one rule: the `aggregateType` is a stable stream key.
+The event store selects a stream by `{ aggregateType, aggregateId }`, and
+every event the process records carries it. A renamed `aggregateType` orphans
+every stored stream under the old name. Rename only with a data migration, and
+never as a side effect of a class rename.
+
 ## What the kit deliberately does not ship
 
 The kit does not supply a `SagaStore`. The state-stored variant uses
