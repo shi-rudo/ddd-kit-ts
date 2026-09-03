@@ -119,7 +119,9 @@ function shadowMutators(
  * mutable. RegExp: pattern and flags live in immutable internal slots, and
  * the only own data property, `lastIndex`, is scan state that every global
  * or sticky match writes. A frozen RegExp protects nothing and throws on
- * the first such match, so the RegExp keeps matching instead.
+ * the first such match, so the RegExp keeps matching instead. A view or a
+ * RegExp passes through whole: an expando property on it stays open, and
+ * the walk does not enter its subtree.
  */
 // Every object whose whole subtree this module sealed: frozen, with every
 // Date, Map, and Set below it carrying the kit's mutator shadows. A later

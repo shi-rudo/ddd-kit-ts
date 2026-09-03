@@ -35,10 +35,11 @@ gives a before-and-after example for each breaking change.
 view. Pattern and flags of a `RegExp` live in immutable internal slots. Its
 only own data property, `lastIndex`, is scan state that every global or
 sticky match writes. Before this change the freeze made `lastIndex`
-read-only, so a global or sticky pattern inside deep-frozen state (entity
-state under `deepFreezeState`, an event payload, a captured snapshot) threw
-on its first match, far from the freeze. `vo()` still rejects a global or
-sticky `RegExp` at admission: a value object carries no scan state.
+read-only. A global or sticky pattern inside deep-frozen state then threw
+on its first match, far from the freeze. Deep-frozen state includes entity
+state under `deepFreezeState`, an event payload, and a captured snapshot.
+`vo()` still rejects a global or sticky `RegExp` at admission: a value
+object carries no scan state.
 
 ### Added: maxPendingEvents limits the pending list
 

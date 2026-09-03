@@ -740,6 +740,9 @@ model's DTO contains values that cannot restore faithfully:
 - `Error` instances
 - symbol-keyed state
 
+A `RegExp` restores with its pattern and flags. Its `lastIndex` restores as
+0: the scan state of a global or sticky pattern is not domain data.
+
 If live state contains class-based child entities, define a plain snapshot DTO
 and map both directions:
 

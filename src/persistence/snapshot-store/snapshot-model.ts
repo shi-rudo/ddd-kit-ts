@@ -252,6 +252,9 @@ function detachSnapshotState<T>(state: T): T {
 /**
  * Rejects graphs that structured cloning would lose or silently degrade.
  * Snapshot models map class-based domain state to plain persistence DTOs.
+ * A RegExp passes: pattern and flags survive the clone, and `lastIndex`
+ * restores as 0. The scan state of a global or sticky pattern is not
+ * domain data.
  */
 function assertSnapshotSafe(
 	value: unknown,
