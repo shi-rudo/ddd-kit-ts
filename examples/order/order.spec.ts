@@ -90,6 +90,23 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 		expect(order.status).toBe("cancelled");
 	});
 
+	it("should not allow adding an item to a confirmed order", () => {
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
+		order.confirm();
+
+		expect(() => order.addItem(product2, 1, eur(500n))).toThrow(
+			OrderInWrongStateError,
+		);
+	});
+
+	it("should not allow cancelling a cancelled order", () => {
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.cancel();
+
+		expect(() => order.cancel()).toThrow(OrderInWrongStateError);
+	});
+
 	it("should not allow cancelling shipped order", () => {
 		const order = Order.create(orderId, customerId, eur(0n));
 		order.addItem(product1, 1, eur(1000n));

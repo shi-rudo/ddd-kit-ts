@@ -120,8 +120,9 @@ export class Order extends StateStoredAggregate<OrderState, OrderId> {
 	}
 
 	cancel(): void {
-		if (this.state.status === "shipped") {
-			throw new OrderInWrongStateError(this.id, this.state.status, "cancel");
+		const { status } = this.state;
+		if (status === "shipped" || status === "cancelled") {
+			throw new OrderInWrongStateError(this.id, status, "cancel");
 		}
 
 		this.setState({ ...this.state, status: "cancelled" });
