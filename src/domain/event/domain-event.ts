@@ -1,4 +1,8 @@
 import { assertNoHostileOwnProtoKey } from "../../errors/kit-errors";
+import {
+	hasCooperativeBrand,
+	stampCooperativeBrand,
+} from "../../internal/cooperative-brand";
 import { deepFreeze } from "../value-object/value-object";
 import { type ClockFactory, defaultClockFactory, readClock } from "./clock";
 import { DomainEventValidationError } from "./domain-event-errors";
@@ -453,16 +457,10 @@ const FACTORY_OWNED_EVENT_STAMPS = new WeakSet<object>();
 
 // Cooperative cross-instance tier of the mint check: a WeakSet is
 // bound to ONE loaded copy of this module, so an event legitimately
-// minted by a second copy of the kit (duplicate npm dependency, dual
-// CJS/ESM load, plugin bundle) would be rejected as unminted. Such
-// events are recognized by this global-registry brand instead, which
-// every constructor and kit-derived copy stamps (non-enumerable, so it
-// never leaks into spreads, JSON, or equality). The brand is forgeable
-// BY DESIGN: the mint gate catches accidental hand-rolled literals, it
-// is not a security boundary against code that deliberately fakes the
-// brand inside the same process. The probes read the brand as an OWN
-// property. An object that inherits a minted event through its prototype
-// can carry mutable own overrides, so it is not minted.
+// minted by a second copy of the kit would be rejected as unminted.
+// Such events are recognized by the cooperative brand instead, which
+// every constructor and kit-derived copy stamps before it freezes the
+// event (see `cooperative-brand.ts` for the probe rules).
 // The key strings are the cross-copy wire contract: every kit copy in a
 // process reads and stamps the same keys. The constant names follow the
 // shapes; the keys never change.
@@ -470,21 +468,11 @@ const RECORDED_BRAND = Symbol.for("@shirudo/ddd-kit.mintedEvent");
 const UNCOMMITTED_BRAND = Symbol.for("@shirudo/ddd-kit.uncommittedEvent");
 
 function stampRecordedBrand(event: object): void {
-	Object.defineProperty(event, RECORDED_BRAND, {
-		value: true,
-		enumerable: false,
-		writable: false,
-		configurable: false,
-	});
+	stampCooperativeBrand(event, RECORDED_BRAND);
 }
 
 function stampUncommittedBrand(event: object): void {
-	Object.defineProperty(event, UNCOMMITTED_BRAND, {
-		value: true,
-		enumerable: false,
-		writable: false,
-		configurable: false,
-	});
+	stampCooperativeBrand(event, UNCOMMITTED_BRAND);
 }
 
 function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
@@ -506,9 +494,7 @@ function isFactoryOwnedDomainEventStamp(stamp: object): boolean {
  */
 export function isRecordedDomainEvent(event: object): event is AnyDomainEvent {
 	return (
-		RECORDED_EVENTS.has(event) ||
-		(Object.hasOwn(event, RECORDED_BRAND) &&
-			(event as Record<symbol, unknown>)[RECORDED_BRAND] === true)
+		RECORDED_EVENTS.has(event) || hasCooperativeBrand(event, RECORDED_BRAND)
 	);
 }
 
@@ -518,8 +504,7 @@ export function isUncommittedDomainEvent(
 ): event is AnyUncommittedDomainEvent {
 	return (
 		UNCOMMITTED_EVENTS.has(event) ||
-		(Object.hasOwn(event, UNCOMMITTED_BRAND) &&
-			(event as Record<symbol, unknown>)[UNCOMMITTED_BRAND] === true)
+		hasCooperativeBrand(event, UNCOMMITTED_BRAND)
 	);
 }
 

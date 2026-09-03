@@ -29,6 +29,19 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: one probe for every cooperative brand
+
+The kit marks a minted event, an uncommitted decision, and a repository
+definition with a cooperative `Symbol.for` brand, so a second loaded copy of
+the kit recognizes them. One probe now reads every brand with one rule: an
+own, non-enumerable, non-writable, non-configurable `true` on a frozen
+carrier. Every kit constructor freezes the carrier after the stamp, so a
+kit-produced object passes unchanged. Before this change the mint gate
+accepted an own brand on an open object, while the repository definition
+check required the frozen carrier. A hand-rolled object that carried the
+event brand without a freeze passed the mint gate; it now throws
+`UnmintedEventError`.
+
 ### Fixed: the capability registry recognizes a WeakMap from another realm
 
 The registry bootstrap reads the value installed under a kit key on

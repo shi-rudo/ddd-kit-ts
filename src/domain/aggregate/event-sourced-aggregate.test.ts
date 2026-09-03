@@ -1095,6 +1095,34 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
+	it("rejects an open literal that carries the recorded brand as an own property", () => {
+		// The cooperative tier accepts a brand on a frozen carrier only: an
+		// open object can change after the stamp, so it is not what a kit
+		// constructor produced.
+		const agg = new RuleTighteningAggregate("test-1" as TestId, {
+			value: 10,
+			status: "inactive",
+		});
+		const literal = {
+			type: "TestEventUpdated",
+			payload: { newValue: 99 },
+			schemaVersion: 1,
+		};
+		Object.defineProperty(literal, Symbol.for("@shirudo/ddd-kit.mintedEvent"), {
+			value: true,
+			enumerable: false,
+			writable: false,
+			configurable: false,
+		});
+
+		expect(isRecordedDomainEvent(literal)).toBe(false);
+		expect(() => agg.testApply(literal as TestEventUpdated)).toThrow(
+			UnmintedEventError,
+		);
+		expect(agg.state.value).toBe(10);
+		expect(agg.pendingEvents).toHaveLength(0);
+	});
+
 	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
 		// A duplicate npm dependency or a plugin bundle loads a second
 		// copy of the kit whose WeakSet this instance cannot see. Such an
