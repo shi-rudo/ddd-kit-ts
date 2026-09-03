@@ -1476,6 +1476,30 @@ describe("maxPendingEvents on the state-stored path", () => {
 			expect(() => limited(limit)).toThrow(RangeError);
 		}
 	});
+
+	it("rejects an invalid limit before the initial state is frozen", () => {
+		type NestedState = { readonly tags: { readonly names: string[] } };
+		class NestedAggregate extends StateStoredAggregate<NestedState, TestId> {
+			protected readonly aggregateType = "NestedAggregate";
+
+			constructor(state: NestedState, config: AggregateConfig<NestedState>) {
+				super("test-1" as TestId, state, config);
+			}
+		}
+		const tags = { names: ["fresh"] };
+
+		expect(
+			() =>
+				new NestedAggregate(
+					{ tags },
+					{ deepFreezeState: true, maxPendingEvents: 0 },
+				),
+		).toThrow(RangeError);
+
+		// The config check runs before the entity constructor, so the rejected
+		// construction leaves the caller's nested state untouched.
+		expect(Object.isFrozen(tags)).toBe(false);
+	});
 });
 
 describe("lifecycle capability boundary", () => {

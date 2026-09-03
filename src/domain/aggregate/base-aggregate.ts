@@ -120,7 +120,9 @@ export abstract class BaseAggregate<
 		initialState: TState,
 		config?: AggregateConfig<TState>,
 	) {
-		super(id, initialState, config);
+		// Before super(): the entity constructor freezes the initial state,
+		// under deepFreezeState in place, so a rejected config must not
+		// leave the caller's state graph frozen.
 		if (config?.maxPendingEvents !== undefined) {
 			assertPositiveSafeInteger(
 				"Aggregate",
@@ -128,6 +130,7 @@ export abstract class BaseAggregate<
 				config.maxPendingEvents,
 			);
 		}
+		super(id, initialState, config);
 		this._maxPendingEvents = config?.maxPendingEvents;
 		registerPendingEventLifecycleCapability(this, {
 			acknowledge: (events, committedVersion) => {
