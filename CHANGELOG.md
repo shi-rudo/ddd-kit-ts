@@ -59,7 +59,15 @@ event brand without a freeze passed the mint gate; it now throws
 DTO included. A write into `snapshot.state` between capture and save throws
 a `TypeError` instead of reaching the store. Before this change the envelope
 and `snapshotAt` were frozen, and the state DTO stayed open. The freeze walks
-the DTO once per capture.
+the DTO once per capture. It cannot seal every built-in: a typed array or
+`DataView` stays writable, and a `Map` or `Set` blocks only the mutators the
+kit knows; see `deepFreeze` for the list.
+
+The capture gate now rejects a global or sticky `RegExp` in the state DTO
+with a `TypeError` that names its path. Such a pattern writes `lastIndex` on
+every `test()` or `exec()`, and the deep freeze would make the first match
+throw far from the capture. A plain `RegExp` stays admitted and matches after
+the freeze. The rule is the one `vo()` applies.
 
 ### Fixed: the capability registry recognizes a WeakMap from another realm
 

@@ -509,6 +509,62 @@ describe("adapter-owned snapshot models", () => {
 		).toThrow(/symbol-keyed/);
 	});
 
+	it("keeps a plain RegExp in the state DTO usable after capture", () => {
+		const regExpModel = defineSnapshotModel({
+			aggregateType: "Order",
+			schemaVersion: 1,
+			capture: () => ({ skuPattern: /sku-\d+/i }),
+			reconstitute: (id: OrderId, _state, version: Version): Order => ({
+				id,
+				state: { status: "unused" },
+				version,
+			}),
+		});
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
+
+		const snapshot = captureAggregateSnapshot(regExpModel, order, new Date());
+
+		// A non-global, non-sticky RegExp never writes lastIndex, so the deep
+		// freeze on the captured snapshot leaves matching intact.
+		expect(snapshot.state.skuPattern.test("SKU-42")).toBe(true);
+	});
+
+	const statefulRegExps: ReadonlyArray<readonly [string, RegExp]> = [
+		["global", /sku-\d+/g],
+		["sticky", /sku-\d+/y],
+	];
+	it.each(statefulRegExps)(
+		"rejects a %s RegExp whose lastIndex is mutable scan state",
+		(_flag, skuPattern) => {
+			const regExpModel = defineSnapshotModel({
+				aggregateType: "Order",
+				schemaVersion: 1,
+				capture: () => ({ skuPattern }),
+				reconstitute: (id: OrderId, _state, version: Version): Order => ({
+					id,
+					state: { status: "unused" },
+					version,
+				}),
+			});
+			const order: Order = {
+				id: "order-1" as OrderId,
+				state: { status: "placed" },
+				version: 1 as Version,
+			};
+
+			// Deep-freezing the snapshot would make lastIndex non-writable, and
+			// the first test()/exec() on the pattern would throw far from the
+			// capture. The gate rejects the pattern at capture with its path.
+			expect(() =>
+				captureAggregateSnapshot(regExpModel, order, new Date()),
+			).toThrow(/snapshot state\.skuPattern is a global or sticky RegExp/);
+		},
+	);
+
 	it("composes snapshot reconstitution with additive event-tail replay", () => {
 		type CounterId = Id<"Counter">;
 		type Incremented = DomainEvent<"Incremented", { by: number }>;

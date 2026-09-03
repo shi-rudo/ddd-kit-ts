@@ -529,7 +529,10 @@ const fresh = reconstituteAggregateFromSnapshot(
 detaches the persistence DTO and deep-freezes the snapshot, its `state` and
 `snapshotAt` included. A later change to the aggregate, or to the DTO that
 `capture` returned, cannot alter the snapshot. A write into the snapshot
-between capture and save throws a `TypeError`.
+between capture and save throws a `TypeError`. The freeze cannot seal every
+built-in: a typed array or `DataView` in the DTO stays writable, and a `Map`
+or `Set` blocks only the mutators the kit knows. See `deepFreeze` for the
+full list.
 Reconstitution always creates a fresh aggregate through the model. It never
 mutates a live instance or records a new domain fact. A factory that forgets
 `markReconstituted(version)` returns an aggregate at the wrong version; the

@@ -250,7 +250,8 @@ function detachSnapshotState<T>(state: T): T {
 }
 
 /**
- * Rejects graphs that structured cloning would lose or silently degrade.
+ * Rejects graphs that structured cloning would lose or silently degrade,
+ * and the built-ins the deep freeze on the captured snapshot would break.
  * Snapshot models map class-based domain state to plain persistence DTOs.
  */
 function assertSnapshotSafe(
@@ -314,6 +315,17 @@ function assertSnapshotSafe(
 			throw new TypeError(
 				`snapshot state${path} is an Error; map it to plain data in the snapshot model`,
 			);
+		}
+		// A global or sticky RegExp writes lastIndex on every test()/exec().
+		// The deep freeze on the captured snapshot makes lastIndex read-only,
+		// so matching would throw far from the capture. Same rule as vo().
+		if (tag === "[object RegExp]") {
+			const regExp = object as RegExp;
+			if (regExp.global || regExp.sticky) {
+				throw new TypeError(
+					`snapshot state${path} is a global or sticky RegExp; its lastIndex is mutable scan state, map it to plain data in the snapshot model`,
+				);
+			}
 		}
 		return;
 	}

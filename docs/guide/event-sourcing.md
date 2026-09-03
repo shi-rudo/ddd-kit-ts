@@ -739,6 +739,8 @@ model's DTO contains values that cannot restore faithfully:
 - `Promise`, `WeakMap`, or `WeakSet`
 - `Error` instances
 - symbol-keyed state
+- a global or sticky `RegExp`: its `lastIndex` is mutable scan state, and
+  the deep freeze on the captured snapshot would make matching throw
 
 If live state contains class-based child entities, define a plain snapshot DTO
 and map both directions:
