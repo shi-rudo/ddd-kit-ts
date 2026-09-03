@@ -1304,6 +1304,66 @@ describe("validateState on the apply path", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
+	it("freezes the fold result before the validator rejects it under deepFreezeState", () => {
+		// The order is freeze, validate, store: the object the validator
+		// sees is the object that would be stored. A fold that hands an
+		// instance-held mutable object to the result gets it frozen on the
+		// accept path as well, so a rejection does not change when a later
+		// write to that object throws.
+		type Draft = { readonly items: string[] };
+		type DraftCommitted = DomainEvent<"DraftCommitted", { count: number }>;
+		class TooManyItemsError extends DomainError<"TOO_MANY_ITEMS"> {
+			constructor() {
+				super({ code: "TOO_MANY_ITEMS", message: "Too many items" });
+			}
+		}
+		class DraftingAggregate extends EventSourcedAggregate<
+			Draft,
+			TestId,
+			DraftCommitted
+		> {
+			protected readonly aggregateType = "DraftingAggregate";
+			readonly draft: string[] = ["a", "b"];
+
+			constructor(id: TestId) {
+				super(
+					id,
+					{ items: [] },
+					{
+						deepFreezeState: true,
+						validateState: (state) => {
+							if (state.items.length > 1) throw new TooManyItemsError();
+						},
+					},
+				);
+			}
+
+			commitDraft(): void {
+				this.apply(
+					createDomainEvent("DraftCommitted", {
+						count: this.draft.length,
+					}) as DraftCommitted,
+				);
+			}
+
+			protected readonly folds = {
+				DraftCommitted: (state: Draft): Draft => ({
+					...state,
+					items: this.draft,
+				}),
+			};
+		}
+		const agg = new DraftingAggregate("test-1" as TestId);
+		const stateBefore = agg.state;
+
+		expect(() => agg.commitDraft()).toThrow(TooManyItemsError);
+
+		expect(agg.state).toBe(stateBefore);
+		expect(agg.version).toBe(0);
+		expect(agg.pendingEvents).toHaveLength(0);
+		expect(Object.isFrozen(agg.draft)).toBe(true);
+	});
+
 	it("keeps the injected validator on apply() when a prototype member shares its name", () => {
 		class ShadowingAggregate extends TestEventSourcedAggregate {}
 		// JavaScript consumers can still attach a same-named prototype method.
