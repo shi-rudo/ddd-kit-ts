@@ -49,7 +49,19 @@ The fields have different jobs:
 | `metadata` | Correlation, causation, user, source, and custom tracing fields. |
 
 `schemaVersion` says which shape the event payload has. It is not an aggregate or
-stream position; those values live in `CommittedDomainEvent.position`.
+stream position; those values live in `CommittedDomainEvent.position`. It is
+also not `AggregateSnapshot.schemaVersion`, which versions the stored snapshot
+state shape. A payload change and a snapshot state change bump their own field.
+
+### What the payload carries
+
+An event carries the fact, not a pointer to it. A subscriber acts on the
+payload without a read of the source aggregate, and a fold rebuilds state from
+the payload alone. A thin notification such as `OrderChanged` with only the id
+forces every subscriber back to the source. Replay cannot rebuild state from
+it, and a later read of the source shows a newer state than the one the event
+announced. Put every value that describes the fact in the payload. Leave out
+the rest of the aggregate state.
 
 ## Creating Events
 
@@ -303,6 +315,12 @@ without changing the event.
 Use metadata for message relationships and operational context, not for core
 domain state. If a value is required to understand the event as a domain fact,
 put it in the payload.
+
+The application shell attaches the actor on the stamp. `userId` says who caused
+the fact and `correlationId` says in which operation. That is the audit record:
+it is present on every recorded event, and no fold reads it. When a rule
+depends on the actor, for example "only the owner cancels", the method takes
+the actor as an argument and the payload records it as a domain value.
 
 The usual meanings:
 

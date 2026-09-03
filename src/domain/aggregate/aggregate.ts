@@ -53,7 +53,9 @@ export interface AggregateSnapshot<TState> {
 	 * shape does the stored state have", so a restore can detect a
 	 * snapshot written against an older DTO shape and migrate or
 	 * discard it instead of crashing later. Optional: a snapshot without
-	 * this field restores as schema `1`.
+	 * this field restores as schema `1`. Distinct also from
+	 * `DomainEvent.schemaVersion`, which versions one event payload shape.
+	 * A payload change and a snapshot state change bump their own field.
 	 */
 	readonly schemaVersion?: number;
 }
