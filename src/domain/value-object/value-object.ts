@@ -188,20 +188,19 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 		walk.cyclic = true;
 		return true;
 	}
-	walk.inProgress.add(obj);
-	let sealed = true;
 
 	// Internal-slot brand probes distinguish genuine built-ins without
 	// invoking toStringTag accessors; spoofed plain objects are frozen
 	// structurally.
 	const builtInTag = builtInTagWithoutInvokingAccessors(obj);
-	// A RegExp is atomic like a view: pattern and flags live in immutable
-	// internal slots, and its only own data property, lastIndex, is scan
-	// state that every global or sticky match writes. Object.freeze protects
-	// nothing on it and makes that write throw, so the RegExp passes through.
+	// Atomic like a view, and like a view never bookkept: see the deepFreeze
+	// doc.
 	if (builtInTag === "[object RegExp]") {
 		return true;
 	}
+	walk.inProgress.add(obj);
+	let sealed = true;
+
 	// Date/Map/Set keep internal-slot mutability under Object.freeze:
 	// shadow their mutators and freeze Map/Set contents (entries are not
 	// own keys, so the key walk below would miss them).
