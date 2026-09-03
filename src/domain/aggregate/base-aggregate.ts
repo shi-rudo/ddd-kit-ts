@@ -35,7 +35,7 @@ import {
 export interface AggregateConfig<TState = unknown>
 	extends EntityConfig<TState> {
 	/**
-	 * Upper bound on the pending list. A recording that would grow the list
+	 * Limit on the pending list. A recording that would grow the list
 	 * past it throws {@link PendingEventLimitExceededError} before the
 	 * state moves, so the rejected decision records nothing and moves
 	 * nothing. Defaults to unlimited. The limit is a modelling signal: a
