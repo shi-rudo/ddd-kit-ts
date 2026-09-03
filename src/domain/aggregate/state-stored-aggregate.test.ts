@@ -1397,12 +1397,12 @@ describe("one identity per pending fact on the state-stored path", () => {
 describe("maxPendingEvents on the state-stored path", () => {
 	type Noted = DomainEvent<"Noted", { value: number }>;
 
-	class BoundedAggregate extends StateStoredAggregate<
+	class LimitedAggregate extends StateStoredAggregate<
 		TestState,
 		TestId,
 		Noted
 	> {
-		protected readonly aggregateType = "BoundedAggregate";
+		protected readonly aggregateType = "LimitedAggregate";
 
 		constructor(id: TestId, config?: AggregateConfig<TestState>) {
 			super(id, { value: 0, status: "inactive" }, config);
@@ -1420,18 +1420,18 @@ describe("maxPendingEvents on the state-stored path", () => {
 		}
 	}
 
-	const bounded = (maxPendingEvents: number): BoundedAggregate =>
-		new BoundedAggregate("test-1" as TestId, { maxPendingEvents });
+	const limited = (maxPendingEvents: number): LimitedAggregate =>
+		new LimitedAggregate("test-1" as TestId, { maxPendingEvents });
 
 	it("rejects a batch that would grow the pending list past the limit before the state moves", () => {
-		const aggregate = bounded(2);
+		const aggregate = limited(2);
 		aggregate.note(1);
 
 		expect(() => aggregate.note(2)).toThrow(PendingEventLimitExceededError);
 		expect(() => aggregate.note(2)).toThrow(
 			expect.objectContaining({
 				code: "PENDING_EVENT_LIMIT_EXCEEDED",
-				aggregateType: "BoundedAggregate",
+				aggregateType: "LimitedAggregate",
 				aggregateId: "test-1",
 				limit: 2,
 				pending: 1,
@@ -1445,7 +1445,7 @@ describe("maxPendingEvents on the state-stored path", () => {
 	});
 
 	it("accepts a batch that fills the pending list exactly", () => {
-		const aggregate = bounded(3);
+		const aggregate = limited(3);
 		aggregate.note(1);
 
 		aggregate.note(2);
@@ -1455,7 +1455,7 @@ describe("maxPendingEvents on the state-stored path", () => {
 	});
 
 	it("rejects a single event on a full pending list at addDomainEvent", () => {
-		const aggregate = bounded(1);
+		const aggregate = limited(1);
 		aggregate.record();
 
 		expect(() => aggregate.record()).toThrow(PendingEventLimitExceededError);
@@ -1463,8 +1463,8 @@ describe("maxPendingEvents on the state-stored path", () => {
 		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 
-	it("leaves the pending list unbounded without a limit", () => {
-		const aggregate = new BoundedAggregate("test-1" as TestId);
+	it("leaves the pending list unlimited without maxPendingEvents", () => {
+		const aggregate = new LimitedAggregate("test-1" as TestId);
 
 		aggregate.note(500);
 
@@ -1473,7 +1473,7 @@ describe("maxPendingEvents on the state-stored path", () => {
 
 	it("rejects a limit that is not a positive safe integer at construction", () => {
 		for (const limit of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
-			expect(() => bounded(limit)).toThrow(RangeError);
+			expect(() => limited(limit)).toThrow(RangeError);
 		}
 	});
 });

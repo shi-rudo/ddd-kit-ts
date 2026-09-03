@@ -165,7 +165,7 @@ export abstract class EventSourcedAggregate<
 		// load, poisoning the own stream.
 		const stamped = this.addressNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
-		this.assertPendingCapacity(1);
+		this.assertPendingEventLimit(1);
 		// Both gates run here, not in fold: apply checks only new facts
 		// against the current rules, and replay trusts history. The order
 		// is the one Entity.setState keeps: freeze, validate, store. The

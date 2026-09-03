@@ -773,8 +773,8 @@ export interface PendingEventLimitExceededErrorOptions {
  * moves, so the rejected decision records nothing and moves nothing. The
  * limit is a modelling signal, not a runtime budget: a decision that emits
  * hundreds of facts points at a missing aggregate boundary, and a retry
- * repeats it. A wiring error: split the aggregate, emit fewer facts per
- * decision, or raise the limit.
+ * repeats it. A wiring error: split the aggregate, or emit fewer facts
+ * per decision.
  */
 export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
 	readonly aggregateType: string;

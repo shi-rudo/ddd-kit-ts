@@ -342,7 +342,7 @@ export abstract class BaseAggregate<
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		const stamped = this.addressNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
-		this.assertPendingCapacity(1);
+		this.assertPendingEventLimit(1);
 		this.appendStampedEvent(stamped);
 	}
 
@@ -375,7 +375,7 @@ export abstract class BaseAggregate<
 	 * limit throws {@link PendingEventLimitExceededError}. Without a limit
 	 * the check is a no-op.
 	 */
-	protected assertPendingCapacity(added: number): void {
+	protected assertPendingEventLimit(added: number): void {
 		const limit = this._maxPendingEvents;
 		if (limit === undefined) return;
 		const pending = this._pendingEvents.length;
