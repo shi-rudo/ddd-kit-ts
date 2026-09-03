@@ -29,6 +29,17 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: deepFreeze keeps a RegExp matching
+
+`deepFreeze` passes a `RegExp` through unfrozen, as it does an ArrayBuffer
+view. Pattern and flags of a `RegExp` live in immutable internal slots. Its
+only own data property, `lastIndex`, is scan state that every global or
+sticky match writes. Before this change the freeze made `lastIndex`
+read-only, so a global or sticky pattern inside deep-frozen state (entity
+state under `deepFreezeState`, an event payload, a captured snapshot) threw
+on its first match, far from the freeze. `vo()` still rejects a global or
+sticky `RegExp` at admission: a value object carries no scan state.
+
 ### Added: maxPendingEvents limits the pending list
 
 `AggregateConfig.maxPendingEvents` sets a limit on the pending list of an
@@ -59,15 +70,9 @@ event brand without a freeze passed the mint gate; it now throws
 DTO included. A write into `snapshot.state` between capture and save throws
 a `TypeError` instead of reaching the store. Before this change the envelope
 and `snapshotAt` were frozen, and the state DTO stayed open. The freeze walks
-the DTO once per capture. It cannot seal every built-in: a typed array or
-`DataView` stays writable, and a `Map` or `Set` blocks only the mutators the
-kit knows; see `deepFreeze` for the list.
-
-The capture gate now rejects a global or sticky `RegExp` in the state DTO
-with a `TypeError` that names its path. Such a pattern writes `lastIndex` on
-every `test()` or `exec()`, and the deep freeze would make the first match
-throw far from the capture. A plain `RegExp` stays admitted and matches after
-the freeze. The rule is the one `vo()` applies.
+the DTO once per capture. It cannot seal every built-in. A typed array, a
+`DataView`, or a `RegExp` passes through unfrozen. A `Map` or `Set` blocks
+only the mutators the kit knows. See `deepFreeze` for the list.
 
 ### Fixed: the capability registry recognizes a WeakMap from another realm
 

@@ -274,11 +274,6 @@ export function findPropertyDescriptor(
 	return undefined;
 }
 
-export type MutableBuiltInTag =
-	| "[object Date]"
-	| "[object Map]"
-	| "[object Set]";
-
 export function builtInTagWithoutInvokingAccessors(
 	value: object,
 ): string | undefined {
@@ -298,17 +293,6 @@ export function builtInTagWithoutInvokingAccessors(
 		return tag;
 	}
 	return descriptor === undefined ? undefined : builtInTagFromBrand(value);
-}
-
-export function mutableBuiltInTagWithoutInvokingAccessors(
-	value: object,
-): MutableBuiltInTag | undefined {
-	const tag = builtInTagWithoutInvokingAccessors(value);
-	return tag === "[object Date]" ||
-		tag === "[object Map]" ||
-		tag === "[object Set]"
-		? tag
-		: undefined;
 }
 
 function builtInTagFromBrand(value: object): string | undefined {

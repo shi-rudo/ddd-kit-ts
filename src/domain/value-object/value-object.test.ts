@@ -231,6 +231,16 @@ describe("deepFreeze", () => {
 		},
 	);
 
+	it.each([
+		["global", /a/g],
+		["sticky", /a/y],
+	])("keeps a %s RegExp matching after the freeze", (_flag, pattern) => {
+		const state = deepFreeze({ pattern });
+
+		expect(state.pattern.test("a")).toBe(true);
+		expect(Object.isFrozen(state)).toBe(true);
+	});
+
 	it("does not invoke inherited toStringTag accessors", () => {
 		let accessorInvoked = false;
 		const prototype = Object.create(Object.prototype);

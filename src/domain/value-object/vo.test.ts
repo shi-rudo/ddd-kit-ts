@@ -1155,15 +1155,15 @@ describe("vo() – RegExp value semantics", () => {
 	it("admits a plain RegExp and keeps it usable after freezing", () => {
 		const value = vo({ pattern: /ab+c/i });
 
-		// A non-global, non-sticky RegExp never touches lastIndex, so it stays
-		// a genuine immutable value that still matches once frozen.
+		// A non-global, non-sticky RegExp never touches lastIndex, so it is
+		// a genuine immutable value.
 		expect(value.pattern.test("ABBBC")).toBe(true);
 		expect(value.pattern.source).toBe("ab+c");
 	});
 
 	it("rejects a global RegExp whose lastIndex is mutable scan state", () => {
-		// A global RegExp advances lastIndex on every test()/exec(); deep
-		// freezing it would make matching throw, so it is not a value.
+		// A global RegExp advances lastIndex on every test()/exec(), so it
+		// is a stateful object, not a value.
 		expect(() => vo({ pattern: /ab+c/g })).toThrow(TypeError);
 		expect(() => vo({ pattern: /ab+c/g })).toThrow(/global or sticky RegExp/);
 	});
