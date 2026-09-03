@@ -42,6 +42,14 @@ check required the frozen carrier. A hand-rolled object that carried the
 event brand without a freeze passed the mint gate; it now throws
 `UnmintedEventError`.
 
+### Changed: the captured snapshot is deep-frozen
+
+`captureAggregateSnapshot` deep-freezes the snapshot it returns, the `state`
+DTO included. A write into `snapshot.state` between capture and save throws
+a `TypeError` instead of reaching the store. Before this change the envelope
+and `snapshotAt` were frozen, and the state DTO stayed open. The freeze walks
+the DTO once per capture.
+
 ### Fixed: the capability registry recognizes a WeakMap from another realm
 
 The registry bootstrap reads the value installed under a kit key on

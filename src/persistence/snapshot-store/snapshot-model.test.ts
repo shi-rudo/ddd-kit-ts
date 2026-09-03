@@ -109,6 +109,46 @@ describe("adapter-owned snapshot models", () => {
 		expect(snapshot.snapshotAt.getTime()).toBe(snapshotAt.getTime());
 	});
 
+	it("returns a state that rejects mutation at every depth", () => {
+		const nestedModel = defineSnapshotModel({
+			aggregateType: "Order",
+			schemaVersion: 1,
+			capture: (order: Order) => ({
+				status: order.state.status,
+				lines: [{ sku: "sku-1" }],
+			}),
+			reconstitute: (
+				id: OrderId,
+				state: {
+					readonly status: string;
+					readonly lines: readonly { sku: string }[];
+				},
+				version: Version,
+			): Order => ({ id, state: { status: state.status }, version }),
+		});
+		const order: Order = {
+			id: "order-1" as OrderId,
+			state: { status: "placed" },
+			version: 1 as Version,
+		};
+
+		const snapshot = captureAggregateSnapshot(nestedModel, order, new Date());
+
+		expect(() => {
+			(snapshot.state as { status: string }).status = "shipped";
+		}).toThrow(TypeError);
+		expect(() => {
+			(snapshot.state.lines[0] as { sku: string }).sku = "sku-2";
+		}).toThrow(TypeError);
+		expect(() => {
+			(snapshot.state.lines as Array<{ sku: string }>).push({ sku: "sku-3" });
+		}).toThrow(TypeError);
+		expect(snapshot.state).toEqual({
+			status: "placed",
+			lines: [{ sku: "sku-1" }],
+		});
+	});
+
 	it("rejects invalid or non-Date snapshot times", () => {
 		const order: Order = {
 			id: "order-1" as OrderId,

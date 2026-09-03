@@ -87,8 +87,11 @@ export function defineSnapshotModel<
 /**
  * Captures a detached persistence envelope at an application-supplied time.
  * The application decides when snapshotting is worthwhile; this function does
- * not read a clock or perform I/O. The envelope and its `snapshotAt` are
- * frozen: a `Date` mutator on the returned time throws.
+ * not read a clock or perform I/O. The envelope is deep-frozen, its `state`
+ * and its `snapshotAt` included: a write into the captured state or a
+ * `Date` mutator on the returned time throws. So a change between capture
+ * and save cannot reach the store. The freeze walks the state DTO once per
+ * capture; see {@link deepFreeze} for the built-ins it cannot seal.
  */
 export function captureAggregateSnapshot<
 	TAggregate extends SnapshotAggregate,
@@ -101,10 +104,10 @@ export function captureAggregateSnapshot<
 	assertSnapshotModel(model);
 	const recordedAt = copySnapshotAt(snapshotAt);
 	const state = detachSnapshotState(model.capture(aggregate));
-	return Object.freeze({
+	return deepFreeze({
 		state,
 		version: aggregate.version,
-		snapshotAt: deepFreeze(recordedAt),
+		snapshotAt: recordedAt,
 		schemaVersion: model.schemaVersion,
 	});
 }
