@@ -29,6 +29,27 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: the guides state the payload, version, and actor postures
+
+The domain-events guide says that an event carries the fact, not a pointer
+to it, and that the application shell attaches the actor on the stamp. The
+guide and the TSDoc of `DomainEvent.schemaVersion` and
+`AggregateSnapshot.schemaVersion` name each other: the two fields version
+different shapes and evolve independently. The event-sourcing guide called
+the payload version field `version`; the field is `schemaVersion`. The
+sagas guide gains a section on changing a running process: a new
+`aggregateType` for a new step sequence, a schema bump for a changed shape,
+and never an edit of the handlers in place. The `replayHistory` port doc
+lists the wiring and boundary errors that propagate after the rollback.
+
+### Fixed: the order example throws coded errors
+
+`examples/order` threw a bare `Error` and typed `customerId` and
+`productId` as `string`. It now throws `OrderInWrongStateError` and
+`EmptyOrderError`, both `DomainError` subclasses with a stable code, and
+the spec matches on the class. The ids carry the `Id` brand like the other
+examples.
+
 ### Fixed: deepFreeze keeps a RegExp matching
 
 `deepFreeze` passes a `RegExp` through unfrozen, as it does an ArrayBuffer
