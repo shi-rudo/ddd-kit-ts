@@ -5,7 +5,13 @@ import {
 } from "../../src/domain/value-object/money";
 import { SnapshotCorruptedError } from "../../src/errors/kit-errors";
 import { defineSnapshotModel } from "../../src/persistence/snapshot-store/snapshot-model";
-import { Order, type OrderId, type OrderState } from "./order";
+import {
+	type CustomerId,
+	Order,
+	type OrderId,
+	type OrderState,
+	type ProductId,
+} from "./order";
 
 /**
  * Stored DTO of the order snapshot. Money values are stored as
@@ -15,9 +21,9 @@ import { Order, type OrderId, type OrderState } from "./order";
  */
 export interface OrderSnapshotState {
 	readonly id: OrderId;
-	readonly customerId: string;
+	readonly customerId: CustomerId;
 	readonly items: ReadonlyArray<{
-		readonly productId: string;
+		readonly productId: ProductId;
 		readonly quantity: number;
 		readonly lineTotal: MoneySnapshot;
 	}>;

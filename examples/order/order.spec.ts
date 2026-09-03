@@ -8,18 +8,28 @@ import {
 	captureAggregateSnapshot,
 	reconstituteAggregateFromSnapshot,
 } from "../../src/persistence/snapshot-store/snapshot-model";
-import { Order, type OrderId } from "./order";
+import {
+	type CustomerId,
+	EmptyOrderError,
+	Order,
+	type OrderId,
+	OrderInWrongStateError,
+	type ProductId,
+} from "./order";
 import { orderSnapshotModel } from "./order-snapshot-model";
 
 const eur = (minor: bigint): Money => moneyOfMinor(minor, "EUR", 2);
+const orderId = "order-123" as OrderId;
+const customerId = "customer-456" as CustomerId;
+const product1 = "product-1" as ProductId;
+const product2 = "product-2" as ProductId;
 
 describe("Order Aggregate (without Event Sourcing)", () => {
 	it("should create an order", () => {
-		const orderId = "order-123" as OrderId;
-		const order = Order.create(orderId, "customer-456", eur(0n));
+		const order = Order.create(orderId, customerId, eur(0n));
 
 		expect(order.id).toBe(orderId);
-		expect(order.customerId).toBe("customer-456");
+		expect(order.customerId).toBe(customerId);
 		expect(order.status).toBe("pending");
 		expect(order.itemCount).toBe(0);
 		expect(order.total).toEqual(eur(0n));
@@ -27,10 +37,10 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should add items to order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
+		const order = Order.create(orderId, customerId, eur(0n));
 
-		order.addItem("product-1", 2, eur(2000n));
-		order.addItem("product-2", 1, eur(500n));
+		order.addItem(product1, 2, eur(2000n));
+		order.addItem(product2, 1, eur(500n));
 
 		expect(order.itemCount).toBe(2);
 		expect(order.total).toEqual(eur(2500n));
@@ -38,8 +48,8 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should confirm order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 1, eur(1000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
 
 		order.confirm();
 
@@ -48,16 +58,14 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should not allow confirming empty order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
+		const order = Order.create(orderId, customerId, eur(0n));
 
-		expect(() => order.confirm()).toThrow(
-			"Cannot confirm an order without items",
-		);
+		expect(() => order.confirm()).toThrow(EmptyOrderError);
 	});
 
 	it("should ship confirmed order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 1, eur(1000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
 		order.confirm();
 
 		order.ship();
@@ -67,15 +75,15 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should not allow shipping non-confirmed order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 1, eur(1000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
 
-		expect(() => order.ship()).toThrow("Only confirmed orders can be shipped");
+		expect(() => order.ship()).toThrow(OrderInWrongStateError);
 	});
 
 	it("should cancel pending order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 1, eur(1000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
 
 		order.cancel();
 
@@ -83,17 +91,17 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should not allow cancelling shipped order", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 1, eur(1000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 1, eur(1000n));
 		order.confirm();
 		order.ship();
 
-		expect(() => order.cancel()).toThrow("Cannot cancel a shipped order");
+		expect(() => order.cancel()).toThrow(OrderInWrongStateError);
 	});
 
 	it("should create snapshot", () => {
-		const order = Order.create("order-123" as OrderId, "customer-456", eur(0n));
-		order.addItem("product-1", 2, eur(2000n));
+		const order = Order.create(orderId, customerId, eur(0n));
+		order.addItem(product1, 2, eur(2000n));
 		order.confirm();
 
 		const snapshotAt = new Date("2027-04-05T06:07:08.000Z");
@@ -114,12 +122,8 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 	});
 
 	it("should restore from snapshot", () => {
-		const order1 = Order.create(
-			"order-123" as OrderId,
-			"customer-456",
-			eur(0n),
-		);
-		order1.addItem("product-1", 2, eur(2000n));
+		const order1 = Order.create(orderId, customerId, eur(0n));
+		order1.addItem(product1, 2, eur(2000n));
 		order1.confirm();
 
 		const snapshot = captureAggregateSnapshot(
@@ -130,7 +134,7 @@ describe("Order Aggregate (without Event Sourcing)", () => {
 
 		const order2 = reconstituteAggregateFromSnapshot(
 			orderSnapshotModel,
-			"order-123" as OrderId,
+			orderId,
 			snapshot,
 		);
 
