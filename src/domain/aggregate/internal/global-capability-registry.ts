@@ -2,6 +2,7 @@ import {
 	CapabilityRegistryConflictError,
 	UnmanagedInstanceError,
 } from "../../../errors/kit-errors";
+import { isWeakMap } from "../../../internal/structural/is-built-in";
 
 /**
  * A capability registry with the outcome of its bootstrap and the one
@@ -36,25 +37,6 @@ const LOCAL_REGISTRY_DETAIL =
 	"host rejected the global registration, so an instance from another " +
 	"package copy cannot be recognized.";
 
-const weakMapHas = WeakMap.prototype.has;
-const PROBE_KEY = {};
-
-/**
- * `instanceof WeakMap` binds to the constructor of this realm. A registry
- * that a kit copy installed from another realm (a `vm` context, an iframe)
- * would then read as a foreign value and raise a false conflict. The
- * internal-slot probe gives the same answer in every realm, and a plain
- * object cannot spoof it through `Symbol.toStringTag`.
- */
-function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
-	try {
-		weakMapHas.call(value, PROBE_KEY);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Shared bootstrap for the kit's cross-copy capability registries.
  *
@@ -81,6 +63,8 @@ export function createGlobalCapabilityRegistry<TCapability extends object>(
 ): CapabilityRegistry<TCapability> {
 	const descriptor = Object.getOwnPropertyDescriptor(host, key);
 	if (descriptor !== undefined) {
+		// Brand-checked, not instanceof: a registry that a kit copy installed
+		// from another realm must not read as a conflict.
 		if (isWeakMap(descriptor.value)) {
 			return withRequire(
 				descriptor.value as WeakMap<object, TCapability>,

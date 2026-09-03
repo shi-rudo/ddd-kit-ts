@@ -428,3 +428,18 @@ export function isBuiltInObject(obj: object, tag: string): boolean {
 	if (tag.endsWith("Array]")) return false;
 	return BUILT_IN_TAGS.has(tag) && hasBrand(obj, tag);
 }
+
+/**
+ * Brand-verified `WeakMap` check that holds across realms. `instanceof
+ * WeakMap` binds to the constructor of one realm, so a WeakMap from a `vm`
+ * context or an iframe reads as a foreign value. The internal-slot probe
+ * answers the same in every realm, and a plain object cannot spoof it
+ * through `Symbol.toStringTag`.
+ */
+export function isWeakMap(value: unknown): value is WeakMap<object, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		hasBrand(value, "[object WeakMap]")
+	);
+}
