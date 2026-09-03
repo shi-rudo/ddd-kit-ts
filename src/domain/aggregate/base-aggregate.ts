@@ -3,10 +3,12 @@ import {
 	InvalidVersionError,
 	MisaddressedEventError,
 	PendingEventBatchMismatchError,
+	PendingEventLimitExceededError,
 	ReentrantEventRecordingError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
+import { assertPositiveSafeInteger } from "../../internal/validate";
 import { Entity, type EntityConfig } from "../entity/entity";
 import {
 	type AnyDomainEvent,
@@ -30,7 +32,19 @@ import {
 } from "./pending-event-recording";
 
 /** Construction options shared by state-stored and event-sourced aggregates. */
-export type AggregateConfig<TState = unknown> = EntityConfig<TState>;
+export interface AggregateConfig<TState = unknown>
+	extends EntityConfig<TState> {
+	/**
+	 * Upper bound on the pending list. A recording that would grow the list
+	 * past it throws {@link PendingEventLimitExceededError} before the
+	 * state moves, so the rejected decision records nothing and moves
+	 * nothing. Defaults to unlimited. The limit is a modelling signal: a
+	 * decision that emits hundreds of facts points at a missing aggregate
+	 * boundary, not at a limit that is too low. Must be a positive safe
+	 * integer when given.
+	 */
+	readonly maxPendingEvents?: number;
+}
 
 /**
  * Shared base for both `StateStoredAggregate` (state-stored) and
@@ -99,12 +113,22 @@ export abstract class BaseAggregate<
 
 	private _pendingEvents: PendingDomainEvent<TEvent>[] = [];
 
+	private readonly _maxPendingEvents: number | undefined;
+
 	protected constructor(
 		id: TId,
 		initialState: TState,
 		config?: AggregateConfig<TState>,
 	) {
 		super(id, initialState, config);
+		if (config?.maxPendingEvents !== undefined) {
+			assertPositiveSafeInteger(
+				"Aggregate",
+				"maxPendingEvents",
+				config.maxPendingEvents,
+			);
+		}
+		this._maxPendingEvents = config?.maxPendingEvents;
 		registerPendingEventLifecycleCapability(this, {
 			acknowledge: (events, committedVersion) => {
 				this.acknowledgePendingEvents(events, committedVersion);
@@ -304,8 +328,9 @@ export abstract class BaseAggregate<
 	 * aggregate throws {@link MisaddressedEventError} before anything is
 	 * recorded. Each append is one fact. A decision appended twice becomes
 	 * two facts with distinct ids. A recorded event that is already pending
-	 * throws {@link DuplicateEventIdError} before anything is recorded.
-	 * Prefer the higher-level `StateStoredAggregate.setState()`
+	 * throws {@link DuplicateEventIdError}, and a list at `maxPendingEvents`
+	 * throws {@link PendingEventLimitExceededError}, before anything is
+	 * recorded. Prefer the higher-level `StateStoredAggregate.setState()`
 	 * (state-stored) or `EventSourcedAggregate.apply()` (event-sourced) call
 	 * sites, both of which wrap `addDomainEvent` in the canonical
 	 * record-AFTER-mutation order (Vernon §8). Calling `addDomainEvent`
@@ -317,6 +342,7 @@ export abstract class BaseAggregate<
 	protected addDomainEvent(event: PendingDomainEvent<TEvent>): void {
 		const stamped = this.addressNewEvent(event);
 		this.assertEventIdsNotPending([stamped]);
+		this.assertPendingCapacity(1);
 		this.appendStampedEvent(stamped);
 	}
 
@@ -341,6 +367,26 @@ export abstract class BaseAggregate<
 			}
 			pendingIds.add(event.eventId);
 		}
+	}
+
+	/**
+	 * The pending list stays within `maxPendingEvents`, checked before the
+	 * change becomes observable: a batch that would grow the list past the
+	 * limit throws {@link PendingEventLimitExceededError}. Without a limit
+	 * the check is a no-op.
+	 */
+	protected assertPendingCapacity(added: number): void {
+		const limit = this._maxPendingEvents;
+		if (limit === undefined) return;
+		const pending = this._pendingEvents.length;
+		if (pending + added <= limit) return;
+		throw new PendingEventLimitExceededError({
+			aggregateType: this.aggregateType,
+			aggregateId: String(this.id),
+			limit,
+			pending,
+			added,
+		});
 	}
 
 	/**

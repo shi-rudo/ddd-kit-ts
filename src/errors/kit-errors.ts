@@ -755,6 +755,51 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 	}
 }
 
+/** Constructor options for {@link PendingEventLimitExceededError}. */
+export interface PendingEventLimitExceededErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** The configured `maxPendingEvents`. */
+	readonly limit: number;
+	/** Events pending before the rejected recording. */
+	readonly pending: number;
+	/** Events the rejected recording would have added. */
+	readonly added: number;
+}
+
+/**
+ * Thrown when a recording would grow the pending list of an aggregate past
+ * `AggregateConfig.maxPendingEvents`. The check runs before the state
+ * moves, so the rejected decision records nothing and moves nothing. The
+ * limit is a modelling signal, not a runtime budget: a decision that emits
+ * hundreds of facts points at a missing aggregate boundary, and a retry
+ * repeats it. A wiring error: split the aggregate, emit fewer facts per
+ * decision, or raise the limit.
+ */
+export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly limit: number;
+	readonly pending: number;
+	readonly added: number;
+
+	constructor(options: PendingEventLimitExceededErrorOptions) {
+		super(
+			"PENDING_EVENT_LIMIT_EXCEEDED",
+			`Aggregate ${options.aggregateType}(${options.aggregateId}) holds ` +
+				`${options.pending} pending event(s) and cannot record ` +
+				`${options.added} more: maxPendingEvents is ${options.limit}. ` +
+				"A decision that emits this many facts points at a missing " +
+				"aggregate boundary.",
+		);
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.limit = options.limit;
+		this.pending = options.pending;
+		this.added = options.added;
+	}
+}
+
 /**
  * Thrown by the post-commit acknowledgement of an aggregate when the
  * committed batch is not the prefix of its pending events any more. The
@@ -1558,6 +1603,7 @@ export type KitErrorCode =
 	| "NESTED_UNIT_OF_WORK"
 	| "NON_PROGRESSING_EVENT_STREAM_PAGE"
 	| "PENDING_EVENT_BATCH_MISMATCH"
+	| "PENDING_EVENT_LIMIT_EXCEEDED"
 	| "PROJECTION_GAP"
 	| "PROJECTION_IDENTITY_VIOLATION"
 	| "PROJECTION_ORDER_VIOLATION"

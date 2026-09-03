@@ -9,6 +9,7 @@ import {
 	HostileStateKeyError,
 	MisaddressedEventError,
 	MissingFoldError,
+	PendingEventLimitExceededError,
 	UnmintedEventError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -1829,6 +1830,52 @@ describe("apply and replay bookkeeping", () => {
 		expect(result.isOk()).toBe(true);
 		expect(Object.isFrozen(shelf.state.items)).toBe(true);
 		expect(Object.isFrozen(shelf.state.items[0])).toBe(true);
+	});
+});
+
+describe("maxPendingEvents on the apply path", () => {
+	it("rejects the apply that would grow the pending list past the limit before anything moves", () => {
+		const aggregate = new TestEventSourcedAggregate(
+			"test-1" as TestId,
+			{ value: 0, status: "inactive" },
+			{ maxPendingEvents: 1 },
+		);
+		aggregate.updateValue(1);
+
+		expect(() => aggregate.updateValue(2)).toThrow(
+			PendingEventLimitExceededError,
+		);
+		expect(() => aggregate.updateValue(2)).toThrow(
+			expect.objectContaining({
+				code: "PENDING_EVENT_LIMIT_EXCEEDED",
+				limit: 1,
+				pending: 1,
+				added: 1,
+			}),
+		);
+
+		expect(aggregate.state.value).toBe(1);
+		expect(aggregate.version).toBe(1);
+		expect(aggregate.pendingEvents).toHaveLength(1);
+	});
+
+	it("does not count replayed history against the limit", () => {
+		const aggregate = new TestEventSourcedAggregate(
+			"test-1" as TestId,
+			{ value: 0, status: "inactive" },
+			{ maxPendingEvents: 1 },
+		);
+		const history = [1, 2, 3].map(
+			(newValue) =>
+				createDomainEvent("TestEventUpdated", { newValue }) as TestEventUpdated,
+		);
+
+		const replayed = aggregate.replayHistory(history);
+		aggregate.updateValue(4);
+
+		expect(replayed.isOk()).toBe(true);
+		expect(aggregate.version).toBe(4);
+		expect(aggregate.pendingEvents).toHaveLength(1);
 	});
 });
 

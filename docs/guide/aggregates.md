@@ -89,6 +89,15 @@ the application edge. See
 [Domain Events -> Shape](./domain-events.md#shape) for the two tiers of the
 mint mark.
 
+`AggregateConfig.maxPendingEvents` bounds the pending list. A recording that
+would grow the list past the bound throws `PendingEventLimitExceededError`
+(code `PENDING_EVENT_LIMIT_EXCEEDED`) before the state moves, on `setState`,
+`apply`, and `addDomainEvent`. Replayed history does not count. The default
+is unlimited. Treat the bound as a modelling signal, not as a budget to
+raise: a decision that emits hundreds of facts in one command points at a
+missing aggregate boundary. Split the aggregate, or emit one fact per
+decision.
+
 ## Creating New Aggregates
 
 Prefer static factory methods over public constructors.

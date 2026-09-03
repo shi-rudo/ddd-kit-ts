@@ -19,9 +19,9 @@ export abstract class StateStoredAggregate<
 	/**
 	 * Replaces the state, advances the OCC version, and records the events
 	 * of the change, in that order. State validation, the event mint gate,
-	 * the event address check, and the pending-identity check run before
-	 * the change becomes observable, so a rejected decision records nothing
-	 * and moves nothing. Without events the call is a plain versioned state
+	 * the event address check, the pending-identity check, and the pending
+	 * capacity check run before the change becomes observable, so a
+	 * rejected decision records nothing and moves nothing. Without events the call is a plain versioned state
 	 * change.
 	 */
 	protected override setState(
@@ -37,6 +37,7 @@ export abstract class StateStoredAggregate<
 			: [events as PendingDomainEvent<TEvent>];
 		const stamped = eventBatch.map((event) => this.addressNewEvent(event));
 		this.assertEventIdsNotPending(stamped);
+		this.assertPendingCapacity(stamped.length);
 		// The version number is validated before the state moves; the write
 		// itself comes after the state gates, so a rejected state leaves the
 		// version untouched.

@@ -170,6 +170,7 @@ const INDEX_SURFACE = [
 	"NonProgressingEventStreamPageError",
 	"OutboxDispatcher",
 	"PendingEventBatchMismatchError",
+	"PendingEventLimitExceededError",
 	"ProjectionGapError",
 	"ProjectionIdentityViolationError",
 	"ProjectionOrderViolationError",

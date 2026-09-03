@@ -29,6 +29,17 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: maxPendingEvents bounds the pending list
+
+`AggregateConfig.maxPendingEvents` sets an upper bound on the pending list of
+an aggregate. A recording that would grow the list past the bound throws
+`PendingEventLimitExceededError` (code `PENDING_EVENT_LIMIT_EXCEEDED`)
+before the state moves, so the rejected decision records nothing and moves
+nothing. The check runs on `setState`, `apply`, and `addDomainEvent`.
+Replayed history does not count. The default stays unlimited. The bound is a
+modelling signal: a decision that emits hundreds of facts points at a
+missing aggregate boundary.
+
 ### Changed: one probe for every cooperative brand
 
 The kit marks a minted event, an uncommitted decision, and a repository
