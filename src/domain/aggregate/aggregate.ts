@@ -97,7 +97,17 @@ export interface ReplayableAggregate<
 	/**
 	 * Reconstitutes the aggregate from an event history. Returns
 	 * `Result` because event-stream corruption is an expected
-	 * recoverable failure at the infrastructure boundary.
+	 * recoverable failure at the infrastructure boundary: a `DomainError`
+	 * thrown by a fold arrives as `Err`. Every other failure propagates
+	 * after the all-or-nothing rollback.
+	 *
+	 * @throws ForeignEventError when a history event names another aggregate
+	 * @throws UnreplayableAggregateError when the target carries pending
+	 *   decisions, or a fold records one
+	 * @throws MissingFoldError when no fold is declared for an event type
+	 * @throws FoldReturnedNoStateError when a fold returns `undefined`
+	 * @throws HostileStateKeyError when the folded state carries an own
+	 *   `__proto__` key
 	 */
 	replayHistory(history: ReadonlyArray<TEvent>): Result<void, DomainError>;
 }
