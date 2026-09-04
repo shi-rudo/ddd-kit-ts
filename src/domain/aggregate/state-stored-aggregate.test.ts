@@ -233,10 +233,6 @@ class TestAggregate extends StateStoredAggregate<TestState, TestId> {
 	deactivate(): void {
 		this.setState({ ...this.state, status: "inactive" });
 	}
-
-	updateWithSetState(newValue: number): void {
-		this.setState({ ...this.state, value: newValue });
-	}
 }
 
 describe("setState OCC contract (named methods, no flag argument)", () => {
@@ -341,32 +337,17 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(aggregate.state.value).toBe(20);
 			expect(aggregate.version).toBe(1);
 		});
-
-		it("should support setState helper method", () => {
-			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-
-			aggregate.updateWithSetState(30);
-
-			expect(aggregate.state.value).toBe(30);
-		});
 	});
 
 	describe("Version management", () => {
-		it("version should not be externally assignable", () => {
+		it("rejects an external version write at runtime", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
-			// Version should be readable
-			expect(aggregate.version).toBe(0);
-
-			// After domain operation, version should increase
-			aggregate.updateValue(20);
-			expect(aggregate.version).toBe(1);
-
-			// Direct assignment should not be possible at runtime
-			// (TypeScript readonly prevents compile-time, but we verify runtime encapsulation)
 			expect(() => {
 				(aggregate as any).version = 99;
 			}).toThrow();
+
+			expect(aggregate.version).toBe(0);
 		});
 
 		it("advances the version by one per state change", () => {
@@ -446,22 +427,6 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 	});
 
 	describe("State immutability", () => {
-		it("should expose state as readonly", () => {
-			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-
-			const state = aggregate.state;
-			// TypeScript should prevent: state.value = 999;
-			expect(state.value).toBe(10);
-		});
-
-		it("replaces the state through a domain method", () => {
-			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-
-			aggregate.updateValue(20);
-
-			expect(aggregate.state.value).toBe(20);
-		});
-
 		it("does not leak the internal state reference through the getter", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 			const leaked = aggregate.state as { value: number };

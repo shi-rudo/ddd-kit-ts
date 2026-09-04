@@ -1016,11 +1016,35 @@ describe("replay trusts history", () => {
 		expect(isRecordedDomainEvent(pending as object)).toBe(false);
 	});
 
-	it("rejects a hand-rolled mutable event before anything moves", () => {
-		// createDomainEvent deep-freezes and defensively copies; a bare
-		// literal bypasses that, and a mutable payload could diverge from
-		// the state change it records. Rejected BEFORE validate/dispatch,
-		// so state, version, and pendingEvents stay clean.
+	// createDomainEvent deep-freezes and defensively copies; a bare
+	// literal bypasses that, and a mutable payload could diverge from
+	// the state change it records. The mint marker checks provenance,
+	// not frozen-ness, so a frozen shell around mutable nested data is
+	// rejected the same way. Rejected BEFORE validate/dispatch, so
+	// state, version, and pendingEvents stay clean.
+	it.each([
+		[
+			"an open literal",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				({ ...minted, payload: { newValue: 99 } }) as TestEventUpdated,
+		],
+		[
+			"a frozen shell around a mutable payload",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				Object.freeze({
+					...minted,
+					payload: { newValue: 99 },
+				}) as TestEventUpdated,
+		],
+		[
+			"a frozen shell around mutable metadata",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				Object.freeze({
+					...minted,
+					metadata: { correlationId: "mutable" },
+				}) as TestEventUpdated,
+		],
+	])("rejects %s of a minted event before anything moves", (_shape, copyOf) => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1028,33 +1052,12 @@ describe("replay trusts history", () => {
 		const minted = createDomainEvent("TestEventUpdated", {
 			newValue: 99,
 		}) as TestEventUpdated;
-		const literal = {
-			...minted,
-			payload: { newValue: 99 },
-		} as TestEventUpdated;
 
-		expect(() => agg.testApply(literal)).toThrow(UnmintedEventError);
+		expect(() => agg.testApply(copyOf(minted))).toThrow(UnmintedEventError);
+
 		expect(agg.state.value).toBe(10);
 		expect(agg.version).toBe(0);
 		expect(agg.pendingEvents).toHaveLength(0);
-
-		// A frozen shell with mutable nested data is equally rejected:
-		// the mint marker checks provenance, not frozen-ness, so no
-		// shallow-freeze trick can smuggle a mutable graph past it.
-		const frozenShellMutablePayload = Object.freeze({
-			...minted,
-			payload: { newValue: 99 },
-		}) as TestEventUpdated;
-		expect(() => agg.testApply(frozenShellMutablePayload)).toThrow(
-			UnmintedEventError,
-		);
-		const frozenShellMutableMetadata = Object.freeze({
-			...minted,
-			metadata: { correlationId: "mutable" },
-		}) as TestEventUpdated;
-		expect(() => agg.testApply(frozenShellMutableMetadata)).toThrow(
-			UnmintedEventError,
-		);
 	});
 
 	it("rejects a lookalike that inherits a minted event through its prototype", () => {
