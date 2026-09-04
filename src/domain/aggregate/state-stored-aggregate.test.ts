@@ -669,12 +669,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 	});
 
 	describe("createEvent", () => {
-		type Recorded = DomainEvent<"Recorded", { v: number }>;
-
 		class DecidingAggregate extends StateStoredAggregate<
 			TestState,
 			TestId,
-			Recorded
+			ValueUpdated
 		> {
 			protected readonly aggregateType = "DecidingAggregate";
 
@@ -683,8 +681,8 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				super(id, initialState);
 			}
 
-			decide(v: number): PendingDomainEvent<Recorded> {
-				return this.createEvent("Recorded", { v });
+			decide(newValue: number): PendingDomainEvent<ValueUpdated> {
+				return this.createEvent("ValueUpdated", { newValue });
 			}
 		}
 
@@ -698,30 +696,28 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			expect(event.aggregateId).toBe("r-1");
 			expect(event.aggregateType).toBe("DecidingAggregate");
-			expect(event.type).toBe("Recorded");
-			expect(event.payload).toEqual({ v: 42 });
+			expect(event.type).toBe("ValueUpdated");
+			expect(event.payload).toEqual({ newValue: 42 });
 			expect(event).not.toHaveProperty("eventId");
 			expect(event).not.toHaveProperty("occurredAt");
 		});
 	});
 
 	describe("kit-internal persistence acknowledgement", () => {
-		type TestRecorded = DomainEvent<"TestRecorded", { value: number }>;
-
 		class EventingAggregate extends StateStoredAggregate<
 			TestState,
 			TestId,
-			TestRecorded
+			ValueUpdated
 		> {
 			protected readonly aggregateType = "EventingAggregate";
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
-			addTestEvent(value: number): void {
+			addValueUpdated(newValue: number): void {
 				this.addDomainEvent(
 					createDomainEvent(
-						"TestRecorded",
-						{ value },
+						"ValueUpdated",
+						{ newValue },
 						{
 							aggregateId: this.id,
 							aggregateType: this.aggregateType,
@@ -736,8 +732,8 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
-			aggregate.addTestEvent(2);
+			aggregate.addValueUpdated(1);
+			aggregate.addValueUpdated(2);
 
 			expect(aggregate.pendingEvents.length).toBe(2);
 
@@ -759,8 +755,8 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
-			aggregate.addTestEvent(2);
+			aggregate.addValueUpdated(1);
+			aggregate.addValueUpdated(2);
 			const reversed = [...aggregate.pendingEvents].reverse();
 
 			expect(() =>
@@ -775,7 +771,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
+			aggregate.addValueUpdated(1);
 			const pending = aggregate.pendingEvents;
 
 			let caught: unknown;
@@ -802,8 +798,8 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
-			const foreign = createDomainEvent("TestRecorded", { value: 99 });
+			aggregate.addValueUpdated(1);
+			const foreign = createDomainEvent("ValueUpdated", { newValue: 99 });
 
 			expect(() =>
 				lifecycleOf(aggregate).discardPendingEvents([foreign]),
@@ -817,14 +813,14 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			aggregate.addTestEvent(1);
+			aggregate.addValueUpdated(1);
 			const enrolled = aggregate.pendingEvents;
-			aggregate.addTestEvent(2);
+			aggregate.addValueUpdated(2);
 
 			lifecycleOf(aggregate).acknowledge(enrolled, 1 as Version);
 
 			expect(aggregate.pendingEvents).toHaveLength(1);
-			expect(aggregate.pendingEvents[0]?.payload.value).toBe(2);
+			expect(aggregate.pendingEvents[0]?.payload.newValue).toBe(2);
 			expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
 		});
 	});
