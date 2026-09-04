@@ -457,9 +457,12 @@ the in-flight instances:
    process as a second class with its own `aggregateType`, for example
    `CheckoutSagaV2`. Move the start reaction to the new class, so a new
    process starts under the new type only. Keep the continuation reactions of
-   the old class subscribed until its last instance is done. A continuation
-   that finds no instance of its own class returns without a write. Then the
-   old class leaves the codebase.
+   the old class subscribed until its last instance is done. Each
+   continuation must look its instance up with `findById`. When its own class
+   has no instance for that id, it must return without a saga write.
+   `getById` throws on the missing instance, and the dispatcher then retries
+   the delivery. When the last old instance is done, the old class leaves
+   the codebase.
 2. **A schema bump for a changed shape.** When the steps stay the same and
    only the stored shape changes, keep the class. An event-sourced process
    bumps the `schemaVersion` of the changed process event and upcasts old

@@ -319,7 +319,7 @@ put it in the payload.
 The application shell attaches the actor on the stamp. `userId` says who caused
 the fact and `correlationId` says in which operation. That is the audit record.
 The kit does not require it: attach it on every stamp, and every recorded event
-carries it. No fold reads it. When a rule depends on the actor, for example
+carries it. A fold must not read it. When a rule depends on the actor, for example
 "only the owner cancels", the method takes the actor as an argument. The
 payload then records the actor as a domain value.
 
