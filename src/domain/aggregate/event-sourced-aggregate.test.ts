@@ -1696,6 +1696,27 @@ describe("apply and replay bookkeeping", () => {
 		expect(lifecycleOf(agg).persistedVersion()).toBeUndefined();
 	});
 
+	it("adds each page of the guide's size to the version and folds every row", () => {
+		// The guide reads history in pages of 256. Two full pages catch up
+		// through replayHistory, one after the other; the version is the
+		// sum of both page lengths, and the last row is what the state
+		// reflects.
+		const pageSize = 256;
+		const pageOf = (firstValue: number): TestEventUpdated[] =>
+			Array.from({ length: pageSize }, (_, offset) =>
+				updated(firstValue + offset),
+			);
+		const agg = fresh();
+
+		expect(agg.replayHistory(pageOf(1)).isOk()).toBe(true);
+		expect(agg.replayHistory(pageOf(pageSize + 1)).isOk()).toBe(true);
+
+		expect(agg.version).toBe(2 * pageSize);
+		expect(agg.state.value).toBe(2 * pageSize);
+		expect(agg.pendingEvents).toHaveLength(0);
+		expect(lifecycleOf(agg).persistedVersion()).toBe(2 * pageSize);
+	});
+
 	it("applies a new fact on top of a restored version", () => {
 		const agg = fresh();
 		expect(agg.replayHistory([activated(), updated(2)]).isOk()).toBe(true);
