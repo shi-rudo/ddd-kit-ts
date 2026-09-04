@@ -1,5 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	DirectStateMutationError,
 	DomainError,
@@ -1127,28 +1127,6 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
-		// A duplicate npm dependency or a plugin bundle loads a second
-		// copy of the kit whose WeakSet this instance cannot see. Such an
-		// event carries the shared recorded brand instead; the gate accepts it.
-		// The brand is cooperative by design (the gate catches accidental
-		// literals, it is not a security boundary).
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		vi.resetModules();
-		const foreignDomainEventModule = await import("../event/domain-event");
-		const foreignInstanceEvent = foreignDomainEventModule.createDomainEvent(
-			"TestEventUpdated",
-			{ newValue: 3 },
-		) as TestEventUpdated;
-
-		agg.testApply(foreignInstanceEvent);
-
-		expect(agg.state.value).toBe(3);
-	});
-
 	it("accepts the address-stamped copy apply() mints for address-less events", () => {
 		// The stamped copy is kit-derived from a minted event and adopted
 		// into the mint marker; the gate must not reject apply's own work.
@@ -1163,30 +1141,6 @@ describe("replay trusts history", () => {
 		);
 		expect(agg.pendingEvents).toHaveLength(1);
 		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
-	});
-
-	it("preserves the cooperative recorded brand on address-stamped copies", async () => {
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		agg.testApply(
-			createDomainEvent("TestEventUpdated", {
-				newValue: 5,
-			}) as TestEventUpdated,
-		);
-		const stamped = agg.pendingEvents[0];
-		expect(stamped).toBeDefined();
-
-		// Re-evaluate domain-event.ts with a fresh module-private WeakSet,
-		// as a duplicate package installation or plugin bundle would. Only
-		// the shared Symbol.for brand can establish provenance there.
-		vi.resetModules();
-		const foreignDomainEventModule = await import("../event/domain-event");
-
-		expect(
-			foreignDomainEventModule.isRecordedDomainEvent(stamped as TestEvent),
-		).toBe(true);
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {

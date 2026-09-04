@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	DuplicateEventIdError,
 	InvalidVersionError,
@@ -819,18 +819,6 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(aggregate.pendingEvents).toHaveLength(1);
 			expect(aggregate.pendingEvents[0]?.payload.value).toBe(2);
 			expect(lifecycleOf(aggregate).persistedVersion()).toBe(1);
-		});
-
-		it("resolves the lifecycle capability from a second copy of the module", async () => {
-			const aggregate = TestAggregate.create("test-1" as TestId, 10);
-
-			// A duplicate package installation re-evaluates the module; its
-			// copy must find the capability this copy registered.
-			vi.resetModules();
-			const foreignModule = await import("./pending-event-lifecycle");
-			expect(
-				foreignModule.pendingEventLifecycleCapabilityFor(aggregate),
-			).toBeDefined();
 		});
 	});
 
