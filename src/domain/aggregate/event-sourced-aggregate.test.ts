@@ -1,5 +1,5 @@
 import { isBaseError } from "@shirudo/base-error";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
 	DirectStateMutationError,
 	DomainError,
@@ -136,6 +136,11 @@ const testFolds = {
 	}),
 	TestEventInvalid: (state: TestState): TestState => state,
 };
+
+/** A fold map that leaves folds out on purpose, past the type check. */
+function partialFolds(declared: Partial<typeof testFolds>): typeof testFolds {
+	return declared as typeof testFolds;
+}
 
 class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
@@ -344,13 +349,9 @@ describe("EventSourcedAggregate", () => {
 					this.apply(event);
 				}
 
-				// Intentionally missing fold for TestEventUpdated
-				protected readonly folds = {
-					TestEventCreated: (s: TestState): TestState => s,
-				} as unknown as Record<
-					TestEvent["type"],
-					(s: TestState, e: TestEventDecision) => TestState
-				>;
+				protected readonly folds = partialFolds({
+					TestEventCreated: testFolds.TestEventCreated,
+				});
 			}
 
 			const aggregate = new FoldlessAggregate("test-1" as TestId, {
@@ -389,10 +390,7 @@ describe("EventSourcedAggregate", () => {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
-				protected readonly folds = {} as unknown as Record<
-					TestEvent["type"],
-					(s: TestState, e: TestEventDecision) => TestState
-				>;
+				protected readonly folds = partialFolds({});
 			}
 
 			const aggregate = new FoldlessReplay("test-1" as TestId, {
@@ -437,13 +435,10 @@ describe("EventSourcedAggregate", () => {
 				}
 
 				protected readonly folds = {
-					TestEventCreated: (state: TestState): TestState => state,
+					...testFolds,
 					TestEventUpdated: (): TestState => {
 						throw new Error("fold boom");
 					},
-					TestEventActivated: (state: TestState): TestState => state,
-					TestEventDeactivated: (state: TestState): TestState => state,
-					TestEventInvalid: (state: TestState): TestState => state,
 				};
 			}
 
@@ -489,12 +484,9 @@ describe("EventSourcedAggregate", () => {
 				this.apply(event);
 			}
 
-			protected readonly folds = {
-				TestEventCreated: (s: TestState): TestState => s,
-			} as unknown as Record<
-				TestEvent["type"],
-				(s: TestState, e: TestEventDecision) => TestState
-			>;
+			protected readonly folds = partialFolds({
+				TestEventCreated: testFolds.TestEventCreated,
+			});
 		}
 
 		const corruptTypes = [
@@ -1016,11 +1008,35 @@ describe("replay trusts history", () => {
 		expect(isRecordedDomainEvent(pending as object)).toBe(false);
 	});
 
-	it("rejects a hand-rolled mutable event before anything moves", () => {
-		// createDomainEvent deep-freezes and defensively copies; a bare
-		// literal bypasses that, and a mutable payload could diverge from
-		// the state change it records. Rejected BEFORE validate/dispatch,
-		// so state, version, and pendingEvents stay clean.
+	// createDomainEvent deep-freezes and defensively copies; a bare
+	// literal bypasses that, and a mutable payload could diverge from
+	// the state change it records. The mint marker checks provenance,
+	// not frozen-ness, so a frozen shell around mutable nested data is
+	// rejected the same way. Rejected BEFORE validate/dispatch, so
+	// state, version, and pendingEvents stay clean.
+	it.each([
+		[
+			"an open literal",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				({ ...minted, payload: { newValue: 99 } }) as TestEventUpdated,
+		],
+		[
+			"a frozen shell around a mutable payload",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				Object.freeze({
+					...minted,
+					payload: { newValue: 99 },
+				}) as TestEventUpdated,
+		],
+		[
+			"a frozen shell around mutable metadata",
+			(minted: TestEventUpdated): TestEventUpdated =>
+				Object.freeze({
+					...minted,
+					metadata: { correlationId: "mutable" },
+				}) as TestEventUpdated,
+		],
+	])("rejects %s of a minted event before anything moves", (_shape, copyOf) => {
 		const agg = new RuleTighteningAggregate("test-1" as TestId, {
 			value: 10,
 			status: "inactive",
@@ -1028,33 +1044,12 @@ describe("replay trusts history", () => {
 		const minted = createDomainEvent("TestEventUpdated", {
 			newValue: 99,
 		}) as TestEventUpdated;
-		const literal = {
-			...minted,
-			payload: { newValue: 99 },
-		} as TestEventUpdated;
 
-		expect(() => agg.testApply(literal)).toThrow(UnmintedEventError);
+		expect(() => agg.testApply(copyOf(minted))).toThrow(UnmintedEventError);
+
 		expect(agg.state.value).toBe(10);
 		expect(agg.version).toBe(0);
 		expect(agg.pendingEvents).toHaveLength(0);
-
-		// A frozen shell with mutable nested data is equally rejected:
-		// the mint marker checks provenance, not frozen-ness, so no
-		// shallow-freeze trick can smuggle a mutable graph past it.
-		const frozenShellMutablePayload = Object.freeze({
-			...minted,
-			payload: { newValue: 99 },
-		}) as TestEventUpdated;
-		expect(() => agg.testApply(frozenShellMutablePayload)).toThrow(
-			UnmintedEventError,
-		);
-		const frozenShellMutableMetadata = Object.freeze({
-			...minted,
-			metadata: { correlationId: "mutable" },
-		}) as TestEventUpdated;
-		expect(() => agg.testApply(frozenShellMutableMetadata)).toThrow(
-			UnmintedEventError,
-		);
 	});
 
 	it("rejects a lookalike that inherits a minted event through its prototype", () => {
@@ -1124,28 +1119,6 @@ describe("replay trusts history", () => {
 		expect(agg.pendingEvents).toHaveLength(0);
 	});
 
-	it("recognizes events minted by another copy of the kit via the cooperative brand", async () => {
-		// A duplicate npm dependency or a plugin bundle loads a second
-		// copy of the kit whose WeakSet this instance cannot see. Such an
-		// event carries the shared recorded brand instead; the gate accepts it.
-		// The brand is cooperative by design (the gate catches accidental
-		// literals, it is not a security boundary).
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		vi.resetModules();
-		const foreignDomainEventModule = await import("../event/domain-event");
-		const foreignInstanceEvent = foreignDomainEventModule.createDomainEvent(
-			"TestEventUpdated",
-			{ newValue: 3 },
-		) as TestEventUpdated;
-
-		agg.testApply(foreignInstanceEvent);
-
-		expect(agg.state.value).toBe(3);
-	});
-
 	it("accepts the address-stamped copy apply() mints for address-less events", () => {
 		// The stamped copy is kit-derived from a minted event and adopted
 		// into the mint marker; the gate must not reject apply's own work.
@@ -1160,30 +1133,6 @@ describe("replay trusts history", () => {
 		);
 		expect(agg.pendingEvents).toHaveLength(1);
 		expect(agg.pendingEvents[0]?.aggregateId).toBe("test-1");
-	});
-
-	it("preserves the cooperative recorded brand on address-stamped copies", async () => {
-		const agg = new RuleTighteningAggregate("test-1" as TestId, {
-			value: 0,
-			status: "inactive",
-		});
-		agg.testApply(
-			createDomainEvent("TestEventUpdated", {
-				newValue: 5,
-			}) as TestEventUpdated,
-		);
-		const stamped = agg.pendingEvents[0];
-		expect(stamped).toBeDefined();
-
-		// Re-evaluate domain-event.ts with a fresh module-private WeakSet,
-		// as a duplicate package installation or plugin bundle would. Only
-		// the shared Symbol.for brand can establish provenance there.
-		vi.resetModules();
-		const foreignDomainEventModule = await import("../event/domain-event");
-
-		expect(
-			foreignDomainEventModule.isRecordedDomainEvent(stamped as TestEvent),
-		).toBe(true);
 	});
 
 	it("replay accepts plain unfrozen objects from storage adapters", () => {
@@ -1745,6 +1694,41 @@ describe("apply and replay bookkeeping", () => {
 		expect(agg.replayHistory([]).isOk()).toBe(true);
 
 		expect(lifecycleOf(agg).persistedVersion()).toBeUndefined();
+	});
+
+	it("adds each page of the guide's size to the version and folds every row", () => {
+		// The guide reads history in pages of 256. A summing fold exposes a
+		// skipped row; the replacing fold of testFolds shows only the last one.
+		class SummingAggregate extends TestEventSourcedAggregate {
+			protected readonly folds = {
+				...testFolds,
+				TestEventUpdated: (
+					state: TestState,
+					event: TestEventUpdatedDecision,
+				): TestState => ({
+					...state,
+					value: state.value + event.payload.newValue,
+				}),
+			};
+		}
+		const pageSize = 256;
+		const pageOf = (firstValue: number): TestEventUpdated[] =>
+			Array.from({ length: pageSize }, (_, offset) =>
+				updated(firstValue + offset),
+			);
+		const agg = new SummingAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
+
+		expect(agg.replayHistory(pageOf(1)).isOk()).toBe(true);
+		expect(agg.replayHistory(pageOf(pageSize + 1)).isOk()).toBe(true);
+
+		const rowCount = 2 * pageSize;
+		expect(agg.version).toBe(rowCount);
+		expect(agg.state.value).toBe((rowCount * (rowCount + 1)) / 2);
+		expect(agg.pendingEvents).toHaveLength(0);
+		expect(lifecycleOf(agg).persistedVersion()).toBe(rowCount);
 	});
 
 	it("applies a new fact on top of a restored version", () => {

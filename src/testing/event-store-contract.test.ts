@@ -7,12 +7,15 @@ import {
 import { InMemoryEventStore } from "../persistence/event-store/adapters/in-memory-event-store";
 import { createEventStoreContractTests } from "./index";
 
-type TestEvent = DomainEvent<"ContractEvent", { sequence: number }>;
+type ContractStepRecorded = DomainEvent<
+	"ContractStepRecorded",
+	{ sequence: number }
+>;
 
 describe("event-store adapter contract", () => {
 	const contractTests = createEventStoreContractTests({
 		createEnvironment: async () => ({
-			store: new InMemoryEventStore<TestEvent>(),
+			store: new InMemoryEventStore<ContractStepRecorded>(),
 		}),
 		createCollidingStreamKeys: (): readonly [
 			AggregateAddress,
@@ -21,8 +24,11 @@ describe("event-store adapter contract", () => {
 			{ aggregateType: "ContractAlpha", aggregateId: "shared-1" },
 			{ aggregateType: "ContractBeta", aggregateId: "shared-1" },
 		],
-		createEvent: (stream: AggregateAddress, sequence: number): TestEvent =>
-			createDomainEvent("ContractEvent", { sequence }, stream),
+		createEvent: (
+			stream: AggregateAddress,
+			sequence: number,
+		): ContractStepRecorded =>
+			createDomainEvent("ContractStepRecorded", { sequence }, stream),
 	});
 
 	it("contains the qualified-stream isolation proof", () => {

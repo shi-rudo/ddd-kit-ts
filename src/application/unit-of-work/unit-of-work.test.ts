@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
-import {
-	pendingEventLifecycleReadViewFor,
-	registerPendingEventLifecycleCapability,
-} from "../../domain/aggregate/pending-event-lifecycle";
+import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	type AnyDomainEvent,
@@ -25,6 +22,7 @@ import type { Outbox } from "../../messaging/outbox/ports";
 import type { AggregateClass } from "../../persistence/repository/identity-map";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { unstampedAggregate } from "../../testing/unstamped-aggregate";
 import {
 	AggregateTrackingError,
 	CommitError,
@@ -84,26 +82,13 @@ function createMockAggregate(
 	return new MockAggregate(id, events);
 }
 
-/**
- * An instance with the kit's lifecycle capability but without the address
- * stamping of the aggregate base classes: the shape of an aggregate from
- * another package copy. Only such an instance can carry an unstamped event
- * into the harvest guard.
- */
-function unstampedInstance(id: string, events: TestEvent[]): MockAggregate {
-	const instance = {
-		id: id as TestId,
-		version: 1 as Version,
-		pendingEvents: events,
-	};
-	registerPendingEventLifecycleCapability(instance, {
-		acknowledge: () => {},
-		discardPendingEvents: () => {},
-		persistedVersion: () => undefined,
-		pendingEventCount: () => events.length,
-		aggregateType: () => "MockOrder",
-	});
-	return instance as unknown as MockAggregate;
+/** A MockOrder as an instance from another package copy. */
+function unstampedOrder(events: TestEvent[]): MockAggregate {
+	return unstampedAggregate(
+		"x" as TestId,
+		"MockOrder",
+		events,
+	) as unknown as MockAggregate;
 }
 
 function testEvent(orderId: string): TestEvent {
@@ -2157,7 +2142,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = unstampedInstance("x", [badEvent]);
+			const agg = unstampedOrder([badEvent]);
 			const { uow } = createUow();
 
 			const rejection = await uow
@@ -2197,7 +2182,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = unstampedInstance("x", [badEvent]);
+			const agg = unstampedOrder([badEvent]);
 			const { uow } = createUow({ scope });
 
 			const rejection = await uow

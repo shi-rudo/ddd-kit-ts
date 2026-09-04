@@ -8,8 +8,8 @@
  * semantics, and the idempotency lifecycle are adapter CONTRACTS the
  * consumer's implementation must prove; this entry provides the proof
  * harnesses. Kept out of the core barrel so test-only code never rides
- * into production bundles. Named exports only; the shared suite
- * plumbing in contract-assertions stays internal.
+ * into production bundles. Named exports only; a module this file does
+ * not export is kit-internal test support.
  */
 export {
 	type CommandOutboxContractEnvironment,
