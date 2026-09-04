@@ -1697,24 +1697,38 @@ describe("apply and replay bookkeeping", () => {
 	});
 
 	it("adds each page of the guide's size to the version and folds every row", () => {
-		// The guide reads history in pages of 256. Two full pages catch up
-		// through replayHistory, one after the other; the version is the
-		// sum of both page lengths, and the last row is what the state
-		// reflects.
+		// The guide reads history in pages of 256. A summing fold exposes a
+		// skipped row; the replacing fold of testFolds shows only the last one.
+		class SummingAggregate extends TestEventSourcedAggregate {
+			protected readonly folds = {
+				...testFolds,
+				TestEventUpdated: (
+					state: TestState,
+					event: TestEventUpdatedDecision,
+				): TestState => ({
+					...state,
+					value: state.value + event.payload.newValue,
+				}),
+			};
+		}
 		const pageSize = 256;
 		const pageOf = (firstValue: number): TestEventUpdated[] =>
 			Array.from({ length: pageSize }, (_, offset) =>
 				updated(firstValue + offset),
 			);
-		const agg = fresh();
+		const agg = new SummingAggregate("test-1" as TestId, {
+			value: 0,
+			status: "inactive",
+		});
 
 		expect(agg.replayHistory(pageOf(1)).isOk()).toBe(true);
 		expect(agg.replayHistory(pageOf(pageSize + 1)).isOk()).toBe(true);
 
-		expect(agg.version).toBe(2 * pageSize);
-		expect(agg.state.value).toBe(2 * pageSize);
+		const rowCount = 2 * pageSize;
+		expect(agg.version).toBe(rowCount);
+		expect(agg.state.value).toBe((rowCount * (rowCount + 1)) / 2);
 		expect(agg.pendingEvents).toHaveLength(0);
-		expect(lifecycleOf(agg).persistedVersion()).toBe(2 * pageSize);
+		expect(lifecycleOf(agg).persistedVersion()).toBe(rowCount);
 	});
 
 	it("applies a new fact on top of a restored version", () => {
