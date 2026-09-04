@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
 	createDomainEvent,
 	type DomainEvent,
+	isRecordedDomainEvent,
 	type UncommittedDomainEventOf,
 } from "../event/domain-event";
 import type { Id } from "../identity/id";
@@ -14,8 +15,8 @@ import { StateStoredAggregate } from "./state-stored-aggregate";
 // invisible to this copy; only the shared Symbol.for brands and registry
 // keys connect the two. vi.resetModules() followed by a dynamic import
 // re-evaluates a module exactly like such a second copy would. The reset
-// drops the module registry of the whole file, so these tests live apart
-// from the aggregate suites: no other test can observe a stale registry.
+// drops the module registry of the whole file. These tests live apart from
+// the aggregate suites, so no other test can observe a stale registry.
 
 type TestId = Id<"TestId">;
 type TestState = { value: number };
@@ -85,6 +86,7 @@ describe("recognition across package copies", () => {
 
 		vi.resetModules();
 		const secondCopy = await import("../event/domain-event");
+		expect(secondCopy.isRecordedDomainEvent).not.toBe(isRecordedDomainEvent);
 
 		expect(secondCopy.isRecordedDomainEvent(stamped as ValueUpdated)).toBe(
 			true,
