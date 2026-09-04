@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
-import {
-	pendingEventLifecycleReadViewFor,
-	registerPendingEventLifecycleCapability,
-} from "../../domain/aggregate/pending-event-lifecycle";
+import { pendingEventLifecycleReadViewFor } from "../../domain/aggregate/pending-event-lifecycle";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
 	createDomainEvent,
@@ -20,6 +17,7 @@ import type { EventCommitCandidate } from "../../messaging/committed-event";
 import type { EventBus } from "../../messaging/event-bus/ports";
 import type { Outbox } from "../../messaging/outbox/ports";
 import type { TransactionScope } from "../../persistence/repository/scope";
+import { unstampedAggregate } from "../../testing/unstamped-aggregate";
 import { recordPendingEvents } from "../unit-of-work/record-pending-events";
 import {
 	type AggregateCommitToken,
@@ -127,30 +125,6 @@ function stamped(
 			commitSize,
 		},
 	};
-}
-
-/**
- * An instance with the kit's lifecycle capability but without the address
- * stamping of the aggregate base classes: the shape of an aggregate from
- * another package copy. Only such an instance can carry an unstamped or
- * foreign-addressed event into the harvest.
- */
-function unstampedInstance(
-	events: ReadonlyArray<TestEvent>,
-): Aggregate<TestId, TestEvent> {
-	const instance = {
-		id: "agg-1" as TestId,
-		version: 1 as Version,
-		pendingEvents: events,
-	};
-	registerPendingEventLifecycleCapability(instance, {
-		acknowledge: () => {},
-		discardPendingEvents: () => {},
-		persistedVersion: () => undefined,
-		pendingEventCount: () => events.length,
-		aggregateType: () => "MockOrder",
-	});
-	return instance;
 }
 
 /** The version the kit acknowledged as persisted; a discard leaves it. */
@@ -331,7 +305,7 @@ describe("withCommit", () => {
 	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {
 		// The aggregate base classes stamp and check the address themselves;
 		// this backstop covers an instance whose recording path did not.
-		const stray = unstampedInstance([
+		const stray = unstampedAggregate("agg-1" as TestId, "MockOrder", [
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "o-1" },
@@ -351,7 +325,7 @@ describe("withCommit", () => {
 	});
 
 	it("rejects a harvested event of another aggregate type than the enrolled one", async () => {
-		const stray = unstampedInstance([
+		const stray = unstampedAggregate("agg-1" as TestId, "MockOrder", [
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "o-1" },
@@ -1048,7 +1022,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = unstampedInstance([badEvent]);
+		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
 
 		await expect(
 			withCommit(
@@ -1066,7 +1040,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = unstampedInstance([badEvent]);
+		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
 
 		const rejection = await withCommit(
 			{ outbox: createMockOutbox(), scope: createMockScope() },
@@ -1086,7 +1060,7 @@ describe("withCommit", () => {
 				// aggregateType missing → guard rejects
 			},
 		);
-		const agg = unstampedInstance([badEvent]);
+		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
 
 		await expect(
 			withCommit(
@@ -1098,7 +1072,7 @@ describe("withCommit", () => {
 
 	it("guard error message names the event type and lists both missing fields", async () => {
 		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" });
-		const agg = unstampedInstance([badEvent]);
+		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
 
 		await expect(
 			withCommit(
