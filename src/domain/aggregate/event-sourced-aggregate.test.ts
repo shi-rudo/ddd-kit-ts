@@ -137,6 +137,11 @@ const testFolds = {
 	TestEventInvalid: (state: TestState): TestState => state,
 };
 
+/** A fold map that leaves folds out on purpose, past the type check. */
+function partialFolds(declared: Partial<typeof testFolds>): typeof testFolds {
+	return declared as typeof testFolds;
+}
+
 class TestEventSourcedAggregate extends EventSourcedAggregate<
 	TestState,
 	TestId,
@@ -344,13 +349,9 @@ describe("EventSourcedAggregate", () => {
 					this.apply(event);
 				}
 
-				// Intentionally missing fold for TestEventUpdated
-				protected readonly folds = {
-					TestEventCreated: (s: TestState): TestState => s,
-				} as unknown as Record<
-					TestEvent["type"],
-					(s: TestState, e: TestEventDecision) => TestState
-				>;
+				protected readonly folds = partialFolds({
+					TestEventCreated: testFolds.TestEventCreated,
+				});
 			}
 
 			const aggregate = new FoldlessAggregate("test-1" as TestId, {
@@ -389,10 +390,7 @@ describe("EventSourcedAggregate", () => {
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
-				protected readonly folds = {} as unknown as Record<
-					TestEvent["type"],
-					(s: TestState, e: TestEventDecision) => TestState
-				>;
+				protected readonly folds = partialFolds({});
 			}
 
 			const aggregate = new FoldlessReplay("test-1" as TestId, {
@@ -437,13 +435,10 @@ describe("EventSourcedAggregate", () => {
 				}
 
 				protected readonly folds = {
-					TestEventCreated: (state: TestState): TestState => state,
+					...testFolds,
 					TestEventUpdated: (): TestState => {
 						throw new Error("fold boom");
 					},
-					TestEventActivated: (state: TestState): TestState => state,
-					TestEventDeactivated: (state: TestState): TestState => state,
-					TestEventInvalid: (state: TestState): TestState => state,
 				};
 			}
 
@@ -489,12 +484,9 @@ describe("EventSourcedAggregate", () => {
 				this.apply(event);
 			}
 
-			protected readonly folds = {
-				TestEventCreated: (s: TestState): TestState => s,
-			} as unknown as Record<
-				TestEvent["type"],
-				(s: TestState, e: TestEventDecision) => TestState
-			>;
+			protected readonly folds = partialFolds({
+				TestEventCreated: testFolds.TestEventCreated,
+			});
 		}
 
 		const corruptTypes = [

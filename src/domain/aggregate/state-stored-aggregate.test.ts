@@ -204,6 +204,9 @@ type TestState = {
 	status: "active" | "inactive";
 };
 
+type ValueUpdated = DomainEvent<"ValueUpdated", { newValue: number }>;
+type Activated = DomainEvent<"Activated", void>;
+
 class TestAggregate extends StateStoredAggregate<TestState, TestId> {
 	protected readonly aggregateType = "TestAggregate";
 	constructor(
@@ -319,8 +322,8 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 });
 
 describe("StateStoredAggregate (without Event Sourcing)", () => {
-	describe("Basic functionality", () => {
-		it("should create aggregate with id and initial state", () => {
+	describe("creation and setState", () => {
+		it("creates the aggregate at version 0 with its id and initial state", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			expect(aggregate.id).toBe("test-1");
@@ -329,7 +332,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			expect(aggregate.version).toBe(0);
 		});
 
-		it("should allow direct state mutation", () => {
+		it("replaces the state through setState and advances the version", () => {
 			const aggregate = TestAggregate.create("test-1" as TestId, 10);
 
 			aggregate.updateValue(20);
@@ -510,26 +513,26 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 	});
 
 	describe("setState(): record-after-mutation helper", () => {
-		type Ev = DomainEvent<"Updated", { value: number }>;
-
-		class CommitAggregate extends StateStoredAggregate<TestState, TestId, Ev> {
+		class CommitAggregate extends StateStoredAggregate<
+			TestState,
+			TestId,
+			ValueUpdated
+		> {
 			protected readonly aggregateType = "CommitAggregate";
 
 			constructor(id: TestId, state: TestState) {
 				super(id, state);
 			}
-			update(value: number, ev: Ev | readonly Ev[] = []): void {
-				this.setState({ ...this.state, value }, ev);
+			update(
+				value: number,
+				events: ValueUpdated | readonly ValueUpdated[] = [],
+			): void {
+				this.setState({ ...this.state, value }, events);
 			}
-			recordOnly(ev: Ev): void {
-				// Forces "record before mutation", which would only be possible by
-				// calling addDomainEvent directly. commit() never does this.
-				this.addDomainEvent(ev);
-			}
-			recordTestEvent(value: number): Ev {
+			valueUpdated(newValue: number): ValueUpdated {
 				return createDomainEvent(
-					"Updated",
-					{ value },
+					"ValueUpdated",
+					{ newValue },
 					{
 						aggregateId: this.id,
 						aggregateType: this.aggregateType,
@@ -538,7 +541,11 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			}
 		}
 
-		class FailingValidator extends StateStoredAggregate<TestState, TestId, Ev> {
+		class FailingValidator extends StateStoredAggregate<
+			TestState,
+			TestId,
+			ValueUpdated
+		> {
 			protected readonly aggregateType = "FailingValidator";
 
 			constructor(id: TestId, state: TestState) {
@@ -548,13 +555,13 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 					},
 				});
 			}
-			tryCommit(value: number, ev: Ev): void {
-				this.setState({ ...this.state, value }, ev);
+			tryCommit(value: number, event: ValueUpdated): void {
+				this.setState({ ...this.state, value }, event);
 			}
-			recordTestEvent(value: number): Ev {
+			valueUpdated(newValue: number): ValueUpdated {
 				return createDomainEvent(
-					"Updated",
-					{ value },
+					"ValueUpdated",
+					{ newValue },
 					{
 						aggregateId: this.id,
 						aggregateType: this.aggregateType,
@@ -571,8 +578,8 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			const minted = agg.recordTestEvent(42);
-			const literal = { ...minted, payload: { value: 42 } } as Ev;
+			const minted = agg.valueUpdated(42);
+			const literal = { ...minted, payload: { newValue: 42 } } as ValueUpdated;
 
 			expect(() => agg.update(42, literal)).toThrow(UnmintedEventError);
 			expect(agg.state.value).toBe(10);
@@ -585,12 +592,12 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			agg.update(42, agg.recordTestEvent(42));
+			agg.update(42, agg.valueUpdated(42));
 
 			expect(agg.state.value).toBe(42);
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]?.type).toBe("Updated");
-			expect(agg.pendingEvents[0]?.payload).toEqual({ value: 42 });
+			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
+			expect(agg.pendingEvents[0]?.payload).toEqual({ newValue: 42 });
 		});
 
 		it("does NOT record the event when state validation throws", () => {
@@ -599,9 +606,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				status: "inactive",
 			});
 
-			expect(() => agg.tryCommit(-1, agg.recordTestEvent(-1))).toThrow(
-				"negative",
-			);
+			expect(() => agg.tryCommit(-1, agg.valueUpdated(-1))).toThrow("negative");
 
 			// State unchanged AND no event queued: the validateState-throws-
 			// before-addDomainEvent path is enforced by commit().
@@ -614,10 +619,12 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 10,
 				status: "inactive",
 			});
-			agg.update(99, [agg.recordTestEvent(99), agg.recordTestEvent(100)]);
+			agg.update(99, [agg.valueUpdated(99), agg.valueUpdated(100)]);
 
 			expect(agg.state.value).toBe(99);
-			expect(agg.pendingEvents.map((e) => e.payload.value)).toEqual([99, 100]);
+			expect(agg.pendingEvents.map((event) => event.payload.newValue)).toEqual([
+				99, 100,
+			]);
 		});
 
 		it("accepts no events (state change only)", () => {
@@ -641,7 +648,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			});
 			expect(agg.version).toBe(0);
 
-			agg.update(11, agg.recordTestEvent(11));
+			agg.update(11, agg.valueUpdated(11));
 
 			expect(agg.version).toBe(1);
 		});
@@ -653,7 +660,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			});
 			expect(agg.version).toBe(0);
 
-			agg.update(11, [agg.recordTestEvent(11), agg.recordTestEvent(12)]);
+			agg.update(11, [agg.valueUpdated(11), agg.valueUpdated(12)]);
 
 			// One state transition = one version bump, regardless of how
 			// many events accompany it.
@@ -835,7 +842,7 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 		});
 	});
 
-	describe("Enhancements", () => {
+	describe("constructor guards", () => {
 		it("rejects a null or undefined id with a coded wiring error", () => {
 			const state = { value: 10, status: "inactive" as const };
 			// @ts-expect-error - testing invalid input
@@ -847,8 +854,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				MissingEntityIdError,
 			);
 		});
+	});
 
-		it("should validate state changes", () => {
+	describe("validateState on setState", () => {
+		it("rejects a state change that fails validateState", () => {
 			class ValidatedAggregate extends StateStoredAggregate<TestState, TestId> {
 				protected readonly aggregateType = "ValidatedAggregate";
 				constructor(id: TestId, initialState: TestState) {
@@ -872,21 +881,22 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 
 			expect(() => agg.update(-5)).toThrow("Value cannot be negative");
 		});
+	});
 
-		it("should manage domain events", () => {
-			type EvT = DomainEvent<"SomethingHappened", void>;
+	describe("domain events typed by TEvent", () => {
+		it("records a domain event and discards it with the batch", () => {
 			class EventAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
-				EvT
+				Activated
 			> {
 				protected readonly aggregateType = "EventAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
-				public doSomething() {
+				public activate() {
 					this.addDomainEvent(
-						createDomainEvent("SomethingHappened", undefined, {
+						createDomainEvent("Activated", undefined, {
 							aggregateId: this.id,
 							aggregateType: this.aggregateType,
 						}),
@@ -900,18 +910,16 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 			});
 
 			expect(agg.pendingEvents).toHaveLength(0);
-			agg.doSomething();
+			agg.activate();
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]?.type).toBe("SomethingHappened");
+			expect(agg.pendingEvents[0]?.type).toBe("Activated");
 
 			discardPendingEvents(agg);
 			expect(agg.pendingEvents).toHaveLength(0);
 		});
 
-		it("should support typed domain events via TEvent parameter", () => {
-			type TestEvent =
-				| DomainEvent<"ValueUpdated", { newValue: number }>
-				| DomainEvent<"Activated", void>;
+		it("types pendingEvents by the TEvent union", () => {
+			type TestEvent = ValueUpdated | Activated;
 
 			class TypedEventAggregate extends StateStoredAggregate<
 				TestState,
@@ -961,28 +969,23 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 					.payload,
 			).toEqual({ newValue: 42 });
 			expect(agg.pendingEvents[1]?.type).toBe("Activated");
-
-			// pendingEvents is typed: access event-specific fields without cast
-			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
 		});
 
-		it("should reject wrong event types at compile time with TEvent", () => {
-			type StrictEvent = DomainEvent<"OnlyThis", { data: string }>;
-
+		it("rejects an event type outside the TEvent union at compile time", () => {
 			class StrictAggregate extends StateStoredAggregate<
 				TestState,
 				TestId,
-				StrictEvent
+				ValueUpdated
 			> {
 				protected readonly aggregateType = "StrictAggregate";
 				constructor(id: TestId, initialState: TestState) {
 					super(id, initialState);
 				}
-				public doCorrect() {
+				public updateValue(newValue: number) {
 					this.addDomainEvent(
 						createDomainEvent(
-							"OnlyThis",
-							{ data: "hello" },
+							"ValueUpdated",
+							{ newValue },
 							{
 								aggregateId: this.id,
 								aggregateType: this.aggregateType,
@@ -990,9 +993,9 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 						),
 					);
 				}
-				public doWrong() {
-					// @ts-expect-error - wrong event type is rejected by TEvent constraint
-					this.createEvent("WrongEvent", undefined);
+				public activate() {
+					// @ts-expect-error - Activated is outside this aggregate's TEvent
+					this.createEvent("Activated", undefined);
 				}
 			}
 
@@ -1000,10 +1003,10 @@ describe("StateStoredAggregate (without Event Sourcing)", () => {
 				value: 1,
 				status: "inactive",
 			});
-			agg.doCorrect();
+			agg.updateValue(7);
 			expect(agg.pendingEvents).toHaveLength(1);
-			expect(agg.pendingEvents[0]?.type).toBe("OnlyThis");
-			expect(agg.pendingEvents[0]?.payload).toEqual({ data: "hello" });
+			expect(agg.pendingEvents[0]?.type).toBe("ValueUpdated");
+			expect(agg.pendingEvents[0]?.payload).toEqual({ newValue: 7 });
 		});
 	});
 });

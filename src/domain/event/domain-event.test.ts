@@ -772,15 +772,16 @@ describe("DomainEvent", () => {
 
 	describe("copyMetadata interaction", () => {
 		it("does not copy eventId or aggregateId fields (those are per-event identity, not metadata)", () => {
-			const previous: DomainEvent<"Prev", { v: number }> = createDomainEvent(
-				"Prev",
-				{ v: 1 },
-				{
-					aggregateId: "order-42",
-					aggregateType: "Order",
-					metadata: { correlationId: "corr-1" },
-				},
-			);
+			const previous: DomainEvent<"OrderCreated", { orderId: string }> =
+				createDomainEvent(
+					"OrderCreated",
+					{ orderId: "order-42" },
+					{
+						aggregateId: "order-42",
+						aggregateType: "Order",
+						metadata: { correlationId: "corr-1" },
+					},
+				);
 			const copied = copyMetadata(previous);
 			expect((copied as Record<string, unknown>).eventId).toBeUndefined();
 			expect((copied as Record<string, unknown>).aggregateId).toBeUndefined();
