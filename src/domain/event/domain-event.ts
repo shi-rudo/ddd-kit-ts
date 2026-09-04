@@ -137,7 +137,9 @@ export interface DomainEvent<T extends string, P = void> {
 	 * Use 1 for the initial schema version.
 	 *
 	 * This is the event PAYLOAD schema version, not a persisted aggregate
-	 * position. Commit positions live on `CommittedDomainEvent`.
+	 * position. Commit positions live on `CommittedDomainEvent`. It is
+	 * also not `AggregateSnapshot.schemaVersion`: that field versions the
+	 * stored snapshot state shape. The two evolve independently.
 	 */
 	readonly schemaVersion: number;
 

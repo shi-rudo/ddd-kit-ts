@@ -39,6 +39,27 @@ now runs in its own non-required workflow: on `main`, on a pull request
 that touches the lockfile or the manifest, and once a day. The publish
 workflow runs the same audit before `npm publish`, so a known
 vulnerability still does not reach the registry.
+### Changed: the guides state the payload, version, and actor postures
+
+The domain-events guide says that an event carries the fact, not a pointer
+to it. It also says that the application shell attaches the actor on the
+stamp. The guide and the TSDoc of `DomainEvent.schemaVersion` and
+`AggregateSnapshot.schemaVersion` name each other: the two fields version
+different shapes and evolve independently. The event-sourcing guide called
+the payload version field `version`; the field is `schemaVersion`. The
+sagas guide gains a section on changing a running process. It names the two
+safe changes, a new `aggregateType` for a new step sequence and a schema
+bump for a changed shape. It never edits the handlers in place. The
+`replayHistory` port doc lists the wiring and boundary errors that
+propagate after the rollback.
+
+### Fixed: the order example throws coded errors
+
+`examples/order` threw a bare `Error` and typed `customerId` and
+`productId` as `string`. It now throws `OrderInWrongStateError` and
+`EmptyOrderError`, both `DomainError` subclasses with a stable code, and
+the spec matches on the class. A second `cancel()` is a wrong-state error
+too. The ids carry the `Id` brand like the other examples.
 
 ### Fixed: deepFreeze keeps a RegExp matching
 

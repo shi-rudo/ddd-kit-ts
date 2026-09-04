@@ -442,6 +442,43 @@ The event-driven model does not replay the call stack. Persisted saga state
 must identify the work that needs compensation. Thus, the state machine owns
 the process position instead of a local variable.
 
+## Changing a running process
+
+A process lives longer than a request and longer than a deploy. When a deploy
+changes the steps, instances that started under the old steps are still in
+flight. Their stored state or event stream encodes the old sequence. Loaded
+into the new class, such an instance can sit in a state the new machine does
+not know. It can also receive a reply to a command the new logic never sends.
+
+Never edit the handlers of a running process in place. Two changes preserve
+the in-flight instances:
+
+1. **A new `aggregateType` for a new step sequence.** Deploy the changed
+   process as a second class with its own `aggregateType`, for example
+   `CheckoutSagaV2`. Move the start reaction to the new class, so a new
+   process starts under the new type only. Keep the continuation reactions of
+   the old class subscribed until its last instance is done. Each
+   continuation must look its instance up with `findById`. When its own class
+   has no instance for that id, it must return without a saga write.
+   `getById` throws on the missing instance, and the dispatcher then retries
+   the delivery. When the last old instance is done, the old class leaves
+   the codebase.
+2. **A schema bump for a changed shape.** When the steps stay the same and
+   only the stored shape changes, keep the class. An event-sourced process
+   bumps the `schemaVersion` of the changed process event and upcasts old
+   rows at the read boundary, as [Event Upcasting](./event-upcasting.md)
+   describes. A state-stored process migrates its row like any other table,
+   before the new class loads it.
+
+The first change separates the instances by their storage key. An
+event-sourced process rests on the `aggregateType` as a stable stream key. The
+event store selects a stream by `{ aggregateType, aggregateId }`, so the two
+classes never load each other's stream. A renamed `aggregateType` orphans
+every stored stream under the old name. Rename only with a data migration, and
+never as a side effect of a class rename. A state-stored process is keyed by
+its id alone. Give the new class its own table, or the old row loads into the
+new class.
+
 ## What the kit deliberately does not ship
 
 The kit does not supply a `SagaStore`. The state-stored variant uses

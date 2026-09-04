@@ -880,12 +880,19 @@ used to protect writes.
 
 ## Schema evolution
 
-Domain events carry a `version` field for payload schema evolution. The kit does
-not ship a built-in upcaster because strategies differ by store and deployment
-style.
+Domain events carry a `schemaVersion` field for payload schema evolution. The
+kit does not ship a built-in upcaster because strategies differ by store and
+deployment style.
 
 The usual rule is simple: upcast at the infrastructure boundary before events
 reach the aggregate. The folds should see the current event shape, not
 every historical shape the system has ever emitted.
 
 See [Event Upcasting](./event-upcasting.md).
+
+A snapshot carries its own `schemaVersion` for the stored state shape (see
+[Snapshots](#snapshots)). The two fields evolve independently. An upcaster
+changes event payloads and bumps `DomainEvent.schemaVersion`. A snapshot model
+migration changes stored state and bumps `AggregateSnapshot.schemaVersion`. A
+snapshot never carries the event schema version, and an event never carries the
+snapshot one.
