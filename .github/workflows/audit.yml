@@ -1,0 +1,40 @@
+name: audit
+
+# Audits the production dependency tree against the npm advisory database.
+# The audit is not a required check: the advisory endpoint is a third-party
+# service, and its outage must not block a merge that changes no dependency.
+# It runs where a dependency can change (main, a pull request that touches
+# the lockfile or the manifest) and once a day for advisories published
+# after the last change. The publish workflow runs the same audit as its
+# gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - pnpm-lock.yaml
+      - package.json
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Production dependency audit
+        run: pnpm audit:prod

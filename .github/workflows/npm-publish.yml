@@ -41,6 +41,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # The audit gates the publish, not the merge (see audit.yml). A known
+      # vulnerability must not reach the registry; a delayed release costs
+      # less than a published one.
+      - name: Production dependency audit
+        run: pnpm audit:prod
+
       - name: Version must carry its tag
         run: |
           pkg=$(node -p "require('./package.json').version")

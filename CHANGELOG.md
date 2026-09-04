@@ -29,6 +29,17 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: the dependency audit gates the publish, not the merge
+
+`pnpm audit --prod` ran as the first step of the required `verify (22)`
+job. The npm advisory endpoint is a third-party service. When it timed
+out, the job failed before typecheck, lint, test, and build ran, and the
+branch protection blocked a merge that changed no dependency. The audit
+now runs in its own non-required workflow: on `main`, on a pull request
+that touches the lockfile or the manifest, and once a day. The publish
+workflow runs the same audit before `npm publish`, so a known
+vulnerability still does not reach the registry.
+
 ### Fixed: deepFreeze keeps a RegExp matching
 
 `deepFreeze` passes a `RegExp` through unfrozen, as it does an ArrayBuffer
