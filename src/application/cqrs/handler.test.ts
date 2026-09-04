@@ -127,6 +127,13 @@ function stamped(
 	};
 }
 
+/** The enrolled MockOrder as an instance from another package copy. */
+function unstampedOrder(
+	events: ReadonlyArray<TestEvent>,
+): Aggregate<TestId, TestEvent> {
+	return unstampedAggregate("agg-1" as TestId, "MockOrder", events);
+}
+
 /** The version the kit acknowledged as persisted; a discard leaves it. */
 function persistedVersionOf(aggregate: object): Version | undefined {
 	return pendingEventLifecycleReadViewFor(aggregate)?.persistedVersion();
@@ -305,7 +312,7 @@ describe("withCommit", () => {
 	it("rejects a harvested event addressed to another aggregate than the enrolled one", async () => {
 		// The aggregate base classes stamp and check the address themselves;
 		// this backstop covers an instance whose recording path did not.
-		const stray = unstampedAggregate("agg-1" as TestId, "MockOrder", [
+		const stray = unstampedOrder([
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "o-1" },
@@ -325,7 +332,7 @@ describe("withCommit", () => {
 	});
 
 	it("rejects a harvested event of another aggregate type than the enrolled one", async () => {
-		const stray = unstampedAggregate("agg-1" as TestId, "MockOrder", [
+		const stray = unstampedOrder([
 			createDomainEvent(
 				"OrderCreated",
 				{ orderId: "o-1" },
@@ -1022,7 +1029,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
+		const agg = unstampedOrder([badEvent]);
 
 		await expect(
 			withCommit(
@@ -1040,7 +1047,7 @@ describe("withCommit", () => {
 				aggregateType: "MockOrder",
 			},
 		);
-		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
+		const agg = unstampedOrder([badEvent]);
 
 		const rejection = await withCommit(
 			{ outbox: createMockOutbox(), scope: createMockScope() },
@@ -1060,7 +1067,7 @@ describe("withCommit", () => {
 				// aggregateType missing → guard rejects
 			},
 		);
-		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
+		const agg = unstampedOrder([badEvent]);
 
 		await expect(
 			withCommit(
@@ -1072,7 +1079,7 @@ describe("withCommit", () => {
 
 	it("guard error message names the event type and lists both missing fields", async () => {
 		const badEvent = createDomainEvent("OrderCreated", { orderId: "x" });
-		const agg = unstampedAggregate("agg-1" as TestId, "MockOrder", [badEvent]);
+		const agg = unstampedOrder([badEvent]);
 
 		await expect(
 			withCommit(

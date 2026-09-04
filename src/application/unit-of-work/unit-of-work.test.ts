@@ -82,6 +82,15 @@ function createMockAggregate(
 	return new MockAggregate(id, events);
 }
 
+/** A MockOrder as an instance from another package copy. */
+function unstampedOrder(events: TestEvent[]): MockAggregate {
+	return unstampedAggregate(
+		"x" as TestId,
+		"MockOrder",
+		events,
+	) as unknown as MockAggregate;
+}
+
 function testEvent(orderId: string): TestEvent {
 	return createDomainEvent(
 		"OrderCreated",
@@ -2133,9 +2142,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = unstampedAggregate("x" as TestId, "MockOrder", [
-				badEvent,
-			]) as unknown as MockAggregate;
+			const agg = unstampedOrder([badEvent]);
 			const { uow } = createUow();
 
 			const rejection = await uow
@@ -2175,9 +2182,7 @@ describe("UnitOfWork", () => {
 					aggregateType: "MockOrder",
 				},
 			) as TestEvent;
-			const agg = unstampedAggregate("x" as TestId, "MockOrder", [
-				badEvent,
-			]) as unknown as MockAggregate;
+			const agg = unstampedOrder([badEvent]);
 			const { uow } = createUow({ scope });
 
 			const rejection = await uow
