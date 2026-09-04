@@ -24,7 +24,7 @@ import type { OutboxWriter } from "../../src/messaging/outbox/ports";
 import type { TransactionScope } from "../../src/persistence/repository/scope";
 
 import { CheckoutSaga } from "./checkout-saga";
-import { Order, type OrderEvent, type OrderId } from "./order";
+import { type CustomerId, Order, type OrderEvent, type OrderId } from "./order";
 import { Payment, type PaymentEvent, type PaymentId } from "./payment";
 import { Shipment, type ShipmentId, type ShippingEvent } from "./shipping";
 
@@ -92,7 +92,7 @@ type AppEvent = OrderEvent | PaymentEvent | ShippingEvent;
 type PlaceOrderCommand = Command & {
 	type: "PlaceOrder";
 	orderId: OrderId;
-	customerId: string;
+	customerId: CustomerId;
 	total: Money;
 };
 type RequestPaymentCommand = Command & {
@@ -443,7 +443,7 @@ describe("Checkout saga (Process Manager)", () => {
 		const placed = await deps.commandBus.execute({
 			type: "PlaceOrder",
 			orderId,
-			customerId: "cust-42",
+			customerId: "cust-42" as CustomerId,
 			total: eur(9999n),
 		});
 		expect(placed.isOk()).toBe(true);
@@ -498,7 +498,7 @@ describe("Checkout saga (Process Manager)", () => {
 		await deps.commandBus.execute({
 			type: "PlaceOrder",
 			orderId,
-			customerId: "cust-42",
+			customerId: "cust-42" as CustomerId,
 			total: eur(5000n),
 		});
 
@@ -533,7 +533,7 @@ describe("Checkout saga (Process Manager)", () => {
 		await deps.commandBus.execute({
 			type: "PlaceOrder",
 			orderId,
-			customerId: "cust-42",
+			customerId: "cust-42" as CustomerId,
 			total: eur(7500n),
 		});
 
