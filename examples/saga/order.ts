@@ -5,10 +5,11 @@ import type { Money } from "../../src/domain/value-object/money";
 import { DomainError } from "../../src/errors/kit-errors";
 
 export type OrderId = Id<"OrderId">;
+export type CustomerId = Id<"CustomerId">;
 
 export type OrderState = {
 	id: OrderId;
-	customerId: string;
+	customerId: CustomerId;
 	total: Money;
 	status: "placed" | "confirmed" | "cancelled";
 	cancelReason?: string;
@@ -16,7 +17,7 @@ export type OrderState = {
 
 export type OrderPlaced = DomainEvent<
 	"OrderPlaced",
-	{ customerId: string; total: Money }
+	{ customerId: CustomerId; total: Money }
 >;
 export type OrderConfirmed = DomainEvent<
 	"OrderConfirmed",
@@ -50,7 +51,7 @@ export class Order extends StateStoredAggregate<
 		return this.state.cancelReason;
 	}
 
-	static place(id: OrderId, customerId: string, total: Money): Order {
+	static place(id: OrderId, customerId: CustomerId, total: Money): Order {
 		const order = new Order(id, {
 			id,
 			customerId,

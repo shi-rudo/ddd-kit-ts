@@ -306,9 +306,9 @@ describe("setState OCC contract (named methods, no flag argument)", () => {
 	});
 
 	it("a polymorphic Entity-typed call gets the safe bumping default", () => {
-		// Before the redesign this path threw a TypeError; with the flag
-		// gone, the same signature as Entity.setState means the safe
-		// (bumping) behavior applies instead of a runtime guard.
+		// setState shares its signature with Entity.setState, so a caller
+		// that holds an Entity reaches the bumping variant. The cosmetic
+		// write has its own name and no polymorphic path.
 		const aggregate = fresh();
 		(
 			aggregate as unknown as {
