@@ -25,6 +25,11 @@ export interface PersistenceModel<TAggregate, TBaseline, TChangeSet> {
 	 * `Set` members and `Map` keys by reference (JS `SameValueZero`
 	 * semantics): a capture that re-materializes object Set members or Map
 	 * keys on every call must supply {@link captureEquals}.
+	 *
+	 * A column that the store owns stays out of the capture, for example an
+	 * `updatedAt` that the adapter stamps; `flush` writes it. A captured store
+	 * column pushes a stale value back on the next write, or it marks every
+	 * row as changed.
 	 */
 	capture(aggregate: TAggregate): TBaseline;
 

@@ -289,6 +289,16 @@ move when the aggregate moves. A change set that aliases it can change after
 registration. Do not add setters, baseline fields, or dirty flags to the
 aggregate for the adapter's convenience.
 
+A column that the store owns never enters the aggregate or the capture.
+Examples are an `updatedAt` that the adapter or the database stamps, and a row
+version that the database manages. `capture` projects domain state only.
+`flush` stamps the store-owned columns when it writes. A captured store column
+is a defect on both sides: the next write pushes the stale value back, and a
+change set that compares it marks every row as changed. A timestamp that the
+domain decides is different. The domain sets it with a clock that the use case
+passes in. It is domain state, so it belongs in the aggregate and in the
+capture.
+
 ## Defining the adapter boundary
 
 `defineRepository` joins an application-owned repository port, its adapter,
@@ -379,6 +389,14 @@ application port. `DrizzleOrderReadAdapter` implements only its read methods
 because the Unit of Work installs `add`, `update`, and `remove`. The concrete
 adapter can have diagnostics or ORM-specific helpers, but those do not become
 application API. It can change without silently widening the port.
+
+A port can have no read methods. Then `create` returns an empty object:
+`create: () => ({})`. Do not invent a read that no use case needs. Check the
+model before you choose that shape. A fact that follows from a state change of
+another aggregate is a domain event. The event metadata carries the user id,
+the correlation id, and the causation id. So an audit trail or a log of such
+facts is a projection of the outbox. A write-only repository fits a fact of
+its own that must commit in the same transaction.
 
 The port and `physicalRemoval` must agree. If the port declares `remove`, set
 `physicalRemoval: true`. If the port has no `remove`, omit the option.
@@ -643,6 +661,19 @@ The suite is the only proof of the OCC predicate. A missing or wrong predicate
 raises no error: the stale write succeeds, and the newer state is lost. The
 suite turns that silent loss into a failing test. Bind it to every adapter you
 ship.
+
+The harness supplies `committedOutboxEvents()` and `failNextOutboxWrite()`.
+Put the adapter's own outbox writer behind them, in the same transaction as
+the aggregate write. The suite reads back what the outbox writer received: the
+event ids of the batch, and the position facts `aggregateVersion`,
+`commitSequence`, and `commitSize`. It proves that a rollback and a failed
+outbox write leave no record and roll the aggregate write back. It does not
+prove the source head or `previousEventfulAggregateVersion`;
+`createOutboxContractTests` proves those. For an in-memory adapter, the
+harness in
+[`src/testing/repository-contract.test.ts`](https://github.com/shi-rudo/ddd-kit-ts/blob/main/src/testing/repository-contract.test.ts)
+is the model: its outbox records live inside the store that the transaction
+snapshot covers, so a rollback discards them with the rows.
 
 The suite needs overlapping `run` calls. The stale-writer proofs hold one
 transaction open while a second one loads, writes, and commits. So `run` must
