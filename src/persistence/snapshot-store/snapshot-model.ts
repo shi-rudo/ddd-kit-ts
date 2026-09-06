@@ -12,7 +12,7 @@ import {
 	SnapshotSchemaMismatchError,
 	SnapshotVersionNotRestoredError,
 } from "../../errors/kit-errors";
-import { isBuiltInObject } from "../../internal/structural/is-built-in";
+import { detachState } from "../../internal/structural/detach-state";
 import { assertPositiveSafeInteger } from "../../internal/validate";
 
 interface SnapshotAggregate {
@@ -103,7 +103,7 @@ export function captureAggregateSnapshot<
 ): AggregateSnapshot<TSnapshotState> {
 	assertSnapshotModel(model);
 	const recordedAt = copySnapshotAt(snapshotAt);
-	const state = detachSnapshotState(model.capture(aggregate));
+	const state = detachState(model.capture(aggregate));
 	return deepFreeze({
 		state,
 		version: aggregate.version,
@@ -159,10 +159,10 @@ export function reconstituteAggregateFromSnapshot<
 	try {
 		let state: TSnapshotState;
 		if (storedSchemaVersion === model.schemaVersion) {
-			state = detachSnapshotState(snapshot.state) as TSnapshotState;
+			state = detachState(snapshot.state) as TSnapshotState;
 		} else if (model.migrate) {
-			state = detachSnapshotState(
-				model.migrate(detachSnapshotState(snapshot.state), storedSchemaVersion),
+			state = detachState(
+				model.migrate(detachState(snapshot.state), storedSchemaVersion),
 			);
 		} else {
 			throw new SnapshotSchemaMismatchError({
@@ -242,106 +242,4 @@ function copySnapshotAt(snapshotAt: Date): Date {
 		throw new SnapshotTimeValidationError();
 	}
 	return new Date(snapshotAt.getTime());
-}
-
-function detachSnapshotState<T>(state: T): T {
-	assertSnapshotSafe(state, "", new WeakSet());
-	return structuredClone(state);
-}
-
-/**
- * Rejects graphs that structured cloning would lose or silently degrade.
- * Snapshot models map class-based domain state to plain persistence DTOs.
- * A RegExp passes: pattern and flags survive the clone, and `lastIndex`
- * restores as 0. The scan state of a global or sticky pattern is not
- * domain data.
- */
-function assertSnapshotSafe(
-	value: unknown,
-	path: string,
-	seen: WeakSet<object>,
-): void {
-	if (typeof value === "function") {
-		throw new TypeError(
-			`snapshot state${path} is a function; map it to serialisable data in the snapshot model`,
-		);
-	}
-	// Guided rejection instead of the raw DataCloneError DOMException that
-	// structuredClone throws for symbols, which no recovery channel catches.
-	if (typeof value === "symbol") {
-		throw new TypeError(
-			`snapshot state${path} is a symbol; map it to serialisable data in the snapshot model`,
-		);
-	}
-	if (value === null || typeof value !== "object") return;
-	const object = value as object;
-	if (seen.has(object)) return;
-	seen.add(object);
-
-	if (Array.isArray(object)) {
-		for (let index = 0; index < object.length; index++) {
-			assertSnapshotSafe(object[index], `${path}[${index}]`, seen);
-		}
-		return;
-	}
-
-	const tag = Object.prototype.toString.call(object);
-	if (isBuiltInObject(object, tag)) {
-		if (tag === "[object Map]") {
-			let index = 0;
-			for (const [key, entry] of object as Map<unknown, unknown>) {
-				assertSnapshotSafe(key, `${path}<map key #${index}>`, seen);
-				assertSnapshotSafe(entry, `${path}<map value #${index}>`, seen);
-				index++;
-			}
-			return;
-		}
-		if (tag === "[object Set]") {
-			let index = 0;
-			for (const member of object as Set<unknown>) {
-				assertSnapshotSafe(member, `${path}<set member #${index}>`, seen);
-				index++;
-			}
-			return;
-		}
-		if (
-			tag === "[object Promise]" ||
-			tag === "[object WeakMap]" ||
-			tag === "[object WeakSet]"
-		) {
-			throw new TypeError(
-				`snapshot state${path} is a ${tag.slice(8, -1)} and cannot be persisted`,
-			);
-		}
-		if (tag === "[object Error]") {
-			throw new TypeError(
-				`snapshot state${path} is an Error; map it to plain data in the snapshot model`,
-			);
-		}
-		return;
-	}
-
-	const prototype = Object.getPrototypeOf(object);
-	if (prototype === Object.prototype || prototype === null) {
-		for (const key of Reflect.ownKeys(object)) {
-			const descriptor = Object.getOwnPropertyDescriptor(object, key);
-			if (!descriptor?.enumerable) continue;
-			if (typeof key === "symbol") {
-				throw new TypeError(
-					`snapshot state${path} has a symbol-keyed property; map it to plain data in the snapshot model`,
-				);
-			}
-			assertSnapshotSafe(
-				(object as Record<PropertyKey, unknown>)[key],
-				`${path}.${key}`,
-				seen,
-			);
-		}
-		return;
-	}
-
-	const name: string = prototype.constructor?.name || "anonymous class";
-	throw new TypeError(
-		`snapshot state${path} is a class instance (${name}); map it to plain data in the snapshot model`,
-	);
 }
