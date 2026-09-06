@@ -314,6 +314,10 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 }
 ```
 
+The getter walks and clones the whole state on every read. That cost belongs
+to the adapter, which reads the DTO once at load and once at commit.
+Application code reads domain queries and never the DTO in a loop.
+
 `detachState` is a `structuredClone` behind a guard. A structured clone keeps
 the data properties of a class instance and drops the methods on its
 prototype, without an error. The guard throws a `TypeError` that names the
