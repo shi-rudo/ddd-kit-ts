@@ -400,6 +400,14 @@ Zero affected rows means the optimistic-concurrency assumption was false.
 Throw `ConcurrencyConflictError`. Do not turn a stale update into an
 insert.
 
+The predicate belongs to the adapter, not to the kit. The compare-and-set must
+run in the same statement that writes the row. Only the store can make the
+version check and the write one atomic step. The kit does not know the store,
+so it cannot write that statement. The kit owns the policy instead. It captures
+`expectedVersion` when the aggregate joins the Unit of Work and stamps
+`version`. It defines `ConcurrencyConflictError`, and the contract suite proves
+the predicate.
+
 ## Event-sourced flush
 
 For an event-sourced aggregate, the registered event batch is the write model:
@@ -623,6 +631,11 @@ for (const contract of createRepositoryContractTests(harness)) {
 
 Keep capability skips visible. They record a guarantee the adapter does not
 yet prove.
+
+The suite is the only proof of the OCC predicate. A missing or wrong predicate
+raises no error: the stale write succeeds, and the newer state is lost. The
+suite turns that silent loss into a failing test. Bind it to every adapter you
+ship.
 
 For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
 [Migrating to v3](/guide/migrating-to-v3).
