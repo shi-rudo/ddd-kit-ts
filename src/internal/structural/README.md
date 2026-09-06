@@ -116,12 +116,17 @@ Returns a copy of `state` that shares no object with the original. The copy is a
 
 #### Rejected values
 
-- A class instance (any prototype other than `Object.prototype` or `null`)
+- A class instance, including a subclass of a built-in (`class Tags extends Set`)
 - A function or a symbol value
-- An enumerable symbol-keyed property, or a non-enumerable string-keyed property (a hidden symbol key passes as metadata)
+- An enumerable symbol-keyed property anywhere (a hidden symbol key passes as metadata)
+- A non-enumerable string-keyed property on a record or an array (the clone drops it)
+- An accessor property (the walk does not invoke it)
+- An expando on a built-in such as a `Map` or a `Date` (the clone drops it)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
+- A `SharedArrayBuffer` or a view over one (the copy would share its memory)
+- A `Proxy`: the walk cannot see it, the clone fails, and `detachState` rethrows the failure as a `TypeError` that keeps the cause
 
-Plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
+Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
 
 #### Example
 
@@ -129,8 +134,8 @@ Plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays
 import { deepFreeze, detachState } from '@shirudo/ddd-kit';
 
 class Order extends StateStoredAggregate<OrderState, OrderId> {
-  /** A detached, immutable copy of the current facts. Never the live graph. */
-  get facts(): Readonly<OrderState> {
+  /** A detached, immutable copy of the state. Never the live graph. */
+  get stateDto(): Readonly<OrderState> {
     return deepFreeze(detachState(this.state));
   }
 }
@@ -141,7 +146,7 @@ detachState({ review: new OwnerReview() });
 
 #### Notes
 
-- The snapshot model's `captureAggregateSnapshot` detaches the captured DTO with the same function
+- The snapshot model detaches the captured DTO and the restored state with the same function
 - A state that carries a class-based child entity is mapped to plain data first; the walk names the field to map
 
 ---

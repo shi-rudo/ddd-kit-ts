@@ -1,3 +1,5 @@
+// @ts-expect-error Node's VM exists in the test runtime; the package stays Node-type-free.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import { detachState } from "./detach-state";
 
@@ -85,6 +87,111 @@ describe("detachState", () => {
 	];
 	it.each(undetachable)("rejects %s with its path", (_kind, state, message) => {
 		expect(() => detachState(state)).toThrow(message);
+	});
+
+	it("rejects a subclass of a built-in as a class instance instead of dropping its methods", () => {
+		class Tags extends Set<string> {
+			has(tag: string): boolean {
+				return super.has(tag.toLowerCase());
+			}
+		}
+		class Line extends Array<number> {}
+		class Stamp extends Date {}
+		class Bytes extends Uint8Array {}
+
+		expect(() => detachState({ tags: new Tags() })).toThrow(
+			/state\.tags is a class instance \(Tags\)/,
+		);
+		expect(() => detachState({ line: new Line() })).toThrow(
+			/state\.line is a class instance \(Line\)/,
+		);
+		expect(() => detachState({ at: new Stamp() })).toThrow(
+			/state\.at is a class instance \(Stamp\)/,
+		);
+		expect(() => detachState({ raw: new Bytes(2) })).toThrow(
+			/state\.raw is a class instance \(Bytes\)/,
+		);
+	});
+
+	it("rejects an accessor property without invoking it", () => {
+		let invoked = 0;
+		const state = {
+			get total() {
+				invoked++;
+				return 1;
+			},
+		};
+
+		expect(() => detachState(state)).toThrow(
+			/state\.total is an accessor property/,
+		);
+		expect(invoked).toBe(0);
+	});
+
+	it("rejects an expando or a symbol key on a built-in that the clone would drop", () => {
+		const byId = Object.assign(new Map([["a", 1]]), { note: "x" });
+		const tags = Object.assign(new Set(), { [Symbol("brand")]: 1 });
+
+		expect(() => detachState({ byId })).toThrow(
+			/state\.byId\.note is an expando on a Map and the clone would drop it/,
+		);
+		expect(() => detachState({ tags })).toThrow(
+			/state\.tags has a symbol-keyed property/,
+		);
+	});
+
+	it("walks an array expando as a member and rejects a hidden key on an array", () => {
+		const line = Object.assign([1, 2], { owner: new OwnerReview(true) });
+		const hidden = Object.defineProperty([1], "hidden", {
+			value: 2,
+			enumerable: false,
+		});
+
+		expect(() => detachState({ line })).toThrow(
+			/state\.line\.owner is a class instance \(OwnerReview\)/,
+		);
+		expect(() => detachState({ hidden })).toThrow(
+			/state\.hidden\.hidden is not enumerable and the clone would drop it/,
+		);
+		expect(detachState({ tagged: Object.assign([1], { note: "x" }) })).toEqual({
+			tagged: Object.assign([1], { note: "x" }),
+		});
+	});
+
+	it("rejects a SharedArrayBuffer and a view over one instead of sharing their memory", () => {
+		const shared = new SharedArrayBuffer(8);
+
+		expect(() => detachState({ shared })).toThrow(
+			/state\.shared is backed by a SharedArrayBuffer/,
+		);
+		expect(() => detachState({ view: new Uint8Array(shared) })).toThrow(
+			/state\.view is backed by a SharedArrayBuffer/,
+		);
+	});
+
+	it("rethrows the clone failure of a Proxy as a TypeError that keeps the cause", () => {
+		const state = { hidden: new Proxy({ a: 1 }, {}) };
+
+		let caught: unknown;
+		try {
+			detachState(state);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(TypeError);
+		expect((caught as TypeError).message).toMatch(
+			/holds a Proxy or a host object that cannot be cloned/,
+		);
+		expect((caught as TypeError).cause).toBeDefined();
+	});
+
+	it("passes a plain object from another realm as a record", () => {
+		const foreign = runInNewContext("({ status: 'draft', nested: { n: 1 } })");
+
+		expect(detachState({ foreign })).toEqual({
+			foreign: { status: "draft", nested: { n: 1 } },
+		});
 	});
 
 	it("names the root when the state itself is a class instance", () => {

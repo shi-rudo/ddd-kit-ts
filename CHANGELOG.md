@@ -35,15 +35,24 @@ gives a before-and-after example for each breaking change.
 rejects every value the clone would lose or degrade. A class instance keeps its
 data properties in a clone and loses the methods on its prototype, without an
 error. The walk throws a `TypeError` that names the field path and the class
-instead, so the defect fails at the boundary that produced it. A function, a
-symbol, a symbol-keyed property, a non-enumerable property, an `Error`, a
-`Promise`, a `WeakMap`, and a `WeakSet` are rejected in the same way. Plain objects, arrays, `Date`, `Map`,
-`Set`, `RegExp`, bigints, and typed arrays pass.
+instead, so the defect fails at the boundary that produced it. A subclass of a
+built-in (`class Tags extends Set`) is a class instance too. The walk also
+rejects a function, a symbol, an enumerable symbol-keyed property, a
+non-enumerable property on a record or an array, an accessor property, an
+expando on a built-in, an `Error`, a `Promise`, a `WeakMap`, a `WeakSet`, a
+`SharedArrayBuffer`, and a view over one. A `Proxy` fails inside the clone;
+`detachState` rethrows that failure as a `TypeError` that keeps the cause.
+Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints,
+and typed arrays pass.
 
 A concrete entity uses it for its detached read DTO:
-`deepFreeze(detachState(this.state))`. The snapshot model already guarded its
-captured DTO with this walk; it now reuses `detachState`, and its messages
-start with `detachState:` instead of `detachSnapshotState:`.
+`deepFreeze(detachState(this.state))`. The snapshot model guarded its captured
+and restored state with a narrower walk of its own; it now reuses `detachState`
+on both paths. The messages start with `detachState: state` instead of
+`snapshot state`. The added rejections apply to a captured or restored snapshot
+state as well; a snapshot model that returns plain data is not affected. A
+plain object from another realm (a `vm` context, an iframe) now passes; the
+old walk rejected it as a class instance.
 
 ### Changed: the dependency audit gates the publish, not the merge
 
