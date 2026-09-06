@@ -39,7 +39,9 @@ own constructor already cloned and froze its props, and a value object is
 immutable by contract. `equals`, `voEquals`, and
 `voEqualsExcept` compare a nested value object by class and by props, so
 two nested value objects of different classes with the same props are not
-equal. Every other custom class instance is still rejected.
+equal. Every other custom class instance is still rejected, and a value
+object as the root props of another value object is rejected with a
+`TypeError`.
 
 A `ValueObject` instance carries one own, non-enumerable symbol property
 that records its class. The key is a `Symbol.for`, so a value object built

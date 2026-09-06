@@ -683,6 +683,15 @@ describe("ValueObject Class", () => {
 			expect(Object.isFrozen(money.tags)).toBe(true);
 		});
 
+		it("rejects a value object as the root props", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+			class Wrapper extends ValueObject<Money> {}
+
+			expect(() => new Wrapper(money)).toThrow(
+				/ValueObject props must be a plain record, not a value object/,
+			);
+		});
+
 		it("clones the outer value object and shares the nested one", () => {
 			const money = new Money({ amount: 100, currency: "USD" });
 			const price = new Price({ amount: money, label: "list" });

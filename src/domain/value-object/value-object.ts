@@ -124,7 +124,10 @@ function recordValueObjectClass(
 	});
 }
 
-function isValueObjectInstance(value: object): boolean {
+function isValueObjectInstance(value: unknown): boolean {
+	if (value === null || typeof value !== "object") {
+		return false;
+	}
 	const record = Reflect.getOwnPropertyDescriptor(value, VALUE_OBJECT_CLASS);
 	if (
 		record === undefined ||
@@ -735,6 +738,11 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 	 * ```
 	 */
 	constructor(props: T) {
+		if (isValueObjectInstance(props)) {
+			throw new TypeError(
+				"ValueObject props must be a plain record, not a value object: nest the value object under a key, or pass its props",
+			);
+		}
 		this.validate(props);
 		// Same clone as vo(): Map/Set contents are walked (so the caller's
 		// entries are never frozen or shadowed in place), nested value
