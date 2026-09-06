@@ -29,6 +29,32 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: defineRepository names the violated port constraint
+
+`defineRepository` checks the port against its constraints. The port is one
+object type. It declares `add` and `update`, and both accept the aggregate of
+the definition. It declares `remove` exactly when the definition sets
+`physicalRemoval: true`, and `remove` accepts the aggregate. A violated
+constraint collapsed the parameter type to `never`. The compiler then reported
+"not assignable to parameter of type 'never'" and an implicit `any` on every
+unannotated callback parameter. The message named no cause.
+
+The compiler now rejects the call with one error that names the violated
+constraint. The error ends with a line such as `Property '"defineRepository:
+the port must declare update(aggregate): void"' is missing in type ...`. The
+callback parameters keep their contextual types, so no implicit `any` follows.
+The repository guide shows the form of the error.
+
+Three definitions that compiled by accident now fail with a named constraint.
+A port with a `remove` that does not accept the aggregate compiled with
+`physicalRemoval: true`, for example `remove(id: OrderId)`. The Unit of Work
+installs no such method, so the call failed at run time. A `physicalRemoval`
+typed `boolean` compiled; the port type then declared a `remove` that the
+runtime installs only for a true value. A union of port types compiled when
+one member satisfied the constraints. A definition typed `any` compiles now,
+as `any` does at every typed parameter; before, the `never` collapse rejected
+it.
+
 ### Added: the repository contract suites prove overlapping calls first
 
 The stale-writer proofs of `createRepositoryContractTests` and

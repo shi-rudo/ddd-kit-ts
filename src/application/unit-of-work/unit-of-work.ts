@@ -156,6 +156,94 @@ export interface RepositoryDefinition<
 /** @inline */
 type CallableValue = (...args: never[]) => unknown;
 
+/**
+ * The compile-time report for a port that violates one constraint of
+ * {@link defineRepository}. No definition can carry a property of type
+ * `never`, so the compiler rejects the call. Its message names the violated
+ * constraint instead of the bare "parameter of type never".
+ * @inline
+ */
+type RepositoryPortViolation<TConstraint extends string> = {
+	readonly [constraint in `defineRepository: ${TConstraint}`]: never;
+};
+
+/**
+ * Continues with the next constraint when the checked one passed, and
+ * otherwise reports the violation of the checked one.
+ * @inline
+ */
+type Then<TChecked, TNext> = unknown extends TChecked ? TNext : TChecked;
+
+/** @inline */
+type IsUnion<T, TEach = T> = T extends unknown
+	? [TEach] extends [T]
+		? false
+		: true
+	: never;
+
+/** @inline */
+type PortShapeConstraint<TRepositoryPort> = [
+	Extract<TRepositoryPort, CallableValue>,
+] extends [never]
+	? true extends IsUnion<TRepositoryPort>
+		? RepositoryPortViolation<"the port must be one object type, not a union">
+		: unknown
+	: RepositoryPortViolation<"the port must be an object type, not a function">;
+
+/** @inline */
+type WriteMemberConstraint<
+	TRepositoryPort,
+	TMember extends keyof AggregateWriteRegistration<TAggregate>,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+> = TMember extends keyof TRepositoryPort
+	? [TRepositoryPort] extends [
+			Pick<AggregateWriteRegistration<TAggregate>, TMember>,
+		]
+		? unknown
+		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>
+	: RepositoryPortViolation<`the port must declare ${TMember}(aggregate): void`>;
+
+/** @inline */
+type RemovalConstraint<
+	TRepositoryPort,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TRemoval extends boolean,
+> = "remove" extends keyof TRepositoryPort
+	? [TRemoval] extends [true]
+		? [TRepositoryPort] extends [PhysicalRemovalRegistration<TAggregate>]
+			? unknown
+			: RepositoryPortViolation<"the port's remove must accept the definition's aggregate">
+		: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
+	: [TRemoval] extends [true]
+		? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
+		: unknown;
+
+/**
+ * Checks the port against every constraint of {@link defineRepository}, one
+ * at a time, so the report names the first violated constraint. Resolves to
+ * `unknown` when the port satisfies all of them. A port typed `any` opts out
+ * of the check, as it does everywhere else. Under the `object` bound of the
+ * builder only `any` satisfies `unknown extends TRepositoryPort`; the usual
+ * `0 extends 1 & T` probe misses an `any` that passed through that bound.
+ * @inline
+ */
+type RepositoryPortConstraint<
+	TRepositoryPort,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TRemoval extends boolean,
+> = unknown extends TRepositoryPort
+	? unknown
+	: Then<
+			PortShapeConstraint<TRepositoryPort>,
+			Then<
+				WriteMemberConstraint<TRepositoryPort, "add", TAggregate>,
+				Then<
+					WriteMemberConstraint<TRepositoryPort, "update", TAggregate>,
+					RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>
+				>
+			>
+		>;
+
 /** @inline */
 type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
@@ -176,15 +264,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TRemoval
 	> & {
 		readonly create: TCreate;
-	} & (TRepositoryPort extends AggregateWriteRegistration<TAggregate>
-			? TRemoval extends true
-				? TRepositoryPort extends PhysicalRemovalRegistration<TAggregate>
-					? unknown
-					: never
-				: TRepositoryPort extends PhysicalRemovalRegistration<TAggregate>
-					? never
-					: unknown
-			: never),
+	} & RepositoryPortConstraint<TRepositoryPort, TAggregate, TRemoval>,
 ) => RepositoryDefinition<
 	Parameters<TCreate>[0],
 	TRepositoryPort,
@@ -194,19 +274,6 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TRemoval
 >;
 
-/**
- * Defines repository wiring for an application-owned driven port.
- *
- * The first call makes the port explicit; the second infers the transaction,
- * aggregate, persistence, event, and removal types from the adapter wiring.
- * The port must declare `add` and `update`; if it declares `remove`, the
- * definition must set `physicalRemoval: true`. The adapter created by the
- * definition implements only the remaining methods because lifecycle writes
- * are installed by the Unit of Work.
- * The returned definition is the only form accepted by {@link UnitOfWork}; a
- * raw adapter-shaped object cannot silently turn its concrete surface into the
- * application contract.
- */
 function assertRepositoryDefinitionMembers(
 	definition: Record<PropertyKey, unknown>,
 ): void {
@@ -239,12 +306,24 @@ function assertRepositoryDefinitionMembers(
 	}
 }
 
-export function defineRepository<TRepositoryPort extends object>(): Extract<
-	TRepositoryPort,
-	CallableValue
-> extends never
-	? RepositoryDefinitionBuilder<TRepositoryPort>
-	: never {
+/**
+ * Defines repository wiring for an application-owned driven port.
+ *
+ * The first call makes the port explicit; the second infers the transaction,
+ * aggregate, persistence, event, and removal types from the adapter wiring.
+ * The port must declare `add` and `update` for the aggregate; if it
+ * declares `remove`, the definition must set `physicalRemoval: true`. A
+ * violated constraint fails the call with a compiler error that names the
+ * constraint. The adapter
+ * created by the definition implements only the remaining methods because
+ * lifecycle writes are installed by the Unit of Work.
+ * The returned definition is the only form accepted by {@link UnitOfWork}; a
+ * raw adapter-shaped object cannot silently turn its concrete surface into the
+ * application contract.
+ */
+export function defineRepository<
+	TRepositoryPort extends object,
+>(): RepositoryDefinitionBuilder<TRepositoryPort> {
 	const builder = (definition: object): object => {
 		const branded = { ...definition };
 		// Validated AFTER the spread, on what actually survives it: the
@@ -256,12 +335,7 @@ export function defineRepository<TRepositoryPort extends object>(): Extract<
 		stampCooperativeBrand(branded, repositoryDefinitionBrand);
 		return Object.freeze(branded);
 	};
-	return builder as unknown as Extract<
-		TRepositoryPort,
-		CallableValue
-	> extends never
-		? RepositoryDefinitionBuilder<TRepositoryPort>
-		: never;
+	return builder as unknown as RepositoryDefinitionBuilder<TRepositoryPort>;
 }
 
 /** Application-facing repositories inferred from their adapter definitions. */
