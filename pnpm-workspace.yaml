@@ -4,7 +4,7 @@ allowBuilds:
   workerd: true
 
 overrides:
-  qs: 6.15.2
+  qs: 6.16.0
   # Vite+ publishes its core under the conventional Vite package name and
   # bundles the matching Vitest release. Keep every transitive peer on that
   # single toolchain instance, as required by the Vite+ pnpm migration.
