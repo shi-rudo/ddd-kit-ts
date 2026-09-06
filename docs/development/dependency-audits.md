@@ -1,6 +1,6 @@
 # Dependency audit policy
 
-Last reviewed: 2026-07-16
+Last reviewed: 2026-09-06
 
 ## Release gate
 
@@ -24,6 +24,12 @@ override removed 20 of the 25 findings reported on 2026-07-16. Moving the
 documentation build to VitePress 2.0.0-alpha.18 and Vite 8 removed the four
 findings retained by VitePress 1.6.4's Vite 5 toolchain. Replacing tsup with
 Vite+ Pack removed the final low-severity esbuild development-server advisory.
+
+On 2026-09-06 the full `pnpm audit` reported 15 findings, all in the
+documentation and mutation toolchains. A deep lockfile update
+(`pnpm update --depth Infinity`) removed 13 of them. The `qs` override moved
+from 6.15.2 to 6.16.0 and removed the last two; `typed-rest-client` still pins
+an affected `qs`, so the override stays until it moves.
 
 As of the review date, both `pnpm audit:prod` and the full `pnpm audit` report
 no known vulnerabilities. There are no accepted advisory exceptions.
