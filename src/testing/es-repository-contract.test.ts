@@ -39,6 +39,7 @@ import {
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
+import { serializedCalls } from "./serialized-calls";
 
 /**
  * The in-memory REFERENCE adapter for the event-sourced contract suite:
@@ -607,37 +608,33 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 		);
 	});
 
-	/**
-	 * Queues every `run` call behind the previous one, like a pool of one
-	 * connection: the second call starts only after the first call ends.
-	 */
+	/** An environment that serializes `run`, like a pool of one connection. */
 	function serializing(
 		harness: EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent>,
+		boundMs: number,
 	): EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent> {
 		return {
 			...harness,
-			overlappingCallsBoundMs: 50,
+			overlappingCallsBoundMs: boundMs,
 			createEnvironment: async () => {
 				const environment = await harness.createEnvironment();
-				let tail: Promise<unknown> = Promise.resolve();
+				const enqueue = serializedCalls();
 				return {
 					...environment,
-					run: (work) => {
-						const call = tail.then(() => environment.run(work));
-						tail = call.catch(() => undefined);
-						return call;
-					},
+					run: (work) => enqueue(() => environment.run(work)),
 				};
 			},
 		};
 	}
 
 	describe("against a serializing environment", () => {
+		const boundMs = 50;
 		const tests = createEsRepositoryContractTests(
-			serializing(createInMemoryEsHarness()),
+			serializing(createInMemoryEsHarness(), boundMs),
 		);
-		const violation =
-			/run must permit overlapping calls: a second run call did not complete within 50 ms/;
+		const violation = new RegExp(
+			`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms`,
+		);
 
 		it("the environment preflight fails with the named requirement", async () => {
 			await expect(tests[0]?.run()).rejects.toThrow(violation);

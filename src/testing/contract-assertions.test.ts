@@ -7,6 +7,7 @@ import {
 	captureRejection,
 	describeError,
 } from "./contract-assertions";
+import { serializedCalls } from "./serialized-calls";
 
 const conflict = () =>
 	new ConcurrencyConflictError({
@@ -101,15 +102,7 @@ describe("assertRunPermitsOverlappingCalls", () => {
 
 	const concurrentRun = (work: () => Promise<void>) => work();
 
-	/** Queues every call behind the previous one, like a single connection. */
-	const serializedRun = () => {
-		let tail: Promise<unknown> = Promise.resolve();
-		return (work: () => Promise<void>) => {
-			const call = tail.then(work);
-			tail = call.catch(() => undefined);
-			return call;
-		};
-	};
+	const serializedRun = serializedCalls;
 
 	const settlesWithin = (promise: Promise<unknown>, ms: number) =>
 		Promise.race([
