@@ -20,6 +20,9 @@ The redesign does not require renaming tables, rewriting event history, or
 resetting versions. It changes who holds the expected version and when a write
 can occur.
 
+Value objects need no change. Version 2.2.0 rejected a value object inside
+another value object; v3 accepts it again.
+
 Snapshots need special attention because their policy moved out of aggregate
 methods. If the stored DTO is still compatible, describe its existing shape
 with a `SnapshotModel`. Do not rewrite it only because the API moved.

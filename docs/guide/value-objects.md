@@ -55,11 +55,12 @@ voEquals(address, sameAddress); // true
 the caller keeps ownership of the original object, and later mutations to the
 original cannot leak into the value object.
 
-Keep the input boring: plain records, arrays, and supported built-ins. Do not
-put functions, services, repositories, custom class instances, `Error` objects,
-buffers, typed arrays, promises, weak collections, or other behavior-bearing
-objects inside a value object. If a value needs methods, make the value object a
-class instead of smuggling behavior through `props`.
+Keep the input boring: plain records, arrays, supported built-ins, and other
+value objects. Do not put functions, services, repositories, other custom class
+instances, `Error` objects, buffers, typed arrays, promises, weak collections,
+or other behavior-bearing objects inside a value object. If a value needs
+methods, make the value object a class instead of smuggling behavior through
+`props`.
 
 ## Parse Input With Validation Helpers
 
@@ -194,6 +195,36 @@ The base class gives you:
 equal to another class with the same `{ from, to }` shape, because the type is
 part of the meaning.
 
+### Compose Value Objects
+
+A value object can hold other value objects. The nested instance is kept by
+reference, not cloned: its own constructor already cloned and froze its props.
+`equals()`, `voEquals()`, and `voEqualsExcept()` compare a nested value object
+by class and by props, and `toJSON()` serializes its props.
+
+```ts
+type StayProps = {
+  window: DateRange;
+  guests: number;
+};
+
+class Stay extends ValueObject<StayProps> {
+  get window(): DateRange {
+    return this.props.window;
+  }
+}
+
+const stay = new Stay({ window: bookingWindow, guests: 2 });
+
+stay.window === bookingWindow; // true
+stay.equals(new Stay({ window: bookingWindow.clone(), guests: 2 })); // true
+JSON.stringify(stay);
+// {"window":{"from":"2026-07-01T00:00:00.000Z","to":"2026-07-31T00:00:00.000Z"},"guests":2}
+```
+
+The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
+`DateRange` instance.
+
 ::: warning Constructor ordering
 `validate(props)` runs from the base constructor before subclass field
 initializers run. Treat `validate` as a pure check over the `props` argument. If
@@ -233,7 +264,8 @@ shadowed on the frozen clone so accidental mutation throws. Map keys and Set
 members must be primitives, because JavaScript compares object keys and set
 members by identity.
 
-Functions and custom class instances are rejected. A class instance can hide
+A `ValueObject<T>` instance is accepted and kept by reference. Functions and
+every other custom class instance are rejected. A class instance can hide
 private fields, non-enumerable state, and runtime-owned internal slots. Cloning
 it as data would produce a value that looks valid but has lost part of its
 meaning.
@@ -248,8 +280,10 @@ side-effect-free way to identify a transparent Proxy, so reflective cloning can
 trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
-internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
-because they clone first and do not freeze caller-owned objects.
+internals. It passes a `ValueObject<T>` instance through whole, because the
+instance already owns frozen props. Application code should usually prefer
+`vo()` or `ValueObject<T>`, because they clone first and do not freeze
+caller-owned objects.
 
 ## Common Mistakes
 
