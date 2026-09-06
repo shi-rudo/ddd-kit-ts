@@ -556,8 +556,8 @@ function isPrimitiveValue(value: unknown): boolean {
  * side-effect. Mutating the input afterwards does not bleed into the VO.
  * Symbol-keyed properties are preserved (matching `voEquals`). A kit
  * `ValueObject` instance nested in the input is kept by reference and
- * frozen in place; it must keep all of its state in `props` (see
- * `VALUE_OBJECT_CLASS`). A value object as the input itself is rejected.
+ * frozen in place; it must keep all of its state in `props`. A value
+ * object as the input itself is rejected.
  * Function values and every other custom class instance are rejected
  * (Value Objects are plain data, not behaviour-bearing object graphs). Inputs must be trusted and
  * Proxy-free: ECMAScript provides no portable way to identify a transparent
@@ -779,9 +779,10 @@ export interface IValueObject<T extends object> {
 /**
  * Abstract base class for creating Value Objects.
  * Value Objects are immutable and defined by their properties. A value
- * object can hold other value objects in its props. `equals` compares a
+ * object can hold other value objects in its props. Every instance
+ * records its class under an own symbol key, so `equals` compares a
  * nested value object by class and props and does not call its `equals`
- * method (see `VALUE_OBJECT_CLASS`).
+ * method.
  *
  * @template T - The shape of the value object's properties
  */
