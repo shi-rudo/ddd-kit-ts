@@ -144,11 +144,18 @@ function isValueObjectInstance(value: unknown): boolean {
 		return false;
 	}
 	const props = Reflect.getOwnPropertyDescriptor(value, "props");
+	return props !== undefined && isSealedProps(props.value);
+}
+
+// deepFreeze passes a RegExp through unfrozen (see its doc), and a RegExp
+// is the one such built-in that cloneForVo admits as the whole props.
+function isSealedProps(props: unknown): boolean {
+	if (typeof props !== "object" || props === null) {
+		return false;
+	}
 	return (
-		props !== undefined &&
-		typeof props.value === "object" &&
-		props.value !== null &&
-		Object.isFrozen(props.value)
+		Object.isFrozen(props) ||
+		builtInTagWithoutInvokingAccessors(props) === "[object RegExp]"
 	);
 }
 

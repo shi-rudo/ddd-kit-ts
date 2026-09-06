@@ -812,6 +812,19 @@ describe("ValueObject Class", () => {
 			).toThrow(/recognized only when a copy of this kit version built it/);
 		});
 
+		it("recognizes a nested value object whose props is a RegExp", () => {
+			class Pattern extends ValueObject<RegExp> {}
+			class Rule extends ValueObject<{ pattern: Pattern }> {}
+			const pattern = new Pattern(/^[a-z]+$/);
+
+			const rule = new Rule({ pattern });
+
+			expect(rule.props.pattern).toBe(pattern);
+			expect(rule.equals(new Rule({ pattern: new Pattern(/^[a-z]+$/) }))).toBe(
+				true,
+			);
+		});
+
 		it("still rejects a class instance that is not a value object", () => {
 			class Tag {
 				constructor(readonly name: string) {}
