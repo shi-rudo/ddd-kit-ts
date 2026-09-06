@@ -89,6 +89,12 @@ export interface RepositoryTracking<
  * the exact moment at which the application registered its write intent.
  * Adapters must use the expected/current version pair for their OCC predicate
  * and must not read mutable write state back from an aggregate reference.
+ *
+ * The predicate itself is adapter code. The compare-and-set must run in the
+ * store's own write statement. The kit does not know the store, so it cannot
+ * write that statement. The kit owns the version pair and
+ * {@link ConcurrencyConflictError}; the repository contract suite proves the
+ * predicate.
  */
 export interface AggregatePersistenceWrite<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,

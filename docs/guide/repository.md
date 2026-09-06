@@ -380,6 +380,13 @@ because the Unit of Work installs `add`, `update`, and `remove`. The concrete
 adapter can have diagnostics or ORM-specific helpers, but those do not become
 application API. It can change without silently widening the port.
 
+The port and `physicalRemoval` must agree. If the port declares `remove`, set
+`physicalRemoval: true`. If the port has no `remove`, omit the option.
+`Repository` declares `remove`; `AggregatePersistence` does not. On a mismatch
+the compiler rejects the whole definition with "not assignable to parameter of
+type 'never'". It also reports an implicit `any` on every unannotated
+parameter. That message names no cause, so check the pairing first.
+
 `mapError` is the storage boundary's last translation step. Known failures
 such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
 An unknown driver failure becomes an application-defined
@@ -399,6 +406,14 @@ The receipt's version relationship is the OCC contract:
 Zero affected rows means the optimistic-concurrency assumption was false.
 Throw `ConcurrencyConflictError`. Do not turn a stale update into an
 insert.
+
+The predicate belongs to the adapter, not to the kit. The compare-and-set must
+run in the same statement that writes the row. Only the store can make the
+version check and the write one atomic step. The kit does not know the store,
+so it cannot write that statement. The kit owns the policy instead. It captures
+`expectedVersion` when the aggregate joins the Unit of Work and stamps
+`version`. It defines `ConcurrencyConflictError`, and the contract suite proves
+the predicate.
 
 ## Event-sourced flush
 
@@ -623,6 +638,11 @@ for (const contract of createRepositoryContractTests(harness)) {
 
 Keep capability skips visible. They record a guarantee the adapter does not
 yet prove.
+
+The suite is the only proof of the OCC predicate. A missing or wrong predicate
+raises no error: the stale write succeeds, and the newer state is lost. The
+suite turns that silent loss into a failing test. Bind it to every adapter you
+ship.
 
 For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
 [Migrating to v3](/guide/migrating-to-v3).
