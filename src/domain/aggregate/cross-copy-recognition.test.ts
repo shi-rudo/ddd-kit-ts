@@ -8,6 +8,7 @@ import {
 import type { Id } from "../identity/id";
 import { EventSourcedAggregate } from "./event-sourced-aggregate";
 import { pendingEventLifecycleCapabilityFor } from "./pending-event-lifecycle";
+import { pendingEventRecordingCapabilityFor } from "./pending-event-recording";
 import { StateStoredAggregate } from "./state-stored-aggregate";
 
 // A duplicate npm dependency or a plugin bundle loads a second copy of the
@@ -104,6 +105,20 @@ describe("recognition across package copies", () => {
 
 		expect(
 			secondCopy.pendingEventLifecycleCapabilityFor(aggregate),
+		).toBeDefined();
+	});
+
+	it("a second copy of the recording module resolves the capability this copy registered", async () => {
+		const aggregate = new NotingAggregate("test-1" as TestId);
+
+		vi.resetModules();
+		const secondCopy = await import("./pending-event-recording");
+		expect(secondCopy.pendingEventRecordingCapabilityFor).not.toBe(
+			pendingEventRecordingCapabilityFor,
+		);
+
+		expect(
+			secondCopy.pendingEventRecordingCapabilityFor(aggregate),
 		).toBeDefined();
 	});
 });

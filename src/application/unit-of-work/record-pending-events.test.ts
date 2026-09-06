@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import type { Version } from "../../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
 import {
@@ -326,20 +326,5 @@ describe("recordPendingEvents", () => {
 		expect(caught).toBeInstanceOf(UnmanagedInstanceError);
 		expect((caught as UnmanagedInstanceError).code).toBe("UNMANAGED_INSTANCE");
 		expect((caught as UnmanagedInstanceError).message).toContain("counter-1");
-	});
-
-	it("resolves the recording capability from a second copy of the module", async () => {
-		const aggregate = new Counter("counter-1" as CounterId, { value: 0 });
-
-		// A duplicate package installation re-evaluates the module; its
-		// copy must find the capability this copy registered.
-		vi.resetModules();
-		const foreignModule = await import(
-			"../../domain/aggregate/pending-event-recording"
-		);
-
-		expect(
-			foreignModule.pendingEventRecordingCapabilityFor(aggregate),
-		).toBeDefined();
 	});
 });
