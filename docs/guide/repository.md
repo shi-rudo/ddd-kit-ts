@@ -380,6 +380,13 @@ because the Unit of Work installs `add`, `update`, and `remove`. The concrete
 adapter can have diagnostics or ORM-specific helpers, but those do not become
 application API. It can change without silently widening the port.
 
+The port and `physicalRemoval` must agree. If the port declares `remove`, set
+`physicalRemoval: true`. If the port has no `remove`, omit the option.
+`Repository` declares `remove`; `AggregatePersistence` does not. On a mismatch
+the compiler rejects the whole definition with "not assignable to parameter of
+type 'never'". It also reports an implicit `any` on every unannotated
+parameter. That message names no cause, so check the pairing first.
+
 `mapError` is the storage boundary's last translation step. Known failures
 such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
 An unknown driver failure becomes an application-defined
