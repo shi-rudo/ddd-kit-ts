@@ -91,27 +91,32 @@ function shadowMutators(
 	return true;
 }
 
-// Every ValueObject constructor stamps the instance with its class under
-// this key, as an own, non-enumerable, locked data property. cloneForVo
-// admits a stamped instance by reference: its own constructor already
-// cloned and sealed its props, so a second clone would only strip the
-// class. The deepFreeze walk that follows freezes the instance in place,
-// like every class instance it reaches; a value object is immutable by
-// contract, so the freeze changes nothing a value object may do. deepEqual
+// Every ValueObject constructor records the class of the instance under
+// this key, as an own, non-enumerable, locked data property. The record
+// does three jobs. cloneForVo admits a recorded instance by reference: its
+// own constructor cloned and sealed its props, and a second clone would
+// only strip the class; the deepFreeze walk that follows freezes the
+// instance in place, like every class instance it reaches. deepEqual
 // counts own symbol keys and compares functions by identity, so two nested
 // value objects of different classes compare unequal without deepEqual
-// knowing about value objects. The key is a Symbol.for, so a value object
-// built by a second loaded copy of the kit is recognised too; like every
-// kit brand it catches accidents, not adversaries. The key version stamps
-// the shape of the stamp (its value is the class); bump it when that shape
-// changes.
-const VALUE_OBJECT_BRAND = Symbol.for("@shirudo/ddd-kit/value-object/v1");
+// knowing about value objects. And the key is a Symbol.for, so an instance
+// built by a second loaded copy of this kit version is recognized too.
+//
+// This is not a cooperative brand (see internal/cooperative-brand.ts).
+// That probe reads a `true` on a frozen carrier, but an instance stays
+// open for the fields of its subclass until a deepFreeze walk reaches it,
+// and the stored value must be the class. The frozen carrier here is
+// `props`, and the probe checks it, so a record on an object with open
+// props is ignored. Like every kit marker it catches accidents, not
+// adversaries. The key version stamps the shape of the record (its value
+// is the class); bump it when that shape changes.
+const VALUE_OBJECT_CLASS = Symbol.for("@shirudo/ddd-kit/value-object-class/v1");
 
-function stampValueObjectBrand(
+function recordValueObjectClass(
 	instance: object,
 	valueObjectClass: unknown,
 ): void {
-	Object.defineProperty(instance, VALUE_OBJECT_BRAND, {
+	Object.defineProperty(instance, VALUE_OBJECT_CLASS, {
 		value: valueObjectClass,
 		enumerable: false,
 		writable: false,
@@ -120,13 +125,22 @@ function stampValueObjectBrand(
 }
 
 function isValueObjectInstance(value: object): boolean {
-	const marker = Reflect.getOwnPropertyDescriptor(value, VALUE_OBJECT_BRAND);
+	const record = Reflect.getOwnPropertyDescriptor(value, VALUE_OBJECT_CLASS);
+	if (
+		record === undefined ||
+		typeof record.value !== "function" ||
+		record.enumerable !== false ||
+		record.writable !== false ||
+		record.configurable !== false
+	) {
+		return false;
+	}
+	const props = Reflect.getOwnPropertyDescriptor(value, "props");
 	return (
-		marker !== undefined &&
-		typeof marker.value === "function" &&
-		marker.enumerable === false &&
-		marker.writable === false &&
-		marker.configurable === false
+		props !== undefined &&
+		typeof props.value === "object" &&
+		props.value !== null &&
+		Object.isFrozen(props.value)
 	);
 }
 
@@ -298,7 +312,7 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
  * preserving `vo()`'s documented data-not-behaviour gate. Built-ins without
  * immutable value semantics throw a descriptive `TypeError`. A kit
  * `ValueObject` instance is admitted by reference (see
- * `VALUE_OBJECT_BRAND`); the deepFreeze walk that follows freezes it in
+ * `VALUE_OBJECT_CLASS`); the deepFreeze walk that follows freezes it in
  * place. Every other custom class instance and every subclass of a
  * built-in is rejected because cloning it without invoking its constructor
  * can silently lose private or non-enumerable state. Map keys
@@ -729,7 +743,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 		// deepOmit (which aliases reference-compared built-ins by design)
 		// would let deepFreeze reach caller-owned objects.
 		this.props = deepFreeze(cloneForVo(props, new WeakMap()) as T);
-		stampValueObjectBrand(this, this.constructor);
+		recordValueObjectClass(this, this.constructor);
 	}
 
 	/**

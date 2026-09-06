@@ -705,21 +705,21 @@ describe("ValueObject Class", () => {
 			);
 		});
 
-		it("recognises a value object built by another copy of the kit through the shared brand", () => {
+		const VALUE_OBJECT_CLASS = Symbol.for(
+			"@shirudo/ddd-kit/value-object-class/v1",
+		);
+
+		it("recognizes a value object built by another copy of the kit through the class record", () => {
 			class OtherCopyMoney {
 				readonly props: Readonly<MoneyProps>;
 				constructor(props: MoneyProps) {
 					this.props = Object.freeze({ ...props });
-					Object.defineProperty(
-						this,
-						Symbol.for("@shirudo/ddd-kit/value-object/v1"),
-						{
-							value: OtherCopyMoney,
-							enumerable: false,
-							writable: false,
-							configurable: false,
-						},
-					);
+					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
+						value: OtherCopyMoney,
+						enumerable: false,
+						writable: false,
+						configurable: false,
+					});
 				}
 			}
 			const money = new OtherCopyMoney({ amount: 100, currency: "USD" });
@@ -730,6 +730,27 @@ describe("ValueObject Class", () => {
 			} as unknown as PriceProps);
 
 			expect(price.props.amount).toBe(money);
+		});
+
+		it("ignores the class record on an object whose props are not frozen", () => {
+			class OpenMoney {
+				readonly props: MoneyProps;
+				constructor(props: MoneyProps) {
+					this.props = { ...props };
+					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
+						value: OpenMoney,
+						enumerable: false,
+						writable: false,
+						configurable: false,
+					});
+				}
+			}
+			const money = new OpenMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(/custom class instances/);
 		});
 
 		it("still rejects a class instance that is not a value object", () => {

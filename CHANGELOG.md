@@ -41,9 +41,9 @@ immutable by contract. `equals`, `voEquals`, and
 two nested value objects of different classes with the same props are not
 equal. Every other custom class instance is still rejected.
 
-A `ValueObject` instance carries one own, non-enumerable symbol property,
-the kit's `Symbol.for` brand, so a value object built by a second loaded
-copy of the kit is recognised as well.
+A `ValueObject` instance carries one own, non-enumerable symbol property
+that records its class. The key is a `Symbol.for`, so a value object built
+by a second loaded copy of this kit version is recognized as well.
 
 ### Changed: the dependency audit gates the publish, not the merge
 
