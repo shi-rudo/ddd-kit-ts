@@ -204,7 +204,6 @@ changes.
 | --- | --- |
 | `protected readonly handlers` | `protected readonly folds` |
 | `MissingHandlerError` thrown by `apply()` and replay | `MissingFoldError` (code `MISSING_FOLD`) |
-| `HandlerReturnedNoStateError` (code `HANDLER_RETURNED_NO_STATE`) | `FoldReturnedNoStateError` (code `FOLD_RETURNED_NO_STATE`) |
 
 `MissingHandlerError` (code `MISSING_HANDLER`) remains and now belongs to
 `projectionFromHandlers` only. A catch or a test that matched
@@ -460,16 +459,16 @@ and records the event. Before this change the function ran only in the
 constructor, so an event-sourced aggregate accepted a state that its own
 validator rejects. Replay through `replayHistory` still skips both gates.
 
-### Changed (breaking): an event handler must return a state
+### Changed (breaking): a fold must return a state
 
-A handler that returns `undefined` now throws `HandlerReturnedNoStateError`
-(code `HANDLER_RETURNED_NO_STATE`) on the apply path and on replay. Before
+A fold that returns `undefined` now throws `FoldReturnedNoStateError`
+(code `FOLD_RETURNED_NO_STATE`) on the apply path and on replay. Before
 this change the aggregate stored `undefined` as its state and, on the apply
 path, recorded the event. A state type that includes `undefined` is no longer
 supported for event-sourced aggregates. On replay, `replayHistory` throws
 the error after the rollback instead of returning `Err`, so a stored stream
-whose handler now returns `undefined` fails to load. Migration: model an
-absent state as `null` or as a status field, and change every handler that
+whose fold now returns `undefined` fails to load. Migration: model an
+absent state as `null` or as a status field, and change every fold that
 returned `undefined` on purpose before you load streams that contain those
 events.
 
