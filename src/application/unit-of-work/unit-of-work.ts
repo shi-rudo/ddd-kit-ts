@@ -92,7 +92,12 @@ export interface RepositoryDefinitionOptions<
 	TChangeSet,
 	TRemoval extends boolean = false,
 > {
-	/** Concrete aggregate class used as the Identity Map key. */
+	/**
+	 * Concrete aggregate class used as the Identity Map key, and for nothing
+	 * else. The read adapter passes the same class to `identityMap.get`, so
+	 * the class is exported. Its protected constructor keeps `new` out of
+	 * reach; the static factories stay the only door.
+	 */
 	readonly aggregate: AggregateClass<TAggregate>;
 	/** Adapter-owned projection, baseline, and change-set policy. */
 	readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;

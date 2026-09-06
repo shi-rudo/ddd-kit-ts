@@ -367,6 +367,13 @@ const orders = defineRepository<ForStoringOrders>()({
 });
 ```
 
+`aggregate` is the class of the aggregate root. The Unit of Work uses it as
+the key of the identity map, and for nothing else. The read adapter passes the
+same class to `identityMap.get(Order, id)`, so export the class. The export
+does not open `new Order(...)` to callers: the base constructor is protected,
+and a subclass without a constructor of its own inherits that. The static
+factories stay the only way to build an instance.
+
 The type argument is deliberately explicit. `ForStoringOrders` is the full
 application port. `DrizzleOrderReadAdapter` implements only its read methods
 because the Unit of Work installs `add`, `update`, and `remove`. The concrete
