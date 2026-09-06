@@ -193,7 +193,10 @@ The base class gives you:
 
 `equals()` checks the constructor as well as the props. A `DateRange` is not
 equal to another class with the same `{ from, to }` shape, because the type is
-part of the meaning.
+part of the meaning. `voEquals()` and `deepEqual()` see the class too: every
+instance records its class under an own symbol key, so two instances of
+different classes are not equal, and an instance is not equal to a plain
+`{ props }` record.
 
 ### Compose Value Objects
 
@@ -201,10 +204,14 @@ A value object can hold other value objects. The nested instance is kept by
 reference, not cloned, and it is frozen in place. Its own constructor already
 cloned and froze its props. A nested value object keeps all of its state in
 `props`: the kit rejects an instance with an own field outside `props`, for
-example a cache field or a field the subclass constructor assigns. Keep derived
-values in getters. `equals()`, `voEquals()`, and `voEqualsExcept()` compare a
-nested value object by class and by props. They do not call the `equals()`
-method of the nested instance. `toJSON()` serializes its props.
+example a cache field or a field the subclass constructor assigns. The kit sees
+own fields only. It does not see a private `#field`, and such a field stays
+mutable after nesting. It does not see a field that the class assigns after
+construction; that assignment throws after nesting, because the instance is
+frozen. Keep derived values in getters that do not store their result.
+`equals()`, `voEquals()`, and `voEqualsExcept()` compare a nested value object
+by class and by props. They do not call the `equals()` method of the nested
+instance. `JSON.stringify` calls `toJSON()` on the nested instance.
 
 ```ts
 type StayProps = {
@@ -230,8 +237,9 @@ The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
 `DateRange` instance. A value object is nested under a key. `vo()` and the
 constructor reject a value object as the input itself with a `TypeError`.
 
-`toJSON()` flattens a nested value object to its props. When you rebuild a
-composed value object from JSON, rebuild the nested value object first. A plain
+The base `toJSON()` returns the props, so a nested value object serializes as
+its props unless its class overrides `toJSON()`. When you rebuild a composed
+value object from JSON, rebuild the nested value object first. A plain
 record in place of the nested value object is a different value: `equals()`
 returns false, and the methods of the nested class are missing.
 

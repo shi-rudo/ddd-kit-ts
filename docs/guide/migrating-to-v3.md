@@ -23,7 +23,10 @@ can occur.
 Value objects need no change when they keep their state in `props`. Version
 2.2.0 rejected a value object inside another value object; v3 accepts it again,
 kept by reference. A nested value object with an own field outside `props` is
-rejected; move such a field into `props` or into a getter.
+rejected; move such a field into `props` or into a getter. `voEquals` and
+`deepEqual` now see the class of a value object instance: two instances of
+different classes are not equal, and an instance is not equal to a plain
+`{ props }` record.
 
 Snapshots need special attention because their policy moved out of aggregate
 methods. If the stored DTO is still compatible, describe its existing shape

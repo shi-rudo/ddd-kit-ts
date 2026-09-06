@@ -38,16 +38,20 @@ object. The nested instance is kept by reference and frozen in place; its
 own constructor already cloned and froze its props. A nested value object
 keeps all of its state in `props`. An instance with an own field outside
 `props`, for example a cache field, is rejected with a `TypeError` that
-names the fields. `equals`, `voEquals`, and `voEqualsExcept` compare a
-nested value object by class and by props and do not call its `equals`
-method. Every other custom class instance is still rejected, and a value
-object as the input itself is rejected with a `TypeError`.
+names the fields. The kit sees own fields only: a private `#field` or a
+field assigned after construction stays invisible. `equals`, `voEquals`,
+and `voEqualsExcept` compare a nested value object by class and by props
+and do not call its `equals` method. Every other custom class instance is
+still rejected, and a value object as the input itself is rejected with a
+`TypeError`.
 
 A `ValueObject` instance carries one own, non-enumerable symbol property
 that records its class. The key is a `Symbol.for`, so a value object built
-by a second loaded copy of this kit version is recognized as well. Inside
-a nested value object the `voEqualsExcept` path continues with `props`.
-The class key is never ignored.
+by a second loaded copy of this kit version is recognized as well. As a
+result, `voEquals` and `deepEqual` return false for two instances of
+different classes with the same props, and an instance is not equal to a
+plain `{ props }` record. Inside a nested value object the `voEqualsExcept`
+path continues with `props`. The class key is never ignored.
 
 ### Changed: the dependency audit gates the publish, not the merge
 
