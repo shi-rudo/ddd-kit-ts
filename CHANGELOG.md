@@ -29,6 +29,19 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a bound over Aggregate<TId> accepts an aggregate with events
+
+The event parameter of the `Aggregate` interface defaulted to `never`. A
+bound written as `Aggregate<TId>` therefore admitted only an aggregate
+without events, and an aggregate that declares an event union failed it with
+TS2344. The kit's own repository ports carried that bound. A port written
+as `interface ForStoringOrders extends Repository<Order, OrderId> {}` did
+not compile for an aggregate with events. The interface default is now
+`AnyDomainEvent`, and `AggregatePersistence` and `Repository` state that
+bound explicitly. An aggregate without events still satisfies both. The
+defaults of the `BaseAggregate` and `StateStoredAggregate` classes stay
+`never`: a class that declares no events cannot create one.
+
 ### Fixed: a value object accepts a nested value object again
 
 `vo()` and the `ValueObject` constructor accept a `ValueObject` instance
