@@ -812,6 +812,22 @@ describe("ValueObject Class", () => {
 			).toThrow(/recognized only when a copy of this kit version built it/);
 		});
 
+		it("does not hint at a version mismatch for a class with an open props field", () => {
+			class Component {
+				props = { amount: 100 };
+			}
+
+			expect(
+				() =>
+					new Price({
+						amount: new Component(),
+						label: "list",
+					} as unknown as PriceProps),
+			).toThrow(
+				"vo() cannot clone custom class instances: Value Objects are plain data",
+			);
+		});
+
 		it("recognizes a nested value object whose props is a RegExp", () => {
 			class Pattern extends ValueObject<RegExp> {}
 			class Rule extends ValueObject<{ pattern: Pattern }> {}

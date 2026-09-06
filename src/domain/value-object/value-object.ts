@@ -159,6 +159,16 @@ function isSealedProps(props: unknown): boolean {
 	);
 }
 
+// A class record under any descriptor, or sealed own props, marks an
+// instance that a kit copy of another version or a clone produced.
+function looksLikeValueObject(instance: object): boolean {
+	if (Object.hasOwn(instance, VALUE_OBJECT_CLASS)) {
+		return true;
+	}
+	const props = Reflect.getOwnPropertyDescriptor(instance, "props");
+	return props !== undefined && isSealedProps(props.value);
+}
+
 function openValueObjectKeys(instance: object): PropertyKey[] {
 	return Reflect.ownKeys(instance).filter(
 		(key) => key !== "props" && key !== VALUE_OBJECT_CLASS,
@@ -505,7 +515,7 @@ function cloneForVo(
 }
 
 function throwUnsupportedClassInstance(instance: object): never {
-	const valueObjectHint = Object.hasOwn(instance, "props")
+	const valueObjectHint = looksLikeValueObject(instance)
 		? ". A value object is recognized only when a copy of this kit version built it and its props are frozen"
 		: "";
 	throw new TypeError(
