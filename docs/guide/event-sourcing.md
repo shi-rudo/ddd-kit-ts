@@ -380,6 +380,12 @@ lifecycle, and point-in-time windows through the repository adapter. When the
 harness provides `captureSnapshot`, the suite also proves that a snapshot
 catch-up ends at the stream head and folds only the tail.
 
+Both suites need overlapping `run` calls: the stale-writer proofs hold one
+transaction open while a second one commits. A single-connection embedded
+database cannot host them. See
+[Certification](/guide/repository#certification) for the requirement and the
+preflight that names it.
+
 ## Loading from history
 
 Reconstitution builds the aggregate from the first page through

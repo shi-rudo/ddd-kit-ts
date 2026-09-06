@@ -32,6 +32,7 @@ import {
 	createRepositoryContractTests,
 	type RepositoryContractHarness,
 } from "./repository-contract";
+import { serializedCalls } from "./serialized-calls";
 
 /**
  * The in-memory REFERENCE adapter: the example consumers copy when
@@ -420,6 +421,11 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		expect(tests.filter((t) => t.skipped)).toHaveLength(0);
 	});
 
+	it("puts the environment preflight first, so its named failure precedes every later proof", () => {
+		expect(tests[0]?.name).toMatch(/^environment preflight/);
+		expect(tests[0]?.skipped).toBeUndefined();
+	});
+
 	for (const test of tests) {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
@@ -529,5 +535,60 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			"duplicate add rejects",
 			/duplicate add must reject/,
 		);
+	});
+
+	/** An environment that serializes `run`, like a pool of one connection. */
+	function serializing(
+		harness: RepositoryContractHarness<ContractOrder, OrderEvent>,
+		boundMs: number,
+	): RepositoryContractHarness<ContractOrder, OrderEvent> {
+		return {
+			...harness,
+			overlappingCallsBoundMs: boundMs,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				const enqueue = serializedCalls();
+				return {
+					...environment,
+					run: (work) => enqueue(() => environment.run(work)),
+				};
+			},
+		};
+	}
+
+	describe("against a serializing environment", () => {
+		const boundMs = 50;
+		const tests = createRepositoryContractTests(
+			serializing(createInMemoryHarness(), boundMs),
+		);
+		const violation = new RegExp(
+			`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms`,
+		);
+
+		it("the environment preflight fails with the named requirement", async () => {
+			await expect(tests[0]?.run()).rejects.toThrow(violation);
+		});
+
+		it.each(["MANDATORY stale update", "stale remove conflicts"])(
+			"the %s proof fails with the same requirement instead of hanging",
+			async (prefix) => {
+				const proof = tests.find((t) => t.name.startsWith(prefix));
+				expect(proof).toBeDefined();
+
+				await expect(proof?.run()).rejects.toThrow(violation);
+			},
+		);
+	});
+
+	it("a stale-writer proof surfaces a load that fails before the writer holds, instead of hanging", async () => {
+		const loadFails: RepoFactory = () => ({
+			findById: () => Promise.reject(new Error("load failed")),
+		});
+		const proof = createRepositoryContractTests(
+			createInMemoryHarness(loadFails),
+		).find((t) => t.name.startsWith("MANDATORY stale update"));
+		expect(proof).toBeDefined();
+
+		await expect(proof?.run()).rejects.toThrow("load failed");
 	});
 });

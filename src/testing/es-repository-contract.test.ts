@@ -39,6 +39,7 @@ import {
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
+import { serializedCalls } from "./serialized-calls";
 
 /**
  * The in-memory REFERENCE adapter for the event-sourced contract suite:
@@ -489,6 +490,11 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 		);
 	});
 
+	it("puts the environment preflight first, so its named failure precedes every later proof", () => {
+		expect(tests[0]?.name).toMatch(/^environment preflight/);
+		expect(tests[0]?.skipped).toBeUndefined();
+	});
+
 	for (const test of tests) {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}
@@ -600,5 +606,45 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			"snapshot catch-up",
 			/must load at the head/,
 		);
+	});
+
+	/** An environment that serializes `run`, like a pool of one connection. */
+	function serializing(
+		harness: EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent>,
+		boundMs: number,
+	): EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent> {
+		return {
+			...harness,
+			overlappingCallsBoundMs: boundMs,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				const enqueue = serializedCalls();
+				return {
+					...environment,
+					run: (work) => enqueue(() => environment.run(work)),
+				};
+			},
+		};
+	}
+
+	describe("against a serializing environment", () => {
+		const boundMs = 50;
+		const tests = createEsRepositoryContractTests(
+			serializing(createInMemoryEsHarness(), boundMs),
+		);
+		const violation = new RegExp(
+			`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms`,
+		);
+
+		it("the environment preflight fails with the named requirement", async () => {
+			await expect(tests[0]?.run()).rejects.toThrow(violation);
+		});
+
+		it("the MANDATORY stale append proof fails with the same requirement instead of hanging", async () => {
+			const proof = tests.find((t) => t.name.startsWith("MANDATORY"));
+			expect(proof).toBeDefined();
+
+			await expect(proof?.run()).rejects.toThrow(violation);
+		});
 	});
 });

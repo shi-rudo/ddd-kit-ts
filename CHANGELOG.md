@@ -29,6 +29,28 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: the repository contract suites prove overlapping calls first
+
+The stale-writer proofs of `createRepositoryContractTests` and
+`createEsRepositoryContractTests` hold one transaction open while a second one
+commits. On an environment that serializes `run`, for example a
+single-connection embedded database, the second call waited for the first one.
+The suite hung until the test timeout and named no cause.
+
+Both suites now start with an environment preflight. It holds one `run` call
+open, starts a second one, and fails when the second call does not complete
+within one second. The failure names the requirement: `run` must permit
+overlapping calls. The message also names a lock held by the first call as a
+cause. The preflight issues one read in each call, so it covers an adapter
+that reserves its connection on the first statement. It releases the first
+call before it returns. The stale-writer proofs apply the same bound to their
+committing `run` call and fail with the same message. A writer that fails
+before it holds its transaction open fails the proof with its own error. The
+harness option `overlappingCallsBoundMs` raises the bound for a slow second
+connection or a slow commit. The failure path takes up to twice the bound. The
+Certification section of the repository guide states the requirement and the
+failure mode.
+
 ### Fixed: a bound over Aggregate<TId> accepts an aggregate with events
 
 The event parameter of the `Aggregate` interface defaulted to `never`. A

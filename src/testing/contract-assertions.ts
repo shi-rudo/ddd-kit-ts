@@ -4,6 +4,7 @@
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
 import { isRecordedDomainEvent } from "../domain/event/domain-event";
+import { runBoundedExecution } from "../internal/async/execution";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -72,6 +73,188 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 		() => undefined,
 		(error: unknown) => error,
 	);
+}
+
+/**
+ * Default bound for the overlapping `run` calls of the contract suites, in
+ * milliseconds. On an environment that gives each `run` call its own
+ * connection, the second call completes in milliseconds. The failure path
+ * takes up to twice the bound: the bound itself, then the wait for the
+ * released calls to settle. Twice the bound plus environment creation and
+ * teardown stays below the default test timeout of common runners
+ * (5000 ms). So the named failure reaches the report before the runner's
+ * own timeout replaces it.
+ */
+export const OVERLAPPING_CALLS_BOUND_MS = 1_000;
+
+const overlappingCallsViolation = (boundMs: number): string =>
+	`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms while the first call stayed open. ` +
+	"Either run serializes its calls, the first call holds a lock that blocks the second one, or the second call needs more time than the bound. " +
+	"Give each call its own transaction and connection, load without row locks, or raise overlappingCallsBoundMs on the harness";
+
+function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+	return promise.then(
+		(value) => ({ status: "fulfilled", value }),
+		(reason: unknown) => ({ status: "rejected", reason }),
+	);
+}
+
+/** Outcomes of every promise, or `undefined` when one is still open after `boundMs`. */
+function settledWithin(
+	promises: ReadonlyArray<Promise<unknown>>,
+	boundMs: number,
+): Promise<PromiseSettledResult<unknown>[] | undefined> {
+	return runBoundedExecution(
+		"release of the overlapping calls",
+		{ timeoutMs: boundMs },
+		() => Promise.allSettled(promises),
+	).catch(() => undefined);
+}
+
+/** A `run` call that stays open until the proof releases it. */
+export interface ParkedRunCall<T> {
+	readonly call: Promise<T>;
+	readonly release: () => void;
+}
+
+/**
+ * Starts a `run` call and holds it open. `start` receives `hold`. The work
+ * of the call awaits `hold()` at the point where it must stay open, for
+ * example after its load. The result resolves once the work holds and the
+ * call is still open. A call that rejects before that propagates its
+ * rejection. A call that resolves while its work holds fails: `run` did not
+ * await its work.
+ */
+export async function parkRunCall<T>(
+	start: (hold: () => Promise<void>) => Promise<T>,
+): Promise<ParkedRunCall<T>> {
+	let release!: () => void;
+	const mayContinue = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let markHolding!: () => void;
+	const holding = new Promise<"holding">((resolve) => {
+		markHolding = () => resolve("holding");
+	});
+	const call = start(() => {
+		markHolding();
+		return mayContinue;
+	});
+	const settled = settle(call).then((outcome) => outcome.status);
+
+	let state = await Promise.race([holding, settled]);
+	if (state === "holding") {
+		state = await Promise.race([settled, Promise.resolve("holding" as const)]);
+	}
+	if (state === "rejected") await call;
+	assert(
+		state === "holding",
+		"run must await its work: the call resolved while its work still holds",
+	);
+	return { call, release };
+}
+
+/**
+ * Starts a `run` call through `startCall` and awaits it. The call must
+ * complete while `parked` stays open. On an environment that serializes
+ * `run`, it never completes. So this bounds the wait. After `boundMs` it
+ * releases the parked call and waits up to `boundMs` for both calls to
+ * settle. Then it fails with the requirement. A rejection of the call, or a
+ * synchronous throw of `startCall`, releases the parked call the same way
+ * and then propagates. On success the parked call stays parked; the proof
+ * releases it when it is ready.
+ */
+export async function awaitOverlappingCall<T>(
+	startCall: () => Promise<T>,
+	parked: ParkedRunCall<unknown>,
+	boundMs: number,
+): Promise<T> {
+	let call: Promise<T>;
+	try {
+		call = startCall();
+	} catch (error) {
+		parked.release();
+		await settledWithin([parked.call], boundMs);
+		throw error;
+	}
+	const outcome = await runBoundedExecution(
+		"overlapping run call",
+		{ timeoutMs: boundMs },
+		() => settle(call),
+	).catch(() => undefined);
+	if (outcome?.status === "fulfilled") return outcome.value;
+
+	parked.release();
+	await settledWithin([parked.call, call], boundMs);
+	assert(outcome !== undefined, overlappingCallsViolation(boundMs));
+	throw outcome.reason;
+}
+
+/**
+ * Proves that the environment lets two `run` calls stay open at once.
+ *
+ * The stale-writer proofs hold one transaction open while a second one
+ * commits. An environment that serializes `run` (one connection, a mutex)
+ * blocks the second call behind the first. The suite then hangs at the test
+ * timeout with no cause. This proof turns that hang into a named failure
+ * within `boundMs`. It releases the first call before it returns and waits
+ * up to `boundMs` for both calls to complete. A second call that is still
+ * blocked after that stays in flight, observed, while the failure reports.
+ */
+export async function assertRunPermitsOverlappingCalls(
+	run: (work: () => Promise<void>) => Promise<unknown>,
+	boundMs: number,
+): Promise<void> {
+	const first = await parkRunCall((hold) => run(hold));
+
+	await awaitOverlappingCall(() => run(async () => {}), first, boundMs);
+
+	first.release();
+	const firstOutcome = (await settledWithin([first.call], boundMs))?.[0];
+	assert(
+		firstOutcome !== undefined,
+		`the first run call did not complete within ${boundMs} ms after the proof released it`,
+	);
+	if (firstOutcome.status === "rejected") throw firstOutcome.reason;
+}
+
+/** The part of a contract environment that the preflight needs. */
+interface OverlappingRunEnvironment<TId> {
+	run<R>(
+		work: (context: {
+			repository: { findById(id: TId): Promise<unknown> };
+		}) => Promise<R>,
+	): Promise<R>;
+}
+
+/**
+ * The preflight entry both repository suites put first: it names a
+ * serializing environment before the stale-writer proofs can hang on it.
+ * Each `run` call of the proof reads `freshId()` before it holds. So an
+ * adapter that reserves its connection on the first statement holds the
+ * connection while the call stays open.
+ */
+export function overlappingCallsPreflight<
+	Env extends OverlappingRunEnvironment<TId>,
+	TId,
+>(
+	inEnvironment: (body: (env: Env) => Promise<void>) => () => Promise<void>,
+	freshId: () => TId,
+	boundMs: number,
+): ContractTest {
+	return {
+		name: "environment preflight: a second run call completes while the first call stays open",
+		run: inEnvironment((env) =>
+			assertRunPermitsOverlappingCalls(
+				(work) =>
+					env.run(async ({ repository }) => {
+						await repository.findById(freshId());
+						await work();
+					}),
+				boundMs,
+			),
+		),
+	};
 }
 
 /**
