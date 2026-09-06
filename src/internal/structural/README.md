@@ -1,11 +1,11 @@
 # Structural Comparison
 
-Functions that compare and reshape a value structure in depth: equality, equality with exclusions, and key removal. They work over objects, arrays, Maps, Sets and TypedArrays.
+Functions that compare, reshape, and detach a value structure in depth: equality, equality with exclusions, key removal, and a guarded structured clone. They work over objects, arrays, Maps, Sets and TypedArrays.
 
 ## Installation
 
 ```ts
-import { deepEqual, deepOmit, deepEqualExcept } from '@shirudo/ddd-kit';
+import { deepEqual, deepOmit, deepEqualExcept, detachState } from '@shirudo/ddd-kit';
 ```
 
 ## Functions
@@ -107,6 +107,47 @@ const result2 = deepOmit(obj, {
 - Built-in types are treated atomically (not modified)
 - Handles circular references correctly
 - Preserves object prototypes
+
+---
+
+### `detachState(state)`
+
+Returns a copy of `state` that shares no object with the original. The copy is a `structuredClone`, taken after a walk that rejects every value the clone would lose or silently degrade. A class instance keeps its data properties in a clone and loses the methods on its prototype; the walk throws a `TypeError` that names the path and the class instead.
+
+#### Rejected values
+
+- A class instance, including a subclass of a built-in (`class Tags extends Set`)
+- A function or a symbol value
+- An enumerable symbol-keyed property anywhere (a hidden symbol key passes as metadata)
+- A non-enumerable string-keyed property on a record or an array (the clone drops it)
+- An accessor property (the walk does not invoke it)
+- An expando on a built-in such as a `Map` or a `Date` (the clone drops it)
+- An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
+- A `SharedArrayBuffer` or a view over one (the copy would share its memory)
+- A `Proxy`: the walk cannot see it, the clone fails, and `detachState` rethrows the failure as a `TypeError` that keeps the cause
+
+Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
+
+#### Example
+
+```ts
+import { deepFreeze, detachState } from '@shirudo/ddd-kit';
+
+class Order extends StateStoredAggregate<OrderState, OrderId> {
+  /** A detached, immutable copy of the state. Never the live graph. */
+  get stateDto(): Readonly<OrderState> {
+    return deepFreeze(detachState(this.state));
+  }
+}
+
+detachState({ review: new OwnerReview() });
+// TypeError: detachState: state.review is a class instance (OwnerReview); map it to plain data
+```
+
+#### Notes
+
+- The snapshot model detaches the captured DTO and the restored state with the same function
+- A state that carries a class-based child entity is mapped to plain data first; the walk names the field to map
 
 ---
 

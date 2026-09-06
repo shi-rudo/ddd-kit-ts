@@ -219,6 +219,7 @@ const INDEX_SURFACE = [
 	"defineRepository",
 	"defineSnapshotModel",
 	"derivePersistenceChanges",
+	"detachState",
 	"domainErrorToResult",
 	"encodeIntegrationMessage",
 	"entityIds",

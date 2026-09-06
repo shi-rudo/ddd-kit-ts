@@ -314,6 +314,8 @@ hold and mutate child entity references. The aggregate root is the entry point.
 
 `Entity.state` is protected. External code cannot read or mutate the live state
 graph; a concrete entity exposes domain queries or a detached read DTO instead.
+[Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside)
+shows the read DTO, built with `deepFreeze(detachState(this.state))`.
 
 ```ts
 class OrderItem extends Entity<OrderItemState, ItemId> {

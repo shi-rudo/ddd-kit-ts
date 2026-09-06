@@ -214,7 +214,11 @@ behind an opaque `PersistenceBaseline` token. The use case and aggregate
 cannot inspect it. At write registration, the same adapter capability derives
 and seals the exact change set.
 
-A full-row model can be small:
+A full-row model can be small. It reads the aggregate through its detached
+read DTO; see
+[Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
+The row holds a JSON-safe encoding of that DTO: `encodeOrderState` maps each
+`Money` field to a `MoneyDto`, and `decodeOrderState` maps it back on load.
 
 ```ts
 type OrderRow = {
@@ -228,12 +232,12 @@ const orderPersistence: PersistenceModel<
   OrderRow | undefined
 > = {
   capture: (order) => ({
-    state: orderStateDto(order),
+    state: encodeOrderState(order.stateDto),
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: orderStateDto(order),
+      state: encodeOrderState(order.stateDto),
       version: order.version,
     };
 
