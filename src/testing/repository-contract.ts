@@ -19,6 +19,7 @@ import {
 	loadAggregateOrFail,
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
+	parkRunCall,
 	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
@@ -85,10 +86,11 @@ export interface RepositoryContractHarness<
 	/** The remove flush predicates on the version captured at load. */
 	removesAreVersionChecked?: boolean;
 	/**
-	 * Bound for the environment preflight, in milliseconds. Raise it only
-	 * when a second connection takes longer than the default to open, for
-	 * example over a slow network. Keep it below the test timeout of the
-	 * runner, including environment creation and teardown.
+	 * Bound for the overlapping `run` calls, in milliseconds: the second call
+	 * of the environment preflight, and the committing call of each
+	 * stale-writer proof. Raise it only for a second connection that needs
+	 * more time to open, or for a slow commit. Keep twice the bound, plus
+	 * environment creation and teardown, below the test timeout of the runner.
 	 */
 	overlappingCallsBoundMs?: number;
 }
@@ -164,13 +166,9 @@ export function createRepositoryContractTests<
 		);
 
 	const tests: RepositoryContractTest[] = [
-		overlappingCallsPreflight<Environment>(
+		overlappingCallsPreflight<Environment, TAggregate["id"]>(
 			inEnvironment,
-			(environment, work) =>
-				environment.run(async ({ repository }) => {
-					await repository.findById(harness.createAggregate().id);
-					await work();
-				}),
+			() => harness.createAggregate().id,
 			overlappingCallsBoundMs,
 		),
 		{
@@ -259,37 +257,29 @@ export function createRepositoryContractTests<
 			name: "MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
-				let loadedB!: () => void;
-				const bLoaded = new Promise<void>((resolve) => {
-					loadedB = resolve;
-				});
-				let releaseB!: () => void;
-				const bMayFlush = new Promise<void>((resolve) => {
-					releaseB = resolve;
-				});
-
-				const writerB = environment.run(async ({ repository }) => {
-					const stale = await load(repository, seeded.id);
-					loadedB();
-					await bMayFlush;
-					harness.mutate(stale);
-					repository.update(stale);
-				});
-				await bLoaded;
+				const writerB = await parkRunCall((hold) =>
+					environment.run(async ({ repository }) => {
+						const stale = await load(repository, seeded.id);
+						await hold();
+						harness.mutate(stale);
+						repository.update(stale);
+					}),
+				);
 
 				const committedA = await awaitOverlappingCall(
-					environment.run(async ({ repository }) => {
-						const current = await load(repository, seeded.id);
-						harness.mutate(current);
-						repository.update(current);
-						return current;
-					}),
-					{ call: writerB, release: releaseB },
+					() =>
+						environment.run(async ({ repository }) => {
+							const current = await load(repository, seeded.id);
+							harness.mutate(current);
+							repository.update(current);
+							return current;
+						}),
+					writerB,
 					overlappingCallsBoundMs,
 				);
 				const outboxAfterA = await environment.committedOutboxEvents();
-				releaseB();
-				const rejection = await captureRejection(writerB);
+				writerB.release();
+				const rejection = await captureRejection(writerB.call);
 				assertChainContainsKitError(
 					rejection,
 					["CONCURRENCY_CONFLICT"],
@@ -584,33 +574,26 @@ export function createRepositoryContractTests<
 				name: "stale remove conflicts and cannot delete a concurrent update",
 				run: inEnvironment(async (environment) => {
 					const seeded = await seed(environment);
-					let loaded!: () => void;
-					const staleLoaded = new Promise<void>((resolve) => {
-						loaded = resolve;
-					});
-					let release!: () => void;
-					const mayRemove = new Promise<void>((resolve) => {
-						release = resolve;
-					});
-					const staleRemove = environment.run(async ({ repository }) => {
-						assert(repository.remove !== undefined, "remove capability gate");
-						const stale = await load(repository, seeded.id);
-						loaded();
-						await mayRemove;
-						repository.remove(stale);
-					});
-					await staleLoaded;
-					await awaitOverlappingCall(
+					const staleRemove = await parkRunCall((hold) =>
 						environment.run(async ({ repository }) => {
-							const current = await load(repository, seeded.id);
-							harness.mutate(current);
-							repository.update(current);
+							assert(repository.remove !== undefined, "remove capability gate");
+							const stale = await load(repository, seeded.id);
+							await hold();
+							repository.remove(stale);
 						}),
-						{ call: staleRemove, release },
+					);
+					await awaitOverlappingCall(
+						() =>
+							environment.run(async ({ repository }) => {
+								const current = await load(repository, seeded.id);
+								harness.mutate(current);
+								repository.update(current);
+							}),
+						staleRemove,
 						overlappingCallsBoundMs,
 					);
-					release();
-					const rejection = await captureRejection(staleRemove);
+					staleRemove.release();
+					const rejection = await captureRejection(staleRemove.call);
 					assertChainContainsKitError(
 						rejection,
 						["CONCURRENCY_CONFLICT"],

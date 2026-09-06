@@ -24,6 +24,7 @@ import {
 	loadAggregateOrFail,
 	OVERLAPPING_CALLS_BOUND_MS,
 	overlappingCallsPreflight,
+	parkRunCall,
 	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
@@ -79,10 +80,11 @@ export interface EsRepositoryContractHarness<
 		environment: EsRepositoryContractEnvironment<TAggregate, TEvent>,
 	): Promise<void>;
 	/**
-	 * Bound for the environment preflight, in milliseconds. Raise it only
-	 * when a second connection takes longer than the default to open, for
-	 * example over a slow network. Keep it below the test timeout of the
-	 * runner, including environment creation and teardown.
+	 * Bound for the overlapping `run` calls, in milliseconds: the second call
+	 * of the environment preflight, and the committing call of each
+	 * stale-writer proof. Raise it only for a second connection that needs
+	 * more time to open, or for a slow commit. Keep twice the bound, plus
+	 * environment creation and teardown, below the test timeout of the runner.
 	 */
 	overlappingCallsBoundMs?: number;
 }
@@ -158,13 +160,9 @@ export function createEsRepositoryContractTests<
 	}
 
 	const tests: EsRepositoryContractTest[] = [
-		overlappingCallsPreflight<Environment>(
+		overlappingCallsPreflight<Environment, TAggregate["id"]>(
 			inEnvironment,
-			(environment, work) =>
-				environment.run(async ({ repository }) => {
-					await repository.findById(harness.createAggregate().id);
-					await work();
-				}),
+			() => harness.createAggregate().id,
 			overlappingCallsBoundMs,
 		),
 		{
@@ -206,40 +204,33 @@ export function createEsRepositoryContractTests<
 			name: "MANDATORY stale append: writer B conflicts after writer A commits and appends no prefix",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
-				let loaded!: () => void;
-				const bLoaded = new Promise<void>((resolve) => {
-					loaded = resolve;
-				});
-				let release!: () => void;
-				const mayAppend = new Promise<void>((resolve) => {
-					release = resolve;
-				});
-				const writerB = environment.run(async ({ repository }) => {
-					const stale = await load(repository, seeded.id);
-					loaded();
-					await mayAppend;
-					harness.mutate(stale);
-					harness.mutate(stale);
-					repository.update(stale);
-				});
-				await bLoaded;
+				const writerB = await parkRunCall((hold) =>
+					environment.run(async ({ repository }) => {
+						const stale = await load(repository, seeded.id);
+						await hold();
+						harness.mutate(stale);
+						harness.mutate(stale);
+						repository.update(stale);
+					}),
+				);
 
 				const winner = await awaitOverlappingCall(
-					environment.run(async ({ repository }) => {
-						const current = await load(repository, seeded.id);
-						harness.mutate(current);
-						repository.update(current);
-						return current;
-					}),
-					{ call: writerB, release },
+					() =>
+						environment.run(async ({ repository }) => {
+							const current = await load(repository, seeded.id);
+							harness.mutate(current);
+							repository.update(current);
+							return current;
+						}),
+					writerB,
 					overlappingCallsBoundMs,
 				);
 				const streamAfterWinner = await environment.committedStreamEvents(
 					streamFor(seeded.id),
 					readAll,
 				);
-				release();
-				const rejection = await captureRejection(writerB);
+				writerB.release();
+				const rejection = await captureRejection(writerB.call);
 				assertChainContainsKitError(
 					rejection,
 					["CONCURRENCY_CONFLICT"],

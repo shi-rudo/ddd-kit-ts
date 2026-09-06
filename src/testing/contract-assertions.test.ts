@@ -6,6 +6,7 @@ import {
 	awaitOverlappingCall,
 	captureRejection,
 	describeError,
+	parkRunCall,
 } from "./contract-assertions";
 import { serializedCalls } from "./serialized-calls";
 
@@ -101,7 +102,6 @@ describe("assertRunPermitsOverlappingCalls", () => {
 	const boundMs = 50;
 
 	const concurrentRun = (work: () => Promise<void>) => work();
-
 	const serializedRun = serializedCalls;
 
 	const settlesWithin = (promise: Promise<unknown>, ms: number) =>
@@ -173,20 +173,64 @@ describe("assertRunPermitsOverlappingCalls", () => {
 		).rejects.toThrow("idle in transaction");
 	});
 
-	it("reports the timeout of the proof, not a rejection of the released first call", async () => {
+	it("reports the exceeded bound, not a rejection of the released first call", async () => {
 		const run = serializedRun();
-		const calls: Promise<unknown>[] = [];
+		let calls = 0;
+		let firstCallRejected = false;
 		const firstCallRejectsAfterRelease = (work: () => Promise<void>) => {
-			const call = run(work).then(() => {
-				if (calls.length === 1) throw new Error("commit failed");
+			const index = calls++;
+			return run(work).then(() => {
+				if (index === 0) {
+					firstCallRejected = true;
+					throw new Error("commit failed");
+				}
 			});
-			calls.push(call);
-			return call;
 		};
 
 		await expect(
 			assertRunPermitsOverlappingCalls(firstCallRejectsAfterRelease, boundMs),
 		).rejects.toThrow(/run must permit overlapping calls/);
+		expect(firstCallRejected).toBe(true);
+	});
+});
+
+describe("parkRunCall", () => {
+	it("resolves once the work holds and keeps the call open until release", async () => {
+		let loaded = false;
+		let flushed = false;
+
+		const parked = await parkRunCall(async (hold) => {
+			loaded = true;
+			await hold();
+			flushed = true;
+		});
+
+		expect(loaded).toBe(true);
+		expect(flushed).toBe(false);
+
+		parked.release();
+		await parked.call;
+
+		expect(flushed).toBe(true);
+	});
+
+	it("propagates a call that rejects before its work holds", async () => {
+		await expect(
+			parkRunCall(async () => {
+				throw new Error("load failed");
+			}),
+		).rejects.toThrow("load failed");
+	});
+
+	it("fails when run resolves without awaiting its work", async () => {
+		const fireAndForget = (work: () => Promise<void>) => {
+			void work();
+			return Promise.resolve();
+		};
+
+		await expect(parkRunCall((hold) => fireAndForget(hold))).rejects.toThrow(
+			/run must await its work/,
+		);
 	});
 });
 
@@ -209,7 +253,7 @@ describe("awaitOverlappingCall", () => {
 		const parked = parkedCall();
 
 		const value = await awaitOverlappingCall(
-			Promise.resolve("committed"),
+			() => Promise.resolve("committed"),
 			parked,
 			boundMs,
 		);
@@ -223,7 +267,7 @@ describe("awaitOverlappingCall", () => {
 		const blockedBehindParked = parked.call.then(() => "late");
 
 		await expect(
-			awaitOverlappingCall(blockedBehindParked, parked, boundMs),
+			awaitOverlappingCall(() => blockedBehindParked, parked, boundMs),
 		).rejects.toThrow(/run must permit overlapping calls/);
 
 		expect(parked.isReleased()).toBe(true);
@@ -235,11 +279,45 @@ describe("awaitOverlappingCall", () => {
 
 		await expect(
 			awaitOverlappingCall(
-				Promise.reject(new Error("commit failed")),
+				() => Promise.reject(new Error("commit failed")),
 				parked,
 				boundMs,
 			),
 		).rejects.toThrow("commit failed");
+
+		expect(parked.isReleased()).toBe(true);
+	});
+
+	it("propagates a TimeoutError of the call itself instead of blaming the bound", async () => {
+		const parked = parkedCall();
+		const driverTimeout = new DOMException(
+			"statement timed out",
+			"TimeoutError",
+		);
+
+		await expect(
+			awaitOverlappingCall(
+				() => Promise.reject(driverTimeout),
+				parked,
+				boundMs,
+			),
+		).rejects.toBe(driverTimeout);
+
+		expect(parked.isReleased()).toBe(true);
+	});
+
+	it("releases the parked call and propagates a synchronous throw of run", async () => {
+		const parked = parkedCall();
+
+		await expect(
+			awaitOverlappingCall(
+				() => {
+					throw new Error("pool exhausted");
+				},
+				parked,
+				boundMs,
+			),
+		).rejects.toThrow("pool exhausted");
 
 		expect(parked.isReleased()).toBe(true);
 	});

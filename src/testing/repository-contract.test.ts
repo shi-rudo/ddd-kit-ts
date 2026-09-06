@@ -579,4 +579,16 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			},
 		);
 	});
+
+	it("a stale-writer proof surfaces a load that fails before the writer holds, instead of hanging", async () => {
+		const loadFails: RepoFactory = () => ({
+			findById: () => Promise.reject(new Error("load failed")),
+		});
+		const proof = createRepositoryContractTests(
+			createInMemoryHarness(loadFails),
+		).find((t) => t.name.startsWith("MANDATORY stale update"));
+		expect(proof).toBeDefined();
+
+		await expect(proof?.run()).rejects.toThrow("load failed");
+	});
 });

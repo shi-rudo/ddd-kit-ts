@@ -646,17 +646,19 @@ ship.
 
 The suite needs overlapping `run` calls. The stale-writer proofs hold one
 transaction open while a second one loads, writes, and commits. So `run` must
-give each call its own transaction and connection. A single-connection embedded
-database cannot host the suite: the second `run` call waits for the first one,
-and nothing completes. The first proof of the suite is an environment
-preflight. It holds one `run` call open and starts a second one. When the
-second call does not complete within two seconds, the preflight fails and
-names the requirement. The stale-writer proofs apply the same bound to their
-second `run` call, so they fail with the same message and never hang. Give the
-harness a real database with a connection pool. Keep the embedded database for
-tests that do not overlap. When a second connection needs more than two seconds
-to open, for example over a slow network, set `overlappingCallsBoundMs` on the
-harness. Keep the bound below the test timeout of the runner.
+give each call its own transaction and connection, and the load must not lock
+the row. A single-connection embedded database cannot host the suite: the
+second `run` call waits for the first one, and nothing completes. The first
+proof of the suite is an environment preflight. It holds one `run` call open
+and starts a second one. When the second call does not complete within one
+second, the preflight fails and names the requirement. The stale-writer proofs
+apply the same bound to their committing `run` call, so they fail with the same
+message. Give the harness a real database with a connection pool. Keep the
+embedded database for tests that do not overlap. When a second connection or
+a commit needs more than one second, set `overlappingCallsBoundMs` on the
+harness. A slow network is one cause. The failure path takes up to twice the
+bound. Keep that, plus environment creation and teardown, below the test
+timeout of the runner.
 
 For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
 [Migrating to v3](/guide/migrating-to-v3).
