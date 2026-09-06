@@ -36,8 +36,8 @@ rejects every value the clone would lose or degrade. A class instance keeps its
 data properties in a clone and loses the methods on its prototype, without an
 error. The walk throws a `TypeError` that names the field path and the class
 instead, so the defect fails at the boundary that produced it. A function, a
-symbol, a symbol-keyed property, an `Error`, a `Promise`, a `WeakMap`, and a
-`WeakSet` are rejected in the same way. Plain objects, arrays, `Date`, `Map`,
+symbol, a symbol-keyed property, a non-enumerable property, an `Error`, a
+`Promise`, a `WeakMap`, and a `WeakSet` are rejected in the same way. Plain objects, arrays, `Date`, `Map`,
 `Set`, `RegExp`, bigints, and typed arrays pass.
 
 A concrete entity uses it for its detached read DTO:

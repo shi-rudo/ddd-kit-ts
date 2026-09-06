@@ -58,6 +58,14 @@ describe("detachState", () => {
 			/state\.status is a symbol/,
 		],
 		["a symbol key", { [Symbol("secret")]: 1 }, /symbol-keyed property/],
+		[
+			"a non-enumerable property",
+			Object.defineProperty({ visible: 1 }, "hidden", {
+				value: 2,
+				enumerable: false,
+			}),
+			/state\.hidden is not enumerable and the clone would drop it/,
+		],
 		["an Error", { nested: new Error("broken") }, /state\.nested is an Error/],
 		[
 			"a Promise",
@@ -83,6 +91,15 @@ describe("detachState", () => {
 		expect(() => detachState(new OwnerReview(true))).toThrow(
 			/^detachState: state is a class instance \(OwnerReview\)/,
 		);
+	});
+
+	it("passes a non-enumerable symbol key as hidden metadata", () => {
+		const state = Object.defineProperty({ status: "draft" }, Symbol("brand"), {
+			value: true,
+			enumerable: false,
+		});
+
+		expect(detachState(state)).toEqual({ status: "draft" });
 	});
 
 	it("passes a RegExp, a null-prototype object, a typed array, and a cycle", () => {

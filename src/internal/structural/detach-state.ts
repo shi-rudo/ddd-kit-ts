@@ -4,9 +4,10 @@ import { isBuiltInObject } from "./is-built-in";
  * Returns a copy of `state` that shares no object with the original.
  * Throws a `TypeError` naming the path when the graph carries a value a
  * structured clone would lose or silently degrade: a class instance loses
- * the methods on its prototype, a symbol-keyed property is dropped, a
- * function or a symbol value throws a raw `DataCloneError`, and an Error,
- * a Promise, a WeakMap, or a WeakSet cannot be detached at all.
+ * the methods on its prototype, a symbol-keyed or non-enumerable property
+ * is dropped, a function or a symbol value throws a raw `DataCloneError`,
+ * and an Error, a Promise, a WeakMap, or a WeakSet cannot be detached at
+ * all. A non-enumerable symbol key passes: it is metadata by convention.
  *
  * Plain objects, arrays, Dates, Maps, Sets, bigints, and typed arrays pass.
  * A RegExp passes: pattern and flags survive the clone, and `lastIndex`
@@ -92,10 +93,17 @@ function assertDetachable(
 	if (prototype === Object.prototype || prototype === null) {
 		for (const key of Reflect.ownKeys(object)) {
 			const descriptor = Object.getOwnPropertyDescriptor(object, key);
-			if (!descriptor?.enumerable) continue;
 			if (typeof key === "symbol") {
+				// A hidden symbol is metadata by convention (a cooperative brand);
+				// a visible one is data the clone would drop.
+				if (!descriptor?.enumerable) continue;
 				throw new TypeError(
 					`detachState: state${path} has a symbol-keyed property; map it to plain data`,
+				);
+			}
+			if (!descriptor?.enumerable) {
+				throw new TypeError(
+					`detachState: state${path}.${key} is not enumerable and the clone would drop it; map it to plain data`,
 				);
 			}
 			assertDetachable(

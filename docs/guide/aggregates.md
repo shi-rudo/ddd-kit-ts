@@ -347,8 +347,9 @@ get stateDto(): OrderStateDto {
 }
 ```
 
-`detachState` also rejects a function, a symbol, a symbol-keyed property, an
-`Error`, a `Promise`, a `WeakMap`, and a `WeakSet`. Plain objects, arrays,
+`detachState` also rejects a function, a symbol, a symbol-keyed property, a
+non-enumerable property, an `Error`, a `Promise`, a `WeakMap`, and a
+`WeakSet`. Plain objects, arrays,
 `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. A `Money`
 value is a frozen plain object and passes.
 

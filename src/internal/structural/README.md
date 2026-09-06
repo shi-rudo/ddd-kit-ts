@@ -118,7 +118,7 @@ Returns a copy of `state` that shares no object with the original. The copy is a
 
 - A class instance (any prototype other than `Object.prototype` or `null`)
 - A function or a symbol value
-- A symbol-keyed enumerable property
+- An enumerable symbol-keyed property, or a non-enumerable string-keyed property (a hidden symbol key passes as metadata)
 - An `Error`, a `Promise`, a `WeakMap`, or a `WeakSet`
 
 Plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. Circular references are preserved.
