@@ -924,6 +924,23 @@ describe("VO", () => {
 			).toBe(false);
 		});
 
+		it("never ignores the class of a nested value object under voEqualsExcept", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+			class Points extends ValueObject<{ amount: number }> {}
+			const money = vo({ price: new Money({ amount: 5 }) });
+			const points = vo({ price: new Points({ amount: 5 }) });
+			const classKey = Symbol.for("@shirudo/ddd-kit/value-object-class/v1");
+
+			expect(
+				voEqualsExcept(money, points as never, {
+					ignoreKeyPredicate: (key) => typeof key === "symbol",
+				}),
+			).toBe(false);
+			expect(
+				voEqualsExcept(money, points as never, { ignoreKeys: [classKey] }),
+			).toBe(false);
+		});
+
 		it("continues the voEqualsExcept path with props inside a nested value object", () => {
 			class Money extends ValueObject<{ amount: number; note: string }> {}
 			const money = vo({ price: new Money({ amount: 5, note: "a" }) });

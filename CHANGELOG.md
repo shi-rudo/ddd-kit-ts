@@ -46,8 +46,8 @@ object as the input itself is rejected with a `TypeError`.
 A `ValueObject` instance carries one own, non-enumerable symbol property
 that records its class. The key is a `Symbol.for`, so a value object built
 by a second loaded copy of this kit version is recognized as well. Inside
-a nested value object the `voEqualsExcept` path continues with `props`,
-and `ignoreKeyPredicate` also receives that symbol key.
+a nested value object the `voEqualsExcept` path continues with `props`.
+The class key is never ignored.
 
 ### Changed: the dependency audit gates the publish, not the merge
 

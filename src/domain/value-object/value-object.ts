@@ -597,11 +597,10 @@ export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
  * Useful for comparing value objects that contain metadata or optional fields
  * that should not affect equality comparison.
  *
- * The walk enters a nested `ValueObject` instance like any other object.
- * Inside it the path continues with `props`, and `ignoreKeyPredicate`
- * also receives the symbol key under which the kit records the class of
- * the instance. A predicate that ignores every symbol key removes that
- * class check.
+ * The walk enters a nested `ValueObject` instance like any other object,
+ * so inside it the path continues with `props`; `ignoreKeys: ["props"]`
+ * empties every nested value object. The key under which the kit records
+ * the class of the instance is never ignored.
  *
  * @param a - First value object
  * @param b - Second value object
@@ -640,7 +639,23 @@ export function voEqualsExcept<T>(
 	b: VO<T>,
 	options: DeepEqualExceptOptions,
 ): boolean {
-	return deepEqualExcept(a, b, options);
+	return deepEqualExcept(a, b, keepValueObjectClass(options));
+}
+
+// Without the class record two nested value objects of different classes
+// compare equal, so no option may ignore it.
+function keepValueObjectClass(
+	options: DeepEqualExceptOptions,
+): DeepEqualExceptOptions {
+	const { ignoreKeys, ignoreKeyPredicate } = options;
+	return {
+		...options,
+		ignoreKeys: ignoreKeys?.filter((key) => key !== VALUE_OBJECT_CLASS),
+		ignoreKeyPredicate:
+			ignoreKeyPredicate &&
+			((key, path) =>
+				key !== VALUE_OBJECT_CLASS && ignoreKeyPredicate(key, path)),
+	};
 }
 
 /**

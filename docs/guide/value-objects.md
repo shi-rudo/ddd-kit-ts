@@ -255,9 +255,10 @@ belongs on the value object at all. Timestamps, database ids, and audit data
 usually belong to an entity, a persistence record, or an event envelope.
 
 Inside a nested value object the `path` of `ignoreKeyPredicate` continues with
-`props`, for example `["window", "props"]`. The predicate also receives the
-symbol key under which the kit records the class of the nested instance. A
-predicate that ignores every symbol key removes that class check.
+`props`, for example `["window", "props"]`. `ignoreKeys: ["props"]` therefore
+empties every nested value object. To ignore a field of your own named `props`,
+use `ignoreKeyPredicate` and check the path. The key under which the kit records
+the class of a nested value object is never ignored.
 
 ## Data Rules That Matter
 
