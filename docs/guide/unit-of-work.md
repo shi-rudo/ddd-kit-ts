@@ -56,7 +56,7 @@ A repository definition has six parts:
 - `mapError` translates a failed flush into an application-facing
   `InfrastructureError`.
 
-Physical removal is opt-in.
+Physical removal is opt-in, and so is an append-only port.
 
 ```ts
 import {
@@ -137,9 +137,11 @@ const deps = {
 The explicit type is the full application port. The adapter returned by
 `create` implements only its non-lifecycle methods. It can be a larger concrete
 class, but its extra methods do not become application API. `UnitOfWork` supplies
-`add` and `update`, and supplies `remove` when both the port and definition opt
-into physical removal. An adapter method with one of those names is never
-called through the facade.
+`add`, and supplies `update` unless the definition sets `appendOnly: true`. It
+supplies `remove` when both the port and definition opt into physical removal.
+An adapter method with one of those names is never called through the facade.
+See [Defining the adapter boundary](/guide/repository#defining-the-adapter-boundary)
+for the append-only shape.
 
 Only the helper-created definition is accepted. An unbranded object fails with
 `InvalidRepositoryDefinitionError`, including for JavaScript callers.

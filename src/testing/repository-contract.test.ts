@@ -30,6 +30,7 @@ import type { TransactionScope } from "../persistence/repository/scope";
 import {
 	type ContractRepository,
 	createRepositoryContractTests,
+	type RepositoryContractEnvironment,
 	type RepositoryContractHarness,
 } from "./repository-contract";
 import { serializedCalls } from "./serialized-calls";
@@ -250,8 +251,13 @@ class InMemoryOrderRepository {
 
 type OrderReadAdapter = Pick<ContractRepository<ContractOrder>, "findById">;
 interface OrderRepositoryPort extends ContractRepository<ContractOrder> {
+	update(aggregate: ContractOrder): void;
 	remove(aggregate: ContractOrder): void;
 }
+type AppendOnlyOrderPort = Pick<
+	ContractRepository<ContractOrder>,
+	"findById" | "add"
+>;
 type RepoFactory = (
 	db: InMemoryDb,
 	tracking: RepositoryTracking<ContractOrder>,
@@ -284,6 +290,118 @@ interface InMemoryTransaction {
 }
 
 /**
+ * The transaction scope and outbox of one `run` call. Each call gets its
+ * own pair, so two overlapping calls never share a transaction.
+ */
+function createRunInfrastructure(
+	db: InMemoryDb,
+	takeOutboxFailure: () => Error | undefined,
+): {
+	scope: TransactionScope<InMemoryTransaction>;
+	outbox: Outbox<OrderEvent>;
+} {
+	let activeTransaction: InMemoryTransaction | undefined;
+	const scope: TransactionScope<InMemoryTransaction> = {
+		transactional: async <T>(
+			fn: (context: InMemoryTransaction) => Promise<T>,
+		) => {
+			const transaction: InMemoryTransaction = {
+				snapshot: db.snapshot(),
+				mutated: false,
+			};
+			activeTransaction = transaction;
+			try {
+				return await fn(transaction);
+			} catch (error) {
+				if (transaction.mutated) db.restore(transaction.snapshot);
+				throw error;
+			} finally {
+				activeTransaction = undefined;
+			}
+		},
+	};
+	const outbox: Outbox<OrderEvent> = {
+		add: async (events) => {
+			if (!activeTransaction) {
+				throw new Error("outbox write outside transaction");
+			}
+			activeTransaction.mutated = true;
+			const failure = takeOutboxFailure();
+			if (failure) throw failure;
+			db.addToOutbox(events);
+		},
+		getPending: async () => [],
+		markDispatched: async () => {},
+	};
+	return { scope, outbox };
+}
+
+function defineOrderRepository(
+	db: InMemoryDb,
+	repoFactory: RepoFactory,
+	flush: OrderFlusher,
+) {
+	return defineRepository<OrderRepositoryPort>()({
+		aggregate: ContractOrder,
+		persistence: orderPersistence,
+		physicalRemoval: true,
+		create: (_tx: InMemoryTransaction, tracking) => repoFactory(db, tracking),
+		flush: (transaction: InMemoryTransaction, write) =>
+			flush(db, transaction, write),
+		mapError: mapRepositoryError,
+	});
+}
+
+function defineAppendOnlyOrderRepository(db: InMemoryDb) {
+	return defineRepository<AppendOnlyOrderPort>()({
+		aggregate: ContractOrder,
+		persistence: orderPersistence,
+		appendOnly: true,
+		create: (_tx: InMemoryTransaction, tracking) =>
+			new InMemoryOrderRepository(db, tracking),
+		flush: (transaction: InMemoryTransaction, write) =>
+			flushOrder(db, transaction, write),
+		mapError: mapRepositoryError,
+	});
+}
+
+type OrdersDefinition =
+	| ReturnType<typeof defineOrderRepository>
+	| ReturnType<typeof defineAppendOnlyOrderRepository>;
+
+/**
+ * One fresh store per environment. Each `run` call gets its own transaction
+ * scope and outbox over that store, so two overlapping calls never share a
+ * transaction.
+ */
+function createInMemoryEnvironment(
+	defineOrders: (db: InMemoryDb) => OrdersDefinition,
+): RepositoryContractEnvironment<ContractOrder, OrderEvent> {
+	const db = new InMemoryDb();
+	const orders = defineOrders(db);
+	let nextOutboxFailure: Error | undefined;
+	const takeOutboxFailure = (): Error | undefined => {
+		const failure = nextOutboxFailure;
+		nextOutboxFailure = undefined;
+		return failure;
+	};
+	return {
+		run: (work) => {
+			const { scope, outbox } = createRunInfrastructure(db, takeOutboxFailure);
+			return new UnitOfWork({
+				scope,
+				outbox,
+				repositories: { orders },
+			}).run(({ repositories }) => work({ repository: repositories.orders }));
+		},
+		failNextOutboxWrite: (error) => {
+			nextOutboxFailure = error;
+		},
+		committedOutboxEvents: async () => [...db.outbox],
+	};
+}
+
+/**
  * The harness consumers copy. `repoFactory` is parameterized only so
  * the mutant test below can swap in a broken repository against the
  * SAME wiring; your harness hard-wires your real adapter.
@@ -297,72 +415,10 @@ function createInMemoryHarness(
 	let idCounter = 0;
 
 	return {
-		createEnvironment: async () => {
-			const db = new InMemoryDb();
-			let nextOutboxFailure: Error | undefined;
-			return {
-				run: (work) => {
-					let activeTransaction: InMemoryTransaction | undefined;
-					const scope: TransactionScope<InMemoryTransaction> = {
-						transactional: async <T>(
-							fn: (context: InMemoryTransaction) => Promise<T>,
-						) => {
-							const transaction: InMemoryTransaction = {
-								snapshot: db.snapshot(),
-								mutated: false,
-							};
-							activeTransaction = transaction;
-							try {
-								return await fn(transaction);
-							} catch (error) {
-								if (transaction.mutated) db.restore(transaction.snapshot);
-								throw error;
-							} finally {
-								activeTransaction = undefined;
-							}
-						},
-					};
-					const outbox: Outbox<OrderEvent> = {
-						add: async (events) => {
-							if (!activeTransaction) {
-								throw new Error("outbox write outside transaction");
-							}
-							activeTransaction.mutated = true;
-							if (nextOutboxFailure) {
-								const failure = nextOutboxFailure;
-								nextOutboxFailure = undefined;
-								throw failure;
-							}
-							db.addToOutbox(events);
-						},
-						getPending: async () => [],
-						markDispatched: async () => {},
-					};
-					return new UnitOfWork({
-						scope,
-						outbox,
-						repositories: {
-							orders: defineRepository<OrderRepositoryPort>()({
-								aggregate: ContractOrder,
-								persistence: orderPersistence,
-								physicalRemoval: true,
-								create: (_tx: InMemoryTransaction, tracking) =>
-									repoFactory(db, tracking),
-								flush: (transaction: InMemoryTransaction, write) =>
-									flush(db, transaction, write),
-								mapError: mapRepositoryError,
-							}),
-						},
-					}).run(({ repositories }) =>
-						work({ repository: repositories.orders }),
-					);
-				},
-				failNextOutboxWrite: (error) => {
-					nextOutboxFailure = error;
-				},
-				committedOutboxEvents: async () => [...db.outbox],
-			};
-		},
+		createEnvironment: async () =>
+			createInMemoryEnvironment((db) =>
+				defineOrderRepository(db, repoFactory, flush),
+			),
 		createAggregate: () =>
 			ContractOrder.create(`contract-order-${idCounter++}` as OrderId),
 		createAggregateWithId: (id) => ContractOrder.create(id),
@@ -374,6 +430,30 @@ function createInMemoryHarness(
 		removesAreSupported: true,
 		removesAreVersionChecked: true,
 		insertsAreDuplicateChecked: true, // explicit; true is also the default
+	};
+}
+
+/**
+ * The append-only reference: the same store, adapter, and flush over a port
+ * without `update`, and a definition marked `appendOnly: true`. It proves
+ * the proofs that remain when the suite skips every update proof.
+ */
+function createAppendOnlyInMemoryHarness(): RepositoryContractHarness<
+	ContractOrder,
+	OrderEvent
+> {
+	let mutationCounter = 0;
+	let idCounter = 0;
+
+	return {
+		createEnvironment: async () =>
+			createInMemoryEnvironment(defineAppendOnlyOrderRepository),
+		createAggregate: () =>
+			ContractOrder.create(`append-only-order-${idCounter++}` as OrderId),
+		createAggregateWithId: (id) => ContractOrder.create(id),
+		mutate: (order) => order.rename(`renamed-${mutationCounter++}`),
+		snapshotState: (order) => ({ name: order.name, items: [...order.items] }),
+		updatesAreSupported: false,
 	};
 }
 
@@ -590,5 +670,71 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		expect(proof).toBeDefined();
 
 		await expect(proof?.run()).rejects.toThrow("load failed");
+	});
+
+	describe("append-only reference harness", () => {
+		const appendOnlyTests = createRepositoryContractTests(
+			createAppendOnlyInMemoryHarness(),
+		);
+
+		it("keeps the test count and skips exactly the update proofs and the remove proof", () => {
+			expect(appendOnlyTests).toHaveLength(tests.length);
+			expect(
+				appendOnlyTests
+					.filter((t) => t.skipped)
+					.map((t) => [t.name, t.skipped?.capability]),
+			).toEqual([
+				[
+					"MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
+					"updatesAreSupported",
+				],
+				[
+					"an unchanged explicit update is safe and emits no event",
+					"updatesAreSupported",
+				],
+				[
+					"version-only change still persists (skip-save must not desync the OCC baseline)",
+					"updatesAreSupported",
+				],
+				[
+					"nested collection changes survive the adapter change-set projection",
+					"updatesAreSupported",
+				],
+				[
+					"remove tombstones the identity and physically removes at commit",
+					"removesAreSupported",
+				],
+				[
+					"stale remove conflicts and cannot delete a concurrent update",
+					"updatesAreSupported",
+				],
+			]);
+		});
+
+		it("keeps the duplicate-add proof, the concurrency proof of an append-only port", () => {
+			const duplicateAdd = appendOnlyTests.find((t) =>
+				t.name.startsWith("duplicate add rejects"),
+			);
+			expect(duplicateAdd).toBeDefined();
+			expect(duplicateAdd?.skipped).toBeUndefined();
+		});
+
+		it("fails instead of skipping the duplicate-add proof when the harness withholds createAggregateWithId", async () => {
+			const harness = createAppendOnlyInMemoryHarness();
+			harness.createAggregateWithId = undefined;
+			const duplicateAdd = createRepositoryContractTests(harness).find((t) =>
+				t.name.startsWith("duplicate add rejects"),
+			);
+
+			expect(duplicateAdd).toBeDefined();
+			expect(duplicateAdd?.skipped).toBeUndefined();
+			await expect(duplicateAdd?.run()).rejects.toThrow(
+				/append-only harness must provide createAggregateWithId/,
+			);
+		});
+
+		for (const test of appendOnlyTests) {
+			(test.skipped ? it.skip : it)(test.name, test.run);
+		}
 	});
 });

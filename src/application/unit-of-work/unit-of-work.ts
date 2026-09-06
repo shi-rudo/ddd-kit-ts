@@ -80,7 +80,7 @@ export interface RunOptions {
 // it when the definition contract changes so an incompatible copy fails the
 // generic not-a-definition check instead of half-working.
 const repositoryDefinitionBrand: unique symbol = Symbol.for(
-	"@shirudo/ddd-kit/repository-definition/v1",
+	"@shirudo/ddd-kit/repository-definition/v2",
 );
 
 /** Adapter wiring accepted by {@link defineRepository}. */
@@ -91,6 +91,7 @@ export interface RepositoryDefinitionOptions<
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
+	TAppendOnly extends boolean = false,
 > {
 	/**
 	 * Concrete aggregate class used as the Identity Map key, and for nothing
@@ -103,7 +104,8 @@ export interface RepositoryDefinitionOptions<
 	readonly persistence: PersistenceModel<TAggregate, TBaseline, TChangeSet>;
 	/**
 	 * Creates the transaction-bound adapter for the port's non-lifecycle
-	 * methods. The Unit of Work supplies `add`, `update`, and optional `remove`.
+	 * methods. The Unit of Work supplies `add`, `update` unless the definition
+	 * is append-only, and `remove` with `physicalRemoval`.
 	 */
 	readonly create: (
 		transaction: TCtx,
@@ -131,6 +133,13 @@ export interface RepositoryDefinitionOptions<
 	) => InfrastructureError;
 	/** Adds Unit-of-Work-owned `remove` to the application-facing repository. */
 	readonly physicalRemoval?: TRemoval;
+	/**
+	 * Leaves `update` out of the application-facing repository. An append-only
+	 * aggregate is a fact that the domain never changes after `add`, for
+	 * example a ledger entry or an audit record. The port then declares no
+	 * `update`, and the Unit of Work installs none.
+	 */
+	readonly appendOnly?: TAppendOnly;
 }
 
 /** Complete, helper-created definition for one Unit-of-Work repository. */
@@ -141,13 +150,15 @@ export interface RepositoryDefinition<
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
+	TAppendOnly extends boolean = false,
 > extends RepositoryDefinitionOptions<
 		TCtx,
 		TRepositoryPort,
 		TAggregate,
 		TBaseline,
 		TChangeSet,
-		TRemoval
+		TRemoval,
+		TAppendOnly
 	> {
 	/** Nominal marker installed by {@link defineRepository}. */
 	readonly [repositoryDefinitionBrand]: true;
@@ -190,18 +201,51 @@ type PortShapeConstraint<TRepositoryPort> = [
 		: unknown
 	: RepositoryPortViolation<"the port must be an object type, not a function">;
 
-/** @inline */
-type WriteMemberConstraint<
+/**
+ * Checks a lifecycle member that the port declares: it is required, and it
+ * accepts the definition's aggregate. An optional member is the trap of a
+ * port that extends a type with `update?` or `remove?`, so it gets its own
+ * message.
+ * @inline
+ */
+type MemberAcceptsAggregate<
 	TRepositoryPort,
-	TMember extends keyof AggregateWriteRegistration<TAggregate>,
+	TMember extends "add" | "update" | "remove",
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-> = TMember extends keyof TRepositoryPort
-	? [TRepositoryPort] extends [
-			Pick<AggregateWriteRegistration<TAggregate>, TMember>,
-		]
+> = undefined extends TRepositoryPort[TMember & keyof TRepositoryPort]
+	? RepositoryPortViolation<`the port's ${TMember} must not be optional`>
+	: [TRepositoryPort] extends [
+				Pick<
+					AggregateWriteRegistration<TAggregate> &
+						PhysicalRemovalRegistration<TAggregate>,
+					TMember
+				>,
+			]
 		? unknown
-		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>
-	: RepositoryPortViolation<`the port must declare ${TMember}(aggregate): void`>;
+		: RepositoryPortViolation<`the port's ${TMember} must accept the definition's aggregate`>;
+
+/** @inline */
+type AddConstraint<
+	TRepositoryPort,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+> = "add" extends keyof TRepositoryPort
+	? MemberAcceptsAggregate<TRepositoryPort, "add", TAggregate>
+	: RepositoryPortViolation<"the port must declare add(aggregate): void">;
+
+/** @inline */
+type UpdateConstraint<
+	TRepositoryPort,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TAppendOnly extends boolean,
+> = "update" extends keyof TRepositoryPort
+	? boolean extends TAppendOnly
+		? RepositoryPortViolation<"the port declares update, so the definition must not set appendOnly">
+		: [TAppendOnly] extends [true]
+			? RepositoryPortViolation<"appendOnly is true, so the port must not declare update">
+			: MemberAcceptsAggregate<TRepositoryPort, "update", TAggregate>
+	: [TAppendOnly] extends [true]
+		? unknown
+		: RepositoryPortViolation<"the port declares no update, so the definition must set appendOnly: true">;
 
 /** @inline */
 type RemovalConstraint<
@@ -210,9 +254,7 @@ type RemovalConstraint<
 	TRemoval extends boolean,
 > = "remove" extends keyof TRepositoryPort
 	? [TRemoval] extends [true]
-		? [TRepositoryPort] extends [PhysicalRemovalRegistration<TAggregate>]
-			? unknown
-			: RepositoryPortViolation<"the port's remove must accept the definition's aggregate">
+		? MemberAcceptsAggregate<TRepositoryPort, "remove", TAggregate>
 		: RepositoryPortViolation<"the port declares remove, so the definition must set physicalRemoval: true">
 	: [TRemoval] extends [true]
 		? RepositoryPortViolation<"physicalRemoval is true, so the port must declare remove(aggregate): void">
@@ -231,14 +273,15 @@ type RepositoryPortConstraint<
 	TRepositoryPort,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TRemoval extends boolean,
+	TAppendOnly extends boolean,
 > = unknown extends TRepositoryPort
 	? unknown
 	: Then<
 			PortShapeConstraint<TRepositoryPort>,
 			Then<
-				WriteMemberConstraint<TRepositoryPort, "add", TAggregate>,
+				AddConstraint<TRepositoryPort, TAggregate>,
 				Then<
-					WriteMemberConstraint<TRepositoryPort, "update", TAggregate>,
+					UpdateConstraint<TRepositoryPort, TAggregate, TAppendOnly>,
 					RemovalConstraint<TRepositoryPort, TAggregate, TRemoval>
 				>
 			>
@@ -254,6 +297,7 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 	TBaseline,
 	TChangeSet,
 	TRemoval extends boolean = false,
+	TAppendOnly extends boolean = false,
 >(
 	definition: RepositoryDefinitionOptions<
 		Parameters<TCreate>[0],
@@ -261,17 +305,24 @@ type RepositoryDefinitionBuilder<TRepositoryPort extends object> = <
 		TAggregate,
 		TBaseline,
 		TChangeSet,
-		TRemoval
+		TRemoval,
+		TAppendOnly
 	> & {
 		readonly create: TCreate;
-	} & RepositoryPortConstraint<TRepositoryPort, TAggregate, TRemoval>,
+	} & RepositoryPortConstraint<
+			TRepositoryPort,
+			TAggregate,
+			TRemoval,
+			TAppendOnly
+		>,
 ) => RepositoryDefinition<
 	Parameters<TCreate>[0],
 	TRepositoryPort,
 	TAggregate,
 	TBaseline,
 	TChangeSet,
-	TRemoval
+	TRemoval,
+	TAppendOnly
 >;
 
 function assertRepositoryDefinitionMembers(
@@ -310,11 +361,11 @@ function assertRepositoryDefinitionMembers(
  * Defines repository wiring for an application-owned driven port.
  *
  * The first call makes the port explicit; the second infers the transaction,
- * aggregate, persistence, event, and removal types from the adapter wiring.
- * The port must declare `add` and `update` for the aggregate; if it
- * declares `remove`, the definition must set `physicalRemoval: true`. A
- * violated constraint fails the call with a compiler error that names the
- * constraint. The adapter
+ * aggregate, persistence, event, and lifecycle types from the adapter wiring.
+ * The port must declare `add` for the aggregate. It declares `update` unless
+ * the definition sets `appendOnly: true`. If it declares `remove`, the
+ * definition must set `physicalRemoval: true`. A violated constraint fails
+ * the call with a compiler error that names the constraint. The adapter
  * created by the definition implements only the remaining methods because
  * lifecycle writes are installed by the Unit of Work.
  * The returned definition is the only form accepted by {@link UnitOfWork}; a
@@ -359,7 +410,8 @@ export type CompatibleRepositoryDefinitions<
 		infer TAggregate,
 		infer _TBaseline,
 		infer _TChangeSet,
-		infer _TRemoval
+		infer _TRemoval,
+		infer _TAppendOnly
 	>
 		? TAggregate extends Aggregate<Id<string>, infer TDefinitionEvent>
 			? [TDefinitionEvent] extends [Evt]
@@ -379,16 +431,23 @@ type RepositoryFacadeOf<TDefinition> =
 		infer _TAggregate,
 		infer _TBaseline,
 		infer _TChangeSet,
-		infer _TRemoval
+		infer _TRemoval,
+		infer _TAppendOnly
 	>
 		? TRepositoryPort
 		: never;
 
-/** Unit-of-Work-owned writes added to every application repository facade. */
-export interface AggregateWriteRegistration<
+/** The one Unit-of-Work-owned write of an append-only repository facade. */
+export interface AppendOnlyWriteRegistration<
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 > {
 	add(aggregate: TAggregate): void;
+}
+
+/** Unit-of-Work-owned writes of a repository facade that is not append-only. */
+export interface AggregateWriteRegistration<
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+> extends AppendOnlyWriteRegistration<TAggregate> {
 	update(aggregate: TAggregate): void;
 }
 

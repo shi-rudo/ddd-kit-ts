@@ -130,6 +130,7 @@ export {
 } from "./application/unit-of-work/record-pending-events";
 export {
 	type AggregateWriteRegistration,
+	type AppendOnlyWriteRegistration,
 	type CompatibleRepositoryDefinitions,
 	defineRepository,
 	type PhysicalRemovalRegistration,

@@ -30,7 +30,8 @@ export interface ContractRepository<
 > {
 	findById(id: TAggregate["id"]): Promise<TAggregate | undefined>;
 	add(aggregate: TAggregate): void;
-	update(aggregate: TAggregate): void;
+	/** An append-only port declares no update. */
+	update?(aggregate: TAggregate): void;
 	/** Physical removal is an optional persistence capability. */
 	remove?(aggregate: TAggregate): void;
 }
@@ -81,6 +82,14 @@ export interface RepositoryContractHarness<
 	snapshotState?(aggregate: TAggregate): unknown;
 	/** Opt out only for an intentionally upserting add implementation. */
 	insertsAreDuplicateChecked?: boolean;
+	/**
+	 * Opt out only for an append-only port, one that the definition marks
+	 * with `appendOnly: true`. The suite then skips every update proof. The
+	 * duplicate-add proof is the concurrency proof that remains, so it is
+	 * mandatory. Provide `createAggregateWithId` and keep
+	 * `insertsAreDuplicateChecked`, or the proof fails instead of skipping.
+	 */
+	updatesAreSupported?: boolean;
 	/** Enables physical-remove behavior and stale-remove OCC tests. */
 	removesAreSupported?: boolean;
 	/** The remove flush predicates on the version captured at load. */
@@ -126,6 +135,7 @@ export function createRepositoryContractTests<
 	const mutateChildCollection = harness.mutateChildCollection;
 	const insertsAreDuplicateChecked =
 		harness.insertsAreDuplicateChecked !== false;
+	const updatesAreSupported = harness.updatesAreSupported !== false;
 	const removesAreSupported = harness.removesAreSupported === true;
 	const removesAreVersionChecked =
 		removesAreSupported && harness.removesAreVersionChecked === true;
@@ -141,6 +151,21 @@ export function createRepositoryContractTests<
 			id,
 			"the adapter did not commit or reconstitute the aggregate",
 		);
+
+	const update = (
+		repository: ContractRepository<TAggregate>,
+		aggregate: TAggregate,
+	): void => {
+		assert(
+			repository.update !== undefined,
+			"the harness keeps updatesAreSupported, but the repository has no update",
+		);
+		repository.update(aggregate);
+	};
+	const updateGate = {
+		capability: "updatesAreSupported",
+		satisfiedBy: updatesAreSupported,
+	};
 
 	async function seed(environment: Environment): Promise<TAggregate> {
 		const aggregate = harness.createAggregate();
@@ -253,7 +278,7 @@ export function createRepositoryContractTests<
 				});
 			}),
 		},
-		{
+		gatedContractTest(updateGate, {
 			name: "MANDATORY stale update: writer B conflicts after writer A commits and persists nothing",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
@@ -262,7 +287,7 @@ export function createRepositoryContractTests<
 						const stale = await load(repository, seeded.id);
 						await hold();
 						harness.mutate(stale);
-						repository.update(stale);
+						update(repository, stale);
 					}),
 				);
 
@@ -271,7 +296,7 @@ export function createRepositoryContractTests<
 						environment.run(async ({ repository }) => {
 							const current = await load(repository, seeded.id);
 							harness.mutate(current);
-							repository.update(current);
+							update(repository, current);
 							return current;
 						}),
 					writerB,
@@ -309,7 +334,7 @@ export function createRepositoryContractTests<
 					"a rejected stale flush must add no outbox records",
 				);
 			}),
-		},
+		}),
 		{
 			name: "rollback acknowledges nothing and commits neither state nor outbox",
 			run: inEnvironment(async (environment) => {
@@ -382,14 +407,14 @@ export function createRepositoryContractTests<
 				});
 			}),
 		},
-		{
+		gatedContractTest(updateGate, {
 			name: "an unchanged explicit update is safe and emits no event",
 			run: inEnvironment(async (environment) => {
 				const seeded = await seed(environment);
 				const before = await environment.committedOutboxEvents();
 				await environment.run(async ({ repository }) => {
 					const aggregate = await load(repository, seeded.id);
-					repository.update(aggregate);
+					update(repository, aggregate);
 				});
 				assert(
 					deepEqual(
@@ -399,7 +424,7 @@ export function createRepositoryContractTests<
 					"an unchanged update must not manufacture an outbox event",
 				);
 			}),
-		},
+		}),
 	];
 
 	tests.push(
@@ -408,13 +433,21 @@ export function createRepositoryContractTests<
 				capability: createAggregateWithId
 					? "insertsAreDuplicateChecked"
 					: "createAggregateWithId",
+				// An append-only harness has no other concurrency proof, so
+				// the proof runs and fails instead of skipping.
 				satisfiedBy:
-					Boolean(createAggregateWithId) && insertsAreDuplicateChecked,
+					(Boolean(createAggregateWithId) && insertsAreDuplicateChecked) ||
+					!updatesAreSupported,
 			},
 			{
 				name: "duplicate add rejects and preserves the existing aggregate",
 				run: inEnvironment(async (environment) => {
-					assert(createAggregateWithId !== undefined, "capability gate");
+					assert(
+						createAggregateWithId !== undefined && insertsAreDuplicateChecked,
+						"an append-only harness must provide createAggregateWithId " +
+							"and keep insertsAreDuplicateChecked: the duplicate-add " +
+							"proof is its only concurrency proof",
+					);
 					const seeded = await seed(environment);
 					// Mutated twice so its version differs from the seeded
 					// row's: a clobbering insert is then visible in the
@@ -468,69 +501,75 @@ export function createRepositoryContractTests<
 
 	tests.push(
 		gatedContractTest(
-			{
-				capability: "mutateVersionOnly",
-				satisfiedBy: Boolean(mutateVersionOnly),
-			},
-			{
-				name: "version-only change still persists (skip-save must not desync the OCC baseline)",
-				run: inEnvironment(async (environment) => {
-					assert(mutateVersionOnly !== undefined, "capability gate");
-					const seeded = await seed(environment);
-					const outboxBefore = await environment.committedOutboxEvents();
-					await environment.run(async ({ repository }) => {
-						const aggregate = await load(repository, seeded.id);
-						mutateVersionOnly.call(harness, aggregate);
-						repository.update(aggregate);
-					});
-					const reloaded = await reload(environment, seeded.id);
-					// The harness contract keeps the projection deep-equal, so a
-					// diff-based model derives an EMPTY change set here: an
-					// adapter that skips empty writes fails this reload.
-					assertEqual(
-						reloaded.version,
-						seeded.version + 1,
-						"a version-only change (empty change set, bumped version) " +
-							"must still be persisted; skipping it desyncs the " +
-							"persisted version and produces false concurrency " +
-							"conflicts later",
-					);
-					assert(
-						deepEqual(
-							eventIds(await environment.committedOutboxEvents()),
-							eventIds(outboxBefore),
-						),
-						"state-only update must not create an outbox event",
-					);
-				}),
-			},
+			updateGate,
+			gatedContractTest(
+				{
+					capability: "mutateVersionOnly",
+					satisfiedBy: Boolean(mutateVersionOnly),
+				},
+				{
+					name: "version-only change still persists (skip-save must not desync the OCC baseline)",
+					run: inEnvironment(async (environment) => {
+						assert(mutateVersionOnly !== undefined, "capability gate");
+						const seeded = await seed(environment);
+						const outboxBefore = await environment.committedOutboxEvents();
+						await environment.run(async ({ repository }) => {
+							const aggregate = await load(repository, seeded.id);
+							mutateVersionOnly.call(harness, aggregate);
+							update(repository, aggregate);
+						});
+						const reloaded = await reload(environment, seeded.id);
+						// The harness contract keeps the projection deep-equal, so a
+						// diff-based model derives an EMPTY change set here: an
+						// adapter that skips empty writes fails this reload.
+						assertEqual(
+							reloaded.version,
+							seeded.version + 1,
+							"a version-only change (empty change set, bumped version) " +
+								"must still be persisted; skipping it desyncs the " +
+								"persisted version and produces false concurrency " +
+								"conflicts later",
+						);
+						assert(
+							deepEqual(
+								eventIds(await environment.committedOutboxEvents()),
+								eventIds(outboxBefore),
+							),
+							"state-only update must not create an outbox event",
+						);
+					}),
+				},
+			),
 		),
 	);
 
 	tests.push(
 		gatedContractTest(
-			{
-				capability: "mutateChildCollection",
-				satisfiedBy: Boolean(mutateChildCollection),
-			},
-			{
-				name: "nested collection changes survive the adapter change-set projection",
-				run: inEnvironment(async (environment) => {
-					assert(mutateChildCollection !== undefined, "capability gate");
-					const seeded = await seed(environment);
-					await environment.run(async ({ repository }) => {
-						const aggregate = await load(repository, seeded.id);
-						mutateChildCollection.call(harness, aggregate);
-						repository.update(aggregate);
-					});
-					const reloaded = await reload(environment, seeded.id);
-					assertEqual(
-						reloaded.version,
-						seeded.version + 1,
-						"nested collection update must advance the persisted root version",
-					);
-				}),
-			},
+			updateGate,
+			gatedContractTest(
+				{
+					capability: "mutateChildCollection",
+					satisfiedBy: Boolean(mutateChildCollection),
+				},
+				{
+					name: "nested collection changes survive the adapter change-set projection",
+					run: inEnvironment(async (environment) => {
+						assert(mutateChildCollection !== undefined, "capability gate");
+						const seeded = await seed(environment);
+						await environment.run(async ({ repository }) => {
+							const aggregate = await load(repository, seeded.id);
+							mutateChildCollection.call(harness, aggregate);
+							update(repository, aggregate);
+						});
+						const reloaded = await reload(environment, seeded.id);
+						assertEqual(
+							reloaded.version,
+							seeded.version + 1,
+							"nested collection update must advance the persisted root version",
+						);
+					}),
+				},
+			),
 		),
 	);
 
@@ -566,45 +605,51 @@ export function createRepositoryContractTests<
 
 	tests.push(
 		gatedContractTest(
-			{
-				capability: "removesAreVersionChecked",
-				satisfiedBy: removesAreVersionChecked,
-			},
-			{
-				name: "stale remove conflicts and cannot delete a concurrent update",
-				run: inEnvironment(async (environment) => {
-					const seeded = await seed(environment);
-					const staleRemove = await parkRunCall((hold) =>
-						environment.run(async ({ repository }) => {
-							assert(repository.remove !== undefined, "remove capability gate");
-							const stale = await load(repository, seeded.id);
-							await hold();
-							repository.remove(stale);
-						}),
-					);
-					await awaitOverlappingCall(
-						() =>
+			updateGate,
+			gatedContractTest(
+				{
+					capability: "removesAreVersionChecked",
+					satisfiedBy: removesAreVersionChecked,
+				},
+				{
+					name: "stale remove conflicts and cannot delete a concurrent update",
+					run: inEnvironment(async (environment) => {
+						const seeded = await seed(environment);
+						const staleRemove = await parkRunCall((hold) =>
 							environment.run(async ({ repository }) => {
-								const current = await load(repository, seeded.id);
-								harness.mutate(current);
-								repository.update(current);
+								assert(
+									repository.remove !== undefined,
+									"remove capability gate",
+								);
+								const stale = await load(repository, seeded.id);
+								await hold();
+								repository.remove(stale);
 							}),
-						staleRemove,
-						overlappingCallsBoundMs,
-					);
-					staleRemove.release();
-					const rejection = await captureRejection(staleRemove.call);
-					assertChainContainsKitError(
-						rejection,
-						["CONCURRENCY_CONFLICT"],
-						`stale remove must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
-					);
-					assert(
-						(await reload(environment, seeded.id)) !== undefined,
-						"stale remove must not delete the concurrent winner",
-					);
-				}),
-			},
+						);
+						await awaitOverlappingCall(
+							() =>
+								environment.run(async ({ repository }) => {
+									const current = await load(repository, seeded.id);
+									harness.mutate(current);
+									update(repository, current);
+								}),
+							staleRemove,
+							overlappingCallsBoundMs,
+						);
+						staleRemove.release();
+						const rejection = await captureRejection(staleRemove.call);
+						assertChainContainsKitError(
+							rejection,
+							["CONCURRENCY_CONFLICT"],
+							`stale remove must reject with ConcurrencyConflictError; got ${describeError(rejection)}`,
+						);
+						assert(
+							(await reload(environment, seeded.id)) !== undefined,
+							"stale remove must not delete the concurrent winner",
+						);
+					}),
+				},
+			),
 		),
 	);
 

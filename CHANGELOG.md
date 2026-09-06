@@ -29,6 +29,53 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: defineRepository accepts an append-only port
+
+An append-only aggregate is a fact that the domain never changes after `add`,
+for example a ledger entry or an audit record. Its port declares `add` and no
+`update`. Before, `defineRepository` rejected such a port, because the
+constraint required `update`. Consumers had to declare an `update` that no use
+case calls, and the Unit of Work installed it.
+
+The definition now takes `appendOnly: true`. The port then must not declare
+`update`, and the Unit of Work installs none. The facade has no `update`
+property, and an `update` that the adapter defines stays hidden, as every
+adapter-defined lifecycle method does. `appendOnly` takes the literal `true`,
+like `physicalRemoval`, and the two options are independent. The new
+`AppendOnlyWriteRegistration` type names the one Unit-of-Work-owned write of
+such a facade; `AggregateWriteRegistration` extends it.
+
+For a port without `update`, the error now names the new option. It ends with
+`Property '"defineRepository: the port declares no update, so the definition
+must set appendOnly: true"' is missing in type ...`. A port with `update` and
+`appendOnly: true` fails with `appendOnly is true, so the port must not
+declare update`. A port with `update` and an `appendOnly` typed `boolean`
+fails with `the port declares update, so the definition must not set
+appendOnly`. An optional `update?` or `remove?` on the port fails with `the
+port's update must not be optional`; the port must declare the member as
+required.
+
+A loaded append-only aggregate must not change. When it changes, the Unit of
+Work rejects the commit with `UnenrolledChangesError` as before, and the
+message now names that rule instead of `repository.update`. When a use case
+passes a loaded append-only aggregate to `add`, the `AggregateTrackingError`
+with reason `loaded_as_new` names the rule as well.
+
+The repository definition brand key is now
+`@shirudo/ddd-kit/repository-definition/v2`, because the definition shape
+changed. A definition from an older kit copy is not a definition of this one.
+
+The repository contract suite accepts an append-only harness.
+`ContractRepository.update` is now optional. A port that extends
+`ContractRepository` inherits that optional `update` and fails the
+constraint, so redeclare `update` on such a port. Set
+`updatesAreSupported: false` on the harness, and the suite skips every update
+proof. The duplicate-add proof is the concurrency proof that remains, so it
+is mandatory there. Provide `createAggregateWithId` and keep
+`insertsAreDuplicateChecked`, or the proof fails instead of skipping. The
+reference binding in `src/testing/repository-contract.test.ts` binds an
+append-only in-memory harness.
+
 ### Fixed: defineRepository names the violated port constraint
 
 `defineRepository` checks the port against its constraints. The port is one
@@ -41,7 +88,7 @@ unannotated callback parameter. The message named no cause.
 
 The compiler now rejects the call with one error that names the violated
 constraint. The error ends with a line such as `Property '"defineRepository:
-the port must declare update(aggregate): void"' is missing in type ...`. The
+the port must declare add(aggregate): void"' is missing in type ...`. The
 callback parameters keep their contextual types, so no implicit `any` follows.
 The repository guide shows the form of the error.
 

@@ -582,6 +582,108 @@ describe("UnitOfWork", () => {
 			expect(persistedVersionOf(aggregate)).toBe(aggregate.version);
 		});
 
+		it("installs no update for an append-only definition and masks the adapter's own", async () => {
+			const event = testEvent("o-1");
+			const aggregate = createMockAggregate("o-1", [event]);
+			const outbox = createMockOutbox();
+			const flushedIntents: string[] = [];
+			let adapterUpdateCalls = 0;
+			const uow = new UnitOfWork({
+				scope: createMockScope(),
+				outbox,
+				repositories: {
+					receipts: defineExplicitRepository<{
+						add(aggregate: MockAggregate): void;
+					}>()({
+						aggregate: MockAggregate,
+						persistence: versionPersistenceModel<MockAggregate>(),
+						appendOnly: true,
+						create: () => ({
+							update: (_aggregate: MockAggregate) => {
+								adapterUpdateCalls += 1;
+							},
+						}),
+						flush: async (_transaction: undefined, write) => {
+							flushedIntents.push(write.intent);
+						},
+						mapError: mapTestRepositoryError,
+					}),
+				},
+			});
+
+			await uow.run(async ({ repositories }) => {
+				repositories.receipts.add(aggregate);
+				expect("update" in repositories.receipts).toBe(false);
+				expect("remove" in repositories.receipts).toBe(false);
+				// @ts-expect-error an append-only facade declares no update
+				expect(repositories.receipts.update).toBeUndefined();
+			});
+
+			expect(adapterUpdateCalls).toBe(0);
+			expect(flushedIntents).toEqual(["add"]);
+			expect(outbox.added).toEqual([[stamped(event)]]);
+		});
+
+		describe("a loaded append-only aggregate", () => {
+			function createAppendOnlyUow() {
+				return new UnitOfWork({
+					scope: createMockScope(),
+					outbox: createMockOutbox(),
+					repositories: {
+						receipts: defineExplicitRepository<{
+							trackLoaded(aggregate: MockAggregate): MockAggregate;
+							add(aggregate: MockAggregate): void;
+						}>()({
+							aggregate: MockAggregate,
+							persistence: versionPersistenceModel<MockAggregate>(),
+							appendOnly: true,
+							create: (tx: undefined, tracking) =>
+								new FakeOrderRepository(tx, tracking),
+							flush: async () => {},
+							mapError: mapTestRepositoryError,
+						}),
+					},
+				});
+			}
+
+			it("names the append-only rule instead of update when it changes", async () => {
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await createAppendOnlyUow()
+					.run(async ({ repositories }) => {
+						repositories.receipts.trackLoaded(aggregate);
+						aggregate.change();
+					})
+					.then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(UnenrolledChangesError);
+				expect((rejection as Error).message).toContain("append-only");
+				expect((rejection as Error).message).not.toContain("repository.update");
+			});
+
+			it("names the append-only rule instead of update when it is added again", async () => {
+				const aggregate = createMockAggregate("o-1");
+
+				const rejection = await createAppendOnlyUow()
+					.run(async ({ repositories }) => {
+						repositories.receipts.trackLoaded(aggregate);
+						repositories.receipts.add(aggregate);
+					})
+					.then(
+						() => undefined,
+						(error: unknown) => error,
+					);
+
+				expect(rejection).toBeInstanceOf(AggregateTrackingError);
+				expect(rejection).toMatchObject({ reason: "loaded_as_new" });
+				expect((rejection as Error).message).toContain("append-only");
+				expect((rejection as Error).message).not.toContain("Use update");
+			});
+		});
+
 		it("does not flush when commit enrollment rejects and the caller catches it", async () => {
 			const lookalike = {
 				id: "lookalike-1" as TestId,
@@ -2705,7 +2807,7 @@ describe("UnitOfWork", () => {
 			});
 
 			expect(Object.getOwnPropertySymbols(definition)).toContain(
-				Symbol.for("@shirudo/ddd-kit/repository-definition/v1"),
+				Symbol.for("@shirudo/ddd-kit/repository-definition/v2"),
 			);
 		});
 	});
