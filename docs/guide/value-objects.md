@@ -230,6 +230,11 @@ The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
 `DateRange` instance. A value object is nested under a key. `vo()` and the
 constructor reject a value object as the input itself with a `TypeError`.
 
+`toJSON()` flattens a nested value object to its props. When you rebuild a
+composed value object from JSON, rebuild the nested value object first. A plain
+record in place of the nested value object is a different value: `equals()`
+returns false, and the methods of the nested class are missing.
+
 ::: warning Constructor ordering
 `validate(props)` runs from the base constructor before subclass field
 initializers run. Treat `validate` as a pure check over the `props` argument. If
