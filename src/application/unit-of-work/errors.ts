@@ -131,10 +131,17 @@ export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING">
 		public readonly operation: AggregateWriteIntent | "load" | "commit",
 		public readonly reason: AggregateTrackingFailure,
 		public readonly registeredIntent?: AggregateWriteIntent,
+		options: { readonly appendOnly?: boolean } = {},
 	) {
 		super(
 			"AGGREGATE_TRACKING",
-			trackingFailureMessage(aggregateId, operation, reason, registeredIntent),
+			trackingFailureMessage(
+				aggregateId,
+				operation,
+				reason,
+				registeredIntent,
+				options,
+			),
 		);
 	}
 }
@@ -144,6 +151,7 @@ function trackingFailureMessage(
 	operation: AggregateWriteIntent | "load" | "commit",
 	reason: AggregateTrackingFailure,
 	registeredIntent: AggregateWriteIntent | undefined,
+	options: { readonly appendOnly?: boolean },
 ): string {
 	switch (reason) {
 		case "not_loaded":
@@ -155,7 +163,11 @@ function trackingFailureMessage(
 		case "loaded_as_new":
 			return (
 				`Aggregate ${aggregateId} cannot be added as new because it was ` +
-				"loaded by this unit of work. Use update for a loaded aggregate."
+				"loaded by this unit of work. " +
+				(options.appendOnly
+					? "Its repository is append-only, so a loaded aggregate is already " +
+						"persisted and must not change."
+					: "Use update for a loaded aggregate.")
 			);
 		case "different_repository":
 			return (

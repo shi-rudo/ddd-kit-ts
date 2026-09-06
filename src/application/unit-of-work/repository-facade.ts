@@ -59,6 +59,8 @@ export function bindRepositoryWrites<TRepository, Evt extends AnyDomainEvent>(
 }
 
 const REPOSITORY_LIFECYCLE_OPERATIONS = ["add", "update", "remove"] as const;
+type RepositoryLifecycleOperation =
+	(typeof REPOSITORY_LIFECYCLE_OPERATIONS)[number];
 
 interface GuardedMethodCacheEntry {
 	/** The source function the wrapper was built over; identity-checked on
@@ -103,7 +105,7 @@ function repositoryOperationName(property: PropertyKey): string {
 
 function isRepositoryLifecycleOperation(property: PropertyKey): boolean {
 	return REPOSITORY_LIFECYCLE_OPERATIONS.includes(
-		property as (typeof REPOSITORY_LIFECYCLE_OPERATIONS)[number],
+		property as RepositoryLifecycleOperation,
 	);
 }
 
@@ -172,13 +174,19 @@ function defineForwardedRepositoryProperty<Evt extends AnyDomainEvent>(
 	state.forwardedOwnProperties.add(property);
 }
 
+function installedLifecycleOperations<Evt extends AnyDomainEvent>(
+	definition: RuntimePersistenceDefinition<Evt>,
+): RepositoryLifecycleOperation[] {
+	const operations: RepositoryLifecycleOperation[] = ["add"];
+	if (!definition.appendOnly) operations.push("update");
+	if (definition.physicalRemoval) operations.push("remove");
+	return operations;
+}
+
 function installRepositoryLifecycleOperations<Evt extends AnyDomainEvent>(
 	state: RepositoryFacadeState<Evt>,
 ): void {
-	const operations = state.definition.physicalRemoval
-		? REPOSITORY_LIFECYCLE_OPERATIONS
-		: REPOSITORY_LIFECYCLE_OPERATIONS.slice(0, 2);
-	for (const operation of operations) {
+	for (const operation of installedLifecycleOperations(state.definition)) {
 		state.writes.add(operation);
 		Object.defineProperty(state.target, operation, {
 			configurable: false,
@@ -232,7 +240,10 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 			state.session.assertOpen(repositoryOperationName(property));
 			const own = Reflect.getOwnPropertyDescriptor(target, property);
 			if (own) return Reflect.get(target, property, receiver);
-			if (property === "remove") return undefined;
+			// An installed lifecycle operation is an own property of the
+			// target, so one that reaches this line is not installed. The
+			// adapter's own method of that name stays masked.
+			if (isRepositoryLifecycleOperation(property)) return undefined;
 			return readRepositorySource(state, property);
 		},
 		set: (target, property, value, receiver) =>
@@ -241,7 +252,7 @@ function createRepositoryFacadeHandler<Evt extends AnyDomainEvent>(
 			state.session.assertOpen(repositoryOperationName(property));
 			return (
 				state.writes.has(property) ||
-				(property !== "remove" &&
+				(!isRepositoryLifecycleOperation(property) &&
 					(Reflect.has(target, property) ||
 						Reflect.has(state.source, property)))
 			);

@@ -34,6 +34,7 @@ export interface RuntimePersistenceDefinition<Evt extends AnyDomainEvent> {
 		write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 	) => InfrastructureError;
 	readonly physicalRemoval?: boolean;
+	readonly appendOnly?: boolean;
 }
 
 /** Read-only Identity Map operations available to repository adapters. */
@@ -57,8 +58,10 @@ export type UnitOfWorkIdentityMap = Pick<
  *   `tracking.trackLoaded(aggregate)` after hydration. This captures the
  *   expected version before application code can mutate the instance.
  * - Adapter objects do not need lifecycle methods; the facade installs the
- *   Unit-of-Work-owned `add`, `update`, and optional `remove`. If a concrete
- *   adapter has same-named methods anyway, the facade masks them.
+ *   Unit-of-Work-owned `add`, `update` unless the definition is append-only,
+ *   and `remove` with `physicalRemoval`. If a concrete adapter has a method
+ *   named `add`, `update`, or `remove` anyway, the facade masks it, installed
+ *   or not.
  * - Other repository methods are reads. A custom method that performs a write
  *   would bypass the Unit of Work and violates the adapter contract.
  */

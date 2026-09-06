@@ -179,6 +179,7 @@ export class Session<Evt extends AnyDomainEvent> {
 				"add",
 				"loaded_as_new",
 				existing.registration?.intent,
+				{ appendOnly: definition.appendOnly === true },
 			);
 		}
 
@@ -464,7 +465,9 @@ export class Session<Evt extends AnyDomainEvent> {
 				(entry.aggregate.version !== entry.expectedVersion ||
 					persistenceProjectionDrifted(entry.baseline, entry.aggregate))
 			) {
-				throw new UnenrolledChangesError(String(entry.aggregate.id));
+				throw new UnenrolledChangesError(String(entry.aggregate.id), {
+					appendOnly: entry.definition.appendOnly === true,
+				});
 			}
 		}
 
@@ -482,7 +485,11 @@ export class Session<Evt extends AnyDomainEvent> {
 			// registered, yet it has no write intent: a forgotten update whose
 			// events would be silently dropped.
 			const id = (instance as { id?: unknown }).id;
-			throw new UnenrolledChangesError(String(id));
+			throw new UnenrolledChangesError(String(id), {
+				appendOnly:
+					this._trackingByAggregate.get(instance as Aggregate<Id<string>, Evt>)
+						?.definition.appendOnly === true,
+			});
 		}
 	}
 

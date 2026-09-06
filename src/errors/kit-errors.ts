@@ -1175,14 +1175,24 @@ export class ErrorMapperFailedError extends KitWiringError<"ERROR_MAPPER_FAILED"
  * captured at load. The pending-event count remains a second guard for an
  * invalid event-only mutation that did not advance the version. A freshly
  * created aggregate that is never passed to `add` is invisible to the kit.
+ *
+ * An append-only repository installs no `update`, so for its aggregate the
+ * message names the rule instead: a loaded append-only aggregate must not
+ * change.
  */
 export class UnenrolledChangesError extends KitWiringError<"UNENROLLED_CHANGES"> {
-	constructor(public readonly aggregateId: string) {
+	constructor(
+		public readonly aggregateId: string,
+		options: { readonly appendOnly?: boolean } = {},
+	) {
 		super(
 			"UNENROLLED_CHANGES",
 			`Aggregate ${aggregateId} was loaded and changed in this unit of work, ` +
-				"but no update intent was registered. Call repository.update(aggregate) " +
-				"after the final domain decision so state and events flush together.",
+				(options.appendOnly
+					? "but its repository is append-only and installs no update. " +
+						"An append-only aggregate must not change after add."
+					: "but no update intent was registered. Call repository.update(aggregate) " +
+						"after the final domain decision so state and events flush together."),
 		);
 	}
 }

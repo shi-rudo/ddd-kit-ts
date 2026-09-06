@@ -390,29 +390,65 @@ because the Unit of Work installs `add`, `update`, and `remove`. The concrete
 adapter can have diagnostics or ORM-specific helpers, but those do not become
 application API. It can change without silently widening the port.
 
-A port can have no read methods. Then `create` returns an empty object:
-`create: () => ({})`. Do not invent a read that no use case needs. Check the
-model before you choose that shape. A fact that follows from a state change of
-another aggregate is a domain event. The event metadata carries the user id,
-the correlation id, and the causation id. So an audit trail or a log of such
-facts is a projection of the outbox. A write-only repository fits a fact of
-its own that must commit in the same transaction.
+A port can have no read methods. Then `create` returns an empty object, and it
+still declares the transaction parameter: `create: (_tx: DrizzleTx) => ({})`.
+The type of that parameter is the transaction type that `flush` receives. Do not
+invent a read that no use case needs. Check the model before you choose that
+shape. A fact that follows from a state change of another aggregate is a domain
+event. The event metadata carries the user id, the correlation id, and the
+causation id. So an audit trail or a log of such facts is a projection of the
+outbox. A write-only repository fits a fact of its own that must commit in the
+same transaction.
 
-The port and `physicalRemoval` must agree. If the port declares `remove`, set
+Such a fact is often append-only: the domain never changes it after `add`. A
+ledger entry or an audit record is an example. Its port declares `add` and no
+`update`. Set `appendOnly: true` on the definition, and the Unit of Work
+installs no `update`:
+
+```ts
+interface ForAppendingLedgerEntries {
+  add(entry: LedgerEntry): void;
+}
+
+const ledgerEntries = defineRepository<ForAppendingLedgerEntries>()({
+  aggregate: LedgerEntry,
+  persistence: ledgerEntryPersistence,
+  appendOnly: true,
+  create: (_tx: DrizzleTx) => ({}),
+  flush: async (tx: DrizzleTx, write) => {
+    await insertLedgerEntry(tx, write);
+  },
+  mapError: (error, write) => {
+    if (error instanceof InfrastructureError) return error;
+    return new LedgerStoreUnavailableError(write.aggregateId, error);
+  },
+});
+```
+
+The facade of an append-only repository has no `update` property. An `update`
+that the adapter defines stays hidden, as every adapter-defined lifecycle
+method does. `appendOnly` and `physicalRemoval` are independent: an
+append-only port can declare `remove` with `physicalRemoval: true`.
+
+The port and the options must agree. If the port declares `remove`, set
 `physicalRemoval: true`. If the port has no `remove`, omit the option.
-`Repository` declares `remove`; `AggregatePersistence` does not. On a mismatch
-the compiler rejects the definition with an error that names the violated
-constraint. The error ends with a line of this form:
+`Repository` declares `remove`; `AggregatePersistence` does not. If the port
+declares `update`, omit `appendOnly`. If the port has no `update`, set
+`appendOnly: true`. On a mismatch the compiler rejects the definition with an
+error that names the violated constraint. The error ends with a line of this
+form:
 
 ```text
 Property '"defineRepository: the port declares remove, so the definition must set physicalRemoval: true"' is missing in type ...
 ```
 
-A port without `add` or `update` fails with the same form of error. So does a
-port whose `add`, `update`, or `remove` does not accept the aggregate of the
-definition. A port that is a function type or a union fails the same way.
-`physicalRemoval` takes the literal `true`; a value typed `boolean` fails the
-pairing.
+A port without `add` fails with the same form of error. So does a port whose
+`add`, `update`, or `remove` does not accept the aggregate of the definition.
+An optional `update?` or `remove?` fails as well: the port must declare the
+member as required. A port that extends `ContractRepository` from the testing
+entry inherits an optional `update`, so redeclare `update` on that port. A
+port that is a function type or a union fails the same way. Both options take
+the literal `true`; a value typed `boolean` fails the pairing.
 
 `mapError` is the storage boundary's last translation step. Known failures
 such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
@@ -665,6 +701,13 @@ for (const contract of createRepositoryContractTests(harness)) {
 
 Keep capability skips visible. They record a guarantee the adapter does not
 yet prove.
+
+An append-only port has no `update`. Set `updatesAreSupported: false` on the
+harness, and the suite skips every update proof. The duplicate-add proof is
+the concurrency proof that remains, so it is mandatory there. Provide
+`createAggregateWithId` and keep `insertsAreDuplicateChecked`, or the proof
+fails instead of skipping. Keep the default for every port with `update`: the
+skipped proofs are the OCC proofs.
 
 The suite is the only proof of the OCC predicate. A missing or wrong predicate
 raises no error: the stale write succeeds, and the newer state is lost. The

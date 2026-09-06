@@ -79,8 +79,20 @@ interface ForAppendingOrders {
 	add(order: Order): void;
 }
 
+interface ForAppendingAndRemovingOrders extends ForAppendingOrders {
+	remove(order: Order): void;
+}
+
 interface ForReadingOrders {
 	findById(id: OrderId): Promise<Order | null>;
+}
+
+interface ForStoringOrdersWithOptionalUpdate extends ForAppendingOrders {
+	update?(order: Order): void;
+}
+
+interface ForRemovingOrdersWithOptionalRemove extends ForStoringOrders {
+	remove?(order: Order): void;
 }
 
 interface ForRemovingOrdersById extends ForStoringOrders {
@@ -107,6 +119,7 @@ interface ForStoringPayments {
 }
 
 declare const removalFlag: boolean;
+declare const appendOnlyFlag: boolean;
 `;
 
 const adapterWiring = `
@@ -122,7 +135,21 @@ const probes = {
 	"complete-port-with-removal": `defineRepository<ForRemovingOrders>()({
 	physicalRemoval: true,${adapterWiring}});`,
 	"any-port": `defineRepository<any>()({${adapterWiring}});`,
+	"append-only-port": `defineRepository<ForAppendingOrders>()({
+	appendOnly: true,${adapterWiring}});`,
+	"append-only-port-with-removal": `defineRepository<ForAppendingAndRemovingOrders>()({
+	appendOnly: true,
+	physicalRemoval: true,${adapterWiring}});`,
 	"port-without-update": `defineRepository<ForAppendingOrders>()({${adapterWiring}});`,
+	"append-only-with-update": `defineRepository<ForStoringOrders>()({
+	appendOnly: true,${adapterWiring}});`,
+	"append-only-with-boolean-flag": `defineRepository<ForAppendingOrders>()({
+	appendOnly: appendOnlyFlag,${adapterWiring}});`,
+	"update-with-boolean-append-only": `defineRepository<ForStoringOrders>()({
+	appendOnly: appendOnlyFlag,${adapterWiring}});`,
+	"optional-update": `defineRepository<ForStoringOrdersWithOptionalUpdate>()({${adapterWiring}});`,
+	"optional-remove": `defineRepository<ForRemovingOrdersWithOptionalRemove>()({
+	physicalRemoval: true,${adapterWiring}});`,
 	"port-without-add": `defineRepository<ForReadingOrders>()({${adapterWiring}});`,
 	"port-for-another-aggregate": `defineRepository<ForStoringPayments>()({${adapterWiring}});`,
 	"removal-without-remove": `defineRepository<ForStoringOrders>()({
@@ -223,8 +250,33 @@ describe("defineRepository compile-time diagnostics", () => {
 		expect(diagnosticsOf("any-port")).toEqual([]);
 	});
 
+	it("accepts a port without update when appendOnly is true", () => {
+		expect(diagnosticsOf("append-only-port")).toEqual([]);
+	});
+
+	it("accepts an append-only port with remove when physicalRemoval is true", () => {
+		expect(diagnosticsOf("append-only-port-with-removal")).toEqual([]);
+	});
+
 	it.each([
-		["port-without-update", "the port must declare update(aggregate): void"],
+		[
+			"port-without-update",
+			"the port declares no update, so the definition must set appendOnly: true",
+		],
+		[
+			"append-only-with-update",
+			"appendOnly is true, so the port must not declare update",
+		],
+		[
+			"append-only-with-boolean-flag",
+			"the port declares no update, so the definition must set appendOnly: true",
+		],
+		[
+			"update-with-boolean-append-only",
+			"the port declares update, so the definition must not set appendOnly",
+		],
+		["optional-update", "the port's update must not be optional"],
+		["optional-remove", "the port's remove must not be optional"],
 		["port-without-add", "the port must declare add(aggregate): void"],
 		[
 			"port-for-another-aggregate",
