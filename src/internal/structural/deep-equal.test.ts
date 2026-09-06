@@ -347,6 +347,29 @@ describe("deepEqual – Symbol-keyed properties", () => {
 		const b: Record<symbol, number> = { [OTHER]: 1 };
 		expect(deepEqual(a, b)).toBe(false);
 	});
+
+	it("detects a differing non-enumerable symbol property", () => {
+		const tagged = (value: unknown) =>
+			Object.defineProperty({ x: 1 }, TAG, { value, enumerable: false });
+
+		expect(deepEqual({ x: 1 }, tagged(1))).toBe(false);
+		expect(deepEqual(tagged(1), tagged(2))).toBe(false);
+		expect(deepEqual(tagged(1), tagged(1))).toBe(true);
+	});
+
+	it("compares a non-enumerable symbol-keyed function by identity", () => {
+		const marker = () => 1;
+		const marked = (value: unknown) =>
+			Object.defineProperty({ x: 1 }, TAG, { value, enumerable: false });
+
+		expect(deepEqual(marked(marker), marked(marker))).toBe(true);
+		expect(
+			deepEqual(
+				marked(marker),
+				marked(() => 1),
+			),
+		).toBe(false);
+	});
 });
 
 describe("deepEqual – Error comparison", () => {
