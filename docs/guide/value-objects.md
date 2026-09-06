@@ -198,9 +198,11 @@ part of the meaning.
 ### Compose Value Objects
 
 A value object can hold other value objects. The nested instance is kept by
-reference, not cloned: its own constructor already cloned and froze its props.
-`equals()`, `voEquals()`, and `voEqualsExcept()` compare a nested value object
-by class and by props, and `toJSON()` serializes its props.
+reference, not cloned, and it is frozen in place. Its own constructor already
+cloned and froze its props, and a value object is immutable by contract, so the
+freeze changes nothing that a value object may do. `equals()`, `voEquals()`, and
+`voEqualsExcept()` compare a nested value object by class and by props, and
+`toJSON()` serializes its props.
 
 ```ts
 type StayProps = {
@@ -264,8 +266,8 @@ shadowed on the frozen clone so accidental mutation throws. Map keys and Set
 members must be primitives, because JavaScript compares object keys and set
 members by identity.
 
-A `ValueObject<T>` instance is accepted and kept by reference. Functions and
-every other custom class instance are rejected. A class instance can hide
+A `ValueObject<T>` instance is accepted, kept by reference, and frozen in
+place. Functions and every other custom class instance are rejected. A class instance can hide
 private fields, non-enumerable state, and runtime-owned internal slots. Cloning
 it as data would produce a value that looks valid but has lost part of its
 meaning.
@@ -280,10 +282,8 @@ side-effect-free way to identify a transparent Proxy, so reflective cloning can
 trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
-internals. It passes a `ValueObject<T>` instance through whole, because the
-instance already owns frozen props. Application code should usually prefer
-`vo()` or `ValueObject<T>`, because they clone first and do not freeze
-caller-owned objects.
+internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
+because they clone first and do not freeze caller-owned objects.
 
 ## Common Mistakes
 

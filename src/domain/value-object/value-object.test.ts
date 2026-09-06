@@ -181,16 +181,18 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(1);
 	});
 
-	it("passes a value object instance through whole", () => {
-		class Money extends ValueObject<{ amount: number }> {}
+	it("freezes a value object instance in place", () => {
+		class Money extends ValueObject<{ amount: number }> {
+			readonly tags: string[] = [];
+		}
 		const money = new Money({ amount: 1 });
 		const state = { money };
 
 		deepFreeze(state);
 
 		expect(Object.isFrozen(state)).toBe(true);
-		expect(Object.isFrozen(money)).toBe(false);
-		expect(Object.isFrozen(money.props)).toBe(true);
+		expect(Object.isFrozen(money)).toBe(true);
+		expect(Object.isFrozen(money.tags)).toBe(true);
 	});
 
 	it("still walks a subtree that another freeze left shallow", () => {
@@ -669,13 +671,16 @@ describe("ValueObject Class", () => {
 			expect(usd.equals(foreign)).toBe(false);
 		});
 
-		it("does not freeze the nested value object instance", () => {
-			const money = new Money({ amount: 100, currency: "USD" });
+		it("freezes the nested value object instance in place", () => {
+			class TaggedMoney extends ValueObject<MoneyProps> {
+				readonly tags: string[] = [];
+			}
+			const money = new TaggedMoney({ amount: 100, currency: "USD" });
 
-			new Price({ amount: money, label: "list" });
+			new Price({ amount: money, label: "list" } as unknown as PriceProps);
 
-			expect(Object.isFrozen(money)).toBe(false);
-			expect(Object.isFrozen(money.props)).toBe(true);
+			expect(Object.isFrozen(money)).toBe(true);
+			expect(Object.isFrozen(money.tags)).toBe(true);
 		});
 
 		it("clones the outer value object and shares the nested one", () => {

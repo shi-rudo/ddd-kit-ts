@@ -95,13 +95,16 @@ function shadowMutators(
 // this key, as an own, non-enumerable, locked data property. cloneForVo
 // admits a stamped instance by reference: its own constructor already
 // cloned and sealed its props, so a second clone would only strip the
-// class. deepEqual counts own symbol keys and compares functions by
-// identity, so two nested value objects of different classes compare
-// unequal without deepEqual knowing about value objects. The key is a
-// Symbol.for, so a value object built by a second loaded copy of the kit
-// is recognised too; like every kit brand it catches accidents, not
-// adversaries. The key version stamps the shape of the stamp (its value
-// is the class); bump it when that shape changes.
+// class. The deepFreeze walk that follows freezes the instance in place,
+// like every class instance it reaches; a value object is immutable by
+// contract, so the freeze changes nothing a value object may do. deepEqual
+// counts own symbol keys and compares functions by identity, so two nested
+// value objects of different classes compare unequal without deepEqual
+// knowing about value objects. The key is a Symbol.for, so a value object
+// built by a second loaded copy of the kit is recognised too; like every
+// kit brand it catches accidents, not adversaries. The key version stamps
+// the shape of the stamp (its value is the class); bump it when that shape
+// changes.
 const VALUE_OBJECT_BRAND = Symbol.for("@shirudo/ddd-kit/value-object/v1");
 
 function stampValueObjectBrand(
@@ -157,9 +160,7 @@ function isValueObjectInstance(value: object): boolean {
  * or sticky match writes. A frozen RegExp protects nothing and throws on
  * the first such match, so the RegExp keeps matching instead. A view or a
  * RegExp passes through whole: an expando property on it stays open, and
- * the walk does not enter its subtree. A `ValueObject` instance passes
- * through whole as well: its constructor sealed its props, and the
- * instance stays open for the own fields of its subclass.
+ * the walk does not enter its subtree.
  */
 // Every object whose whole subtree this module sealed: frozen, with every
 // Date, Map, and Set below it carrying the kit's mutator shadows. A later
@@ -215,11 +216,6 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
 	// buffer anyway, so views are returned as-is (their contents stay
 	// mutable). Mirrors deepEqual, which also treats views atomically.
 	if (ArrayBuffer.isView(obj)) {
-		return true;
-	}
-	// A value object instance is atomic: its constructor sealed its props,
-	// and the instance itself stays open for the own fields of its subclass.
-	if (isValueObjectInstance(obj)) {
 		return true;
 	}
 	// A shared reference (two edges to one object) is finished on the first
@@ -302,9 +298,10 @@ function freezeDeep(obj: unknown, walk: FreezeWalk): boolean {
  * preserving `vo()`'s documented data-not-behaviour gate. Built-ins without
  * immutable value semantics throw a descriptive `TypeError`. A kit
  * `ValueObject` instance is admitted by reference (see
- * `VALUE_OBJECT_BRAND`). Every other custom class instance and every
- * subclass of a built-in is rejected because cloning it without invoking
- * its constructor can silently lose private or non-enumerable state. Map keys
+ * `VALUE_OBJECT_BRAND`); the deepFreeze walk that follows freezes it in
+ * place. Every other custom class instance and every subclass of a
+ * built-in is rejected because cloning it without invoking its constructor
+ * can silently lose private or non-enumerable state. Map keys
  * and Set members must be primitive because their equality is
  * identity-based and object identity cannot survive defensive cloning.
  * Accessor properties are rejected without invoking them. Admitted atomic
@@ -495,9 +492,9 @@ function isPrimitiveValue(value: unknown): boolean {
  * `vo(input)` never freezes the caller's own object graph as a
  * side-effect. Mutating the input afterwards does not bleed into the VO.
  * Symbol-keyed properties are preserved (matching `voEquals`). A kit
- * `ValueObject` instance is kept by reference; function values and every
- * other custom class instance are rejected (Value Objects are plain data,
- * not behaviour-bearing object graphs). Inputs must be trusted and
+ * `ValueObject` instance is kept by reference and frozen in place; function
+ * values and every other custom class instance are rejected (Value Objects
+ * are plain data, not behaviour-bearing object graphs). Inputs must be trusted and
  * Proxy-free: ECMAScript provides no portable way to identify a transparent
  * Proxy without potentially executing its traps, so `vo()` is not a sandbox
  * for hostile in-process objects. Built-ins that cannot provide immutable,

@@ -881,6 +881,20 @@ describe("VO", () => {
 			).toBe(false);
 		});
 
+		it("freezes a kit value object instance in place", () => {
+			class Money extends ValueObject<{ amount: number }> {
+				readonly tags: string[] = [];
+			}
+			const money = new Money({ amount: 5 });
+
+			const priced = vo({ price: money });
+			const same = vo(money);
+
+			expect(Object.isFrozen(priced.price)).toBe(true);
+			expect(Object.isFrozen(money.tags)).toBe(true);
+			expect(same).toBe(money);
+		});
+
 		it("keeps nested value objects class-aware under voEqualsExcept", () => {
 			class Money extends ValueObject<{ amount: number; note: string }> {}
 			class Points extends ValueObject<{ amount: number; note: string }> {}
