@@ -232,7 +232,7 @@ describe("UnitOfWork repository definition", () => {
 				persistence,
 				create: () => (_required: string) => undefined,
 				flush: async () => {},
-				mapError: (error: unknown) => new OrderStoreUnavailableError(error),
+				mapError: (error) => new OrderStoreUnavailableError(error),
 			});
 
 			// @ts-expect-error every definition must translate persistence errors
@@ -249,24 +249,20 @@ describe("UnitOfWork repository definition", () => {
 				aggregate: Order,
 				persistence,
 				physicalRemoval: true,
-				create: (
-					_transaction: undefined,
-					tracking: RepositoryTracking<Order>,
-				) => new SqlOrderAdapter(tracking),
+				create: (_transaction: undefined, tracking) =>
+					new SqlOrderAdapter(tracking),
 				flush: async () => {},
-				mapError: (error: unknown) => new OrderStoreUnavailableError(error),
+				mapError: (error) => new OrderStoreUnavailableError(error),
 			});
 
 			// @ts-expect-error a port with remove must enable physical removal
 			defineRepository<ForRemovingOrders>()({
 				aggregate: Order,
 				persistence,
-				create: (
-					_transaction: undefined,
-					tracking: RepositoryTracking<Order>,
-				) => new SqlOrderAdapter(tracking),
+				create: (_transaction: undefined, tracking) =>
+					new SqlOrderAdapter(tracking),
 				flush: async () => {},
-				mapError: (error: unknown) => new OrderStoreUnavailableError(error),
+				mapError: (error) => new OrderStoreUnavailableError(error),
 			});
 		};
 

@@ -401,9 +401,18 @@ its own that must commit in the same transaction.
 The port and `physicalRemoval` must agree. If the port declares `remove`, set
 `physicalRemoval: true`. If the port has no `remove`, omit the option.
 `Repository` declares `remove`; `AggregatePersistence` does not. On a mismatch
-the compiler rejects the whole definition with "not assignable to parameter of
-type 'never'". It also reports an implicit `any` on every unannotated
-parameter. That message names no cause, so check the pairing first.
+the compiler rejects the definition with an error that names the violated
+constraint. The error ends with a line of this form:
+
+```text
+Property '"defineRepository: the port declares remove, so the definition must set physicalRemoval: true"' is missing in type ...
+```
+
+A port without `add` or `update` fails with the same form of error. So does a
+port whose `add`, `update`, or `remove` does not accept the aggregate of the
+definition. A port that is a function type or a union fails the same way.
+`physicalRemoval` takes the literal `true`; a value typed `boolean` fails the
+pairing.
 
 `mapError` is the storage boundary's last translation step. Known failures
 such as `DuplicateAggregateError` and `ConcurrencyConflictError` pass through.
