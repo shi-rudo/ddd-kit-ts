@@ -420,6 +420,11 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 		expect(tests.filter((t) => t.skipped)).toHaveLength(0);
 	});
 
+	it("puts the environment preflight first, so its named failure precedes every later proof", () => {
+		expect(tests[0]?.name).toMatch(/^environment preflight/);
+		expect(tests[0]?.skipped).toBeUndefined();
+	});
+
 	for (const test of tests) {
 		(test.skipped ? it.skip : it)(test.name, test.run);
 	}

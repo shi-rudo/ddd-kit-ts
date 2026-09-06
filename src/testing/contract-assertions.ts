@@ -4,6 +4,7 @@
  * to the testing entry: not re-exported from `@shirudo/ddd-kit/testing`.
  */
 import { isRecordedDomainEvent } from "../domain/event/domain-event";
+import { runBoundedExecution } from "../internal/async/execution";
 
 /**
  * One entry of a contract test suite. Every suite (repository,
@@ -72,6 +73,106 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
 		() => undefined,
 		(error: unknown) => error,
 	);
+}
+
+/**
+ * Default bound for {@link assertRunPermitsOverlappingCalls}. On an
+ * environment that gives each `run` call its own connection, the second call
+ * completes in milliseconds. The bound stays below the default test timeout
+ * of common runners (5000 ms). So the named failure reaches the report before
+ * the runner's own timeout replaces it. Environment creation and teardown
+ * must fit into the rest of that timeout.
+ */
+export const OVERLAPPING_CALLS_BOUND_MS = 2_000;
+
+/**
+ * Proves that the environment lets two `run` calls stay open at once.
+ *
+ * The stale-writer proofs hold one transaction open while a second one
+ * commits. An environment that serializes `run` (one connection, a mutex)
+ * blocks the second call behind the first. The suite then hangs at the test
+ * timeout with no cause. This proof turns that hang into a named failure
+ * within `boundMs`. It releases the first call before it returns and waits
+ * up to `boundMs` for both calls to complete. A second call that is still
+ * blocked after that stays in flight, observed, while the failure reports.
+ */
+export async function assertRunPermitsOverlappingCalls(
+	run: (work: () => Promise<void>) => Promise<unknown>,
+	boundMs: number,
+): Promise<void> {
+	let releaseFirst!: () => void;
+	const firstMayFinish = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	let firstIsOpen!: () => void;
+	const firstOpened = new Promise<void>((resolve) => {
+		firstIsOpen = resolve;
+	});
+	const first = run(async () => {
+		firstIsOpen();
+		await firstMayFinish;
+	});
+	let second: Promise<unknown> = Promise.resolve();
+	const releaseAndSettle = () => {
+		releaseFirst();
+		return runBoundedExecution(
+			"release of the preflight calls",
+			{ timeoutMs: boundMs },
+			() => Promise.allSettled([first, second]),
+		).catch(() => undefined);
+	};
+
+	try {
+		await Promise.race([firstOpened, first]);
+		second = run(async () => {});
+		await runBoundedExecution(
+			"second run call",
+			{ timeoutMs: boundMs },
+			() => second,
+		).catch((error: unknown) => {
+			assert(
+				!isTimeoutError(error),
+				`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms while the first call stayed open. ` +
+					"Either run serializes its calls, or the second connection took longer than the bound. " +
+					"Give each call its own transaction and connection, or raise overlappingCallsBoundMs on the harness",
+			);
+			throw error;
+		});
+	} catch (error) {
+		await releaseAndSettle();
+		throw error;
+	}
+
+	const firstOutcome = (await releaseAndSettle())?.[0];
+	assert(
+		firstOutcome !== undefined,
+		`the first run call did not complete within ${boundMs} ms after the proof released it`,
+	);
+	if (firstOutcome.status === "rejected") throw firstOutcome.reason;
+}
+
+function isTimeoutError(error: unknown): boolean {
+	return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+/**
+ * The preflight entry both repository suites put first: it names a
+ * serializing environment before the stale-writer proofs can hang on it.
+ * `openCall` runs `work` inside one `run` call of the environment. It should
+ * issue one real read before `work`. Then an adapter that reserves its
+ * connection on the first statement holds it while `work` holds the call.
+ */
+export function overlappingCallsPreflight<Env>(
+	inEnvironment: (body: (env: Env) => Promise<void>) => () => Promise<void>,
+	openCall: (env: Env, work: () => Promise<void>) => Promise<unknown>,
+	boundMs: number,
+): ContractTest {
+	return {
+		name: "environment preflight: a second run call completes while the first call stays open",
+		run: inEnvironment((env) =>
+			assertRunPermitsOverlappingCalls((work) => openCall(env, work), boundMs),
+		),
+	};
 }
 
 /**

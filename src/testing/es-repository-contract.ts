@@ -21,6 +21,8 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
+	OVERLAPPING_CALLS_BOUND_MS,
+	overlappingCallsPreflight,
 	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
@@ -75,6 +77,13 @@ export interface EsRepositoryContractHarness<
 		aggregate: TAggregate,
 		environment: EsRepositoryContractEnvironment<TAggregate, TEvent>,
 	): Promise<void>;
+	/**
+	 * Bound for the environment preflight, in milliseconds. Raise it only
+	 * when a second connection takes longer than the default to open, for
+	 * example over a slow network. Keep it below the test timeout of the
+	 * runner, including environment creation and teardown.
+	 */
+	overlappingCallsBoundMs?: number;
 }
 
 export type EsRepositoryContractTest = ContractTest;
@@ -146,6 +155,15 @@ export function createEsRepositoryContractTests<
 	}
 
 	const tests: EsRepositoryContractTest[] = [
+		overlappingCallsPreflight<Environment>(
+			inEnvironment,
+			(environment, work) =>
+				environment.run(async ({ repository }) => {
+					await repository.findById(harness.createAggregate().id);
+					await work();
+				}),
+			harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS,
+		),
 		{
 			name: "add appends the exact creation batch to stream and outbox",
 			run: inEnvironment(async (environment) => {

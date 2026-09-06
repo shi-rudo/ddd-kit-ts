@@ -16,6 +16,8 @@ import {
 	describeError,
 	gatedContractTest,
 	loadAggregateOrFail,
+	OVERLAPPING_CALLS_BOUND_MS,
+	overlappingCallsPreflight,
 	recordedPendingEventIds,
 	sortedCommittedEventIds,
 } from "./contract-assertions";
@@ -81,6 +83,13 @@ export interface RepositoryContractHarness<
 	removesAreSupported?: boolean;
 	/** The remove flush predicates on the version captured at load. */
 	removesAreVersionChecked?: boolean;
+	/**
+	 * Bound for the environment preflight, in milliseconds. Raise it only
+	 * when a second connection takes longer than the default to open, for
+	 * example over a slow network. Keep it below the test timeout of the
+	 * runner, including environment creation and teardown.
+	 */
+	overlappingCallsBoundMs?: number;
 }
 
 export type RepositoryContractTest = ContractTest;
@@ -152,6 +161,15 @@ export function createRepositoryContractTests<
 		);
 
 	const tests: RepositoryContractTest[] = [
+		overlappingCallsPreflight<Environment>(
+			inEnvironment,
+			(environment, work) =>
+				environment.run(async ({ repository }) => {
+					await repository.findById(harness.createAggregate().id);
+					await work();
+				}),
+			harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS,
+		),
 		{
 			name: "add flushes a new aggregate and its exact event batch atomically",
 			run: inEnvironment(async (environment) => {
