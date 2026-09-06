@@ -369,7 +369,7 @@ function cloneForVo(
 
 	if (Array.isArray(obj)) {
 		if (!hasIntrinsicPrototypeChain(obj, "Array")) {
-			throwUnsupportedClassInstance();
+			throwUnsupportedClassInstance(obj);
 		}
 		const clone: unknown[] = new Array(obj.length);
 		visited.set(obj, clone);
@@ -394,7 +394,7 @@ function cloneForVo(
 	const tag = builtInTagWithoutInvokingAccessors(obj);
 	if (tag !== undefined) {
 		if (!hasIntrinsicPrototypeChain(obj)) {
-			throwUnsupportedClassInstance();
+			throwUnsupportedClassInstance(obj);
 		}
 		if (tag === "[object Map]") {
 			const clone = new Map<unknown, unknown>();
@@ -472,7 +472,7 @@ function cloneForVo(
 			if (openKeys.length > 0) throwOpenValueObjectFields(openKeys);
 			return obj;
 		}
-		throwUnsupportedClassInstance();
+		throwUnsupportedClassInstance(obj);
 	}
 
 	// Normalize cross-realm records to the local Object prototype.
@@ -497,9 +497,12 @@ function cloneForVo(
 	return clone;
 }
 
-function throwUnsupportedClassInstance(): never {
+function throwUnsupportedClassInstance(instance: object): never {
+	const valueObjectHint = Object.hasOwn(instance, "props")
+		? ". A value object is recognized only when a copy of this kit version built it and its props are frozen"
+		: "";
 	throw new TypeError(
-		"vo() cannot clone custom class instances: Value Objects are plain data",
+		`vo() cannot clone custom class instances: Value Objects are plain data${valueObjectHint}`,
 	);
 }
 

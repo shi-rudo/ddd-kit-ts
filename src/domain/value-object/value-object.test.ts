@@ -792,7 +792,24 @@ describe("ValueObject Class", () => {
 			expect(
 				() =>
 					new Price({ amount: money, label: "list" } as unknown as PriceProps),
-			).toThrow(/custom class instances/);
+			).toThrow(
+				"vo() cannot clone custom class instances: Value Objects are plain data. A value object is recognized only when a copy of this kit version built it and its props are frozen",
+			);
+		});
+
+		it("names the version mismatch when a value object carries no class record", () => {
+			class OlderCopyMoney {
+				readonly props: Readonly<MoneyProps>;
+				constructor(props: MoneyProps) {
+					this.props = Object.freeze({ ...props });
+				}
+			}
+			const money = new OlderCopyMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(/recognized only when a copy of this kit version built it/);
 		});
 
 		it("still rejects a class instance that is not a value object", () => {
