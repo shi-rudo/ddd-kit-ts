@@ -74,11 +74,13 @@ export interface AggregateSnapshot<TState> {
  * part of this surface. The application shell holds that authority.
  *
  * @template TId    - The aggregate root identifier (branded via `Id<Tag>`)
- * @template TEvent - The domain-event union, defaults to `never`
+ * @template TEvent - The domain-event union. Defaults to `AnyDomainEvent`,
+ *   so a bound written as `Aggregate<TId>` admits every aggregate root,
+ *   with or without events.
  */
 export interface Aggregate<
 	TId extends Id<string>,
-	TEvent extends AnyDomainEvent = never,
+	TEvent extends AnyDomainEvent = AnyDomainEvent,
 > {
 	readonly id: TId;
 	readonly version: Version;

@@ -1,4 +1,5 @@
 import type { Aggregate } from "../../domain/aggregate/aggregate";
+import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 
 /**
@@ -21,7 +22,7 @@ import type { Id } from "../../domain/identity/id";
  * @template TId - Branded aggregate identifier.
  */
 export interface AggregatePersistence<
-	TAggregate extends Aggregate<TId>,
+	TAggregate extends Aggregate<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 > {
 	/**
@@ -77,7 +78,7 @@ export interface AggregatePersistence<
  * port.
  */
 export interface Repository<
-	TAggregate extends Aggregate<TId>,
+	TAggregate extends Aggregate<TId, AnyDomainEvent>,
 	TId extends Id<string>,
 > extends AggregatePersistence<TAggregate, TId> {
 	/**

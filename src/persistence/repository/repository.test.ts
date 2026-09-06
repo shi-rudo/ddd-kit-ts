@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 // consumer applications own domain-specific query repository ports instead.
 import type { IQueryableRepository as RemovedQueryableRepository } from "../..";
 import type { Aggregate, Version } from "../../domain/aggregate/aggregate";
+import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggregate";
+import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
 	AggregateNotFoundError,
@@ -48,6 +50,37 @@ describe("Aggregate interface contract", () => {
 });
 
 describe("Repository contract", () => {
+	describe("port type constraints", () => {
+		type OrderEvent =
+			| DomainEvent<"OrderPlaced", { total: number }>
+			| DomainEvent<"OrderCancelled">;
+		class EventfulOrder extends StateStoredAggregate<
+			{ total: number },
+			OrderId,
+			OrderEvent
+		> {
+			protected readonly aggregateType = "Order";
+		}
+
+		it("accepts an aggregate that declares an event union", () => {
+			type EventfulOrderPersistence = AggregatePersistence<
+				EventfulOrder,
+				OrderId
+			>;
+			type EventfulOrderRepository = Repository<EventfulOrder, OrderId>;
+
+			void (undefined as unknown as EventfulOrderPersistence);
+			void (undefined as unknown as EventfulOrderRepository);
+		});
+
+		it("admits an aggregate with events through a bound written as Aggregate<TId>", () => {
+			type BoundOverAggregate<T extends Aggregate<OrderId>> = T;
+			type Admitted = BoundOverAggregate<EventfulOrder>;
+
+			void (undefined as unknown as Admitted);
+		});
+	});
+
 	describe("AggregatePersistence: common lifecycle contract", () => {
 		it("makes new and loaded write intent explicit", async () => {
 			class OrderPersistence implements AggregatePersistence<Order, OrderId> {
