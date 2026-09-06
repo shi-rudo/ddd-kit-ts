@@ -910,6 +910,23 @@ describe("VO", () => {
 			).toBe(false);
 		});
 
+		it("continues the voEqualsExcept path with props inside a nested value object", () => {
+			class Money extends ValueObject<{ amount: number; note: string }> {}
+			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
+			const paths: string[] = [];
+
+			const equal = voEqualsExcept(money, sameMoney, {
+				ignoreKeyPredicate: (key, path) => {
+					if (key === "note") paths.push(path.join("."));
+					return key === "note";
+				},
+			});
+
+			expect(equal).toBe(true);
+			expect(paths).toEqual(["price.props", "price.props"]);
+		});
+
 		it("rejects classes with private or non-enumerable constructor state", () => {
 			class PrivateValue {
 				#value: number;

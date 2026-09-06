@@ -201,8 +201,9 @@ A value object can hold other value objects. The nested instance is kept by
 reference, not cloned, and it is frozen in place. Its own constructor already
 cloned and froze its props, and a value object is immutable by contract, so the
 freeze changes nothing that a value object may do. `equals()`, `voEquals()`, and
-`voEqualsExcept()` compare a nested value object by class and by props, and
-`toJSON()` serializes its props.
+`voEqualsExcept()` compare a nested value object by class and by every own
+field, `props` included. They do not call the `equals()` method of the nested
+instance. `toJSON()` serializes its props.
 
 ```ts
 type StayProps = {
@@ -251,6 +252,11 @@ voEqualsExcept(firstAddress, secondAddress, {
 Use this sparingly. If a field never participates in equality, ask whether it
 belongs on the value object at all. Timestamps, database ids, and audit data
 usually belong to an entity, a persistence record, or an event envelope.
+
+Inside a nested value object the `path` of `ignoreKeyPredicate` continues with
+`props`, for example `["window", "props"]`. The predicate also receives the
+symbol key under which the kit records the class of the nested instance. A
+predicate that ignores every symbol key removes that class check.
 
 ## Data Rules That Matter
 

@@ -568,6 +568,12 @@ export function voEquals<T>(a: VO<T>, b: VO<T>): boolean {
  * Useful for comparing value objects that contain metadata or optional fields
  * that should not affect equality comparison.
  *
+ * The walk enters a nested `ValueObject` instance like any other object.
+ * Inside it the path continues with `props`, and `ignoreKeyPredicate`
+ * also receives the symbol key under which the kit records the class of
+ * the instance. A predicate that ignores every symbol key removes that
+ * class check.
+ *
  * @param a - First value object
  * @param b - Second value object
  * @param options - Options specifying which keys to ignore during comparison
@@ -709,8 +715,9 @@ export interface IValueObject<T extends object> {
 /**
  * Abstract base class for creating Value Objects.
  * Value Objects are immutable and defined by their properties. A value
- * object can hold other value objects in its props; `equals` compares
- * them by class and props.
+ * object can hold other value objects in its props. `equals` compares a
+ * nested value object by class and by every own field, `props` included,
+ * and does not call its `equals` method.
  *
  * @template T - The shape of the value object's properties
  */

@@ -683,6 +683,24 @@ describe("ValueObject Class", () => {
 			expect(Object.isFrozen(money.tags)).toBe(true);
 		});
 
+		it("compares a nested value object by its own fields, not through its equals method", () => {
+			class LooseMoney extends ValueObject<MoneyProps> {
+				override equals(): boolean {
+					return true;
+				}
+			}
+			const usd = new Price({
+				amount: new LooseMoney({ amount: 100, currency: "USD" }),
+				label: "list",
+			} as unknown as PriceProps);
+			const eur = new Price({
+				amount: new LooseMoney({ amount: 100, currency: "EUR" }),
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(usd.equals(eur)).toBe(false);
+		});
+
 		it("rejects a value object as the root props", () => {
 			const money = new Money({ amount: 100, currency: "USD" });
 			class Wrapper extends ValueObject<Money> {}
