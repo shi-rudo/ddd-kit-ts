@@ -10,6 +10,7 @@ import {
 	assert,
 	assertChainContainsKitError,
 	assertEqual,
+	awaitOverlappingCall,
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
@@ -126,6 +127,8 @@ export function createRepositoryContractTests<
 	const removesAreSupported = harness.removesAreSupported === true;
 	const removesAreVersionChecked =
 		removesAreSupported && harness.removesAreVersionChecked === true;
+	const overlappingCallsBoundMs =
+		harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS;
 
 	const load = (
 		repository: ContractRepository<TAggregate>,
@@ -168,7 +171,7 @@ export function createRepositoryContractTests<
 					await repository.findById(harness.createAggregate().id);
 					await work();
 				}),
-			harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS,
+			overlappingCallsBoundMs,
 		),
 		{
 			name: "add flushes a new aggregate and its exact event batch atomically",
@@ -274,12 +277,16 @@ export function createRepositoryContractTests<
 				});
 				await bLoaded;
 
-				const committedA = await environment.run(async ({ repository }) => {
-					const current = await load(repository, seeded.id);
-					harness.mutate(current);
-					repository.update(current);
-					return current;
-				});
+				const committedA = await awaitOverlappingCall(
+					environment.run(async ({ repository }) => {
+						const current = await load(repository, seeded.id);
+						harness.mutate(current);
+						repository.update(current);
+						return current;
+					}),
+					{ call: writerB, release: releaseB },
+					overlappingCallsBoundMs,
+				);
 				const outboxAfterA = await environment.committedOutboxEvents();
 				releaseB();
 				const rejection = await captureRejection(writerB);
@@ -593,11 +600,15 @@ export function createRepositoryContractTests<
 						repository.remove(stale);
 					});
 					await staleLoaded;
-					await environment.run(async ({ repository }) => {
-						const current = await load(repository, seeded.id);
-						harness.mutate(current);
-						repository.update(current);
-					});
+					await awaitOverlappingCall(
+						environment.run(async ({ repository }) => {
+							const current = await load(repository, seeded.id);
+							harness.mutate(current);
+							repository.update(current);
+						}),
+						{ call: staleRemove, release },
+						overlappingCallsBoundMs,
+					);
 					release();
 					const rejection = await captureRejection(staleRemove);
 					assertChainContainsKitError(

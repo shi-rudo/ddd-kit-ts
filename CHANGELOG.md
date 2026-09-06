@@ -42,9 +42,11 @@ open, starts a second one, and fails when the second call does not complete
 within two seconds. The failure names the requirement: `run` must permit
 overlapping calls. The preflight issues one read in each call, so an adapter
 that reserves its connection on the first statement is covered. It releases
-the first call before it returns. The harness option `overlappingCallsBoundMs`
-raises the bound for a slow second connection. The Certification section of
-the repository guide states the requirement and the failure mode.
+the first call before it returns. The stale-writer proofs apply the same bound
+to their second `run` call and fail with the same message. The harness option
+`overlappingCallsBoundMs` raises the bound for a slow second connection. The
+Certification section of the repository guide states the requirement and the
+failure mode.
 
 ### Fixed: a bound over Aggregate<TId> accepts an aggregate with events
 

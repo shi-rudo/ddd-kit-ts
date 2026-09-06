@@ -651,11 +651,12 @@ database cannot host the suite: the second `run` call waits for the first one,
 and nothing completes. The first proof of the suite is an environment
 preflight. It holds one `run` call open and starts a second one. When the
 second call does not complete within two seconds, the preflight fails and
-names the requirement. Give the harness a real database with a connection
-pool. Keep the embedded database for tests that do not overlap. When a second
-connection needs more than two seconds to open, for example over a slow
-network, set `overlappingCallsBoundMs` on the harness. Keep the bound below
-the test timeout of the runner.
+names the requirement. The stale-writer proofs apply the same bound to their
+second `run` call, so they fail with the same message and never hang. Give the
+harness a real database with a connection pool. Keep the embedded database for
+tests that do not overlap. When a second connection needs more than two seconds
+to open, for example over a slow network, set `overlappingCallsBoundMs` on the
+harness. Keep the bound below the test timeout of the runner.
 
 For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
 [Migrating to v3](/guide/migrating-to-v3).

@@ -606,4 +606,48 @@ describe("event-sourced repository contract test suite (in-memory reference adap
 			/must load at the head/,
 		);
 	});
+
+	/**
+	 * Queues every `run` call behind the previous one, like a pool of one
+	 * connection: the second call starts only after the first call ends.
+	 */
+	function serializing(
+		harness: EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent>,
+	): EsRepositoryContractHarness<ContractEsOrder, EsOrderEvent> {
+		return {
+			...harness,
+			overlappingCallsBoundMs: 50,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				let tail: Promise<unknown> = Promise.resolve();
+				return {
+					...environment,
+					run: (work) => {
+						const call = tail.then(() => environment.run(work));
+						tail = call.catch(() => undefined);
+						return call;
+					},
+				};
+			},
+		};
+	}
+
+	describe("against a serializing environment", () => {
+		const tests = createEsRepositoryContractTests(
+			serializing(createInMemoryEsHarness()),
+		);
+		const violation =
+			/run must permit overlapping calls: a second run call did not complete within 50 ms/;
+
+		it("the environment preflight fails with the named requirement", async () => {
+			await expect(tests[0]?.run()).rejects.toThrow(violation);
+		});
+
+		it("the MANDATORY stale append proof fails with the same requirement instead of hanging", async () => {
+			const proof = tests.find((t) => t.name.startsWith("MANDATORY"));
+			expect(proof).toBeDefined();
+
+			await expect(proof?.run()).rejects.toThrow(violation);
+		});
+	});
 });

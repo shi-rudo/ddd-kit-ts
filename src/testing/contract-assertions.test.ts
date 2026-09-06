@@ -3,6 +3,7 @@ import { ConcurrencyConflictError } from "../errors/kit-errors";
 import {
 	assertChainContainsKitError,
 	assertRunPermitsOverlappingCalls,
+	awaitOverlappingCall,
 	captureRejection,
 	describeError,
 } from "./contract-assertions";
@@ -193,5 +194,60 @@ describe("assertRunPermitsOverlappingCalls", () => {
 		await expect(
 			assertRunPermitsOverlappingCalls(firstCallRejectsAfterRelease, boundMs),
 		).rejects.toThrow(/run must permit overlapping calls/);
+	});
+});
+
+describe("awaitOverlappingCall", () => {
+	const boundMs = 50;
+
+	const parkedCall = () => {
+		let release!: () => void;
+		let released = false;
+		const call = new Promise<void>((resolve) => {
+			release = () => {
+				released = true;
+				resolve();
+			};
+		});
+		return { call, release, isReleased: () => released };
+	};
+
+	it("resolves with the value of the call and leaves the parked call parked", async () => {
+		const parked = parkedCall();
+
+		const value = await awaitOverlappingCall(
+			Promise.resolve("committed"),
+			parked,
+			boundMs,
+		);
+
+		expect(value).toBe("committed");
+		expect(parked.isReleased()).toBe(false);
+	});
+
+	it("releases the parked call and names the requirement when the call does not complete within the bound", async () => {
+		const parked = parkedCall();
+		const blockedBehindParked = parked.call.then(() => "late");
+
+		await expect(
+			awaitOverlappingCall(blockedBehindParked, parked, boundMs),
+		).rejects.toThrow(/run must permit overlapping calls/);
+
+		expect(parked.isReleased()).toBe(true);
+		await expect(blockedBehindParked).resolves.toBe("late");
+	});
+
+	it("releases the parked call and propagates a rejection of the call", async () => {
+		const parked = parkedCall();
+
+		await expect(
+			awaitOverlappingCall(
+				Promise.reject(new Error("commit failed")),
+				parked,
+				boundMs,
+			),
+		).rejects.toThrow("commit failed");
+
+		expect(parked.isReleased()).toBe(true);
 	});
 });

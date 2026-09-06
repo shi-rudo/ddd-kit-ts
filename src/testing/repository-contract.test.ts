@@ -535,4 +535,51 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 			/duplicate add must reject/,
 		);
 	});
+
+	/**
+	 * Queues every `run` call behind the previous one, like a pool of one
+	 * connection: the second call starts only after the first call ends.
+	 */
+	function serializing(
+		harness: RepositoryContractHarness<ContractOrder, OrderEvent>,
+	): RepositoryContractHarness<ContractOrder, OrderEvent> {
+		return {
+			...harness,
+			overlappingCallsBoundMs: 50,
+			createEnvironment: async () => {
+				const environment = await harness.createEnvironment();
+				let tail: Promise<unknown> = Promise.resolve();
+				return {
+					...environment,
+					run: (work) => {
+						const call = tail.then(() => environment.run(work));
+						tail = call.catch(() => undefined);
+						return call;
+					},
+				};
+			},
+		};
+	}
+
+	describe("against a serializing environment", () => {
+		const tests = createRepositoryContractTests(
+			serializing(createInMemoryHarness()),
+		);
+		const violation =
+			/run must permit overlapping calls: a second run call did not complete within 50 ms/;
+
+		it("the environment preflight fails with the named requirement", async () => {
+			await expect(tests[0]?.run()).rejects.toThrow(violation);
+		});
+
+		it.each(["MANDATORY stale update", "stale remove conflicts"])(
+			"the %s proof fails with the same requirement instead of hanging",
+			async (prefix) => {
+				const proof = tests.find((t) => t.name.startsWith(prefix));
+				expect(proof).toBeDefined();
+
+				await expect(proof?.run()).rejects.toThrow(violation);
+			},
+		);
+	});
 });

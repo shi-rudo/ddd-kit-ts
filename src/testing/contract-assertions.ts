@@ -85,6 +85,55 @@ export function captureRejection(promise: Promise<unknown>): Promise<unknown> {
  */
 export const OVERLAPPING_CALLS_BOUND_MS = 2_000;
 
+const overlappingCallsViolation = (boundMs: number): string =>
+	`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms while the first call stayed open. ` +
+	"Either run serializes its calls, or the second connection took longer than the bound. " +
+	"Give each call its own transaction and connection, or raise overlappingCallsBoundMs on the harness";
+
+function isTimeoutError(error: unknown): boolean {
+	return error instanceof DOMException && error.name === "TimeoutError";
+}
+
+/** Outcomes of every promise, or `undefined` when one is still open after `boundMs`. */
+function settledWithin(
+	promises: ReadonlyArray<Promise<unknown>>,
+	boundMs: number,
+): Promise<PromiseSettledResult<unknown>[] | undefined> {
+	return runBoundedExecution(
+		"release of the overlapping calls",
+		{ timeoutMs: boundMs },
+		() => Promise.allSettled(promises),
+	).catch(() => undefined);
+}
+
+/**
+ * Awaits `call`, a `run` call that must complete while `parked`, another
+ * `run` call, stays open. On an environment that serializes `run`, `call`
+ * never completes. This bounds the wait: after `boundMs` it releases the
+ * parked call, waits up to `boundMs` for both calls to settle, and fails
+ * with the requirement. A rejection of `call` releases the parked call the
+ * same way and then propagates. On success the parked call stays parked;
+ * the proof releases it when it is ready.
+ */
+export async function awaitOverlappingCall<T>(
+	call: Promise<T>,
+	parked: { readonly call: Promise<unknown>; readonly release: () => void },
+	boundMs: number,
+): Promise<T> {
+	try {
+		return await runBoundedExecution(
+			"overlapping run call",
+			{ timeoutMs: boundMs },
+			() => call,
+		);
+	} catch (error) {
+		parked.release();
+		await settledWithin([parked.call, call], boundMs);
+		assert(!isTimeoutError(error), overlappingCallsViolation(boundMs));
+		throw error;
+	}
+}
+
 /**
  * Proves that the environment lets two `run` calls stay open at once.
  *
@@ -112,47 +161,21 @@ export async function assertRunPermitsOverlappingCalls(
 		firstIsOpen();
 		await firstMayFinish;
 	});
-	let second: Promise<unknown> = Promise.resolve();
-	const releaseAndSettle = () => {
-		releaseFirst();
-		return runBoundedExecution(
-			"release of the preflight calls",
-			{ timeoutMs: boundMs },
-			() => Promise.allSettled([first, second]),
-		).catch(() => undefined);
-	};
+	await Promise.race([firstOpened, first]);
 
-	try {
-		await Promise.race([firstOpened, first]);
-		second = run(async () => {});
-		await runBoundedExecution(
-			"second run call",
-			{ timeoutMs: boundMs },
-			() => second,
-		).catch((error: unknown) => {
-			assert(
-				!isTimeoutError(error),
-				`run must permit overlapping calls: a second run call did not complete within ${boundMs} ms while the first call stayed open. ` +
-					"Either run serializes its calls, or the second connection took longer than the bound. " +
-					"Give each call its own transaction and connection, or raise overlappingCallsBoundMs on the harness",
-			);
-			throw error;
-		});
-	} catch (error) {
-		await releaseAndSettle();
-		throw error;
-	}
+	await awaitOverlappingCall(
+		run(async () => {}),
+		{ call: first, release: releaseFirst },
+		boundMs,
+	);
 
-	const firstOutcome = (await releaseAndSettle())?.[0];
+	releaseFirst();
+	const firstOutcome = (await settledWithin([first], boundMs))?.[0];
 	assert(
 		firstOutcome !== undefined,
 		`the first run call did not complete within ${boundMs} ms after the proof released it`,
 	);
 	if (firstOutcome.status === "rejected") throw firstOutcome.reason;
-}
-
-function isTimeoutError(error: unknown): boolean {
-	return error instanceof DOMException && error.name === "TimeoutError";
 }
 
 /**

@@ -15,6 +15,7 @@ import {
 	assert,
 	assertChainContainsKitError,
 	assertEqual,
+	awaitOverlappingCall,
 	bindContractEnvironment,
 	type ContractTest,
 	captureRejection,
@@ -110,6 +111,8 @@ export function createEsRepositoryContractTests<
 	const createAggregateWithId = harness.createAggregateWithId;
 	const snapshotState = harness.snapshotState;
 	const captureSnapshot = harness.captureSnapshot;
+	const overlappingCallsBoundMs =
+		harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS;
 
 	const load = (
 		repository: EsContractRepository<TAggregate>,
@@ -162,7 +165,7 @@ export function createEsRepositoryContractTests<
 					await repository.findById(harness.createAggregate().id);
 					await work();
 				}),
-			harness.overlappingCallsBoundMs ?? OVERLAPPING_CALLS_BOUND_MS,
+			overlappingCallsBoundMs,
 		),
 		{
 			name: "add appends the exact creation batch to stream and outbox",
@@ -221,12 +224,16 @@ export function createEsRepositoryContractTests<
 				});
 				await bLoaded;
 
-				const winner = await environment.run(async ({ repository }) => {
-					const current = await load(repository, seeded.id);
-					harness.mutate(current);
-					repository.update(current);
-					return current;
-				});
+				const winner = await awaitOverlappingCall(
+					environment.run(async ({ repository }) => {
+						const current = await load(repository, seeded.id);
+						harness.mutate(current);
+						repository.update(current);
+						return current;
+					}),
+					{ call: writerB, release },
+					overlappingCallsBoundMs,
+				);
 				const streamAfterWinner = await environment.committedStreamEvents(
 					streamFor(seeded.id),
 					readAll,
