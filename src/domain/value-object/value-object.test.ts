@@ -181,6 +181,18 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(1);
 	});
 
+	it("passes a value object instance through whole", () => {
+		class Money extends ValueObject<{ amount: number }> {}
+		const money = new Money({ amount: 1 });
+		const state = { money };
+
+		deepFreeze(state);
+
+		expect(Object.isFrozen(state)).toBe(true);
+		expect(Object.isFrozen(money)).toBe(false);
+		expect(Object.isFrozen(money.props)).toBe(true);
+	});
+
 	it("still walks a subtree that another freeze left shallow", () => {
 		const grandchild = { value: 1 };
 		const child = Object.freeze({ grandchild });
@@ -604,6 +616,129 @@ describe("ValueObject Class", () => {
 			const money = new Money({ amount: 100, currency: "USD" });
 			const json = JSON.stringify(money);
 			expect(json).toBe('{"amount":100,"currency":"USD"}');
+		});
+	});
+
+	describe("nested value objects", () => {
+		interface PriceProps {
+			amount: Money;
+			label: string;
+		}
+
+		class Price extends ValueObject<PriceProps> {}
+
+		class ForeignMoney extends ValueObject<MoneyProps> {}
+
+		it("keeps a nested value object by reference instead of cloning it", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+
+			const price = new Price({ amount: money, label: "list" });
+
+			expect(price.props.amount).toBe(money);
+			expect(price.props.amount.amount).toBe(100);
+		});
+
+		it("compares nested value objects by props", () => {
+			const first = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const same = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const other = new Price({
+				amount: new Money({ amount: 200, currency: "USD" }),
+				label: "list",
+			});
+
+			expect(first.equals(same)).toBe(true);
+			expect(first.equals(other)).toBe(false);
+		});
+
+		it("treats nested value objects of different classes as unequal", () => {
+			const usd = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const foreign = new Price({
+				amount: new ForeignMoney({ amount: 100, currency: "USD" }),
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(usd.equals(foreign)).toBe(false);
+		});
+
+		it("does not freeze the nested value object instance", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+
+			new Price({ amount: money, label: "list" });
+
+			expect(Object.isFrozen(money)).toBe(false);
+			expect(Object.isFrozen(money.props)).toBe(true);
+		});
+
+		it("clones the outer value object and shares the nested one", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+			const price = new Price({ amount: money, label: "list" });
+
+			const cloned = price.clone({ label: "sale" });
+
+			expect(cloned.props.amount).toBe(money);
+			expect(cloned.props.label).toBe("sale");
+			expect(cloned.clone().equals(cloned)).toBe(true);
+		});
+
+		it("serializes nested value objects through their props", () => {
+			const price = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+
+			expect(JSON.stringify(price)).toBe(
+				'{"amount":{"amount":100,"currency":"USD"},"label":"list"}',
+			);
+		});
+
+		it("recognises a value object built by another copy of the kit through the shared brand", () => {
+			class OtherCopyMoney {
+				readonly props: Readonly<MoneyProps>;
+				constructor(props: MoneyProps) {
+					this.props = Object.freeze({ ...props });
+					Object.defineProperty(
+						this,
+						Symbol.for("@shirudo/ddd-kit/value-object/v1"),
+						{
+							value: OtherCopyMoney,
+							enumerable: false,
+							writable: false,
+							configurable: false,
+						},
+					);
+				}
+			}
+			const money = new OtherCopyMoney({ amount: 100, currency: "USD" });
+
+			const price = new Price({
+				amount: money,
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(price.props.amount).toBe(money);
+		});
+
+		it("still rejects a class instance that is not a value object", () => {
+			class Tag {
+				constructor(readonly name: string) {}
+			}
+
+			expect(
+				() =>
+					new Price({
+						amount: new Tag("x"),
+						label: "list",
+					} as unknown as PriceProps),
+			).toThrow(/custom class instances/);
 		});
 	});
 });

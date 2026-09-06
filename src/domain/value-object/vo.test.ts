@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	deepFreeze,
+	ValueObject,
 	type VO,
 	vo,
 	voEquals,
@@ -859,6 +860,40 @@ describe("VO", () => {
 			expect(() => vo({ price: new Money(5) })).toThrow(
 				/custom class instances/,
 			);
+		});
+
+		it("keeps a kit value object instance by reference", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+			class Points extends ValueObject<{ amount: number }> {}
+			const money = new Money({ amount: 5 });
+
+			const priced = vo({ price: money });
+
+			expect(priced.price).toBe(money);
+			expect(voEquals(priced, vo({ price: new Money({ amount: 5 }) }))).toBe(
+				true,
+			);
+			expect(voEquals(priced, vo({ price: new Money({ amount: 6 }) }))).toBe(
+				false,
+			);
+			expect(
+				voEquals(priced, vo({ price: new Points({ amount: 5 }) } as never)),
+			).toBe(false);
+		});
+
+		it("keeps nested value objects class-aware under voEqualsExcept", () => {
+			class Money extends ValueObject<{ amount: number; note: string }> {}
+			class Points extends ValueObject<{ amount: number; note: string }> {}
+			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
+			const points = vo({ price: new Points({ amount: 5, note: "a" }) });
+
+			expect(voEqualsExcept(money, sameMoney, { ignoreKeys: ["note"] })).toBe(
+				true,
+			);
+			expect(
+				voEqualsExcept(money, points as never, { ignoreKeys: ["note"] }),
+			).toBe(false);
 		});
 
 		it("rejects classes with private or non-enumerable constructor state", () => {

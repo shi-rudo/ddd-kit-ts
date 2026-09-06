@@ -29,6 +29,24 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a value object accepts a nested value object again
+
+`vo()` and the `ValueObject` constructor accept a `ValueObject` instance
+inside the props again. Versions 2.2.0 through 3.0.0-rc.5 rejected it as a
+custom class instance, so a value object could not hold another value
+object. The nested instance is kept by reference: its own constructor
+already cloned and froze its props. `equals`, `voEquals`, and
+`voEqualsExcept` compare a nested value object by class and by props, so
+two nested value objects of different classes with the same props are not
+equal. Every other custom class instance is still rejected.
+
+Two details are observable. `deepFreeze` passes a `ValueObject` instance
+through whole, so an entity with `deepFreezeState` no longer freezes a
+value object instance in its state; the props of the instance were frozen
+by its own constructor. And a `ValueObject` instance carries one own,
+non-enumerable symbol property, the kit's `Symbol.for` brand, so a value
+object built by a second loaded copy of the kit is recognised as well.
+
 ### Changed: the dependency audit gates the publish, not the merge
 
 `pnpm audit --prod` ran as the first step of the required `verify (22)`
