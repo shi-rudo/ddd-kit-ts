@@ -181,6 +181,20 @@ describe("deepFreeze", () => {
 		expect(reads).toBe(1);
 	});
 
+	it("freezes a value object instance in place", () => {
+		class Money extends ValueObject<{ amount: number }> {
+			readonly tags: string[] = [];
+		}
+		const money = new Money({ amount: 1 });
+		const state = { money };
+
+		deepFreeze(state);
+
+		expect(Object.isFrozen(state)).toBe(true);
+		expect(Object.isFrozen(money)).toBe(true);
+		expect(Object.isFrozen(money.tags)).toBe(true);
+	});
+
 	it("still walks a subtree that another freeze left shallow", () => {
 		const grandchild = { value: 1 };
 		const child = Object.freeze({ grandchild });
@@ -604,6 +618,241 @@ describe("ValueObject Class", () => {
 			const money = new Money({ amount: 100, currency: "USD" });
 			const json = JSON.stringify(money);
 			expect(json).toBe('{"amount":100,"currency":"USD"}');
+		});
+	});
+
+	describe("nested value objects", () => {
+		interface PriceProps {
+			amount: Money;
+			label: string;
+		}
+
+		class Price extends ValueObject<PriceProps> {}
+
+		class ForeignMoney extends ValueObject<MoneyProps> {}
+
+		it("keeps a nested value object by reference instead of cloning it", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+
+			const price = new Price({ amount: money, label: "list" });
+
+			expect(price.props.amount).toBe(money);
+			expect(price.props.amount.amount).toBe(100);
+		});
+
+		it("compares nested value objects by props", () => {
+			const first = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const same = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const other = new Price({
+				amount: new Money({ amount: 200, currency: "USD" }),
+				label: "list",
+			});
+
+			expect(first.equals(same)).toBe(true);
+			expect(first.equals(other)).toBe(false);
+		});
+
+		it("treats nested value objects of different classes as unequal", () => {
+			const usd = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+			const foreign = new Price({
+				amount: new ForeignMoney({ amount: 100, currency: "USD" }),
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(usd.equals(foreign)).toBe(false);
+		});
+
+		it("freezes the nested value object instance in place", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+
+			new Price({ amount: money, label: "list" });
+
+			expect(Object.isFrozen(money)).toBe(true);
+		});
+
+		it("rejects a nested value object with own fields outside props", () => {
+			class CachedMoney extends ValueObject<MoneyProps> {
+				private cache?: string;
+				readonly tags: string[] = [];
+				get label(): string {
+					this.cache ??= `${this.props.amount} ${this.props.currency}`;
+					return this.cache;
+				}
+			}
+			const money = new CachedMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(
+				"vo() cannot nest a value object with own fields outside props (cache, tags): keep the state of a value object in props",
+			);
+		});
+
+		it("compares a nested value object by its own fields, not through its equals method", () => {
+			class LooseMoney extends ValueObject<MoneyProps> {
+				override equals(): boolean {
+					return true;
+				}
+			}
+			const usd = new Price({
+				amount: new LooseMoney({ amount: 100, currency: "USD" }),
+				label: "list",
+			} as unknown as PriceProps);
+			const eur = new Price({
+				amount: new LooseMoney({ amount: 100, currency: "EUR" }),
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(usd.equals(eur)).toBe(false);
+		});
+
+		it("rejects a value object as the root props", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+			class Wrapper extends ValueObject<Money> {}
+
+			expect(() => new Wrapper(money)).toThrow(
+				"new ValueObject() does not accept a value object as its input: nest the value object under a key, or pass its props",
+			);
+		});
+
+		it("clones the outer value object and shares the nested one", () => {
+			const money = new Money({ amount: 100, currency: "USD" });
+			const price = new Price({ amount: money, label: "list" });
+
+			const cloned = price.clone({ label: "sale" });
+
+			expect(cloned.props.amount).toBe(money);
+			expect(cloned.props.label).toBe("sale");
+			expect(cloned.clone().equals(cloned)).toBe(true);
+		});
+
+		it("serializes nested value objects through their props", () => {
+			const price = new Price({
+				amount: new Money({ amount: 100, currency: "USD" }),
+				label: "list",
+			});
+
+			expect(JSON.stringify(price)).toBe(
+				'{"amount":{"amount":100,"currency":"USD"},"label":"list"}',
+			);
+		});
+
+		const VALUE_OBJECT_CLASS = Symbol.for(
+			"@shirudo/ddd-kit/value-object-class/v1",
+		);
+
+		it("recognizes a value object built by another copy of the kit through the class record", () => {
+			class OtherCopyMoney {
+				readonly props: Readonly<MoneyProps>;
+				constructor(props: MoneyProps) {
+					this.props = Object.freeze({ ...props });
+					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
+						value: OtherCopyMoney,
+						enumerable: false,
+						writable: false,
+						configurable: false,
+					});
+				}
+			}
+			const money = new OtherCopyMoney({ amount: 100, currency: "USD" });
+
+			const price = new Price({
+				amount: money,
+				label: "list",
+			} as unknown as PriceProps);
+
+			expect(price.props.amount).toBe(money);
+		});
+
+		it("ignores the class record on an object whose props are not frozen", () => {
+			class OpenMoney {
+				readonly props: MoneyProps;
+				constructor(props: MoneyProps) {
+					this.props = { ...props };
+					Object.defineProperty(this, VALUE_OBJECT_CLASS, {
+						value: OpenMoney,
+						enumerable: false,
+						writable: false,
+						configurable: false,
+					});
+				}
+			}
+			const money = new OpenMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(
+				"vo() cannot clone custom class instances: Value Objects are plain data. A value object is recognized only when a copy of this kit version built it and its props are frozen",
+			);
+		});
+
+		it("names the version mismatch when a value object carries no class record", () => {
+			class OlderCopyMoney {
+				readonly props: Readonly<MoneyProps>;
+				constructor(props: MoneyProps) {
+					this.props = Object.freeze({ ...props });
+				}
+			}
+			const money = new OlderCopyMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(/recognized only when a copy of this kit version built it/);
+		});
+
+		it("does not hint at a version mismatch for a class with an open props field", () => {
+			class Component {
+				props = { amount: 100 };
+			}
+
+			expect(
+				() =>
+					new Price({
+						amount: new Component(),
+						label: "list",
+					} as unknown as PriceProps),
+			).toThrow(
+				"vo() cannot clone custom class instances: Value Objects are plain data",
+			);
+		});
+
+		it("recognizes a nested value object whose props is a RegExp", () => {
+			class Pattern extends ValueObject<RegExp> {}
+			class Rule extends ValueObject<{ pattern: Pattern }> {}
+			const pattern = new Pattern(/^[a-z]+$/);
+
+			const rule = new Rule({ pattern });
+
+			expect(rule.props.pattern).toBe(pattern);
+			expect(rule.equals(new Rule({ pattern: new Pattern(/^[a-z]+$/) }))).toBe(
+				true,
+			);
+		});
+
+		it("still rejects a class instance that is not a value object", () => {
+			class Tag {
+				constructor(readonly name: string) {}
+			}
+
+			expect(
+				() =>
+					new Price({
+						amount: new Tag("x"),
+						label: "list",
+					} as unknown as PriceProps),
+			).toThrow(/custom class instances/);
 		});
 	});
 });

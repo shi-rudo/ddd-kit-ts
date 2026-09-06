@@ -543,10 +543,11 @@ describe("deepOmit – shared references (DAG) vs cycles with path-sensitive pre
 	});
 });
 
-describe("deepOmit – non-enumerable own string properties", () => {
-	// deepEqual compares plain objects via Object.getOwnPropertyNames
-	// (test-pinned there), so the omit clone must preserve exactly that
-	// key set or deepEqualExcept diverges from deepEqual.
+describe("deepOmit – non-enumerable own properties", () => {
+	// deepEqual compares plain objects via Object.getOwnPropertyNames and
+	// Object.getOwnPropertySymbols (test-pinned there), so the omit clone
+	// must preserve exactly that key set or deepEqualExcept diverges from
+	// deepEqual.
 	const withHidden = (visible: number, hidden: number) => {
 		const obj: Record<string, unknown> = { visible };
 		Object.defineProperty(obj, "hidden", {
@@ -574,6 +575,21 @@ describe("deepOmit – non-enumerable own string properties", () => {
 		const clone = deepOmit(withHidden(1, 2), { ignoreKeys: ["hidden"] });
 
 		expect(Object.hasOwn(clone, "hidden")).toBe(false);
+	});
+
+	it("preserves a non-enumerable own symbol property including its enumerability", () => {
+		const TAG = Symbol("tag");
+		const marker = () => 1;
+		const input = Object.defineProperty({ visible: 1 }, TAG, {
+			value: marker,
+			enumerable: false,
+		});
+
+		const clone = deepOmit(input, {});
+
+		const descriptor = Object.getOwnPropertyDescriptor(clone, TAG);
+		expect(descriptor?.value).toBe(marker);
+		expect(descriptor?.enumerable).toBe(false);
 	});
 });
 

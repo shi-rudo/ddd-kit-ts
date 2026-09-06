@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	deepFreeze,
+	ValueObject,
 	type VO,
 	vo,
 	voEquals,
@@ -859,6 +860,102 @@ describe("VO", () => {
 			expect(() => vo({ price: new Money(5) })).toThrow(
 				/custom class instances/,
 			);
+		});
+
+		it("keeps a kit value object instance by reference", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+			class Points extends ValueObject<{ amount: number }> {}
+			const money = new Money({ amount: 5 });
+
+			const priced = vo({ price: money });
+
+			expect(priced.price).toBe(money);
+			expect(voEquals(priced, vo({ price: new Money({ amount: 5 }) }))).toBe(
+				true,
+			);
+			expect(voEquals(priced, vo({ price: new Money({ amount: 6 }) }))).toBe(
+				false,
+			);
+			expect(
+				voEquals(priced, vo({ price: new Points({ amount: 5 }) } as never)),
+			).toBe(false);
+		});
+
+		it("freezes a kit value object instance in place", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+			const money = new Money({ amount: 5 });
+
+			const priced = vo({ price: money });
+
+			expect(priced.price).toBe(money);
+			expect(Object.isFrozen(money)).toBe(true);
+		});
+
+		it("rejects a value object as the input itself", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+
+			expect(() => vo(new Money({ amount: 5 }))).toThrow(
+				"vo() does not accept a value object as its input: nest the value object under a key, or pass its props",
+			);
+		});
+
+		it("rejects a nested value object with own fields outside props", () => {
+			class TaggedMoney extends ValueObject<{ amount: number }> {
+				readonly tags: string[] = [];
+			}
+
+			expect(() => vo({ price: new TaggedMoney({ amount: 5 }) })).toThrow(
+				/own fields outside props \(tags\)/,
+			);
+		});
+
+		it("keeps nested value objects class-aware under voEqualsExcept", () => {
+			class Money extends ValueObject<{ amount: number; note: string }> {}
+			class Points extends ValueObject<{ amount: number; note: string }> {}
+			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
+			const points = vo({ price: new Points({ amount: 5, note: "a" }) });
+
+			expect(voEqualsExcept(money, sameMoney, { ignoreKeys: ["note"] })).toBe(
+				true,
+			);
+			expect(
+				voEqualsExcept(money, points as never, { ignoreKeys: ["note"] }),
+			).toBe(false);
+		});
+
+		it("never ignores the class of a nested value object under voEqualsExcept", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+			class Points extends ValueObject<{ amount: number }> {}
+			const money = vo({ price: new Money({ amount: 5 }) });
+			const points = vo({ price: new Points({ amount: 5 }) });
+			const classKey = Symbol.for("@shirudo/ddd-kit/value-object-class/v1");
+
+			expect(
+				voEqualsExcept(money, points as never, {
+					ignoreKeyPredicate: (key) => typeof key === "symbol",
+				}),
+			).toBe(false);
+			expect(
+				voEqualsExcept(money, points as never, { ignoreKeys: [classKey] }),
+			).toBe(false);
+		});
+
+		it("continues the voEqualsExcept path with props inside a nested value object", () => {
+			class Money extends ValueObject<{ amount: number; note: string }> {}
+			const money = vo({ price: new Money({ amount: 5, note: "a" }) });
+			const sameMoney = vo({ price: new Money({ amount: 5, note: "b" }) });
+			const paths: string[] = [];
+
+			const equal = voEqualsExcept(money, sameMoney, {
+				ignoreKeyPredicate: (key, path) => {
+					if (key === "note") paths.push(path.join("."));
+					return key === "note";
+				},
+			});
+
+			expect(equal).toBe(true);
+			expect(paths).toEqual(["price.props", "price.props"]);
 		});
 
 		it("rejects classes with private or non-enumerable constructor state", () => {

@@ -29,6 +29,30 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a value object accepts a nested value object again
+
+`vo()` and the `ValueObject` constructor accept a `ValueObject` instance
+inside the input again. Versions 2.2.0 through 3.0.0-rc.5 rejected it as a
+custom class instance, so a value object could not hold another value
+object. The nested instance is kept by reference and frozen in place; its
+own constructor already cloned and froze its props. A nested value object
+keeps all of its state in `props`. An instance with an own field outside
+`props`, for example a cache field, is rejected with a `TypeError` that
+names the fields. The kit sees own fields only: a private `#field` or a
+field assigned after construction stays invisible. `equals`, `voEquals`,
+and `voEqualsExcept` compare a nested value object by class and by props
+and do not call its `equals` method. Every other custom class instance is
+still rejected, and a value object as the input itself is rejected with a
+`TypeError`.
+
+A `ValueObject` instance carries one own, non-enumerable symbol property
+that records its class. The key is a `Symbol.for`, so a value object built
+by a second loaded copy of this kit version is recognized as well. As a
+result, `voEquals` and `deepEqual` return false for two instances of
+different classes with the same props, and an instance is not equal to a
+plain `{ props }` record. Inside a nested value object the `voEqualsExcept`
+path continues with `props`. The class key is never ignored.
+
 ### Added: detachState returns a copy that shares nothing with the state
 
 `detachState(state)` returns a `structuredClone` of `state` after a walk that

@@ -55,11 +55,12 @@ voEquals(address, sameAddress); // true
 the caller keeps ownership of the original object, and later mutations to the
 original cannot leak into the value object.
 
-Keep the input boring: plain records, arrays, and supported built-ins. Do not
-put functions, services, repositories, custom class instances, `Error` objects,
-buffers, typed arrays, promises, weak collections, or other behavior-bearing
-objects inside a value object. If a value needs methods, make the value object a
-class instead of smuggling behavior through `props`.
+Keep the input boring: plain records, arrays, supported built-ins, and other
+value objects. Do not put functions, services, repositories, other custom class
+instances, `Error` objects, buffers, typed arrays, promises, weak collections,
+or other behavior-bearing objects inside a value object. If a value needs
+methods, make the value object a class instead of smuggling behavior through
+`props`.
 
 ## Parse Input With Validation Helpers
 
@@ -192,7 +193,55 @@ The base class gives you:
 
 `equals()` checks the constructor as well as the props. A `DateRange` is not
 equal to another class with the same `{ from, to }` shape, because the type is
-part of the meaning.
+part of the meaning. `voEquals()` and `deepEqual()` see the class too: every
+instance records its class under an own symbol key, so two instances of
+different classes are not equal, and an instance is not equal to a plain
+`{ props }` record.
+
+### Compose Value Objects
+
+A value object can hold other value objects. The nested instance is kept by
+reference, not cloned, and it is frozen in place. Its own constructor already
+cloned and froze its props. A nested value object keeps all of its state in
+`props`: the kit rejects an instance with an own field outside `props`, for
+example a cache field or a field the subclass constructor assigns. The kit sees
+own fields only. It does not see a private `#field`, and such a field stays
+mutable after nesting. It does not see a field that the class assigns after
+construction; that assignment throws after nesting, because the instance is
+frozen. Keep derived values in getters that do not store their result.
+`equals()`, `voEquals()`, and `voEqualsExcept()` compare a nested value object
+by class and by props. They do not call the `equals()` method of the nested
+instance. `JSON.stringify` calls `toJSON()` on the nested instance.
+
+```ts
+type StayProps = {
+  window: DateRange;
+  guests: number;
+};
+
+class Stay extends ValueObject<StayProps> {
+  get window(): DateRange {
+    return this.props.window;
+  }
+}
+
+const stay = new Stay({ window: bookingWindow, guests: 2 });
+
+stay.window === bookingWindow; // true
+stay.equals(new Stay({ window: bookingWindow.clone(), guests: 2 })); // true
+JSON.stringify(stay);
+// {"window":{"from":"2026-07-01T00:00:00.000Z","to":"2026-07-31T00:00:00.000Z"},"guests":2}
+```
+
+The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
+`DateRange` instance. A value object is nested under a key. `vo()` and the
+constructor reject a value object as the input itself with a `TypeError`.
+
+The base `toJSON()` returns the props, so a nested value object serializes as
+its props unless its class overrides `toJSON()`. When you rebuild a composed
+value object from JSON, rebuild the nested value object first. A plain
+record in place of the nested value object is a different value: `equals()`
+returns false, and the methods of the nested class are missing.
 
 ::: warning Constructor ordering
 `validate(props)` runs from the base constructor before subclass field
@@ -218,6 +267,12 @@ Use this sparingly. If a field never participates in equality, ask whether it
 belongs on the value object at all. Timestamps, database ids, and audit data
 usually belong to an entity, a persistence record, or an event envelope.
 
+Inside a nested value object the `path` of `ignoreKeyPredicate` continues with
+`props`, for example `["window", "props"]`. `ignoreKeys: ["props"]` therefore
+empties every nested value object. To ignore a field of your own named `props`,
+use `ignoreKeyPredicate` and check the path. The key under which the kit records
+the class of a nested value object is never ignored.
+
 ## Data Rules That Matter
 
 Value objects only work when their content has value semantics. The library is
@@ -233,7 +288,9 @@ shadowed on the frozen clone so accidental mutation throws. Map keys and Set
 members must be primitives, because JavaScript compares object keys and set
 members by identity.
 
-Functions and custom class instances are rejected. A class instance can hide
+A `ValueObject<T>` instance is accepted, kept by reference, and frozen in
+place. It must keep all of its state in `props`. Functions and every other
+custom class instance are rejected. A class instance can hide
 private fields, non-enumerable state, and runtime-owned internal slots. Cloning
 it as data would produce a value that looks valid but has lost part of its
 meaning.
@@ -249,7 +306,8 @@ trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
 internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
-because they clone first and do not freeze caller-owned objects.
+because they clone first and do not freeze caller-owned objects. A nested value
+object is the one exception: it is frozen in place.
 
 ## Common Mistakes
 
