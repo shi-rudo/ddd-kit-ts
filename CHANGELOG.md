@@ -1852,15 +1852,15 @@ await rows.update({ state: order.state, version: order.version });
 order.status;
 
 // and a detached read DTO for persistence, declared on the aggregate
-get facts(): Readonly<OrderState> {
+get stateDto(): Readonly<OrderState> {
   return deepFreeze(detachState(this.state));
 }
-await rows.update({ state: order.facts, version: order.version });
+await rows.update({ state: order.stateDto, version: order.version });
 ```
 
 Concrete entities expose domain queries or explicitly detached, immutable
 read DTOs. A persistence model captures the aggregate through that surface:
-`capture: (order) => order.facts`. A state that carries a class-based child
+`capture: (order) => order.stateDto`. A state that carries a class-based child
 entity needs an explicit mapper to plain data instead; `detachState` throws
 with the field path when it meets one. This is compile-checked unless a
 consumer deliberately widens the protected accessor in its own subclass; do

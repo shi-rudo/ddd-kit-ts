@@ -111,8 +111,9 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 }
 ```
 
-`detachState` throws when the state carries a class instance, a function, or
-a symbol, and names the field path. A state with class-based child entities
+`detachState` throws when the state carries a class instance, a function, a
+symbol, or another value a structured clone would lose, and names the field
+path. A state with class-based child entities
 needs an explicit mapper to plain data instead of the clone. See
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 

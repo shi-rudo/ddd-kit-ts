@@ -217,10 +217,12 @@ and seals the exact change set.
 A full-row model can be small. It reads the aggregate through its detached
 read DTO; see
 [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
+The row holds a JSON-safe encoding of that DTO: `encodeOrderState` maps each
+`Money` field to a `MoneyDto`, and `decodeOrderState` maps it back on load.
 
 ```ts
 type OrderRow = {
-  readonly state: Readonly<OrderState>;
+  readonly state: OrderStateDto;
   readonly version: number;
 };
 
@@ -230,12 +232,12 @@ const orderPersistence: PersistenceModel<
   OrderRow | undefined
 > = {
   capture: (order) => ({
-    state: order.stateDto,
+    state: encodeOrderState(order.stateDto),
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: order.stateDto,
+      state: encodeOrderState(order.stateDto),
       version: order.version,
     };
 

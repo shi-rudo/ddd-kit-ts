@@ -315,7 +315,9 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 ```
 
 The getter walks and clones the whole state on every read. That cost belongs
-to the adapter, which reads the DTO once at load and once at commit.
+to the adapter. The unit of work reads the DTO several times per aggregate:
+at load, when it registers the write, and at commit. The snapshot model
+detaches the captured DTO once more, so a snapshot capture clones twice.
 Application code reads domain queries and never the DTO in a loop.
 
 `detachState` is a `structuredClone` behind a guard. A structured clone keeps
@@ -347,11 +349,20 @@ get stateDto(): OrderStateDto {
 }
 ```
 
-`detachState` also rejects a function, a symbol, a symbol-keyed property, a
-non-enumerable property, an `Error`, a `Promise`, a `WeakMap`, and a
-`WeakSet`. Plain objects, arrays,
-`Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. A `Money`
-value is a frozen plain object and passes.
+A subclass of a built-in (`class Tags extends Set`) is a class instance too.
+`detachState` also rejects a function, a symbol, an enumerable symbol-keyed
+property, a non-enumerable property on a record or an array, an accessor
+property, an expando on a built-in, an `Error`, a `Promise`, a `WeakMap`, a
+`WeakSet`, a `SharedArrayBuffer`, and a view over one. A `Proxy` fails inside
+the clone; `detachState` rethrows that failure as a `TypeError` that keeps the
+cause. Plain objects, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints, and
+typed arrays pass.
+
+A `Money` value is a frozen plain object and passes. Its `amountMinor` is a
+`bigint`, and JSON cannot carry a `bigint`. A JSON-backed row or snapshot
+store needs a mapper from the DTO to JSON-safe data, with `moneyToDto` or
+`moneyToSnapshot` for each `Money` field; see
+[Money -> Wire And Persistence](./money.md#wire-and-persistence).
 
 The persistence examples in this guide, in
 [Repository](./repository.md#adapter-owned-persistence-models), and in
@@ -579,6 +590,15 @@ const orderSnapshots = defineSnapshotModel({
   migrate: (stored, storedSchemaVersion) =>
     migrateOrderSnapshot(stored, storedSchemaVersion),
 });
+```
+
+This model stores the DTO as it is. `OrderState` carries `Money`, whose
+`amountMinor` is a `bigint`. A JSON-backed snapshot store needs `capture` to
+map each `Money` field to JSON-safe data and `reconstitute` to map it back;
+`examples/order/order-snapshot-model.ts` shows that pair with
+`moneyToSnapshot` and `moneyFromSnapshot`.
+
+```ts
 
 const snapshot = captureAggregateSnapshot(
   orderSnapshots,
