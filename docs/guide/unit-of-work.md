@@ -376,6 +376,11 @@ replay, OCC, identity mapping, and atomic stream-plus-outbox rollback.
 Optional capabilities produce visible skipped tests. A skip is an unproven
 guarantee, not a pass. Run SQL or ORM adapters against a real database. An
 in-memory fake cannot prove the actual `WHERE version = ...` clause.
+The database must permit overlapping `run` calls: the stale-writer proofs hold
+one transaction open while a second one commits. A single-connection embedded
+database cannot host the suites. See
+[Certification](/guide/repository#certification) for the requirement and the
+preflight that names it.
 
 ## Deliberate limits
 

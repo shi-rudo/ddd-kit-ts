@@ -644,5 +644,18 @@ raises no error: the stale write succeeds, and the newer state is lost. The
 suite turns that silent loss into a failing test. Bind it to every adapter you
 ship.
 
+The suite needs overlapping `run` calls. The stale-writer proofs hold one
+transaction open while a second one loads, writes, and commits. So `run` must
+give each call its own transaction and connection. A single-connection embedded
+database cannot host the suite: the second `run` call waits for the first one,
+and nothing completes. The first proof of the suite is an environment
+preflight. It holds one `run` call open and starts a second one. When the
+second call does not complete within two seconds, the preflight fails and
+names the requirement. Give the harness a real database with a connection
+pool. Keep the embedded database for tests that do not overlap. When a second
+connection needs more than two seconds to open, for example over a slow
+network, set `overlappingCallsBoundMs` on the harness. Keep the bound below
+the test timeout of the runner.
+
 For the breaking cutover from v2.2 or an earlier v3 release candidate, follow
 [Migrating to v3](/guide/migrating-to-v3).
