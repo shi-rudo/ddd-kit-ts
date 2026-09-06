@@ -296,8 +296,11 @@ The structural sharing gives the aggregate a cheap way to decide.
 ## Live state is protected and reads are explicit
 
 `Entity.state` is `protected`. A generic public getter cannot safely return a
-live graph. A generic copy can destroy prototypes for class-based child
-entities. Concrete models expose domain queries or detached read DTOs.
+live graph. A generic copy destroys the prototypes of class-based child
+entities, so the kit offers no generic reader. Concrete models expose domain
+queries or detached read DTOs. `detachState` builds the DTO for a plain-data
+state and refuses a class instance with its field path; see
+[Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 Persistence adapters define state and snapshot projections outside the
 aggregate.
 

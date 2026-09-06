@@ -290,6 +290,68 @@ The last example changes state without recording an event, but still bumps the v
 Changing aggregate state should normally move the version. If you deliberately need a mutation that does not participate in optimistic concurrency, use `setStateWithoutVersionBump(newState)` directly and do not call `setState`.
 :::
 
+## Reading State from Outside
+
+`state` is `protected`. Code outside the aggregate reads it through the
+surfaces that the aggregate declares:
+
+- Domain queries such as `order.status`. Application code reads these.
+- One detached read DTO: an immutable copy of the state that shares nothing
+  with the live graph. A persistence adapter captures the aggregate through
+  it.
+
+```ts
+import { deepFreeze, detachState } from "@shirudo/ddd-kit";
+
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
+  get status(): OrderState["status"] {
+    return this.state.status;
+  }
+
+  get stateDto(): Readonly<OrderState> {
+    return deepFreeze(detachState(this.state));
+  }
+}
+```
+
+`detachState` is a `structuredClone` behind a guard. A structured clone keeps
+the data properties of a class instance and drops the methods on its
+prototype, without an error. The guard throws a `TypeError` that names the
+field path and the class instead:
+
+```
+TypeError: detachState: state.items[0] is a class instance (OrderItem); map it to plain data
+```
+
+The tell is a state field whose type carries behaviour. A type alias hides
+it: `type OrderItem = OrderItemImpl` names a class, and a search of the state
+type for `class` does not find it. Such a state needs an explicit mapper to
+plain data in place of the clone:
+
+```ts
+// items hold OrderItem entities: map them, do not clone them
+get stateDto(): OrderStateDto {
+  return deepFreeze({
+    customerId: this.state.customerId,
+    status: this.state.status,
+    items: this.state.items.map((item) => ({
+      id: item.id,
+      qty: item.qty,
+      price: item.price,
+    })),
+  });
+}
+```
+
+`detachState` also rejects a function, a symbol, a symbol-keyed property, an
+`Error`, a `Promise`, a `WeakMap`, and a `WeakSet`. Plain objects, arrays,
+`Date`, `Map`, `Set`, `RegExp`, bigints, and typed arrays pass. A `Money`
+value is a frozen plain object and passes.
+
+The persistence examples in this guide, in
+[Repository](./repository.md#adapter-owned-persistence-models), and in
+[Unit of Work](./unit-of-work.md) read `order.stateDto`.
+
 ## Where Invariants Live
 
 An aggregate should reject impossible business states and impossible business operations. The right place for the check depends on what the rule is about.
@@ -506,9 +568,9 @@ import {
 const orderSnapshots = defineSnapshotModel({
   aggregateType: "Order",
   schemaVersion: 2,
-  capture: (order: Order) => orderStateDto(order),
-  reconstitute: (id: OrderId, state: OrderStateDto, version: Version) =>
-    Order.reconstitute(id, stateFromDto(state), version),
+  capture: (order: Order) => order.stateDto,
+  reconstitute: (id: OrderId, state: OrderState, version: Version) =>
+    Order.reconstitute(id, state, version),
   migrate: (stored, storedSchemaVersion) =>
     migrateOrderSnapshot(stored, storedSchemaVersion),
 });
@@ -539,9 +601,11 @@ mutates a live instance or records a new domain fact. A factory that forgets
 restore then throws `SnapshotVersionNotRestoredError` (code
 `SNAPSHOT_VERSION_NOT_RESTORED`).
 
-Live aggregate state remains `protected`. Give the persistence adapter an
-explicit DTO projection such as `orderStateDto(order)` rather than exposing a
-generic public state getter. For event-sourced aggregates, restore the
+Live aggregate state remains `protected`. The model captures the aggregate
+through its detached read DTO (`order.stateDto`) or through domain queries,
+never through a public state getter. See
+[Reading State from Outside](#reading-state-from-outside). For
+event-sourced aggregates, restore the
 snapshot first, call `replayHistory` with only the stream tail, and check
 that the final version equals the stream head (see
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots)).

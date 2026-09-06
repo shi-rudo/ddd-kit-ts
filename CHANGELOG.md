@@ -29,6 +29,22 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: detachState returns a copy that shares nothing with the state
+
+`detachState(state)` returns a `structuredClone` of `state` after a walk that
+rejects every value the clone would lose or degrade. A class instance keeps its
+data properties in a clone and loses the methods on its prototype, without an
+error. The walk throws a `TypeError` that names the field path and the class
+instead, so the defect fails at the boundary that produced it. A function, a
+symbol, a symbol-keyed property, an `Error`, a `Promise`, a `WeakMap`, and a
+`WeakSet` are rejected in the same way. Plain objects, arrays, `Date`, `Map`,
+`Set`, `RegExp`, bigints, and typed arrays pass.
+
+A concrete entity uses it for its detached read DTO:
+`deepFreeze(detachState(this.state))`. The snapshot model already guarded its
+captured DTO with this walk; it now reuses `detachState`, and its messages
+start with `detachState:` instead of `detachSnapshotState:`.
+
 ### Changed: the dependency audit gates the publish, not the merge
 
 `pnpm audit --prod` ran as the first step of the required `verify (22)`
@@ -1826,17 +1842,20 @@ await rows.update({ state: order.state, version: order.version });
 // after: a domain query for application reads
 order.status;
 
-// and a detached memento for persistence
-const memento = order.createSnapshot();
-await rows.update({ state: memento.state, version: memento.version });
+// and a detached read DTO for persistence, declared on the aggregate
+get facts(): Readonly<OrderState> {
+  return deepFreeze(detachState(this.state));
+}
+await rows.update({ state: order.facts, version: order.version });
 ```
 
-Concrete entities expose fachliche scalar queries or explicitly detached,
-immutable read DTOs. Aggregate repositories use `createSnapshot()` (and
-the existing `toSnapshotState` mapper for class-based children) instead of
-reaching into the live graph. This is compile-checked unless a consumer
-deliberately widens the protected accessor in its own subclass; do not do
-that.
+Concrete entities expose domain queries or explicitly detached, immutable
+read DTOs. A persistence model captures the aggregate through that surface:
+`capture: (order) => order.facts`. A state that carries a class-based child
+entity needs an explicit mapper to plain data instead; `detachState` throws
+with the field path when it meets one. This is compile-checked unless a
+consumer deliberately widens the protected accessor in its own subclass; do
+not do that.
 
 #### 14. Projection cursors prove gaps (runtime change)
 
