@@ -199,11 +199,12 @@ part of the meaning.
 
 A value object can hold other value objects. The nested instance is kept by
 reference, not cloned, and it is frozen in place. Its own constructor already
-cloned and froze its props, and a value object is immutable by contract, so the
-freeze changes nothing that a value object may do. `equals()`, `voEquals()`, and
-`voEqualsExcept()` compare a nested value object by class and by every own
-field, `props` included. They do not call the `equals()` method of the nested
-instance. `toJSON()` serializes its props.
+cloned and froze its props. A nested value object keeps all of its state in
+`props`: the kit rejects an instance with an own field outside `props`, for
+example a cache field or a field the subclass constructor assigns. Keep derived
+values in getters. `equals()`, `voEquals()`, and `voEqualsExcept()` compare a
+nested value object by class and by props. They do not call the `equals()`
+method of the nested instance. `toJSON()` serializes its props.
 
 ```ts
 type StayProps = {
@@ -274,7 +275,8 @@ members must be primitives, because JavaScript compares object keys and set
 members by identity.
 
 A `ValueObject<T>` instance is accepted, kept by reference, and frozen in
-place. Functions and every other custom class instance are rejected. A class instance can hide
+place. It must keep all of its state in `props`. Functions and every other
+custom class instance are rejected. A class instance can hide
 private fields, non-enumerable state, and runtime-owned internal slots. Cloning
 it as data would produce a value that looks valid but has lost part of its
 meaning.
@@ -290,7 +292,8 @@ trigger traps. Treat `vo()` as an immutable value constructor, not as a sandbox.
 
 The exported `deepFreeze()` helper freezes in place and is used by lower-level
 internals. Application code should usually prefer `vo()` or `ValueObject<T>`,
-because they clone first and do not freeze caller-owned objects.
+because they clone first and do not freeze caller-owned objects. A nested value
+object is the one exception: it is frozen in place.
 
 ## Common Mistakes
 

@@ -20,8 +20,10 @@ The redesign does not require renaming tables, rewriting event history, or
 resetting versions. It changes who holds the expected version and when a write
 can occur.
 
-Value objects need no change. Version 2.2.0 rejected a value object inside
-another value object; v3 accepts it again.
+Value objects need no change when they keep their state in `props`. Version
+2.2.0 rejected a value object inside another value object; v3 accepts it again,
+kept by reference. A nested value object with an own field outside `props` is
+rejected; move such a field into `props` or into a getter.
 
 Snapshots need special attention because their policy moved out of aggregate
 methods. If the stored DTO is still compatible, describe its existing shape

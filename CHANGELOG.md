@@ -34,14 +34,15 @@ gives a before-and-after example for each breaking change.
 `vo()` and the `ValueObject` constructor accept a `ValueObject` instance
 inside the props again. Versions 2.2.0 through 3.0.0-rc.5 rejected it as a
 custom class instance, so a value object could not hold another value
-object. The nested instance is kept by reference and frozen in place. Its
-own constructor already cloned and froze its props, and a value object is
-immutable by contract. `equals`, `voEquals`, and `voEqualsExcept` compare
-a nested value object by class and by every own field, `props` included.
-Two nested value objects of different classes with the same props are not
-equal. The kit does not call the `equals` method of the nested instance.
-Every other custom class instance is still rejected, and a value object as
-the root props of another value object is rejected with a `TypeError`.
+object. The nested instance is kept by reference and frozen in place; its
+own constructor already cloned and froze its props. A nested value object
+keeps all of its state in `props`. An instance with an own field outside
+`props`, for example a cache field, is rejected with a `TypeError` that
+names the fields. `equals`, `voEquals`, and `voEqualsExcept` compare a
+nested value object by class and by props and do not call its `equals`
+method. Every other custom class instance is still rejected, and a value
+object as the root props of another value object is rejected with a
+`TypeError`.
 
 A `ValueObject` instance carries one own, non-enumerable symbol property
 that records its class. The key is a `Symbol.for`, so a value object built

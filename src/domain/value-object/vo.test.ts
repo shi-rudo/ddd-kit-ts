@@ -882,17 +882,25 @@ describe("VO", () => {
 		});
 
 		it("freezes a kit value object instance in place", () => {
-			class Money extends ValueObject<{ amount: number }> {
-				readonly tags: string[] = [];
-			}
+			class Money extends ValueObject<{ amount: number }> {}
 			const money = new Money({ amount: 5 });
 
 			const priced = vo({ price: money });
 			const same = vo(money);
 
-			expect(Object.isFrozen(priced.price)).toBe(true);
-			expect(Object.isFrozen(money.tags)).toBe(true);
+			expect(priced.price).toBe(money);
+			expect(Object.isFrozen(money)).toBe(true);
 			expect(same).toBe(money);
+		});
+
+		it("rejects a nested value object with own fields outside props", () => {
+			class TaggedMoney extends ValueObject<{ amount: number }> {
+				readonly tags: string[] = [];
+			}
+
+			expect(() => vo({ price: new TaggedMoney({ amount: 5 }) })).toThrow(
+				/own fields outside props \(tags\)/,
+			);
 		});
 
 		it("keeps nested value objects class-aware under voEqualsExcept", () => {

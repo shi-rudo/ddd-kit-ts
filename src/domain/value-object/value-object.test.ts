@@ -672,15 +672,30 @@ describe("ValueObject Class", () => {
 		});
 
 		it("freezes the nested value object instance in place", () => {
-			class TaggedMoney extends ValueObject<MoneyProps> {
-				readonly tags: string[] = [];
-			}
-			const money = new TaggedMoney({ amount: 100, currency: "USD" });
+			const money = new Money({ amount: 100, currency: "USD" });
 
-			new Price({ amount: money, label: "list" } as unknown as PriceProps);
+			new Price({ amount: money, label: "list" });
 
 			expect(Object.isFrozen(money)).toBe(true);
-			expect(Object.isFrozen(money.tags)).toBe(true);
+		});
+
+		it("rejects a nested value object with own fields outside props", () => {
+			class CachedMoney extends ValueObject<MoneyProps> {
+				private cache?: string;
+				readonly tags: string[] = [];
+				get label(): string {
+					this.cache ??= `${this.props.amount} ${this.props.currency}`;
+					return this.cache;
+				}
+			}
+			const money = new CachedMoney({ amount: 100, currency: "USD" });
+
+			expect(
+				() =>
+					new Price({ amount: money, label: "list" } as unknown as PriceProps),
+			).toThrow(
+				"vo() cannot nest a value object with own fields outside props (cache, tags): keep the state of a value object in props",
+			);
 		});
 
 		it("compares a nested value object by its own fields, not through its equals method", () => {
