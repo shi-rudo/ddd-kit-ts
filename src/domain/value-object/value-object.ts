@@ -158,6 +158,14 @@ function openValueObjectKeys(instance: object): PropertyKey[] {
 	);
 }
 
+function rejectValueObjectAsInput(input: unknown, entry: string): void {
+	if (isValueObjectInstance(input)) {
+		throw new TypeError(
+			`${entry} does not accept a value object as its input: nest the value object under a key, or pass its props`,
+		);
+	}
+}
+
 /**
  * Deep freezes an object and all its nested properties recursively, then
  * returns it. Iterates both string-keyed and symbol-keyed own properties
@@ -529,9 +537,9 @@ function isPrimitiveValue(value: unknown): boolean {
  * Symbol-keyed properties are preserved (matching `voEquals`). A kit
  * `ValueObject` instance nested in the input is kept by reference and
  * frozen in place; it must keep all of its state in `props` (see
- * `VALUE_OBJECT_CLASS`). Function values and every other custom class
- * instance are rejected (Value Objects are plain data, not
- * behaviour-bearing object graphs). Inputs must be trusted and
+ * `VALUE_OBJECT_CLASS`). A value object as the input itself is rejected.
+ * Function values and every other custom class instance are rejected
+ * (Value Objects are plain data, not behaviour-bearing object graphs). Inputs must be trusted and
  * Proxy-free: ECMAScript provides no portable way to identify a transparent
  * Proxy without potentially executing its traps, so `vo()` is not a sandbox
  * for hostile in-process objects. Built-ins that cannot provide immutable,
@@ -546,6 +554,7 @@ function isPrimitiveValue(value: unknown): boolean {
  * ```
  */
 export function vo<T>(t: T): VO<T> {
+	rejectValueObjectAsInput(t, "vo()");
 	return deepFreeze(cloneForVo(t, new WeakMap()) as T);
 }
 
@@ -765,11 +774,7 @@ export abstract class ValueObject<T extends object> implements IValueObject<T> {
 	 * ```
 	 */
 	constructor(props: T) {
-		if (isValueObjectInstance(props)) {
-			throw new TypeError(
-				"ValueObject props must be a plain record, not a value object: nest the value object under a key, or pass its props",
-			);
-		}
+		rejectValueObjectAsInput(props, "new ValueObject()");
 		this.validate(props);
 		// Same clone as vo(): Map/Set contents are walked (so the caller's
 		// entries are never frozen or shadowed in place), nested value

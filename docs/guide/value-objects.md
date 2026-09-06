@@ -227,8 +227,8 @@ JSON.stringify(stay);
 ```
 
 The same rule applies to `vo()`: `vo({ window: bookingWindow })` keeps the
-`DateRange` instance. A value object is nested under a key. The constructor
-rejects a value object as the root props with a `TypeError`.
+`DateRange` instance. A value object is nested under a key. `vo()` and the
+constructor reject a value object as the input itself with a `TypeError`.
 
 ::: warning Constructor ordering
 `validate(props)` runs from the base constructor before subclass field

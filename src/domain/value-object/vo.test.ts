@@ -886,11 +886,17 @@ describe("VO", () => {
 			const money = new Money({ amount: 5 });
 
 			const priced = vo({ price: money });
-			const same = vo(money);
 
 			expect(priced.price).toBe(money);
 			expect(Object.isFrozen(money)).toBe(true);
-			expect(same).toBe(money);
+		});
+
+		it("rejects a value object as the input itself", () => {
+			class Money extends ValueObject<{ amount: number }> {}
+
+			expect(() => vo(new Money({ amount: 5 }))).toThrow(
+				"vo() does not accept a value object as its input: nest the value object under a key, or pass its props",
+			);
 		});
 
 		it("rejects a nested value object with own fields outside props", () => {

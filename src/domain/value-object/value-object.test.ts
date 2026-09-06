@@ -721,7 +721,7 @@ describe("ValueObject Class", () => {
 			class Wrapper extends ValueObject<Money> {}
 
 			expect(() => new Wrapper(money)).toThrow(
-				/ValueObject props must be a plain record, not a value object/,
+				"new ValueObject() does not accept a value object as its input: nest the value object under a key, or pass its props",
 			);
 		});
 

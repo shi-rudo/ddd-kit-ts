@@ -32,7 +32,7 @@ gives a before-and-after example for each breaking change.
 ### Fixed: a value object accepts a nested value object again
 
 `vo()` and the `ValueObject` constructor accept a `ValueObject` instance
-inside the props again. Versions 2.2.0 through 3.0.0-rc.5 rejected it as a
+inside the input again. Versions 2.2.0 through 3.0.0-rc.5 rejected it as a
 custom class instance, so a value object could not hold another value
 object. The nested instance is kept by reference and frozen in place; its
 own constructor already cloned and froze its props. A nested value object
@@ -41,8 +41,7 @@ keeps all of its state in `props`. An instance with an own field outside
 names the fields. `equals`, `voEquals`, and `voEqualsExcept` compare a
 nested value object by class and by props and do not call its `equals`
 method. Every other custom class instance is still rejected, and a value
-object as the root props of another value object is rejected with a
-`TypeError`.
+object as the input itself is rejected with a `TypeError`.
 
 A `ValueObject` instance carries one own, non-enumerable symbol property
 that records its class. The key is a `Symbol.for`, so a value object built
