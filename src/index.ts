@@ -333,7 +333,7 @@ export type {
 	DeliveryFailureClassifier,
 	DeliveryFailureKind,
 } from "./internal/delivery-failure";
-// Structural equality
+// Structural equality and detachment
 export { deepEqual } from "./internal/structural/deep-equal";
 export {
 	type DeepEqualExceptOptions,
@@ -345,6 +345,7 @@ export {
 	type DeepOmitPathSegment,
 	deepOmit,
 } from "./internal/structural/deep-omit";
+export { detachState } from "./internal/structural/detach-state";
 // Messaging: commit envelope, bus, outbox, dispatcher
 export type {
 	CommitPosition,

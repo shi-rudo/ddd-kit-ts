@@ -207,7 +207,7 @@ describe("adapter-owned snapshot models", () => {
 				order,
 				new Date("2026-07-29T10:00:00.000Z"),
 			),
-		).toThrow(/snapshot state\.status is a symbol/);
+		).toThrow(/state\.status is a symbol/);
 	});
 
 	it("routes a foreign-copy domain rejection into the corruption channel", () => {

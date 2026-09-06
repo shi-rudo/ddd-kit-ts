@@ -48,7 +48,9 @@ A repository definition has six parts:
 
 - The application supplies a repository port to `defineRepository`.
 - The aggregate class is the identity-map key.
-- The adapter owns a `PersistenceModel`.
+- The adapter owns a `PersistenceModel`. It reads the aggregate through its
+  detached read DTO, `order.stateDto`; see
+  [Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 - `create` builds the transaction-bound read adapter.
 - `flush` performs the registered write.
 - `mapError` translates a failed flush into an application-facing
@@ -81,12 +83,12 @@ const orderPersistence: PersistenceModel<
   OrderChange
 > = {
   capture: (order) => ({
-    state: orderStateDto(order),
+    state: order.stateDto,
     version: order.version,
   }),
   changes: (baseline, order, lifecycle) => {
     const current = {
-      state: orderStateDto(order),
+      state: order.stateDto,
       version: order.version,
     };
 

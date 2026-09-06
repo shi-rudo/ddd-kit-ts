@@ -29,6 +29,31 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: detachState returns a copy that shares nothing with the state
+
+`detachState(state)` returns a `structuredClone` of `state` after a walk that
+rejects every value the clone would lose or degrade. A class instance keeps its
+data properties in a clone and loses the methods on its prototype, without an
+error. The walk throws a `TypeError` that names the field path and the class
+instead, so the defect fails at the boundary that produced it. A subclass of a
+built-in (`class Tags extends Set`) is a class instance too. The walk also
+rejects a function, a symbol, an enumerable symbol-keyed property, a
+non-enumerable property on a record or an array, an accessor property, an
+expando on a built-in, an `Error`, a `Promise`, a `WeakMap`, a `WeakSet`, a
+`SharedArrayBuffer`, and a view over one. A `Proxy` fails inside the clone;
+`detachState` rethrows that failure as a `TypeError` that keeps the cause.
+Plain objects from any realm, arrays, `Date`, `Map`, `Set`, `RegExp`, bigints,
+and typed arrays pass.
+
+A concrete entity uses it for its detached read DTO:
+`deepFreeze(detachState(this.state))`. The snapshot model guarded its captured
+and restored state with a narrower walk of its own; it now reuses `detachState`
+on both paths. The messages start with `detachState: state` instead of
+`snapshot state`. The added rejections apply to a captured or restored snapshot
+state as well; a snapshot model that returns plain data is not affected. A
+plain object from another realm (a `vm` context, an iframe) now passes; the
+old walk rejected it as a class instance.
+
 ### Changed: the dependency audit gates the publish, not the merge
 
 `pnpm audit --prod` ran as the first step of the required `verify (22)`
@@ -1826,17 +1851,20 @@ await rows.update({ state: order.state, version: order.version });
 // after: a domain query for application reads
 order.status;
 
-// and a detached memento for persistence
-const memento = order.createSnapshot();
-await rows.update({ state: memento.state, version: memento.version });
+// and a detached read DTO for persistence, declared on the aggregate
+get stateDto(): Readonly<OrderState> {
+  return deepFreeze(detachState(this.state));
+}
+await rows.update({ state: order.stateDto, version: order.version });
 ```
 
-Concrete entities expose fachliche scalar queries or explicitly detached,
-immutable read DTOs. Aggregate repositories use `createSnapshot()` (and
-the existing `toSnapshotState` mapper for class-based children) instead of
-reaching into the live graph. This is compile-checked unless a consumer
-deliberately widens the protected accessor in its own subclass; do not do
-that.
+Concrete entities expose domain queries or explicitly detached, immutable
+read DTOs. A persistence model captures the aggregate through that surface:
+`capture: (order) => order.stateDto`. A state that carries a class-based child
+entity needs an explicit mapper to plain data instead; `detachState` throws
+with the field path when it meets one. This is compile-checked unless a
+consumer deliberately widens the protected accessor in its own subclass; do
+not do that.
 
 #### 14. Projection cursors prove gaps (runtime change)
 

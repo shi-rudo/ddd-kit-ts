@@ -59,7 +59,7 @@ Do the source migration on a branch while v2 writers continue serving
 production. The actual deployment is a short, coordinated cutover described
 later.
 
-### 1. Make aggregate reconstitution explicit
+### 1. Make aggregate reconstitution and reads explicit
 
 Keep business factories for new aggregates. Add or retain a separate factory
 for persisted facts:
@@ -98,6 +98,24 @@ only. See
 For event-sourced aggregates, keep a bare factory and load accepted history
 with `replayHistory`. A clean reconstituted aggregate can load a later tail
 additively.
+
+`Entity.state` is `protected` in v3. Every `order.state.x` read outside the
+aggregate no longer compiles. Replace application reads with domain queries
+(`order.status`). Give the persistence adapter one detached read DTO:
+
+```ts
+class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
+  get stateDto(): Readonly<OrderState> {
+    return deepFreeze(detachState(this.state));
+  }
+}
+```
+
+`detachState` throws when the state carries a class instance, a function, a
+symbol, or another value a structured clone would lose, and names the field
+path. A state with class-based child entities
+needs an explicit mapper to plain data instead of the clone. See
+[Aggregates -> Reading State from Outside](./aggregates.md#reading-state-from-outside).
 
 ### 2. Replace repository contracts
 
@@ -206,9 +224,9 @@ const orderPersistence: PersistenceModel<
   OrderRow,
   OrderRow | undefined
 > = {
-  capture: (order) => rowFor(order),
+  capture: (order) => ({ state: order.stateDto, version: order.version }),
   changes: (baseline, order, lifecycle) => {
-    const current = rowFor(order);
+    const current = { state: order.stateDto, version: order.version };
     return lifecycle === "loaded" && deepEqual(baseline, current)
       ? undefined
       : current;
