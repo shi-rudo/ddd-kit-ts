@@ -467,10 +467,13 @@ this list if your code observes one of these paths:
 ## Appendix: v3.0.0-rc.4 to rc.5 or later
 
 Source breaks at the entry points, on the event bus port, in the aggregate
-vocabulary, on the entity state field, and on two error constructors. The
-vocabulary renames are mechanical; the sections
+vocabulary, on the entity state field, on two error constructors, and on two
+subclass members. The vocabulary renames are mechanical; the sections
 [One lifecycle vocabulary](#one-lifecycle-vocabulary) and [Folds](#folds)
-list them with the commands that apply them.
+list them with the commands that apply them. Three behavior changes follow
+the source breaks: a fold must return a state, the hostile own-key guard
+covers the fold result and the payload, and one code names an unmanaged
+instance.
 
 ### The `utils` entry point is gone
 
@@ -597,25 +600,18 @@ projection handlers, and bus subscribers. No behavior changes.
 | --- | --- |
 | `protected readonly handlers = { ... }` | `protected readonly folds = { ... }` |
 | `MissingHandlerError` from `apply()` or replay | `MissingFoldError` (code `MISSING_FOLD`) |
-| `HandlerReturnedNoStateError` (code `HANDLER_RETURNED_NO_STATE`) | `FoldReturnedNoStateError` (code `FOLD_RETURNED_NO_STATE`) |
 
-Apply the member rename and the class rename with one command over your
-TypeScript sources:
+Apply the member rename with one command over your TypeScript sources:
 
 ```sh
-perl -pi \
-  -e 's/\breadonly handlers\b/readonly folds/g;' \
-  -e 's/\bHandlerReturnedNoStateError\b/FoldReturnedNoStateError/g;' \
-  -e 's/\bHANDLER_RETURNED_NO_STATE\b/FOLD_RETURNED_NO_STATE/g;' \
-  $(git ls-files '*.ts')
+perl -pi -e 's/\breadonly handlers\b/readonly folds/g;' $(git ls-files '*.ts')
 ```
 
 Then run the compiler. It flags every event-sourced aggregate that still
-declares `handlers`, and every catch that names the removed class.
-`MissingHandlerError` still exists for `projectionFromHandlers`, so the
-compiler does not flag it: search for `MissingHandlerError` and
-`MISSING_HANDLER` and change the sites that guard an aggregate to
-`MissingFoldError` and `MISSING_FOLD`.
+declares `handlers`. `MissingHandlerError` still exists for
+`projectionFromHandlers`, so the compiler does not flag it: search for
+`MissingHandlerError` and `MISSING_HANDLER` and change the sites that guard
+an aggregate to `MissingFoldError` and `MISSING_FOLD`.
 
 ### The entity state field is private
 
@@ -647,3 +643,71 @@ the old fields change.
 `actual` names only the address fields the event carries. A missing field on
 the event matches the receiving aggregate by default, so an `actual` field
 can be `undefined`, as the old optional fields could.
+
+### A subclass member named `validateState` fails to compile
+
+`Entity` declares a private `validateState` member. A subclass that declares
+a method or a field with that name fails to compile. Before this change such
+a member compiled and never ran, because the validator comes from
+`EntityConfig.validateState`.
+
+| Before | After |
+| --- | --- |
+| `protected validateState(state: OrderState) { ... }` in a subclass | `super(id, initialState, { validateState: validateOrderState })` |
+
+Rename the member, or move its rule into `EntityConfig.validateState`.
+
+### The protected `pendingEventCount` getter is gone
+
+`BaseAggregate` no longer exposes a protected `pendingEventCount` getter.
+The compiler flags each read.
+
+| Before | After |
+| --- | --- |
+| `this.pendingEventCount` in a subclass | `this.pendingEvents.length` |
+
+### A fold must return a state
+
+A fold that returns `undefined` throws `FoldReturnedNoStateError` (code
+`FOLD_RETURNED_NO_STATE`) on `apply()` and on replay. Before this change the
+aggregate stored `undefined` as its state and, on `apply()`, recorded the
+event. A state type that includes `undefined` is not supported. Model an
+absent state as `null` or as a status field.
+
+On replay, `replayHistory` throws the error after the rollback instead of
+returning `Err`, so a stored stream whose fold returns `undefined` fails to
+load. Change every fold that returned `undefined` on purpose before you load
+the streams that contain those events.
+
+### The hostile own-key guard covers the fold result and the payload
+
+The rejection of an own `"__proto__"` data key now runs on the result of a
+fold and on the event payload. `apply()` checks each new state. Replay checks
+the final folded state once. `createDomainEvent` and
+`createUncommittedDomainEvent` check the payload. Before this change the
+guard ran on the entity constructor, on `setState`, and on the metadata
+helpers only.
+
+The guard reads the root object only, on a plain object, a null-prototype
+object, and an array. A class instance passes. It throws
+`HostileStateKeyError` (code `HOSTILE_STATE_KEY`). On replay, `replayHistory`
+throws it after the rollback, so a stored stream whose final fold carries
+the key fails to load until the row is repaired. A well-formed stream needs
+no change.
+
+### One code for an unmanaged instance
+
+`recordPendingEvents`, `withCommit` enrollment, and the persistence baseline
+functions throw `UnmanagedInstanceError` (code `UNMANAGED_INSTANCE`) for an
+aggregate or a baseline that this package did not construct: a repository
+DTO, a structural lookalike, an instance from another package copy, or a
+nullish value. Before this change `withCommit` threw `EventHarvestError`
+(code `EVENT_HARVEST_FAILED`) for this case, and the other paths threw a
+bare `TypeError`.
+
+| Before | After |
+| --- | --- |
+| an error mapper that matches `EVENT_HARVEST_FAILED` for a foreign aggregate in `withCommit` | matches `UNMANAGED_INSTANCE` |
+| a test that expects a `TypeError` from `recordPendingEvents` or a baseline function | expects `UnmanagedInstanceError` |
+
+`EventHarvestError` remains for the other harvest wiring failures.
