@@ -168,15 +168,33 @@ export interface RepositoryDefinition<
 type CallableValue = (...args: never[]) => unknown;
 
 /**
- * The compile-time report for a port that violates one constraint of
- * {@link defineRepository}. No definition can carry a property of type
- * `never`, so the compiler rejects the call. Its message names the violated
- * constraint instead of the bare "parameter of type never".
+ * The compile-time report for a value that violates one constraint of a kit
+ * site. No value can carry a property of type `never`, so the compiler
+ * rejects the call. Its message names the site and the violated constraint
+ * instead of the bare "parameter of type never".
  * @inline
  */
-type RepositoryPortViolation<TConstraint extends string> = {
-	readonly [constraint in `defineRepository: ${TConstraint}`]: never;
+type ConstraintViolation<TSite extends string, TConstraint extends string> = {
+	readonly [constraint in `${TSite}: ${TConstraint}`]: never;
 };
+
+/**
+ * The report for a port that violates one constraint of
+ * {@link defineRepository}.
+ * @inline
+ */
+type RepositoryPortViolation<TConstraint extends string> = ConstraintViolation<
+	"defineRepository",
+	TConstraint
+>;
+
+/**
+ * The report for a repository entry that violates one wiring constraint of
+ * {@link UnitOfWork}.
+ * @inline
+ */
+type RepositoryWiringViolation<TConstraint extends string> =
+	ConstraintViolation<"UnitOfWork", TConstraint>;
 
 /**
  * Continues with the next constraint when the checked one passed, and
@@ -395,9 +413,11 @@ export type RepositoriesOf<TDefinitions> = {
 };
 
 /**
- * Preserves each concrete repository definition while rejecting incomplete
- * entries, callable adapter results, and definitions whose transaction context
- * or aggregate event family does not belong to the Unit of Work that owns them.
+ * Preserves each concrete repository definition and replaces every entry that
+ * violates one wiring constraint with a report that names the constraint. The
+ * entry must be a definition from {@link defineRepository}, the outbox must
+ * accept its aggregate events, and its transaction context must accept the
+ * context of the scope.
  */
 export type CompatibleRepositoryDefinitions<
 	Evt extends AnyDomainEvent,
@@ -417,10 +437,10 @@ export type CompatibleRepositoryDefinitions<
 			? [TDefinitionEvent] extends [Evt]
 				? TCtx extends TDefinitionContext
 					? TDefinitions[K]
-					: never
-				: never
-			: never
-		: never;
+					: RepositoryWiringViolation<"the definition's transaction context must accept the scope's context">
+				: RepositoryWiringViolation<"the outbox must accept the definition's aggregate events">
+			: RepositoryWiringViolation<"the repository must be a definition from defineRepository">
+		: RepositoryWiringViolation<"the repository must be a definition from defineRepository">;
 };
 
 /** @inline */

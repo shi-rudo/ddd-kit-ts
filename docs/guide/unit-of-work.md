@@ -144,7 +144,15 @@ See [Defining the adapter boundary](/guide/repository#defining-the-adapter-bound
 for the append-only shape.
 
 Only the helper-created definition is accepted. An unbranded object fails with
-`InvalidRepositoryDefinitionError`, including for JavaScript callers.
+`InvalidRepositoryDefinitionError`, including for JavaScript callers. The
+compiler rejects it first. It also rejects a definition whose aggregate events
+the outbox does not accept, and a definition whose transaction context does not
+accept the context of the scope. The error names the violated constraint and
+ends with a line of this form:
+
+```text
+Property '"UnitOfWork: the outbox must accept the definition's aggregate events"' is missing in type ...
+```
 
 This is deliberate. A write method cannot accidentally issue SQL before the
 rest of the operation is ready, forget event harvesting, or use a different

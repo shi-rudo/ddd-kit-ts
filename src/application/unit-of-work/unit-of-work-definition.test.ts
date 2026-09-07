@@ -305,7 +305,7 @@ describe("UnitOfWork repository definition", () => {
 				scope,
 				outbox: outbox(),
 				repositories: {
-					// @ts-expect-error repository context must accept the Unit of Work context
+					// @ts-expect-error the definition's transaction context must accept the scope's context
 					orders: connectionOrders,
 				},
 			});
