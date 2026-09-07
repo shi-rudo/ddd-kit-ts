@@ -29,6 +29,55 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: versionedFlush owns the error branches of the flush contract
+
+The flush of a repository definition carries the same three branches in every
+adapter. An `add` maps the store's unique violation to
+`DuplicateAggregateError`. An `update` or a `remove` runs a compare-and-set on
+`expectedVersion` and raises `ConcurrencyConflictError` when it affects no row.
+Every adapter wrote those branches again, and a wrong branch stays silent until
+two writers meet.
+
+`versionedFlush` builds the flush from the store statements and owns the
+branches. The consumer supplies `aggregateType`, `insert`, `isDuplicate`, and,
+for a definition that updates or removes, `update`, `remove`, and
+`currentVersion`. A definition with `physicalRemoval: true` supplies `remove`.
+A definition with `appendOnly: true` omits `update`. The compiler requires
+`currentVersion` next to `update` or `remove`.
+
+`update` and `remove` return the count of affected rows. Zero rows means a
+failed version check. The helper then reads `currentVersion` and raises
+`ConcurrencyConflictError` with the stored version, or `-1` when no row exists.
+The read is diagnostic: when it fails, the conflict stays and carries the read
+failure as cause. The helper runs `update` for every update, also for an empty
+change set, because the new version must reach the store. An error that
+`isDuplicate` rejects propagates unchanged and reaches `mapError`.
+
+Both writes come from a loaded aggregate. So the statements of `update` and
+`remove` receive a receipt whose `expectedVersion` is a `Version`, never
+`undefined`. The new `VersionedWrite` type names that receipt, so a
+compare-and-set predicate needs no narrowing.
+
+A defect in the statements is a wiring error, not a store failure. The new
+`InvalidFlushStatementError` carries the code `INVALID_FLUSH_STATEMENT` and a
+`reason`: `statement_absent`, `no_row_count`, `no_expected_version`, or
+`predicate_beyond_version`. The last one fires when a statement affects no row
+although the stored version equals `expectedVersion`. Its predicate then holds
+a condition beyond the version, for example a tenant id, and the write can
+never succeed. Reporting a conflict there would make a caller retry forever.
+
+The helper takes no driver and no ORM. It is the cost of the row count: drivers
+name that value differently, `rowsAffected` on libsql, `affectedRows` on
+mysql2, and `rowCount` on `pg`, which can be `null`. So the statement returns
+the number, and the consumer adapts the driver result. `isDuplicate` is
+driver-specific in the same way. A future Postgres adapter package supplies it
+for SQLSTATE `23505`.
+
+The helper adds one concept on the flush side. A hand-written flush stays
+valid, and the repository guide keeps that form for a flush that writes several
+tables with different predicates. The event-sourced flush stays hand-written,
+because the event store runs its own version check.
+
 ### Added: defineRepository accepts an append-only port
 
 An append-only aggregate is a fact that the domain never changes after `add`,

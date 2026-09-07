@@ -314,62 +314,38 @@ const orders = defineRepository<ForStoringOrders>()({
   physicalRemoval: true,
   create: (tx: DrizzleTx, tracking: RepositoryTracking<Order>) =>
     new DrizzleOrderReadAdapter(tx, tracking),
-  flush: async (tx: DrizzleTx, write) => {
-    if (write.intent === "add") {
+  flush: versionedFlush({
+    aggregateType: "Order",
+    insert: async (tx: DrizzleTx, write) => {
       const row = requireOrderRow(write.changes);
-      try {
-        await tx.insert(orderTable).values({
-          id: write.aggregateId,
-          state: row.state,
-          version: write.version,
-        });
-      } catch (error) {
-        if (isUniqueViolation(error)) {
-          throw new DuplicateAggregateError({
-            aggregateType: "Order",
-            aggregateId: write.aggregateId,
-            cause: error,
-          });
-        }
-        throw error;
-      }
-      return;
-    }
-
-    if (write.intent === "update") {
-      const row = write.changes.value;
-      if (row === undefined) return;
-
+      await tx.insert(orderTable).values({
+        id: write.aggregateId,
+        state: row.state,
+        version: write.version,
+      });
+    },
+    isDuplicate: isUniqueViolation,
+    update: async (tx, write) => {
       const result = await tx
         .update(orderTable)
-        .set({ state: row.state, version: write.version })
+        .set({ ...write.changes.value, version: write.version })
         .where(and(
           eq(orderTable.id, write.aggregateId),
           eq(orderTable.version, write.expectedVersion),
         ));
-
-      if (result.rowsAffected === 0) {
-        throw new ConcurrencyConflictError({
-          aggregateType: "Order",
-          aggregateId: write.aggregateId,
-          expectedVersion: write.expectedVersion ?? -1,
-          actualVersion: await loadOrderVersion(tx, write.aggregateId),
-        });
-      }
-      return;
-    }
-
-    const result = await tx
-      .delete(orderTable)
-      .where(and(
-        eq(orderTable.id, write.aggregateId),
-        eq(orderTable.version, write.expectedVersion),
-      ));
-
-    if (result.rowsAffected === 0) {
-      throw staleRemoval(write);
-    }
-  },
+      return result.rowsAffected;
+    },
+    remove: async (tx, write) => {
+      const result = await tx
+        .delete(orderTable)
+        .where(and(
+          eq(orderTable.id, write.aggregateId),
+          eq(orderTable.version, write.expectedVersion),
+        ));
+      return result.rowsAffected;
+    },
+    currentVersion: (tx, id) => loadOrderVersion(tx, id),
+  }),
   mapError: (error, write) => {
     if (error instanceof InfrastructureError) return error;
     return new OrderStoreUnavailableError(write.aggregateId, error);
@@ -415,15 +391,21 @@ const ledgerEntries = defineRepository<ForAppendingLedgerEntries>()({
   persistence: ledgerEntryPersistence,
   appendOnly: true,
   create: (_tx: DrizzleTx) => ({}),
-  flush: async (tx: DrizzleTx, write) => {
-    await insertLedgerEntry(tx, write);
-  },
+  flush: versionedFlush({
+    aggregateType: "LedgerEntry",
+    insert: (tx: DrizzleTx, write) => insertLedgerEntry(tx, write),
+    isDuplicate: isUniqueViolation,
+  }),
   mapError: (error, write) => {
     if (error instanceof InfrastructureError) return error;
     return new LedgerStoreUnavailableError(write.aggregateId, error);
   },
 });
 ```
+
+An append-only definition never updates, so its statements omit `update`. The
+flush above shows that shape. A definition that also sets
+`physicalRemoval: true` still supplies `remove` and `currentVersion`.
 
 The facade of an append-only repository has no `update` property. An `update`
 that the adapter defines stays hidden, as every adapter-defined lifecycle
@@ -458,17 +440,18 @@ or returns a raw value, the Unit of Work raises
 `RepositoryErrorMappingFailedError` and preserves both failures for diagnosis.
 That keeps ORM error types out of use cases without hiding the original cause.
 
+### The flush and the OCC contract
+
 The receipt's version relationship is the OCC contract:
 
-- `add` has no `expectedVersion`. Insert a new identity and map a uniqueness
-  violation to `DuplicateAggregateError`.
+- `add` has no `expectedVersion`. Insert a new identity. A second insert of
+  the same identity is `DuplicateAggregateError`.
 - `update` writes `version` and uses `expectedVersion` in the predicate.
 - `remove` deletes the identity and uses `expectedVersion` when
   delete-vs-update races matter.
 
 Zero affected rows means the optimistic-concurrency assumption was false.
-Throw `ConcurrencyConflictError`. Do not turn a stale update into an
-insert.
+That is `ConcurrencyConflictError`. A stale update never becomes an insert.
 
 The predicate belongs to the adapter, not to the kit. The compare-and-set must
 run in the same statement that writes the row. Only the store can make the
@@ -477,6 +460,102 @@ so it cannot write that statement. The kit owns the policy instead. It captures
 `expectedVersion` when the aggregate joins the Unit of Work and stamps
 `version`. It defines `ConcurrencyConflictError`, and the contract suite proves
 the predicate.
+
+`versionedFlush` is that policy as code. The kit exports it from the root
+entry. The adapter supplies the store statements, and the helper owns the
+branches:
+
+- `insert` runs for `add`. If it throws and `isDuplicate(error)` is true, the
+  helper raises `DuplicateAggregateError` with the error as cause. Every other
+  error propagates unchanged and reaches `mapError`.
+- `update` and `remove` run the compare-and-set and return the count of
+  affected rows. On zero rows the helper reads `currentVersion` and raises
+  `ConcurrencyConflictError` with `expectedVersion` and the stored version. If
+  no row exists, `actualVersion` is `-1`.
+- The helper runs `update` for every update, also for an empty change set,
+  because the new version must reach the store. The statement above spreads
+  `write.changes.value`, so an empty change set writes the version only.
+
+The statements follow the definition options. A definition with
+`physicalRemoval: true` supplies `remove`, and a definition without it omits
+`remove`. A definition with `appendOnly: true` omits `update`. A definition
+that supplies `update` or `remove` also supplies `currentVersion`. A
+definition that never updates or removes supplies `insert` and `isDuplicate`
+only. The compiler checks the `currentVersion` pairing, and the flush rejects
+statements that carry `update` or `remove` without `currentVersion` when it
+is built.
+
+A defect in the statements is a wiring error, not a store failure. The helper
+raises `InvalidFlushStatementError` for it, with a `reason` that names the
+defect:
+
+- `statement_absent`: the write needs a statement that the statements do not
+  carry.
+- `no_row_count`: the statement returned a value that is no row count.
+- `no_expected_version`: the write carries no `expectedVersion`, so it did not
+  come from a loaded aggregate.
+- `predicate_beyond_version`: the statement affected no row, although the
+  stored version equals `expectedVersion`. The predicate holds a condition
+  beyond the version, for example a tenant id, so the write can never succeed.
+  Without that check the write would look like a conflict and a retry would
+  repeat it forever.
+
+`currentVersion` reports the diagnostic `actualVersion` only. The zero row
+count already proves the conflict, so a failed read never replaces it: the
+helper reports `actualVersion` `-1` and carries the read failure as the
+conflict's cause.
+
+The row count is the one value the helper needs from the driver, and drivers
+name it differently. A libsql result reports `rowsAffected`. A mysql2 result
+reports `affectedRows`. A `pg` result reports `rowCount`, which can be `null`,
+so that statement returns `result.rowCount ?? 0`. The statement returns the
+number, whatever the driver calls it. `isDuplicate` is driver-specific too.
+Postgres reports a unique violation as SQLSTATE `23505`. SQLite reports
+`SQLITE_CONSTRAINT_UNIQUE`.
+
+Annotate the transaction on `insert`, as the example does. The other
+statements take the transaction type from that annotation. The aggregate and
+the change set come from the definition. Without the annotation the
+transaction type is `unknown`.
+
+The helper is the default, not the only way. A flush that does not fit its
+shape stays a hand-written function. An example is a flush that writes several
+tables with different predicates. The event-sourced flush below is another one.
+A hand-written flush owns the same branches:
+
+```ts
+flush: async (tx: DrizzleTx, write) => {
+  if (write.intent === "add") {
+    try {
+      await insertOrder(tx, write);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      throw new DuplicateAggregateError({
+        aggregateType: "Order",
+        aggregateId: write.aggregateId,
+        cause: error,
+      });
+    }
+    return;
+  }
+
+  const affectedRows = write.intent === "update"
+    ? await updateOrder(tx, write)
+    : await deleteOrder(tx, write);
+  if (affectedRows > 0) return;
+
+  throw new ConcurrencyConflictError({
+    aggregateType: "Order",
+    aggregateId: write.aggregateId,
+    expectedVersion: write.expectedVersion ?? -1,
+    actualVersion: await loadOrderVersion(tx, write.aggregateId) ?? -1,
+  });
+},
+```
+
+`updateOrder` and `deleteOrder` carry the `expectedVersion` predicate, and
+`updateOrder` also runs for an empty change set. A hand-written flush never
+turns a stale update into an insert.
 
 ## Event-sourced flush
 
