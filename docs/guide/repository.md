@@ -495,10 +495,10 @@ defect:
 - `no_expected_version`: the write carries no `expectedVersion`, so it did not
   come from a loaded aggregate.
 - `predicate_beyond_version`: the statement affected no row, although the
-  stored version equals `expectedVersion`. The predicate holds a condition
-  beyond the version, for example a tenant id, so the write can never succeed.
-  Without that check the write would look like a conflict and a retry would
-  repeat it forever.
+  stored version equals `expectedVersion`. The predicate then holds a condition
+  beyond the version, for example a tenant id, or the driver counts changed
+  rows. Without that check the write would look like a conflict, and a retry
+  would repeat it forever.
 
 `currentVersion` reports the diagnostic `actualVersion` only. The zero row
 count already proves the conflict, so a failed read never replaces it: the
@@ -509,9 +509,23 @@ The row count is the one value the helper needs from the driver, and drivers
 name it differently. A libsql result reports `rowsAffected`. A mysql2 result
 reports `affectedRows`. A `pg` result reports `rowCount`, which can be `null`,
 so that statement returns `result.rowCount ?? 0`. The statement returns the
-number, whatever the driver calls it. `isDuplicate` is driver-specific too.
-Postgres reports a unique violation as SQLSTATE `23505`. SQLite reports
-`SQLITE_CONSTRAINT_UNIQUE`.
+number, whatever the driver calls it.
+
+The number must count the rows that the predicate matched, never the rows
+whose values changed. An update can write the values a row already holds: an
+update that changes nothing still writes the same version, and
+`setStateWithoutVersionBump` writes state without a new version. The predicate
+matches such a row, so the count is 1. A driver that counts changed rows
+reports 0 there, and the helper reads that as a failed write. MySQL counts
+changed rows by default, so a mysql2 connection needs the `FOUND_ROWS` flag.
+Postgres and SQLite count matched rows.
+
+`isDuplicate` is driver-specific too. Postgres reports a unique violation as
+SQLSTATE `23505`. SQLite reports `SQLITE_CONSTRAINT_UNIQUE`. It classifies the
+errors of `insert` only. A store that holds a unique index on a business key
+can reject an update as well. Such an error passes to `mapError` unchanged,
+because it is a violated business rule, not a duplicate identity. Map it there
+to an error of the application.
 
 Annotate the transaction on `insert`, as the example does. The other
 statements take the transaction type from that annotation. The aggregate and

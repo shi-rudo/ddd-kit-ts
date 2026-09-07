@@ -310,7 +310,8 @@ describe("versionedFlush", () => {
 			message:
 				`The update statement of the update of Order(${orderId}) affected ` +
 				"no row, although the stored version is 3. Its predicate holds a " +
-				"condition beyond the version, so the write can never succeed.",
+				"condition beyond the version, or it counts changed rows instead " +
+				"of matched rows.",
 		});
 	});
 

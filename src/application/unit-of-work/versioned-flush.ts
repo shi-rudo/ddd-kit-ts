@@ -49,7 +49,8 @@ export type VersionedFlushStatements<
 	/**
 	 * Tells whether an error from `insert` is the store's unique-violation
 	 * signal. The helper then raises {@link DuplicateAggregateError} with the
-	 * error as cause. Every other error propagates unchanged.
+	 * error as cause. Every other error propagates unchanged. It classifies
+	 * errors of `insert` only.
 	 */
 	readonly isDuplicate: (error: unknown) => boolean;
 } & (
@@ -57,9 +58,10 @@ export type VersionedFlushStatements<
 			/**
 			 * Updates the rows where the stored version equals
 			 * `write.expectedVersion` and stamps `write.version`. The version check
-			 * and the write run in one statement. It returns the count of affected
-			 * rows. It runs for every update, also for an empty change set, because
-			 * the new version must reach the store. Absent for an append-only
+			 * and the write run in one statement. It returns the count of rows that
+			 * the predicate matched, never the count of rows whose values changed.
+			 * It runs for every update, also for an empty change set, because the
+			 * new version must reach the store. Absent for an append-only
 			 * definition.
 			 */
 			readonly update?: (
@@ -68,7 +70,7 @@ export type VersionedFlushStatements<
 			) => AffectedRows | Promise<AffectedRows>;
 			/**
 			 * Deletes the rows where the stored version equals
-			 * `write.expectedVersion` and returns the count of affected rows.
+			 * `write.expectedVersion` and returns the count of rows it deleted.
 			 * Present exactly when the definition sets `physicalRemoval: true`.
 			 */
 			readonly remove?: (

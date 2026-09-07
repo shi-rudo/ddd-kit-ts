@@ -69,9 +69,15 @@ never succeed. Reporting a conflict there would make a caller retry forever.
 The helper takes no driver and no ORM. It is the cost of the row count: drivers
 name that value differently, `rowsAffected` on libsql, `affectedRows` on
 mysql2, and `rowCount` on `pg`, which can be `null`. So the statement returns
-the number, and the consumer adapts the driver result. `isDuplicate` is
-driver-specific in the same way. A future Postgres adapter package supplies it
-for SQLSTATE `23505`.
+the number, and the consumer adapts the driver result. The number counts the
+rows that the predicate matched, never the rows whose values changed. An update
+can write the values a row already holds. MySQL counts changed rows by
+default, so a mysql2 connection needs the `FOUND_ROWS` flag.
+
+`isDuplicate` is driver-specific in the same way, and it classifies the errors
+of `insert` only. A unique violation on an update, for example on a business
+key, passes to `mapError` unchanged. A future Postgres adapter package supplies
+`isDuplicate` for SQLSTATE `23505`.
 
 The helper adds one concept on the flush side. A hand-written flush stays
 valid, and the repository guide keeps that form for a flush that writes several

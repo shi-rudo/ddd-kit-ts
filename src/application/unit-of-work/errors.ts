@@ -182,8 +182,8 @@ function flushStatementFailureMessage(options: {
 			return (
 				`The ${options.intent} statement of the ${site} affected no row, ` +
 				`although the stored version is ${options.storedVersion ?? "unknown"}. ` +
-				"Its predicate holds a condition beyond the version, so the write " +
-				"can never succeed."
+				"Its predicate holds a condition beyond the version, or it counts " +
+				"changed rows instead of matched rows."
 			);
 	}
 }
