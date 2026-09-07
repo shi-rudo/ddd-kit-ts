@@ -8,7 +8,11 @@ import {
 import { InvalidFlushStatementError } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
 
-/** The count of rows that one compare-and-set statement affected. */
+/**
+ * The count of rows that one compare-and-set statement matched. It is a
+ * `number`: a driver that reports a `bigint`, for example better-sqlite3 with
+ * safe integers, needs `Number(...)` in the statement.
+ */
 export type AffectedRows = number;
 
 /**
@@ -118,10 +122,9 @@ const NO_ROW_VERSION = -1;
  * insert. Every other error propagates to `mapError` unchanged.
  *
  * A defect in the statements becomes {@link InvalidFlushStatementError}: an
- * absent statement, a statement that returns no row count, and a statement
- * that affects no row although the stored version matches. Statements that
- * update or remove without `currentVersion` fail here, when the flush is
- * built.
+ * absent statement, a statement that returns no row count, and an
+ * `isDuplicate` that throws. Statements that update or remove without
+ * `currentVersion` fail here, when the flush is built.
  */
 export function versionedFlush<
 	TCtx,
@@ -186,7 +189,20 @@ async function insertNew<
 	try {
 		await statements.insert(transaction, write);
 	} catch (error) {
-		if (!statements.isDuplicate(error)) throw error;
+		let duplicate: boolean;
+		try {
+			duplicate = statements.isDuplicate(error);
+		} catch (classifierCause) {
+			throw new InvalidFlushStatementError({
+				aggregateType: statements.aggregateType,
+				aggregateId: String(write.aggregateId),
+				intent: "add",
+				reason: "duplicate_check_failed",
+				cause: error,
+				classifierCause,
+			});
+		}
+		if (!duplicate) throw error;
 		throw new DuplicateAggregateError({
 			aggregateType: statements.aggregateType,
 			aggregateId: write.aggregateId,
@@ -235,7 +251,7 @@ async function writeVersioned<
 		throw new InvalidFlushStatementError({
 			...failure,
 			reason: "no_row_count",
-			received: String(affectedRows),
+			received: describeRowCount(affectedRows),
 		});
 	}
 	if (affectedRows > 0) return;
@@ -245,13 +261,6 @@ async function writeVersioned<
 		transaction,
 		write.aggregateId,
 	);
-	if (storedVersion.version === expectedVersion) {
-		throw new InvalidFlushStatementError({
-			...failure,
-			reason: "predicate_beyond_version",
-			storedVersion: storedVersion.version,
-		});
-	}
 	throw new ConcurrencyConflictError({
 		aggregateType,
 		aggregateId: write.aggregateId,
@@ -259,6 +268,14 @@ async function writeVersioned<
 		actualVersion: storedVersion.version ?? NO_ROW_VERSION,
 		cause: storedVersion.readFailure,
 	});
+}
+
+/** Names what a statement returned instead of a row count. */
+function describeRowCount(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	return typeof value === "number"
+		? String(value)
+		: `${String(value)} (${typeof value})`;
 }
 
 /**

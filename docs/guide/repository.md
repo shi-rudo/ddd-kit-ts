@@ -494,16 +494,25 @@ defect:
 - `no_row_count`: the statement returned a value that is no row count.
 - `no_expected_version`: the write carries no `expectedVersion`, so it did not
   come from a loaded aggregate.
-- `predicate_beyond_version`: the statement affected no row, although the
-  stored version equals `expectedVersion`. The predicate then holds a condition
-  beyond the version, for example a tenant id, or the driver counts changed
-  rows. Without that check the write would look like a conflict, and a retry
-  would repeat it forever.
+- `duplicate_check_failed`: `isDuplicate` threw. The insert failure stays the
+  cause, and the failure of the check is in `classifierCause`.
+
+The commit phase hands every flush failure to `mapError`, this one included. A
+mapper must return an `InfrastructureError`, so the use case receives the
+mapper's own error. The reason stays readable in the cause chain.
 
 `currentVersion` reports the diagnostic `actualVersion` only. The zero row
 count already proves the conflict, so a failed read never replaces it: the
 helper reports `actualVersion` `-1` and carries the read failure as the
 conflict's cause.
+
+A conflict that reports the same number for `expectedVersion` and
+`actualVersion` names a defect, not a race. It has two causes. The predicate
+of the statement holds a condition beyond the version, for example a tenant
+id. Or the version read did not see what the statement saw. The second cause
+is a matter of isolation: under MySQL's `REPEATABLE READ` a plain `SELECT`
+answers from the snapshot of the transaction, while the compare-and-set reads
+the current row. Use a locking read there, for example `SELECT ... FOR SHARE`.
 
 The row count is the one value the helper needs from the driver, and drivers
 name it differently. A libsql result reports `rowsAffected`. A mysql2 result

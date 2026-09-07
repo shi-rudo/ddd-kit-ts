@@ -245,7 +245,7 @@ describe("versionedFlush", () => {
 			"A definition with physicalRemoval: true needs a remove statement.",
 		],
 	] as const)(
-		"fails a %s write when the statements carry no %s",
+		"fails a %s write when the statements carry no such statement",
 		async (intent, requirement) => {
 			const { statements } = recordingStatements();
 			const { [intent]: _absent, ...withoutStatement } = statements;
@@ -269,9 +269,15 @@ describe("versionedFlush", () => {
 		},
 	);
 
-	it.each([undefined, -1, 1.5, "1"])(
+	it.each([
+		[undefined, "no value"],
+		[-1, "-1"],
+		[1.5, "1.5"],
+		["1", "1 (string)"],
+		[1n, "1 (bigint)"],
+	])(
 		"fails an update whose statement returns %s instead of the row count",
-		async (returned) => {
+		async (returned, received) => {
 			const { statements, calls } = recordingStatements({
 				update: () => returned,
 			});
@@ -284,16 +290,17 @@ describe("versionedFlush", () => {
 			expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
 			expect(rejection).toMatchObject({
 				reason: "no_row_count",
+				received: returned === undefined ? undefined : received,
 				message:
 					`The update statement of the update of Order(${orderId}) ` +
-					`returned ${String(returned)}. It must return the count of rows ` +
+					`returned ${received}. It must return the count of rows ` +
 					"it affected, so the flush can tell a conflict from a write.",
 			});
 			expect(calls).toEqual(["update transaction update"]);
 		},
 	);
 
-	it("fails a write whose statement affected no row although the stored version matches", async () => {
+	it("reports a conflict with equal versions when the statement matched no row", async () => {
 		const { statements } = recordingStatements({
 			update: () => 0,
 			currentVersion: () => 3,
@@ -304,15 +311,8 @@ describe("versionedFlush", () => {
 			writeFor("update", 3 as Version),
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
-		expect(rejection).toMatchObject({
-			reason: "predicate_beyond_version",
-			message:
-				`The update statement of the update of Order(${orderId}) affected ` +
-				"no row, although the stored version is 3. Its predicate holds a " +
-				"condition beyond the version, or it counts changed rows instead " +
-				"of matched rows.",
-		});
+		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
+		expect(rejection).toMatchObject({ expectedVersion: 3, actualVersion: 3 });
 	});
 
 	it("keeps the conflict when the version read fails, and carries the read failure as cause", async () => {
@@ -334,6 +334,35 @@ describe("versionedFlush", () => {
 			expectedVersion: 3,
 			actualVersion: -1,
 			cause: readOutage,
+		});
+	});
+
+	it("fails an add whose isDuplicate throws, and keeps the insert failure as cause", async () => {
+		const outage = new Error("connection reset");
+		const classifierFailure = new TypeError("cannot read code of undefined");
+		const { statements } = recordingStatements({
+			insert: () => {
+				throw outage;
+			},
+		});
+		const brokenClassifier = {
+			...statements,
+			isDuplicate: () => {
+				throw classifierFailure;
+			},
+		};
+
+		const rejection = await versionedFlush(brokenClassifier)(
+			transaction,
+			writeFor("add", undefined),
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidFlushStatementError);
+		expect(rejection).toMatchObject({
+			reason: "duplicate_check_failed",
+			intent: "add",
+			cause: outage,
+			classifierCause: classifierFailure,
 		});
 	});
 

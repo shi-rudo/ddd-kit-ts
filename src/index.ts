@@ -111,6 +111,7 @@ export {
 	CommitError,
 	type FlushStatementFailure,
 	InvalidFlushStatementError,
+	type InvalidFlushStatementErrorOptions,
 	InvalidRepositoryAdapterError,
 	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,

@@ -115,7 +115,7 @@ export type FlushStatementFailure =
 	| "statement_absent"
 	| "no_row_count"
 	| "no_expected_version"
-	| "predicate_beyond_version";
+	| "duplicate_check_failed";
 
 /**
  * A deterministic defect in the store statements that build a flush.
@@ -123,39 +123,50 @@ export type FlushStatementFailure =
  * This is a wiring error, not a persistence failure: the statements cannot
  * run the write the Unit of Work registered, and a retry repeats the same
  * outcome. {@link versionedFlush} raises it during the commit phase, so the
- * repository's `mapError` sees it. A mapper that passes a kit wiring error
- * through keeps the code and the reason.
+ * repository's `mapError` receives it like a store failure. A mapper must
+ * return an `InfrastructureError`. So the use case receives the mapper's own
+ * error, and the reason stays in the cause chain.
  */
 export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_STATEMENT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
 	readonly reason: FlushStatementFailure;
+	/** What the statement returned instead of a row count. */
+	readonly received: string | undefined;
+	/** The failure of `isDuplicate`, when the classifier itself threw. */
+	readonly classifierCause: unknown;
 
-	constructor(options: {
-		readonly aggregateType: string;
-		readonly aggregateId: string;
-		readonly intent: AggregateWriteIntent;
-		readonly reason: FlushStatementFailure;
-		readonly received?: string;
-		readonly storedVersion?: number;
-	}) {
-		super("INVALID_FLUSH_STATEMENT", flushStatementFailureMessage(options));
+	constructor(options: InvalidFlushStatementErrorOptions) {
+		super(
+			"INVALID_FLUSH_STATEMENT",
+			flushStatementFailureMessage(options),
+			options.cause,
+		);
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.intent = options.intent;
 		this.reason = options.reason;
+		this.received = options.received;
+		this.classifierCause = options.classifierCause;
 	}
 }
 
-function flushStatementFailureMessage(options: {
+/** The fields that describe one defect of the flush statements. */
+export interface InvalidFlushStatementErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
 	readonly reason: FlushStatementFailure;
 	readonly received?: string;
-	readonly storedVersion?: number;
-}): string {
+	/** The store failure that the flush was handling, kept for diagnosis. */
+	readonly cause?: unknown;
+	readonly classifierCause?: unknown;
+}
+
+function flushStatementFailureMessage(
+	options: InvalidFlushStatementErrorOptions,
+): string {
 	const site = `${options.intent} of ${options.aggregateType}(${options.aggregateId})`;
 	switch (options.reason) {
 		case "statement_absent":
@@ -178,12 +189,11 @@ function flushStatementFailureMessage(options: {
 				"it when the aggregate is loaded, so this write did not come from a " +
 				"loaded aggregate."
 			);
-		case "predicate_beyond_version":
+		case "duplicate_check_failed":
 			return (
-				`The ${options.intent} statement of the ${site} affected no row, ` +
-				`although the stored version is ${options.storedVersion ?? "unknown"}. ` +
-				"Its predicate holds a condition beyond the version, or it counts " +
-				"changed rows instead of matched rows."
+				`The isDuplicate check of the ${site} threw. It must classify the ` +
+				"error of insert, never fail. The insert failure is the cause; the " +
+				"failure of the check is in classifierCause."
 			);
 	}
 }

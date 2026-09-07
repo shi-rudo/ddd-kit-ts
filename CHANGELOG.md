@@ -61,10 +61,11 @@ compare-and-set predicate needs no narrowing.
 A defect in the statements is a wiring error, not a store failure. The new
 `InvalidFlushStatementError` carries the code `INVALID_FLUSH_STATEMENT` and a
 `reason`: `statement_absent`, `no_row_count`, `no_expected_version`, or
-`predicate_beyond_version`. The last one fires when a statement affects no row
-although the stored version equals `expectedVersion`. Its predicate then holds
-a condition beyond the version, for example a tenant id, and the write can
-never succeed. Reporting a conflict there would make a caller retry forever.
+`duplicate_check_failed`. The last one fires when `isDuplicate` throws. The
+insert failure stays the cause, so a broken classifier never hides the store
+failure it was classifying. The commit phase hands every flush failure to
+`mapError`, this one included. The use case then receives the mapper's error,
+with the reason in the cause chain.
 
 The helper takes no driver and no ORM. It is the cost of the row count: drivers
 name that value differently, `rowsAffected` on libsql, `affectedRows` on
