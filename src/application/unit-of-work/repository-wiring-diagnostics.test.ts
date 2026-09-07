@@ -4,10 +4,11 @@ import ts from "typescript";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * Compiles one definition call per port constraint through the TypeScript
- * compiler API and reads the diagnostic that a consumer sees. A
- * `@ts-expect-error` proves only that some error exists; this suite pins
- * the text that names the violated constraint.
+ * Compiles one call per constraint of the two repository wiring sites through
+ * the TypeScript compiler API. The sites are `defineRepository` and the
+ * `repositories` of `UnitOfWork`. The suite reads the diagnostic that a
+ * consumer sees. A `@ts-expect-error` proves only that some error exists;
+ * this suite pins the text that names the violated constraint.
  */
 
 const moduleDirectory: string = fileURLToPath(new URL("./", import.meta.url));
@@ -21,9 +22,11 @@ import { StateStoredAggregate } from "../../domain/aggregate/state-stored-aggreg
 import type { DomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import { InfrastructureError } from "../../errors/kit-errors";
+import type { Outbox } from "../../messaging/outbox/ports";
 import type { PersistenceModel } from "../../persistence/repository/persistence-model";
+import type { TransactionScope } from "../../persistence/repository/scope";
 import type { RepositoryTracking } from "./persistence-contract";
-import { defineRepository } from "./unit-of-work";
+import { defineRepository, UnitOfWork } from "./unit-of-work";
 
 type OrderEvent = DomainEvent<"OrderPlaced", { readonly orderId: string }>;
 type OrderId = Id<"OrderId">;
@@ -120,6 +123,63 @@ interface ForStoringPayments {
 
 declare const removalFlag: boolean;
 declare const appendOnlyFlag: boolean;
+
+const paymentPersistence: PersistenceModel<Payment, Version, Version | undefined> = {
+	capture: (payment) => payment.version,
+	changes: (baseline, payment) =>
+		baseline === payment.version ? undefined : payment.version,
+	isEmpty: (change) => change === undefined,
+};
+
+declare const scope: TransactionScope<undefined>;
+declare const outbox: Outbox<OrderEvent>;
+declare const tracking: RepositoryTracking<Order>;
+
+const orders = defineRepository<ForStoringOrders>()({
+	aggregate: Order,
+	persistence,
+	create: (_transaction: undefined, tracking) => new SqlOrderAdapter(tracking),
+	flush: async () => {},
+	mapError: (error) => new OrderStoreUnavailableError(error),
+});
+
+const unbrandedOrders = {
+	aggregate: Order,
+	persistence,
+	create: (_transaction: undefined, tracking: RepositoryTracking<Order>) =>
+		new SqlOrderAdapter(tracking),
+	flush: async () => {},
+	mapError: (error: unknown) => new OrderStoreUnavailableError(error),
+};
+
+const connectionOrders = defineRepository<ForStoringOrders>()({
+	aggregate: Order,
+	persistence,
+	create: (_transaction: { readonly connection: string }, tracking) =>
+		new SqlOrderAdapter(tracking),
+	flush: async (_transaction: { readonly connection: string }) => {},
+	mapError: (error) => new OrderStoreUnavailableError(error),
+});
+
+const payments = defineRepository<ForStoringPayments>()({
+	aggregate: Payment,
+	persistence: paymentPersistence,
+	create: () => ({ findById: async () => null }),
+	flush: async (_transaction: undefined) => {},
+	mapError: (error) => new OrderStoreUnavailableError(error),
+});
+
+interface PgTransaction { readonly pg: true }
+interface MyTransaction { readonly my: true }
+declare const unionScope: TransactionScope<PgTransaction | MyTransaction>;
+
+const pgOrders = defineRepository<ForStoringOrders>()({
+	aggregate: Order,
+	persistence,
+	create: (_transaction: PgTransaction, tracking) => new SqlOrderAdapter(tracking),
+	flush: async (_transaction: PgTransaction) => {},
+	mapError: (error) => new OrderStoreUnavailableError(error),
+});
 `;
 
 const adapterWiring = `
@@ -161,12 +221,27 @@ const probes = {
 	physicalRemoval: true,${adapterWiring}});`,
 	"union-port": `defineRepository<ForStoringOrders | ForRemovingOrders>()({${adapterWiring}});`,
 	"callable-port": `defineRepository<(required: string) => void>()({${adapterWiring}});`,
+	"compatible-definition": `new UnitOfWork({ scope, outbox, repositories: { orders } })
+	.run(async ({ repositories }) => {
+		const port: ForStoringOrders = repositories.orders;
+		void port;
+	});`,
+	"raw-adapter": `new UnitOfWork({ scope, outbox, repositories: { orders: new SqlOrderAdapter(tracking) } });`,
+	"unbranded-definition": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } });`,
+	"definition-with-another-context": `new UnitOfWork({ scope, outbox, repositories: { orders: connectionOrders } });`,
+	"definition-with-one-of-the-scope-contexts": `new UnitOfWork({ scope: unionScope, outbox, repositories: { orders: pgOrders } });`,
+	"unbranded-definition-used-in-run": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } })
+	.run(async ({ repositories }) => {
+		await repositories.orders.findById("order-1" as OrderId);
+	});`,
+	"definition-with-another-event-family": `new UnitOfWork({ scope, outbox, repositories: { payments } });`,
+	"compatible-and-incompatible-definitions": `new UnitOfWork({ scope, outbox, repositories: { orders, payments } });`,
 } as const;
 
 type ProbeName = keyof typeof probes;
 
 const probePath = (name: ProbeName): string =>
-	`${moduleDirectory}define-repository.${name}.probe.ts`;
+	`${moduleDirectory}repository-wiring.${name}.probe.ts`;
 
 function compileProbes(): ts.Program {
 	const configPath = `${repositoryRoot}tsconfig.json`;
@@ -223,7 +298,13 @@ function compileProbes(): ts.Program {
 
 let compiled: ts.Program | undefined;
 
-function diagnosticsOf(name: ProbeName): string[] {
+interface ProbeDiagnostic {
+	readonly message: string;
+	/** The source text that the diagnostic points at; absent for a file-level diagnostic. */
+	readonly target: string | undefined;
+}
+
+function diagnosticsOf(name: ProbeName): ProbeDiagnostic[] {
 	compiled ??= compileProbes();
 	const sourceFile = compiled.getSourceFile(probePath(name));
 	if (sourceFile === undefined) {
@@ -232,9 +313,16 @@ function diagnosticsOf(name: ProbeName): string[] {
 	return [
 		...compiled.getSyntacticDiagnostics(sourceFile),
 		...compiled.getSemanticDiagnostics(sourceFile),
-	].map((diagnostic) =>
-		ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-	);
+	].map((diagnostic) => ({
+		message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+		target:
+			diagnostic.start === undefined
+				? undefined
+				: sourceFile.text.slice(
+						diagnostic.start,
+						diagnostic.start + (diagnostic.length ?? 0),
+					),
+	}));
 }
 
 describe("defineRepository compile-time diagnostics", () => {
@@ -306,9 +394,72 @@ describe("defineRepository compile-time diagnostics", () => {
 			const diagnostics = diagnosticsOf(name);
 
 			expect(diagnostics).toHaveLength(1);
-			expect(diagnostics[0]).toContain(
+			expect(diagnostics[0]?.message).toContain(
 				`Property '"defineRepository: ${constraint}"' is missing`,
 			);
 		},
 	);
+});
+
+describe("UnitOfWork repositories compile-time diagnostics", () => {
+	it("accepts a compatible definition and exposes its port", () => {
+		expect(diagnosticsOf("compatible-definition")).toEqual([]);
+	});
+
+	it.each([
+		[
+			"raw-adapter",
+			"the repository must be a definition from defineRepository",
+		],
+		[
+			"unbranded-definition",
+			"the repository must be a definition from defineRepository",
+		],
+		[
+			"definition-with-another-context",
+			"the definition's transaction context must accept the scope's context",
+		],
+		[
+			"definition-with-one-of-the-scope-contexts",
+			"the definition's transaction context must accept the scope's context",
+		],
+		[
+			"definition-with-another-event-family",
+			"the outbox must accept the definition's aggregate events",
+		],
+	] as const)(
+		"reports one error that names the violated constraint for %s",
+		(name, constraint) => {
+			const diagnostics = diagnosticsOf(name);
+
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]?.message).toContain(
+				`Property '"UnitOfWork: ${constraint}"' is missing`,
+			);
+		},
+	);
+
+	it("names the constraint again where run() uses the rejected entry", () => {
+		const diagnostics = diagnosticsOf("unbranded-definition-used-in-run");
+
+		expect(diagnostics).toHaveLength(2);
+		expect(diagnostics[0]?.message).toContain(
+			`Property '"UnitOfWork: the repository must be a definition from defineRepository"' is missing`,
+		);
+		expect(diagnostics[1]?.message).toBe(
+			`Property 'findById' does not exist on type 'RepositoryWiringViolation<"the repository must be a definition from defineRepository">'.`,
+		);
+	});
+
+	it("points the error at the incompatible entry, not at the record", () => {
+		const diagnostics = diagnosticsOf(
+			"compatible-and-incompatible-definitions",
+		);
+
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0]?.target).toBe("payments");
+		expect(diagnostics[0]?.message).toContain(
+			`Property '"UnitOfWork: the outbox must accept the definition's aggregate events"' is missing`,
+		);
+	});
 });

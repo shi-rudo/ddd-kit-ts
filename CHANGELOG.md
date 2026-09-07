@@ -102,6 +102,29 @@ one member satisfied the constraints. A definition typed `any` compiles now,
 as `any` does at every typed parameter; before, the `never` collapse rejected
 it.
 
+### Fixed: UnitOfWork names the violated wiring constraint
+
+`UnitOfWork` checks every entry of `repositories` against three wiring
+constraints. The entry is a definition from `defineRepository`. The outbox
+accepts the aggregate events of the definition. The transaction context of the
+definition accepts the context of the scope. A violated constraint collapsed
+the entry type to `never`. The compiler then reported "not assignable to type
+'never'" and named no cause.
+
+The compiler now rejects the entry with one error that names the violated
+constraint, for example `Property '"UnitOfWork: the outbox must accept the
+definition's aggregate events"' is missing in type ...`. Compatible entries in
+the same record keep their inferred ports. Where `run` uses a rejected entry,
+that error names the constraint as well. For an incompatible entry, the
+exported `CompatibleRepositoryDefinitions` now yields the report type instead
+of `never`. The Unit of Work guide shows the form of the error.
+
+The context constraint now checks the context of the scope as one type. A
+scope over a union of contexts, for example `TransactionScope<PgTx | MyTx>`,
+hands any member to the definition. A definition that accepts only `PgTx`
+compiled against such a scope and failed inside the transaction. It now fails
+to compile with the named constraint.
+
 ### Added: the repository contract suites prove overlapping calls first
 
 The stale-writer proofs of `createRepositoryContractTests` and

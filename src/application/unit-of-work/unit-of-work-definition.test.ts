@@ -166,7 +166,7 @@ describe("UnitOfWork repository definition", () => {
 				scope,
 				outbox: outbox(),
 				repositories: {
-					// @ts-expect-error repository definitions carry the helper's contract brand
+					// @ts-expect-error the repository must be a definition from defineRepository
 					orders: rawDefinition,
 				},
 			});
@@ -305,7 +305,7 @@ describe("UnitOfWork repository definition", () => {
 				scope,
 				outbox: outbox(),
 				repositories: {
-					// @ts-expect-error repository context must accept the Unit of Work context
+					// @ts-expect-error the definition's transaction context must accept the scope's context
 					orders: connectionOrders,
 				},
 			});
@@ -313,7 +313,7 @@ describe("UnitOfWork repository definition", () => {
 				scope,
 				outbox: outbox(),
 				repositories: {
-					// @ts-expect-error repository events must be accepted by the outbox
+					// @ts-expect-error the outbox must accept the definition's aggregate events
 					payments,
 				},
 			});
