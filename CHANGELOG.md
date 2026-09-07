@@ -29,6 +29,80 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a wiring error from the flush no longer arrives as a store failure
+
+The commit phase handed every failure of a repository's `flush` to the
+definition's `mapError`. A mapper must return an `InfrastructureError`, and the
+documented mapper wraps what it does not recognise. So a deterministic defect of
+the definition, for example a missing statement, reached the use case as the
+consumer's own store-unavailable error. Its `retryable` flag then invited a
+retry of a write that can never succeed.
+
+The commit phase now recognises the kit's wiring family and hands such an error
+to the caller unchanged. Every other failure passes through `mapError` as
+before. The new `isWiringErrorLike` performs the check across kit copies, like
+`isDomainErrorLike` and `isInfrastructureErrorLike`. So the check also
+recognises an adapter package that carries its own copy of the kit.
+
+Consumers who relied on seeing their own error type for a wiring defect now see
+the kit's error, with a code from `KitErrorCode`.
+
+### Added: versionedFlush owns the error branches of the flush contract
+
+The flush of a repository definition carries the same three branches in every
+adapter. An `add` maps the store's unique violation to
+`DuplicateAggregateError`. An `update` or a `remove` runs a compare-and-set on
+`expectedVersion` and raises `ConcurrencyConflictError` when it affects no row.
+Every adapter wrote those branches again, and a wrong branch stays silent until
+two writers meet.
+
+`versionedFlush` builds the flush from the store statements and owns the
+branches. The consumer supplies `aggregateType`, `insert`, `isDuplicate`, and,
+for a definition that updates or removes, `update`, `remove`, and
+`currentVersion`. A definition with `physicalRemoval: true` supplies `remove`.
+A definition with `appendOnly: true` omits `update`. The compiler requires
+`currentVersion` next to `update` or `remove`.
+
+`update` and `remove` return the count of matched rows (`MatchedRows`). Zero
+rows means a failed version check. The helper then reads `currentVersion` and raises
+`ConcurrencyConflictError` with the stored version, or `-1` when no row exists.
+The read is diagnostic: when it fails, the conflict stays and carries the read
+failure as cause. The helper runs `update` for every update, also for an empty
+change set, because the new version must reach the store. An error that
+`isDuplicate` rejects propagates unchanged and reaches `mapError`.
+
+Both writes come from a loaded aggregate. So the statements of `update` and
+`remove` receive a receipt whose `expectedVersion` is a `Version`, never
+`undefined`. The new `VersionedWrite` type names that receipt, so a
+compare-and-set predicate needs no narrowing.
+
+A defect in the statements is a wiring error, not a store failure. The new
+`InvalidFlushStatementError` carries the code `INVALID_FLUSH_STATEMENT` and a
+`reason`: `statement_absent`, `no_row_count`, `no_expected_version`, or
+`duplicate_check_failed`. The last one fires when `isDuplicate` throws. The
+insert failure stays the cause, so a broken classifier never hides the store
+failure it was classifying. The commit phase hands every flush failure to
+`mapError`, this one included. The use case then receives the mapper's error,
+with the reason in the cause chain.
+
+The helper takes no driver and no ORM. It is the cost of the row count: drivers
+name that value differently, `rowsAffected` on libsql, `affectedRows` on
+mysql2, and `rowCount` on `pg`, which can be `null`. So the statement returns
+the number, and the consumer adapts the driver result. The number counts the
+rows that the predicate matched, never the rows whose values changed. An update
+can write the values a row already holds. MySQL counts changed rows by
+default, so a mysql2 connection needs the `FOUND_ROWS` flag.
+
+`isDuplicate` is driver-specific in the same way, and it classifies the errors
+of `insert` only. A unique violation on an update, for example on a business
+key, passes to `mapError` unchanged. A future Postgres adapter package supplies
+`isDuplicate` for SQLSTATE `23505`.
+
+The helper adds one concept on the flush side. A hand-written flush stays
+valid, and the repository guide keeps that form for a flush that writes several
+tables with different predicates. The event-sourced flush stays hand-written,
+because the event store runs its own version check.
+
 ### Added: defineRepository accepts an append-only port
 
 An append-only aggregate is a fact that the domain never changes after `add`,

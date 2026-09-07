@@ -8,6 +8,7 @@ import {
 	AggregateDeletedError,
 	type InfrastructureError,
 	isInfrastructureErrorLike,
+	isWiringErrorLike,
 	UnenrolledChangesError,
 } from "../../errors/kit-errors";
 import { IdentityMap } from "../../persistence/repository/identity-map";
@@ -548,6 +549,10 @@ function mapRepositoryPersistenceError<Evt extends AnyDomainEvent>(
 	error: unknown,
 	write: AggregatePersistenceWrite<Aggregate<Id<string>, Evt>, unknown>,
 ): InfrastructureError {
+	// A wiring error states a defect of the definition, not a store failure.
+	// The mapper must return an InfrastructureError, so passing it in would
+	// relabel a programming defect as a store outage and make it retryable.
+	if (isWiringErrorLike(error)) throw error;
 	let mapped: unknown;
 	try {
 		mapped = definition.mapError(error, write);

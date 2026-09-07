@@ -554,34 +554,43 @@ const invoices = defineRepository<ForStoringInvoices>()({
   persistence: invoicePersistenceModel,
   create: (tx: PgTx, tracking: RepositoryTracking<Invoice>) =>
     new PgInvoiceReadAdapter(tx, tracking),
-  flush: async (tx: PgTx, write) => {
-    if (write.intent !== "update") return insertOrRemoveInvoice(tx, write);
+  flush: versionedFlush({
+    aggregateType: "Invoice",
+    insert: (tx: PgTx, write) => insertInvoice(tx, write),
+    isDuplicate: isUniqueViolation,
+    update: async (tx, write) => {
+      const { status, total } = write.changes.value;
+      const result = await tx.query(
+        `update invoice
+            set version = $2,
+                status = $3,
+                total_minor = $4,
+                total_currency = $5,
+                total_scale = $6
+          where id = $1 and version = $7`,
+        [
+          write.aggregateId,
+          write.version,
+          status,
+          total.amountMinor.toString(),
+          total.currency,
+          total.scale,
+          write.expectedVersion,
+        ],
+      );
 
-    const { status, total } = write.changes.value;
-    const result = await tx.query(
-      `update invoice
-          set version = $2,
-              status = $3,
-              total_minor = $4,
-              total_currency = $5,
-              total_scale = $6
-        where id = $1 and version = $7`,
-      [
-        write.aggregateId,
-        write.version,
-        status,
-        total.amountMinor.toString(),
-        total.currency,
-        total.scale,
-        write.expectedVersion,
-      ],
-    );
-
-    if (result.rowCount === 0) throw staleInvoice(write);
-  },
+      return result.rowCount ?? 0;
+    },
+    currentVersion: (tx, id) => loadInvoiceVersion(tx, id),
+  }),
   mapError: mapInvoicePersistenceError,
 });
 ```
+
+`invoicePersistenceModel` projects the full row for every update, so
+`write.changes.value` is always present. An update with no changed field then
+writes the new version only. `versionedFlush` runs the update statement for
+every update, so the stored version never lags behind the aggregate.
 
 The HTTP entry point parses raw input once and emits DTOs once:
 

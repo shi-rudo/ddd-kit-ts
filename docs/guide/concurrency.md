@@ -96,43 +96,42 @@ Explicit `add` and `update` make the lifecycle unambiguous.
 
 ## Optimistic concurrency in `flush`
 
-For an update, compare the stored row with `write.expectedVersion` and write
-`write.version` as the new value:
+An update compares the stored row with `write.expectedVersion` and writes
+`write.version` as the new value. An `add` uses an insert that the aggregate
+id's unique constraint protects. `versionedFlush` builds that flush from the
+store statements and owns the error branches:
 
 ```ts
-async function updateOrder(
-  tx: DrizzleTx,
-  write: AggregatePersistenceWrite<Order, OrderChange>,
-): Promise<void> {
-  if (write.expectedVersion === undefined) {
-    throw new AggregateTrackingError("update requires a loaded version");
-  }
-
-  const result = await tx
-    .update(orders)
-    .set({
-      ...write.changes.value,
-      version: write.version,
-    })
-    .where(and(
-      eq(orders.id, write.aggregateId),
-      eq(orders.version, write.expectedVersion),
-    ));
-
-  if (result.rowsAffected === 0) {
-    const current = await loadOrderVersion(tx, write.aggregateId);
-    throw new ConcurrencyConflictError({
-      aggregateType: "Order",
-      aggregateId: write.aggregateId,
-      expectedVersion: write.expectedVersion,
-      actualVersion: current ?? -1,
-    });
-  }
-}
+flush: versionedFlush({
+  aggregateType: "Order",
+  insert: (tx: DrizzleTx, write) => insertOrder(tx, write),
+  isDuplicate: isUniqueViolation,
+  update: async (tx, write) => {
+    const result = await tx
+      .update(orders)
+      .set({
+        ...write.changes.value,
+        version: write.version,
+      })
+      .where(and(
+        eq(orders.id, write.aggregateId),
+        eq(orders.version, write.expectedVersion),
+      ));
+    return result.rowsAffected;
+  },
+  currentVersion: (tx, id) => loadOrderVersion(tx, id),
+}),
 ```
 
-For `add`, use an insert protected by the aggregate id's unique constraint. For
-an event stream, append `write.events` with `write.expectedVersion ?? 0`.
+Zero affected rows means that another writer moved the row. The helper then
+reads `currentVersion` and raises `ConcurrencyConflictError` with
+`expectedVersion` and the stored version. A duplicate insert becomes
+`DuplicateAggregateError`. The
+[repository guide](./repository.md#the-flush-and-the-occ-contract) documents
+the statements and the hand-written alternative.
+
+For an event stream, append `write.events` with `write.expectedVersion ?? 0`.
+The event store runs the version check, so that flush stays hand-written.
 
 The receipt is immutable. The adapter must not inspect mutable aggregate state
 during the flush. `UnitOfWork` compares the registered version, event batch,

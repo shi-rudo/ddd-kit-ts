@@ -7,6 +7,7 @@ import {
 	defineRepository,
 	UnitOfWork,
 } from "../application/unit-of-work/unit-of-work";
+import { versionedFlush } from "../application/unit-of-work/versioned-flush";
 import type { Version } from "../domain/aggregate/aggregate";
 import { StateStoredAggregate } from "../domain/aggregate/state-stored-aggregate";
 import {
@@ -14,11 +15,7 @@ import {
 	type DomainEvent,
 } from "../domain/event/domain-event";
 import type { Id } from "../domain/identity/id";
-import {
-	ConcurrencyConflictError,
-	DuplicateAggregateError,
-	InfrastructureError,
-} from "../errors/kit-errors";
+import { InfrastructureError } from "../errors/kit-errors";
 import { deepEqual } from "../internal/structural/deep-equal";
 import type {
 	CommittedDomainEvent,
@@ -278,11 +275,11 @@ function mapRepositoryError(error: unknown): InfrastructureError {
 		? error
 		: new ContractRepositoryPersistenceError(error);
 }
-type OrderFlusher = (
-	db: InMemoryDb,
+type OrderFlush = (
 	transaction: InMemoryTransaction,
 	write: AggregatePersistenceWrite<ContractOrder, RowChange>,
 ) => void | Promise<void>;
+type OrderFlushFor = (db: InMemoryDb) => OrderFlush;
 
 interface InMemoryTransaction {
 	readonly snapshot: ReturnType<InMemoryDb["snapshot"]>;
@@ -339,15 +336,14 @@ function createRunInfrastructure(
 function defineOrderRepository(
 	db: InMemoryDb,
 	repoFactory: RepoFactory,
-	flush: OrderFlusher,
+	flushFor: OrderFlushFor,
 ) {
 	return defineRepository<OrderRepositoryPort>()({
 		aggregate: ContractOrder,
 		persistence: orderPersistence,
 		physicalRemoval: true,
 		create: (_tx: InMemoryTransaction, tracking) => repoFactory(db, tracking),
-		flush: (transaction: InMemoryTransaction, write) =>
-			flush(db, transaction, write),
+		flush: flushFor(db),
 		mapError: mapRepositoryError,
 	});
 }
@@ -359,8 +355,7 @@ function defineAppendOnlyOrderRepository(db: InMemoryDb) {
 		appendOnly: true,
 		create: (_tx: InMemoryTransaction, tracking) =>
 			new InMemoryOrderRepository(db, tracking),
-		flush: (transaction: InMemoryTransaction, write) =>
-			flushOrder(db, transaction, write),
+		flush: flushOrder(db),
 		mapError: mapRepositoryError,
 	});
 }
@@ -409,7 +404,7 @@ function createInMemoryEnvironment(
 function createInMemoryHarness(
 	repoFactory: RepoFactory = (db, session) =>
 		new InMemoryOrderRepository(db, session),
-	flush: OrderFlusher = flushOrder,
+	flushFor: OrderFlushFor = flushOrder,
 ): RepositoryContractHarness<ContractOrder, OrderEvent> {
 	let mutationCounter = 0;
 	let idCounter = 0;
@@ -417,7 +412,7 @@ function createInMemoryHarness(
 	return {
 		createEnvironment: async () =>
 			createInMemoryEnvironment((db) =>
-				defineOrderRepository(db, repoFactory, flush),
+				defineOrderRepository(db, repoFactory, flushFor),
 			),
 		createAggregate: () =>
 			ContractOrder.create(`contract-order-${idCounter++}` as OrderId),
@@ -457,41 +452,51 @@ function createAppendOnlyInMemoryHarness(): RepositoryContractHarness<
 	};
 }
 
-function flushOrder(
-	db: InMemoryDb,
-	transaction: InMemoryTransaction,
-	write: AggregatePersistenceWrite<ContractOrder, RowChange>,
-): void {
-	const row = db.rows.get(write.aggregateId);
-	if (write.intent === "add") {
-		if (row) {
-			throw new DuplicateAggregateError({
-				aggregateType: "ContractOrder",
-				aggregateId: write.aggregateId,
-			});
-		}
-		const inserted = write.changes.value;
-		if (!inserted) throw new Error("add produced an empty change set");
-		transaction.mutated = true;
-		db.rows.set(write.aggregateId, structuredClone(inserted));
-		return;
+/** The store's unique-constraint signal, as a driver raises it. */
+class UniqueViolation extends Error {
+	constructor(id: string) {
+		super(`duplicate key: ${id}`);
 	}
-	if (!row || row.version !== write.expectedVersion) {
-		throw new ConcurrencyConflictError({
-			aggregateType: "ContractOrder",
-			aggregateId: write.aggregateId,
-			expectedVersion: write.expectedVersion ?? -1,
-			actualVersion: row?.version ?? -1,
-		});
-	}
-	transaction.mutated = true;
-	if (write.intent === "remove") {
-		db.rows.delete(write.aggregateId);
-		return;
-	}
-	if (!write.changes.empty && write.changes.value) {
-		db.rows.set(write.aggregateId, structuredClone(write.changes.value));
-	}
+}
+
+/**
+ * The reference flush: the store statements, with `versionedFlush` owning
+ * the error branches of the OCC contract. `update` and `remove` report the
+ * affected rows, like a SQL statement with a version predicate.
+ */
+function flushOrder(db: InMemoryDb): OrderFlush {
+	return versionedFlush({
+		aggregateType: "ContractOrder",
+		insert: (transaction: InMemoryTransaction, write) => {
+			if (db.rows.has(write.aggregateId)) {
+				throw new UniqueViolation(write.aggregateId);
+			}
+			const inserted = write.changes.value;
+			if (!inserted) throw new Error("add produced an empty change set");
+			transaction.mutated = true;
+			db.rows.set(write.aggregateId, structuredClone(inserted));
+		},
+		isDuplicate: (error) => error instanceof UniqueViolation,
+		update: (transaction, write) => {
+			if (db.rows.get(write.aggregateId)?.version !== write.expectedVersion) {
+				return 0;
+			}
+			transaction.mutated = true;
+			if (!write.changes.empty && write.changes.value) {
+				db.rows.set(write.aggregateId, structuredClone(write.changes.value));
+			}
+			return 1;
+		},
+		remove: (transaction, write) => {
+			if (db.rows.get(write.aggregateId)?.version !== write.expectedVersion) {
+				return 0;
+			}
+			transaction.mutated = true;
+			db.rows.delete(write.aggregateId);
+			return 1;
+		},
+		currentVersion: (_transaction, id) => db.rows.get(id)?.version,
+	});
 }
 
 describe("repository contract test suite (in-memory reference adapter)", () => {
@@ -568,19 +573,19 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 	 * SPECIFIC assertion (not for any incidental reason).
 	 */
 	async function expectMutantFails(
-		flush: OrderFlusher,
+		flushFor: OrderFlushFor,
 		testNamePrefix: string,
 		expectedFailure: RegExp,
 	): Promise<void> {
 		const mutantTest = createRepositoryContractTests(
-			createInMemoryHarness(undefined, flush),
+			createInMemoryHarness(undefined, flushFor),
 		).find((t) => t.name.startsWith(testNamePrefix));
 		expect(mutantTest).toBeDefined();
 		expect(mutantTest?.skipped).toBeUndefined();
 		await expect(mutantTest?.run()).rejects.toThrow(expectedFailure);
 	}
 
-	const lastWriteWins: OrderFlusher = (db, transaction, write) => {
+	const lastWriteWins: OrderFlushFor = (db) => (transaction, write) => {
 		const change = write.changes.value;
 		if (!change) return;
 		transaction.mutated = true;
@@ -597,12 +602,15 @@ describe("repository contract test suite (in-memory reference adapter)", () => {
 
 	it("the suite EXPOSES an unpredicated delete: a stale delete that succeeds fails the stale-delete test", async () => {
 		await expectMutantFails(
-			(db, transaction, write) => {
-				if (write.intent !== "remove") {
-					return flushOrder(db, transaction, write);
-				}
-				transaction.mutated = true;
-				db.rows.delete(write.aggregateId);
+			(db) => {
+				const reference = flushOrder(db);
+				return (transaction, write) => {
+					if (write.intent !== "remove") {
+						return reference(transaction, write);
+					}
+					transaction.mutated = true;
+					db.rows.delete(write.aggregateId);
+				};
 			},
 			"stale remove conflicts",
 			/stale remove must reject/,
