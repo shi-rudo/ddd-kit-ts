@@ -440,6 +440,12 @@ or returns a raw value, the Unit of Work raises
 `RepositoryErrorMappingFailedError` and preserves both failures for diagnosis.
 That keeps ORM error types out of use cases without hiding the original cause.
 
+The mapper never sees a wiring error. A flush that raises one, for example
+`InvalidFlushStatementError`, reaches the caller unchanged. Such an error
+states a defect of the definition, and a mapper can only return an
+`InfrastructureError`, which would make a caller retry a write that can never
+succeed. Use `isWiringErrorLike` to recognise the family across kit copies.
+
 ### The flush and the OCC contract
 
 The receipt's version relationship is the OCC contract:
@@ -497,9 +503,11 @@ defect:
 - `duplicate_check_failed`: `isDuplicate` threw. The insert failure stays the
   cause, and the failure of the check is in `classifierCause`.
 
-The commit phase hands every flush failure to `mapError`, this one included. A
-mapper must return an `InfrastructureError`, so the use case receives the
-mapper's own error. The reason stays readable in the cause chain.
+A wiring error never reaches `mapError`. The commit phase recognises the kit's
+wiring family and hands such an error to the caller unchanged, because a mapper
+must return an `InfrastructureError` and would relabel a defect of the
+definition as a store outage. Every other failure of the flush passes through
+`mapError` as before.
 
 `currentVersion` reports the diagnostic `actualVersion` only. The zero row
 count already proves the conflict, so a failed read never replaces it: the

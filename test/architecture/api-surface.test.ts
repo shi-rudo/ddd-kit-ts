@@ -234,6 +234,7 @@ const INDEX_SURFACE = [
 	"isDomainErrorLike",
 	"isInfrastructureErrorLike",
 	"isPositionAfter",
+	"isWiringErrorLike",
 	"mergeMetadata",
 	"outboxWriterAcceptingEventLoss",
 	"persistenceProjectionDrifted",

@@ -306,6 +306,7 @@ export {
 	InvalidVersionError,
 	isDomainErrorLike,
 	isInfrastructureErrorLike,
+	isWiringErrorLike,
 	type KitErrorCode,
 	type KitErrorOptions,
 	MisaddressedEventError,

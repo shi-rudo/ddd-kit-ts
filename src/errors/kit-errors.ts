@@ -152,6 +152,30 @@ export function isInfrastructureErrorLike(
 	);
 }
 
+/**
+ * Copy-safe membership check for the kit's wiring-error family.
+ * Same rationale as {@link isDomainErrorLike}.
+ *
+ * A wiring error states a deterministic programming or configuration defect.
+ * A kit boundary that translates failures uses this check to pass such an
+ * error through untouched, instead of relabelling it as a store failure.
+ *
+ * The check narrows to the structural shape, not to a class: the family's
+ * base stays kit-internal, and an error from another kit copy carries the
+ * shape without being an instance of this copy's class.
+ */
+export function isWiringErrorLike(value: unknown): value is Error & {
+	readonly code: string;
+	readonly category: "WIRING";
+	readonly retryable: false;
+} {
+	return (
+		value instanceof KitWiringError ||
+		(value instanceof Error &&
+			(value as { readonly category?: unknown }).category === "WIRING")
+	);
+}
+
 /** Options bag for {@link InMemoryCapacityExceededError}. */
 export interface InMemoryCapacityExceededErrorOptions {
 	/** Concrete reference adapter whose configured capacity was exhausted. */

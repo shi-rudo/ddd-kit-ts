@@ -29,6 +29,24 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a wiring error from the flush no longer arrives as a store failure
+
+The commit phase handed every failure of a repository's `flush` to the
+definition's `mapError`. A mapper must return an `InfrastructureError`, and the
+documented mapper wraps what it does not recognise. So a deterministic defect of
+the definition, for example a missing statement, reached the use case as the
+consumer's own store-unavailable error. Its `retryable` flag then invited a
+retry of a write that can never succeed.
+
+The commit phase now recognises the kit's wiring family and hands such an error
+to the caller unchanged. Every other failure passes through `mapError` as
+before. The new `isWiringErrorLike` performs the check across kit copies, like
+`isDomainErrorLike` and `isInfrastructureErrorLike`. So the check also
+recognises an adapter package that carries its own copy of the kit.
+
+Consumers who relied on seeing their own error type for a wiring defect now see
+the kit's error, with a code from `KitErrorCode`.
+
 ### Added: versionedFlush owns the error branches of the flush contract
 
 The flush of a repository definition carries the same three branches in every
