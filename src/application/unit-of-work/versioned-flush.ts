@@ -9,11 +9,12 @@ import { InvalidFlushStatementError } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
 
 /**
- * The count of rows that one compare-and-set statement matched. It is a
+ * The count of rows that one compare-and-set statement matched. It counts the
+ * rows the predicate matched, never the rows whose values changed. It is a
  * `number`: a driver that reports a `bigint`, for example better-sqlite3 with
  * safe integers, needs `Number(...)` in the statement.
  */
-export type AffectedRows = number;
+export type MatchedRows = number;
 
 /**
  * The receipt of an update or a remove. Both come from a loaded aggregate,
@@ -71,7 +72,7 @@ export type VersionedFlushStatements<
 			readonly update?: (
 				transaction: TCtx,
 				write: VersionedWrite<TAggregate, TChangeSet>,
-			) => AffectedRows | Promise<AffectedRows>;
+			) => MatchedRows | Promise<MatchedRows>;
 			/**
 			 * Deletes the rows where the stored version equals
 			 * `write.expectedVersion` and returns the count of rows it deleted.
@@ -80,7 +81,7 @@ export type VersionedFlushStatements<
 			readonly remove?: (
 				transaction: TCtx,
 				write: VersionedWrite<TAggregate, TChangeSet>,
-			) => AffectedRows | Promise<AffectedRows>;
+			) => MatchedRows | Promise<MatchedRows>;
 			/**
 			 * Reads the stored version of one aggregate. Returns `undefined` when
 			 * no row exists. The helper runs it once, after a statement affected no
@@ -157,6 +158,13 @@ export function versionedFlush<
 					transaction,
 					write,
 				);
+			default: {
+				const unknownIntent: never = write.intent;
+				throw new TypeError(
+					`versionedFlush: the Unit of Work registered the intent ` +
+						`${String(unknownIntent)}, which the statements cannot run.`,
+				);
+			}
 		}
 	};
 }
@@ -195,7 +203,7 @@ async function insertNew<
 		} catch (classifierCause) {
 			throw new InvalidFlushStatementError({
 				aggregateType: statements.aggregateType,
-				aggregateId: String(write.aggregateId),
+				aggregateId: write.aggregateId,
 				intent: "add",
 				reason: "duplicate_check_failed",
 				cause: error,
@@ -225,38 +233,39 @@ async function writeVersioned<
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 ): Promise<void> {
 	const statement = versionedWrites?.[intent];
-	const failure = {
-		aggregateType,
-		aggregateId: String(write.aggregateId),
-		intent,
-	};
 	if (versionedWrites === undefined || statement === undefined) {
 		throw new InvalidFlushStatementError({
-			...failure,
+			aggregateType,
+			aggregateId: write.aggregateId,
+			intent,
 			reason: "statement_absent",
 		});
 	}
 	if (write.expectedVersion === undefined) {
 		throw new InvalidFlushStatementError({
-			...failure,
+			aggregateType,
+			aggregateId: write.aggregateId,
+			intent,
 			reason: "no_expected_version",
 		});
 	}
 	const expectedVersion = write.expectedVersion;
-	const affectedRows = await statement(
+	const matchedRows = await statement(
 		transaction,
 		write as VersionedWrite<TAggregate, TChangeSet>,
 	);
-	if (!Number.isInteger(affectedRows) || affectedRows < 0) {
+	if (!Number.isInteger(matchedRows) || matchedRows < 0) {
 		throw new InvalidFlushStatementError({
-			...failure,
+			aggregateType,
+			aggregateId: write.aggregateId,
+			intent,
 			reason: "no_row_count",
-			received: describeRowCount(affectedRows),
+			received: describeMatchedRows(matchedRows),
 		});
 	}
-	if (affectedRows > 0) return;
+	if (matchedRows > 0) return;
 
-	const storedVersion = await readStoredVersion(
+	const stored = await readCurrentVersion(
 		versionedWrites,
 		transaction,
 		write.aggregateId,
@@ -265,13 +274,13 @@ async function writeVersioned<
 		aggregateType,
 		aggregateId: write.aggregateId,
 		expectedVersion,
-		actualVersion: storedVersion.version ?? NO_ROW_VERSION,
-		cause: storedVersion.readFailure,
+		actualVersion: stored.currentVersion ?? NO_ROW_VERSION,
+		cause: stored.readFailure,
 	});
 }
 
 /** Names what a statement returned instead of a row count. */
-function describeRowCount(value: unknown): string | undefined {
+function describeMatchedRows(value: unknown): string | undefined {
 	if (value === undefined) return undefined;
 	return typeof value === "number"
 		? String(value)
@@ -283,7 +292,7 @@ function describeRowCount(value: unknown): string | undefined {
  * row count already proves the conflict, so a failed read must not replace
  * it. Such a read reports no version and travels as the conflict's cause.
  */
-async function readStoredVersion<
+async function readCurrentVersion<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
@@ -291,12 +300,15 @@ async function readStoredVersion<
 	versionedWrites: VersionedWriteStatements<TCtx, TAggregate, TChangeSet>,
 	transaction: TCtx,
 	aggregateId: TAggregate["id"],
-): Promise<{ version: number | undefined; readFailure?: unknown }> {
+): Promise<{ currentVersion: number | undefined; readFailure?: unknown }> {
 	try {
 		return {
-			version: await versionedWrites.currentVersion(transaction, aggregateId),
+			currentVersion: await versionedWrites.currentVersion(
+				transaction,
+				aggregateId,
+			),
 		};
 	} catch (readFailure) {
-		return { version: undefined, readFailure };
+		return { currentVersion: undefined, readFailure };
 	}
 }

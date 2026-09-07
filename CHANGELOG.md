@@ -45,8 +45,8 @@ for a definition that updates or removes, `update`, `remove`, and
 A definition with `appendOnly: true` omits `update`. The compiler requires
 `currentVersion` next to `update` or `remove`.
 
-`update` and `remove` return the count of affected rows. Zero rows means a
-failed version check. The helper then reads `currentVersion` and raises
+`update` and `remove` return the count of matched rows (`MatchedRows`). Zero
+rows means a failed version check. The helper then reads `currentVersion` and raises
 `ConcurrencyConflictError` with the stored version, or `-1` when no row exists.
 The read is diagnostic: when it fails, the conflict stays and carries the read
 failure as cause. The helper runs `update` for every update, also for an empty

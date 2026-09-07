@@ -181,7 +181,7 @@ function flushStatementFailureMessage(
 			return (
 				`The ${options.intent} statement of the ${site} returned ` +
 				`${options.received ?? "no value"}. It must return the count of rows ` +
-				"it affected, so the flush can tell a conflict from a write."
+				"its predicate matched, so the flush can tell a conflict from a write."
 			);
 		case "no_expected_version":
 			return (

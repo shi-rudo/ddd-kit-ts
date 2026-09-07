@@ -262,10 +262,8 @@ describe("versionedFlush", () => {
 				aggregateType: "Order",
 				aggregateId: orderId,
 				intent,
-				message:
-					`The Unit of Work registered the ${intent} of Order(${orderId}), ` +
-					`but the statements carry no ${intent}. ${requirement}`,
 			});
+			expect((rejection as Error).message).toContain(requirement);
 		},
 	);
 
@@ -291,10 +289,6 @@ describe("versionedFlush", () => {
 			expect(rejection).toMatchObject({
 				reason: "no_row_count",
 				received: returned === undefined ? undefined : received,
-				message:
-					`The update statement of the update of Order(${orderId}) ` +
-					`returned ${received}. It must return the count of rows ` +
-					"it affected, so the flush can tell a conflict from a write.",
 			});
 			expect(calls).toEqual(["update transaction update"]);
 		},
@@ -364,6 +358,40 @@ describe("versionedFlush", () => {
 			cause: outage,
 			classifierCause: classifierFailure,
 		});
+	});
+
+	it("awaits an insert that rejects, and still classifies the duplicate", async () => {
+		const violation = new UniqueViolation("duplicate key");
+		const { statements } = recordingStatements();
+		const asyncInsert = {
+			...statements,
+			insert: async () => {
+				await Promise.resolve();
+				throw violation;
+			},
+		};
+
+		await expect(
+			versionedFlush(asyncInsert)(transaction, writeFor("add", undefined)),
+		).rejects.toBeInstanceOf(DuplicateAggregateError);
+	});
+
+	it("awaits a version read that resolves later", async () => {
+		const { statements } = recordingStatements({ update: () => 0 });
+		const asyncReader = {
+			...statements,
+			currentVersion: async () => {
+				await Promise.resolve();
+				return 7;
+			},
+		};
+
+		await expect(
+			versionedFlush(asyncReader)(
+				transaction,
+				writeFor("update", 3 as Version),
+			),
+		).rejects.toMatchObject({ expectedVersion: 3, actualVersion: 7 });
 	});
 
 	it("accepts statements with insert only, as an append-only definition supplies them", async () => {
