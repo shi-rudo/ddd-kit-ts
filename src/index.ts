@@ -109,6 +109,8 @@ export {
 	AggregateTrackingError,
 	type AggregateTrackingFailure,
 	CommitError,
+	type FlushStatementFailure,
+	InvalidFlushStatementError,
 	InvalidRepositoryAdapterError,
 	InvalidRepositoryDefinitionError,
 	NestedUnitOfWorkError,
@@ -142,6 +144,12 @@ export {
 	type UnitOfWorkContext,
 	type UnitOfWorkDeps,
 } from "./application/unit-of-work/unit-of-work";
+export {
+	type AffectedRows,
+	type VersionedFlushStatements,
+	type VersionedWrite,
+	versionedFlush,
+} from "./application/unit-of-work/versioned-flush";
 // Aggregates: type hub
 export {
 	type Aggregate,

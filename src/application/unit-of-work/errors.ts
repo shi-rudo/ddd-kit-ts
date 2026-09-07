@@ -110,6 +110,84 @@ export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITOR
 	}
 }
 
+/** Why a flush statement cannot run the registered write. */
+export type FlushStatementFailure =
+	| "statement_absent"
+	| "no_row_count"
+	| "no_expected_version"
+	| "predicate_beyond_version";
+
+/**
+ * A deterministic defect in the store statements that build a flush.
+ *
+ * This is a wiring error, not a persistence failure: the statements cannot
+ * run the write the Unit of Work registered, and a retry repeats the same
+ * outcome. {@link versionedFlush} raises it during the commit phase, so the
+ * repository's `mapError` sees it. A mapper that passes a kit wiring error
+ * through keeps the code and the reason.
+ */
+export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_STATEMENT"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly intent: AggregateWriteIntent;
+	readonly reason: FlushStatementFailure;
+
+	constructor(options: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+		readonly intent: AggregateWriteIntent;
+		readonly reason: FlushStatementFailure;
+		readonly received?: string;
+		readonly storedVersion?: number;
+	}) {
+		super("INVALID_FLUSH_STATEMENT", flushStatementFailureMessage(options));
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.intent = options.intent;
+		this.reason = options.reason;
+	}
+}
+
+function flushStatementFailureMessage(options: {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly intent: AggregateWriteIntent;
+	readonly reason: FlushStatementFailure;
+	readonly received?: string;
+	readonly storedVersion?: number;
+}): string {
+	const site = `${options.intent} of ${options.aggregateType}(${options.aggregateId})`;
+	switch (options.reason) {
+		case "statement_absent":
+			return (
+				`The Unit of Work registered the ${site}, but the statements carry ` +
+				`no ${options.intent}. ` +
+				(options.intent === "remove"
+					? "A definition with physicalRemoval: true needs a remove statement."
+					: "A definition without appendOnly: true needs an update statement.")
+			);
+		case "no_row_count":
+			return (
+				`The ${options.intent} statement of the ${site} returned ` +
+				`${options.received ?? "no value"}. It must return the count of rows ` +
+				"it affected, so the flush can tell a conflict from a write."
+			);
+		case "no_expected_version":
+			return (
+				`The ${site} carries no expectedVersion. The Unit of Work captures ` +
+				"it when the aggregate is loaded, so this write did not come from a " +
+				"loaded aggregate."
+			);
+		case "predicate_beyond_version":
+			return (
+				`The ${options.intent} statement of the ${site} affected no row, ` +
+				`although the stored version is ${options.storedVersion ?? "unknown"}. ` +
+				"Its predicate holds a condition beyond the version, so the write " +
+				"can never succeed."
+			);
+	}
+}
+
 /** Why an aggregate lifecycle registration was rejected. */
 export type AggregateTrackingFailure =
 	| "not_loaded"
