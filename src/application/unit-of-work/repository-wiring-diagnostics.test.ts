@@ -168,6 +168,18 @@ const payments = defineRepository<ForStoringPayments>()({
 	flush: async (_transaction: undefined) => {},
 	mapError: (error) => new OrderStoreUnavailableError(error),
 });
+
+interface PgTransaction { readonly pg: true }
+interface MyTransaction { readonly my: true }
+declare const unionScope: TransactionScope<PgTransaction | MyTransaction>;
+
+const pgOrders = defineRepository<ForStoringOrders>()({
+	aggregate: Order,
+	persistence,
+	create: (_transaction: PgTransaction, tracking) => new SqlOrderAdapter(tracking),
+	flush: async (_transaction: PgTransaction) => {},
+	mapError: (error) => new OrderStoreUnavailableError(error),
+});
 `;
 
 const adapterWiring = `
@@ -217,6 +229,7 @@ const probes = {
 	"raw-adapter": `new UnitOfWork({ scope, outbox, repositories: { orders: new SqlOrderAdapter(tracking) } });`,
 	"unbranded-definition": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } });`,
 	"definition-with-another-context": `new UnitOfWork({ scope, outbox, repositories: { orders: connectionOrders } });`,
+	"definition-with-one-of-the-scope-contexts": `new UnitOfWork({ scope: unionScope, outbox, repositories: { orders: pgOrders } });`,
 	"unbranded-definition-used-in-run": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } })
 	.run(async ({ repositories }) => {
 		await repositories.orders.findById("order-1" as OrderId);
@@ -404,6 +417,10 @@ describe("UnitOfWork repositories compile-time diagnostics", () => {
 		],
 		[
 			"definition-with-another-context",
+			"the definition's transaction context must accept the scope's context",
+		],
+		[
+			"definition-with-one-of-the-scope-contexts",
 			"the definition's transaction context must accept the scope's context",
 		],
 		[

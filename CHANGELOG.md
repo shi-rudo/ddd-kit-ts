@@ -119,6 +119,12 @@ that error names the constraint as well. For an incompatible entry, the
 exported `CompatibleRepositoryDefinitions` now yields the report type instead
 of `never`. The Unit of Work guide shows the form of the error.
 
+The context constraint now checks the context of the scope as one type. A
+scope over a union of contexts, for example `TransactionScope<PgTx | MyTx>`,
+hands any member to the definition. A definition that accepts only `PgTx`
+compiled against such a scope and failed inside the transaction. It now fails
+to compile with the named constraint.
+
 ### Added: the repository contract suites prove overlapping calls first
 
 The stale-writer proofs of `createRepositoryContractTests` and

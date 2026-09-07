@@ -417,7 +417,8 @@ export type RepositoriesOf<TDefinitions> = {
  * violates one wiring constraint with a report that names the constraint. The
  * entry must be a definition from {@link defineRepository}. The outbox must
  * accept its aggregate events. Its transaction context must accept the context
- * of the scope.
+ * of the scope as one type. A scope over a union of contexts hands any member
+ * to the definition.
  */
 export type CompatibleRepositoryDefinitions<
 	Evt extends AnyDomainEvent,
@@ -435,7 +436,7 @@ export type CompatibleRepositoryDefinitions<
 	>
 		? TAggregate extends Aggregate<Id<string>, infer TDefinitionEvent>
 			? [TDefinitionEvent] extends [Evt]
-				? TCtx extends TDefinitionContext
+				? [TCtx] extends [TDefinitionContext]
 					? TDefinitions[K]
 					: RepositoryWiringViolation<"the definition's transaction context must accept the scope's context">
 				: RepositoryWiringViolation<"the outbox must accept the definition's aggregate events">
