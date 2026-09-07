@@ -415,9 +415,9 @@ export type RepositoriesOf<TDefinitions> = {
 /**
  * Preserves each concrete repository definition and replaces every entry that
  * violates one wiring constraint with a report that names the constraint. The
- * entry must be a definition from {@link defineRepository}, the outbox must
- * accept its aggregate events, and its transaction context must accept the
- * context of the scope.
+ * entry must be a definition from {@link defineRepository}. The outbox must
+ * accept its aggregate events. Its transaction context must accept the context
+ * of the scope.
  */
 export type CompatibleRepositoryDefinitions<
 	Evt extends AnyDomainEvent,
@@ -455,7 +455,7 @@ type RepositoryFacadeOf<TDefinition> =
 		infer _TAppendOnly
 	>
 		? TRepositoryPort
-		: never;
+		: RepositoryWiringViolation<"the repository must be a definition from defineRepository">;
 
 /** The one Unit-of-Work-owned write of an append-only repository facade. */
 export interface AppendOnlyWriteRegistration<

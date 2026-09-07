@@ -4,11 +4,11 @@ import ts from "typescript";
 import { describe, expect, it } from "vite-plus/test";
 
 /**
- * Compiles one call per constraint of the two repository wiring sites,
- * `defineRepository` and the `repositories` of `UnitOfWork`, through the
- * TypeScript compiler API and reads the diagnostic that a consumer sees. A
- * `@ts-expect-error` proves only that some error exists; this suite pins
- * the text that names the violated constraint.
+ * Compiles one call per constraint of the two repository wiring sites through
+ * the TypeScript compiler API. The sites are `defineRepository` and the
+ * `repositories` of `UnitOfWork`. The suite reads the diagnostic that a
+ * consumer sees. A `@ts-expect-error` proves only that some error exists;
+ * this suite pins the text that names the violated constraint.
  */
 
 const moduleDirectory: string = fileURLToPath(new URL("./", import.meta.url));
@@ -217,6 +217,10 @@ const probes = {
 	"raw-adapter": `new UnitOfWork({ scope, outbox, repositories: { orders: new SqlOrderAdapter(tracking) } });`,
 	"unbranded-definition": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } });`,
 	"definition-with-another-context": `new UnitOfWork({ scope, outbox, repositories: { orders: connectionOrders } });`,
+	"unbranded-definition-used-in-run": `new UnitOfWork({ scope, outbox, repositories: { orders: unbrandedOrders } })
+	.run(async ({ repositories }) => {
+		await repositories.orders.findById("order-1" as OrderId);
+	});`,
 	"definition-with-another-event-family": `new UnitOfWork({ scope, outbox, repositories: { payments } });`,
 	"compatible-and-incompatible-definitions": `new UnitOfWork({ scope, outbox, repositories: { orders, payments } });`,
 } as const;
@@ -283,8 +287,8 @@ let compiled: ts.Program | undefined;
 
 interface ProbeDiagnostic {
 	readonly message: string;
-	/** The source text that the diagnostic points at. */
-	readonly target: string;
+	/** The source text that the diagnostic points at; absent for a file-level diagnostic. */
+	readonly target: string | undefined;
 }
 
 function diagnosticsOf(name: ProbeName): ProbeDiagnostic[] {
@@ -298,10 +302,13 @@ function diagnosticsOf(name: ProbeName): ProbeDiagnostic[] {
 		...compiled.getSemanticDiagnostics(sourceFile),
 	].map((diagnostic) => ({
 		message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-		target: sourceFile.text.slice(
-			diagnostic.start,
-			(diagnostic.start ?? 0) + (diagnostic.length ?? 0),
-		),
+		target:
+			diagnostic.start === undefined
+				? undefined
+				: sourceFile.text.slice(
+						diagnostic.start,
+						diagnostic.start + (diagnostic.length ?? 0),
+					),
 	}));
 }
 
@@ -414,6 +421,18 @@ describe("UnitOfWork repositories compile-time diagnostics", () => {
 			);
 		},
 	);
+
+	it("names the constraint again where run() uses the rejected entry", () => {
+		const diagnostics = diagnosticsOf("unbranded-definition-used-in-run");
+
+		expect(diagnostics).toHaveLength(2);
+		expect(diagnostics[0]?.message).toContain(
+			`Property '"UnitOfWork: the repository must be a definition from defineRepository"' is missing`,
+		);
+		expect(diagnostics[1]?.message).toBe(
+			`Property 'findById' does not exist on type 'RepositoryWiringViolation<"the repository must be a definition from defineRepository">'.`,
+		);
+	});
 
 	it("points the error at the incompatible entry, not at the record", () => {
 		const diagnostics = diagnosticsOf(

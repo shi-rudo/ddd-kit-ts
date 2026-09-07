@@ -146,9 +146,9 @@ for the append-only shape.
 Only the helper-created definition is accepted. An unbranded object fails with
 `InvalidRepositoryDefinitionError`, including for JavaScript callers. The
 compiler rejects it first. It also rejects a definition whose aggregate events
-the outbox does not accept, and a definition whose transaction context does not
-accept the context of the scope. The error names the violated constraint and
-ends with a line of this form:
+the outbox does not accept. And it rejects a definition whose transaction
+context does not accept the context of the scope. The error names the violated
+constraint, for example:
 
 ```text
 Property '"UnitOfWork: the outbox must accept the definition's aggregate events"' is missing in type ...

@@ -112,11 +112,12 @@ the entry type to `never`. The compiler then reported "not assignable to type
 'never'" and named no cause.
 
 The compiler now rejects the entry with one error that names the violated
-constraint. The error ends with a line such as `Property '"UnitOfWork: the
-outbox must accept the definition's aggregate events"' is missing in type
-...`. The error points at the violating entry; compatible entries in the same
-record keep their inferred ports. The Unit of Work guide shows the form of the
-error.
+constraint, for example `Property '"UnitOfWork: the outbox must accept the
+definition's aggregate events"' is missing in type ...`. Compatible entries in
+the same record keep their inferred ports. Where `run` uses a rejected entry,
+that error names the constraint as well. For an incompatible entry, the
+exported `CompatibleRepositoryDefinitions` now yields the report type instead
+of `never`. The Unit of Work guide shows the form of the error.
 
 ### Added: the repository contract suites prove overlapping calls first
 
