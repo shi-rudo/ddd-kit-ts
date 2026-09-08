@@ -28,9 +28,8 @@ export default defineConfig({
 	ignoreDeadLinks: [/^\.\/(aggregates|unit-of-work|outbox|concurrency)$/],
 
 	// Emit llms.txt (sitemap index) and llms-full.txt (full docs concat)
-	// at the docs site root for LLM coding tools. The hand-curated LLM
-	// integration guide lives at /LLM.md in the repo root (audience: tools
-	// that read directly from the GitHub repo, not the deployed docs site).
+	// at the docs site root for LLM coding tools. Both derive from the guides,
+	// so they cannot drift away from what the guides say.
 	vite: {
 		plugins: [llmstxt()],
 	},
