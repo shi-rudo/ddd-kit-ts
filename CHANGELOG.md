@@ -29,6 +29,39 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: ConcurrencyConflictError says why it has no stored version
+
+`actualVersion` was a plain number, so a conflict with no stored version had to
+use `-1`. That sentinel carried two facts at once: the aggregate is gone, and
+the version read itself failed. The message printed `actual -1` in both cases,
+and the reader had to inspect the cause to tell them apart.
+
+The error now carries a `reason` of type `ConcurrencyConflictReason`:
+
+- `stale_version`: the aggregate is stored at another version, and
+  `actualVersion` carries it.
+- `version_unchanged`: the write matched nothing although the stored version
+  equals the expected one.
+- `aggregate_absent`: the aggregate no longer exists.
+- `version_unknown`: the version read failed, and the failure is the cause.
+
+`actualVersion` is `number | null`. The type requires it for `stale_version`
+and `version_unchanged`, and forbids it for the other two. So a caller can no
+longer read a version that was never established. It is `null`, never
+`undefined`, because `JSON.stringify` drops a key whose value is `undefined`
+and the field must stay in the log line.
+
+`retryable` now follows the reason. It stays `true` for three of them.
+`version_unchanged` is `false`: the write statement carries a condition beyond
+the version, or its version read answered from a transaction snapshot. Both
+are defects of the adapter, and a retry repeats them. The repository guide
+names the causes and the fix.
+
+Every construction site passes a reason. An adapter that raises the error
+itself adds `reason: "stale_version"` next to `actualVersion`, or
+`reason: "aggregate_absent"` where it used `-1`. An event-store adapter always
+reports `stale_version`: a stream that was never created is at version 0.
+
 ### Fixed: a serialized kit error keeps the fields it declares
 
 Every kit error declares fields of its own: `ConcurrencyConflictError` carries

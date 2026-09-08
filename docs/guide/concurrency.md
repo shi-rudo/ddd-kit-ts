@@ -160,6 +160,13 @@ When an adapter throws `ConcurrencyConflictError`, the application has three
 choices. It can retry the operation, return HTTP 409, or accept
 last-write-wins for that path.
 
+Read `retryable` before you retry. Three of the four reasons are retryable:
+another writer moved the aggregate (`stale_version`), the aggregate is gone
+(`aggregate_absent`), or the version read failed (`version_unknown`). The
+fourth, `version_unchanged`, names a defect of the adapter and is not
+retryable. The [repository guide](./repository.md#the-flush-and-the-occ-contract)
+states the two causes and the fix.
+
 Do not catch the conflict inside the same `run` callback and continue using the
 aggregate. Its decision was made from stale facts. A retry must start a fresh
 unit of work, open a fresh transaction, reload fresh instances, and run the

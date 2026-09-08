@@ -1127,6 +1127,7 @@ describe("UnitOfWork", () => {
 		it("a repository ConcurrencyConflictError passes through as the same instance (stays distinguishable)", async () => {
 			const { uow } = createUow();
 			const conflict = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -2391,6 +2392,7 @@ describe("UnitOfWork", () => {
 
 		it("callback failed AND scope rejected with an unrelated error: RollbackError carrying both", async () => {
 			const original = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,

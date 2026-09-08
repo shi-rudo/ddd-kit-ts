@@ -219,6 +219,7 @@ describe("Repository contract", () => {
 		it("ConcurrencyConflictError marks itself retryable via @shirudo/base-error isRetryable", async () => {
 			const { isRetryable } = await import("@shirudo/base-error");
 			const e = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -241,6 +242,7 @@ describe("Repository contract", () => {
 
 		it("library errors serialise to JSON for structured logging", () => {
 			const e = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -269,6 +271,7 @@ describe("Repository contract", () => {
 			}
 
 			const root = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -299,6 +302,7 @@ describe("Repository contract", () => {
 
 		it("ConcurrencyConflictError is an InfrastructureError, not a DomainError", () => {
 			const error = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -328,6 +332,7 @@ describe("Repository contract", () => {
 	describe("ConcurrencyConflictError contract", () => {
 		it("carries aggregate type, id, expected and actual versions", () => {
 			const error = new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 3,
@@ -340,12 +345,13 @@ describe("Repository contract", () => {
 			expect(error.actualVersion).toBe(5);
 			expect(error.message).toContain("Order(o-1)");
 			expect(error.message).toContain("expected version 3");
-			expect(error.message).toContain("actual 5");
+			expect(error.message).toContain("stored version 5");
 		});
 
 		it("is the canonical error a Unit-of-Work flush surfaces on optimistic-lock mismatch", () => {
 			const flush = () => {
 				throw new ConcurrencyConflictError({
+					reason: "stale_version",
 					aggregateType: "Order",
 					aggregateId: "o-1",
 					expectedVersion: 3,

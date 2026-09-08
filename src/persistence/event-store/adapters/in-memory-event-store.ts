@@ -99,6 +99,9 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 				aggregateType: stream.aggregateType,
 				aggregateId: stream.aggregateId,
 				expectedVersion: options.expectedVersion,
+				// A stream that was never created is at version 0, so the stored
+				// version is always a number on this path.
+				reason: "stale_version",
 				actualVersion: existing?.length ?? 0,
 			});
 		}

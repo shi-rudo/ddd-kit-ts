@@ -115,9 +115,6 @@ type VersionedWriteStatements<
 	{ readonly currentVersion: unknown }
 >;
 
-/** The `actualVersion` that a conflict reports when no row exists. */
-const NO_ROW_VERSION = -1;
-
 /**
  * Builds the `flush` of a repository definition from store statements and
  * owns the error branches of the optimistic-concurrency contract.
@@ -310,10 +307,31 @@ function versionedWriter<
 			aggregateType,
 			aggregateId: write.aggregateId,
 			expectedVersion: write.expectedVersion,
-			actualVersion: stored.currentVersion ?? NO_ROW_VERSION,
 			cause: stored.readFailure,
+			...storedVersionOf(stored, write.expectedVersion),
 		});
 	};
+}
+
+/**
+ * Names which version the conflict reports, and why. A read that failed leaves
+ * the stored version unknown; a store that lost the aggregate has none to
+ * name; a version that still equals the expected one means the statement
+ * matched nothing for a reason beyond the version.
+ */
+function storedVersionOf(
+	stored: { currentVersion: number | undefined; readFailure?: unknown },
+	expectedVersion: number,
+):
+	| { reason: "stale_version" | "version_unchanged"; actualVersion: number }
+	| { reason: "aggregate_absent" | "version_unknown" } {
+	if (stored.readFailure !== undefined) return { reason: "version_unknown" };
+	if (stored.currentVersion === undefined) {
+		return { reason: "aggregate_absent" };
+	}
+	return stored.currentVersion === expectedVersion
+		? { reason: "version_unchanged", actualVersion: stored.currentVersion }
+		: { reason: "stale_version", actualVersion: stored.currentVersion };
 }
 
 /** Names what a statement returned instead of a row count. */

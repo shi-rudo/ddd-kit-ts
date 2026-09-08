@@ -24,6 +24,7 @@ describe("toPublicErrorView()", () => {
 		expect(
 			toPublicErrorView(
 				new ConcurrencyConflictError({
+					reason: "stale_version",
 					aggregateType: "Order",
 					aggregateId: "o-1",
 					expectedVersion: 3,

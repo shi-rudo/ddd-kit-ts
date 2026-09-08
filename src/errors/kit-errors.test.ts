@@ -234,6 +234,7 @@ describe("DuplicateAggregateError", () => {
 describe("ConcurrencyConflictError", () => {
 	it("carries expected/actual versions for OCC reporting", () => {
 		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "o-1",
 			expectedVersion: 3,
@@ -244,11 +245,12 @@ describe("ConcurrencyConflictError", () => {
 		expect(e.expectedVersion).toBe(3);
 		expect(e.actualVersion).toBe(5);
 		expect(e.message).toContain("expected version 3");
-		expect(e.message).toContain("actual 5");
+		expect(e.message).toContain("stored version 5");
 	});
 
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
 		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "o-1",
 			expectedVersion: 3,
@@ -269,6 +271,7 @@ describe("ConcurrencyConflictError", () => {
 			}
 		}
 		const root = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "o-1",
 			expectedVersion: 3,
@@ -284,6 +287,7 @@ describe("ConcurrencyConflictError", () => {
 
 	it("serialises to JSON with name, message, and timestamp for structured logging", () => {
 		const e = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "o-1",
 			expectedVersion: 3,

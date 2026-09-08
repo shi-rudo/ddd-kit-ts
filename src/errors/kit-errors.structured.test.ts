@@ -73,6 +73,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 1,
@@ -349,6 +350,7 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 	it("typed matchError dispatches exhaustively over kit codes", () => {
 		const status = matchError(
 			new ConcurrencyConflictError({
+				reason: "stale_version",
 				aggregateType: "Order",
 				aggregateId: "o-1",
 				expectedVersion: 1,
@@ -450,6 +452,7 @@ describe("the no-base-error consumer path is first-class", () => {
 	// toProblem) is an on-top benefit, never a prerequisite.
 	it("branches with a plain switch on error.code and plain property reads", () => {
 		const error: unknown = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "o-1",
 			expectedVersion: 1,
@@ -478,6 +481,7 @@ describe("the no-base-error consumer path is first-class", () => {
 describe("a serialized kit error keeps the fields it declares", () => {
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "order-1",
 			expectedVersion: 3,
@@ -528,6 +532,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 
 	it("does not let a declared field overwrite the envelope", () => {
 		const error = new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: "order-1",
 			expectedVersion: 3,

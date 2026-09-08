@@ -1409,35 +1409,107 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
  * rule) detects the race. Marks itself as `retryable: true` so the
  * `isRetryable` predicate from `@shirudo/base-error` picks it up.
  */
-export interface ConcurrencyConflictErrorOptions {
+/**
+ * Why the version check failed, and whether a stored version exists to name.
+ *
+ * The reason is diagnostic. Callers branch on the code and on `retryable`,
+ * never on the reason.
+ */
+export type ConcurrencyConflictReason =
+	/** The aggregate is stored at another version. `actualVersion` carries it. */
+	| "stale_version"
+	/**
+	 * The write matched nothing although the stored version equals the
+	 * expected one. Either the write statement carries a condition beyond the
+	 * version, for example a tenant id, or its version read answered from a
+	 * transaction snapshot instead of the current row. Both are defects of the
+	 * adapter, so this reason is the one that is not retryable.
+	 */
+	| "version_unchanged"
+	/**
+	 * The aggregate no longer exists. Only a store that can lose a persisted
+	 * record reports this. An append-only event stream cannot: a stream that
+	 * was never created is at version 0, which is `stale_version`.
+	 */
+	| "aggregate_absent"
+	/** The version read failed. The failure travels as the cause. */
+	| "version_unknown";
+
+export type ConcurrencyConflictErrorOptions = {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedVersion: number;
-	readonly actualVersion: number;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
-}
+} & (
+	| {
+			readonly reason: "stale_version" | "version_unchanged";
+			/** The version the store holds. */
+			readonly actualVersion: number;
+	  }
+	| {
+			readonly reason: "aggregate_absent" | "version_unknown";
+			/** No stored version exists to name. */
+			readonly actualVersion?: null;
+	  }
+);
 
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedVersion: number;
-	readonly actualVersion: number;
+	/** The stored version, or `null` when none exists to name. */
+	readonly actualVersion: number | null;
+	readonly reason: ConcurrencyConflictReason;
 
 	constructor(options: ConcurrencyConflictErrorOptions) {
 		super({
 			code: "CONCURRENCY_CONFLICT",
-			message: `Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
+			message: concurrencyConflictMessage(options),
 			cause: options.cause,
 			// The canonical OCC pattern: reload the aggregate, re-apply the
 			// use case, retry in a FRESH unit of work. The structured field
-			// is what the retry classifier (someChainRetryable) reads.
-			retryable: true,
+			// is what the retry classifier (someChainRetryable) reads. A
+			// version_unchanged names a defect of the adapter, and a retry
+			// repeats it, so that one reason is not retryable.
+			retryable: options.reason !== "version_unchanged",
 		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedVersion = options.expectedVersion;
-		this.actualVersion = options.actualVersion;
+		this.actualVersion = options.actualVersion ?? null;
+		this.reason = options.reason;
+	}
+}
+
+function concurrencyConflictMessage(
+	options: ConcurrencyConflictErrorOptions,
+): string {
+	const site = `${options.aggregateType}(${options.aggregateId})`;
+	switch (options.reason) {
+		case "stale_version":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}, stored version ${options.actualVersion}.`
+			);
+		case "version_unchanged":
+			return (
+				`Concurrency conflict on ${site}: the write matched nothing, ` +
+				`although the stored version is ${options.actualVersion}. Its ` +
+				"statement carries a condition beyond the version, or its version " +
+				"read answered from a transaction snapshot."
+			);
+		case "aggregate_absent":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}, but the aggregate no longer exists.`
+			);
+		case "version_unknown":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}. The stored version could not be read; ` +
+				"the read failure is the cause."
+			);
 	}
 }
 
