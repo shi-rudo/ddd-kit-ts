@@ -1,6 +1,9 @@
 import { isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
-import { InvalidFlushStatementError } from "../application/unit-of-work/errors";
+import {
+	InvalidFlushStatementError,
+	RollbackError,
+} from "../application/unit-of-work/errors";
 import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
 import type {
 	EventBusClosedError,
@@ -528,6 +531,50 @@ describe("a serialized kit error keeps the fields it declares", () => {
 			state: "draft",
 			inputType: "ship",
 		});
+	});
+
+	it("survives a field that holds a value with a cycle", () => {
+		const driver: Record<string, unknown> = { name: "DriverError" };
+		driver.connection = { pool: driver };
+		const error = new RollbackError(new Error("callback failed"), driver);
+
+		expect(() => JSON.stringify(error)).not.toThrow();
+		expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+			code: "ROLLBACK_FAILED",
+		});
+	});
+
+	it("keeps name, message and code of a field that holds an error", () => {
+		const rollbackCause = new AggregateDeletedError("order-1");
+		const error = new RollbackError(
+			new Error("callback failed"),
+			rollbackCause,
+		);
+
+		expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+			rollbackCause: {
+				name: "AGGREGATE_DELETED",
+				code: "AGGREGATE_DELETED",
+			},
+		});
+	});
+
+	it("leaves the internals of the envelope out", () => {
+		const error = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			expectedVersion: 3,
+			reason: "stale_version",
+			actualVersion: 5,
+		});
+
+		const serialized = JSON.parse(JSON.stringify(error)) as Record<
+			string,
+			unknown
+		>;
+
+		expect(serialized._tag).toBeUndefined();
+		expect("details" in serialized).toBe(false);
 	});
 
 	it("does not let a declared field overwrite the envelope", () => {

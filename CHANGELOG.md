@@ -79,6 +79,11 @@ overwrite `code` or `category`. The fields are own properties of the error. So
 this holds for every kit error, and for a consumer's own subclass of
 `DomainError` or `InfrastructureError`, with nothing to remember per class.
 
+A field must never break the serializer, because it runs in the failure path.
+A field of type `unknown` can hold a driver value with a cycle, a bigint or a
+symbol. A value that `JSON.stringify` cannot take is left out. An error keeps its
+name, message and code, and a bigint or a symbol becomes its text.
+
 Known limit: an error that travels as the `cause` of another error still
 serializes as name, message, stack, code, category and retryable. The cause
 node is assembled by `@shirudo/base-error`, not by the kit.

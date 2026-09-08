@@ -584,16 +584,21 @@ flush: async (tx: DrizzleTx, write) => {
     return;
   }
 
-  const affectedRows = write.intent === "update"
-    ? await updateOrder(tx, write)
-    : await deleteOrder(tx, write);
-  if (affectedRows > 0) return;
+  const { expectedVersion } = write;
+  if (expectedVersion === undefined) {
+    throw new TypeError("an update or a remove needs a loaded aggregate");
+  }
+
+  const matchedRows = write.intent === "update"
+    ? await updateOrder(tx, write, expectedVersion)
+    : await deleteOrder(tx, write, expectedVersion);
+  if (matchedRows > 0) return;
 
   const currentVersion = await loadOrderVersion(tx, write.aggregateId);
   throw new ConcurrencyConflictError({
     aggregateType: "Order",
     aggregateId: write.aggregateId,
-    expectedVersion: write.expectedVersion,
+    expectedVersion,
     ...(currentVersion === undefined
       ? { reason: "aggregate_absent" as const }
       : { reason: "stale_version" as const, actualVersion: currentVersion }),
@@ -603,7 +608,9 @@ flush: async (tx: DrizzleTx, write) => {
 
 `updateOrder` and `deleteOrder` carry the `expectedVersion` predicate, and
 `updateOrder` also runs for an empty change set. A hand-written flush never
-turns a stale update into an insert.
+turns a stale update into an insert. It narrows `expectedVersion` itself: the
+receipt types it as optional, because an `add` carries none, and the conflict
+needs a number. `versionedFlush` does that narrowing for you.
 
 ## Event-sourced flush
 

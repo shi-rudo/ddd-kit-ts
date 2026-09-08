@@ -35,6 +35,66 @@ export interface KitErrorOptions<TCode extends string> {
 	retryable?: boolean;
 }
 
+/** The keys `StructuredError` owns, which a declared field never replaces. */
+const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
+
+/**
+ * The fields a kit error declares of its own, for the raw log object.
+ *
+ * Every field of a kit error is an own enumerable property, so the log object
+ * carries them without each class repeating them.
+ */
+function ownFields(error: object): Record<string, unknown> {
+	const fields: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(error)) {
+		if (ENVELOPE_FIELDS.has(key)) continue;
+		const safe = logSafeValue(value);
+		if (safe !== undefined) fields[key] = safe;
+	}
+	return fields;
+}
+
+/**
+ * Projects one field value to something a log serializer survives.
+ *
+ * A field of type `unknown` can hold a driver value with a cycle, a bigint or
+ * a symbol, and `JSON.stringify` throws on the first two. A serializer that
+ * throws inside the failure path costs the whole report, so a value that does
+ * not survive the attempt is left out. An error keeps its name, message and
+ * code, which is what a reader needs and cannot cycle.
+ */
+function logSafeValue(value: unknown): unknown {
+	switch (typeof value) {
+		case "string":
+		case "number":
+		case "boolean":
+			return value;
+		case "bigint":
+		case "symbol":
+			return String(value);
+		case "undefined":
+		case "function":
+			return undefined;
+		default:
+			break;
+	}
+	if (value === null) return null;
+	if (value instanceof Error) {
+		const code = (value as { readonly code?: unknown }).code;
+		return {
+			name: value.name,
+			message: value.message,
+			...(typeof code === "string" ? { code } : {}),
+		};
+	}
+	try {
+		JSON.stringify(value);
+		return value;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
@@ -62,17 +122,6 @@ export interface KitErrorOptions<TCode extends string> {
  * }
  * ```
  */
-/**
- * The fields a kit error declares of its own, for the raw log object.
- *
- * Every field of a kit error is an own enumerable property, so the log object
- * carries them without each class repeating them. The envelope of
- * `StructuredError` stays authoritative for the keys it owns.
- */
-function ownFields(error: object): Record<string, unknown> {
-	return Object.fromEntries(Object.entries(error));
-}
-
 export abstract class DomainError<
 	TCode extends string = string,
 > extends StructuredError<TCode, "DOMAIN"> {
