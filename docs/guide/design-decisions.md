@@ -486,6 +486,25 @@ logic, it must already be a validated domain object when it crosses the
 port. If the caller has to map or re-validate first, the translation
 has leaked out of the adapter.
 
+## An error carries one code, and a reason names the case
+
+Some kit errors cover several cases that a caller acts on the same way. A
+concurrency conflict is one error whether the aggregate moved, vanished, or
+could not be read. A flush statement is invalid whether it is absent or
+returns no row count.
+
+Those cases do not become their own codes. The rule is one code per outcome a
+caller acts on, so a caller matches the code and reads the rest. A second code
+would force a `switch` for a decision that is always the same.
+
+The case is a `reason` on the error, and its type carries the field's name:
+`ConcurrencyConflictReason`, `FlushStatementReason`, `AggregateTrackingReason`.
+The reason is diagnostic. It explains a failure in a log, and it does not ask
+the caller to branch. Where the case changes what a caller should do, the flag
+that says so moves with it: a concurrency conflict whose reason is
+`version_unchanged` reports `retryable: false`, so a caller that reads
+`retryable` needs no knowledge of the reason at all.
+
 ## The kit is small on purpose
 
 The kit is not trying to be a full application framework.

@@ -29,6 +29,21 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: one suffix names the reason of an error
+
+Three errors carry a `reason`, and their types carried three suffixes:
+`AggregateTrackingFailure`, `FlushStatementDefect`, and
+`ConcurrencyConflictReason`. One idea, three words, all three public.
+
+The type takes the name of the field it types, so they are
+`AggregateTrackingReason`, `FlushStatementReason`, and
+`ConcurrencyConflictReason`. The values do not change, and neither does any
+behaviour. The guide on design decisions states the rule: one code per outcome
+a caller acts on, and a reason that names the case for a reader.
+
+`FlushStatementDefect` never shipped, so only `AggregateTrackingFailure` had a
+released name. Update the import; the union it names is the same.
+
 ### Removed: the hand-curated LLM.md
 
 `LLM.md` retold the architecture, the API surface and the common mistakes for

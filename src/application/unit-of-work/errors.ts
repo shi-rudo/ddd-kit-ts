@@ -111,7 +111,7 @@ export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITOR
 }
 
 /** What is wrong with the store statements that build a flush. */
-export type FlushStatementDefect =
+export type FlushStatementReason =
 	| "statement_absent"
 	| "no_row_count"
 	| "no_expected_version"
@@ -131,7 +131,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
-	readonly reason: FlushStatementDefect;
+	readonly reason: FlushStatementReason;
 	/** What the statement returned instead of a row count. */
 	readonly received: string | undefined;
 	/** The failure of `isDuplicate`, when the classifier itself threw. */
@@ -140,7 +140,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 	constructor(options: InvalidFlushStatementErrorOptions) {
 		super(
 			"INVALID_FLUSH_STATEMENT",
-			flushStatementDefectMessage(options),
+			flushStatementReasonMessage(options),
 			options.cause,
 		);
 		this.aggregateType = options.aggregateType;
@@ -157,14 +157,14 @@ export interface InvalidFlushStatementErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
-	readonly reason: FlushStatementDefect;
+	readonly reason: FlushStatementReason;
 	readonly received?: string;
 	/** The store failure that the flush was handling, kept for diagnosis. */
 	readonly cause?: unknown;
 	readonly classifierCause?: unknown;
 }
 
-function flushStatementDefectMessage(
+function flushStatementReasonMessage(
 	options: InvalidFlushStatementErrorOptions,
 ): string {
 	const site = `${options.intent} of ${options.aggregateType}(${options.aggregateId})`;
@@ -199,7 +199,7 @@ function flushStatementDefectMessage(
 }
 
 /** Why an aggregate lifecycle registration was rejected. */
-export type AggregateTrackingFailure =
+export type AggregateTrackingReason =
 	| "not_loaded"
 	| "loaded_as_new"
 	| "different_repository"
@@ -217,13 +217,13 @@ export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING">
 	constructor(
 		public readonly aggregateId: string,
 		public readonly operation: AggregateWriteIntent | "load" | "commit",
-		public readonly reason: AggregateTrackingFailure,
+		public readonly reason: AggregateTrackingReason,
 		public readonly registeredIntent?: AggregateWriteIntent,
 		options: { readonly appendOnly?: boolean } = {},
 	) {
 		super(
 			"AGGREGATE_TRACKING",
-			trackingFailureMessage(
+			trackingReasonMessage(
 				aggregateId,
 				operation,
 				reason,
@@ -234,10 +234,10 @@ export class AggregateTrackingError extends KitWiringError<"AGGREGATE_TRACKING">
 	}
 }
 
-function trackingFailureMessage(
+function trackingReasonMessage(
 	aggregateId: string,
 	operation: AggregateWriteIntent | "load" | "commit",
-	reason: AggregateTrackingFailure,
+	reason: AggregateTrackingReason,
 	registeredIntent: AggregateWriteIntent | undefined,
 	options: { readonly appendOnly?: boolean },
 ): string {
