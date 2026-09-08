@@ -59,6 +59,10 @@ on every write, so retrying it multiplies the load of a broken deployment
 instead of surfacing it. An adapter whose version read is a snapshot read can
 accept the reason through the `isRetryable` of its retry policy.
 
+The public error catalog follows the error. A `CONCURRENCY_CONFLICT` that is
+not retryable no longer tells a client to retry, so the repeated load stops at
+the process boundary instead of moving out to the caller.
+
 Every construction site passes a reason. An adapter that raises the error
 itself adds `reason: "stale_version"` next to `actualVersion`, or
 `reason: "aggregate_absent"` where it used `-1`. An event-store adapter always

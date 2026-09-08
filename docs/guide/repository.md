@@ -595,14 +595,11 @@ flush: async (tx: DrizzleTx, write) => {
     : await deleteOrder(tx, write, expectedVersion);
   if (matchedRows > 0) return;
 
-  const currentVersion = await loadOrderVersion(tx, write.aggregateId);
   throw new ConcurrencyConflictError({
     aggregateType: "Order",
     aggregateId: write.aggregateId,
     expectedVersion,
-    ...(currentVersion === undefined
-      ? { reason: "aggregate_absent" as const }
-      : { reason: "stale_version" as const, actualVersion: currentVersion }),
+    ...(await orderConflictReason(tx, write.aggregateId, expectedVersion)),
   });
 },
 ```
@@ -612,6 +609,32 @@ flush: async (tx: DrizzleTx, write) => {
 turns a stale update into an insert. It narrows `expectedVersion` itself: the
 receipt types it as optional, because an `add` carries none, and the conflict
 needs a number. `versionedFlush` does that narrowing for you.
+
+The conflict needs a reason, and a hand-written flush names all four:
+
+```ts
+async function orderConflictReason(
+  tx: DrizzleTx,
+  aggregateId: OrderId,
+  expectedVersion: number,
+) {
+  let currentVersion: number | undefined;
+  try {
+    currentVersion = await loadOrderVersion(tx, aggregateId);
+  } catch (readFailure) {
+    return { reason: "version_unknown" as const, cause: readFailure };
+  }
+
+  if (currentVersion === undefined) return { reason: "aggregate_absent" as const };
+  return currentVersion === expectedVersion
+    ? { reason: "version_unchanged" as const, actualVersion: currentVersion }
+    : { reason: "stale_version" as const, actualVersion: currentVersion };
+}
+```
+
+The `version_unchanged` branch is the one an adapter forgets, and it is the
+one that stops a retry of a write that can never succeed. `versionedFlush`
+classifies the same four cases for you.
 
 ## Event-sourced flush
 

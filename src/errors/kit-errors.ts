@@ -46,10 +46,16 @@ const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
  */
 function ownFields(error: object): Record<string, unknown> {
 	const fields: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(error)) {
+	for (const key of Object.keys(error)) {
 		if (ENVELOPE_FIELDS.has(key)) continue;
-		const safe = logSafeValue(value);
-		if (safe !== undefined) fields[key] = safe;
+		// A field can be an accessor, and a consumer's own error class decides
+		// what it computes. Reading it must not fail the report.
+		try {
+			const safe = logSafeValue((error as Record<string, unknown>)[key]);
+			if (safe !== undefined) fields[key] = safe;
+		} catch {
+			// The field cannot be read, so the log object leaves it out.
+		}
 	}
 	return fields;
 }
@@ -82,8 +88,8 @@ function logSafeValue(value: unknown): unknown {
 	if (value instanceof Error) {
 		const code = (value as { readonly code?: unknown }).code;
 		return {
-			name: value.name,
-			message: value.message,
+			name: String(value.name),
+			message: String(value.message),
 			...(typeof code === "string" ? { code } : {}),
 		};
 	}
@@ -1441,24 +1447,6 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 }
 
 /**
- * Surfaced by a Unit-of-Work flush when the aggregate's expected version does
- * not match the version currently persisted: i.e. another writer
- * updated the aggregate concurrently. The canonical optimistic-
- * concurrency signal; the App-Service typically reloads, re-applies
- * the use case, and retries, or surfaces HTTP 409 to the caller.
- *
- * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
- * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
- * inside the same `run()` callback and continue: the failed aggregate
- * is already enrolled (its events would be committed for a write that
- * never happened) and the identity map still serves the same stale
- * instance to any in-place "reload".
- *
- * `InfrastructureError` because the persistence layer (not a domain
- * rule) detects the race. Marks itself as `retryable: true` so the
- * `isRetryable` predicate from `@shirudo/base-error` picks it up.
- */
-/**
  * Why the version check failed, and whether a stored version exists to name.
  *
  * The reason is diagnostic. Callers branch on the code and on `retryable`,
@@ -1511,6 +1499,25 @@ export type ConcurrencyConflictErrorOptions = {
 	  }
 );
 
+/**
+ * Surfaced by a Unit-of-Work flush when the aggregate's expected version does
+ * not match the version currently persisted: i.e. another writer
+ * updated the aggregate concurrently. The canonical optimistic-
+ * concurrency signal; the App-Service typically reloads, re-applies
+ * the use case, and retries, or surfaces HTTP 409 to the caller.
+ *
+ * **Retry means a FRESH unit of work** (a new `UnitOfWork.run()` /
+ * `withCommit` invocation): reload, re-apply, and register `update` again. Do NOT catch this
+ * inside the same `run()` callback and continue: the failed aggregate
+ * is already enrolled (its events would be committed for a write that
+ * never happened) and the identity map still serves the same stale
+ * instance to any in-place "reload".
+ *
+ * `InfrastructureError` because the persistence layer (not a domain
+ * rule) detects the race. Its `retryable` follows the reason, so the
+ * `isRetryable` predicate from `@shirudo/base-error` picks up every reason
+ * but `version_unchanged`, which names a defect of the adapter.
+ */
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;

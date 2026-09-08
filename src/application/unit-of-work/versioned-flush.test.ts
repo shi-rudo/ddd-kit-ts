@@ -345,6 +345,26 @@ describe("versionedFlush", () => {
 		});
 	});
 
+	it("reports a failed version read even when the statement rejects with undefined", async () => {
+		const { statements } = recordingStatements({ update: () => 0 });
+		const rejectingReader = {
+			...statements,
+			// A driver can reject with no value at all.
+			currentVersion: () => Promise.reject(),
+		};
+
+		const rejection = await versionedFlush(rejectingReader)(
+			transaction,
+			writeFor("update", 3 as Version),
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
+		expect(rejection).toMatchObject({
+			reason: "version_unknown",
+			actualVersion: null,
+		});
+	});
+
 	it("fails an add whose isDuplicate throws, and keeps the insert failure as cause", async () => {
 		const outage = new Error("connection reset");
 		const classifierFailure = new TypeError("cannot read code of undefined");
