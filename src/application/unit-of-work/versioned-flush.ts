@@ -6,7 +6,7 @@ import {
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
 import {
-	type FlushStatementFailure,
+	type FlushStatementDefect,
 	InvalidFlushStatementError,
 } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
@@ -146,8 +146,10 @@ export function versionedFlush<
 	const versionedWrites = versionedWritesOf(statements);
 	const aggregateType = statements.aggregateType;
 	const runInsert = insertWriter(statements);
-	const runUpdate = versionedWriter(aggregateType, versionedWrites, "update");
-	const runRemove = versionedWriter(aggregateType, versionedWrites, "remove");
+	const { update: runUpdate, remove: runRemove } = versionedWriters(
+		aggregateType,
+		versionedWrites,
+	);
 	return async (transaction, write) => {
 		switch (write.intent) {
 			case "add":
@@ -167,17 +169,14 @@ export function versionedFlush<
 	};
 }
 
-/** Builds the writer of an add. Reads its statements once, like its peers. */
+/** Reads its statements here, like its versioned peers. */
 function insertWriter<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 >(
 	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
-): (
-	transaction: TCtx,
-	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-) => Promise<void> {
+): IntentWriter<TAggregate, TChangeSet, TCtx> {
 	const { aggregateType, insert, isDuplicate } = statements;
 
 	return async (transaction, write) => {
@@ -227,9 +226,35 @@ function versionedWritesOf<
 	);
 }
 
+/** Runs the write of one intent against the store. */
+type IntentWriter<
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TChangeSet,
+	TCtx,
+> = (
+	transaction: TCtx,
+	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
+) => Promise<void>;
+
+function versionedWriters<
+	TCtx,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TChangeSet,
+>(
+	aggregateType: string,
+	versionedWrites:
+		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
+		| undefined,
+): Record<"update" | "remove", IntentWriter<TAggregate, TChangeSet, TCtx>> {
+	return {
+		update: versionedWriter(aggregateType, versionedWrites, "update"),
+		remove: versionedWriter(aggregateType, versionedWrites, "remove"),
+	};
+}
+
 /**
- * Builds the writer of one versioned intent. It resolves its statement here,
- * so a statements object that changes after the flush is built has no effect.
+ * Resolves the statement of one intent here, so a statements object that
+ * changes after the flush is built has no effect.
  */
 function versionedWriter<
 	TCtx,
@@ -241,14 +266,11 @@ function versionedWriter<
 		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
 		| undefined,
 	intent: "update" | "remove",
-): (
-	transaction: TCtx,
-	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-) => Promise<void> {
+): IntentWriter<TAggregate, TChangeSet, TCtx> {
 	const statement = versionedWrites?.[intent];
-	const defect = (
+	const statementDefect = (
 		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-		reason: FlushStatementFailure,
+		reason: FlushStatementDefect,
 		received?: string,
 	) =>
 		new InvalidFlushStatementError({
@@ -261,17 +283,21 @@ function versionedWriter<
 
 	return async (transaction, write) => {
 		if (versionedWrites === undefined || statement === undefined) {
-			throw defect(write, "statement_absent");
+			throw statementDefect(write, "statement_absent");
 		}
 		if (write.expectedVersion === undefined) {
-			throw defect(write, "no_expected_version");
+			throw statementDefect(write, "no_expected_version");
 		}
 		const matchedRows = await statement(
 			transaction,
 			write as VersionedWrite<TAggregate, TChangeSet>,
 		);
 		if (!Number.isInteger(matchedRows) || matchedRows < 0) {
-			throw defect(write, "no_row_count", describeMatchedRows(matchedRows));
+			throw statementDefect(
+				write,
+				"no_row_count",
+				describeMatchedRows(matchedRows),
+			);
 		}
 		if (matchedRows > 0) return;
 

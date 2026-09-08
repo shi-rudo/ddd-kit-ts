@@ -110,8 +110,8 @@ export class RepositoryErrorMappingFailedError extends KitWiringError<"REPOSITOR
 	}
 }
 
-/** Why a flush statement cannot run the registered write. */
-export type FlushStatementFailure =
+/** What is wrong with the store statements that build a flush. */
+export type FlushStatementDefect =
 	| "statement_absent"
 	| "no_row_count"
 	| "no_expected_version"
@@ -131,7 +131,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
-	readonly reason: FlushStatementFailure;
+	readonly reason: FlushStatementDefect;
 	/** What the statement returned instead of a row count. */
 	readonly received: string | undefined;
 	/** The failure of `isDuplicate`, when the classifier itself threw. */
@@ -140,7 +140,7 @@ export class InvalidFlushStatementError extends KitWiringError<"INVALID_FLUSH_ST
 	constructor(options: InvalidFlushStatementErrorOptions) {
 		super(
 			"INVALID_FLUSH_STATEMENT",
-			flushStatementFailureMessage(options),
+			flushStatementDefectMessage(options),
 			options.cause,
 		);
 		this.aggregateType = options.aggregateType;
@@ -157,14 +157,14 @@ export interface InvalidFlushStatementErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly intent: AggregateWriteIntent;
-	readonly reason: FlushStatementFailure;
+	readonly reason: FlushStatementDefect;
 	readonly received?: string;
 	/** The store failure that the flush was handling, kept for diagnosis. */
 	readonly cause?: unknown;
 	readonly classifierCause?: unknown;
 }
 
-function flushStatementFailureMessage(
+function flushStatementDefectMessage(
 	options: InvalidFlushStatementErrorOptions,
 ): string {
 	const site = `${options.intent} of ${options.aggregateType}(${options.aggregateId})`;
