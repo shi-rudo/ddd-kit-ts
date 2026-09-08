@@ -62,6 +62,17 @@ export interface KitErrorOptions<TCode extends string> {
  * }
  * ```
  */
+/**
+ * The fields a kit error declares of its own, for the raw log object.
+ *
+ * Every field of a kit error is an own enumerable property, so the log object
+ * carries them without each class repeating them. The envelope of
+ * `StructuredError` stays authoritative for the keys it owns.
+ */
+function ownFields(error: object): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(error));
+}
+
 export abstract class DomainError<
 	TCode extends string = string,
 > extends StructuredError<TCode, "DOMAIN"> {
@@ -73,6 +84,11 @@ export abstract class DomainError<
 			message: options.message,
 			cause: options.cause,
 		});
+	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
 	}
 }
 
@@ -89,6 +105,11 @@ export abstract class KitWiringError<
 > extends StructuredError<TCode, "WIRING"> {
 	protected constructor(code: TCode, message: string, cause?: unknown) {
 		super({ code, category: "WIRING", retryable: false, message, cause });
+	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
 	}
 }
 
@@ -119,6 +140,11 @@ export abstract class InfrastructureError<
 			message: options.message,
 			cause: options.cause,
 		});
+	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
 	}
 }
 

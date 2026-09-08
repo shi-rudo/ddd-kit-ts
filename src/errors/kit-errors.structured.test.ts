@@ -1,5 +1,7 @@
 import { isStructuredError, matchError } from "@shirudo/base-error";
 import { describe, expect, it } from "vite-plus/test";
+import { InvalidFlushStatementError } from "../application/unit-of-work/errors";
+import { InvalidDomainTransitionError } from "../domain/state-machine/errors";
 import type {
 	EventBusClosedError,
 	PublishDepthExceededError,
@@ -470,6 +472,75 @@ describe("the no-base-error consumer path is first-class", () => {
 
 		expect(status).toBe(409);
 		expect(retry).toBe(true);
+	});
+});
+
+describe("a serialized kit error keeps the fields it declares", () => {
+	it("carries the fields of an infrastructure error", () => {
+		const error = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
+
+		expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+			code: "CONCURRENCY_CONFLICT",
+			category: "INFRASTRUCTURE",
+			retryable: true,
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
+	});
+
+	it("carries the fields of a wiring error", () => {
+		const error = new InvalidFlushStatementError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			intent: "update",
+			reason: "no_row_count",
+			received: "1 (bigint)",
+		});
+
+		expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+			code: "INVALID_FLUSH_STATEMENT",
+			category: "WIRING",
+			retryable: false,
+			intent: "update",
+			reason: "no_row_count",
+			received: "1 (bigint)",
+		});
+	});
+
+	it("carries the fields of a domain error", () => {
+		const error = new InvalidDomainTransitionError("draft", "ship");
+
+		expect(JSON.parse(JSON.stringify(error))).toMatchObject({
+			code: "INVALID_DOMAIN_TRANSITION",
+			category: "DOMAIN",
+			retryable: false,
+			state: "draft",
+			inputType: "ship",
+		});
+	});
+
+	it("does not let a declared field overwrite the envelope", () => {
+		const error = new ConcurrencyConflictError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			expectedVersion: 3,
+			actualVersion: 5,
+		});
+
+		const serialized = JSON.parse(JSON.stringify(error)) as {
+			name: string;
+			code: string;
+		};
+
+		expect(serialized.name).toBe("CONCURRENCY_CONFLICT");
+		expect(serialized.code).toBe("CONCURRENCY_CONFLICT");
 	});
 });
 

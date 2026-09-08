@@ -29,6 +29,27 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Fixed: a serialized kit error keeps the fields it declares
+
+Every kit error declares fields of its own: `ConcurrencyConflictError` carries
+`expectedVersion` and `actualVersion`, `InvalidFlushStatementError` carries
+`reason` and `intent`, `AggregateTrackingError` carries `reason` and
+`operation`. None of them survived serialization. `JSON.stringify(error)`,
+`res.json(error)` and every JSON log transport returned the envelope only:
+name, message, stack, code, category, retryable. A responder could not filter
+by the machine-readable field. The only way to the value was to parse the
+message, which the error contract forbids.
+
+The three kit error bases now carry the declared fields into the log object.
+The envelope stays authoritative for the keys it owns, so a field can never
+overwrite `code` or `category`. The fields are own properties of the error. So
+this holds for every kit error, and for a consumer's own subclass of
+`DomainError` or `InfrastructureError`, with nothing to remember per class.
+
+Known limit: an error that travels as the `cause` of another error still
+serializes as name, message, stack, code, category and retryable. The cause
+node is assembled by `@shirudo/base-error`, not by the kit.
+
 ### Fixed: a wiring error from the flush no longer arrives as a store failure
 
 The commit phase handed every failure of a repository's `flush` to the
