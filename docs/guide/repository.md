@@ -475,9 +475,9 @@ branches:
   helper raises `DuplicateAggregateError` with the error as cause. Every other
   error propagates unchanged and reaches `mapError`.
 - `update` and `remove` run the compare-and-set and return the count of
-  affected rows. On zero rows the helper reads `currentVersion` and raises
-  `ConcurrencyConflictError` with `expectedVersion` and the stored version. If
-  no row exists, `actualVersion` is `-1`.
+  matched rows. On zero rows the helper reads `currentVersion` and raises
+  `ConcurrencyConflictError` with `expectedVersion` and a `reason` that names
+  what the read found.
 - The helper runs `update` for every update, also for an empty change set,
   because the new version must reach the store. The statement above spreads
   `write.changes.value`, so an empty change set writes the version only.
@@ -504,23 +504,38 @@ defect:
   cause, and the failure of the check is in `classifierCause`.
 
 A wiring error never reaches `mapError`. The commit phase recognises the kit's
-wiring family and hands such an error to the caller unchanged, because a mapper
-must return an `InfrastructureError` and would relabel a defect of the
-definition as a store outage. Every other failure of the flush passes through
-`mapError` as before.
+wiring family and hands such an error to the caller unchanged. A mapper must
+return an `InfrastructureError`, so it would relabel a defect of the definition
+as a store outage. Every other failure of the flush passes through `mapError`
+as before.
 
-`currentVersion` reports the diagnostic `actualVersion` only. The zero row
-count already proves the conflict, so a failed read never replaces it: the
-helper reports `actualVersion` `-1` and carries the read failure as the
-conflict's cause.
+The zero row count already proves the conflict, so the version read only names
+it. The conflict carries one of four reasons:
 
-A conflict that reports the same number for `expectedVersion` and
-`actualVersion` names a defect, not a race. It has two causes. The predicate
-of the statement holds a condition beyond the version, for example a tenant
-id. Or the version read did not see what the statement saw. The second cause
-is a matter of isolation: under MySQL's `REPEATABLE READ` a plain `SELECT`
-answers from the snapshot of the transaction, while the compare-and-set reads
-the current row. Use a locking read there, for example `SELECT ... FOR SHARE`.
+- `stale_version`: the aggregate is stored at another version, and
+  `actualVersion` carries it.
+- `aggregate_absent`: the aggregate no longer exists, and `actualVersion` is
+  `null`. Only a store that can lose a persisted record reports this. An
+  append-only event stream cannot: a stream that was never created is at
+  version 0, which is `stale_version`.
+- `version_unknown`: the version read failed, `actualVersion` is `null`, and
+  the read failure is the conflict's cause. A failed read never replaces the
+  conflict that the row count already proved.
+- `version_unchanged`: the write matched nothing although the stored version
+  equals the expected one.
+
+The reason is diagnostic. Branch on the code and on `retryable`, never on the
+reason.
+
+`version_unchanged` is the one reason that is not retryable, because it names
+a defect and not a race. A write that hits it fails at once instead of
+retrying. It has two causes. The predicate of the statement
+holds a condition beyond the version, for example a tenant id. Or the version
+read did not see what the statement saw. The second cause is a matter of
+isolation: under MySQL's `REPEATABLE READ` a plain `SELECT` answers from the
+snapshot of the transaction, while the compare-and-set reads the current row.
+Use a locking read there, for example `SELECT ... FOR SHARE`. A retry repeats
+either cause, so the write fails loud instead.
 
 The row count is the one value the helper needs from the driver, and drivers
 name it differently. A libsql result reports `rowsAffected`. A mysql2 result
@@ -570,23 +585,56 @@ flush: async (tx: DrizzleTx, write) => {
     return;
   }
 
-  const affectedRows = write.intent === "update"
-    ? await updateOrder(tx, write)
-    : await deleteOrder(tx, write);
-  if (affectedRows > 0) return;
+  const { expectedVersion } = write;
+  if (expectedVersion === undefined) {
+    throw new TypeError("an update or a remove needs a loaded aggregate");
+  }
+
+  const matchedRows = write.intent === "update"
+    ? await updateOrder(tx, write, expectedVersion)
+    : await deleteOrder(tx, write, expectedVersion);
+  if (matchedRows > 0) return;
 
   throw new ConcurrencyConflictError({
     aggregateType: "Order",
     aggregateId: write.aggregateId,
-    expectedVersion: write.expectedVersion ?? -1,
-    actualVersion: await loadOrderVersion(tx, write.aggregateId) ?? -1,
+    expectedVersion,
+    ...(await orderConflictReason(tx, write.aggregateId, expectedVersion)),
   });
 },
 ```
 
 `updateOrder` and `deleteOrder` carry the `expectedVersion` predicate, and
 `updateOrder` also runs for an empty change set. A hand-written flush never
-turns a stale update into an insert.
+turns a stale update into an insert. It narrows `expectedVersion` itself: the
+receipt types it as optional, because an `add` carries none, and the conflict
+needs a number. `versionedFlush` does that narrowing for you.
+
+The conflict needs a reason, and a hand-written flush names all four:
+
+```ts
+async function orderConflictReason(
+  tx: DrizzleTx,
+  aggregateId: OrderId,
+  expectedVersion: number,
+) {
+  let currentVersion: number | undefined;
+  try {
+    currentVersion = await loadOrderVersion(tx, aggregateId);
+  } catch (readFailure) {
+    return { reason: "version_unknown" as const, cause: readFailure };
+  }
+
+  if (currentVersion === undefined) return { reason: "aggregate_absent" as const };
+  return currentVersion === expectedVersion
+    ? { reason: "version_unchanged" as const, actualVersion: currentVersion }
+    : { reason: "stale_version" as const, actualVersion: currentVersion };
+}
+```
+
+The `version_unchanged` branch is the one an adapter forgets, and it is the
+one that stops a retry of a write that can never succeed. `versionedFlush`
+classifies the same four cases for you.
 
 ## Event-sourced flush
 

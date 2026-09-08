@@ -37,6 +37,7 @@ const instantSleep = async () => {};
 
 const conflict = () =>
 	new ConcurrencyConflictError({
+		reason: "stale_version",
 		aggregateType: "Order",
 		aggregateId: "o-1",
 		expectedVersion: 1,

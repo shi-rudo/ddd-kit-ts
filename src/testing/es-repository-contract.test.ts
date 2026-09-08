@@ -463,6 +463,7 @@ function flushEsOrder(
 	const stream = db.streams.get(key) ?? [];
 	if (stream.length !== expectedVersion) {
 		throw new ConcurrencyConflictError({
+			reason: "stale_version",
 			aggregateType: "ContractEsOrder",
 			aggregateId: write.aggregateId,
 			expectedVersion,

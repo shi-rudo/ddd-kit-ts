@@ -27,8 +27,10 @@ export interface RetryPolicy {
 	/**
 	 * Classifier deciding whether an error is worth retrying. Default
 	 * {@link someChainRetryable} (walks the cause chain for the loose
-	 * `retryable === true` marker, so `ConcurrencyConflictError` matches
-	 * even when an adapter wraps it). Override to add driver-specific
+	 * `retryable === true` marker, so a `ConcurrencyConflictError` matches
+	 * even when an adapter wraps it, unless its reason is
+	 * `version_unchanged`, which names a defect a retry repeats). Override
+	 * to add driver-specific
 	 * serialization codes (Postgres 40001, MySQL 1213, SQLite SQLITE_BUSY)
 	 * that your adapter has not mapped to a retryable kit error.
 	 *

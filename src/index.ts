@@ -276,6 +276,7 @@ export {
 	CapabilityRegistryConflictError,
 	ConcurrencyConflictError,
 	type ConcurrencyConflictErrorOptions,
+	type ConcurrencyConflictReason,
 	DirectStateMutationError,
 	DomainError,
 	DuplicateAggregateError,

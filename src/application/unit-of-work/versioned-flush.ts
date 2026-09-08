@@ -115,17 +115,14 @@ type VersionedWriteStatements<
 	{ readonly currentVersion: unknown }
 >;
 
-/** The `actualVersion` that a conflict reports when no row exists. */
-const NO_ROW_VERSION = -1;
-
 /**
  * Builds the `flush` of a repository definition from store statements and
  * owns the error branches of the optimistic-concurrency contract.
  *
  * An `add` runs `insert`; a unique violation becomes
  * {@link DuplicateAggregateError}. An `update` or `remove` runs the matching
- * statement. Zero affected rows becomes {@link ConcurrencyConflictError} with
- * the stored version as `actualVersion`. A stale update never becomes an
+ * statement. Zero matched rows becomes {@link ConcurrencyConflictError}, whose
+ * reason names what the version read found. A stale update never becomes an
  * insert. Every other error propagates to `mapError` unchanged.
  *
  * A defect in the statements becomes {@link InvalidFlushStatementError}: an
@@ -310,10 +307,31 @@ function versionedWriter<
 			aggregateType,
 			aggregateId: write.aggregateId,
 			expectedVersion: write.expectedVersion,
-			actualVersion: stored.currentVersion ?? NO_ROW_VERSION,
-			cause: stored.readFailure,
+			cause: stored.read ? undefined : stored.readFailure,
+			...storedVersionOf(stored, write.expectedVersion),
 		});
 	};
+}
+
+/**
+ * Names which version the conflict reports, and why. A read that failed leaves
+ * the stored version unknown; a store that lost the aggregate has none to
+ * name; a version that still equals the expected one means the statement
+ * matched nothing for a reason beyond the version.
+ */
+function storedVersionOf(
+	stored: VersionRead,
+	expectedVersion: number,
+):
+	| { reason: "stale_version" | "version_unchanged"; actualVersion: number }
+	| { reason: "aggregate_absent" | "version_unknown" } {
+	if (!stored.read) return { reason: "version_unknown" };
+	if (stored.currentVersion === undefined) {
+		return { reason: "aggregate_absent" };
+	}
+	return stored.currentVersion === expectedVersion
+		? { reason: "version_unchanged", actualVersion: stored.currentVersion }
+		: { reason: "stale_version", actualVersion: stored.currentVersion };
 }
 
 /** Names what a statement returned instead of a row count. */
@@ -337,15 +355,25 @@ async function readCurrentVersion<
 	versionedWrites: VersionedWriteStatements<TCtx, TAggregate, TChangeSet>,
 	transaction: TCtx,
 	aggregateId: TAggregate["id"],
-): Promise<{ currentVersion: number | undefined; readFailure?: unknown }> {
+): Promise<VersionRead> {
 	try {
 		return {
+			read: true,
 			currentVersion: await versionedWrites.currentVersion(
 				transaction,
 				aggregateId,
 			),
 		};
 	} catch (readFailure) {
-		return { currentVersion: undefined, readFailure };
+		return { read: false, readFailure };
 	}
 }
+
+/**
+ * The outcome of one version read. `read` states whether the read answered at
+ * all, because a statement can reject with `undefined`, and a failed read is
+ * not an absent aggregate.
+ */
+type VersionRead =
+	| { readonly read: true; readonly currentVersion: number | undefined }
+	| { readonly read: false; readonly readFailure: unknown };

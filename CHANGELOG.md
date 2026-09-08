@@ -29,6 +29,71 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: ConcurrencyConflictError says why it has no stored version
+
+`actualVersion` was a plain number, so a conflict with no stored version had to
+use `-1`. That sentinel carried two facts at once: the aggregate is gone, and
+the version read itself failed. The message printed `actual -1` in both cases,
+and the reader had to inspect the cause to tell them apart.
+
+The error now carries a `reason` of type `ConcurrencyConflictReason`:
+
+- `stale_version`: the aggregate is stored at another version, and
+  `actualVersion` carries it.
+- `version_unchanged`: the write matched nothing although the stored version
+  equals the expected one.
+- `aggregate_absent`: the aggregate no longer exists.
+- `version_unknown`: the version read failed, and the failure is the cause.
+
+`actualVersion` is `number | null`. The type requires it for `stale_version`
+and `version_unchanged`, and forbids it for the other two. So a caller can no
+longer read a version that was never established. It is `null`, never
+`undefined`, because `JSON.stringify` drops a key whose value is `undefined`
+and the field must stay in the log line.
+
+`retryable` now follows the reason. It stays `true` for three of them.
+`version_unchanged` is `false`: the write statement carries a condition beyond
+the version, or its version read answered from a transaction snapshot. Both
+are defects of the adapter, and a retry repeats them. A predicate defect fires
+on every write, so retrying it multiplies the load of a broken deployment
+instead of surfacing it. An adapter whose version read is a snapshot read can
+accept the reason through the `isRetryable` of its retry policy.
+
+The public error catalog follows the error. A `CONCURRENCY_CONFLICT` that is
+not retryable no longer tells a client to retry, so the repeated load stops at
+the process boundary instead of moving out to the caller.
+
+Every construction site passes a reason. An adapter that raises the error
+itself adds `reason: "stale_version"` next to `actualVersion`, or
+`reason: "aggregate_absent"` where it used `-1`. An event-store adapter always
+reports `stale_version`: a stream that was never created is at version 0.
+
+### Fixed: a serialized kit error keeps the fields it declares
+
+Every kit error declares fields of its own: `ConcurrencyConflictError` carries
+`expectedVersion` and `actualVersion`, `InvalidFlushStatementError` carries
+`reason` and `intent`, `AggregateTrackingError` carries `reason` and
+`operation`. None of them survived serialization. `JSON.stringify(error)`,
+`res.json(error)` and every JSON log transport returned the envelope only:
+name, message, stack, code, category, retryable. A responder could not filter
+by the machine-readable field. The only way to the value was to parse the
+message, which the error contract forbids.
+
+The three kit error bases now carry the declared fields into the log object.
+The envelope stays authoritative for the keys it owns, so a field can never
+overwrite `code` or `category`. The fields are own properties of the error. So
+this holds for every kit error, and for a consumer's own subclass of
+`DomainError` or `InfrastructureError`, with nothing to remember per class.
+
+A field must never break the serializer, because it runs in the failure path.
+A field of type `unknown` can hold a driver value with a cycle, a bigint or a
+symbol. A value that `JSON.stringify` cannot take is left out. An error keeps its
+name, message and code, and a bigint or a symbol becomes its text.
+
+Known limit: an error that travels as the `cause` of another error still
+serializes as name, message, stack, code, category and retryable. The cause
+node is assembled by `@shirudo/base-error`, not by the kit.
+
 ### Fixed: a wiring error from the flush no longer arrives as a store failure
 
 The commit phase handed every failure of a repository's `flush` to the

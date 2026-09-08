@@ -151,6 +151,12 @@ export function createKitPublicErrors() {
 			publicCode: "CONCURRENCY_CONFLICT",
 			status: 409,
 			retryable: true,
+			// A conflict whose reason is version_unchanged names a defect of the
+			// adapter, and the kit marks it not retryable. Telling the client to
+			// retry would move the repeated load out of the process instead of
+			// stopping it.
+			projectRetryable: (error) =>
+				(error as { readonly retryable?: unknown }).retryable !== false,
 			userMessages: english(
 				"The resource was modified by another request. Please reload and try again.",
 			),

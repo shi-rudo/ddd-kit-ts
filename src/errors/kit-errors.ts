@@ -35,6 +35,72 @@ export interface KitErrorOptions<TCode extends string> {
 	retryable?: boolean;
 }
 
+/** The keys `StructuredError` owns, which a declared field never replaces. */
+const ENVELOPE_FIELDS: ReadonlySet<string> = new Set(["_tag", "details"]);
+
+/**
+ * The fields a kit error declares of its own, for the raw log object.
+ *
+ * Every field of a kit error is an own enumerable property, so the log object
+ * carries them without each class repeating them.
+ */
+function ownFields(error: object): Record<string, unknown> {
+	const fields: Record<string, unknown> = {};
+	for (const key of Object.keys(error)) {
+		if (ENVELOPE_FIELDS.has(key)) continue;
+		// A field can be an accessor, and a consumer's own error class decides
+		// what it computes. Reading it must not fail the report.
+		try {
+			const safe = logSafeValue((error as Record<string, unknown>)[key]);
+			if (safe !== undefined) fields[key] = safe;
+		} catch {
+			// The field cannot be read, so the log object leaves it out.
+		}
+	}
+	return fields;
+}
+
+/**
+ * Projects one field value to something a log serializer survives.
+ *
+ * A field of type `unknown` can hold a driver value with a cycle, a bigint or
+ * a symbol, and `JSON.stringify` throws on the first two. A serializer that
+ * throws inside the failure path costs the whole report, so a value that does
+ * not survive the attempt is left out. An error keeps its name, message and
+ * code, which is what a reader needs and cannot cycle.
+ */
+function logSafeValue(value: unknown): unknown {
+	switch (typeof value) {
+		case "string":
+		case "number":
+		case "boolean":
+			return value;
+		case "bigint":
+		case "symbol":
+			return String(value);
+		case "undefined":
+		case "function":
+			return undefined;
+		default:
+			break;
+	}
+	if (value === null) return null;
+	if (value instanceof Error) {
+		const code = (value as { readonly code?: unknown }).code;
+		return {
+			name: String(value.name),
+			message: String(value.message),
+			...(typeof code === "string" ? { code } : {}),
+		};
+	}
+	try {
+		JSON.stringify(value);
+		return value;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Abstract base for **domain-invariant violations**. Domain methods
  * (aggregates, entity validation hooks, value-object constructors)
@@ -74,6 +140,11 @@ export abstract class DomainError<
 			cause: options.cause,
 		});
 	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
+	}
 }
 
 /**
@@ -89,6 +160,11 @@ export abstract class KitWiringError<
 > extends StructuredError<TCode, "WIRING"> {
 	protected constructor(code: TCode, message: string, cause?: unknown) {
 		super({ code, category: "WIRING", retryable: false, message, cause });
+	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
 	}
 }
 
@@ -119,6 +195,11 @@ export abstract class InfrastructureError<
 			message: options.message,
 			cause: options.cause,
 		});
+	}
+
+	/** Carries the fields the concrete error declares into the log object. */
+	protected override buildLogObject(): Record<string, unknown> {
+		return { ...ownFields(this), ...super.buildLogObject() };
 	}
 }
 
@@ -1366,6 +1447,59 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 }
 
 /**
+ * Why the version check failed, and whether a stored version exists to name.
+ *
+ * The reason is diagnostic. Callers branch on the code and on `retryable`,
+ * never on the reason.
+ */
+export type ConcurrencyConflictReason =
+	/** The aggregate is stored at another version. `actualVersion` carries it. */
+	| "stale_version"
+	/**
+	 * The write matched nothing although the stored version equals the
+	 * expected one. Either the write statement carries a condition beyond the
+	 * version, for example a tenant id. Or its version read answered from a
+	 * transaction snapshot instead of the current row. Both are defects of the
+	 * adapter, so this reason is the one that is not retryable: a predicate
+	 * defect fires on every write, and retrying it multiplies the load of a
+	 * broken deployment instead of surfacing it.
+	 *
+	 * One occurrence does not tell the two causes apart; their rates do. A
+	 * predicate defect fires at a flat rate whatever the load, a snapshot read
+	 * only when writes race. An adapter whose version read is a snapshot read
+	 * can opt this reason back into retrying through the `isRetryable` of its
+	 * retry policy.
+	 */
+	| "version_unchanged"
+	/**
+	 * The aggregate no longer exists. Only a store that can lose a persisted
+	 * record reports this. An append-only event stream cannot: a stream that
+	 * was never created is at version 0, which is `stale_version`.
+	 */
+	| "aggregate_absent"
+	/** The version read failed. The failure travels as the cause. */
+	| "version_unknown";
+
+export type ConcurrencyConflictErrorOptions = {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly expectedVersion: number;
+	/** Optional driver-level error to preserve in the cause chain. */
+	readonly cause?: unknown;
+} & (
+	| {
+			readonly reason: "stale_version" | "version_unchanged";
+			/** The version the store holds. */
+			readonly actualVersion: number;
+	  }
+	| {
+			readonly reason: "aggregate_absent" | "version_unknown";
+			/** No stored version exists to name. */
+			readonly actualVersion?: null;
+	  }
+);
+
+/**
  * Surfaced by a Unit-of-Work flush when the aggregate's expected version does
  * not match the version currently persisted: i.e. another writer
  * updated the aggregate concurrently. The canonical optimistic-
@@ -1380,38 +1514,68 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
  * instance to any in-place "reload".
  *
  * `InfrastructureError` because the persistence layer (not a domain
- * rule) detects the race. Marks itself as `retryable: true` so the
- * `isRetryable` predicate from `@shirudo/base-error` picks it up.
+ * rule) detects the race. Its `retryable` follows the reason, so the
+ * `isRetryable` predicate from `@shirudo/base-error` picks up every reason
+ * but `version_unchanged`, which names a defect of the adapter.
  */
-export interface ConcurrencyConflictErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
-	readonly expectedVersion: number;
-	readonly actualVersion: number;
-	/** Optional driver-level error to preserve in the cause chain. */
-	readonly cause?: unknown;
-}
-
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
 	readonly expectedVersion: number;
-	readonly actualVersion: number;
+	/** The stored version, or `null` when none exists to name. */
+	readonly actualVersion: number | null;
+	readonly reason: ConcurrencyConflictReason;
 
 	constructor(options: ConcurrencyConflictErrorOptions) {
 		super({
 			code: "CONCURRENCY_CONFLICT",
-			message: `Concurrency conflict on ${options.aggregateType}(${options.aggregateId}): expected version ${options.expectedVersion}, actual ${options.actualVersion}`,
+			message: concurrencyConflictMessage(options),
 			cause: options.cause,
 			// The canonical OCC pattern: reload the aggregate, re-apply the
 			// use case, retry in a FRESH unit of work. The structured field
-			// is what the retry classifier (someChainRetryable) reads.
-			retryable: true,
+			// is what the retry classifier (someChainRetryable) reads. A
+			// version_unchanged names a defect of the adapter, and a retry
+			// repeats it, so that one reason is not retryable.
+			retryable: options.reason !== "version_unchanged",
 		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
 		this.expectedVersion = options.expectedVersion;
-		this.actualVersion = options.actualVersion;
+		this.actualVersion = options.actualVersion ?? null;
+		this.reason = options.reason;
+	}
+}
+
+function concurrencyConflictMessage(
+	options: ConcurrencyConflictErrorOptions,
+): string {
+	const site = `${options.aggregateType}(${options.aggregateId})`;
+	switch (options.reason) {
+		case "stale_version":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}, stored version ${options.actualVersion}.`
+			);
+		case "version_unchanged":
+			return (
+				`Concurrency conflict on ${site}: the write matched nothing, ` +
+				`although the stored version is ${options.actualVersion}. Its ` +
+				"statement carries a condition beyond the version, or its version " +
+				"read answered from a transaction snapshot. Drop the extra " +
+				"condition, or read the version with a locking read, for example " +
+				"SELECT ... FOR SHARE."
+			);
+		case "aggregate_absent":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}, but the aggregate no longer exists.`
+			);
+		case "version_unknown":
+			return (
+				`Concurrency conflict on ${site}: expected version ` +
+				`${options.expectedVersion}. The stored version could not be read; ` +
+				"the read failure is the cause."
+			);
 	}
 }
 

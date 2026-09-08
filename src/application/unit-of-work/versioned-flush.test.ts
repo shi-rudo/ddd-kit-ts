@@ -158,10 +158,12 @@ describe("versionedFlush", () => {
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
 		expect(rejection).toMatchObject({
+			reason: "stale_version",
 			aggregateType: "Order",
 			aggregateId: orderId,
 			expectedVersion: 3,
 			actualVersion: 5,
+			retryable: true,
 		});
 		expect(calls).toEqual([
 			"update transaction update",
@@ -169,7 +171,7 @@ describe("versionedFlush", () => {
 		]);
 	});
 
-	it("reports actualVersion -1 when the stale update finds no row, and never inserts", async () => {
+	it("reports an absent aggregate when the stale update finds no row, and never inserts", async () => {
 		const { statements, calls } = recordingStatements({
 			update: () => 0,
 			currentVersion: () => undefined,
@@ -181,7 +183,12 @@ describe("versionedFlush", () => {
 		).catch((error: unknown) => error);
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
-		expect(rejection).toMatchObject({ expectedVersion: 3, actualVersion: -1 });
+		expect(rejection).toMatchObject({
+			reason: "aggregate_absent",
+			expectedVersion: 3,
+			actualVersion: null,
+			retryable: true,
+		});
 		expect(calls).not.toContain("insert transaction update");
 	});
 
@@ -294,7 +301,7 @@ describe("versionedFlush", () => {
 		},
 	);
 
-	it("reports a conflict with equal versions when the statement matched no row", async () => {
+	it("reports an unchanged version, and no retry, when the statement matched no row", async () => {
 		const { statements } = recordingStatements({
 			update: () => 0,
 			currentVersion: () => 3,
@@ -306,7 +313,12 @@ describe("versionedFlush", () => {
 		).catch((error: unknown) => error);
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
-		expect(rejection).toMatchObject({ expectedVersion: 3, actualVersion: 3 });
+		expect(rejection).toMatchObject({
+			reason: "version_unchanged",
+			expectedVersion: 3,
+			actualVersion: 3,
+			retryable: false,
+		});
 	});
 
 	it("keeps the conflict when the version read fails, and carries the read failure as cause", async () => {
@@ -325,9 +337,31 @@ describe("versionedFlush", () => {
 
 		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
 		expect(rejection).toMatchObject({
+			reason: "version_unknown",
 			expectedVersion: 3,
-			actualVersion: -1,
+			actualVersion: null,
 			cause: readOutage,
+			retryable: true,
+		});
+	});
+
+	it("reports a failed version read even when the statement rejects with undefined", async () => {
+		const { statements } = recordingStatements({ update: () => 0 });
+		const rejectingReader = {
+			...statements,
+			// A driver can reject with no value at all.
+			currentVersion: () => Promise.reject(),
+		};
+
+		const rejection = await versionedFlush(rejectingReader)(
+			transaction,
+			writeFor("update", 3 as Version),
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ConcurrencyConflictError);
+		expect(rejection).toMatchObject({
+			reason: "version_unknown",
+			actualVersion: null,
 		});
 	});
 
