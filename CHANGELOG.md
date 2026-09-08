@@ -29,6 +29,18 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Removed: the hand-curated LLM.md
+
+`LLM.md` retold the architecture, the API surface and the common mistakes for
+a coding tool that reads the repository. It was a parallel copy of the guides,
+and it drifted: it announced the library as "2.0, stable" while the 3.0 window
+was open, and it named repository interfaces that the kit had already dropped.
+
+The guides stay the one source. A reader of the repository starts at the
+README, which links every guide, and the docs build derives `llms.txt` and
+`llms-full.txt` from those guides. Nothing shipped in the package changes:
+`LLM.md` was never part of it.
+
 ### Changed: ConcurrencyConflictError says why it has no stored version
 
 `actualVersion` was a plain number, so a conflict with no stored version had to
