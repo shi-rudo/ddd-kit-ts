@@ -38,6 +38,9 @@ export type VersionedWrite<
  * A definition that updates or removes carries `currentVersion`. A definition
  * that never does, for example an append-only one, carries `insert` and
  * `isDuplicate` only.
+ *
+ * {@link versionedFlush} reads every statement once, when it builds the flush.
+ * A statements object that changes later has no effect.
  */
 export type VersionedFlushStatements<
 	TCtx,
@@ -141,12 +144,14 @@ export function versionedFlush<
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 ) => Promise<void> {
 	const versionedWrites = versionedWritesOf(statements);
-	const runUpdate = versionedWriter(statements, versionedWrites, "update");
-	const runRemove = versionedWriter(statements, versionedWrites, "remove");
+	const aggregateType = statements.aggregateType;
+	const runInsert = insertWriter(statements);
+	const runUpdate = versionedWriter(aggregateType, versionedWrites, "update");
+	const runRemove = versionedWriter(aggregateType, versionedWrites, "remove");
 	return async (transaction, write) => {
 		switch (write.intent) {
 			case "add":
-				return insertNew(statements, transaction, write);
+				return runInsert(transaction, write);
 			case "update":
 				return runUpdate(transaction, write);
 			case "remove":
@@ -162,38 +167,44 @@ export function versionedFlush<
 	};
 }
 
-async function insertNew<
+/** Builds the writer of an add. Reads its statements once, like its peers. */
+function insertWriter<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 >(
 	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
+): (
 	transaction: TCtx,
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-): Promise<void> {
-	try {
-		await statements.insert(transaction, write);
-	} catch (error) {
-		let duplicate: boolean;
+) => Promise<void> {
+	const { aggregateType, insert, isDuplicate } = statements;
+
+	return async (transaction, write) => {
 		try {
-			duplicate = statements.isDuplicate(error);
-		} catch (classifierCause) {
-			throw new InvalidFlushStatementError({
-				aggregateType: statements.aggregateType,
+			await insert(transaction, write);
+		} catch (error) {
+			let duplicate: boolean;
+			try {
+				duplicate = isDuplicate(error);
+			} catch (classifierCause) {
+				throw new InvalidFlushStatementError({
+					aggregateType,
+					aggregateId: write.aggregateId,
+					intent: "add",
+					reason: "duplicate_check_failed",
+					cause: error,
+					classifierCause,
+				});
+			}
+			if (!duplicate) throw error;
+			throw new DuplicateAggregateError({
+				aggregateType,
 				aggregateId: write.aggregateId,
-				intent: "add",
-				reason: "duplicate_check_failed",
 				cause: error,
-				classifierCause,
 			});
 		}
-		if (!duplicate) throw error;
-		throw new DuplicateAggregateError({
-			aggregateType: statements.aggregateType,
-			aggregateId: write.aggregateId,
-			cause: error,
-		});
-	}
+	};
 }
 
 /**
@@ -217,17 +228,15 @@ function versionedWritesOf<
 }
 
 /**
- * Builds the writer of one versioned intent. The aggregate type, the
- * statements and the intent stay the same for one definition, so the writer
- * captures them once and every write passes the transaction and the receipt
- * only.
+ * Builds the writer of one versioned intent. It resolves its statement here,
+ * so a statements object that changes after the flush is built has no effect.
  */
 function versionedWriter<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
 >(
-	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
+	aggregateType: string,
 	versionedWrites:
 		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
 		| undefined,
@@ -236,7 +245,6 @@ function versionedWriter<
 	transaction: TCtx,
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 ) => Promise<void> {
-	const aggregateType = statements.aggregateType;
 	const statement = versionedWrites?.[intent];
 	const defect = (
 		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
