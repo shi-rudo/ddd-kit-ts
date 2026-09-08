@@ -5,7 +5,10 @@ import {
 	ConcurrencyConflictError,
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
-import { InvalidFlushStatementError } from "./errors";
+import {
+	type FlushStatementFailure,
+	InvalidFlushStatementError,
+} from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
 
 /**
@@ -35,6 +38,9 @@ export type VersionedWrite<
  * A definition that updates or removes carries `currentVersion`. A definition
  * that never does, for example an append-only one, carries `insert` and
  * `isDuplicate` only.
+ *
+ * {@link versionedFlush} reads every statement once, when it builds the flush.
+ * A statements object that changes later has no effect.
  */
 export type VersionedFlushStatements<
 	TCtx,
@@ -138,26 +144,18 @@ export function versionedFlush<
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
 ) => Promise<void> {
 	const versionedWrites = versionedWritesOf(statements);
+	const aggregateType = statements.aggregateType;
+	const runInsert = insertWriter(statements);
+	const runUpdate = versionedWriter(aggregateType, versionedWrites, "update");
+	const runRemove = versionedWriter(aggregateType, versionedWrites, "remove");
 	return async (transaction, write) => {
 		switch (write.intent) {
 			case "add":
-				return insertNew(statements, transaction, write);
+				return runInsert(transaction, write);
 			case "update":
-				return writeVersioned(
-					statements.aggregateType,
-					versionedWrites,
-					"update",
-					transaction,
-					write,
-				);
+				return runUpdate(transaction, write);
 			case "remove":
-				return writeVersioned(
-					statements.aggregateType,
-					versionedWrites,
-					"remove",
-					transaction,
-					write,
-				);
+				return runRemove(transaction, write);
 			default: {
 				const unknownIntent: never = write.intent;
 				throw new TypeError(
@@ -169,6 +167,50 @@ export function versionedFlush<
 	};
 }
 
+/** Builds the writer of an add. Reads its statements once, like its peers. */
+function insertWriter<
+	TCtx,
+	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
+	TChangeSet,
+>(
+	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
+): (
+	transaction: TCtx,
+	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
+) => Promise<void> {
+	const { aggregateType, insert, isDuplicate } = statements;
+
+	return async (transaction, write) => {
+		try {
+			await insert(transaction, write);
+		} catch (error) {
+			let duplicate: boolean;
+			try {
+				duplicate = isDuplicate(error);
+			} catch (classifierCause) {
+				throw new InvalidFlushStatementError({
+					aggregateType,
+					aggregateId: write.aggregateId,
+					intent: "add",
+					reason: "duplicate_check_failed",
+					cause: error,
+					classifierCause,
+				});
+			}
+			if (!duplicate) throw error;
+			throw new DuplicateAggregateError({
+				aggregateType,
+				aggregateId: write.aggregateId,
+				cause: error,
+			});
+		}
+	};
+}
+
+/**
+ * Narrows the statements to the versioned half, and rejects the pairing that
+ * the type system cannot: `update` or `remove` without `currentVersion`.
+ */
 function versionedWritesOf<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
@@ -185,41 +227,11 @@ function versionedWritesOf<
 	);
 }
 
-async function insertNew<
-	TCtx,
-	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
-	TChangeSet,
->(
-	statements: VersionedFlushStatements<TCtx, TAggregate, TChangeSet>,
-	transaction: TCtx,
-	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-): Promise<void> {
-	try {
-		await statements.insert(transaction, write);
-	} catch (error) {
-		let duplicate: boolean;
-		try {
-			duplicate = statements.isDuplicate(error);
-		} catch (classifierCause) {
-			throw new InvalidFlushStatementError({
-				aggregateType: statements.aggregateType,
-				aggregateId: write.aggregateId,
-				intent: "add",
-				reason: "duplicate_check_failed",
-				cause: error,
-				classifierCause,
-			});
-		}
-		if (!duplicate) throw error;
-		throw new DuplicateAggregateError({
-			aggregateType: statements.aggregateType,
-			aggregateId: write.aggregateId,
-			cause: error,
-		});
-	}
-}
-
-async function writeVersioned<
+/**
+ * Builds the writer of one versioned intent. It resolves its statement here,
+ * so a statements object that changes after the flush is built has no effect.
+ */
+function versionedWriter<
 	TCtx,
 	TAggregate extends Aggregate<Id<string>, AnyDomainEvent>,
 	TChangeSet,
@@ -229,54 +241,53 @@ async function writeVersioned<
 		| VersionedWriteStatements<TCtx, TAggregate, TChangeSet>
 		| undefined,
 	intent: "update" | "remove",
+): (
 	transaction: TCtx,
 	write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-): Promise<void> {
+) => Promise<void> {
 	const statement = versionedWrites?.[intent];
-	if (versionedWrites === undefined || statement === undefined) {
-		throw new InvalidFlushStatementError({
+	const defect = (
+		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
+		reason: FlushStatementFailure,
+		received?: string,
+	) =>
+		new InvalidFlushStatementError({
 			aggregateType,
 			aggregateId: write.aggregateId,
 			intent,
-			reason: "statement_absent",
+			reason,
+			received,
 		});
-	}
-	if (write.expectedVersion === undefined) {
-		throw new InvalidFlushStatementError({
-			aggregateType,
-			aggregateId: write.aggregateId,
-			intent,
-			reason: "no_expected_version",
-		});
-	}
-	const expectedVersion = write.expectedVersion;
-	const matchedRows = await statement(
-		transaction,
-		write as VersionedWrite<TAggregate, TChangeSet>,
-	);
-	if (!Number.isInteger(matchedRows) || matchedRows < 0) {
-		throw new InvalidFlushStatementError({
-			aggregateType,
-			aggregateId: write.aggregateId,
-			intent,
-			reason: "no_row_count",
-			received: describeMatchedRows(matchedRows),
-		});
-	}
-	if (matchedRows > 0) return;
 
-	const stored = await readCurrentVersion(
-		versionedWrites,
-		transaction,
-		write.aggregateId,
-	);
-	throw new ConcurrencyConflictError({
-		aggregateType,
-		aggregateId: write.aggregateId,
-		expectedVersion,
-		actualVersion: stored.currentVersion ?? NO_ROW_VERSION,
-		cause: stored.readFailure,
-	});
+	return async (transaction, write) => {
+		if (versionedWrites === undefined || statement === undefined) {
+			throw defect(write, "statement_absent");
+		}
+		if (write.expectedVersion === undefined) {
+			throw defect(write, "no_expected_version");
+		}
+		const matchedRows = await statement(
+			transaction,
+			write as VersionedWrite<TAggregate, TChangeSet>,
+		);
+		if (!Number.isInteger(matchedRows) || matchedRows < 0) {
+			throw defect(write, "no_row_count", describeMatchedRows(matchedRows));
+		}
+		if (matchedRows > 0) return;
+
+		const stored = await readCurrentVersion(
+			versionedWrites,
+			transaction,
+			write.aggregateId,
+		);
+		throw new ConcurrencyConflictError({
+			aggregateType,
+			aggregateId: write.aggregateId,
+			expectedVersion: write.expectedVersion,
+			actualVersion: stored.currentVersion ?? NO_ROW_VERSION,
+			cause: stored.readFailure,
+		});
+	};
 }
 
 /** Names what a statement returned instead of a row count. */
