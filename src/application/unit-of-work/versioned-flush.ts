@@ -6,7 +6,7 @@ import {
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
 import {
-	type FlushStatementDefect,
+	type FlushStatementReason,
 	InvalidFlushStatementError,
 } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
@@ -267,7 +267,7 @@ function versionedWriter<
 	const statement = versionedWrites?.[intent];
 	const statementDefect = (
 		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-		reason: FlushStatementDefect,
+		reason: FlushStatementReason,
 		received?: string,
 	) =>
 		new InvalidFlushStatementError({

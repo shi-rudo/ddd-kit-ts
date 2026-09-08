@@ -107,9 +107,9 @@ export {
 } from "./application/projections/projector";
 export {
 	AggregateTrackingError,
-	type AggregateTrackingFailure,
+	type AggregateTrackingReason,
 	CommitError,
-	type FlushStatementDefect,
+	type FlushStatementReason,
 	InvalidFlushStatementError,
 	type InvalidFlushStatementErrorOptions,
 	InvalidRepositoryAdapterError,
