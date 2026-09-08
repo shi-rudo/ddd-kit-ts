@@ -167,6 +167,16 @@ fourth, `version_unchanged`, names a defect of the adapter and is not
 retryable. The [repository guide](./repository.md#the-flush-and-the-occ-contract)
 states the two causes and the fix.
 
+The two flags carry different alerts. A conflict with `retryable: false` is a
+defect: alert on any occurrence. A conflict with `retryable: true` is the
+expected background of a busy store: alert on a change of the rate, not on the
+count.
+
+An adapter whose version read is a snapshot read can retry `version_unchanged`
+after all. Pass an `isRetryable` to the retry policy that accepts it. Prefer
+the locking read: a retry of a predicate defect fires on every write and
+multiplies the load of a broken deployment.
+
 Do not catch the conflict inside the same `run` callback and continue using the
 aggregate. Its decision was made from stale facts. A retry must start a fresh
 unit of work, open a fresh transaction, reload fresh instances, and run the

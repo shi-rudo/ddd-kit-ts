@@ -54,8 +54,10 @@ and the field must stay in the log line.
 `retryable` now follows the reason. It stays `true` for three of them.
 `version_unchanged` is `false`: the write statement carries a condition beyond
 the version, or its version read answered from a transaction snapshot. Both
-are defects of the adapter, and a retry repeats them. The repository guide
-names the causes and the fix.
+are defects of the adapter, and a retry repeats them. A predicate defect fires
+on every write, so retrying it multiplies the load of a broken deployment
+instead of surfacing it. An adapter whose version read is a snapshot read can
+accept the reason through the `isRetryable` of its retry policy.
 
 Every construction site passes a reason. An adapter that raises the error
 itself adds `reason: "stale_version"` next to `actualVersion`, or

@@ -1470,9 +1470,17 @@ export type ConcurrencyConflictReason =
 	/**
 	 * The write matched nothing although the stored version equals the
 	 * expected one. Either the write statement carries a condition beyond the
-	 * version, for example a tenant id, or its version read answered from a
+	 * version, for example a tenant id. Or its version read answered from a
 	 * transaction snapshot instead of the current row. Both are defects of the
-	 * adapter, so this reason is the one that is not retryable.
+	 * adapter, so this reason is the one that is not retryable: a predicate
+	 * defect fires on every write, and retrying it multiplies the load of a
+	 * broken deployment instead of surfacing it.
+	 *
+	 * One occurrence does not tell the two causes apart; their rates do. A
+	 * predicate defect fires at a flat rate whatever the load, a snapshot read
+	 * only when writes race. An adapter whose version read is a snapshot read
+	 * can opt this reason back into retrying through the `isRetryable` of its
+	 * retry policy.
 	 */
 	| "version_unchanged"
 	/**
@@ -1546,7 +1554,9 @@ function concurrencyConflictMessage(
 				`Concurrency conflict on ${site}: the write matched nothing, ` +
 				`although the stored version is ${options.actualVersion}. Its ` +
 				"statement carries a condition beyond the version, or its version " +
-				"read answered from a transaction snapshot."
+				"read answered from a transaction snapshot. Drop the extra " +
+				"condition, or read the version with a locking read, for example " +
+				"SELECT ... FOR SHARE."
 			);
 		case "aggregate_absent":
 			return (

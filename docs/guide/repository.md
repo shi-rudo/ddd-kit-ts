@@ -528,7 +528,8 @@ The reason is diagnostic. Branch on the code and on `retryable`, never on the
 reason.
 
 `version_unchanged` is the one reason that is not retryable, because it names
-a defect and not a race. It has two causes. The predicate of the statement
+a defect and not a race. A write that hits it fails at once instead of
+retrying. It has two causes. The predicate of the statement
 holds a condition beyond the version, for example a tenant id. Or the version
 read did not see what the statement saw. The second cause is a matter of
 isolation: under MySQL's `REPEATABLE READ` a plain `SELECT` answers from the
