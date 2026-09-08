@@ -78,8 +78,8 @@ compare-and-set predicate needs no narrowing.
 
 A defect in the statements is a wiring error, not a store failure. The new
 `InvalidFlushStatementError` carries the code `INVALID_FLUSH_STATEMENT` and a
-`reason`: `statement_absent`, `no_row_count`, `no_expected_version`, or
-`duplicate_check_failed`. The last one fires when `isDuplicate` throws. The
+`reason` of type `FlushStatementDefect`: `statement_absent`, `no_row_count`,
+`no_expected_version`, or `duplicate_check_failed`. The last one fires when `isDuplicate` throws. The
 insert failure stays the cause, so a broken classifier never hides the store
 failure it was classifying. The commit phase hands every flush failure to
 `mapError`, this one included. The use case then receives the mapper's error,

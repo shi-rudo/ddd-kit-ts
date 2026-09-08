@@ -109,7 +109,7 @@ export {
 	AggregateTrackingError,
 	type AggregateTrackingFailure,
 	CommitError,
-	type FlushStatementFailure,
+	type FlushStatementDefect,
 	InvalidFlushStatementError,
 	type InvalidFlushStatementErrorOptions,
 	InvalidRepositoryAdapterError,

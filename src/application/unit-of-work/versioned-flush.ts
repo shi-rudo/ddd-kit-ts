@@ -6,7 +6,7 @@ import {
 	DuplicateAggregateError,
 } from "../../errors/kit-errors";
 import {
-	type FlushStatementFailure,
+	type FlushStatementDefect,
 	InvalidFlushStatementError,
 } from "./errors";
 import type { AggregatePersistenceWrite } from "./persistence-contract";
@@ -268,9 +268,9 @@ function versionedWriter<
 	intent: "update" | "remove",
 ): IntentWriter<TAggregate, TChangeSet, TCtx> {
 	const statement = versionedWrites?.[intent];
-	const statementFailure = (
+	const statementDefect = (
 		write: AggregatePersistenceWrite<TAggregate, TChangeSet>,
-		reason: FlushStatementFailure,
+		reason: FlushStatementDefect,
 		received?: string,
 	) =>
 		new InvalidFlushStatementError({
@@ -283,17 +283,17 @@ function versionedWriter<
 
 	return async (transaction, write) => {
 		if (versionedWrites === undefined || statement === undefined) {
-			throw statementFailure(write, "statement_absent");
+			throw statementDefect(write, "statement_absent");
 		}
 		if (write.expectedVersion === undefined) {
-			throw statementFailure(write, "no_expected_version");
+			throw statementDefect(write, "no_expected_version");
 		}
 		const matchedRows = await statement(
 			transaction,
 			write as VersionedWrite<TAggregate, TChangeSet>,
 		);
 		if (!Number.isInteger(matchedRows) || matchedRows < 0) {
-			throw statementFailure(
+			throw statementDefect(
 				write,
 				"no_row_count",
 				describeMatchedRows(matchedRows),
