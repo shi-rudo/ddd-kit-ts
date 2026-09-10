@@ -431,6 +431,13 @@ export type {
 	StreamReadResult,
 } from "./persistence/event-store/event-store";
 export {
+	type ExistingStreamPages,
+	type ReadStreamPagesOptions,
+	readStreamPages,
+	reconstituteAggregateFromStreamPages,
+	type StreamPages,
+} from "./persistence/event-store/stream-pages";
+export {
 	type AggregateClass,
 	IdentityMap,
 } from "./persistence/repository/identity-map";

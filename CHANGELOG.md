@@ -29,6 +29,35 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: readStreamPages and reconstituteAggregateFromStreamPages carry the load recipe
+
+The event-stream load recipe lived only in the guides: pin the head on the
+first page, read pages toward it, reject a page that makes no progress, and
+check the final version against the head. Four copies carried it, and copies
+drift; one had lost the head check. The kit now ships the recipe as tested
+code.
+
+`readStreamPages(eventStore, stream, { fromVersion, limit })` reads the
+first page, decides existence, and pins `lastVersion` as `targetVersion`.
+It returns `{ exists: false }` for an unknown stream. For an existing
+stream it returns the pinned head and the pages after the cursor as one
+lazy, single-pass iteration. A continuation page without events throws
+`NonProgressingEventStreamPageError`.
+
+`reconstituteAggregateFromStreamPages(create, read)` is the async form of
+`reconstituteAggregateFromHistory`. It folds every page into the replay
+target, returns `Result<Aggregate, DomainError>`, and throws
+`ReplayHeadMismatchError` when the replay does not end at the pinned head.
+It accepts only the existing branch of the read, so the caller decides what
+an absent stream means before the fold: not found on the normal path, a
+snapshot to discard on the snapshot path.
+
+The event-store contract suite gains a proof that walks an adapter through
+`readStreamPages` and stops before an append that lands during the
+iteration. The event-sourcing, repository, and event-upcasting guides and
+the port docs show the two calls. The long form stays in the event-sourcing
+guide as an appendix for an adapter that pages on its own.
+
 ### Changed: one suffix names the reason of an error
 
 Three errors carry a `reason`, and their types carried three suffixes:

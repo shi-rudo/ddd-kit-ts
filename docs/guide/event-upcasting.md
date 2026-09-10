@@ -56,40 +56,29 @@ ambiguous and forces consumers to infer schema from fields. Do not do that.
 Upcast after reading from storage and before events reach the aggregate:
 
 ```ts
-const address = { aggregateType: "Order", aggregateId: orderId };
-const order = Order.reconstitute(orderId);
-let fromVersion = 0;
-let targetVersion: number | undefined;
-
-for (;;) {
-  const page = await eventStore.readStream(address, {
-    fromVersion,
-    toVersion: targetVersion,
-    limit: 256,
-  });
-  if (!page.exists) return null;
-  targetVersion ??= page.lastVersion;
-  if (fromVersion === targetVersion) break;
-  if (page.events.length === 0) {
-    throw new NonProgressingEventStreamPageError({
-      ...address,
-      fromVersion,
-      targetVersion,
-    });
-  }
-
-  const current = page.events.map(upcastOrderEvent) as OrderEvent[];
-  const result = order.replayHistory(current);
-  if (result.isErr()) throw result.error;
-  fromVersion += page.events.length;
+async function* upcastPages(
+  pages: AsyncIterable<ReadonlyArray<StoredOrderEvent>>,
+): AsyncIterable<ReadonlyArray<OrderEvent>> {
+  for await (const page of pages) yield page.map(upcastOrderEvent);
 }
+
+const address = { aggregateType: "Order", aggregateId: orderId };
+const stored = await readStreamPages(eventStore, address, { limit: 256 });
+if (!stored.exists) return null;
+
+const loaded = await reconstituteAggregateFromStreamPages(
+  () => Order.reconstitute(orderId),
+  { ...stored, pages: upcastPages(stored.pages) },
+);
+if (loaded.isErr()) throw loaded.error;
 ```
 
-Upcast one bounded page at a time. Preserve each stored envelope's identity,
-pin the first observed stream head, and advance by the number of stored events,
-not by the number of output objects an upcaster happens to produce. A one-to-one
-upcaster is the normal case; split/merge migrations need an explicit storage
-position cursor outside the event array.
+Upcast one bounded page at a time and preserve each stored envelope's
+identity. Keep the upcaster one-to-one: `readStreamPages` advances by the
+number of stored events, and the head check counts the events the folds
+received. An upcaster that splits or merges events therefore fails the head
+check. Split/merge migrations need an explicit storage position cursor
+outside the event array.
 
 The aggregate only handles the current union:
 

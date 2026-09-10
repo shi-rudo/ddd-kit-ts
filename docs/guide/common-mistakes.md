@@ -360,14 +360,16 @@ See [Edge Runtimes](./edge-runtimes.md).
 repository that calls it once and immediately returns the aggregate silently
 loads partial state whenever the stream exceeds its chosen `limit`.
 
-Start at `fromVersion: 0`, record the first page's `lastVersion`, and pass that
-value as `toVersion` on every later page. Advance `fromVersion` by the number of
-events actually returned, because adapters may return fewer than requested.
-Replay each page into the same fresh aggregate, and add it to the identity map
-only after the cursor reaches the pinned head. A zero-length page before that
-point is a violated adapter contract, not end-of-stream. Throw
-`NonProgressingEventStreamPageError` so the stream address and both cursors
-survive into logs and telemetry.
+Read the stream through `readStreamPages` and fold it through
+`reconstituteAggregateFromStreamPages`. The reader records the first page's
+`lastVersion` and passes it as `toVersion` on every later page. It advances
+`fromVersion` by the number of events actually returned, because adapters may
+return fewer than requested. A zero-length page before the pinned head is a
+violated adapter contract, not end-of-stream. The reader throws
+`NonProgressingEventStreamPageError` for it, so the stream address and both
+cursors survive into logs and telemetry. The folder yields the aggregate only
+when the replay ends at the pinned head. Add it to the identity map after
+that, never before.
 
 Pinning the head matters. Without it, events appended during a slow load keep
 moving the target, so one request can observe an open-ended mixture of stream

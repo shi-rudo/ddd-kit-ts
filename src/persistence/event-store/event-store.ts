@@ -95,42 +95,16 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * async findById(id: OrderId): Promise<Order | undefined> {
  *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
- *   const address = this.stream(id);
- *   const first = await this.eventStore.readStream(address, { limit: 256 });
- *   if (!first.exists) return undefined;
- *   const targetVersion = first.lastVersion; // pin the first observed head
- *   const reconstituted = reconstituteAggregateFromHistory(
+ *   const read = await readStreamPages(this.eventStore, this.stream(id), {
+ *     limit: 256,
+ *   });
+ *   if (!read.exists) return undefined;
+ *   const loaded = await reconstituteAggregateFromStreamPages(
  *     () => Order.reconstitute(id), // bare instance, no events
- *     first.events,
+ *     read,
  *   );
- *   if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
- *   const order = reconstituted.value;
- *   let fromVersion = first.events.length;
- *   while (fromVersion < targetVersion) {
- *     const page = await this.eventStore.readStream(address, {
- *       fromVersion,
- *       toVersion: targetVersion,
- *       limit: 256,
- *     });
- *     if (!page.exists || page.events.length === 0) {
- *       throw new NonProgressingEventStreamPageError({
- *         ...address,
- *         fromVersion,
- *         targetVersion,
- *       });
- *     }
- *     const catchUp = order.replayHistory(page.events);
- *     if (catchUp.isErr()) throw catchUp.error; // corrupt stream
- *     fromVersion += page.events.length;
- *   }
- *   if (order.version !== targetVersion) {
- *     throw new ReplayHeadMismatchError({
- *       ...address,
- *       targetVersion,
- *       actualVersion: order.version,
- *     });
- *   }
- *   return this.tracking.trackLoaded(order);
+ *   if (loaded.isErr()) throw loaded.error; // corrupt stream
+ *   return this.tracking.trackLoaded(loaded.value);
  * }
  *
  * flush(write: AggregatePersistenceWrite<Order, number | undefined>) {
@@ -139,6 +113,11 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   });
  * }
  * ```
+ *
+ * `readStreamPages` pins the head on the first page and reads the rest in
+ * bounded pages toward it; `reconstituteAggregateFromStreamPages` folds
+ * the pages and checks that the replay ends at that head. The long form,
+ * for an adapter that pages on its own, is in the event-sourcing guide.
  *
  * `flush` appends the exact event batch registered by `add` or `update`;
  * `withCommit`
