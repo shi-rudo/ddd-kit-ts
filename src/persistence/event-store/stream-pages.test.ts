@@ -13,6 +13,7 @@ import {
 	ForeignEventError,
 	NonProgressingEventStreamPageError,
 	ReplayHeadMismatchError,
+	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
 import type {
@@ -57,6 +58,10 @@ class Counter extends EventSourcedAggregate<
 
 	get total(): number {
 		return this.state.total;
+	}
+
+	count(by: number): void {
+		this.apply(this.createEvent("Counted", { by }));
 	}
 
 	protected readonly folds = {
@@ -152,6 +157,15 @@ async function collectPages<Evt>(
 const eventIds = (events: ReadonlyArray<AnyDomainEvent>): string[] =>
 	events.map((event) => event.eventId);
 
+function rejectsToVersion(
+	store: EventStore<CounterEvent>,
+	options: ReadStreamOptions,
+): void {
+	// @ts-expect-error the read pins its own upper bound; toVersion is not accepted
+	void readStreamPages(store, stream, options);
+}
+void rejectsToVersion;
+
 describe("readStreamPages", () => {
 	it("reports an absent stream from the first page and reads no other", async () => {
 		const store = new CountingEventStore(
@@ -197,6 +211,20 @@ describe("readStreamPages", () => {
 		expect(eventIds(collected)).toEqual(eventIds(history));
 		const afterwards = await store.readStream(stream, { limit: 10 });
 		expect(afterwards.lastVersion).toBe(6);
+	});
+
+	it("reads the continuation pages again on a second iteration", async () => {
+		const history = countedUpTo(5);
+		const store = await seededStore(history);
+		const read = await readStreamPages(store, stream, { limit: 2 });
+		if (!read.exists) throw new Error("the seeded stream must exist");
+
+		const firstPass = await collectPages(read.pages);
+		const secondPass = await collectPages(read.pages);
+
+		expect(eventIds(firstPass.flat())).toEqual(eventIds(history));
+		expect(eventIds(secondPass.flat())).toEqual(eventIds(history));
+		expect(store.reads).toBe(5);
 	});
 
 	it("yields no page for an empty window and keeps the pinned head", async () => {
@@ -371,6 +399,24 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(ReplayHeadMismatchError);
 		expect(rejection).toMatchObject({ targetVersion: 5, actualVersion: 3 });
+	});
+
+	it("rejects a dirty replay target on a read without pages", async () => {
+		const store = await seededStore(countedUpTo(3));
+		const read = await readStreamPages(store, stream, {
+			fromVersion: 3,
+			limit: 2,
+		});
+		if (!read.exists) throw new Error("the seeded stream must exist");
+		const dirtyTarget = (): Counter => {
+			const counter = Counter.fromSnapshot(counterId, 6, 3);
+			counter.count(1);
+			return counter;
+		};
+
+		await expect(
+			reconstituteAggregateFromStreamPages(dirtyTarget, read),
+		).rejects.toBeInstanceOf(UnreplayableAggregateError);
 	});
 
 	it("lets a foreign row throw past the Result", async () => {

@@ -57,9 +57,11 @@ Upcast after reading from storage and before events reach the aggregate:
 
 ```ts
 async function* upcastPages(
-  pages: AsyncIterable<ReadonlyArray<StoredOrderEvent>>,
+  pages: AsyncIterable<ReadonlyArray<AnyDomainEvent>>,
 ): AsyncIterable<ReadonlyArray<OrderEvent>> {
-  for await (const page of pages) yield page.map(upcastOrderEvent);
+  for await (const page of pages) {
+    yield page.map(upcastOrderEvent) as OrderEvent[];
+  }
 }
 
 const address = { aggregateType: "Order", aggregateId: orderId };
@@ -74,11 +76,12 @@ if (loaded.isErr()) throw loaded.error;
 ```
 
 Upcast one bounded page at a time and preserve each stored envelope's
-identity. Keep the upcaster one-to-one: `readStreamPages` advances by the
-number of stored events, and the head check counts the events the folds
-received. An upcaster that splits or merges events therefore fails the head
-check. Split/merge migrations need an explicit storage position cursor
-outside the event array.
+identity. The cast at the end of `upcastPages` is the boundary: after the
+upcaster, the page holds the current union. Keep the upcaster one-to-one.
+`readStreamPages` advances by the number of stored events, and the head check
+counts the events the folds received. An upcaster that splits or merges
+events therefore fails the head check. Split/merge migrations need an
+explicit storage position cursor outside the event array.
 
 The aggregate only handles the current union:
 

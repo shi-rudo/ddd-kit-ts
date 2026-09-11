@@ -276,8 +276,9 @@ export abstract class EventSourcedAggregate<
 	 * a reconstituted aggregate at v=P catching up on M newer events ends at
 	 * v=P+M. Events carry no stream position, so an overlap with the current
 	 * version is invisible here: the caller passes only the events after
-	 * that version and checks the final version against the pinned stream
-	 * head ({@link ReplayHeadMismatchError}).
+	 * that version, and `reconstituteAggregateFromStreamPages` checks the
+	 * final version against the pinned stream head
+	 * ({@link ReplayHeadMismatchError}).
 	 *
 	 * The replay target must not carry pending decisions. Factory-vs-load
 	 * lifecycle is owned by the Unit of Work rather than inferred from an
@@ -361,8 +362,8 @@ export abstract class EventSourcedAggregate<
  * yields it only on success. `createReplayTarget` builds the instance: a
  * fresh one, or one restored from a snapshot. The instance exists only
  * inside this call. A rejected replay therefore leaves the caller with
- * nothing to return by mistake. Later catch-up pages go through
- * `replayHistory` on the value. A `DomainError` from a fold rides the
+ * nothing to return by mistake. A stream read in pages goes through
+ * `reconstituteAggregateFromStreamPages` instead. A `DomainError` from a fold rides the
  * `Result`; wiring errors and a foreign row throw, as in `replayHistory`.
  * The creator runs outside the `Result`: what it throws propagates.
  */

@@ -688,11 +688,19 @@ Loading creates a fresh aggregate. For event sourcing, replay the tail after
 at the stream head:
 
 ```ts
+const discardSnapshotAndRefold = async (): Promise<Order | undefined> => {
+  const refolded = await replayFromZero(orderId);
+  await snapshotStore.delete(address);
+  return refolded;
+};
+
 const tail = await readStreamPages(eventStore, address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
-if (!tail.exists) return discardSnapshotAndRefold();
+if (!tail.exists || snapshot.version > tail.targetVersion) {
+  return discardSnapshotAndRefold();
+}
 
 const restored = await reconstituteAggregateFromStreamPages(
   () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
@@ -702,9 +710,11 @@ if (restored.isErr()) return discardSnapshotAndRefold();
 const order = restored.value;
 ```
 
-A tail longer than one page is read page by page. A tail that does not bridge
-the snapshot to the pinned head throws `ReplayHeadMismatchError`. The complete
-recipe with the coded discard set is in
+A snapshot beyond the pinned head outlived its stream, so the check runs
+before the fold and discards it. `readStreamPages` reads a longer tail page by
+page. A tail that does not bridge the snapshot to the pinned head throws
+`ReplayHeadMismatchError`, because the adapter contradicted its contract. The
+complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It

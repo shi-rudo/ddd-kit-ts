@@ -25,11 +25,11 @@ export interface ReadStreamOptions {
 
 	/**
 	 * Return only events AFTER this stream position (1-based event count),
-	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
-	 * snapshot.version, limit: 256 })` yields the next page passed to
-	 * `aggregate.replayHistory`; the caller checks that the aggregate
-	 * ends at the pinned head ({@link ReplayHeadMismatchError}). Defaults
-	 * to `0` (the first stream page).
+	 * the snapshot catch-up read. `readStreamPages(store, stream, {
+	 * fromVersion: snapshot.version, limit: 256 })` pins the head and pages
+	 * toward it, and `reconstituteAggregateFromStreamPages` checks that the
+	 * aggregate ends there ({@link ReplayHeadMismatchError}). Defaults to
+	 * `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;
@@ -206,10 +206,11 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *
 	 * Each page's `exists`, `lastVersion`, and `events` must describe one
 	 * consistent view of the stream. Multiple page reads are not one database
-	 * snapshot: pin the first page's `lastVersion` as `toVersion` on every
-	 * continuation, then advance `fromVersion` by the number of events actually
-	 * returned. Because streams are append-only, that yields a stable prefix
-	 * even if new events arrive while replay is in progress. The returned
+	 * snapshot. `readStreamPages` pins the first page's `lastVersion` as
+	 * `toVersion` on every continuation and advances `fromVersion` by the
+	 * number of events actually returned. An adapter that pages on its own
+	 * must do the same. Because streams are append-only, that yields a stable
+	 * prefix even if new events arrive while replay is in progress. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.
 	 */
