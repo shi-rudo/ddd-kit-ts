@@ -10,10 +10,7 @@ import {
 import type { Version } from "../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AggregateConfig } from "../domain/aggregate/base-aggregate";
-import {
-	EventSourcedAggregate,
-	reconstituteAggregateFromHistory,
-} from "../domain/aggregate/event-sourced-aggregate";
+import { EventSourcedAggregate } from "../domain/aggregate/event-sourced-aggregate";
 import {
 	createDomainEvent,
 	type DomainEvent,
@@ -24,13 +21,13 @@ import type { Id } from "../domain/identity/id";
 import {
 	ConcurrencyConflictError,
 	InfrastructureError,
-	ReplayHeadMismatchError,
 } from "../errors/kit-errors";
 import type {
 	CommittedDomainEvent,
 	EventCommitCandidate,
 } from "../messaging/committed-event";
 import type { Outbox } from "../messaging/outbox/ports";
+import { reconstituteAggregateFromStreamPages } from "../persistence/event-store/stream-pages";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
 import {
@@ -263,26 +260,30 @@ class InMemoryEsOrderRepository {
 		if (!history || history.length === 0) return undefined;
 		const snapshot = this.db.snapshots.get(key);
 		// Only the tail after the restored version; the aggregate cannot
-		// detect an overlap, so the head check below is the proof.
+		// detect an overlap, so the kit's head check is the proof. The map
+		// pages on its own, so it hands the tail over as one page.
 		const tail = snapshot ? history.slice(snapshot.version) : history;
-		const reconstituted = reconstituteAggregateFromHistory(
+		const reconstituted = await reconstituteAggregateFromStreamPages(
 			() =>
 				snapshot
 					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
 					: ContractEsOrder.bare(id),
-			tail,
+			{
+				exists: true,
+				stream: orderStream(id),
+				targetVersion: history.length,
+				pages: onePage(tail),
+			},
 		);
 		if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
-		const order = reconstituted.value;
-		if (order.version !== history.length) {
-			throw new ReplayHeadMismatchError({
-				...orderStream(id),
-				targetVersion: history.length,
-				actualVersion: order.version,
-			});
-		}
-		return this.tracking.trackLoaded(order);
+		return this.tracking.trackLoaded(reconstituted.value);
 	}
+}
+
+async function* onePage<T>(
+	events: ReadonlyArray<T>,
+): AsyncGenerator<ReadonlyArray<T>, void, undefined> {
+	if (events.length > 0) yield events;
 }
 
 type EsOrderReadAdapter = Pick<

@@ -25,11 +25,11 @@ export interface ReadStreamOptions {
 
 	/**
 	 * Return only events AFTER this stream position (1-based event count),
-	 * the snapshot catch-up read: `readStream(stream, { fromVersion:
-	 * snapshot.version, limit: 256 })` yields the next page passed to
-	 * `aggregate.replayHistory`; the caller checks that the aggregate
-	 * ends at the pinned head ({@link ReplayHeadMismatchError}). Defaults
-	 * to `0` (the first stream page).
+	 * the snapshot catch-up read. `readStreamPages(store, stream, {
+	 * fromVersion: snapshot.version, limit: 256 })` pins the head and pages
+	 * toward it, and `reconstituteAggregateFromStreamPages` checks that the
+	 * aggregate ends there ({@link ReplayHeadMismatchError}). Defaults to
+	 * `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;
@@ -95,42 +95,16 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * async findById(id: OrderId): Promise<Order | undefined> {
  *   const cached = this.tracking.identityMap.get(Order, id);
  *   if (cached) return cached;
- *   const address = this.stream(id);
- *   const first = await this.eventStore.readStream(address, { limit: 256 });
- *   if (!first.exists) return undefined;
- *   const targetVersion = first.lastVersion; // pin the first observed head
- *   const reconstituted = reconstituteAggregateFromHistory(
+ *   const read = await readStreamPages(this.eventStore, this.stream(id), {
+ *     limit: 256,
+ *   });
+ *   if (!read.exists) return undefined;
+ *   const loaded = await reconstituteAggregateFromStreamPages(
  *     () => Order.reconstitute(id), // bare instance, no events
- *     first.events,
+ *     read,
  *   );
- *   if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
- *   const order = reconstituted.value;
- *   let fromVersion = first.events.length;
- *   while (fromVersion < targetVersion) {
- *     const page = await this.eventStore.readStream(address, {
- *       fromVersion,
- *       toVersion: targetVersion,
- *       limit: 256,
- *     });
- *     if (!page.exists || page.events.length === 0) {
- *       throw new NonProgressingEventStreamPageError({
- *         ...address,
- *         fromVersion,
- *         targetVersion,
- *       });
- *     }
- *     const catchUp = order.replayHistory(page.events);
- *     if (catchUp.isErr()) throw catchUp.error; // corrupt stream
- *     fromVersion += page.events.length;
- *   }
- *   if (order.version !== targetVersion) {
- *     throw new ReplayHeadMismatchError({
- *       ...address,
- *       targetVersion,
- *       actualVersion: order.version,
- *     });
- *   }
- *   return this.tracking.trackLoaded(order);
+ *   if (loaded.isErr()) throw loaded.error; // corrupt stream
+ *   return this.tracking.trackLoaded(loaded.value);
  * }
  *
  * flush(write: AggregatePersistenceWrite<Order, number | undefined>) {
@@ -139,6 +113,11 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   });
  * }
  * ```
+ *
+ * `readStreamPages` pins the head on the first page and reads the rest in
+ * bounded pages toward it; `reconstituteAggregateFromStreamPages` folds
+ * the pages and checks that the replay ends at that head. The long form,
+ * for an adapter that pages on its own, is in the event-sourcing guide.
  *
  * `flush` appends the exact event batch registered by `add` or `update`;
  * `withCommit`
@@ -227,10 +206,11 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *
 	 * Each page's `exists`, `lastVersion`, and `events` must describe one
 	 * consistent view of the stream. Multiple page reads are not one database
-	 * snapshot: pin the first page's `lastVersion` as `toVersion` on every
-	 * continuation, then advance `fromVersion` by the number of events actually
-	 * returned. Because streams are append-only, that yields a stable prefix
-	 * even if new events arrive while replay is in progress. The returned
+	 * snapshot. `readStreamPages` pins the first page's `lastVersion` as
+	 * `toVersion` on every continuation and advances `fromVersion` by the
+	 * number of events actually returned. An adapter that pages on its own
+	 * must do the same. Because streams are append-only, that yields a stable
+	 * prefix even if new events arrive while replay is in progress. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.
 	 */

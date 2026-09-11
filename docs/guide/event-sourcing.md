@@ -388,65 +388,58 @@ preflight that names it.
 
 ## Loading from history
 
-Reconstitution builds the aggregate from the first page through
-`reconstituteAggregateFromHistory` and folds later pages into it:
+Reconstitution reads the stream in bounded pages toward a pinned head and
+folds them into a fresh replay target. Two kit calls carry that recipe:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
-  const first = await eventStore.readStream(address, { limit: 256 });
-  if (!first.exists) return null;
-  const targetVersion = first.lastVersion;
+  const read = await readStreamPages(eventStore, address, { limit: 256 });
+  if (!read.exists) return null;
 
-  const reconstituted = reconstituteAggregateFromHistory(
+  const loaded = await reconstituteAggregateFromStreamPages(
     () => Order.reconstitute(id),
-    first.events,
+    read,
   );
-  if (reconstituted.isErr()) throw reconstituted.error;
-  const order = reconstituted.value;
-  let fromVersion = first.events.length;
-
-  while (fromVersion < targetVersion) {
-    const page = await eventStore.readStream(address, {
-      fromVersion,
-      toVersion: targetVersion,
-      limit: 256,
-    });
-    if (!page.exists || page.events.length === 0) {
-      throw new NonProgressingEventStreamPageError({
-        ...address,
-        fromVersion,
-        targetVersion,
-      });
-    }
-
-    const catchUp = order.replayHistory(page.events);
-    if (catchUp.isErr()) throw catchUp.error;
-    fromVersion += page.events.length;
-  }
-
-  if (order.version !== targetVersion) {
-    throw new ReplayHeadMismatchError({
-      ...address,
-      targetVersion,
-      actualVersion: order.version,
-    });
-  }
-  return order;
+  if (loaded.isErr()) throw loaded.error;
+  return loaded.value;
 }
 ```
 
-The first page pins the authoritative head; subsequent pages replay only that
-prefix. `reconstituteAggregateFromHistory` builds the instance inside the
-call and yields it only when the first page folded. A rejected replay leaves
-the repository with nothing to track. Each later page goes through
-`replayHistory` on that instance, once per page, which keeps allocation
-bounded. If a later page fails, discard the local aggregate and do not place
-it in the identity map. Replay remains all-or-nothing per call, and no
-partially loaded instance escapes the repository.
+`readStreamPages(eventStore, address, { fromVersion, limit })` reads the
+first page and decides the stream state once. An unknown stream returns
+`{ exists: false }`. An existing stream returns three things: the pinned
+head as `targetVersion`, the `stream` address, and `pages`. The pages hold
+the events after the cursor through that head, in append order, one bounded
+page per iteration. `readStreamPages` reads the pages lazily. Every
+iteration of `pages` starts again from the first page, so a second fold over
+one read sees the same prefix. The reader bounds every continuation page to
+the pinned head with `toVersion`. It continues by the number of events the
+previous page returned. A writer that appends during the load therefore
+cannot move the target. A continuation page without events cannot make
+progress and throws `NonProgressingEventStreamPageError`.
 
-`reconstituteAggregateFromHistory(create, history)` returns
-`Result<Order, DomainError>`: the aggregate exists only in the `Ok`.
+The caller decides what absence means before it hands the existing branch
+over: `null` here, a snapshot to discard in the [snapshot path](#snapshots).
+The type enforces that order, because `reconstituteAggregateFromStreamPages`
+accepts only the `exists: true` branch.
+
+`reconstituteAggregateFromStreamPages(create, read)` builds the replay
+target through your factory, folds every page into it through
+`replayHistory`, and returns `Result<Order, DomainError>`. The aggregate
+exists only in the `Ok`. A rejected page leaves the repository with nothing
+to track, and the iteration stops there: the kit reads no further page. When
+the replay does not end at `targetVersion`, the call throws
+`ReplayHeadMismatchError`. Allocation stays bounded by the page limit: the
+read keeps the first page, and each later page goes through `replayHistory`
+once.
+
+The same recipe in long form, for an adapter that pages on its own, is in
+the [appendix](#appendix-the-load-recipe-in-long-form).
+
+`reconstituteAggregateFromHistory(create, history)` is the one-page form of
+the same call. It returns `Result<Order, DomainError>` for a history that is
+already in memory, and the aggregate exists only in the `Ok`.
 `replayHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a fold that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the
@@ -506,9 +499,10 @@ Version advances additively:
 Events carry no stream position, so the aggregate cannot detect a tail that
 overlaps its version: a snapshot at version `10` fed five events of which two
 were already folded ends at version `15`. The caller passes only the events
-after the restored version, pins the stream head before the first page, and
-checks the final version against it. On a mismatch the load recipe throws
-`ReplayHeadMismatchError` (code `REPLAY_HEAD_MISMATCH`).
+after the restored version. `readStreamPages` pins the stream head on the
+first page, and `reconstituteAggregateFromStreamPages` checks the final
+version against it. On a mismatch it throws `ReplayHeadMismatchError` (code
+`REPLAY_HEAD_MISMATCH`).
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
 `replayHistory(...)` throws `UnreplayableAggregateError` before anything
@@ -569,6 +563,13 @@ async function findOrderAsOfVersion(
     if (result.isErr()) throw result.error;
     fromVersion += page.events.length;
   }
+  if (historical.version !== toVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion: toVersion,
+      actualVersion: historical.version,
+    });
+  }
   return historical.toView();
 }
 ```
@@ -592,6 +593,12 @@ latency. The snapshot path is:
 4. If the snapshot is missing or invalid, fall back to full replay.
 
 ```ts
+const SNAPSHOT_DISCARD_CODES: ReadonlySet<string> = new Set<KitErrorCode>([
+  "SNAPSHOT_SCHEMA_MISMATCH",
+  "SNAPSHOT_CORRUPTED",
+  "NON_PROGRESSING_EVENT_STREAM_PAGE",
+]);
+
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
   const discardSnapshotAndRefold = async (): Promise<Order | null> => {
@@ -601,87 +608,57 @@ async function findById(id: OrderId): Promise<Order | null> {
   };
 
   const snapshot = await snapshots.load(address);
-  if (snapshot === undefined) {
-    return replayFromZero(id);
-  }
+  if (snapshot === undefined) return replayFromZero(id);
 
-  let tail = await eventStore.readStream(address, {
+  const tail = await readStreamPages(eventStore, address, {
     fromVersion: snapshot.version,
     limit: 256,
   });
-
-  if (
-    !tail.exists ||
-    tail.lastVersion < snapshot.version
-  ) {
+  if (!tail.exists || snapshot.version > tail.targetVersion) {
     return discardSnapshotAndRefold();
   }
 
-  let order: Order;
-  const targetVersion = tail.lastVersion;
-  let fromVersion = snapshot.version;
-
   try {
-    const restored = reconstituteAggregateFromHistory(
+    const restored = await reconstituteAggregateFromStreamPages(
       () => reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot),
-      tail.events,
+      tail,
     );
-    if (restored.isErr()) {
-      return discardSnapshotAndRefold();
-    }
-    order = restored.value;
-    fromVersion += tail.events.length;
-
-    while (fromVersion < targetVersion) {
-      tail = await eventStore.readStream(address, {
-        fromVersion,
-        toVersion: targetVersion,
-        limit: 256,
-      });
-      if (
-        !tail.exists ||
-        tail.lastVersion < targetVersion ||
-        tail.events.length === 0
-      ) {
-        return discardSnapshotAndRefold();
-      }
-
-      const catchUp = order.replayHistory(tail.events);
-      if (catchUp.isErr()) return discardSnapshotAndRefold();
-      fromVersion += tail.events.length;
-    }
+    if (restored.isErr()) return discardSnapshotAndRefold();
+    return restored.value;
   } catch (error) {
     if (
-      error instanceof SnapshotSchemaMismatchError ||
-      error instanceof SnapshotCorruptedError
+      isInfrastructureErrorLike(error) &&
+      SNAPSHOT_DISCARD_CODES.has(error.code)
     ) {
       return discardSnapshotAndRefold();
     }
-
     throw error;
   }
-
-  if (order.version !== targetVersion) {
-    throw new ReplayHeadMismatchError({
-      ...address,
-      targetVersion,
-      actualVersion: order.version,
-    });
-  }
-  return order;
 }
 ```
 
-The page checks are deliberate. A missing stream means the snapshot cannot
-establish aggregate existence. A head behind the snapshot or behind the pinned
-target means the authoritative stream was truncated or replaced. A zero-length
-page before the cursor reaches the target cannot make progress and violates the
-EventStore contract.
+Every failure that the derived snapshot can explain discards it and refolds
+from the stream. A missing stream means the snapshot cannot establish
+aggregate existence. A snapshot beyond the pinned head outlived its stream:
+the stream was truncated or replaced, so that check runs before the fold. A
+rejected page (`Err`) means the tail holds a row the fold cannot map. Three
+coded errors mean the same. `SnapshotSchemaMismatchError` and
+`SnapshotCorruptedError` come from the reconstitution.
+`NonProgressingEventStreamPageError` comes from a page that cannot advance.
+None of these paths can return the partially restored aggregate. Match on
+the code, not on the class or the message: the code is the contract.
+`isInfrastructureErrorLike` recognizes a kit error from another loaded copy
+of the kit, which a plain `instanceof` misses. The typed `Set` rejects a
+misspelled code at compile time.
 
-All three discard the derived snapshot and refold from the stream. None can
-return the partially restored aggregate. Reaching the target
-cursor proves every page bridged the snapshot to the pinned head without
-materializing the whole tail.
+`ReplayHeadMismatchError` stays outside the discard set on purpose. After the
+check above, it means the adapter contradicted its port contract, for example
+with an inclusive `fromVersion` slice. A refold from zero cannot see that
+defect, because position zero has no off-by-one. A discard would hide it
+behind a snapshot that the recipe deletes and rebuilds on every load. Every
+other error escapes too. `SnapshotVersionNotRestoredError` is a wiring bug in
+the model. A `ForeignEventError` is a wrong stream read. A failure of the
+store itself is not a snapshot problem.
 
 `replayHistory(...)` keeps its `Result<void, DomainError>` boundary for
 invalid historical facts. Snapshot DTO validation, migration, and
@@ -902,3 +879,88 @@ changes event payloads and bumps `DomainEvent.schemaVersion`. A snapshot model
 migration changes stored state and bumps `AggregateSnapshot.schemaVersion`. A
 snapshot never carries the event schema version, and an event never carries the
 snapshot one.
+
+## Appendix: the load recipe in long form
+
+`readStreamPages` and `reconstituteAggregateFromStreamPages` carry the recipe.
+Use the long form only for an adapter that pages on its own, for example over
+a database cursor. Even then, keep the fold in the kit. Hand your pages to
+`reconstituteAggregateFromStreamPages` as an `ExistingStreamPages` value, so
+the head check and the `Result` boundary stay the kit's:
+
+```ts
+const read: ExistingStreamPages<OrderEvent> = {
+  exists: true,
+  stream: address,
+  targetVersion: head,
+  pages: cursorPages(address, head),
+};
+const loaded = await reconstituteAggregateFromStreamPages(
+  () => Order.reconstitute(id),
+  read,
+);
+```
+
+`cursorPages` is your `AsyncIterable` of event pages after the cursor
+through `head`, in append order. The iteration must stop at `head`, and it
+must start again from the first page when it is iterated again.
+
+A reader that pages on its own keeps five rules. Pin the first page's
+`lastVersion`. Pass it as `toVersion` on every later page. Advance
+`fromVersion` by the number of events actually returned. Reject a page that
+makes no progress. Check the final version against the pinned head.
+
+The full replay in long form, without the kit reader and without the kit
+fold, shows all five rules in one place:
+
+```ts
+async function findById(id: OrderId): Promise<Order | null> {
+  const address = { aggregateType: "Order", aggregateId: id };
+  const first = await eventStore.readStream(address, { limit: 256 });
+  if (!first.exists) return null;
+  const targetVersion = first.lastVersion;
+
+  const reconstituted = reconstituteAggregateFromHistory(
+    () => Order.reconstitute(id),
+    first.events,
+  );
+  if (reconstituted.isErr()) throw reconstituted.error;
+  const order = reconstituted.value;
+  let fromVersion = first.events.length;
+
+  while (fromVersion < targetVersion) {
+    const page = await eventStore.readStream(address, {
+      fromVersion,
+      toVersion: targetVersion,
+      limit: 256,
+    });
+    if (!page.exists || page.events.length === 0) {
+      throw new NonProgressingEventStreamPageError({
+        ...address,
+        fromVersion,
+        targetVersion,
+      });
+    }
+
+    const catchUp = order.replayHistory(page.events);
+    if (catchUp.isErr()) throw catchUp.error;
+    fromVersion += page.events.length;
+  }
+
+  if (order.version !== targetVersion) {
+    throw new ReplayHeadMismatchError({
+      ...address,
+      targetVersion,
+      actualVersion: order.version,
+    });
+  }
+  return order;
+}
+```
+
+The snapshot catch-up in long form differs in three places. The first read
+starts at `fromVersion: snapshot.version`. The replay target comes from
+`reconstituteAggregateFromSnapshot`. And the discard set of the
+[snapshot recipe](#snapshots) applies: a missing stream, a snapshot beyond
+the pinned head, a rejected page, and the three coded errors discard the
+snapshot and refold from zero, while a head mismatch escapes.

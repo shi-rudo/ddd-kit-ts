@@ -29,6 +29,42 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Added: readStreamPages and reconstituteAggregateFromStreamPages carry the load recipe
+
+The event-stream load recipe lived only in the guides. Pin the head on the
+first page, read pages toward it, reject a page that makes no progress, and
+check the final version against the head. The guides and the port docs
+carried it in several copies, and copies drift: one had lost the head
+check. The kit now ships the recipe as tested code.
+
+`readStreamPages(eventStore, stream, { fromVersion, limit })` reads the
+first page, decides existence, and pins `lastVersion` as `targetVersion`.
+It returns `{ exists: false }` for an unknown stream. For an existing
+stream it returns the pinned head and the pages after the cursor as a lazy
+iteration. Every iteration starts again from the first page. A
+continuation page without events throws
+`NonProgressingEventStreamPageError`.
+
+`reconstituteAggregateFromStreamPages(create, read)` is the paged form of
+`reconstituteAggregateFromHistory`. It folds every page into the replay
+target and returns `Result<Aggregate, DomainError>`. It throws
+`ReplayHeadMismatchError` when the replay does not end at the pinned head,
+and `UnreplayableAggregateError` for a dirty target, even on a read
+without pages. It accepts only the existing branch of the read. The caller
+therefore decides what an absent stream means before the fold: not found
+on the normal path, a snapshot to discard on the snapshot path.
+
+The snapshot recipe checks for a snapshot beyond the pinned head before the
+fold and discards it. A head mismatch stays outside its discard set, so an
+adapter defect stays loud. `ReplayHeadMismatchError` names both causes in
+its message.
+
+The event-store contract suite gains a proof that walks an adapter through
+`readStreamPages` and stops before an append that lands during the
+iteration. The event-sourcing, repository, and event-upcasting guides and
+the port docs show the two calls. The long form stays in the event-sourcing
+guide as an appendix for an adapter that pages on its own.
+
 ### Changed: one suffix names the reason of an error
 
 Three errors carry a `reason`, and their types carried three suffixes:

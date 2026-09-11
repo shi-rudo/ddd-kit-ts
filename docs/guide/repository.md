@@ -135,58 +135,29 @@ async findById(id: OrderId): Promise<Order | undefined> {
 }
 ```
 
-For event sourcing, build the aggregate from the first page through
-`reconstituteAggregateFromHistory` and replay the rest of the pinned prefix
-into it:
+For event sourcing, read the stream in pages toward the pinned head and fold
+them into a fresh replay target:
 
 ```ts
-const first = await eventStore.readStream(address, { limit: 256 });
-if (!first.exists) return undefined;
-const toVersion = first.lastVersion;
+const read = await readStreamPages(eventStore, address, { limit: 256 });
+if (!read.exists) return undefined;
 
-const reconstituted = reconstituteAggregateFromHistory(
+const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.bare(id),
-  first.events,
+  read,
 );
-if (reconstituted.isErr()) throw reconstituted.error;
-const order = reconstituted.value;
-let fromVersion = first.events.length;
-
-while (fromVersion < toVersion) {
-  const page = await eventStore.readStream(address, {
-    fromVersion,
-    toVersion,
-    limit: 256,
-  });
-  if (!page.exists || page.events.length === 0) {
-    throw new NonProgressingEventStreamPageError({
-      ...address,
-      fromVersion,
-      targetVersion: toVersion,
-    });
-  }
-
-  const replay = order.replayHistory(page.events);
-  if (replay.isErr()) throw replay.error;
-  fromVersion += page.events.length;
-}
-
-if (order.version !== toVersion) {
-  throw new ReplayHeadMismatchError({
-    ...address,
-    targetVersion: toVersion,
-    actualVersion: order.version,
-  });
-}
-return tracking.trackLoaded(order);
+if (loaded.isErr()) throw loaded.error;
+return tracking.trackLoaded(loaded.value);
 ```
 
-The full recipe with the refold fallback is in
+`readStreamPages` pins the first page's `lastVersion` and pages toward that
+fixed head. This gives the load one stable append-only prefix even if another
+writer appends while it is running. `reconstituteAggregateFromStreamPages`
+folds every page and throws `ReplayHeadMismatchError` when the replay does
+not end there. Never identity-map a partly replayed aggregate: the aggregate
+exists only in the `Ok`, so there is none to map. The recipe with the refold
+fallback and the long form are in
 [Event Sourcing -> Loading from history](./event-sourcing.md#loading-from-history).
-
-Pin the first page's `lastVersion` and page toward that fixed head. This gives
-the load one stable append-only prefix even if another writer appends while it
-is running. Never identity-map a partly replayed aggregate.
 
 ## Adapter-owned persistence models
 
@@ -713,33 +684,37 @@ await snapshotStore.save(address, snapshot);
 ```
 
 Loading creates a fresh aggregate. For event sourcing, replay the tail after
-`snapshot.version` on that fresh instance and check that it ends at the
-stream head:
+`snapshot.version` on that fresh instance and let the kit check that it ends
+at the stream head:
 
 ```ts
-const tail = await eventStore.readStream(address, {
+const discardSnapshotAndRefold = async (): Promise<Order | undefined> => {
+  const refolded = await replayFromZero(orderId);
+  await snapshotStore.delete(address);
+  return refolded;
+};
+
+const tail = await readStreamPages(eventStore, address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
-
-const restored = reconstituteAggregateFromHistory(
-  () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
-  tail.events,
-);
-if (restored.isErr()) throw restored.error;
-const order = restored.value;
-if (order.version !== tail.lastVersion) {
-  throw new ReplayHeadMismatchError({
-    ...address,
-    targetVersion: tail.lastVersion,
-    actualVersion: order.version,
-  });
+if (!tail.exists || snapshot.version > tail.targetVersion) {
+  return discardSnapshotAndRefold();
 }
+
+const restored = await reconstituteAggregateFromStreamPages(
+  () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
+  tail,
+);
+if (restored.isErr()) return discardSnapshotAndRefold();
+const order = restored.value;
 ```
 
-This reads one page. A tail longer than the page limit fails the head check
-instead of loading a truncated aggregate; the paged recipe with the pinned
-head and the refold fallback is in
+A snapshot beyond the pinned head outlived its stream, so the check runs
+before the fold and discards it. `readStreamPages` reads a longer tail page by
+page. A tail that does not bridge the snapshot to the pinned head throws
+`ReplayHeadMismatchError`, because the adapter contradicted its contract. The
+complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).
 
 `captureAggregateSnapshot` supplies no hidden clock and performs no I/O. It

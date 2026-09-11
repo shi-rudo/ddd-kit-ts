@@ -250,7 +250,7 @@ async findById(id: OrderId): Promise<Order | null> {
 }
 ```
 
-`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. A later page of a long stream goes through `replayHistory(events)` on the instance.
+`reconstituteAggregateFromHistory(createReplayTarget, events)` builds the replay target through your factory and folds the events into it. It yields the aggregate only in the `Ok`, so a rejected replay leaves you with nothing to return by mistake. The fold advances the version and leaves `pendingEvents` empty. Replayed events are historical facts, not new facts. Every load from an `EventStore` goes through `readStreamPages` and `reconstituteAggregateFromStreamPages`, whatever the stream length. `reconstituteAggregateFromHistory` serves a history that is already in memory. See [Event Sourcing -> Loading from history](./event-sourcing.md#loading-from-history).
 
 The initial state should be inert: enough structure for your folds to build on, but not a new domain event. If you use it often, expose it as something like `Order.empty(id)`.
 

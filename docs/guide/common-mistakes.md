@@ -360,14 +360,17 @@ See [Edge Runtimes](./edge-runtimes.md).
 repository that calls it once and immediately returns the aggregate silently
 loads partial state whenever the stream exceeds its chosen `limit`.
 
-Start at `fromVersion: 0`, record the first page's `lastVersion`, and pass that
-value as `toVersion` on every later page. Advance `fromVersion` by the number of
-events actually returned, because adapters may return fewer than requested.
-Replay each page into the same fresh aggregate, and add it to the identity map
-only after the cursor reaches the pinned head. A zero-length page before that
-point is a violated adapter contract, not end-of-stream. Throw
-`NonProgressingEventStreamPageError` so the stream address and both cursors
-survive into logs and telemetry.
+Read the stream through `readStreamPages` and fold it through
+`reconstituteAggregateFromStreamPages`. `readStreamPages` records the first
+page's `lastVersion` and passes it as `toVersion` on every later page. It
+advances `fromVersion` by the number of events actually returned, because
+adapters may return fewer than requested. A zero-length page before the
+pinned head is a violated adapter contract, not end-of-stream.
+`readStreamPages` throws `NonProgressingEventStreamPageError` for it, so the
+stream address and both cursors survive into logs and telemetry.
+`reconstituteAggregateFromStreamPages` yields the aggregate only when the
+replay ends at the pinned head. Add it to the identity map after that, never
+before.
 
 Pinning the head matters. Without it, events appended during a slow load keep
 moving the target, so one request can observe an open-ended mixture of stream
@@ -583,8 +586,8 @@ When you review code that uses the kit, make sure that these rules apply:
 - Keep aggregate lifecycle methods out of repository adapters.
 - Use explicit `add` or `update` calls. Do not infer lifecycle from `version`.
 - Use one aggregate instance for each identifier in one unit of work.
-- Read bounded event-stream pages. When the cursor reaches the pinned head,
-  stop.
+- Load event-sourced aggregates through `readStreamPages` and
+  `reconstituteAggregateFromStreamPages`.
 - Use a separate test factory for each test scope.
 - Load aggregates separately for each edge-runtime request.
 - Preserve structured errors until the mapping boundary.

@@ -1,6 +1,7 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { EventStore } from "../persistence/event-store/event-store";
+import { readStreamPages } from "../persistence/event-store/stream-pages";
 import {
 	assert,
 	assertChainContainsKitError,
@@ -211,6 +212,57 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				assert(
 					atEnd.exists && atEnd.events.length === 0,
 					"continuing at the pinned head must return an existing empty page",
+				);
+			}),
+		},
+		{
+			name: "kit reader: readStreamPages walks the pinned prefix and stops before a later append",
+			run: inEnv(async ({ store }) => {
+				const [firstKey, secondKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const absent = await readStreamPages(
+					store,
+					{ ...secondKey },
+					{ limit: 2 },
+				);
+				assert(
+					!absent.exists,
+					"the kit reader must report an unknown stream as absent",
+				);
+
+				const read = await readStreamPages(
+					store,
+					{ ...firstKey },
+					{ limit: 2 },
+				);
+				assert(
+					read.exists,
+					"the kit reader must report the seeded stream as existing",
+				);
+				assert(
+					read.targetVersion === events.length,
+					"the first page must pin the actual stream head",
+				);
+				const collected: Evt[] = [];
+				for await (const page of read.pages) {
+					assert(
+						page.length > 0 && page.length <= 2,
+						"every page must hold at least one event and at most the limit",
+					);
+					collected.push(...page);
+					if (collected.length === page.length) {
+						await store.append(firstKey, [harness.createEvent(firstKey, 6)], {
+							expectedVersion: events.length,
+						});
+					}
+				}
+				assert(
+					hasSameEventIds(collected, events),
+					"the pages must reproduce the pinned prefix in append order and leave the later append out",
 				);
 			}),
 		},

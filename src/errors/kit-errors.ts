@@ -979,8 +979,9 @@ export interface NonProgressingEventStreamPageErrorOptions {
 }
 
 /**
- * Thrown by a paged EventStore consumer when `readStream` returns no events
- * even though its continuation cursor has not reached the pinned target.
+ * Thrown by `readStreamPages`, or by an adapter that pages on its own, when
+ * `readStream` returns no events even though the continuation cursor has
+ * not reached the pinned target.
  * Such a page cannot advance and violates the EventStore port contract; a
  * replay loop that merely continued would spin forever.
  *
@@ -1022,17 +1023,20 @@ export interface ReplayHeadMismatchErrorOptions {
 }
 
 /**
- * Thrown by a load recipe when the replayed aggregate does not end at the
+ * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
+ * that folds on its own, when the replayed aggregate does not end at the
  * pinned stream head. Events carry no stream position, so the aggregate
- * cannot detect a tail that overlaps the restored version or a page that
- * lies outside the requested window; only the caller, which pinned the
- * head, can compare. A snapshot catch-up passes only the events after the
- * restored version, and the final version must equal the head.
+ * cannot detect a tail that overlaps or misses its restored version, or a
+ * page that lies outside the requested window. Only the caller, which
+ * pinned the head, can compare.
  *
- * This is a non-retryable infrastructure error: the persistence adapter
- * contradicted its port contract. Run `createEventStoreContractTests` and
- * `createEsRepositoryContractTests` against the adapter and fix its
- * windowing.
+ * Two causes exist, and neither is retryable. The persistence adapter
+ * contradicted its port contract: run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against it and fix its windowing. Or a
+ * derived snapshot outlived its stream: the restored version lies beyond
+ * the head because the stream was truncated or replaced. The snapshot
+ * recipe in the event-sourcing guide checks for that case before the fold
+ * and discards the snapshot.
  */
 export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
 	readonly aggregateType: string;
@@ -1041,13 +1045,18 @@ export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MI
 	readonly actualVersion: number;
 
 	constructor(options: ReplayHeadMismatchErrorOptions) {
+		const cause =
+			options.actualVersion > options.targetVersion
+				? "The restored version lies beyond the head (a snapshot outlived its " +
+					"stream), or the tail overlapped the restored version."
+				: "The replay target started below the read cursor, or a page lay " +
+					"outside the requested window.";
 		super({
 			code: "REPLAY_HEAD_MISMATCH",
 			message:
 				`Replay of ${options.aggregateType}(${options.aggregateId}) ended at version ` +
 				`${options.actualVersion}, not at the pinned stream head ${options.targetVersion}. ` +
-				"The tail overlapped the restored version or a page lay outside the " +
-				"requested window; pass only the events after the restored version.",
+				cause,
 		});
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
