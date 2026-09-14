@@ -388,14 +388,14 @@ preflight that names it.
 
 ## Loading from history
 
-Reconstitution reads the stream in bounded pages toward a pinned head and
+Reconstitution reads the stream in bounded pages toward a pinned target and
 folds them into a fresh replay target. Two kit calls carry that recipe:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
   const read = await readStreamPages(eventStore, address, { limit: 256 });
-  if (!read.exists || !read.reachable) return null;
+  if (!read.reachable) return null;
 
   const loaded = await reconstituteAggregateFromStreamPages(
     () => Order.reconstitute(id),
@@ -408,12 +408,12 @@ async function findById(id: OrderId): Promise<Order | null> {
 
 `readStreamPages(eventStore, address, { fromVersion, toVersion, limit })`
 reads the first page and decides the stream state once, in three branches.
-An unknown stream returns `{ exists: false }`. An existing stream whose
-requested window lies outside it returns `reachable: false` with the actual
-head as `lastVersion`: the cursor lies beyond the target, or `toVersion` lies
-beyond the head. The remaining branch returns the pinned target as
-`targetVersion`, the actual head as `lastVersion`, the `stream` address, and
-`pages`. The target is `toVersion` when the read asked for one, else the
+An unknown stream returns `{ exists: false, reachable: false }`. An existing
+stream whose requested window lies outside it returns `reachable: false`
+with the actual head as `lastVersion`. That happens when the cursor lies
+beyond the target, or when `toVersion` lies beyond the head. The remaining
+branch returns the pinned target as `targetVersion`, the `stream` address,
+and `pages`. The target is `toVersion` when the read asked for one, else the
 head of the first page. The pages hold the events after the cursor through
 that target, in append order, one bounded page per iteration.
 `readStreamPages` reads the pages lazily. Every iteration of `pages` starts
@@ -424,12 +424,12 @@ returned. A writer that appends during the load therefore cannot move the
 target. A continuation page without events cannot make progress and throws
 `NonProgressingEventStreamPageError`.
 
-The caller decides what the first two branches mean before it hands the
-last one over: `null` here, a snapshot to discard in the
+The caller decides what the two `reachable: false` branches mean before it
+hands the last one over: `null` here, a snapshot to discard in the
 [snapshot path](#snapshots), a version the stream has not reached in a
-[point-in-time read](#point-in-time-reconstruction). The type enforces that
-order, because `reconstituteAggregateFromStreamPages` accepts only the
-`reachable: true` branch.
+[point-in-time read](#point-in-time-reconstruction). One guard on
+`reachable` narrows to the branch the fold accepts, because
+`reconstituteAggregateFromStreamPages` takes only that one.
 
 `reconstituteAggregateFromStreamPages(create, read)` builds the replay
 target through your factory, folds every page into it through
@@ -506,7 +506,7 @@ Version advances additively:
 Events carry no stream position, so the aggregate cannot detect a tail that
 overlaps its version: a snapshot at version `10` fed five events of which two
 were already folded ends at version `15`. The caller passes only the events
-after the restored version. `readStreamPages` pins the stream head on the
+after the restored version. `readStreamPages` pins the target on the
 first page, and `reconstituteAggregateFromStreamPages` checks the final
 version against it. On a mismatch it throws `ReplayHeadMismatchError` (code
 `REPLAY_HEAD_MISMATCH`).
@@ -529,14 +529,12 @@ async function findOrderAsOfVersion(
   id: OrderId,
   toVersion: number,
 ): Promise<OrderView | null> {
-  if (toVersion === 0) return null;
-
   const address = { aggregateType: "Order", aggregateId: id };
   const read = await readStreamPages(eventStore, address, {
     toVersion,
     limit: 256,
   });
-  if (!read.exists || !read.reachable) return null;
+  if (!read.reachable) return null;
 
   const loaded = await reconstituteAggregateFromStreamPages(
     () => Order.reconstitute(id),
@@ -551,14 +549,30 @@ A request for version `10` of a stream that ends at version `7` returns
 `reachable: false` with `lastVersion: 7`. It never becomes "latest" by
 accident: the target is `toVersion`, not the head, and the fold must end
 there. What the caller answers on that branch is its own decision. This
-query answers `null`, like an unknown stream. An HTTP boundary maps that to a
-not-found response and can name the head from `lastVersion`. Version `0` is
-the state before the first event, so the query answers `null` before it
-reads. The store rejects a negative or fractional `toVersion` with
-`RangeError` before it reads. For combined snapshot and point-in-time reads,
-use `{ fromVersion: snapshot.version, toVersion, limit }` and restore only
-when the snapshot version is at or below the requested version. A snapshot
-above it makes the window unreachable.
+query answers `null`, like an unknown stream. `lastVersion` is on the branch
+for a query that reports the head instead. `readStreamPages` rejects
+`toVersion: 0` with `RangeError` before it reads. Version `0` is the state
+before the first event, and no replay can end there.
+
+A combined snapshot and point-in-time read passes both bounds:
+`{ fromVersion: snapshot.version, toVersion, limit }`. On `reachable: false`
+the caller tells three cases apart from its own inputs:
+
+```ts
+if (!read.reachable) {
+  if (!read.exists || snapshot.version > read.lastVersion) {
+    return discardSnapshotAndRefold();
+  }
+  if (toVersion > read.lastVersion) return null;
+  return replayFromZeroAsOf(id, toVersion);
+}
+```
+
+A snapshot above the head outlived its stream: discard it. A `toVersion`
+above the head is a version the stream has not reached: answer not found
+and keep the snapshot. A snapshot above `toVersion` is too new for the
+request: keep it and refold from zero up to `toVersion`. Only the first
+case discards the snapshot.
 
 ## Snapshots
 
@@ -594,9 +608,7 @@ async function findById(id: OrderId): Promise<Order | null> {
     fromVersion: snapshot.version,
     limit: 256,
   });
-  if (!tail.exists || !tail.reachable) {
-    return discardSnapshotAndRefold();
-  }
+  if (!tail.reachable) return discardSnapshotAndRefold();
 
   try {
     const restored = await reconstituteAggregateFromStreamPages(
@@ -874,7 +886,6 @@ const read: ExistingStreamPages<OrderEvent> = {
   exists: true,
   reachable: true,
   stream: address,
-  lastVersion: head,
   targetVersion: head,
   pages: cursorPages(address, head),
 };
@@ -888,10 +899,11 @@ const loaded = await reconstituteAggregateFromStreamPages(
 through `head`, in append order. The iteration must stop at `head`, and it
 must start again from the first page when it is iterated again.
 
-A reader that pages on its own keeps five rules. Pin the first page's
-`lastVersion`. Pass it as `toVersion` on every later page. Advance
-`fromVersion` by the number of events actually returned. Reject a page that
-makes no progress. Check the final version against the pinned head.
+A reader that pages on its own keeps five rules. Pin the target: the first
+page's `lastVersion`, or a requested `toVersion` at or below it. Pass the
+target as `toVersion` on every later page. Advance `fromVersion` by the
+number of events actually returned. Reject a page that makes no progress.
+Check the final version against the pinned target.
 
 The full replay in long form, without the kit reader and without the kit
 fold, shows all five rules in one place:
@@ -945,5 +957,5 @@ The snapshot catch-up in long form differs in three places. The first read
 starts at `fromVersion: snapshot.version`. The replay target comes from
 `reconstituteAggregateFromSnapshot`. And the discard set of the
 [snapshot recipe](#snapshots) applies: a missing stream, a snapshot beyond
-the pinned head, a rejected page, and the three coded errors discard the
+the head, a rejected page, and the three coded errors discard the
 snapshot and refold from zero, while a head mismatch escapes.

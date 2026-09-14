@@ -240,10 +240,6 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					{ limit: 2 },
 				);
 				assert(
-					read.exists,
-					"the kit reader must report the seeded stream as existing",
-				);
-				assert(
 					read.reachable,
 					"a full read of an existing stream must be reachable",
 				);
@@ -285,13 +281,12 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					{ toVersion: 3, limit: 2 },
 				);
 				assert(
-					asOfThree.exists && asOfThree.reachable,
+					asOfThree.reachable,
 					"a target below the head must be reachable",
 				);
 				assert(
-					asOfThree.targetVersion === 3 &&
-						asOfThree.lastVersion === events.length,
-					"the read must pin toVersion as the target and report the actual head",
+					asOfThree.targetVersion === 3,
+					"the read must pin toVersion as the target",
 				);
 				const collected: Evt[] = [];
 				for await (const page of asOfThree.pages) collected.push(...page);

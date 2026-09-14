@@ -40,7 +40,8 @@ export interface ReadStreamOptions {
 	 * `(fromVersion, toVersion]`. Defaults to the actual stream head.
 	 * `0` therefore returns an empty window; a value beyond the head clamps
 	 * to the head; and `fromVersion >= toVersion` is an empty interval, not
-	 * an error.
+	 * an error. `readStreamPages` does not clamp: it reports a `toVersion`
+	 * beyond the head as an unreachable window.
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly toVersion?: number;
@@ -98,7 +99,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   const read = await readStreamPages(this.eventStore, this.stream(id), {
  *     limit: 256,
  *   });
- *   if (!read.exists || !read.reachable) return undefined;
+ *   if (!read.reachable) return undefined;
  *   const loaded = await reconstituteAggregateFromStreamPages(
  *     () => Order.reconstitute(id), // bare instance, no events
  *     read,
@@ -206,10 +207,11 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 *
 	 * Each page's `exists`, `lastVersion`, and `events` must describe one
 	 * consistent view of the stream. Multiple page reads are not one database
-	 * snapshot. `readStreamPages` pins the first page's `lastVersion` as
-	 * `toVersion` on every continuation and advances `fromVersion` by the
-	 * number of events actually returned. An adapter that pages on its own
-	 * must do the same. Because streams are append-only, that yields a stable
+	 * snapshot. `readStreamPages` pins its target, the first page's
+	 * `lastVersion` or the `toVersion` it was given, as `toVersion` on every
+	 * continuation and advances `fromVersion` by the number of events actually
+	 * returned. An adapter that pages on its own must do the same. Because
+	 * streams are append-only, that yields a stable
 	 * prefix even if new events arrive while replay is in progress. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.

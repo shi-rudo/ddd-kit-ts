@@ -135,12 +135,13 @@ async findById(id: OrderId): Promise<Order | undefined> {
 }
 ```
 
-For event sourcing, read the stream in pages toward the pinned head and fold
+For event sourcing, read the stream in pages toward the pinned target and
+fold
 them into a fresh replay target:
 
 ```ts
 const read = await readStreamPages(eventStore, address, { limit: 256 });
-if (!read.exists || !read.reachable) return undefined;
+if (!read.reachable) return undefined;
 
 const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.bare(id),
@@ -150,8 +151,8 @@ if (loaded.isErr()) throw loaded.error;
 return tracking.trackLoaded(loaded.value);
 ```
 
-`readStreamPages` pins the first page's `lastVersion` and pages toward that
-fixed head. This gives the load one stable append-only prefix even if another
+`readStreamPages` pins the first page's `lastVersion` as the target and
+pages toward it. This gives the load one stable append-only prefix even if another
 writer appends while it is running. `reconstituteAggregateFromStreamPages`
 folds every page and throws `ReplayHeadMismatchError` when the replay does
 not end there. Never identity-map a partly replayed aggregate: the aggregate
@@ -698,9 +699,7 @@ const tail = await readStreamPages(eventStore, address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
-if (!tail.exists || !tail.reachable) {
-  return discardSnapshotAndRefold();
-}
+if (!tail.reachable) return discardSnapshotAndRefold();
 
 const restored = await reconstituteAggregateFromStreamPages(
   () => reconstituteAggregateFromSnapshot(orderSnapshots, orderId, snapshot),
@@ -712,7 +711,8 @@ const order = restored.value;
 
 A snapshot beyond the head outlived its stream. `readStreamPages` reports
 that window as `reachable: false`, and the check before the fold discards
-it. `readStreamPages` reads a longer tail page by page. A tail that does not bridge the snapshot to the pinned head throws
+it. `readStreamPages` reads a longer tail page by page. A tail that does not
+bridge the snapshot to the pinned target throws
 `ReplayHeadMismatchError`, because the adapter contradicted its contract. The
 complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).

@@ -37,33 +37,35 @@ check the final version against the head. The guides and the port docs
 carried it in several copies, and copies drift: one had lost the head
 check. The kit now ships the recipe as tested code.
 
-`readStreamPages(eventStore, stream, { fromVersion, limit })` reads the
-first page, decides existence, and pins `lastVersion` as `targetVersion`.
-It returns `{ exists: false }` for an unknown stream. For an existing
-stream it returns the pinned head and the pages after the cursor as a lazy
-iteration. Every iteration starts again from the first page. A
-continuation page without events throws
-`NonProgressingEventStreamPageError`.
+`readStreamPages(eventStore, stream, { fromVersion, toVersion, limit })`
+reads the first page, decides existence, and pins the target: `toVersion`
+when given, else `lastVersion`. It returns `{ exists: false, reachable:
+false }` for an unknown stream. For an existing stream it returns the
+pinned target and the pages after the cursor as a lazy iteration. Every
+iteration starts again from the first page. A continuation page without
+events throws `NonProgressingEventStreamPageError`.
 
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of
 `reconstituteAggregateFromHistory`. It folds every page into the replay
 target and returns `Result<Aggregate, DomainError>`. It throws
-`ReplayHeadMismatchError` when the replay does not end at the pinned head,
+`ReplayHeadMismatchError` when the replay does not end at the pinned target,
 and `UnreplayableAggregateError` for a dirty target, even on a read
 without pages. It accepts only the existing branch of the read. The caller
 therefore decides what an absent stream means before the fold: not found
 on the normal path, a snapshot to discard on the snapshot path.
 
 The read has a third branch. `toVersion` pins a target below the head for a
-point-in-time read. A window that lies outside the stream, because the
-cursor lies beyond the target or the target lies beyond the head, comes
-back as `reachable: false` with the actual head as `lastVersion`. The read
-never clamps such a request to the latest state, and the fold accepts only
-the reachable branch. The snapshot recipe discards a snapshot beyond the
-head on that branch, before the fold. The point-in-time recipe answers it
-as not found. A head mismatch stays outside the snapshot discard set, so an
-adapter defect stays loud. `ReplayHeadMismatchError` names both causes in
-its message.
+point-in-time read. A window that lies outside the stream comes back as
+`reachable: false` with the actual head as `lastVersion`. That happens when
+the cursor lies beyond the target or the target lies beyond the head. The
+read never clamps such a request to the latest state. It rejects
+`toVersion: 0` with `RangeError`, because no replay can end before the
+first event. The fold accepts only the reachable branch. The snapshot
+recipe discards a snapshot beyond the head on that branch, before the fold.
+The point-in-time recipe answers it as not found. A combined read tells the
+two apart by comparing its own inputs with `lastVersion`. A head mismatch
+stays outside the snapshot discard set, so an adapter defect stays loud.
+`ReplayHeadMismatchError` names both causes in its message.
 
 The event-store contract suite gains a proof that walks an adapter through
 `readStreamPages` and stops before an append that lands during the

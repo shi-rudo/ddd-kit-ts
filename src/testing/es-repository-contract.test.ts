@@ -36,6 +36,7 @@ import {
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
+import { inMemoryStreamPages } from "./in-memory-stream-pages";
 import { serializedCalls } from "./serialized-calls";
 
 /**
@@ -268,24 +269,11 @@ class InMemoryEsOrderRepository {
 				snapshot
 					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
 					: ContractEsOrder.bare(id),
-			{
-				exists: true,
-				reachable: true,
-				stream: orderStream(id),
-				lastVersion: history.length,
-				targetVersion: history.length,
-				pages: onePage(tail),
-			},
+			inMemoryStreamPages(orderStream(id), tail, history.length),
 		);
 		if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
 		return this.tracking.trackLoaded(reconstituted.value);
 	}
-}
-
-async function* onePage<T>(
-	events: ReadonlyArray<T>,
-): AsyncGenerator<ReadonlyArray<T>, void, undefined> {
-	if (events.length > 0) yield events;
 }
 
 type EsOrderReadAdapter = Pick<

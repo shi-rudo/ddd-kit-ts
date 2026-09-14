@@ -1016,7 +1016,10 @@ export class NonProgressingEventStreamPageError extends InfrastructureError<"NON
 export interface ReplayHeadMismatchErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	/** Pinned inclusive stream head the replay had to reach. */
+	/**
+	 * Pinned inclusive target the replay had to reach: the stream head, or
+	 * `toVersion` on a point-in-time read.
+	 */
 	readonly targetVersion: number;
 	/** Version the aggregate holds after the replay. */
 	readonly actualVersion: number;
@@ -1025,18 +1028,19 @@ export interface ReplayHeadMismatchErrorOptions {
 /**
  * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
  * that folds on its own, when the replayed aggregate does not end at the
- * pinned stream head. Events carry no stream position, so the aggregate
- * cannot detect a tail that overlaps or misses its restored version, or a
- * page that lies outside the requested window. Only the caller, which
- * pinned the head, can compare.
+ * pinned target. Events carry no stream position, so the aggregate cannot
+ * detect a tail that overlaps or misses its restored version, or a page
+ * that lies outside the requested window. Only the caller, which pinned
+ * the target, can compare.
  *
- * Two causes exist, and neither is retryable. The persistence adapter
- * contradicted its port contract: run `createEventStoreContractTests` and
- * `createEsRepositoryContractTests` against it and fix its windowing. Or a
- * derived snapshot outlived its stream: the restored version lies beyond
- * the head because the stream was truncated or replaced. `readStreamPages`
- * reports that window as unreachable, and the snapshot recipe discards the
- * snapshot before the fold.
+ * The error is not retryable. Two causes exist. The replay target did not
+ * start at the read cursor: a restore factory reported a version other
+ * than the `fromVersion` the read used. Or the persistence adapter
+ * contradicted its port contract with a page outside the requested window:
+ * run `createEventStoreContractTests` and `createEsRepositoryContractTests`
+ * against it and fix its windowing. A snapshot beyond its stream does not
+ * reach the fold, because `readStreamPages` reports that window as
+ * unreachable first.
  */
 export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
 	readonly aggregateType: string;
@@ -1047,15 +1051,15 @@ export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MI
 	constructor(options: ReplayHeadMismatchErrorOptions) {
 		const cause =
 			options.actualVersion > options.targetVersion
-				? "The restored version lies beyond the head (a snapshot outlived its " +
-					"stream), or the tail overlapped the restored version."
+				? "The replay target started above the read cursor, the tail " +
+					"overlapped the restored version, or a page ran past the target."
 				: "The replay target started below the read cursor, or a page lay " +
 					"outside the requested window.";
 		super({
 			code: "REPLAY_HEAD_MISMATCH",
 			message:
 				`Replay of ${options.aggregateType}(${options.aggregateId}) ended at version ` +
-				`${options.actualVersion}, not at the pinned stream head ${options.targetVersion}. ` +
+				`${options.actualVersion}, not at the pinned target version ${options.targetVersion}. ` +
 				cause,
 		});
 		this.aggregateType = options.aggregateType;

@@ -66,7 +66,7 @@ async function* upcastPages(
 
 const address = { aggregateType: "Order", aggregateId: orderId };
 const stored = await readStreamPages(eventStore, address, { limit: 256 });
-if (!stored.exists || !stored.reachable) return null;
+if (!stored.reachable) return null;
 
 const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.reconstitute(orderId),

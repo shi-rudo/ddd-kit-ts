@@ -361,15 +361,16 @@ repository that calls it once and immediately returns the aggregate silently
 loads partial state whenever the stream exceeds its chosen `limit`.
 
 Read the stream through `readStreamPages` and fold it through
-`reconstituteAggregateFromStreamPages`. `readStreamPages` records the first
-page's `lastVersion` and passes it as `toVersion` on every later page. It
+`reconstituteAggregateFromStreamPages`. `readStreamPages` pins its target,
+the first page's `lastVersion` or a requested `toVersion`, and passes it as
+`toVersion` on every later page. It
 advances `fromVersion` by the number of events actually returned, because
 adapters may return fewer than requested. A zero-length page before the
-pinned head is a violated adapter contract, not end-of-stream.
+pinned target is a violated adapter contract, not end-of-stream.
 `readStreamPages` throws `NonProgressingEventStreamPageError` for it, so the
 stream address and both cursors survive into logs and telemetry.
 `reconstituteAggregateFromStreamPages` yields the aggregate only when the
-replay ends at the pinned head. Add it to the identity map after that, never
+replay ends at the pinned target. Add it to the identity map after that, never
 before.
 
 Pinning the head matters. Without it, events appended during a slow load keep
