@@ -1,5 +1,9 @@
+import { err, ok } from "@shirudo/result";
 import { describe, expect, it } from "vite-plus/test";
-import type { Version } from "../../domain/aggregate/aggregate";
+import type {
+	ReplayableAggregate,
+	Version,
+} from "../../domain/aggregate/aggregate";
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import { EventSourcedAggregate } from "../../domain/aggregate/event-sourced-aggregate";
 import {
@@ -12,9 +16,10 @@ import {
 	DomainError,
 	ForeignEventError,
 	NonProgressingEventStreamPageError,
-	ReplayHeadMismatchError,
+	ReplayTargetMismatchError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
+import { inMemoryStreamPages } from "../../testing/in-memory-stream-pages";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
 import type {
 	EventStore,
@@ -23,6 +28,8 @@ import type {
 	StreamReadResult,
 } from "./event-store";
 import {
+	type ReachableStreamPages,
+	type ReadStreamPagesOptions,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 } from "./stream-pages";
@@ -135,6 +142,32 @@ class StallingEventStore<
 	}
 }
 
+/** Returns at most one event per page: an adapter that pages shorter than the limit. */
+class ShortPageEventStore implements EventStore<CounterEvent> {
+	constructor(private readonly inner: CountingEventStore<CounterEvent>) {}
+
+	get reads(): number {
+		return this.inner.reads;
+	}
+
+	append(
+		address: AggregateAddress,
+		events: ReadonlyArray<CounterEvent>,
+		options: EventStoreAppendOptions,
+	): Promise<void> {
+		return this.inner.append(address, events, options);
+	}
+
+	async readStream(
+		address: AggregateAddress,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<CounterEvent>> {
+		const page = await this.inner.readStream(address, options);
+		if (!page.exists) return page;
+		return { ...page, events: page.events.slice(0, 1) };
+	}
+}
+
 async function seededStore(
 	events: ReadonlyArray<CounterEvent>,
 ): Promise<CountingEventStore<CounterEvent>> {
@@ -157,14 +190,14 @@ async function collectPages<Evt>(
 const eventIds = (events: ReadonlyArray<AnyDomainEvent>): string[] =>
 	events.map((event) => event.eventId);
 
-function rejectsToVersion(
+async function readReachable(
 	store: EventStore<CounterEvent>,
-	options: ReadStreamOptions,
-): void {
-	// @ts-expect-error the read pins its own upper bound; toVersion is not accepted
-	void readStreamPages(store, stream, options);
+	options: ReadStreamPagesOptions,
+): Promise<ReachableStreamPages<CounterEvent>> {
+	const read = await readStreamPages(store, stream, options);
+	if (!read.reachable) throw new Error("the seeded window must be reachable");
+	return read;
 }
-void rejectsToVersion;
 
 describe("readStreamPages", () => {
 	it("reports an absent stream from the first page and reads no other", async () => {
@@ -174,7 +207,7 @@ describe("readStreamPages", () => {
 
 		const read = await readStreamPages(store, stream, { limit: 2 });
 
-		expect(read.exists).toBe(false);
+		expect(read).toEqual({ exists: false, reachable: false });
 		expect(store.reads).toBe(1);
 	});
 
@@ -182,10 +215,14 @@ describe("readStreamPages", () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
 
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 		const pages = await collectPages(read.pages);
 
+		expect(read).toMatchObject({
+			exists: true,
+			reachable: true,
+			fromVersion: 0,
+		});
 		expect(read.targetVersion).toBe(5);
 		expect(read.stream).toEqual(stream);
 		expect(pages.map((page) => page.length)).toEqual([2, 2, 1]);
@@ -196,8 +233,7 @@ describe("readStreamPages", () => {
 	it("stops at the pinned head when another writer appends during the iteration", async () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const collected: CounterEvent[] = [];
 		for await (const page of read.pages) {
@@ -216,8 +252,7 @@ describe("readStreamPages", () => {
 	it("reads the continuation pages again on a second iteration", async () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const firstPass = await collectPages(read.pages);
 		const secondPass = await collectPages(read.pages);
@@ -230,14 +265,131 @@ describe("readStreamPages", () => {
 	it("yields no page for an empty window and keeps the pinned head", async () => {
 		const store = await seededStore(countedUpTo(3));
 
-		const read = await readStreamPages(store, stream, {
+		const read = await readReachable(store, {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
 
 		expect(read.targetVersion).toBe(3);
 		expect(await collectPages(read.pages)).toEqual([]);
+	});
+
+	it("pins toVersion as the target and stops there below the head", async () => {
+		const history = countedUpTo(5);
+		const store = await seededStore(history);
+
+		const read = await readReachable(store, {
+			toVersion: 3,
+			limit: 2,
+		});
+		const pages = await collectPages(read.pages);
+
+		expect(read.targetVersion).toBe(3);
+		expect(eventIds(pages.flat())).toEqual(eventIds(history.slice(0, 3)));
+	});
+
+	it("bounds the first page to toVersion when the limit exceeds it", async () => {
+		const history = countedUpTo(5);
+		const store = await seededStore(history);
+
+		const read = await readReachable(store, { toVersion: 3, limit: 10 });
+		const pages = await collectPages(read.pages);
+
+		expect(eventIds(pages.flat())).toEqual(eventIds(history.slice(0, 3)));
+		expect(store.reads).toBe(1);
+	});
+
+	it("advances the cursor by the events a short page returned", async () => {
+		const history = countedUpTo(5);
+		const store = new ShortPageEventStore(await seededStore(history));
+
+		const read = await readReachable(store, { limit: 2 });
+		const pages = await collectPages(read.pages);
+
+		expect(pages.map((page) => page.length)).toEqual([1, 1, 1, 1, 1]);
+		expect(eventIds(pages.flat())).toEqual(eventIds(history));
+		expect(store.reads).toBe(5);
+	});
+
+	it("rejects with the abort reason before the first read when the signal is aborted", async () => {
+		const store = await seededStore(countedUpTo(3));
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			readStreamPages(store, stream, { limit: 2, signal: controller.signal }),
+		).rejects.toBe(controller.signal.reason);
+		expect(store.reads).toBe(0);
+	});
+
+	it("stops paging with the abort reason when the signal aborts between pages", async () => {
+		const store = await seededStore(countedUpTo(5));
+		const controller = new AbortController();
+		const read = await readReachable(store, {
+			limit: 2,
+			signal: controller.signal,
+		});
+
+		const walk = async (): Promise<number> => {
+			let seen = 0;
+			for await (const page of read.pages) {
+				seen += page.length;
+				controller.abort();
+			}
+			return seen;
+		};
+
+		const rejection = await walk().catch((error: unknown) => error);
+
+		expect(rejection).toBe(controller.signal.reason);
+		expect(store.reads).toBe(1);
+	});
+
+	it("reports the window unreachable when toVersion lies beyond the head", async () => {
+		const store = await seededStore(countedUpTo(3));
+
+		const read = await readStreamPages(store, stream, {
+			toVersion: 5,
+			limit: 2,
+		});
+
+		expect(read).toEqual({
+			exists: true,
+			reachable: false,
+			fromVersion: 0,
+			lastVersion: 3,
+		});
+	});
+
+	it("reports the window unreachable when the cursor lies beyond the head", async () => {
+		const store = await seededStore(countedUpTo(3));
+
+		const read = await readStreamPages(store, stream, {
+			fromVersion: 5,
+			limit: 2,
+		});
+
+		expect(read).toMatchObject({
+			exists: true,
+			reachable: false,
+			lastVersion: 3,
+		});
+	});
+
+	it("reports the window unreachable when the cursor lies beyond toVersion", async () => {
+		const store = await seededStore(countedUpTo(5));
+
+		const read = await readStreamPages(store, stream, {
+			fromVersion: 4,
+			toVersion: 3,
+			limit: 2,
+		});
+
+		expect(read).toMatchObject({
+			exists: true,
+			reachable: false,
+			lastVersion: 5,
+		});
 	});
 
 	it("throws NonProgressingEventStreamPageError when a continuation page returns no events", async () => {
@@ -246,8 +398,7 @@ describe("readStreamPages", () => {
 			{ exists: true, lastVersion: 5, events: [] },
 		);
 		await store.append(stream, countedUpTo(5), { expectedVersion: 0 });
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -267,8 +418,7 @@ describe("readStreamPages", () => {
 			{ exists: false, lastVersion: 0, events: [] },
 		);
 		await store.append(stream, countedUpTo(3), { expectedVersion: 0 });
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -276,6 +426,15 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({ fromVersion: 2, targetVersion: 3 });
+	});
+
+	it("rejects toVersion 0 before any page is read", async () => {
+		const store = await seededStore(countedUpTo(3));
+
+		await expect(
+			readStreamPages(store, stream, { toVersion: 0, limit: 2 }),
+		).rejects.toThrow(/readStreamPages: toVersion/);
+		expect(store.reads).toBe(0);
 	});
 
 	it("lets the store reject an invalid limit before any page is read", async () => {
@@ -290,8 +449,7 @@ describe("readStreamPages", () => {
 describe("reconstituteAggregateFromStreamPages", () => {
 	it("folds every page and yields the aggregate at the pinned head", async () => {
 		const store = await seededStore(countedUpTo(5));
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -307,11 +465,10 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 	it("catches a snapshot up on the tail after its version only", async () => {
 		const store = await seededStore(countedUpTo(5));
-		const read = await readStreamPages(store, stream, {
+		const read = await readReachable(store, {
 			fromVersion: 2,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.fromSnapshot(counterId, 3, 2),
@@ -325,11 +482,10 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 	it("loads a snapshot at the head without a page", async () => {
 		const store = await seededStore(countedUpTo(3));
-		const read = await readStreamPages(store, stream, {
+		const read = await readReachable(store, {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.fromSnapshot(counterId, 6, 3),
@@ -349,8 +505,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			counted(5),
 			counted(6),
 		]);
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -363,51 +518,96 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(store.reads).toBe(2);
 	});
 
-	it("throws ReplayHeadMismatchError when the replay target starts beyond the pinned head", async () => {
-		const store = await seededStore(countedUpTo(3));
-		const read = await readStreamPages(store, stream, {
-			fromVersion: 5,
+	it("folds a point-in-time read up to toVersion", async () => {
+		const store = await seededStore(countedUpTo(5));
+		const read = await readReachable(store, {
+			toVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
 
-		const rejection = await reconstituteAggregateFromStreamPages(
-			() => Counter.fromSnapshot(counterId, 0, 5),
+		const loaded = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
 			read,
-		).catch((error: unknown) => error);
+		);
 
-		expect(rejection).toBeInstanceOf(ReplayHeadMismatchError);
-		expect(rejection).toMatchObject({
-			...stream,
-			targetVersion: 3,
-			actualVersion: 5,
-		});
+		if (loaded.isErr()) throw loaded.error;
+		expect(loaded.value.version).toBe(3);
+		expect(loaded.value.total).toBe(6);
 	});
 
-	it("throws ReplayHeadMismatchError when the replay target does not start at the cursor", async () => {
+	it("throws ReplayTargetMismatchError before the first page when the replay target does not stand at the cursor", async () => {
 		const store = await seededStore(countedUpTo(5));
-		const read = await readStreamPages(store, stream, {
-			fromVersion: 2,
-			limit: 2,
-		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { fromVersion: 2, limit: 2 });
 
 		const rejection = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
 			read,
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(ReplayHeadMismatchError);
-		expect(rejection).toMatchObject({ targetVersion: 5, actualVersion: 3 });
+		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "target_not_at_cursor",
+			fromVersion: 2,
+			targetVersion: 5,
+			actualVersion: 0,
+		});
+		expect(store.reads).toBe(1);
+	});
+
+	it("throws ReplayTargetMismatchError when the pages do not reach the target", async () => {
+		const read = inMemoryStreamPages<CounterEvent>(stream, {
+			fromVersion: 0,
+			tail: countedUpTo(3),
+			targetVersion: 5,
+		});
+
+		const rejection = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "pages_outside_window",
+			fromVersion: 0,
+			targetVersion: 5,
+			actualVersion: 3,
+		});
+	});
+
+	it("returns Err when the replay target rejects the priming replay", async () => {
+		const read = inMemoryStreamPages<CounterEvent>(stream, {
+			fromVersion: 0,
+			tail: countedUpTo(2),
+			targetVersion: 2,
+		});
+		const rejecting: ReplayableAggregate<CounterId, CounterEvent> = {
+			id: counterId,
+			version: 0 as Version,
+			pendingEvents: [],
+			replayHistory: (history) =>
+				history.length === 0 ? err(new PoisonedRowError()) : ok(),
+		};
+
+		const loaded = await reconstituteAggregateFromStreamPages(
+			() => rejecting,
+			read,
+		);
+
+		expect(loaded.isErr()).toBe(true);
+		if (loaded.isOk())
+			throw new Error("a rejected priming replay must not load");
+		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
 	});
 
 	it("rejects a dirty replay target on a read without pages", async () => {
 		const store = await seededStore(countedUpTo(3));
-		const read = await readStreamPages(store, stream, {
+		const read = await readReachable(store, {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
 		const dirtyTarget = (): Counter => {
 			const counter = Counter.fromSnapshot(counterId, 6, 3);
 			counter.count(1);
@@ -421,8 +621,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 	it("lets a foreign row throw past the Result", async () => {
 		const store = await seededStore(countedUpTo(2));
-		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		const read = await readReachable(store, { limit: 2 });
 
 		await expect(
 			reconstituteAggregateFromStreamPages(

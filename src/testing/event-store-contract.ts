@@ -240,8 +240,8 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 					{ limit: 2 },
 				);
 				assert(
-					read.exists,
-					"the kit reader must report the seeded stream as existing",
+					read.reachable,
+					"a full read of an existing stream must be reachable",
 				);
 				assert(
 					read.targetVersion === events.length,
@@ -263,6 +263,48 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 				assert(
 					hasSameEventIds(collected, events),
 					"the pages must reproduce the pinned prefix in append order and leave the later append out",
+				);
+			}),
+		},
+		{
+			name: "kit reader: toVersion pins a target below the head and a target beyond it is unreachable",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+
+				const asOfThree = await readStreamPages(
+					store,
+					{ ...firstKey },
+					{ toVersion: 3, limit: 2 },
+				);
+				assert(
+					asOfThree.reachable,
+					"a target below the head must be reachable",
+				);
+				assert(
+					asOfThree.targetVersion === 3,
+					"the read must pin toVersion as the target",
+				);
+				const collected: Evt[] = [];
+				for await (const page of asOfThree.pages) collected.push(...page);
+				assert(
+					hasSameEventIds(collected, events.slice(0, 3)),
+					"the pages must stop at toVersion",
+				);
+
+				const beyondHead = await readStreamPages(
+					store,
+					{ ...firstKey },
+					{ toVersion: 9, limit: 2 },
+				);
+				assert(
+					beyondHead.exists &&
+						!beyondHead.reachable &&
+						beyondHead.lastVersion === events.length,
+					"a target beyond the head must be unreachable and name the actual head",
 				);
 			}),
 		},

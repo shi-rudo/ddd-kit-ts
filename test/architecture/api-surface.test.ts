@@ -181,7 +181,7 @@ const INDEX_SURFACE = [
 	"QueryBus",
 	"ReentrantDomainStateMachineEvaluationError",
 	"ReentrantEventRecordingError",
-	"ReplayHeadMismatchError",
+	"ReplayTargetMismatchError",
 	"RepositoryErrorMappingFailedError",
 	"RetryingTransactionScope",
 	"RollbackError",
