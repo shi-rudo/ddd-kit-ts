@@ -39,6 +39,7 @@ describe("event-store adapter contract", () => {
 			"append/read: event order and fromVersion slicing are preserved",
 			"paged read: limit bounds every page and fromVersion continues without gaps or duplicates",
 			"kit reader: readStreamPages walks the pinned prefix and stops before a later append",
+			"kit reader: toVersion pins a target below the head and a target beyond it is unreachable",
 			"read options: invalid limits and stream positions fail loudly",
 			"bounded read: toVersion is inclusive while lastVersion remains the actual head",
 			"bounded read edges: zero, beyond-head, and inverted ranges are empty or clamped",

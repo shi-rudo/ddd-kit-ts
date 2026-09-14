@@ -54,8 +54,14 @@ without pages. It accepts only the existing branch of the read. The caller
 therefore decides what an absent stream means before the fold: not found
 on the normal path, a snapshot to discard on the snapshot path.
 
-The snapshot recipe checks for a snapshot beyond the pinned head before the
-fold and discards it. A head mismatch stays outside its discard set, so an
+The read has a third branch. `toVersion` pins a target below the head for a
+point-in-time read. A window that lies outside the stream, because the
+cursor lies beyond the target or the target lies beyond the head, comes
+back as `reachable: false` with the actual head as `lastVersion`. The read
+never clamps such a request to the latest state, and the fold accepts only
+the reachable branch. The snapshot recipe discards a snapshot beyond the
+head on that branch, before the fold. The point-in-time recipe answers it
+as not found. A head mismatch stays outside the snapshot discard set, so an
 adapter defect stays loud. `ReplayHeadMismatchError` names both causes in
 its message.
 

@@ -270,7 +270,9 @@ class InMemoryEsOrderRepository {
 					: ContractEsOrder.bare(id),
 			{
 				exists: true,
+				reachable: true,
 				stream: orderStream(id),
+				lastVersion: history.length,
 				targetVersion: history.length,
 				pages: onePage(tail),
 			},

@@ -1034,9 +1034,9 @@ export interface ReplayHeadMismatchErrorOptions {
  * contradicted its port contract: run `createEventStoreContractTests` and
  * `createEsRepositoryContractTests` against it and fix its windowing. Or a
  * derived snapshot outlived its stream: the restored version lies beyond
- * the head because the stream was truncated or replaced. The snapshot
- * recipe in the event-sourcing guide checks for that case before the fold
- * and discards the snapshot.
+ * the head because the stream was truncated or replaced. `readStreamPages`
+ * reports that window as unreachable, and the snapshot recipe discards the
+ * snapshot before the fold.
  */
 export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
 	readonly aggregateType: string;

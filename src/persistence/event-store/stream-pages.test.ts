@@ -23,6 +23,7 @@ import type {
 	StreamReadResult,
 } from "./event-store";
 import {
+	type ExistingStreamPages,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 } from "./stream-pages";
@@ -157,14 +158,11 @@ async function collectPages<Evt>(
 const eventIds = (events: ReadonlyArray<AnyDomainEvent>): string[] =>
 	events.map((event) => event.eventId);
 
-function rejectsToVersion(
-	store: EventStore<CounterEvent>,
-	options: ReadStreamOptions,
-): void {
-	// @ts-expect-error the read pins its own upper bound; toVersion is not accepted
-	void readStreamPages(store, stream, options);
+async function* onePage<T>(
+	events: ReadonlyArray<T>,
+): AsyncGenerator<ReadonlyArray<T>, void, undefined> {
+	if (events.length > 0) yield events;
 }
-void rejectsToVersion;
 
 describe("readStreamPages", () => {
 	it("reports an absent stream from the first page and reads no other", async () => {
@@ -183,7 +181,9 @@ describe("readStreamPages", () => {
 		const store = await seededStore(history);
 
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 		const pages = await collectPages(read.pages);
 
 		expect(read.targetVersion).toBe(5);
@@ -197,7 +197,9 @@ describe("readStreamPages", () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const collected: CounterEvent[] = [];
 		for await (const page of read.pages) {
@@ -217,7 +219,9 @@ describe("readStreamPages", () => {
 		const history = countedUpTo(5);
 		const store = await seededStore(history);
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const firstPass = await collectPages(read.pages);
 		const secondPass = await collectPages(read.pages);
@@ -234,10 +238,78 @@ describe("readStreamPages", () => {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		expect(read.targetVersion).toBe(3);
+		expect(read.lastVersion).toBe(3);
 		expect(await collectPages(read.pages)).toEqual([]);
+	});
+
+	it("pins toVersion as the target and stops there below the head", async () => {
+		const history = countedUpTo(5);
+		const store = await seededStore(history);
+
+		const read = await readStreamPages(store, stream, {
+			toVersion: 3,
+			limit: 2,
+		});
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
+		const pages = await collectPages(read.pages);
+
+		expect(read.targetVersion).toBe(3);
+		expect(read.lastVersion).toBe(5);
+		expect(eventIds(pages.flat())).toEqual(eventIds(history.slice(0, 3)));
+	});
+
+	it("reports the window unreachable when toVersion lies beyond the head", async () => {
+		const store = await seededStore(countedUpTo(3));
+
+		const read = await readStreamPages(store, stream, {
+			toVersion: 5,
+			limit: 2,
+		});
+
+		expect(read).toEqual({
+			exists: true,
+			reachable: false,
+			stream,
+			lastVersion: 3,
+		});
+	});
+
+	it("reports the window unreachable when the cursor lies beyond the head", async () => {
+		const store = await seededStore(countedUpTo(3));
+
+		const read = await readStreamPages(store, stream, {
+			fromVersion: 5,
+			limit: 2,
+		});
+
+		expect(read).toMatchObject({
+			exists: true,
+			reachable: false,
+			lastVersion: 3,
+		});
+	});
+
+	it("reports the window unreachable when the cursor lies beyond toVersion", async () => {
+		const store = await seededStore(countedUpTo(5));
+
+		const read = await readStreamPages(store, stream, {
+			fromVersion: 4,
+			toVersion: 3,
+			limit: 2,
+		});
+
+		expect(read).toMatchObject({
+			exists: true,
+			reachable: false,
+			lastVersion: 5,
+		});
 	});
 
 	it("throws NonProgressingEventStreamPageError when a continuation page returns no events", async () => {
@@ -247,7 +319,9 @@ describe("readStreamPages", () => {
 		);
 		await store.append(stream, countedUpTo(5), { expectedVersion: 0 });
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -268,7 +342,9 @@ describe("readStreamPages", () => {
 		);
 		await store.append(stream, countedUpTo(3), { expectedVersion: 0 });
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -291,7 +367,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	it("folds every page and yields the aggregate at the pinned head", async () => {
 		const store = await seededStore(countedUpTo(5));
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -311,7 +389,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			fromVersion: 2,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.fromSnapshot(counterId, 3, 2),
@@ -329,7 +409,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.fromSnapshot(counterId, 6, 3),
@@ -350,7 +432,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			counted(6),
 		]);
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -363,13 +447,35 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(store.reads).toBe(2);
 	});
 
-	it("throws ReplayHeadMismatchError when the replay target starts beyond the pinned head", async () => {
-		const store = await seededStore(countedUpTo(3));
+	it("folds a point-in-time read up to toVersion", async () => {
+		const store = await seededStore(countedUpTo(5));
 		const read = await readStreamPages(store, stream, {
-			fromVersion: 5,
+			toVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
+
+		const loaded = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		);
+
+		if (loaded.isErr()) throw loaded.error;
+		expect(loaded.value.version).toBe(3);
+		expect(loaded.value.total).toBe(6);
+	});
+
+	it("throws ReplayHeadMismatchError when a hand-built read starts its target beyond the head", async () => {
+		const read: ExistingStreamPages<CounterEvent> = {
+			exists: true,
+			reachable: true,
+			stream,
+			lastVersion: 3,
+			targetVersion: 3,
+			pages: { [Symbol.asyncIterator]: () => onePage([]) },
+		};
 
 		const rejection = await reconstituteAggregateFromStreamPages(
 			() => Counter.fromSnapshot(counterId, 0, 5),
@@ -390,7 +496,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			fromVersion: 2,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		const rejection = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -407,7 +515,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			fromVersion: 3,
 			limit: 2,
 		});
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 		const dirtyTarget = (): Counter => {
 			const counter = Counter.fromSnapshot(counterId, 6, 3);
 			counter.count(1);
@@ -422,7 +532,9 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	it("lets a foreign row throw past the Result", async () => {
 		const store = await seededStore(countedUpTo(2));
 		const read = await readStreamPages(store, stream, { limit: 2 });
-		if (!read.exists) throw new Error("the seeded stream must exist");
+		if (!read.exists || !read.reachable) {
+			throw new Error("the seeded window must be reachable");
+		}
 
 		await expect(
 			reconstituteAggregateFromStreamPages(

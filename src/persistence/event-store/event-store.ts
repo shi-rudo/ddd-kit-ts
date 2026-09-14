@@ -98,7 +98,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  *   const read = await readStreamPages(this.eventStore, this.stream(id), {
  *     limit: 256,
  *   });
- *   if (!read.exists) return undefined;
+ *   if (!read.exists || !read.reachable) return undefined;
  *   const loaded = await reconstituteAggregateFromStreamPages(
  *     () => Order.reconstitute(id), // bare instance, no events
  *     read,

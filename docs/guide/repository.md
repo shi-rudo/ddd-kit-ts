@@ -140,7 +140,7 @@ them into a fresh replay target:
 
 ```ts
 const read = await readStreamPages(eventStore, address, { limit: 256 });
-if (!read.exists) return undefined;
+if (!read.exists || !read.reachable) return undefined;
 
 const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.bare(id),
@@ -698,7 +698,7 @@ const tail = await readStreamPages(eventStore, address, {
   fromVersion: snapshot.version,
   limit: 256,
 });
-if (!tail.exists || snapshot.version > tail.targetVersion) {
+if (!tail.exists || !tail.reachable) {
   return discardSnapshotAndRefold();
 }
 
@@ -710,9 +710,9 @@ if (restored.isErr()) return discardSnapshotAndRefold();
 const order = restored.value;
 ```
 
-A snapshot beyond the pinned head outlived its stream, so the check runs
-before the fold and discards it. `readStreamPages` reads a longer tail page by
-page. A tail that does not bridge the snapshot to the pinned head throws
+A snapshot beyond the head outlived its stream. `readStreamPages` reports
+that window as `reachable: false`, and the check before the fold discards
+it. `readStreamPages` reads a longer tail page by page. A tail that does not bridge the snapshot to the pinned head throws
 `ReplayHeadMismatchError`, because the adapter contradicted its contract. The
 complete recipe with the coded discard set is in
 [Event Sourcing -> Snapshots](./event-sourcing.md#snapshots).

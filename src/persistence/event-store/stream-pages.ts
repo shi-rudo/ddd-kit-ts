@@ -11,47 +11,75 @@ import {
 } from "../../errors/kit-errors";
 import type { EventStore, ReadStreamOptions } from "./event-store";
 
-/**
- * Options for {@link readStreamPages}: the `limit` and `fromVersion` of
- * {@link ReadStreamOptions}. `toVersion` is not accepted, because the read
- * pins its own upper bound: the stream head of the first page.
- */
-export type ReadStreamPagesOptions = Omit<ReadStreamOptions, "toVersion"> & {
-	readonly toVersion?: never;
-};
+/** Options for {@link readStreamPages}. */
+export interface ReadStreamPagesOptions
+	extends Pick<ReadStreamOptions, "limit" | "fromVersion"> {
+	/**
+	 * The stream position the replay must reach (inclusive, 1-based event
+	 * count): a point-in-time read. Defaults to the stream head of the first
+	 * page. A value beyond that head does not clamp. The read reports the
+	 * window as unreachable instead, so a request for version 10 of a stream
+	 * that ends at 7 never loads the latest state by accident.
+	 * Must be a non-negative safe integer when present.
+	 */
+	readonly toVersion?: number;
+}
 
 /**
- * A stream read with the head pinned on its first page.
+ * A stream read with the target pinned on its first page.
  *
- * The first page decides the stream state once. An absent stream is the
- * `exists: false` branch and carries nothing else. An existing stream
- * exposes the pinned head and the pages after the cursor. The caller
- * decides what absence means (not found, or a snapshot to discard) before
- * it hands the existing branch to
+ * The first page decides the stream state once, in three branches. An
+ * absent stream is `exists: false` and carries nothing else. An existing
+ * stream whose requested window lies outside it is `reachable: false` and
+ * carries the actual head. The remaining branch exposes the pinned target
+ * and the pages after the cursor. The caller decides what the first two
+ * branches mean (not found, a snapshot to discard, a version the stream
+ * has not reached) before it hands the last branch to
  * {@link reconstituteAggregateFromStreamPages}.
  */
 export type StreamPages<Evt extends AnyDomainEvent> =
 	| { readonly exists: false }
+	| UnreachableStreamPages
 	| ExistingStreamPages<Evt>;
 
-/** The existing-stream branch of {@link StreamPages}. */
+/**
+ * The branch of {@link StreamPages} for a window that lies outside the
+ * stream: the cursor lies beyond the target, or the target lies beyond the
+ * head. A derived snapshot outlived its stream, or a point-in-time read
+ * asked for a version the stream has not reached.
+ */
+export interface UnreachableStreamPages {
+	readonly exists: true;
+	readonly reachable: false;
+
+	/** The qualified stream the read addressed. */
+	readonly stream: AggregateAddress;
+
+	/** The actual stream head on the first page. */
+	readonly lastVersion: number;
+}
+
+/** The branch of {@link StreamPages} that a replay can fold. */
 export interface ExistingStreamPages<Evt extends AnyDomainEvent> {
 	readonly exists: true;
+	readonly reachable: true;
 
 	/** The qualified stream the pages come from. */
 	readonly stream: AggregateAddress;
 
+	/** The actual stream head on the first page. */
+	readonly lastVersion: number;
+
 	/**
-	 * The stream head pinned on the first page: the version a replay of the
-	 * pages must end at. Later appends do not move it. A cursor beyond this
-	 * head means a derived snapshot outlived its stream. The pages are then
-	 * empty, and the replay fails the head check.
+	 * The version a replay of the pages must end at: `toVersion` when the
+	 * read asked for one, else the head pinned on the first page. Later
+	 * appends do not move it.
 	 */
 	readonly targetVersion: number;
 
 	/**
-	 * The events after the cursor through the pinned head, in append order,
-	 * one bounded page per iteration. Every iteration starts again from the
+	 * The events after the cursor through the target, in append order, one
+	 * bounded page per iteration. Every iteration starts again from the
 	 * first page, so a second fold over one read sees the same prefix. The
 	 * kit reader yields no empty page. It throws
 	 * {@link NonProgressingEventStreamPageError} for a continuation page
@@ -61,15 +89,16 @@ export interface ExistingStreamPages<Evt extends AnyDomainEvent> {
 }
 
 /**
- * Reads one stream in bounded pages toward the head pinned on the first
- * page.
+ * Reads one stream in bounded pages toward a pinned target.
  *
- * This call reads the first page. That page decides existence and pins
- * `lastVersion` as `targetVersion`. Each iteration of `pages` reads the
- * remaining pages lazily. The reader bounds every continuation page to the
- * pinned head with `toVersion` and continues by the number of events the
- * previous page returned. Streams are append-only, so that yields one
- * stable prefix even when another writer appends during the replay.
+ * This call reads the first page. That page decides existence and reports
+ * the head. The target is `toVersion` when given, else that head. A window
+ * that lies outside the stream is reported as unreachable, never clamped.
+ * Each iteration of `pages` reads the remaining pages lazily. The reader
+ * bounds every continuation page to the target with `toVersion` and
+ * continues by the number of events the previous page returned. Streams
+ * are append-only, so that yields one stable prefix even when another
+ * writer appends during the replay.
  *
  * The store rejects invalid options with `RangeError` before any page is
  * read.
@@ -87,21 +116,31 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 	const first = await eventStore.readStream(address, {
 		fromVersion,
 		limit: options.limit,
+		...(options.toVersion === undefined
+			? {}
+			: { toVersion: options.toVersion }),
 	});
 	if (!first.exists) return { exists: false };
+	const lastVersion = first.lastVersion;
+	const targetVersion = options.toVersion ?? lastVersion;
+	if (fromVersion > targetVersion || targetVersion > lastVersion) {
+		return { exists: true, reachable: false, stream: address, lastVersion };
+	}
 	const window: PinnedWindow<Evt> = {
 		stream: address,
 		firstPage: first.events,
 		cursorAfterFirstPage: fromVersion + first.events.length,
-		targetVersion: first.lastVersion,
+		targetVersion,
 		limit: options.limit,
 	};
 	return {
 		exists: true,
+		reachable: true,
 		stream: address,
-		targetVersion: first.lastVersion,
+		lastVersion,
+		targetVersion,
 		pages: {
-			[Symbol.asyncIterator]: () => continueToPinnedHead(eventStore, window),
+			[Symbol.asyncIterator]: () => continueToPinnedTarget(eventStore, window),
 		},
 	};
 }
@@ -114,7 +153,7 @@ interface PinnedWindow<Evt extends AnyDomainEvent> {
 	readonly limit: number;
 }
 
-async function* continueToPinnedHead<Evt extends AnyDomainEvent>(
+async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 	eventStore: EventStore<Evt>,
 	window: PinnedWindow<Evt>,
 ): AsyncGenerator<ReadonlyArray<Evt>, void, undefined> {
@@ -140,7 +179,7 @@ async function* continueToPinnedHead<Evt extends AnyDomainEvent>(
 
 /**
  * Reconstitutes an event-sourced aggregate from the pages of a stream read
- * and yields it only when the replay ended at the pinned head.
+ * and yields it only when the replay ended at the pinned target.
  *
  * This is the paged form of `reconstituteAggregateFromHistory`.
  * `createReplayTarget` builds the instance: a fresh one for a full replay,

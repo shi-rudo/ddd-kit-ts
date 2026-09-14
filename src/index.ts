@@ -436,6 +436,7 @@ export {
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 	type StreamPages,
+	type UnreachableStreamPages,
 } from "./persistence/event-store/stream-pages";
 export {
 	type AggregateClass,
