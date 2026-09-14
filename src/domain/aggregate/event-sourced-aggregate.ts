@@ -278,7 +278,7 @@ export abstract class EventSourcedAggregate<
 	 * version is invisible here: the caller passes only the events after
 	 * that version, and `reconstituteAggregateFromStreamPages` checks the
 	 * final version against the pinned target
-	 * ({@link ReplayHeadMismatchError}).
+	 * ({@link ReplayTargetMismatchError}).
 	 *
 	 * The replay target must not carry pending decisions. Factory-vs-load
 	 * lifecycle is owned by the Unit of Work rather than inferred from an

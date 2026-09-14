@@ -39,7 +39,7 @@ import {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
-	ReplayHeadMismatchError,
+	ReplayTargetMismatchError,
 	SnapshotSchemaMismatchError,
 	SnapshotVersionNotRestoredError,
 	UnenrolledChangesError,
@@ -227,13 +227,15 @@ const concreteCases: ReadonlyArray<{
 	},
 	{
 		error: () =>
-			new ReplayHeadMismatchError({
+			new ReplayTargetMismatchError({
 				aggregateType: "Order",
 				aggregateId: "o-1",
+				reason: "pages_outside_window",
+				fromVersion: 10,
 				targetVersion: 12,
 				actualVersion: 15,
 			}),
-		code: "REPLAY_HEAD_MISMATCH",
+		code: "REPLAY_TARGET_MISMATCH",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -622,7 +624,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<MissingFoldError["code"]>,
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<NonProgressingEventStreamPageError["code"]>,
-			AssertKitCode<ReplayHeadMismatchError["code"]>,
+			AssertKitCode<ReplayTargetMismatchError["code"]>,
 			AssertKitCode<PendingEventBatchMismatchError["code"]>,
 			AssertKitCode<PendingEventLimitExceededError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,

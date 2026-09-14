@@ -29,6 +29,23 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
+
+The replay check compares the aggregate with the pinned target, which is the
+stream head on a full load and `toVersion` on a point-in-time read. The
+error named the head, and its message guessed between causes. It is now
+`ReplayTargetMismatchError` with the code `REPLAY_TARGET_MISMATCH`. Its
+options carry `fromVersion`, the cursor the read started at, and a `reason`:
+`target_not_at_cursor` when the replay target stands at another version
+than the cursor, found before any page is read, or `pages_outside_window`
+when the fold does not end at the target. Rename the class and the code
+where you match on them. The rc.8 name is gone; no alias remains.
+
+The stream read types follow the same vocabulary. The branch a replay can
+fold is `ReachableStreamPages`, the absent branch is `AbsentStreamPages`,
+and both non-absent branches carry `fromVersion`. Neither name shipped in a
+release.
+
 ### Added: readStreamPages and reconstituteAggregateFromStreamPages carry the load recipe
 
 The event-stream load recipe lived only in the guides. Pin the head on the
@@ -48,7 +65,7 @@ events throws `NonProgressingEventStreamPageError`.
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of
 `reconstituteAggregateFromHistory`. It folds every page into the replay
 target and returns `Result<Aggregate, DomainError>`. It throws
-`ReplayHeadMismatchError` when the replay does not end at the pinned target,
+`ReplayTargetMismatchError` when the replay does not end at the pinned target,
 and `UnreplayableAggregateError` for a dirty target, even on a read
 without pages. It accepts only the existing branch of the read. The caller
 therefore decides what an absent stream means before the fold: not found
@@ -64,8 +81,12 @@ first event. The fold accepts only the reachable branch. The snapshot
 recipe discards a snapshot beyond the head on that branch, before the fold.
 The point-in-time recipe answers it as not found. A combined read tells the
 two apart by comparing its own inputs with `lastVersion`. A head mismatch
-stays outside the snapshot discard set, so an adapter defect stays loud.
-`ReplayHeadMismatchError` names both causes in its message.
+and a page that makes no progress stay outside the snapshot discard set, so
+an adapter defect stays loud. The read carries its cursor as `fromVersion`,
+and the fold checks that the replay target stands there before the first
+page. `ReplayTargetMismatchError` names the failed check in its `reason`.
+`readStreamPages` accepts the `signal` of the surrounding unit of work and
+stops paging once it is aborted.
 
 The event-store contract suite gains a proof that walks an adapter through
 `readStreamPages` and stops before an append that lands during the

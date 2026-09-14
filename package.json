@@ -57,6 +57,7 @@
 		"docs:build": "typedoc && vitepress build docs",
 		"docs:preview": "vitepress preview docs",
 		"mutate:aggregate": "stryker run stryker.aggregate.json",
+		"mutate:event-store": "stryker run stryker.event-store.json",
 		"mutate:money": "stryker run stryker.money.json"
 	},
 	"keywords": [

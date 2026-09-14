@@ -28,7 +28,7 @@ export interface ReadStreamOptions {
 	 * the snapshot catch-up read. `readStreamPages(store, stream, {
 	 * fromVersion: snapshot.version, limit: 256 })` pins the head and pages
 	 * toward it, and `reconstituteAggregateFromStreamPages` checks that the
-	 * aggregate ends there ({@link ReplayHeadMismatchError}). Defaults to
+	 * aggregate ends there ({@link ReplayTargetMismatchError}). Defaults to
 	 * `0` (the first stream page).
 	 * Must be a non-negative safe integer when present.
 	 */

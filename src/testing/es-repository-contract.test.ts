@@ -259,17 +259,26 @@ class InMemoryEsOrderRepository {
 		const key = streamMapKey(orderStream(id));
 		const history = this.db.streams.get(key);
 		if (!history || history.length === 0) return undefined;
-		const snapshot = this.db.snapshots.get(key);
+		let snapshot = this.db.snapshots.get(key);
+		if (snapshot && snapshot.version > history.length) {
+			// The window lies outside the stream: the snapshot outlived it.
+			this.db.snapshots.delete(key);
+			snapshot = undefined;
+		}
 		// Only the tail after the restored version; the aggregate cannot
-		// detect an overlap, so the kit's head check is the proof. The map
+		// detect an overlap, so the kit's target check is the proof. The map
 		// pages on its own, so it hands the tail over as one page.
-		const tail = snapshot ? history.slice(snapshot.version) : history;
+		const fromVersion = snapshot?.version ?? 0;
 		const reconstituted = await reconstituteAggregateFromStreamPages(
 			() =>
 				snapshot
 					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
 					: ContractEsOrder.bare(id),
-			inMemoryStreamPages(orderStream(id), tail, history.length),
+			inMemoryStreamPages(orderStream(id), {
+				fromVersion,
+				tail: history.slice(fromVersion),
+				targetVersion: history.length,
+			}),
 		);
 		if (reconstituted.isErr()) throw reconstituted.error; // corrupt stream
 		return this.tracking.trackLoaded(reconstituted.value);

@@ -1012,58 +1012,72 @@ export class NonProgressingEventStreamPageError extends InfrastructureError<"NON
 	}
 }
 
-/** Constructor options for {@link ReplayHeadMismatchError}. */
-export interface ReplayHeadMismatchErrorOptions {
+/** The check a {@link ReplayTargetMismatchError} reports. */
+export type ReplayTargetMismatchReason =
+	| "target_not_at_cursor"
+	| "pages_outside_window";
+
+/** Constructor options for {@link ReplayTargetMismatchError}. */
+export interface ReplayTargetMismatchErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
+	/** The check that failed; see {@link ReplayTargetMismatchReason}. */
+	readonly reason: ReplayTargetMismatchReason;
+	/** The cursor the read started at; the replay target must start here. */
+	readonly fromVersion: number;
 	/**
 	 * Pinned inclusive target the replay had to reach: the stream head, or
 	 * `toVersion` on a point-in-time read.
 	 */
 	readonly targetVersion: number;
-	/** Version the aggregate holds after the replay. */
+	/** Version the aggregate held when the check ran. */
 	readonly actualVersion: number;
 }
 
 /**
  * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
- * that folds on its own, when the replayed aggregate does not end at the
- * pinned target. Events carry no stream position, so the aggregate cannot
- * detect a tail that overlaps or misses its restored version, or a page
- * that lies outside the requested window. Only the caller, which pinned
- * the target, can compare.
+ * that folds on its own, when the replay target does not line up with the
+ * read. Events carry no stream position, so the aggregate cannot detect a
+ * tail that overlaps or misses its restored version, or a page that lies
+ * outside the requested window. Only the caller, which pinned the target,
+ * can compare.
  *
- * The error is not retryable. Two causes exist. The replay target did not
- * start at the read cursor: a restore factory reported a version other
- * than the `fromVersion` the read used. Or the persistence adapter
- * contradicted its port contract with a page outside the requested window:
- * run `createEventStoreContractTests` and `createEsRepositoryContractTests`
- * against it and fix its windowing. A snapshot beyond its stream does not
- * reach the fold, because `readStreamPages` reports that window as
- * unreachable first.
+ * The `reason` names the check that failed. `target_not_at_cursor`: the
+ * replay target stands at a version other than the `fromVersion` the read
+ * used, found before any page is folded; a reconstitution factory reports
+ * the wrong version. `pages_outside_window`: the target started at the
+ * cursor, but the fold did not end at the target; the persistence adapter
+ * returned a page outside the requested window. Run
+ * `createEventStoreContractTests` and `createEsRepositoryContractTests`
+ * against it and fix its windowing. Neither case is retryable. A snapshot
+ * beyond its stream does not reach the fold: `readStreamPages` reports
+ * that window as unreachable first, and a reader that pages on its own
+ * must do the same.
  */
-export class ReplayHeadMismatchError extends InfrastructureError<"REPLAY_HEAD_MISMATCH"> {
+export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
+	readonly reason: ReplayTargetMismatchReason;
+	readonly fromVersion: number;
 	readonly targetVersion: number;
 	readonly actualVersion: number;
 
-	constructor(options: ReplayHeadMismatchErrorOptions) {
-		const cause =
-			options.actualVersion > options.targetVersion
-				? "The replay target started above the read cursor, the tail " +
-					"overlapped the restored version, or a page ran past the target."
-				: "The replay target started below the read cursor, or a page lay " +
-					"outside the requested window.";
-		super({
-			code: "REPLAY_HEAD_MISMATCH",
-			message:
-				`Replay of ${options.aggregateType}(${options.aggregateId}) ended at version ` +
-				`${options.actualVersion}, not at the pinned target version ${options.targetVersion}. ` +
-				cause,
-		});
+	constructor(options: ReplayTargetMismatchErrorOptions) {
+		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const message =
+			options.reason === "target_not_at_cursor"
+				? `Replay target for ${stream} stands at version ${options.actualVersion}, ` +
+					`but the read continues after version ${options.fromVersion}. The ` +
+					"reconstitution factory reports a version other than the read cursor."
+				: `Replay of ${stream} ended at version ${options.actualVersion}, not at ` +
+					`the pinned target version ${options.targetVersion}. The adapter ` +
+					`returned a page outside the window (${options.fromVersion}, ` +
+					`${options.targetVersion}].`;
+		super({ code: "REPLAY_TARGET_MISMATCH", message });
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
+		this.reason = options.reason;
+		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
 		this.actualVersion = options.actualVersion;
 	}
@@ -1823,7 +1837,7 @@ export type KitErrorCode =
 	| "PUBLISH_DEPTH_EXCEEDED"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "REENTRANT_EVENT_RECORDING"
-	| "REPLAY_HEAD_MISMATCH"
+	| "REPLAY_TARGET_MISMATCH"
 	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"
 	| "SNAPSHOT_CORRUPTED"

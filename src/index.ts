@@ -324,8 +324,9 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
-	ReplayHeadMismatchError,
-	type ReplayHeadMismatchErrorOptions,
+	ReplayTargetMismatchError,
+	type ReplayTargetMismatchErrorOptions,
+	type ReplayTargetMismatchReason,
 	SnapshotCorruptedError,
 	SnapshotSchemaMismatchError,
 	type SnapshotSchemaMismatchErrorOptions,
@@ -431,7 +432,8 @@ export type {
 	StreamReadResult,
 } from "./persistence/event-store/event-store";
 export {
-	type ExistingStreamPages,
+	type AbsentStreamPages,
+	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
