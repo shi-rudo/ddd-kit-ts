@@ -3,7 +3,8 @@
  *
  * Ships the adapter contract test suites (event-sourced repositories, event
  * stores, event and command outboxes, idempotency stores, projections,
- * snapshots, and deadlines):
+ * snapshots, and deadlines) and `createInMemoryStreamPages`, the stream read
+ * a test hands to the kit fold in place of a reader that pages on its own:
  * the kit is ORM- and store-agnostic, so optimistic concurrency, outbox
  * semantics, and the idempotency lifecycle are adapter CONTRACTS the
  * consumer's implementation must prove; this entry provides the proof
@@ -48,6 +49,10 @@ export {
 	type IdempotencyStoreContractHarness,
 	type IdempotencyStoreContractTest,
 } from "./idempotency-store-contract";
+export {
+	createInMemoryStreamPages,
+	type InMemoryStreamPagesWindow,
+} from "./in-memory-stream-pages";
 export {
 	createOutboxContractTests,
 	type OutboxContractEnvironment,

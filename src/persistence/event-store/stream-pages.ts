@@ -80,11 +80,12 @@ export interface UnreachableStreamPages {
 	readonly lastVersion: number;
 }
 
-/** The branch of {@link StreamPages} that a replay can fold. */
-export interface ReachableStreamPages<Evt extends AnyDomainEvent> {
-	readonly exists: true;
-	readonly reachable: true;
-
+/**
+ * The shape a replay folds: the stream, the window, and the pages. The kit
+ * reader returns it as the reachable branch of {@link StreamPages}; a
+ * reader that pages on its own builds it directly.
+ */
+export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/** The qualified stream the pages come from. */
 	readonly stream: AggregateAddress;
 
@@ -112,6 +113,13 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent> {
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
 
+/** The branch of {@link StreamPages} that a replay can fold. */
+export interface ReachableStreamPages<Evt extends AnyDomainEvent>
+	extends ReplayableStreamPages<Evt> {
+	readonly exists: true;
+	readonly reachable: true;
+}
+
 /**
  * Reads one stream in bounded pages toward a pinned target.
  *
@@ -130,7 +138,7 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent> {
  * reason before the next page.
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
-	eventStore: EventStore<Evt>,
+	eventStore: Pick<EventStore<Evt>, "readStream">,
 	stream: AggregateAddress,
 	options: ReadStreamPagesOptions,
 ): Promise<StreamPages<Evt>> {
@@ -190,7 +198,7 @@ interface PinnedWindow<Evt extends AnyDomainEvent> {
 }
 
 async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
-	eventStore: EventStore<Evt>,
+	eventStore: Pick<EventStore<Evt>, "readStream">,
 	window: PinnedWindow<Evt>,
 ): AsyncGenerator<ReadonlyArray<Evt>, void, undefined> {
 	if (window.firstPage.length > 0) yield window.firstPage;
@@ -225,7 +233,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
  * This is the paged form of `reconstituteAggregateFromHistory`.
  * `createReplayTarget` builds the instance: a fresh one for a full replay,
  * or one restored from a snapshot for a read that started at
- * `snapshot.version`. The target must carry no pending decisions. The fold
+ * `snapshot.version`. `read` is the reachable branch of a kit read, or a
+ * {@link ReplayableStreamPages} value a reader that pages on its own built;
+ * the absent and unreachable branches lack the pages, so a caller decides
+ * them before the fold. The target must carry no pending decisions. The fold
  * primes it with an empty history first, so the aggregate runs its own
  * replay-target guard even when the read holds no page; a dirty target
  * throws `UnreplayableAggregateError` as `replayHistory` does. The target
@@ -247,7 +258,7 @@ export async function reconstituteAggregateFromStreamPages<
 	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
 >(
 	createReplayTarget: () => TAggregate,
-	read: ReachableStreamPages<
+	read: ReplayableStreamPages<
 		Parameters<TAggregate["replayHistory"]>[0][number]
 	>,
 ): Promise<Result<TAggregate, DomainError>> {

@@ -883,17 +883,15 @@ snapshot one.
 `readStreamPages` and `reconstituteAggregateFromStreamPages` carry the
 recipe. An adapter that pages on its own, for example over a database
 cursor, keeps the fold in the kit. It hands its pages to
-`reconstituteAggregateFromStreamPages` as a `ReachableStreamPages` value, so
-the cursor check, the target check, and the `Result` boundary stay the
-kit's:
+`reconstituteAggregateFromStreamPages` as a `ReplayableStreamPages` value:
+the stream, the window, and the pages. The cursor check, the target check,
+and the `Result` boundary stay the kit's:
 
 ```ts
 const head = await streamHead(address); // your own query, undefined when absent
 if (head === undefined) return null;
 
-const read: ReachableStreamPages<OrderEvent> = {
-  exists: true,
-  reachable: true,
+const read: ReplayableStreamPages<OrderEvent> = {
   stream: address,
   fromVersion: 0,
   targetVersion: head,
@@ -907,7 +905,9 @@ const loaded = await reconstituteAggregateFromStreamPages(
 
 `cursorPages` is your `AsyncIterable` of event pages after `fromVersion`
 through `targetVersion`, in append order. Every iteration starts again from
-the first page.
+the first page. A test of such a reader builds the same value from an
+in-memory tail with `createInMemoryStreamPages` from
+`@shirudo/ddd-kit/testing`.
 
 Such a reader keeps six rules. Decide the window before the fold: a cursor
 beyond the target, or a target beyond the head, is unreachable, never a

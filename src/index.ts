@@ -435,6 +435,7 @@ export {
 	type AbsentStreamPages,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
+	type ReplayableStreamPages,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 	type StreamPages,

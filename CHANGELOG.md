@@ -29,6 +29,21 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed: the fold takes the replayable shape of a stream read
+
+`reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`
+value: the stream, `fromVersion`, `targetVersion`, and the pages. The
+reachable branch of a kit read extends that shape, so a kit read still
+passes after one guard on `reachable`. A reader that pages on its own
+builds the shape directly and no longer carries the `exists` and
+`reachable` tags, which were the kit reader's decisions, not its own.
+`readStreamPages` asks the store for `readStream` only.
+
+`@shirudo/ddd-kit/testing` exports `createInMemoryStreamPages(stream, {
+fromVersion, tail, targetVersion })`. It builds that value from an
+in-memory tail, so a test of a self-paging reader, or of a fold over a
+fixed window, needs no store.
+
 ### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
 
 The replay check compares the aggregate with the pinned target, which is the

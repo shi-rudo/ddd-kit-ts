@@ -36,7 +36,7 @@ import {
 	type EsRepositoryContractEnvironment,
 	type EsRepositoryContractHarness,
 } from "./es-repository-contract";
-import { inMemoryStreamPages } from "./in-memory-stream-pages";
+import { createInMemoryStreamPages } from "./in-memory-stream-pages";
 import { serializedCalls } from "./serialized-calls";
 
 /**
@@ -274,7 +274,7 @@ class InMemoryEsOrderRepository {
 				snapshot
 					? ContractEsOrder.fromSnapshot(id, snapshot.state, snapshot.version)
 					: ContractEsOrder.bare(id),
-			inMemoryStreamPages(orderStream(id), {
+			createInMemoryStreamPages(orderStream(id), {
 				fromVersion,
 				tail: history.slice(fromVersion),
 				targetVersion: history.length,

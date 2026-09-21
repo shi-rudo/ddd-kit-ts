@@ -1,6 +1,6 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
-import type { ReachableStreamPages } from "../persistence/event-store/stream-pages";
+import type { ReplayableStreamPages } from "../persistence/event-store/stream-pages";
 
 /** The window a hand-built stream read covers. */
 export interface InMemoryStreamPagesWindow<Evt extends AnyDomainEvent> {
@@ -13,17 +13,16 @@ export interface InMemoryStreamPagesWindow<Evt extends AnyDomainEvent> {
 }
 
 /**
- * A stream read hand-built from an in-memory tail, for a test of a fold
- * that pages on its own. The tail comes back as one page on every
- * iteration. An empty tail yields no page, as the kit reader does.
+ * Builds a stream read from an in-memory tail, for a test of a reader that
+ * pages on its own or of a fold over a fixed window. The tail comes back as
+ * one page on every iteration. An empty tail yields no page, as the kit
+ * reader does.
  */
-export function inMemoryStreamPages<Evt extends AnyDomainEvent>(
+export function createInMemoryStreamPages<Evt extends AnyDomainEvent>(
 	stream: AggregateAddress,
 	window: InMemoryStreamPagesWindow<Evt>,
-): ReachableStreamPages<Evt> {
+): ReplayableStreamPages<Evt> {
 	return {
-		exists: true,
-		reachable: true,
 		stream,
 		fromVersion: window.fromVersion,
 		targetVersion: window.targetVersion,

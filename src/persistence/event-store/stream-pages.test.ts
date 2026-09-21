@@ -19,7 +19,7 @@ import {
 	ReplayTargetMismatchError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
-import { inMemoryStreamPages } from "../../testing/in-memory-stream-pages";
+import { createInMemoryStreamPages } from "../../testing/in-memory-stream-pages";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
 import type {
 	EventStore,
@@ -556,7 +556,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("throws ReplayTargetMismatchError when the pages do not reach the target", async () => {
-		const read = inMemoryStreamPages<CounterEvent>(stream, {
+		const read = createInMemoryStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(3),
 			targetVersion: 5,
@@ -578,7 +578,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("returns Err when the replay target rejects the priming replay", async () => {
-		const read = inMemoryStreamPages<CounterEvent>(stream, {
+		const read = createInMemoryStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(2),
 			targetVersion: 2,

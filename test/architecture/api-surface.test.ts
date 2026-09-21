@@ -273,6 +273,7 @@ const TESTING_SURFACE = [
 	"createEventBusContractTests",
 	"createEventStoreContractTests",
 	"createIdempotencyStoreContractTests",
+	"createInMemoryStreamPages",
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",
 	"createRepositoryContractTests",
