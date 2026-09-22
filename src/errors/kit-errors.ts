@@ -1168,6 +1168,56 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 	}
 }
 
+/** Constructor options for {@link ReplayRejectedError}. */
+export interface ReplayRejectedErrorOptions {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	/** The version the aggregate held before the rejected page. */
+	readonly fromVersion: number;
+	/** The last stream position of the rejected page (inclusive). */
+	readonly toVersion: number;
+	/** The error the aggregate raised for a stored event of the page. */
+	readonly cause: DomainError;
+}
+
+/**
+ * The `Err` of `reconstituteAggregateFromStreamPages`: the aggregate
+ * rejected a stored event while it replayed a page of the stream.
+ *
+ * The window `(fromVersion, toVersion]` locates the rejected page, and
+ * `cause` holds the `DomainError` of the aggregate. A stored stream that
+ * the domain cannot replay is a defect of the stored data, not a request
+ * the caller can correct. So this is an `InfrastructureError`, and it is
+ * not retryable. An empty window means that the replay target rejected an
+ * empty history before the first page.
+ */
+export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> {
+	readonly aggregateType: string;
+	readonly aggregateId: string;
+	readonly fromVersion: number;
+	readonly toVersion: number;
+	declare readonly cause: DomainError;
+
+	constructor(options: ReplayRejectedErrorOptions) {
+		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const rejected = `${options.cause.code}: ${options.cause.message}`;
+		super({
+			code: "REPLAY_REJECTED",
+			message:
+				options.fromVersion === options.toVersion
+					? `The replay target of ${stream} rejected an empty history at ` +
+						`version ${options.fromVersion} with ${rejected}`
+					: `The aggregate ${stream} rejected a stored event in the page ` +
+						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
+			cause: options.cause,
+		});
+		this.aggregateType = options.aggregateType;
+		this.aggregateId = options.aggregateId;
+		this.fromVersion = options.fromVersion;
+		this.toVersion = options.toVersion;
+	}
+}
+
 /**
  * Thrown when an event harvested from an aggregate cannot be safely composed
  * into a commit envelope, or when an outbox can prove that accepting a
@@ -1922,6 +1972,7 @@ export type KitErrorCode =
 	| "PUBLISH_DEPTH_EXCEEDED"
 	| "REENTRANT_DOMAIN_STATE_MACHINE_EVALUATION"
 	| "REENTRANT_EVENT_RECORDING"
+	| "REPLAY_REJECTED"
 	| "REPLAY_TARGET_MISMATCH"
 	| "REPOSITORY_ERROR_MAPPING_FAILED"
 	| "ROLLBACK_FAILED"

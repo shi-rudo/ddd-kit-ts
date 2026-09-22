@@ -130,7 +130,13 @@ iteration starts again from the first page. A page that breaks the
 
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of
 `reconstituteAggregateFromHistory`. It folds every page into the replay
-target and returns `Result<Aggregate, DomainError>`. It throws
+target and returns `Result<Aggregate, ReplayRejectedError>`. When the
+aggregate rejects a stored event, the `Err` names the stream and the window
+`(fromVersion, toVersion]` of the rejected page, and it holds the
+`DomainError` of the aggregate as `cause`. `ReplayRejectedError` (code
+`REPLAY_REJECTED`) is an `InfrastructureError`: a stored stream that the
+domain cannot replay is a defect of the data, so a repository that
+rethrows the `Err` no longer reports it as a business rejection. It throws
 `ReplayTargetMismatchError` when the replay does not end at the pinned target,
 and `UnreplayableAggregateError` for a dirty target, even on a read
 without pages. It takes a replayable stream read; the absent and unreachable

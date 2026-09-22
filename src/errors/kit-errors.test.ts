@@ -15,6 +15,7 @@ import {
 	InvalidEventStreamPageError,
 	MissingFoldError,
 	MissingHandlerError,
+	ReplayRejectedError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
 } from "./kit-errors";
@@ -108,6 +109,52 @@ describe("InvalidEventStreamPageError", () => {
 
 		expect(error.targetVersion).toBeUndefined();
 		expect(error.message).toContain("exists with head 0");
+	});
+});
+
+describe("ReplayRejectedError", () => {
+	class RowRejectedError extends DomainError<"ROW_REJECTED"> {
+		constructor() {
+			super({ code: "ROW_REJECTED", message: "the fold rejects this row" });
+		}
+	}
+
+	it("carries the stream, the window of the rejected page, and the domain error as cause", () => {
+		const cause = new RowRejectedError();
+		const error = new ReplayRejectedError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			fromVersion: 256,
+			toVersion: 300,
+			cause,
+		});
+
+		expect(error.code).toBe("REPLAY_REJECTED");
+		expect(error.name).toBe("REPLAY_REJECTED");
+		expect(error).toBeInstanceOf(InfrastructureError);
+		expect(error.retryable).toBe(false);
+		expect(error).toMatchObject({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			fromVersion: 256,
+			toVersion: 300,
+		});
+		expect(error.cause).toBe(cause);
+		expect(error.message).toContain("Order(order-1)");
+		expect(error.message).toContain("(256, 300]");
+		expect(error.message).toContain("ROW_REJECTED");
+	});
+
+	it("names a rejected empty history when the window is empty", () => {
+		const error = new ReplayRejectedError({
+			aggregateType: "Order",
+			aggregateId: "order-1",
+			fromVersion: 4,
+			toVersion: 4,
+			cause: new RowRejectedError(),
+		});
+
+		expect(error.message).toContain("rejected an empty history at version 4");
 	});
 });
 

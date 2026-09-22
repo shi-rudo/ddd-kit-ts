@@ -16,6 +16,7 @@ import {
 	DomainError,
 	ForeignEventError,
 	InvalidEventStreamPageError,
+	ReplayRejectedError,
 	ReplayTargetMismatchError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -178,7 +179,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.value.total).toBe(6);
 	});
 
-	it("returns Err and pulls no page after the one with a row the fold rejects", async () => {
+	it("returns ReplayRejectedError with the window of the page that holds a row the fold rejects", async () => {
 		const read = countingPulledPages(
 			createReplayableStreamPages<CounterEvent>(stream, {
 				fromVersion: 0,
@@ -195,7 +196,13 @@ describe("reconstituteAggregateFromStreamPages", () => {
 
 		expect(loaded.isErr()).toBe(true);
 		if (loaded.isOk()) throw new Error("a poisoned row must not load");
-		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
+		expect(loaded.error).toBeInstanceOf(ReplayRejectedError);
+		expect(loaded.error).toMatchObject({
+			...stream,
+			fromVersion: 2,
+			toVersion: 4,
+		});
+		expect(loaded.error.cause).toBeInstanceOf(PoisonedRowError);
 		expect(read.pulled).toBe(2);
 	});
 
@@ -268,7 +275,13 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.isErr()).toBe(true);
 		if (loaded.isOk())
 			throw new Error("a rejected priming replay must not load");
-		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
+		expect(loaded.error).toBeInstanceOf(ReplayRejectedError);
+		expect(loaded.error).toMatchObject({
+			...stream,
+			fromVersion: 0,
+			toVersion: 0,
+		});
+		expect(loaded.error.cause).toBeInstanceOf(PoisonedRowError);
 	});
 
 	it("throws InvalidEventStreamPageError at the first empty page of an adapter", async () => {

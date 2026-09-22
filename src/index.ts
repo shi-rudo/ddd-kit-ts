@@ -325,6 +325,8 @@ export {
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
 	ReentrantEventRecordingError,
+	ReplayRejectedError,
+	type ReplayRejectedErrorOptions,
 	ReplayTargetMismatchError,
 	type ReplayTargetMismatchErrorOptions,
 	type ReplayTargetMismatchReason,

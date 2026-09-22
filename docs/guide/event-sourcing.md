@@ -450,12 +450,15 @@ two branches carry no pages, so they cannot reach it.
 
 `reconstituteAggregateFromStreamPages(create, read)` builds the replay
 target through your factory, folds every page into it through
-`replayHistory`, and returns `Result<Order, DomainError>`. The aggregate
-exists only in the `Ok`. A rejected page leaves the repository with nothing
-to track, and the iteration stops there: the kit reads no further page. A
-fold's `DomainError` names neither the stream nor the position, so a
-repository that rethrows `loaded.error` attaches `read.stream`,
-`read.fromVersion`, and `read.targetVersion`. Before the first page, the call
+`replayHistory`, and returns `Result<Order, ReplayRejectedError>`. The
+aggregate exists only in the `Ok`. When the aggregate rejects a stored event
+with a `DomainError`, the iteration stops there, and the kit reads no
+further page. The `Err` is a `ReplayRejectedError`: it names the stream and
+the window of the rejected page, and it holds the `DomainError` as `cause`.
+A stored stream that the domain cannot replay is a defect of the data, not
+a request the client can correct. So `ReplayRejectedError` is an
+`InfrastructureError`, and a repository that rethrows `loaded.error` does
+not report a business rejection. Before the first page, the call
 checks that the replay target stands at `read.fromVersion`. A replay that
 ends short of `targetVersion` is rejected after the last page. Both cases
 throw `ReplayTargetMismatchError` with a `reason` that names the check. An
@@ -469,7 +472,8 @@ the [appendix](#appendix-an-adapter-that-pages-on-its-own).
 
 `reconstituteAggregateFromHistory(create, history)` is the one-page form of
 the same call. It returns `Result<Order, DomainError>` for a history that is
-already in memory, and the aggregate exists only in the `Ok`.
+already in memory, and the aggregate exists only in the `Ok`. It knows no
+stream, so its `Err` is the `DomainError` of the aggregate itself.
 `replayHistory(...)` returns `Result<void, DomainError>` because a persisted
 stream can be corrupt in ways the domain can name (a fold that rejects a
 payload it cannot map). Two groups of failures deliberately do NOT ride the

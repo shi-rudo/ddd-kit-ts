@@ -4,8 +4,8 @@ import type { AggregateAddress } from "../../domain/aggregate/aggregate-address"
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
-	type DomainError,
 	InvalidEventStreamPageError,
+	ReplayRejectedError,
 	ReplayTargetMismatchError,
 } from "../../errors/kit-errors";
 import {
@@ -48,39 +48,40 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 
 /**
  * Reconstitutes an event-sourced aggregate from the pages of a stream read
- * and yields it only when the replay ended at the pinned target.
+ * and yields it only when the replay ends at the target version.
  *
  * This is the paged form of `reconstituteAggregateFromHistory`.
- * `createReplayTarget` builds the instance: a fresh one for a full replay,
- * or one restored from a snapshot for a read that started at
- * `snapshot.version`. `read` is a {@link ReplayableStreamPages}: the
- * reachable branch of a kit read, or the value an adapter that pages on its
- * own built. The target must
- * carry no pending decisions. The fold
- * primes it with an empty history first, so the aggregate runs its own
- * replay-target guard even when the read holds no page; a dirty target
- * throws `UnreplayableAggregateError` as `replayHistory` does. The target
- * must then stand at the read cursor, `read.fromVersion`; a target at
- * another version throws {@link ReplayTargetMismatchError} before any page
- * is read. Each page goes through `replayHistory` on that instance, so
- * allocation stays bounded by the page limit. An empty page, and a page
- * that would run past the target, throw {@link InvalidEventStreamPageError}
- * before they are folded, so no row of them reaches the aggregate. An
- * adapter that yields an empty page, or one that overshoots, therefore
- * fails instead of looping. The
- * fold validates the window first: `targetVersion` is a
- * positive safe integer, `fromVersion` a non-negative one at or below it; a
- * bad window rejects with `RangeError` before the target is built.
- * `replayHistory` rolls back
- * one page. On a rejected page the earlier pages stay folded on the
- * instance, and that instance never escapes: the `DomainError` rides the
- * `Result`. Wiring errors and a foreign row throw, as in `replayHistory`.
- * The creator runs outside the `Result`.
+ * `createReplayTarget` builds the replay target: a fresh instance for a
+ * full replay, or an instance restored from a snapshot for a read that
+ * starts at `snapshot.version`. `read` is the reachable branch of a kit
+ * read, or the value that an adapter that pages on its own built.
  *
- * Events carry no stream position, so the instance cannot detect pages
- * that end short of the target. The call therefore checks the final
- * version against `read.targetVersion` and throws
- * {@link ReplayTargetMismatchError} when the pages ended early.
+ * The call checks the window first. `targetVersion` must be a positive
+ * safe integer, and `fromVersion` a non-negative one at or below it. A bad
+ * window rejects with `RangeError` before the replay target is built.
+ *
+ * The call then primes the replay target with an empty history, so the
+ * aggregate runs its own guard even when the read holds no page: a replay
+ * target with pending decisions throws `UnreplayableAggregateError`. The
+ * replay target must stand at `read.fromVersion`. A replay target at
+ * another version throws {@link ReplayTargetMismatchError} before the
+ * first page.
+ *
+ * Each page goes through `replayHistory` on the replay target, so
+ * allocation stays bounded by the page limit. An empty page, and a page
+ * that would run past the target version, throw
+ * {@link InvalidEventStreamPageError} before any row of them reaches the
+ * aggregate. Events carry no stream position, so only the call can find
+ * pages that end short of the target version. After the last page it
+ * compares the final version with `read.targetVersion` and throws
+ * {@link ReplayTargetMismatchError} on a difference.
+ *
+ * When the aggregate rejects a stored event with a `DomainError`, the call
+ * stops reading and returns {@link ReplayRejectedError} as `Err`. The
+ * error names the stream and the window of the rejected page, and it holds
+ * the `DomainError` as `cause`. The replay target never escapes on that
+ * path. Wiring errors and a foreign row throw, as in `replayHistory`. What
+ * `createReplayTarget` throws propagates.
  */
 export async function reconstituteAggregateFromStreamPages<
 	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
@@ -89,7 +90,7 @@ export async function reconstituteAggregateFromStreamPages<
 	read: ReplayableStreamPages<
 		Parameters<TAggregate["replayHistory"]>[0][number]
 	>,
-): Promise<Result<TAggregate, DomainError>> {
+): Promise<Result<TAggregate, ReplayRejectedError>> {
 	assertNonNegativeSafeInteger(
 		"reconstituteAggregateFromStreamPages",
 		"fromVersion",
@@ -108,7 +109,16 @@ export async function reconstituteAggregateFromStreamPages<
 	}
 	const aggregate = createReplayTarget();
 	const primed = aggregate.replayHistory([]);
-	if (primed.isErr()) return err(primed.error);
+	if (primed.isErr()) {
+		return err(
+			new ReplayRejectedError({
+				...read.stream,
+				fromVersion: aggregate.version,
+				toVersion: aggregate.version,
+				cause: primed.error,
+			}),
+		);
+	}
 	if (aggregate.version !== read.fromVersion) {
 		throw new ReplayTargetMismatchError({
 			...read.stream,
@@ -133,8 +143,18 @@ export async function reconstituteAggregateFromStreamPages<
 			aggregate.version,
 			read.targetVersion,
 		);
+		const versionBeforePage = aggregate.version;
 		const replayed = aggregate.replayHistory(page);
-		if (replayed.isErr()) return err(replayed.error);
+		if (replayed.isErr()) {
+			return err(
+				new ReplayRejectedError({
+					...read.stream,
+					fromVersion: versionBeforePage,
+					toVersion: versionBeforePage + page.length,
+					cause: replayed.error,
+				}),
+			);
+		}
 	}
 	if (aggregate.version !== read.targetVersion) {
 		throw new ReplayTargetMismatchError({

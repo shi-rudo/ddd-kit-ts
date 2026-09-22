@@ -39,6 +39,7 @@ import {
 	ProjectionIdentityViolationError,
 	ProjectionOrderViolationError,
 	ProjectionReceiptViolationError,
+	ReplayRejectedError,
 	ReplayTargetMismatchError,
 	SnapshotSchemaMismatchError,
 	SnapshotVersionNotRestoredError,
@@ -55,6 +56,12 @@ import {
 // there is exactly one identifier and no name/code drift. `category` follows
 // the class hierarchy mechanically (DOMAIN / INFRASTRUCTURE / WIRING);
 // `retryable` is the structured field the retry classifier reads.
+
+class RowRejectedError extends DomainError<"ROW_REJECTED"> {
+	constructor() {
+		super({ code: "ROW_REJECTED", message: "the fold rejects this row" });
+	}
+}
 
 const concreteCases: ReadonlyArray<{
 	error: () => Error & {
@@ -237,6 +244,19 @@ const concreteCases: ReadonlyArray<{
 				actualVersion: 11,
 			}),
 		code: "REPLAY_TARGET_MISMATCH",
+		category: "INFRASTRUCTURE",
+		retryable: false,
+	},
+	{
+		error: () =>
+			new ReplayRejectedError({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+				fromVersion: 10,
+				toVersion: 12,
+				cause: new RowRejectedError(),
+			}),
+		code: "REPLAY_REJECTED",
 		category: "INFRASTRUCTURE",
 		retryable: false,
 	},
@@ -626,6 +646,7 @@ describe("KitErrorCode stays in sync with the classes", () => {
 			AssertKitCode<MissingHandlerError["code"]>,
 			AssertKitCode<InvalidEventStreamPageError["code"]>,
 			AssertKitCode<ReplayTargetMismatchError["code"]>,
+			AssertKitCode<ReplayRejectedError["code"]>,
 			AssertKitCode<PendingEventBatchMismatchError["code"]>,
 			AssertKitCode<PendingEventLimitExceededError["code"]>,
 			AssertKitCode<ProjectionGapError["code"]>,
