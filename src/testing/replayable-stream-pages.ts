@@ -1,7 +1,7 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import { assertPositiveSafeInteger } from "../internal/validate";
-import type { ReplayableStreamPages } from "../persistence/event-store/stream-pages";
+import type { ReplayableStreamPages } from "../persistence/event-store/reconstitute-from-stream-pages";
 
 /** Options for {@link createReplayableStreamPages}. */
 export interface CreateReplayableStreamPagesOptions<Evt extends AnyDomainEvent>

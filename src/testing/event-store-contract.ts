@@ -1,7 +1,7 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
 import type { EventStore } from "../persistence/event-store/event-store";
-import { readStreamPages } from "../persistence/event-store/stream-pages";
+import { readStreamPages } from "../persistence/event-store/read-stream-pages";
 import {
 	assert,
 	assertChainContainsKitError,

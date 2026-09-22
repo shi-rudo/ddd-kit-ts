@@ -27,7 +27,7 @@ import type {
 	EventCommitCandidate,
 } from "../messaging/committed-event";
 import type { Outbox } from "../messaging/outbox/ports";
-import { reconstituteAggregateFromStreamPages } from "../persistence/event-store/stream-pages";
+import { reconstituteAggregateFromStreamPages } from "../persistence/event-store/reconstitute-from-stream-pages";
 import type { PersistenceModel } from "../persistence/repository/persistence-model";
 import type { TransactionScope } from "../persistence/repository/scope";
 import {

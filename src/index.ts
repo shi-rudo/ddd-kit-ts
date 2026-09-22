@@ -437,12 +437,14 @@ export {
 	type AbsentStreamPages,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
-	type ReplayableStreamPages,
 	readStreamPages,
-	reconstituteAggregateFromStreamPages,
 	type StreamPages,
 	type UnreachableStreamPages,
-} from "./persistence/event-store/stream-pages";
+} from "./persistence/event-store/read-stream-pages";
+export {
+	type ReplayableStreamPages,
+	reconstituteAggregateFromStreamPages,
+} from "./persistence/event-store/reconstitute-from-stream-pages";
 export {
 	type AggregateClass,
 	IdentityMap,
