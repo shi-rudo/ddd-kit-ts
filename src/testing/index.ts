@@ -2,8 +2,8 @@
  * Opt-in testing entry point (`@shirudo/ddd-kit/testing`).
  *
  * Ships the adapter contract test suites: event-sourced repositories, event
- * stores, event and command outboxes, idempotency stores, projections,
- * snapshots, and deadlines. The kit is ORM- and store-agnostic, so
+ * stores, replayable stream reads, event and command outboxes, idempotency
+ * stores, projections, snapshots, and deadlines. The kit is ORM- and store-agnostic, so
  * optimistic concurrency, outbox semantics, and the idempotency lifecycle
  * are adapter CONTRACTS the consumer's implementation must prove; this
  * entry provides the proof harnesses. It also ships
@@ -66,6 +66,13 @@ export {
 	type CreateReplayableStreamPagesOptions,
 	createReplayableStreamPages,
 } from "./replayable-stream-pages";
+export {
+	createReplayableStreamPagesContractTests,
+	type ReplayableStreamPagesContractEnvironment,
+	type ReplayableStreamPagesContractHarness,
+	type ReplayableStreamPagesContractTest,
+	type ReplayableStreamPagesContractWindow,
+} from "./replayable-stream-pages-contract";
 export {
 	type ContractRepository,
 	createRepositoryContractTests,

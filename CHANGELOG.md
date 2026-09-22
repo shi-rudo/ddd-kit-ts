@@ -57,6 +57,14 @@ read from an in-memory tail. A test of a repository, or of the fold over a
 fixed window, then needs no store. The optional `limit` slices the tail
 into pages, so such a test can cross a page boundary.
 
+`createReplayableStreamPagesContractTests` from the same entry proves a
+reader that builds such values, the kit read or an adapter that pages on
+its own. The pages hold the events after the cursor through the target
+version in append order. No page is empty or larger than the limit.
+Every iteration yields the same prefix, and an append during the
+iteration stays out. An absent stream and a window outside the stream
+give no replayable read.
+
 ### Changed (breaking): NonProgressingEventStreamPageError is InvalidEventStreamPageError
 
 A page of a stream read can break the `readStream` contract in several

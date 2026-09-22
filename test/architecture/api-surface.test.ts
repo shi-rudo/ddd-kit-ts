@@ -278,6 +278,7 @@ const TESTING_SURFACE = [
 	"createOutboxContractTests",
 	"createProjectionCheckpointStoreContractTests",
 	"createReplayableStreamPages",
+	"createReplayableStreamPagesContractTests",
 	"createRepositoryContractTests",
 	"createSnapshotStoreContractTests",
 ] as const;

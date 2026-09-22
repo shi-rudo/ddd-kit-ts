@@ -936,7 +936,11 @@ the first page. A store failure inside `pages` throws as is: the fold
 translates nothing, and the edge maps it. A test of the code that consumes
 such a read, a repository or the fold, builds the value from an in-memory
 tail with `createReplayableStreamPages` from `@shirudo/ddd-kit/testing`. It
-stands in for the adapter; the adapter's own rules need their own test.
+stands in for the adapter. The adapter itself runs
+`createReplayableStreamPagesContractTests` from the same entry. The suite
+proves the pages, the target version, the iteration rules, and the
+windows that give no replayable read. Its optional `limit` slices the tail
+into pages, so a repository test can cross a page boundary.
 
 Such an adapter keeps six rules. Decide existence before the fold: a head of
 `0` means absent. Pin the target with `pinTargetVersion`, the decision
