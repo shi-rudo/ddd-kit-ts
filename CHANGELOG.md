@@ -180,9 +180,11 @@ target version, or `reachable: false` for a window outside the stream. An
 adapter that pages on its own pins its target with it, so it does not
 derive the rule again from prose.
 
-The event-store contract suite gains a proof that walks an adapter through
-`readStreamPages` and stops before an append that lands during the
-iteration. The event-sourcing, repository, and event-upcasting guides and
+The event-store contract suite walks an adapter through `readStreamPages`.
+It proves that the read stops before an append that lands during the
+iteration. It also proves each window on its own: a `toVersion` below the
+head and one beyond it, and a cursor inside the stream and one beyond it.
+The event-sourcing, repository, and event-upcasting guides and
 the port docs show the two calls. The long form stays in the event-sourcing
 guide as an appendix for an adapter that pages on its own.
 
