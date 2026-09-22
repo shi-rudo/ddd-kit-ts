@@ -1054,27 +1054,6 @@ export interface ReplayTargetMismatchErrorOptions {
 	readonly actualVersion: number;
 }
 
-/**
- * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
- * that folds on its own, when the replay target does not line up with the
- * read. Events carry no stream position, so the aggregate cannot detect a
- * tail that overlaps or misses its restored version, or a page that lies
- * outside the requested window. Only the caller, which pinned the target,
- * can compare.
- *
- * The `reason` names the check that failed. `target_not_at_cursor`: the
- * replay target stands at a version other than the `fromVersion` the read
- * used, found before any page is folded; a reconstitution factory reports
- * the wrong version. `pages_outside_window`: a page would carry the replay
- * past the target, found before that page is folded; the read returned a
- * page outside the requested window. `pages_short_of_target`: the pages
- * ended before the target; the read stopped early, or the stream has a
- * gap. For an EventStore adapter, run `createEventStoreContractTests` and
- * `createEsRepositoryContractTests` against it and fix its windowing.
- * None of the cases is retryable. A snapshot beyond its stream does not
- * reach the fold: `readStreamPages` reports that window as unreachable
- * first, and an adapter that pages on its own must do the same.
- */
 function replayTargetMismatchMessage(
 	stream: string,
 	options: ReplayTargetMismatchErrorOptions,
@@ -1103,6 +1082,27 @@ function replayTargetMismatchMessage(
 	}
 }
 
+/**
+ * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
+ * that folds on its own, when the replay target does not line up with the
+ * read. Events carry no stream position, so the aggregate cannot detect a
+ * tail that overlaps or misses its restored version, or a page that lies
+ * outside the requested window. Only the caller, which pinned the target,
+ * can compare.
+ *
+ * The `reason` names the check that failed. `target_not_at_cursor`: the
+ * replay target stands at a version other than the `fromVersion` the read
+ * used, found before any page is folded; a reconstitution factory reports
+ * the wrong version. `pages_outside_window`: a page would carry the replay
+ * past the target, found before that page is folded; the read returned a
+ * page outside the requested window. `pages_short_of_target`: the pages
+ * ended before the target; the read stopped early, or the stream has a
+ * gap. For an EventStore adapter, run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against it and fix its windowing.
+ * None of the cases is retryable. A snapshot beyond its stream does not
+ * reach the fold: `readStreamPages` reports that window as unreachable
+ * first, and an adapter that pages on its own must do the same.
+ */
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
