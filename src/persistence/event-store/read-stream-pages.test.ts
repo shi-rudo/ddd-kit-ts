@@ -6,7 +6,7 @@ import {
 	type DomainEvent,
 } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
-import { NonProgressingEventStreamPageError } from "../../errors/kit-errors";
+import { InvalidEventStreamPageError } from "../../errors/kit-errors";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
 import type {
 	EventStore,
@@ -58,25 +58,19 @@ class CountingEventStore<Evt extends AnyDomainEvent>
 	}
 }
 
-/** Answers every continuation read with one fixed page: a broken adapter. */
-class StallingEventReader<Evt extends AnyDomainEvent>
-	implements EventStreamReader<Evt>
-{
-	private firstPageRead = false;
-
-	constructor(
-		private readonly inner: EventStreamReader<Evt>,
-		private readonly continuation: StreamReadResult<Evt>,
-	) {}
-
-	readStream(
-		address: AggregateAddress,
-		options: ReadStreamOptions,
-	): Promise<StreamReadResult<Evt>> {
-		if (this.firstPageRead) return Promise.resolve(this.continuation);
-		this.firstPageRead = true;
-		return this.inner.readStream(address, options);
-	}
+/** Answers each read with the next scripted page: an adapter under test control. */
+function scriptedReader(
+	...pages: ReadonlyArray<StreamReadResult<Counted>>
+): EventStreamReader<Counted> {
+	let next = 0;
+	return {
+		readStream: async () => {
+			const page = pages[next];
+			next += 1;
+			if (page === undefined) throw new Error("no scripted page is left");
+			return page;
+		},
+	};
 }
 
 /** Returns at most one event per page: a store that pages shorter than the limit. */
@@ -358,20 +352,19 @@ describe("readStreamPages", () => {
 		});
 	});
 
-	it("throws NonProgressingEventStreamPageError when a continuation page returns no events", async () => {
-		const store = await seededStore(countedUpTo(5));
-		const reader = new StallingEventReader(store, {
-			exists: true,
-			lastVersion: 5,
-			events: [],
-		});
+	it("throws InvalidEventStreamPageError when a continuation page returns no events", async () => {
+		const history = countedUpTo(5);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 5, events: history.slice(0, 2) },
+			{ exists: true, lastVersion: 5, events: [] },
+		);
 		const read = await readReachable(reader, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
 			reason: "empty_page",
@@ -380,24 +373,125 @@ describe("readStreamPages", () => {
 		});
 	});
 
-	it("throws NonProgressingEventStreamPageError when a continuation page reports the stream absent", async () => {
-		const store = await seededStore(countedUpTo(3));
-		const reader = new StallingEventReader(store, {
-			exists: false,
-			lastVersion: 0,
-			events: [],
-		});
+	it("throws InvalidEventStreamPageError when a continuation page reports the stream absent", async () => {
+		const history = countedUpTo(3);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 3, events: history.slice(0, 2) },
+			{ exists: false, lastVersion: 0, events: [] },
+		);
 		const read = await readReachable(reader, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
 		);
 
-		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
+			...stream,
 			reason: "stream_vanished",
 			fromVersion: 2,
 			targetVersion: 3,
+		});
+	});
+
+	it("rejects an existing stream whose first page reports head 0", async () => {
+		const reader = scriptedReader({ exists: true, lastVersion: 0, events: [] });
+
+		const rejection = await readStreamPages(reader, stream, {
+			limit: 2,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "stream_without_events",
+			fromVersion: 0,
+			lastVersion: 0,
+		});
+	});
+
+	it("rejects a first page that holds more events than the window up to the head", async () => {
+		const reader = scriptedReader({
+			exists: true,
+			lastVersion: 3,
+			events: countedUpTo(4),
+		});
+
+		const rejection = await readStreamPages(reader, stream, {
+			limit: 10,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "page_past_target",
+			fromVersion: 0,
+			targetVersion: 3,
+			eventCount: 4,
+		});
+	});
+
+	it("rejects a first page that runs past toVersion", async () => {
+		const reader = scriptedReader({
+			exists: true,
+			lastVersion: 5,
+			events: countedUpTo(3),
+		});
+
+		const rejection = await readStreamPages(reader, stream, {
+			toVersion: 2,
+			limit: 10,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			reason: "page_past_target",
+			fromVersion: 0,
+			targetVersion: 2,
+			eventCount: 3,
+		});
+	});
+
+	it("rejects a continuation page that holds more events than the window has left", async () => {
+		const history = countedUpTo(6);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 3, events: history.slice(0, 2) },
+			{ exists: true, lastVersion: 3, events: history.slice(2, 4) },
+		);
+		const read = await readReachable(reader, { limit: 2 });
+
+		const rejection = await collectPages(read.pages).catch(
+			(error: unknown) => error,
+		);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			reason: "page_past_target",
+			fromVersion: 2,
+			targetVersion: 3,
+			eventCount: 2,
+		});
+	});
+
+	it("rejects a continuation page that reports a head below the head of the first page", async () => {
+		const history = countedUpTo(5);
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 5, events: history.slice(0, 2) },
+			{ exists: true, lastVersion: 4, events: history.slice(2, 4) },
+		);
+		const read = await readReachable(reader, { limit: 2 });
+
+		const rejection = await collectPages(read.pages).catch(
+			(error: unknown) => error,
+		);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			reason: "head_regressed",
+			fromVersion: 2,
+			targetVersion: 5,
+			lastVersion: 4,
+			firstPageLastVersion: 5,
 		});
 	});
 

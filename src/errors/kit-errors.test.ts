@@ -12,36 +12,102 @@ import {
 	DuplicateAggregateError,
 	EventHarvestError,
 	InfrastructureError,
+	InvalidEventStreamPageError,
 	MissingFoldError,
 	MissingHandlerError,
-	NonProgressingEventStreamPageError,
 	UnenrolledChangesError,
 	UnreplayableAggregateError,
 } from "./kit-errors";
 
-describe("NonProgressingEventStreamPageError", () => {
-	it("names an EventStore page that cannot advance to its pinned target", () => {
-		const error = new NonProgressingEventStreamPageError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+describe("InvalidEventStreamPageError", () => {
+	const stream = { aggregateType: "Order", aggregateId: "order-1" };
+
+	it("is a non-retryable infrastructure error with one code for every reason", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
 			reason: "empty_page",
 			fromVersion: 256,
 			targetVersion: 300,
 		});
 
-		expect(error.code).toBe("NON_PROGRESSING_EVENT_STREAM_PAGE");
-		expect(error.name).toBe("NON_PROGRESSING_EVENT_STREAM_PAGE");
+		expect(error.code).toBe("INVALID_EVENT_STREAM_PAGE");
+		expect(error.name).toBe("INVALID_EVENT_STREAM_PAGE");
 		expect(error).toBeInstanceOf(InfrastructureError);
 		expect(error.category).toBe("INFRASTRUCTURE");
 		expect(error.retryable).toBe(false);
-		expect(error.aggregateType).toBe("Order");
-		expect(error.aggregateId).toBe("order-1");
-		expect(error.reason).toBe("empty_page");
-		expect(error.fromVersion).toBe(256);
-		expect(error.targetVersion).toBe(300);
+		expect(error).toMatchObject({
+			...stream,
+			reason: "empty_page",
+			fromVersion: 256,
+			targetVersion: 300,
+		});
+	});
+
+	it("names an empty page with its cursor and target version", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "empty_page",
+			fromVersion: 256,
+			targetVersion: 300,
+		});
+
 		expect(error.message).toContain("Order(order-1)");
-		expect(error.message).toContain("after version 256");
+		expect(error.message).toContain("empty page after version 256");
 		expect(error.message).toContain("target version 300");
+	});
+
+	it("names a vanished stream with its cursor and target version", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "stream_vanished",
+			fromVersion: 256,
+			targetVersion: 300,
+		});
+
+		expect(error.message).toContain("absent after version 256");
+		expect(error.message).toContain("target version 300");
+	});
+
+	it("names a page past the target with its size and the room left", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "page_past_target",
+			fromVersion: 298,
+			targetVersion: 300,
+			eventCount: 5,
+		});
+
+		expect(error.eventCount).toBe(5);
+		expect(error.message).toContain("5 events after version 298");
+		expect(error.message).toContain("(298, 300]");
+	});
+
+	it("names a regressed head with both heads", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "head_regressed",
+			fromVersion: 256,
+			targetVersion: 300,
+			lastVersion: 280,
+			firstPageLastVersion: 300,
+		});
+
+		expect(error.lastVersion).toBe(280);
+		expect(error.firstPageLastVersion).toBe(300);
+		expect(error.message).toContain("head 280");
+		expect(error.message).toContain("head 300 of the first page");
+	});
+
+	it("names an existing stream without events and pins no target version", () => {
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "stream_without_events",
+			fromVersion: 0,
+			lastVersion: 0,
+		});
+
+		expect(error.targetVersion).toBeUndefined();
+		expect(error.message).toContain("exists with head 0");
 	});
 });
 

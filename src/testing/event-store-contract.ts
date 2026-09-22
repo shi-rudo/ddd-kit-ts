@@ -1,6 +1,9 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
-import type { EventStore } from "../persistence/event-store/event-store";
+import type {
+	EventStore,
+	ReadStreamOptions,
+} from "../persistence/event-store/event-store";
 import { readStreamPages } from "../persistence/event-store/read-stream-pages";
 import {
 	assert,
@@ -438,6 +441,42 @@ export function createEventStoreContractTests<Evt extends AnyDomainEvent>(
 							result.lastVersion === 2 &&
 							result.events.length === 0,
 						"an empty read window must retain stream existence and report the actual head, even when fromVersion is beyond it",
+					);
+				}
+			}),
+		},
+		{
+			name: "page bounds: an existing stream reports a head of at least 1 and no page holds more events than its window",
+			run: inEnv(async ({ store }) => {
+				const [firstKey] = harness.createCollidingStreamKeys();
+				const events = [1, 2, 3, 4, 5].map((sequence) =>
+					harness.createEvent(firstKey, sequence),
+				);
+				await store.append(firstKey, events, { expectedVersion: 0 });
+				const windows: ReadonlyArray<ReadStreamOptions> = [
+					{ limit: 100 },
+					{ limit: 2 },
+					{ fromVersion: 2, limit: 100 },
+					{ fromVersion: 3, toVersion: 4, limit: 100 },
+					{ fromVersion: 4, toVersion: 99, limit: 100 },
+					{ fromVersion: 99, limit: 100 },
+					{ fromVersion: 3, toVersion: 1, limit: 100 },
+				];
+
+				for (const window of windows) {
+					const page = await store.readStream({ ...firstKey }, window);
+					assert(
+						page.exists && page.lastVersion >= 1,
+						"an existing stream must report a head of at least 1; report a stream without events as absent",
+					);
+					const windowEnd = Math.min(
+						window.toVersion ?? page.lastVersion,
+						page.lastVersion,
+					);
+					const room = Math.max(0, windowEnd - (window.fromVersion ?? 0));
+					assert(
+						page.events.length <= room && page.events.length <= window.limit,
+						`a page must hold at most the ${room} events of its window (${window.fromVersion ?? 0}, ${windowEnd}] and at most the limit ${window.limit}; got ${page.events.length}`,
 					);
 				}
 			}),

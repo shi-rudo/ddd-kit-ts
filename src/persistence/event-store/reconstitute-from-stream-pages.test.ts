@@ -15,7 +15,7 @@ import type { Id } from "../../domain/identity/id";
 import {
 	DomainError,
 	ForeignEventError,
-	NonProgressingEventStreamPageError,
+	InvalidEventStreamPageError,
 	ReplayTargetMismatchError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
@@ -271,7 +271,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
 	});
 
-	it("throws NonProgressingEventStreamPageError at the first empty page of an adapter", async () => {
+	it("throws InvalidEventStreamPageError at the first empty page of an adapter", async () => {
 		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
@@ -294,7 +294,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			read,
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
 			reason: "empty_page",
@@ -325,12 +325,13 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			read,
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			reason: "pages_outside_window",
-			fromVersion: 0,
+			...stream,
+			reason: "page_past_target",
+			fromVersion: 2,
 			targetVersion: 3,
-			actualVersion: 4,
+			eventCount: 2,
 		});
 		expect(pulls).toBe(2);
 	});
@@ -353,10 +354,11 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			read,
 		).catch((error: unknown) => error);
 
-		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			reason: "pages_outside_window",
-			actualVersion: 5,
+			reason: "page_past_target",
+			fromVersion: 2,
+			eventCount: 3,
 		});
 	});
 

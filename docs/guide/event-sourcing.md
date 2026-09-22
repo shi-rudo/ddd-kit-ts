@@ -434,8 +434,12 @@ again from the first page, so a second fold over one read sees the same
 prefix. The reader bounds every continuation page to the target with
 `toVersion`. It continues by the number of events the previous page
 returned. A writer that appends during the load therefore cannot move the
-target. A continuation page without events cannot make progress and throws
-`NonProgressingEventStreamPageError`.
+target. The reader checks every page against the `readStream` contract. A
+page that breaks it throws `InvalidEventStreamPageError`, and its `reason`
+names the defect: an existing stream with a head below 1, a page with more
+events than its window has left, or a continuation page that is empty,
+reports the stream absent, or reports a head below the head of the first
+page.
 
 The caller decides what the two `reachable: false` branches mean before it
 hands the last one over: `null` here, a snapshot to discard in the
@@ -452,11 +456,12 @@ to track, and the iteration stops there: the kit reads no further page. A
 fold's `DomainError` names neither the stream nor the position, so a
 repository that rethrows `loaded.error` attaches `read.stream`,
 `read.fromVersion`, and `read.targetVersion`. Before the first page, the call
-checks that the replay target stands at `read.fromVersion`. A page that
-would run past `targetVersion` is rejected before it is folded. A replay
-that ends short of `targetVersion` is rejected after the last page. Each
-case throws `ReplayTargetMismatchError` with a `reason` that names the
-check. Allocation stays bounded by the page limit: the read keeps the first
+checks that the replay target stands at `read.fromVersion`. A replay that
+ends short of `targetVersion` is rejected after the last page. Both cases
+throw `ReplayTargetMismatchError` with a `reason` that names the check. An
+empty page, and a page that would run past `targetVersion`, throw
+`InvalidEventStreamPageError` before they are folded, as they do in the
+reader. Allocation stays bounded by the page limit: the read keeps the first
 page, and each later page goes through `replayHistory` once.
 
 The same recipe in long form, for an adapter that pages on its own, is in
@@ -663,7 +668,7 @@ the code, not on the class or the message: the code is the contract.
 of the kit, which a plain `instanceof` misses. The typed `Set` rejects a
 misspelled code at compile time.
 
-`ReplayTargetMismatchError` and `NonProgressingEventStreamPageError` stay
+`ReplayTargetMismatchError` and `InvalidEventStreamPageError` stay
 outside the discard set on purpose. After the check above, both mean the
 read contradicted its contract: an EventStore adapter its port, for example
 with an inclusive `fromVersion` slice or a continuation that returns

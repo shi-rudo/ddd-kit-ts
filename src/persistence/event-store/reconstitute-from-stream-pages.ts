@@ -5,7 +5,7 @@ import type { AnyDomainEvent } from "../../domain/event/domain-event";
 import type { Id } from "../../domain/identity/id";
 import {
 	type DomainError,
-	NonProgressingEventStreamPageError,
+	InvalidEventStreamPageError,
 	ReplayTargetMismatchError,
 } from "../../errors/kit-errors";
 import {
@@ -40,10 +40,8 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	 * bounded page per iteration. Every iteration starts again from the
 	 * first page, so a second fold over one read sees the same prefix. A
 	 * page holds at least one event, and the pages end at the target. The
-	 * fold rejects an empty page with
-	 * {@link NonProgressingEventStreamPageError}, and a page that would run
-	 * past the target with {@link ReplayTargetMismatchError} before it folds
-	 * that page.
+	 * fold rejects an empty page, and a page that would run past the target,
+	 * with {@link InvalidEventStreamPageError} before it folds that page.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
@@ -65,11 +63,11 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
  * must then stand at the read cursor, `read.fromVersion`; a target at
  * another version throws {@link ReplayTargetMismatchError} before any page
  * is read. Each page goes through `replayHistory` on that instance, so
- * allocation stays bounded by the page limit. An empty page throws
- * {@link NonProgressingEventStreamPageError}. A page that would run past
- * the target throws {@link ReplayTargetMismatchError} before it is folded,
- * so no row of it reaches the aggregate. An adapter that yields an empty
- * page, or one that overshoots, therefore fails instead of looping. The
+ * allocation stays bounded by the page limit. An empty page, and a page
+ * that would run past the target, throw {@link InvalidEventStreamPageError}
+ * before they are folded, so no row of them reaches the aggregate. An
+ * adapter that yields an empty page, or one that overshoots, therefore
+ * fails instead of looping. The
  * fold validates the window first: `targetVersion` is a
  * positive safe integer, `fromVersion` a non-negative one at or below it; a
  * bad window rejects with `RangeError` before the target is built.
@@ -122,22 +120,19 @@ export async function reconstituteAggregateFromStreamPages<
 	}
 	for await (const page of read.pages) {
 		if (page.length === 0) {
-			throw new NonProgressingEventStreamPageError({
+			throw new InvalidEventStreamPageError({
 				...read.stream,
 				reason: "empty_page",
 				fromVersion: aggregate.version,
 				targetVersion: read.targetVersion,
 			});
 		}
-		if (aggregate.version + page.length > read.targetVersion) {
-			throw new ReplayTargetMismatchError({
-				...read.stream,
-				reason: "pages_outside_window",
-				fromVersion: read.fromVersion,
-				targetVersion: read.targetVersion,
-				actualVersion: aggregate.version + page.length,
-			});
-		}
+		assertPageWithinWindow(
+			read.stream,
+			page.length,
+			aggregate.version,
+			read.targetVersion,
+		);
 		const replayed = aggregate.replayHistory(page);
 		if (replayed.isErr()) return err(replayed.error);
 	}
@@ -151,4 +146,20 @@ export async function reconstituteAggregateFromStreamPages<
 		});
 	}
 	return ok(aggregate);
+}
+
+export function assertPageWithinWindow(
+	stream: AggregateAddress,
+	eventCount: number,
+	fromVersion: number,
+	targetVersion: number,
+): void {
+	if (eventCount <= targetVersion - fromVersion) return;
+	throw new InvalidEventStreamPageError({
+		...stream,
+		reason: "page_past_target",
+		fromVersion,
+		targetVersion,
+		eventCount,
+	});
 }

@@ -1,15 +1,15 @@
 import type { AggregateAddress } from "../../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../../domain/event/domain-event";
-import {
-	NonProgressingEventStreamPageError,
-	type NonProgressingEventStreamPageReason,
-} from "../../errors/kit-errors";
+import { InvalidEventStreamPageError } from "../../errors/kit-errors";
 import {
 	assertNonNegativeSafeInteger,
 	assertPositiveSafeInteger,
 } from "../../internal/validate";
 import type { EventStreamReader, ReadStreamOptions } from "./event-store";
-import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
+import {
+	assertPageWithinWindow,
+	type ReplayableStreamPages,
+} from "./reconstitute-from-stream-pages";
 
 /** Options for {@link readStreamPages}. */
 export interface ReadStreamPagesOptions
@@ -152,10 +152,14 @@ export function pinTargetVersion(
  * window as unreachable. Each iteration of `pages` reads the remaining
  * pages lazily. It bounds every continuation page to the target
  * with `toVersion`. It continues by the number of events the previous page
- * returned. It yields no empty page and throws
- * {@link NonProgressingEventStreamPageError} for a continuation page that
- * makes no progress. Streams are append-only, so that yields one stable
- * prefix even when another writer appends during the replay.
+ * returned. Streams are append-only, so that yields one stable prefix even
+ * when another writer appends during the replay.
+ *
+ * The call checks every page against the `readStream` contract and throws
+ * {@link InvalidEventStreamPageError} for a page that breaks it: an
+ * existing stream with a head below 1, a page with more events than its
+ * window has left, and a continuation page that is empty, reports the
+ * stream absent, or reports a head below the head of the first page.
  *
  * Invalid options reject with `RangeError` before any page is read:
  * `limit` and `toVersion` must be positive safe integers, `fromVersion` a
@@ -192,6 +196,14 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		...(options.signal === undefined ? {} : { signal: options.signal }),
 	});
 	if (!first.exists) return { exists: false, reachable: false };
+	if (first.lastVersion < 1) {
+		throw new InvalidEventStreamPageError({
+			...address,
+			reason: "stream_without_events",
+			fromVersion,
+			lastVersion: first.lastVersion,
+		});
+	}
 	const pinned = pinTargetVersion({
 		fromVersion,
 		toVersion: options.toVersion,
@@ -205,9 +217,16 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 			lastVersion: first.lastVersion,
 		};
 	}
+	assertPageWithinWindow(
+		address,
+		first.events.length,
+		fromVersion,
+		pinned.targetVersion,
+	);
 	const window: PinnedWindow<Evt> = {
 		stream: address,
 		firstPage: first.events,
+		firstPageLastVersion: first.lastVersion,
 		cursorAfterFirstPage: fromVersion + first.events.length,
 		targetVersion: pinned.targetVersion,
 		limit: options.limit,
@@ -228,6 +247,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 interface PinnedWindow<Evt extends AnyDomainEvent> {
 	readonly stream: AggregateAddress;
 	readonly firstPage: ReadonlyArray<Evt>;
+	readonly firstPageLastVersion: number;
 	readonly cursorAfterFirstPage: number;
 	readonly targetVersion: number;
 	readonly limit: number;
@@ -248,22 +268,37 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 			limit: window.limit,
 			...(window.signal === undefined ? {} : { signal: window.signal }),
 		});
+		const pageAt = {
+			...window.stream,
+			fromVersion: cursor,
+			targetVersion: window.targetVersion,
+		};
 		if (!page.exists) {
-			throw nonProgressingPage(
-				window.stream,
-				"stream_vanished",
-				cursor,
-				window.targetVersion,
-			);
+			throw new InvalidEventStreamPageError({
+				...pageAt,
+				reason: "stream_vanished",
+			});
+		}
+		if (page.lastVersion < window.firstPageLastVersion) {
+			throw new InvalidEventStreamPageError({
+				...pageAt,
+				reason: "head_regressed",
+				lastVersion: page.lastVersion,
+				firstPageLastVersion: window.firstPageLastVersion,
+			});
 		}
 		if (page.events.length === 0) {
-			throw nonProgressingPage(
-				window.stream,
-				"empty_page",
-				cursor,
-				window.targetVersion,
-			);
+			throw new InvalidEventStreamPageError({
+				...pageAt,
+				reason: "empty_page",
+			});
 		}
+		assertPageWithinWindow(
+			window.stream,
+			page.events.length,
+			cursor,
+			window.targetVersion,
+		);
 		yield page.events;
 		cursor += page.events.length;
 	}
@@ -271,18 +306,4 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw signal.reason;
-}
-
-function nonProgressingPage(
-	stream: AggregateAddress,
-	reason: NonProgressingEventStreamPageReason,
-	fromVersion: number,
-	targetVersion: number,
-): NonProgressingEventStreamPageError {
-	return new NonProgressingEventStreamPageError({
-		...stream,
-		reason,
-		fromVersion,
-		targetVersion,
-	});
 }

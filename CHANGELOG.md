@@ -42,19 +42,11 @@ fold; only a kit read reports that verdict on the value.
 The fold guards such a value. It validates the window before it builds the
 replay target: `targetVersion` is a positive safe integer, `fromVersion` a
 non-negative one at or below it; a bad window rejects with `RangeError`.
-It rejects an empty page with `NonProgressingEventStreamPageError`. It
-rejects a page that would run past the target with
-`ReplayTargetMismatchError` before it folds that page, and a replay that
-ends short of the target after the last page. An adapter that yields an
-empty page or overshoots therefore fails instead of looping.
-
-`NonProgressingEventStreamPageError` carries a required `reason`:
-`empty_page`, or `stream_vanished` when `readStream` reports the stream
-absent between two pages. The message names the condition, not a store.
-Code that constructs the error, as the rc.10 guides showed, passes the
-reason. `ReplayTargetMismatchError` gains the reason
-`pages_short_of_target`; `pages_outside_window` now names a page that
-would run past the target.
+It rejects an empty page, and a page that would run past the target, with
+`InvalidEventStreamPageError` before it folds that page. It rejects a
+replay that ends short of the target with `ReplayTargetMismatchError`
+after the last page. An adapter that yields an empty page or overshoots
+therefore fails instead of looping.
 
 `EventStore` extends `EventStreamReader`, the read half of the store.
 `readStreamPages` asks for that role only.
@@ -65,6 +57,44 @@ read from an in-memory tail. A test of a repository, or of the fold over a
 fixed window, then needs no store. The optional `limit` slices the tail
 into pages, so such a test can cross a page boundary.
 
+### Changed (breaking): NonProgressingEventStreamPageError is InvalidEventStreamPageError
+
+A page of a stream read can break the `readStream` contract in several
+ways. For each of them, the responder does the same: fix the adapter and
+run the contract suite. One error now covers them all.
+`NonProgressingEventStreamPageError` is `InvalidEventStreamPageError`, its
+code `NON_PROGRESSING_EVENT_STREAM_PAGE` is `INVALID_EVENT_STREAM_PAGE`, and
+its reason type is `EventStreamPageReason`. The required `reason` names the
+defect:
+
+- `empty_page`: the page holds no event, but events remain before the
+  target version.
+- `stream_vanished`: a continuation page reports the stream absent.
+- `page_past_target`: the page holds more events than its window has left.
+  New.
+- `head_regressed`: a continuation page reports a head below the head of
+  the first page. New.
+- `stream_without_events`: the first page reports an existing stream with a
+  head below 1. New.
+
+`readStreamPages` checks every page it reads, and
+`reconstituteAggregateFromStreamPages` checks every page it folds. Both
+throw this error for the same defect, before any row of the page reaches
+the aggregate. Before, an existing stream with head 0 passed the read and
+failed later in the fold with a `RangeError`. The fold reported a page
+past the target as `ReplayTargetMismatchError` with the reason
+`pages_outside_window`. That reason is gone. `ReplayTargetMismatchError`
+keeps `target_not_at_cursor` and `pages_short_of_target`.
+
+`targetVersion` is optional on the error, because the first page pins no
+target when it reports a head below 1. The optional fields `lastVersion`,
+`firstPageLastVersion`, and `eventCount` carry what the page reported.
+Rename the class, the options type, and the code where you construct or
+match on them. No alias remains.
+
+The event-store contract suite gains a proof: an existing stream reports a
+head of at least 1, and no page holds more events than its window.
+
 ### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
 
 The replay check compares the aggregate with the pinned target, which is the
@@ -73,8 +103,8 @@ error named the head, and its message guessed between causes. It is now
 `ReplayTargetMismatchError` with the code `REPLAY_TARGET_MISMATCH`. Its
 options carry `fromVersion`, the cursor the read started at, and a `reason`:
 `target_not_at_cursor` when the replay target stands at another version
-than the cursor, found before any page is read, or `pages_outside_window`
-when the fold does not end at the target. Rename the class and the code
+than the cursor, found before any page is read, or `pages_short_of_target`
+when the pages end before the target. Rename the class and the code
 where you match on them. The rc.8 name is gone; no alias remains.
 
 The stream read types follow the same vocabulary. The reachable branch of
@@ -95,8 +125,8 @@ reads the first page, decides existence, and pins the target: `toVersion`
 when given, else `lastVersion`. It returns `{ exists: false, reachable:
 false }` for an unknown stream. For an existing stream it returns the
 pinned target and the pages after the cursor as a lazy iteration. Every
-iteration starts again from the first page. A continuation page without
-events throws `NonProgressingEventStreamPageError`.
+iteration starts again from the first page. A page that breaks the
+`readStream` contract throws `InvalidEventStreamPageError`.
 
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of
 `reconstituteAggregateFromHistory`. It folds every page into the replay

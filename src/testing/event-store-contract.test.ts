@@ -44,6 +44,7 @@ describe("event-store adapter contract", () => {
 			"bounded read: toVersion is inclusive while lastVersion remains the actual head",
 			"bounded read edges: zero, beyond-head, and inverted ranges are empty or clamped",
 			"read state: empty and beyond-head windows retain existence and the actual stream head",
+			"page bounds: an existing stream reports a head of at least 1 and no page holds more events than its window",
 			"qualified fromVersion: slicing one type cannot observe a colliding raw id",
 			"OCC: a rejected multi-event append is atomic and maps to ConcurrencyConflictError",
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
