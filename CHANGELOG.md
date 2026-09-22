@@ -123,8 +123,12 @@ and a page that makes no progress stay outside the snapshot discard set, so
 an adapter defect stays loud. The read carries its cursor as `fromVersion`,
 and the fold checks that the replay target stands there before the first
 page. `ReplayTargetMismatchError` names the failed check in its `reason`.
-`readStreamPages` accepts the `signal` of the surrounding unit of work and
-stops paging once it is aborted.
+`readStreamPages` accepts the `signal` of the surrounding unit of work. It
+passes the signal to every page read and stops paging once it is aborted.
+`ReadStreamOptions` carries the optional `signal` for that. An adapter
+rejects with the `reason` of an aborted signal, or bounds each page read
+with the timeout of its driver. `InMemoryEventStore` rejects a read with an
+aborted signal.
 
 `pinTargetVersion({ fromVersion, toVersion, lastVersion })` is the decision
 the read makes on its first page, as a pure function. It returns the

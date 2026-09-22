@@ -263,6 +263,7 @@ interface EventStreamReader<Evt extends AnyDomainEvent> {
       limit: number;
       fromVersion?: number;
       toVersion?: number;
+      signal?: AbortSignal;
     },
   ): Promise<StreamReadResult<Evt>>;
 }
@@ -331,6 +332,12 @@ actual head.
 non-negative safe integers.
 
 Invalid options reject with `RangeError`.
+
+`signal` is the cancellation signal of the surrounding operation.
+`readStreamPages` passes it to every page read. An adapter either rejects
+with the `reason` of an aborted signal, or bounds each page read with the
+timeout of its driver. So a page read that hangs cannot hang the load.
+
 Adapters must compute `exists`, `lastVersion`, and `events` from one consistent
 view of the page. Do not assemble the result from racing reads.
 

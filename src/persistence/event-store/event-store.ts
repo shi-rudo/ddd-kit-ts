@@ -45,6 +45,14 @@ export interface ReadStreamOptions {
 	 * Must be a non-negative safe integer when present.
 	 */
 	readonly toVersion?: number;
+
+	/**
+	 * Cooperative-cancellation signal of the surrounding operation. An
+	 * adapter either rejects with the `reason` of an aborted signal, or
+	 * bounds each page read with the timeout of its driver. So a page read
+	 * that hangs cannot hang the load.
+	 */
+	readonly signal?: AbortSignal;
 }
 
 /**

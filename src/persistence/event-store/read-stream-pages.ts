@@ -13,7 +13,7 @@ import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
 
 /** Options for {@link readStreamPages}. */
 export interface ReadStreamPagesOptions
-	extends Pick<ReadStreamOptions, "limit" | "fromVersion"> {
+	extends Pick<ReadStreamOptions, "limit" | "fromVersion" | "signal"> {
 	/**
 	 * The stream position the replay must reach (inclusive, 1-based event
 	 * count): a point-in-time read. Defaults to the stream head of the first
@@ -24,14 +24,6 @@ export interface ReadStreamPagesOptions
 	 * before the first event, and no replay can end there.
 	 */
 	readonly toVersion?: number;
-
-	/**
-	 * Cooperative-cancellation signal, the one `UnitOfWork.run` carries. The
-	 * reader polls it before the first page and before every continuation
-	 * page and throws its `reason` once it is aborted. A page read in
-	 * flight completes on its own, because the port takes no signal.
-	 */
-	readonly signal?: AbortSignal;
 }
 
 /**
@@ -167,8 +159,9 @@ export function pinTargetVersion(
  *
  * Invalid options reject with `RangeError` before any page is read:
  * `limit` and `toVersion` must be positive safe integers, `fromVersion` a
- * non-negative one. An aborted `signal` rejects with its reason before the
- * next page.
+ * non-negative one. The call passes `signal` to every page read, and it
+ * checks the signal before each page read as well. An aborted signal
+ * rejects with its `reason`.
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
 	reader: EventStreamReader<Evt>,
@@ -196,6 +189,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		...(options.toVersion === undefined
 			? {}
 			: { toVersion: options.toVersion }),
+		...(options.signal === undefined ? {} : { signal: options.signal }),
 	});
 	if (!first.exists) return { exists: false, reachable: false };
 	const pinned = pinTargetVersion({
@@ -252,6 +246,7 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 			fromVersion: cursor,
 			toVersion: window.targetVersion,
 			limit: window.limit,
+			...(window.signal === undefined ? {} : { signal: window.signal }),
 		});
 		if (!page.exists) {
 			throw nonProgressingPage(

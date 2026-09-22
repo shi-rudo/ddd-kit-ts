@@ -301,6 +301,17 @@ describe("InMemoryEventStore", () => {
 		]);
 	});
 
+	it("rejects a read with the abort reason when the signal is aborted", async () => {
+		const store = new InMemoryEventStore<OrderEvent>();
+		await store.append(streamA, [renamed("a")], { expectedVersion: 0 });
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			store.readStream(streamA, { limit: 10, signal: controller.signal }),
+		).rejects.toBe(controller.signal.reason);
+	});
+
 	it("treats an empty append as a no-op", async () => {
 		const store = new InMemoryEventStore<OrderEvent>();
 

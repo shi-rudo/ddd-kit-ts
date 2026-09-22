@@ -285,6 +285,30 @@ describe("readStreamPages", () => {
 		expect(store.reads).toBe(1);
 	});
 
+	it("passes the signal to the first page read and to every continuation read", async () => {
+		const store = await seededStore(countedUpTo(5));
+		const signals: Array<AbortSignal | undefined> = [];
+		const reader: EventStreamReader<Counted> = {
+			readStream: (address, options) => {
+				signals.push(options.signal);
+				return store.readStream(address, options);
+			},
+		};
+		const controller = new AbortController();
+
+		const read = await readReachable(reader, {
+			limit: 2,
+			signal: controller.signal,
+		});
+		await collectPages(read.pages);
+
+		expect(signals).toEqual([
+			controller.signal,
+			controller.signal,
+			controller.signal,
+		]);
+	});
+
 	it("reports the window unreachable when toVersion lies beyond the head", async () => {
 		const store = await seededStore(countedUpTo(3));
 
