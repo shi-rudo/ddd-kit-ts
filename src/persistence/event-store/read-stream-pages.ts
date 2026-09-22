@@ -4,7 +4,10 @@ import {
 	NonProgressingEventStreamPageError,
 	type NonProgressingEventStreamPageReason,
 } from "../../errors/kit-errors";
-import { assertPositiveSafeInteger } from "../../internal/validate";
+import {
+	assertNonNegativeSafeInteger,
+	assertPositiveSafeInteger,
+} from "../../internal/validate";
 import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
 
@@ -98,16 +101,19 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
  * makes no progress. Streams are append-only, so that yields one stable
  * prefix even when another writer appends during the replay.
  *
- * A `toVersion` that is not a positive safe integer rejects with
- * `RangeError` before any page is read. The store rejects the other
- * invalid options the same way. An aborted `signal` rejects with its
- * reason before the next page.
+ * Invalid options reject with `RangeError` before any page is read:
+ * `limit` and `toVersion` must be positive safe integers, `fromVersion` a
+ * non-negative one. An aborted `signal` rejects with its reason before the
+ * next page.
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
 	reader: EventStreamReader<Evt>,
 	stream: AggregateAddress,
 	options: ReadStreamPagesOptions,
 ): Promise<StreamPages<Evt>> {
+	assertPositiveSafeInteger("readStreamPages", "limit", options.limit);
+	const fromVersion = options.fromVersion ?? 0;
+	assertNonNegativeSafeInteger("readStreamPages", "fromVersion", fromVersion);
 	if (options.toVersion !== undefined) {
 		assertPositiveSafeInteger(
 			"readStreamPages",
@@ -116,7 +122,6 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		);
 	}
 	throwIfAborted(options.signal);
-	const fromVersion = options.fromVersion ?? 0;
 	const address: AggregateAddress = {
 		aggregateType: stream.aggregateType,
 		aggregateId: stream.aggregateId,

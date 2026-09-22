@@ -112,9 +112,10 @@ The read has a third branch. `toVersion` pins a target below the head for a
 point-in-time read. A window that lies outside the stream comes back as
 `reachable: false` with the actual head as `lastVersion`. That happens when
 the cursor lies beyond the target or the target lies beyond the head. The
-read never clamps such a request to the latest state. It rejects
-`toVersion: 0` with `RangeError`, because no replay can end before the
-first event. Only the reachable branch reaches the fold. The snapshot
+read never clamps such a request to the latest state. It validates
+`limit`, `fromVersion`, and `toVersion` before it reads the first page and
+rejects a bad value with `RangeError`. `toVersion: 0` is such a value,
+because no replay can end before the first event. Only the reachable branch reaches the fold. The snapshot
 recipe discards a snapshot beyond the head on that branch, before the fold.
 The point-in-time recipe answers it as not found. A combined read tells the
 two apart by comparing its own inputs with `lastVersion`. A head mismatch

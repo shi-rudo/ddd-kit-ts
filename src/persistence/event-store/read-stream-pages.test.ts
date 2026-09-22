@@ -385,11 +385,29 @@ describe("readStreamPages", () => {
 		expect(store.reads).toBe(0);
 	});
 
-	it("lets the store reject an invalid limit before any page is read", async () => {
-		const store = await seededStore(countedUpTo(1));
+	it.each([0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects limit %s before any page is read",
+		async (limit) => {
+			const store = await seededStore(countedUpTo(1));
 
-		await expect(
-			readStreamPages(store, stream, { limit: 0 }),
-		).rejects.toBeInstanceOf(RangeError);
-	});
+			await expect(readStreamPages(store, stream, { limit })).rejects.toThrow(
+				/readStreamPages: limit must be a positive safe integer/,
+			);
+			expect(store.reads).toBe(0);
+		},
+	);
+
+	it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects fromVersion %s before any page is read",
+		async (fromVersion) => {
+			const store = await seededStore(countedUpTo(1));
+
+			await expect(
+				readStreamPages(store, stream, { fromVersion, limit: 2 }),
+			).rejects.toThrow(
+				/readStreamPages: fromVersion must be a non-negative safe integer/,
+			);
+			expect(store.reads).toBe(0);
+		},
+	);
 });
