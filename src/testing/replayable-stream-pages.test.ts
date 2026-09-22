@@ -62,6 +62,31 @@ describe("createReplayableStreamPages", () => {
 		expect(await collectPages(read.pages)).toEqual([["a"]]);
 	});
 
+	it("slices the tail into pages of at most the limit on every iteration", async () => {
+		const read = createReplayableStreamPages(stream, {
+			fromVersion: 0,
+			tail: [renamed("a"), renamed("b"), renamed("c")],
+			targetVersion: 3,
+			limit: 2,
+		});
+
+		expect(await collectPages(read.pages)).toEqual([["a", "b"], ["c"]]);
+		expect(await collectPages(read.pages)).toEqual([["a", "b"], ["c"]]);
+	});
+
+	it("rejects a limit that is not a positive safe integer", () => {
+		expect(() =>
+			createReplayableStreamPages(stream, {
+				fromVersion: 0,
+				tail: [renamed("a")],
+				targetVersion: 1,
+				limit: 0,
+			}),
+		).toThrow(
+			/createReplayableStreamPages: limit must be a positive safe integer/,
+		);
+	});
+
 	it("yields no page for an empty tail", async () => {
 		const read = createReplayableStreamPages<OrderRenamed>(stream, {
 			fromVersion: 3,

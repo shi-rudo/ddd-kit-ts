@@ -60,9 +60,10 @@ would run past the target.
 `readStreamPages` asks for that role only.
 
 `@shirudo/ddd-kit/testing` exports `createReplayableStreamPages(stream, {
-fromVersion, tail, targetVersion })`. It builds a replayable stream read
-from an in-memory tail. A test of a repository, or of the fold over a
-fixed window, then needs no store.
+fromVersion, tail, targetVersion, limit })`. It builds a replayable stream
+read from an in-memory tail. A test of a repository, or of the fold over a
+fixed window, then needs no store. The optional `limit` slices the tail
+into pages, so such a test can cross a page boundary.
 
 ### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
 
