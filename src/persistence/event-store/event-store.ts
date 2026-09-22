@@ -72,6 +72,50 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
 	  };
 
 /**
+ * The read half of the store: one bounded page of a stream at a time. A
+ * store implements both halves; a read-only implementation offers this
+ * role alone.
+ */
+export interface EventStreamReader<Evt extends AnyDomainEvent> {
+	/**
+	 * Reads one bounded page of the qualified stream in append order. An unknown stream returns
+	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
+	 * `exists: true` even when its requested window is empty. An existing stream
+	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
+	 * metadata or tombstones without events must be reported as absent.
+	 * `lastVersion` is always the actual stream head. `options.limit` is
+	 * mandatory and caps the returned array. An adapter may return fewer than
+	 * the requested limit, but if the requested window still contains unread
+	 * events it must return a non-empty contiguous prefix so callers can make
+	 * progress. `options.fromVersion`
+	 * excludes positions at or below its 1-based event count;
+	 * `options.toVersion` includes positions through its count, so both bounds
+	 * describe `(fromVersion, toVersion]`. `toVersion: 0` and inverted ranges
+	 * return an empty existing window, while a bound beyond the head clamps to
+	 * the head. This distinction is load-bearing for snapshot catch-up and
+	 * point-in-time reconstruction: a repository can verify the requested
+	 * historical window against the authoritative head. `limit` must be a
+	 * positive safe integer; present bounds must be non-negative safe integers.
+	 * Invalid options reject with `RangeError` before querying storage.
+	 *
+	 * Each page's `exists`, `lastVersion`, and `events` must describe one
+	 * consistent view of the stream. Multiple page reads are not one database
+	 * snapshot. `readStreamPages` pins its target, the first page's
+	 * `lastVersion` or the `toVersion` it was given, as `toVersion` on every
+	 * continuation and advances `fromVersion` by the number of events actually
+	 * returned. An adapter that pages on its own must do the same. Because
+	 * streams are append-only, that yields a stable
+	 * prefix even if new events arrive while replay is in progress. The returned
+	 * event array is owned by the caller; implementations must not hand out
+	 * mutable live internal state.
+	 */
+	readStream(
+		stream: AggregateAddress,
+		options: ReadStreamOptions,
+	): Promise<StreamReadResult<Evt>>;
+}
+
+/**
  * Driven port for event-sourced aggregate persistence: an append-only
  * store with one stream per aggregate. Each stream is addressed by the
  * qualified tuple `(aggregateType, aggregateId)`, because aggregate ids
@@ -128,7 +172,8 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  * The exact appended event batch is acknowledged only after the surrounding
  * transaction commits. Rollback leaves it pending.
  */
-export interface EventStore<Evt extends AnyDomainEvent> {
+export interface EventStore<Evt extends AnyDomainEvent>
+	extends EventStreamReader<Evt> {
 	/**
 	 * Atomically appends `events` to the stream, guarded by optimistic
 	 * concurrency: the append succeeds only when the stream currently
@@ -173,6 +218,10 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 	 * touching the store (an ES repository skips `append` for aggregates
 	 * without pending events anyway).
 	 *
+	 * A load that read its pages through a replica still appends here with
+	 * the pinned target as `expectedVersion`. The primary rejects a stale
+	 * head, so a lagging replica cannot lose an update.
+	 *
 	 * Treat `aggregateType` as a stable technical stream category. If two
 	 * bounded contexts share one physical store and reuse a domain name,
 	 * qualify it at the source (`sales.order`, `fulfillment.order`). Renaming
@@ -183,41 +232,4 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 		events: ReadonlyArray<Evt>,
 		options: EventStoreAppendOptions,
 	): Promise<void>;
-
-	/**
-	 * Reads one bounded page of the qualified stream in append order. An unknown stream returns
-	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
-	 * `exists: true` even when its requested window is empty. An existing stream
-	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
-	 * metadata or tombstones without events must be reported as absent.
-	 * `lastVersion` is always the actual stream head. `options.limit` is
-	 * mandatory and caps the returned array. An adapter may return fewer than
-	 * the requested limit, but if the requested window still contains unread
-	 * events it must return a non-empty contiguous prefix so callers can make
-	 * progress. `options.fromVersion`
-	 * excludes positions at or below its 1-based event count;
-	 * `options.toVersion` includes positions through its count, so both bounds
-	 * describe `(fromVersion, toVersion]`. `toVersion: 0` and inverted ranges
-	 * return an empty existing window, while a bound beyond the head clamps to
-	 * the head. This distinction is load-bearing for snapshot catch-up and
-	 * point-in-time reconstruction: a repository can verify the requested
-	 * historical window against the authoritative head. `limit` must be a
-	 * positive safe integer; present bounds must be non-negative safe integers.
-	 * Invalid options reject with `RangeError` before querying storage.
-	 *
-	 * Each page's `exists`, `lastVersion`, and `events` must describe one
-	 * consistent view of the stream. Multiple page reads are not one database
-	 * snapshot. `readStreamPages` pins its target, the first page's
-	 * `lastVersion` or the `toVersion` it was given, as `toVersion` on every
-	 * continuation and advances `fromVersion` by the number of events actually
-	 * returned. An adapter that pages on its own must do the same. Because
-	 * streams are append-only, that yields a stable
-	 * prefix even if new events arrive while replay is in progress. The returned
-	 * event array is owned by the caller; implementations must not hand out
-	 * mutable live internal state.
-	 */
-	readStream(
-		stream: AggregateAddress,
-		options: ReadStreamOptions,
-	): Promise<StreamReadResult<Evt>>;
 }

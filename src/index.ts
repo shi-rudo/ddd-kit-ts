@@ -316,6 +316,7 @@ export {
 	MissingHandlerError,
 	NonProgressingEventStreamPageError,
 	type NonProgressingEventStreamPageErrorOptions,
+	type NonProgressingEventStreamPageReason,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,
@@ -428,6 +429,7 @@ export {
 export type {
 	EventStore,
 	EventStoreAppendOptions,
+	EventStreamReader,
 	ReadStreamOptions,
 	StreamReadResult,
 } from "./persistence/event-store/event-store";
@@ -435,6 +437,7 @@ export {
 	type AbsentStreamPages,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
+	type ReplayableStreamPages,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 	type StreamPages,

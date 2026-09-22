@@ -42,3 +42,16 @@ export function assertPositiveSafeInteger(
 		);
 	}
 }
+
+/** Guard for stream positions that must fit exact JS integers. */
+export function assertNonNegativeSafeInteger(
+	context: string,
+	field: string,
+	value: number,
+): void {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError(
+			`${context}: ${field} must be a non-negative safe integer, got ${value}`,
+		);
+	}
+}

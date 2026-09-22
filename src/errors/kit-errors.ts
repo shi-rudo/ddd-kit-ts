@@ -968,45 +968,61 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	}
 }
 
+/** The condition a {@link NonProgressingEventStreamPageError} reports. */
+export type NonProgressingEventStreamPageReason =
+	| "empty_page"
+	| "stream_vanished";
+
 /** Constructor options for {@link NonProgressingEventStreamPageError}. */
 export interface NonProgressingEventStreamPageErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	/** Exclusive continuation cursor supplied to `EventStore.readStream`. */
+	/** The condition; see {@link NonProgressingEventStreamPageReason}. */
+	readonly reason: NonProgressingEventStreamPageReason;
+	/** The exclusive cursor the page followed. */
 	readonly fromVersion: number;
-	/** Pinned inclusive stream version the replay still has to reach. */
+	/** Pinned inclusive target the replay still has to reach. */
 	readonly targetVersion: number;
 }
 
 /**
- * Thrown by `readStreamPages`, or by an adapter that pages on its own, when
- * `readStream` returns no events even though the continuation cursor has
- * not reached the pinned target.
- * Such a page cannot advance and violates the EventStore port contract; a
- * replay loop that merely continued would spin forever.
+ * Thrown when a page of a stream read cannot advance the replay. The
+ * `reason` names the condition. `empty_page`: the page holds no event; a
+ * page holds at least one event while events remain, and the read ends at
+ * the target. `readStreamPages` reports it for a continuation page of the
+ * store, and `reconstituteAggregateFromStreamPages` for a page of an
+ * adapter that pages on its own. `stream_vanished`: `readStream` reported
+ * the stream absent between two pages; a stream is append-only, so
+ * something deleted it during the replay.
  *
- * This is a non-retryable infrastructure error: the persistence adapter
- * deterministically contradicted its port contract, so retrying the same read
- * is not a recovery policy. Run `createEventStoreContractTests` against the
- * adapter and fix its windowing/continuation implementation.
+ * Neither case is retryable. For an EventStore adapter, run
+ * `createEventStoreContractTests` against it and fix its windowing; for an
+ * adapter that pages on its own, fix its paging.
  */
 export class NonProgressingEventStreamPageError extends InfrastructureError<"NON_PROGRESSING_EVENT_STREAM_PAGE"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
+	readonly reason: NonProgressingEventStreamPageReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number;
 
 	constructor(options: NonProgressingEventStreamPageErrorOptions) {
-		super({
-			code: "NON_PROGRESSING_EVENT_STREAM_PAGE",
-			message:
-				`EventStore returned no events for ${options.aggregateType}(${options.aggregateId}) ` +
-				`after version ${options.fromVersion}, before pinned target version ` +
-				`${options.targetVersion}. The page cannot advance; run the EventStore ` +
-				"contract suite and fix the adapter's continuation window.",
-		});
+		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const message =
+			options.reason === "empty_page"
+				? `The read of ${stream} returned an empty page after version ` +
+					`${options.fromVersion} toward target version ${options.targetVersion}. ` +
+					"A page holds at least one event while events remain, and the read " +
+					"ends at the target; fix the paging of the read. For an EventStore " +
+					"adapter, run the EventStore contract suite."
+				: `The stream ${stream} vanished after version ${options.fromVersion} ` +
+					`while the replay had not reached target ${options.targetVersion}: ` +
+					"readStream reported it absent. A stream is append-only; check for a " +
+					"concurrent deletion.";
+		super({ code: "NON_PROGRESSING_EVENT_STREAM_PAGE", message });
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
+		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
 	}
@@ -1015,7 +1031,8 @@ export class NonProgressingEventStreamPageError extends InfrastructureError<"NON
 /** The check a {@link ReplayTargetMismatchError} reports. */
 export type ReplayTargetMismatchReason =
 	| "target_not_at_cursor"
-	| "pages_outside_window";
+	| "pages_outside_window"
+	| "pages_short_of_target";
 
 /** Constructor options for {@link ReplayTargetMismatchError}. */
 export interface ReplayTargetMismatchErrorOptions {
@@ -1030,7 +1047,10 @@ export interface ReplayTargetMismatchErrorOptions {
 	 * `toVersion` on a point-in-time read.
 	 */
 	readonly targetVersion: number;
-	/** Version the aggregate held when the check ran. */
+	/**
+	 * Version the aggregate held when the check ran; for
+	 * `pages_outside_window`, the version the offending page would reach.
+	 */
 	readonly actualVersion: number;
 }
 
@@ -1045,15 +1065,44 @@ export interface ReplayTargetMismatchErrorOptions {
  * The `reason` names the check that failed. `target_not_at_cursor`: the
  * replay target stands at a version other than the `fromVersion` the read
  * used, found before any page is folded; a reconstitution factory reports
- * the wrong version. `pages_outside_window`: the target started at the
- * cursor, but the fold did not end at the target; the persistence adapter
- * returned a page outside the requested window. Run
- * `createEventStoreContractTests` and `createEsRepositoryContractTests`
- * against it and fix its windowing. Neither case is retryable. A snapshot
- * beyond its stream does not reach the fold: `readStreamPages` reports
- * that window as unreachable first, and a reader that pages on its own
- * must do the same.
+ * the wrong version. `pages_outside_window`: a page would carry the replay
+ * past the target, found before that page is folded; the read returned a
+ * page outside the requested window. `pages_short_of_target`: the pages
+ * ended before the target; the read stopped early, or the stream has a
+ * gap. For an EventStore adapter, run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against it and fix its windowing.
+ * None of the cases is retryable. A snapshot beyond its stream does not
+ * reach the fold: `readStreamPages` reports that window as unreachable
+ * first, and an adapter that pages on its own must do the same.
  */
+function replayTargetMismatchMessage(
+	stream: string,
+	options: ReplayTargetMismatchErrorOptions,
+): string {
+	switch (options.reason) {
+		case "target_not_at_cursor":
+			return (
+				`Replay target for ${stream} stands at version ${options.actualVersion}, ` +
+				`but the read continues after version ${options.fromVersion}. The ` +
+				"reconstitution factory reports a version other than the read cursor."
+			);
+		case "pages_outside_window":
+			return (
+				`A page of the read for ${stream} runs past the pinned target version ` +
+				`${options.targetVersion}: the replay would reach version ` +
+				`${options.actualVersion}. The read returned a page outside the window ` +
+				`(${options.fromVersion}, ${options.targetVersion}].`
+			);
+		case "pages_short_of_target":
+			return (
+				`Replay of ${stream} ended at version ${options.actualVersion}, short of ` +
+				`the pinned target version ${options.targetVersion}. The read stopped ` +
+				`before the target, or the stream has a gap after version ` +
+				`${options.actualVersion}.`
+			);
+	}
+}
+
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
@@ -1064,15 +1113,7 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 
 	constructor(options: ReplayTargetMismatchErrorOptions) {
 		const stream = `${options.aggregateType}(${options.aggregateId})`;
-		const message =
-			options.reason === "target_not_at_cursor"
-				? `Replay target for ${stream} stands at version ${options.actualVersion}, ` +
-					`but the read continues after version ${options.fromVersion}. The ` +
-					"reconstitution factory reports a version other than the read cursor."
-				: `Replay of ${stream} ended at version ${options.actualVersion}, not at ` +
-					`the pinned target version ${options.targetVersion}. The adapter ` +
-					`returned a page outside the window (${options.fromVersion}, ` +
-					`${options.targetVersion}].`;
+		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
