@@ -394,6 +394,18 @@ describe("readStreamPages", () => {
 		});
 	});
 
+	it("reads a stream that holds one event", async () => {
+		const history = countedUpTo(1);
+		const store = await seededStore(history);
+
+		const read = await readReachable(store, { limit: 2 });
+
+		expect(read.targetVersion).toBe(1);
+		expect(eventIds((await collectPages(read.pages)).flat())).toEqual(
+			eventIds(history),
+		);
+	});
+
 	it("rejects an existing stream whose first page reports head 0", async () => {
 		const reader = scriptedReader({ exists: true, lastVersion: 0, events: [] });
 
