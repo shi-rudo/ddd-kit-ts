@@ -36,13 +36,24 @@ value: the stream, `fromVersion`, `targetVersion`, and the pages. The
 reachable branch of a kit read extends that type. A kit read therefore
 passes after one guard on `reachable`. A reader that pages on its own
 builds the value directly. It no longer carries the `exists` and
-`reachable` tags, because the kit reader decides those, not the reader.
-The fold rejects an empty page with `NonProgressingEventStreamPageError`,
-so a hand-built iterator that stalls fails instead of hanging.
-`readStreamPages` asks the store for `readStream` only; that role is
-`EventStreamReader`.
+`reachable` tags: every reader decides existence and reachability before
+the fold, and only a kit read reports that verdict on the value.
 
-`@shirudo/ddd-kit/testing` exports `createInMemoryStreamPages(stream, {
+The fold guards a hand-built read. It validates the window before it
+builds the replay target: `targetVersion` is a positive safe integer,
+`fromVersion` a non-negative one at or below it; a bad window rejects with
+`RangeError`. It rejects an empty page with
+`NonProgressingEventStreamPageError` and a page past the target with
+`ReplayTargetMismatchError`, so an iterator that yields an empty page or
+overshoots fails instead of looping. `NonProgressingEventStreamPageError`
+carries a `reason`: `continuation_read` for a store page the kit reader
+got, `folded_page` for a page of a hand-built read; the message names the
+site. Constructors of that error pass the reason.
+
+`EventStore` extends `EventStreamReader`, the read half of the store.
+`readStreamPages` asks for that role only.
+
+`@shirudo/ddd-kit/testing` exports `createReplayableStreamPages(stream, {
 fromVersion, tail, targetVersion })`. It builds a replayable stream read
 from an in-memory tail. A test of a repository, or of the fold over a
 fixed window, then needs no store.

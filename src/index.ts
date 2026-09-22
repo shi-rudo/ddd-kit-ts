@@ -316,6 +316,7 @@ export {
 	MissingHandlerError,
 	NonProgressingEventStreamPageError,
 	type NonProgressingEventStreamPageErrorOptions,
+	type NonProgressingEventStreamPageReason,
 	PendingEventBatchMismatchError,
 	PendingEventLimitExceededError,
 	type PendingEventLimitExceededErrorOptions,

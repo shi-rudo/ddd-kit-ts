@@ -437,15 +437,16 @@ target through your factory, folds every page into it through
 exists only in the `Ok`. A rejected page leaves the repository with nothing
 to track, and the iteration stops there: the kit reads no further page. A
 fold's `DomainError` names neither the stream nor the position, so a
-repository that rethrows `loaded.error` attaches `read.stream` and the
-version the aggregate held. Before the first page, the call checks that the
-replay target stands at `read.fromVersion`; when the replay does not end at
-`targetVersion`, it throws `ReplayTargetMismatchError` with a `reason` that
-names the check. Allocation stays bounded by the page limit: the read keeps
-the first page, and each later page goes through `replayHistory` once.
+repository that rethrows `loaded.error` attaches `read.stream`,
+`read.fromVersion`, and `read.targetVersion`. Before the first page, the call
+checks that the replay target stands at `read.fromVersion`; when a page runs
+past `targetVersion`, or the replay does not end there, it throws
+`ReplayTargetMismatchError` with a `reason` that names the check. Allocation
+stays bounded by the page limit: the read keeps the first page, and each
+later page goes through `replayHistory` once.
 
 The same recipe in long form, for an adapter that pages on its own, is in
-the [appendix](#appendix-the-load-recipe-in-long-form).
+the [appendix](#appendix-a-reader-that-pages-on-its-own).
 
 `reconstituteAggregateFromHistory(create, history)` is the one-page form of
 the same call. It returns `Result<Order, DomainError>` for a history that is
@@ -905,18 +906,20 @@ const loaded = await reconstituteAggregateFromStreamPages(
 
 `cursorPages` is your `AsyncIterable` of event pages after `fromVersion`
 through `targetVersion`, in append order. Every iteration starts again from
-the first page. A test of the code that consumes such a read, a repository
-or the fold, builds the value from an in-memory tail with
-`createInMemoryStreamPages` from `@shirudo/ddd-kit/testing`. It stands in
-for the reader; the reader's own rules need their own test.
+the first page. A store failure inside `pages` throws as is: the fold
+translates nothing, and the edge maps it. A test of the code that consumes
+such a read, a repository or the fold, builds the value from an in-memory
+tail with `createReplayableStreamPages` from `@shirudo/ddd-kit/testing`. It
+stands in for the reader; the reader's own rules need their own test.
 
 Such a reader keeps six rules. Decide the window before the fold: a cursor
 beyond the target, or a target beyond the head, is unreachable, never a
 fold. Pin the target: the head, or a requested `toVersion` at or below it.
 Pass the target as the upper bound of every later page. Advance the cursor
 by the number of events actually returned. Reject a page that makes no
-progress. Hand the pages to the kit fold, which checks the start against
-the cursor and the end against the target.
+progress. Hand the pages to the kit fold, which validates the window,
+checks the start against the cursor, rejects an empty page and a page past
+the target, and checks the end against the target.
 
 The snapshot catch-up differs in three places. The cursor is
 `snapshot.version`, and a snapshot above the head fails the first rule. The

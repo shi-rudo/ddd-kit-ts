@@ -24,6 +24,7 @@ describe("NonProgressingEventStreamPageError", () => {
 		const error = new NonProgressingEventStreamPageError({
 			aggregateType: "Order",
 			aggregateId: "order-1",
+			reason: "continuation_read",
 			fromVersion: 256,
 			targetVersion: 300,
 		});

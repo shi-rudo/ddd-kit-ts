@@ -103,7 +103,8 @@ export interface ReplayableAggregate<
 	 * `Result` because event-stream corruption is an expected
 	 * recoverable failure at the infrastructure boundary: a `DomainError`
 	 * thrown by a fold arrives as `Err`. Every other failure propagates
-	 * after the all-or-nothing rollback.
+	 * after the all-or-nothing rollback. The pending-decisions guard runs
+	 * for an empty history as well; an empty history is otherwise a no-op.
 	 *
 	 * @throws ForeignEventError when a history event names another aggregate
 	 * @throws UnreplayableAggregateError when the target carries pending

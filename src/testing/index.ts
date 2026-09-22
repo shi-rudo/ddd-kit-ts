@@ -7,8 +7,9 @@
  * optimistic concurrency, outbox semantics, and the idempotency lifecycle
  * are adapter CONTRACTS the consumer's implementation must prove; this
  * entry provides the proof harnesses. It also ships
- * `createInMemoryStreamPages`, a stream read built from an in-memory tail
- * for a test of the code that consumes a read. Kept out of the core barrel
+ * `createReplayableStreamPages`, a replayable stream read built from an
+ * in-memory tail for a test of the code that consumes a read. Kept out of
+ * the core barrel
  * so test-only code never rides into production bundles. Named exports
  * only; a module this file does not export is kit-internal test support.
  */
@@ -50,10 +51,6 @@ export {
 	type IdempotencyStoreContractTest,
 } from "./idempotency-store-contract";
 export {
-	createInMemoryStreamPages,
-	type InMemoryStreamPagesWindow,
-} from "./in-memory-stream-pages";
-export {
 	createOutboxContractTests,
 	type OutboxContractEnvironment,
 	type OutboxContractHarness,
@@ -65,6 +62,10 @@ export {
 	type ProjectionCheckpointStoreContractHarness,
 	type ProjectionCheckpointStoreContractTest,
 } from "./projection-checkpoint-contract";
+export {
+	type CreateReplayableStreamPagesOptions,
+	createReplayableStreamPages,
+} from "./replayable-stream-pages";
 export {
 	type ContractRepository,
 	createRepositoryContractTests,

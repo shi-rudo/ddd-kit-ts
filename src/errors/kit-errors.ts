@@ -968,45 +968,62 @@ export class ForeignEventError extends InfrastructureError<"FOREIGN_EVENT"> {
 	}
 }
 
+/** The site a {@link NonProgressingEventStreamPageError} reports. */
+export type NonProgressingEventStreamPageReason =
+	| "continuation_read"
+	| "folded_page";
+
 /** Constructor options for {@link NonProgressingEventStreamPageError}. */
 export interface NonProgressingEventStreamPageErrorOptions {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
-	/** Exclusive continuation cursor supplied to `EventStore.readStream`. */
+	/**
+	 * The site that saw the empty page; see
+	 * {@link NonProgressingEventStreamPageReason}.
+	 */
+	readonly reason: NonProgressingEventStreamPageReason;
+	/** The exclusive cursor the empty page followed. */
 	readonly fromVersion: number;
-	/** Pinned inclusive stream version the replay still has to reach. */
+	/** Pinned inclusive target the replay still has to reach. */
 	readonly targetVersion: number;
 }
 
 /**
- * Thrown by `readStreamPages`, or by an adapter that pages on its own, when
- * `readStream` returns no events even though the continuation cursor has
- * not reached the pinned target.
- * Such a page cannot advance and violates the EventStore port contract; a
- * replay loop that merely continued would spin forever.
+ * Thrown when a page of a stream read holds no event although the cursor
+ * has not reached the pinned target. Such a page cannot advance; a replay
+ * loop that merely continued would spin forever.
  *
- * This is a non-retryable infrastructure error: the persistence adapter
- * deterministically contradicted its port contract, so retrying the same read
- * is not a recovery policy. Run `createEventStoreContractTests` against the
- * adapter and fix its windowing/continuation implementation.
+ * The `reason` names the site. `continuation_read`: `readStreamPages`, or
+ * an adapter that pages on its own, got no events from `readStream` for a
+ * window that still holds unread events; the persistence adapter
+ * contradicted its port contract. Run `createEventStoreContractTests`
+ * against it and fix its windowing. `folded_page`:
+ * `reconstituteAggregateFromStreamPages` received an empty page from the
+ * `pages` of a hand-built read; no store was involved, so fix the paging of
+ * that read. Neither case is retryable.
  */
 export class NonProgressingEventStreamPageError extends InfrastructureError<"NON_PROGRESSING_EVENT_STREAM_PAGE"> {
 	readonly aggregateType: string;
 	readonly aggregateId: string;
+	readonly reason: NonProgressingEventStreamPageReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number;
 
 	constructor(options: NonProgressingEventStreamPageErrorOptions) {
-		super({
-			code: "NON_PROGRESSING_EVENT_STREAM_PAGE",
-			message:
-				`EventStore returned no events for ${options.aggregateType}(${options.aggregateId}) ` +
-				`after version ${options.fromVersion}, before pinned target version ` +
-				`${options.targetVersion}. The page cannot advance; run the EventStore ` +
-				"contract suite and fix the adapter's continuation window.",
-		});
+		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const message =
+			options.reason === "continuation_read"
+				? `EventStore returned no events for ${stream} after version ` +
+					`${options.fromVersion}, before pinned target version ` +
+					`${options.targetVersion}. The page cannot advance; run the ` +
+					"EventStore contract suite and fix the adapter's continuation window."
+				: `The stream read yielded an empty page for ${stream} after version ` +
+					`${options.fromVersion}, before target version ${options.targetVersion}. ` +
+					"A page holds at least one event; fix the paging of the read.";
+		super({ code: "NON_PROGRESSING_EVENT_STREAM_PAGE", message });
 		this.aggregateType = options.aggregateType;
 		this.aggregateId = options.aggregateId;
+		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
 	}

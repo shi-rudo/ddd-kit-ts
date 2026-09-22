@@ -6,9 +6,13 @@ import type { Id } from "../../domain/identity/id";
 import {
 	type DomainError,
 	NonProgressingEventStreamPageError,
+	type NonProgressingEventStreamPageReason,
 	ReplayTargetMismatchError,
 } from "../../errors/kit-errors";
-import { assertPositiveSafeInteger } from "../../internal/validate";
+import {
+	assertNonNegativeSafeInteger,
+	assertPositiveSafeInteger,
+} from "../../internal/validate";
 import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 
 /** Options for {@link readStreamPages}. */
@@ -96,9 +100,9 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	readonly fromVersion: number;
 
 	/**
-	 * The version a replay of the pages must end at. It is `toVersion` when
-	 * the read asked for one, else the head pinned on the first page. Later
-	 * appends do not move it.
+	 * The version a replay of the pages must end at: the stream head at read
+	 * time, or a `toVersion` at or below it. Never a version taken from a
+	 * snapshot, and never below `fromVersion`. Later appends do not move it.
 	 */
 	readonly targetVersion: number;
 
@@ -106,8 +110,10 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	 * The events after the cursor through the target, in append order, one
 	 * bounded page per iteration. Every iteration starts again from the
 	 * first page, so a second fold over one read sees the same prefix. A
-	 * page holds at least one event; the fold rejects an empty page with
-	 * {@link NonProgressingEventStreamPageError}.
+	 * page holds at least one event, and the pages end at the target. The
+	 * fold rejects an empty page with
+	 * {@link NonProgressingEventStreamPageError} and a page past the target
+	 * with {@link ReplayTargetMismatchError}.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
@@ -212,11 +218,12 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 			limit: window.limit,
 		});
 		if (!page.exists || page.events.length === 0) {
-			throw new NonProgressingEventStreamPageError({
-				...window.stream,
-				fromVersion: cursor,
-				targetVersion: window.targetVersion,
-			});
+			throw nonProgressingPage(
+				window.stream,
+				"continuation_read",
+				cursor,
+				window.targetVersion,
+			);
 		}
 		yield page.events;
 		cursor += page.events.length;
@@ -225,6 +232,20 @@ async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw signal.reason;
+}
+
+function nonProgressingPage(
+	stream: AggregateAddress,
+	reason: NonProgressingEventStreamPageReason,
+	fromVersion: number,
+	targetVersion: number,
+): NonProgressingEventStreamPageError {
+	return new NonProgressingEventStreamPageError({
+		...stream,
+		reason,
+		fromVersion,
+		targetVersion,
+	});
 }
 
 /**
@@ -243,9 +264,14 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
  * must then stand at the read cursor, `read.fromVersion`; a target at
  * another version throws {@link ReplayTargetMismatchError} before any page
  * is read. Each page goes through `replayHistory` on that instance, so
- * allocation stays bounded by the page limit. An empty page cannot make
- * progress and throws {@link NonProgressingEventStreamPageError}, so a
- * hand-built iterator that stalls fails instead of hanging. `replayHistory` rolls back
+ * allocation stays bounded by the page limit. An empty page throws
+ * {@link NonProgressingEventStreamPageError}, and a page past the target
+ * throws {@link ReplayTargetMismatchError} at once. So a hand-built
+ * iterator that yields an empty page, or one that overshoots, fails instead
+ * of looping. The fold validates the window first: `targetVersion` is a
+ * positive safe integer, `fromVersion` a non-negative one at or below it; a
+ * bad window rejects with `RangeError` before the target is built.
+ * `replayHistory` rolls back
  * one page. On a rejected page the earlier pages stay folded on the
  * instance, and that instance never escapes: the `DomainError` rides the
  * `Result`. Wiring errors and a foreign row throw, as in `replayHistory`.
@@ -264,6 +290,22 @@ export async function reconstituteAggregateFromStreamPages<
 		Parameters<TAggregate["replayHistory"]>[0][number]
 	>,
 ): Promise<Result<TAggregate, DomainError>> {
+	assertNonNegativeSafeInteger(
+		"reconstituteAggregateFromStreamPages",
+		"fromVersion",
+		read.fromVersion,
+	);
+	assertPositiveSafeInteger(
+		"reconstituteAggregateFromStreamPages",
+		"targetVersion",
+		read.targetVersion,
+	);
+	if (read.fromVersion > read.targetVersion) {
+		throw new RangeError(
+			"reconstituteAggregateFromStreamPages: fromVersion must not exceed " +
+				`targetVersion, got ${read.fromVersion} > ${read.targetVersion}`,
+		);
+	}
 	const aggregate = createReplayTarget();
 	const primed = aggregate.replayHistory([]);
 	if (primed.isErr()) return err(primed.error);
@@ -278,14 +320,24 @@ export async function reconstituteAggregateFromStreamPages<
 	}
 	for await (const page of read.pages) {
 		if (page.length === 0) {
-			throw new NonProgressingEventStreamPageError({
-				...read.stream,
-				fromVersion: aggregate.version,
-				targetVersion: read.targetVersion,
-			});
+			throw nonProgressingPage(
+				read.stream,
+				"folded_page",
+				aggregate.version,
+				read.targetVersion,
+			);
 		}
 		const replayed = aggregate.replayHistory(page);
 		if (replayed.isErr()) return err(replayed.error);
+		if (aggregate.version > read.targetVersion) {
+			throw new ReplayTargetMismatchError({
+				...read.stream,
+				reason: "pages_outside_window",
+				fromVersion: read.fromVersion,
+				targetVersion: read.targetVersion,
+				actualVersion: aggregate.version,
+			});
+		}
 	}
 	if (aggregate.version !== read.targetVersion) {
 		throw new ReplayTargetMismatchError({

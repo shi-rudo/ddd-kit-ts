@@ -19,11 +19,12 @@ import {
 	ReplayTargetMismatchError,
 	UnreplayableAggregateError,
 } from "../../errors/kit-errors";
-import { createInMemoryStreamPages } from "../../testing/in-memory-stream-pages";
+import { createReplayableStreamPages } from "../../testing/replayable-stream-pages";
 import { InMemoryEventStore } from "./adapters/in-memory-event-store";
 import type {
 	EventStore,
 	EventStoreAppendOptions,
+	EventStreamReader,
 	ReadStreamOptions,
 	StreamReadResult,
 } from "./event-store";
@@ -143,20 +144,12 @@ class StallingEventStore<
 	}
 }
 
-/** Returns at most one event per page: an adapter that pages shorter than the limit. */
-class ShortPageEventStore implements EventStore<CounterEvent> {
+/** Returns at most one event per page: a reader that pages shorter than the limit. */
+class ShortPageEventStore implements EventStreamReader<CounterEvent> {
 	constructor(private readonly inner: CountingEventStore<CounterEvent>) {}
 
 	get reads(): number {
 		return this.inner.reads;
-	}
-
-	append(
-		address: AggregateAddress,
-		events: ReadonlyArray<CounterEvent>,
-		options: EventStoreAppendOptions,
-	): Promise<void> {
-		return this.inner.append(address, events, options);
 	}
 
 	async readStream(
@@ -192,7 +185,7 @@ const eventIds = (events: ReadonlyArray<AnyDomainEvent>): string[] =>
 	events.map((event) => event.eventId);
 
 async function readReachable(
-	store: EventStore<CounterEvent>,
+	store: EventStreamReader<CounterEvent>,
 	options: ReadStreamPagesOptions,
 ): Promise<ReachableStreamPages<CounterEvent>> {
 	const read = await readStreamPages(store, stream, options);
@@ -312,6 +305,19 @@ describe("readStreamPages", () => {
 		expect(store.reads).toBe(5);
 	});
 
+	it("reads through an object that offers readStream only", async () => {
+		const history = countedUpTo(3);
+		const store = await seededStore(history);
+		const reader: EventStreamReader<CounterEvent> = {
+			readStream: (address, options) => store.readStream(address, options),
+		};
+
+		const read = await readReachable(reader, { limit: 2 });
+		const pages = await collectPages(read.pages);
+
+		expect(eventIds(pages.flat())).toEqual(eventIds(history));
+	});
+
 	it("rejects with the abort reason before the first read when the signal is aborted", async () => {
 		const store = await seededStore(countedUpTo(3));
 		const controller = new AbortController();
@@ -408,6 +414,7 @@ describe("readStreamPages", () => {
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
+			reason: "continuation_read",
 			fromVersion: 2,
 			targetVersion: 5,
 		});
@@ -426,7 +433,11 @@ describe("readStreamPages", () => {
 		);
 
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
-		expect(rejection).toMatchObject({ fromVersion: 2, targetVersion: 3 });
+		expect(rejection).toMatchObject({
+			reason: "continuation_read",
+			fromVersion: 2,
+			targetVersion: 3,
+		});
 	});
 
 	it("rejects toVersion 0 before any page is read", async () => {
@@ -557,7 +568,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("throws ReplayTargetMismatchError when the pages do not reach the target", async () => {
-		const read = createInMemoryStreamPages<CounterEvent>(stream, {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(3),
 			targetVersion: 5,
@@ -579,7 +590,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("returns Err when the replay target rejects the priming replay", async () => {
-		const read = createInMemoryStreamPages<CounterEvent>(stream, {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(2),
 			targetVersion: 2,
@@ -603,15 +614,20 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
 	});
 
-	it("throws NonProgressingEventStreamPageError when a hand-built page is empty", async () => {
+	it("throws NonProgressingEventStreamPageError at the first empty hand-built page", async () => {
+		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
 			fromVersion: 0,
-			targetVersion: 2,
+			targetVersion: 3,
 			pages: {
 				[Symbol.asyncIterator]: async function* () {
+					pulls += 1;
+					yield [counted(1), counted(2)];
+					pulls += 1;
 					yield [];
-					yield [];
+					pulls += 1;
+					yield [counted(3)];
 				},
 			},
 		};
@@ -624,9 +640,87 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
-			fromVersion: 0,
-			targetVersion: 2,
+			reason: "folded_page",
+			fromVersion: 2,
+			targetVersion: 3,
 		});
+		expect(pulls).toBe(2);
+	});
+
+	it("throws ReplayTargetMismatchError at the first hand-built page past the target", async () => {
+		let pulls = 0;
+		const read: ReplayableStreamPages<CounterEvent> = {
+			stream,
+			fromVersion: 0,
+			targetVersion: 3,
+			pages: {
+				[Symbol.asyncIterator]: async function* () {
+					for (let by = 1; ; by += 2) {
+						pulls += 1;
+						yield [counted(by), counted(by + 1)];
+					}
+				},
+			},
+		};
+
+		const rejection = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toMatchObject({
+			reason: "pages_outside_window",
+			fromVersion: 0,
+			targetVersion: 3,
+			actualVersion: 4,
+		});
+		expect(pulls).toBe(2);
+	});
+
+	it("rejects a target of version 0 before the replay target is built", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: 0,
+			tail: [],
+			targetVersion: 0,
+		});
+		let built = 0;
+
+		await expect(
+			reconstituteAggregateFromStreamPages(() => {
+				built += 1;
+				return Counter.bare(counterId);
+			}, read),
+		).rejects.toThrow(
+			/reconstituteAggregateFromStreamPages: targetVersion must be a positive safe integer/,
+		);
+		expect(built).toBe(0);
+	});
+
+	it("rejects a negative fromVersion before the replay target is built", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: -1,
+			tail: [],
+			targetVersion: 3,
+		});
+
+		await expect(
+			reconstituteAggregateFromStreamPages(() => Counter.bare(counterId), read),
+		).rejects.toThrow(
+			/reconstituteAggregateFromStreamPages: fromVersion must be a non-negative safe integer/,
+		);
+	});
+
+	it("rejects an inverted window before the replay target is built", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: 5,
+			tail: [],
+			targetVersion: 3,
+		});
+
+		await expect(
+			reconstituteAggregateFromStreamPages(() => Counter.bare(counterId), read),
+		).rejects.toThrow(/fromVersion must not exceed targetVersion/);
 	});
 
 	it("rejects a dirty replay target on a read without pages", async () => {
