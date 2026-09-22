@@ -20,9 +20,10 @@ export interface CreateReplayableStreamPagesOptions<Evt extends AnyDomainEvent>
 /**
  * Builds a replayable stream read from an in-memory tail, for a test of the
  * code that consumes a read: a repository, or the fold over a fixed window.
- * It stands in for a reader and does not test one. The tail is copied once
- * and comes back in the same pages on every iteration. An empty tail yields
- * no page, as the kit reader does.
+ * It stands in for `readStreamPages` or an adapter that pages on its own,
+ * and it tests neither. The tail is copied once and comes back in the same
+ * pages on every iteration. An empty tail yields no page, as
+ * `readStreamPages` does.
  */
 export function createReplayableStreamPages<Evt extends AnyDomainEvent>(
 	stream: AggregateAddress,

@@ -14,9 +14,10 @@ import {
 } from "../../internal/validate";
 
 /**
- * The shape a replay folds: the stream, the window, and the pages.
- * `readStreamPages` returns it as the reachable branch of
- * {@link StreamPages}; an adapter that pages on its own builds it directly.
+ * The shape the replay reads: the stream, the window, and the pages.
+ * `readStreamPages` returns it as the reachable branch of a kit read. An
+ * adapter that pages on its own builds it directly, after it pinned the
+ * target version with `pinTargetVersion`.
  */
 export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/** The qualified stream the pages come from. */
@@ -24,24 +25,27 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 
 	/**
 	 * The cursor the read started at: `fromVersion`, or `0`. The pages hold
-	 * the events after it, so a replay target must start at this version.
+	 * the events after it, so the replay target must stand at this version.
 	 */
 	readonly fromVersion: number;
 
 	/**
-	 * The version a replay of the pages must end at: the stream head at read
-	 * time, or a `toVersion` at or below it. Never a version taken from a
-	 * snapshot, and never below `fromVersion`. Later appends do not move it.
+	 * The version the replay must end at: the head at read time, or a
+	 * `toVersion` at or below it. Never a version taken from a snapshot, and
+	 * never below `fromVersion`. Later appends do not move it.
 	 */
 	readonly targetVersion: number;
 
 	/**
-	 * The events after the cursor through the target, in append order, one
-	 * bounded page per iteration. Every iteration starts again from the
-	 * first page, so a second fold over one read sees the same prefix. A
-	 * page holds at least one event, and the pages end at the target. The
-	 * fold rejects an empty page, and a page that would run past the target,
-	 * with {@link InvalidEventStreamPageError} before it folds that page.
+	 * The events after the cursor through the target version, in append
+	 * order, one bounded page per iteration. Every iteration starts again
+	 * from the first page, so a second replay of one read sees the same
+	 * prefix. A page holds at least one event, and the pages end at the
+	 * target version. The replay rejects an empty page, and a page that
+	 * would run past the target version, with
+	 * {@link InvalidEventStreamPageError} before any row of it reaches the
+	 * aggregate. `createReplayableStreamPagesContractTests` proves these
+	 * rules for an adapter.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }

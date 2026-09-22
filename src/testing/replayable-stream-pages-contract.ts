@@ -7,10 +7,10 @@ import {
 	type ContractTest,
 } from "./contract-assertions";
 
-/** One named contract test for a reader that builds replayable stream reads. */
+/** One named contract test for code that builds replayable stream reads. */
 export type ReplayableStreamPagesContractTest = ContractTest;
 
-/** The window the suite asks the reader for. */
+/** The window the suite asks the code under test for. */
 export interface ReplayableStreamPagesContractWindow {
 	/** The cursor: the pages hold the events after this version. */
 	readonly fromVersion: number;
@@ -20,15 +20,15 @@ export interface ReplayableStreamPagesContractWindow {
 	readonly limit: number;
 }
 
-/** One isolated reader and the store it reads. The suite creates one per test. */
+/** The code under test and the store it reads. The suite creates one per test. */
 export interface ReplayableStreamPagesContractEnvironment<
 	Evt extends AnyDomainEvent,
 > {
-	/** Appends events to the end of the stream in the store the reader reads. */
+	/** Appends events to the end of the stream in the store that the code reads. */
 	append(stream: AggregateAddress, events: ReadonlyArray<Evt>): Promise<void>;
 
 	/**
-	 * Reads the stream through the reader under test. Returns `undefined`
+	 * Reads the stream through the code under test. Returns `undefined`
 	 * for an absent stream and for a window that lies outside the stream.
 	 */
 	read(
@@ -53,8 +53,8 @@ export interface ReplayableStreamPagesContractHarness<
 }
 
 /**
- * Reusable proof of a reader that builds `ReplayableStreamPages` values:
- * the kit reader `readStreamPages`, or an adapter that pages on its own.
+ * Reusable proof of code that builds `ReplayableStreamPages` values:
+ * `readStreamPages`, or an adapter that pages on its own.
  * The suite proves that the pages hold the events after the cursor
  * through the target version in append order, that no page is empty or
  * larger than the limit, that every iteration yields the same prefix, and

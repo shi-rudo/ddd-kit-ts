@@ -29,7 +29,7 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
-### Changed (breaking): the fold takes a replayable stream read
+### Changed (breaking): the stream-page replay takes a replayable stream read
 
 `reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`
 value: the stream, `fromVersion`, `targetVersion`, and the pages. The
@@ -37,15 +37,15 @@ reachable branch of a kit read extends that type. A kit read therefore
 passes after one guard on `reachable`. An adapter that pages on its own
 builds the value directly. It no longer carries the `exists` and
 `reachable` tags. Every read decides existence and reachability before the
-fold; only a kit read reports that verdict on the value.
+replay; only a kit read reports that verdict on the value.
 
-The fold guards such a value. It validates the window before it builds the
+The replay guards such a value. It validates the window before it builds the
 replay target: `targetVersion` is a positive safe integer, `fromVersion` a
 non-negative one at or below it; a bad window rejects with `RangeError`.
-It rejects an empty page, and a page that would run past the target, with
-`InvalidEventStreamPageError` before it folds that page. It rejects a
-replay that ends short of the target with `ReplayTargetMismatchError`
-after the last page. An adapter that yields an empty page or overshoots
+It rejects an empty page, and a page that would run past the target
+version, with `InvalidEventStreamPageError` before any row of that page
+reaches the aggregate. It rejects a replay that ends short of the target
+version with `ReplayTargetMismatchError` after the last page. An adapter that yields an empty page or overshoots
 therefore fails instead of looping.
 
 `EventStore` extends `EventStreamReader`, the read half of the store.
@@ -53,8 +53,8 @@ therefore fails instead of looping.
 
 `@shirudo/ddd-kit/testing` exports `createReplayableStreamPages(stream, {
 fromVersion, tail, targetVersion, limit })`. It builds a replayable stream
-read from an in-memory tail. A test of a repository, or of the fold over a
-fixed window, then needs no store. The optional `limit` slices the tail
+read from an in-memory tail. A test of a repository, or of the replay over
+a fixed window, then needs no store. The optional `limit` slices the tail
 into pages, so such a test can cross a page boundary.
 
 `createReplayableStreamPagesContractTests` from the same entry proves a
@@ -86,11 +86,11 @@ defect:
   head below 1. New.
 
 `readStreamPages` checks every page it reads, and
-`reconstituteAggregateFromStreamPages` checks every page it folds. Both
+`reconstituteAggregateFromStreamPages` checks every page it replays. Both
 throw this error for the same defect, before any row of the page reaches
 the aggregate. Before, an existing stream with head 0 passed the read and
-failed later in the fold with a `RangeError`. The fold reported a page
-past the target as `ReplayTargetMismatchError` with the reason
+failed later in the replay with a `RangeError`. The replay reported a page
+past the target version as `ReplayTargetMismatchError` with the reason
 `pages_outside_window`. That reason is gone. `ReplayTargetMismatchError`
 keeps `target_not_at_cursor` and `pages_short_of_target`.
 
@@ -105,14 +105,15 @@ head of at least 1, and no page holds more events than its window.
 
 ### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
 
-The replay check compares the aggregate with the pinned target, which is the
-stream head on a full load and `toVersion` on a point-in-time read. The
+The replay check compares the aggregate with the pinned target version,
+which is the stream head on a full load and `toVersion` on a point-in-time
+read. The
 error named the head, and its message guessed between causes. It is now
 `ReplayTargetMismatchError` with the code `REPLAY_TARGET_MISMATCH`. Its
 options carry `fromVersion`, the cursor the read started at, and a `reason`:
 `target_not_at_cursor` when the replay target stands at another version
 than the cursor, found before any page is read, or `pages_short_of_target`
-when the pages end before the target. Rename the class and the code
+when the pages end before the target version. Rename the class and the code
 where you match on them. The rc.8 name is gone; no alias remains.
 
 The stream read types follow the same vocabulary. The reachable branch of
@@ -129,15 +130,16 @@ carried it in several copies, and copies drift: one had lost the head
 check. The kit now ships the recipe as tested code.
 
 `readStreamPages(eventStore, stream, { fromVersion, toVersion, limit })`
-reads the first page, decides existence, and pins the target: `toVersion`
-when given, else `lastVersion`. It returns `{ exists: false, reachable:
-false }` for an unknown stream. For an existing stream it returns the
-pinned target and the pages after the cursor as a lazy iteration. Every
-iteration starts again from the first page. A page that breaks the
+reads the first page, decides existence, and pins the target version:
+`toVersion` when given, else `lastVersion`. It returns `{ exists: false,
+reachable: false }` for an absent stream. For an existing stream it returns
+the target version and the pages after the cursor as a lazy iteration. It
+keeps the first page in memory, and every iteration yields it again and
+reads the continuation pages from the store again. A page that breaks the
 `readStream` contract throws `InvalidEventStreamPageError`.
 
 `reconstituteAggregateFromStreamPages(create, read)` is the paged form of
-`reconstituteAggregateFromHistory`. It folds every page into the replay
+`reconstituteAggregateFromHistory`. It replays every page into the replay
 target and returns `Result<Aggregate, ReplayRejectedError>`. When the
 aggregate rejects a stored event, the `Err` names the stream and the window
 `(fromVersion, toVersion]` of the rejected page, and it holds the
@@ -145,27 +147,28 @@ aggregate rejects a stored event, the `Err` names the stream and the window
 `REPLAY_REJECTED`) is an `InfrastructureError`: a stored stream that the
 domain cannot replay is a defect of the data, so a repository that
 rethrows the `Err` no longer reports it as a business rejection. It throws
-`ReplayTargetMismatchError` when the replay does not end at the pinned target,
-and `UnreplayableAggregateError` for a dirty target, even on a read
-without pages. It takes a replayable stream read; the absent and unreachable
-branches of a kit read carry no pages, so the caller decides what they mean
-before the fold: not found on the normal path, a snapshot to discard on the
-snapshot path.
+`ReplayTargetMismatchError` when the replay does not end at the target
+version, and `UnreplayableAggregateError` for a replay target with pending
+decisions, even on a read without pages. It takes a replayable stream read;
+the absent and unreachable branches of a kit read carry no pages, so the
+caller decides what they mean before the replay: not found on the normal
+path, a snapshot to discard on the snapshot path.
 
-The read has a third branch. `toVersion` pins a target below the head for a
-point-in-time read. A window that lies outside the stream comes back as
-`reachable: false` with the actual head as `lastVersion`. That happens when
-the cursor lies beyond the target or the target lies beyond the head. The
-read never clamps such a request to the latest state. It validates
-`limit`, `fromVersion`, and `toVersion` before it reads the first page and
-rejects a bad value with `RangeError`. `toVersion: 0` is such a value,
-because no replay can end before the first event. Only the reachable branch reaches the fold. The snapshot
-recipe discards a snapshot beyond the head on that branch, before the fold.
-The point-in-time recipe answers it as not found. A combined read tells the
-two apart by comparing its own inputs with `lastVersion`. A head mismatch
-and a page that makes no progress stay outside the snapshot discard set, so
-an adapter defect stays loud. The read carries its cursor as `fromVersion`,
-and the fold checks that the replay target stands there before the first
+The read has a third branch. `toVersion` pins a target version below the
+head for a point-in-time read. A window that lies outside the stream comes
+back as `reachable: false` with the actual head as `lastVersion`. That
+happens when the cursor lies beyond the target version or the target
+version lies beyond the head. The read never clamps such a request to the
+latest state. It validates `limit`, `fromVersion`, and `toVersion` before it
+reads the first page and rejects a bad value with `RangeError`.
+`toVersion: 0` is such a value, because no replay can end before the first
+event. Only the reachable branch reaches the replay. The snapshot recipe
+discards a snapshot beyond the head on that branch, before the replay. The
+point-in-time recipe answers it as not found. A combined read tells the two
+apart by comparing its own inputs with `lastVersion`. A target version
+mismatch and an invalid page stay outside the snapshot discard set, so an
+adapter defect stays loud. The read carries its cursor as `fromVersion`,
+and the replay checks that the replay target stands there before the first
 page. `ReplayTargetMismatchError` names the failed check in its `reason`.
 `readStreamPages` accepts the `signal` of the surrounding unit of work. It
 passes the signal to every page read and stops paging once it is aborted.

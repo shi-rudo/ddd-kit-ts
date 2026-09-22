@@ -33,16 +33,16 @@ describe("event-store adapter contract", () => {
 
 	it("lists every contract test by name", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
-			"unknown stream: read reports explicit absence at version zero",
+			"absent stream: read reports explicit absence at version zero",
 			"empty append: no version check and no stream creation",
 			"qualified stream key: equal aggregate ids remain isolated by aggregate type",
 			"append/read: event order and fromVersion slicing are preserved",
 			"paged read: limit bounds every page and fromVersion continues without gaps or duplicates",
-			"kit reader: readStreamPages walks the pinned prefix and stops before a later append",
-			"kit reader: toVersion below the head is the target version and the pages end there",
-			"kit reader: toVersion beyond the head is unreachable and names the head",
-			"kit reader: a cursor inside the stream reads only the events after it",
-			"kit reader: a cursor beyond the head is unreachable and names the head",
+			"readStreamPages: the pages walk the pinned prefix and stop before a later append",
+			"readStreamPages: toVersion below the head is the target version and the pages end there",
+			"readStreamPages: toVersion beyond the head is unreachable and names the head",
+			"readStreamPages: a cursor inside the stream reads only the events after it",
+			"readStreamPages: a cursor beyond the head is unreachable and names the head",
 			"read options: invalid limits and stream positions fail loudly",
 			"bounded read: toVersion is inclusive while lastVersion remains the actual head",
 			"bounded read edges: zero, beyond-head, and inverted ranges are empty or clamped",
@@ -51,7 +51,7 @@ describe("event-store adapter contract", () => {
 			"qualified fromVersion: slicing one type cannot observe a colliding raw id",
 			"OCC: a rejected multi-event append is atomic and maps to ConcurrencyConflictError",
 			"OCC: duplicate create is rejected atomically with a sanctioned kit error",
-			"OCC: an expectedVersion ahead of an unknown stream conflicts without creating it",
+			"OCC: an expectedVersion ahead of an absent stream conflicts without creating it",
 			"read ownership: a mutation attempt cannot mutate the stream",
 		]);
 	});

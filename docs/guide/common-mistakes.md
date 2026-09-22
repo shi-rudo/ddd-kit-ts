@@ -360,22 +360,22 @@ See [Edge Runtimes](./edge-runtimes.md).
 repository that calls it once and immediately returns the aggregate silently
 loads partial state whenever the stream exceeds its chosen `limit`.
 
-Read the stream through `readStreamPages` and fold it through
-`reconstituteAggregateFromStreamPages`. `readStreamPages` pins its target,
-the first page's `lastVersion` or a requested `toVersion`, and passes it as
-`toVersion` on every later page. It
-advances `fromVersion` by the number of events actually returned, because
-adapters may return fewer than requested. A zero-length page before the
-pinned target is a violated adapter contract, not end-of-stream.
-`readStreamPages` throws `InvalidEventStreamPageError` for it, and so does
-the fold for an empty page of an adapter that pages on its own. The stream
-address and both cursors survive into logs and telemetry.
+Read the stream through `readStreamPages` and replay it through
+`reconstituteAggregateFromStreamPages`. `readStreamPages` pins its target
+version, the first page's `lastVersion` or a requested `toVersion`, and
+passes it as `toVersion` on every later page. It advances `fromVersion` by
+the number of events actually returned, because adapters may return fewer
+than requested. A zero-length page before the target version is a violated
+adapter contract, not end-of-stream. `readStreamPages` throws
+`InvalidEventStreamPageError` for it, and so does the replay for an empty
+page of an adapter that pages on its own. The stream address and both
+cursors survive into logs and telemetry.
 `reconstituteAggregateFromStreamPages` yields the aggregate only when the
-replay ends at the pinned target. Add it to the identity map after that, never
-before.
+replay ends at the target version. Add it to the identity map after that,
+never before.
 
 Pinning the head matters. Without it, events appended during a slow load keep
-moving the target, so one request can observe an open-ended mixture of stream
+moving the target version, so one request can observe an open-ended mixture of stream
 states. See [Event Sourcing](./event-sourcing.md#loading-from-history).
 
 ### Using the Event Bus for Work That Must Not Be Lost

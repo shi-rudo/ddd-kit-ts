@@ -56,12 +56,16 @@ ambiguous and forces consumers to infer schema from fields. Do not do that.
 Upcast after reading from storage and before events reach the aggregate:
 
 ```ts
-async function* upcastPages(
+function upcastPages(
   pages: AsyncIterable<ReadonlyArray<AnyDomainEvent>>,
 ): AsyncIterable<ReadonlyArray<OrderEvent>> {
-  for await (const page of pages) {
-    yield page.map(upcastOrderEvent) as OrderEvent[];
-  }
+  return {
+    async *[Symbol.asyncIterator]() {
+      for await (const page of pages) {
+        yield page.map(upcastOrderEvent) as OrderEvent[];
+      }
+    },
+  };
 }
 
 const address = { aggregateType: "Order", aggregateId: orderId };
@@ -76,12 +80,20 @@ if (loaded.isErr()) throw loaded.error;
 ```
 
 Upcast one bounded page at a time and preserve each stored envelope's
-identity. The cast at the end of `upcastPages` is the boundary: after the
-upcaster, the page holds the current union. Keep the upcaster one-to-one.
-`readStreamPages` advances by the number of stored events, and the head check
-counts the events the folds received. An upcaster that splits or merges
-events therefore fails the head check. Split/merge migrations need an
-explicit storage position cursor outside the event array.
+identity. The cast in `upcastPages` is the boundary: after the upcaster, the
+page holds the current union. `upcastPages` returns an object whose
+iterator method starts a new pass over `pages`. So every iteration starts
+again from the first page, as `ReplayableStreamPages` requires. An async
+generator function alone returns a generator object, which iterates once.
+
+Keep the upcaster one-to-one. `readStreamPages` counts one version per
+stored event, and the replay counts one version per event it receives. An
+upcaster that splits a stored event into several makes a page run past its
+window: `InvalidEventStreamPageError` with the reason `page_past_target`.
+An upcaster that merges stored events ends the replay short of the target
+version: `ReplayTargetMismatchError` with the reason `pages_short_of_target`.
+Split and merge migrations need an explicit storage position cursor
+outside the event array.
 
 The aggregate only handles the current union:
 

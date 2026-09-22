@@ -18,19 +18,16 @@ export interface ReadStreamOptions {
 	/**
 	 * Maximum number of events returned by this page. Required so callers
 	 * cannot accidentally materialize an unbounded stream. Must be a positive
-	 * safe integer. An adapter may return fewer events, but must return at least
-	 * one while unread events remain inside the requested window.
+	 * safe integer. An adapter may return fewer events, for example when it
+	 * clamps `limit` to a maximum of its own. It must return at least one
+	 * event while unread events remain inside the requested window.
 	 */
 	readonly limit: number;
 
 	/**
 	 * Return only events AFTER this stream position (1-based event count),
-	 * the snapshot catch-up read. `readStreamPages(store, stream, {
-	 * fromVersion: snapshot.version, limit: 256 })` pins the head and pages
-	 * toward it, and `reconstituteAggregateFromStreamPages` checks that the
-	 * aggregate ends there ({@link ReplayTargetMismatchError}). Defaults to
-	 * `0` (the first stream page).
-	 * Must be a non-negative safe integer when present.
+	 * for example the version of a snapshot. Defaults to `0` (the first
+	 * stream page). Must be a non-negative safe integer when present.
 	 */
 	readonly fromVersion?: number;
 
@@ -40,9 +37,7 @@ export interface ReadStreamOptions {
 	 * `(fromVersion, toVersion]`. Defaults to the actual stream head.
 	 * `0` therefore returns an empty window; a value beyond the head clamps
 	 * to the head; and `fromVersion >= toVersion` is an empty interval, not
-	 * an error. `readStreamPages` does not clamp: it reports a `toVersion`
-	 * beyond the head as an unreachable window.
-	 * Must be a non-negative safe integer when present.
+	 * an error. Must be a non-negative safe integer when present.
 	 */
 	readonly toVersion?: number;
 
@@ -62,7 +57,7 @@ export interface ReadStreamOptions {
  * of the requested read window and page limit. `exists: true` implies
  * `lastVersion >= 1`: an
  * existing stream has at least one event, while metadata or tombstones without
- * events must be reported as `exists: false`. A missing stream is therefore
+ * events must be reported as `exists: false`. An absent stream is therefore
  * distinguishable from an existing stream whose requested window is empty.
  * Snapshot-backed repositories use that distinction to reject a snapshot whose
  * version lies beyond the current authoritative stream head.
@@ -86,7 +81,7 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
  */
 export interface EventStreamReader<Evt extends AnyDomainEvent> {
 	/**
-	 * Reads one bounded page of the qualified stream in append order. An unknown stream returns
+	 * Reads one bounded page of the qualified stream in append order. An absent stream returns
 	 * `{ exists: false, lastVersion: 0, events: [] }`; an existing stream keeps
 	 * `exists: true` even when its requested window is empty. An existing stream
 	 * has at least one event, so `exists: true` implies `lastVersion >= 1`;
@@ -95,7 +90,9 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
 	 * mandatory and caps the returned array. An adapter may return fewer than
 	 * the requested limit, but if the requested window still contains unread
 	 * events it must return a non-empty contiguous prefix so callers can make
-	 * progress. `options.fromVersion`
+	 * progress. Each returned event occupies one stream position, so the
+	 * events of a page fill the positions after `fromVersion` without a gap.
+	 * `options.fromVersion`
 	 * excludes positions at or below its 1-based event count;
 	 * `options.toVersion` includes positions through its count, so both bounds
 	 * describe `(fromVersion, toVersion]`. `toVersion: 0` and inverted ranges
@@ -108,11 +105,10 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
 	 *
 	 * Each page's `exists`, `lastVersion`, and `events` must describe one
 	 * consistent view of the stream. Multiple page reads are not one database
-	 * snapshot. `readStreamPages` pins its target, the first page's
-	 * `lastVersion` or the `toVersion` it was given, as `toVersion` on every
-	 * continuation and advances `fromVersion` by the number of events actually
-	 * returned. An adapter that pages on its own must do the same. Because
-	 * streams are append-only, that yields a stable
+	 * snapshot. A caller that reads a stream in several pages pins a target
+	 * version on the first page, passes it as `toVersion` on every
+	 * continuation, and advances `fromVersion` by the number of events each
+	 * page returned. Because streams are append-only, that yields a stable
 	 * prefix even if new events arrive while replay is in progress. The returned
 	 * event array is owned by the caller; implementations must not hand out
 	 * mutable live internal state.
@@ -167,10 +163,11 @@ export interface EventStreamReader<Evt extends AnyDomainEvent> {
  * }
  * ```
  *
- * `readStreamPages` pins the head on the first page and reads the rest in
- * bounded pages toward it; `reconstituteAggregateFromStreamPages` folds
- * the pages and checks that the replay ends at that head. The long form,
- * for an adapter that pages on its own, is in the event-sourcing guide.
+ * `readStreamPages` pins the head on the first page as the target version
+ * and reads the rest in bounded pages up to it.
+ * `reconstituteAggregateFromStreamPages` replays the pages and checks that
+ * the replay ends at the target version. The long form, for an adapter that
+ * pages on its own, is in the event-sourcing guide.
  *
  * `flush` appends the exact event batch registered by `add` or `update`;
  * `withCommit`

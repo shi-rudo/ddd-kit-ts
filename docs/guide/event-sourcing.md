@@ -308,10 +308,13 @@ contexts with the same domain name share storage, qualify it at the source
 `readStream(stream, options)` reports both stream state and one bounded event
 page. `limit` is mandatory, so no port call can accidentally materialize an
 unbounded stream. It must be a positive safe integer. An adapter may return
-fewer events than requested, but an unread window must return at least one
-event so continuation makes progress.
+fewer events than requested, for example when it clamps `limit` to a
+maximum of its own. But an unread window must return at least one event so
+continuation makes progress. Each returned event occupies one stream
+position, so the events of a page fill the positions after `fromVersion`
+without a gap.
 
-A missing stream is
+An absent stream is
 `{ exists: false, lastVersion: 0, events: [] }`. An existing stream stays
 `exists: true` even when its requested window is empty. An existing stream has
 at least one event. Thus, `exists: true` implies `lastVersion >= 1`. Report
@@ -391,7 +394,8 @@ bounds. The repository suite covers append
 conflicts, duplicate creates, replay equality, rollback purity, commit
 lifecycle, and point-in-time windows through the repository adapter. When the
 harness provides `captureSnapshot`, the suite also proves that a snapshot
-catch-up ends at the stream head and folds only the tail.
+catch-up ends at the stream head and replays only the events after the
+snapshot.
 
 Both suites need overlapping `run` calls: the stale-writer proofs hold one
 transaction open while a second one commits. A single-connection embedded
@@ -401,8 +405,9 @@ preflight that names it.
 
 ## Loading from history
 
-Reconstitution reads the stream in bounded pages toward a pinned target and
-folds them into a fresh replay target. Two kit calls carry that recipe:
+Reconstitution reads the stream in bounded pages up to a pinned target
+version and replays them into a fresh replay target. Two kit calls carry
+that recipe:
 
 ```ts
 async function findById(id: OrderId): Promise<Order | null> {
@@ -419,53 +424,74 @@ async function findById(id: OrderId): Promise<Order | null> {
 }
 ```
 
+`limit: 256` is a starting value, not a measured one. A load of `n` events
+after the cursor takes at least `max(1, ceil(n / limit))` page reads, and
+each page read is one round trip to the store. An adapter can clamp `limit`
+to a maximum of its own, and then the load needs more round trips. Measure
+the stream lengths and the event sizes of your system, then set the value.
+
 `readStreamPages(eventStore, address, { fromVersion, toVersion, limit })`
-reads the first page and decides the stream state once, in three branches.
-An unknown stream returns `{ exists: false, reachable: false }`. An existing
-stream whose requested window lies outside it returns `reachable: false`
-with the actual head as `lastVersion`. That happens when the cursor lies
-beyond the target, or when `toVersion` lies beyond the head. The remaining
-branch returns the pinned target as `targetVersion`, the `stream` address,
-and `pages`. The target is `toVersion` when the read asked for one, else the
-head of the first page. The pages hold the events after the cursor through
-that target, in append order, one bounded page per iteration.
-`readStreamPages` reads the pages lazily. Every iteration of `pages` starts
-again from the first page, so a second fold over one read sees the same
-prefix. The reader bounds every continuation page to the target with
-`toVersion`. It continues by the number of events the previous page
+reads the first page and decides the state of the stream once, in three
+branches:
+
+- An absent stream returns `{ exists: false, reachable: false }`.
+- An existing stream whose window lies outside it returns
+  `reachable: false` with the actual head as `lastVersion`. The window lies
+  outside when the cursor lies beyond the target version, or when
+  `toVersion` lies beyond the head. `pinTargetVersion` makes this decision;
+  the [point-in-time read](#point-in-time-reconstruction) shows why it never
+  clamps.
+- The remaining branch returns the `stream` address, `fromVersion`, the
+  pinned `targetVersion`, and `pages`. The target version is `toVersion`
+  when the read asked for one, else the head of the first page.
+
+The pages hold the events after the cursor through the target version, in
+append order, one bounded page per iteration. `readStreamPages` keeps the
+first page in memory. Every iteration of `pages` yields that page again and
+reads the continuation pages from the store again, so a second replay of
+one read sees the same prefix. Each continuation read passes the target
+version as `toVersion` and starts after the events that the earlier pages
 returned. A writer that appends during the load therefore cannot move the
-target. The reader checks every page against the `readStream` contract. A
+target version.
+
+`readStreamPages` checks every page against the `readStream` contract. A
 page that breaks it throws `InvalidEventStreamPageError`, and its `reason`
 names the defect: an existing stream with a head below 1, a page with more
 events than its window has left, or a continuation page that is empty,
 reports the stream absent, or reports a head below the head of the first
 page.
 
-The caller decides what the two `reachable: false` branches mean before it
-hands the last one over: `null` here, a snapshot to discard in the
-[snapshot path](#snapshots), a version the stream has not reached in a
-[point-in-time read](#point-in-time-reconstruction). One guard on
-`reachable` narrows a kit read to the branch the fold accepts. The other
-two branches carry no pages, so they cannot reach it.
+The caller decides what the two `reachable: false` branches mean before the
+replay: `null` here, a snapshot to discard in the
+[snapshot path](#snapshots), or a version that the stream has not reached in
+a [point-in-time read](#point-in-time-reconstruction). One guard on
+`reachable` narrows a kit read to the branch that the replay accepts. The
+other two branches carry no pages, so they cannot reach it.
 
 `reconstituteAggregateFromStreamPages(create, read)` builds the replay
-target through your factory, folds every page into it through
+target through your factory, replays every page into it through
 `replayHistory`, and returns `Result<Order, ReplayRejectedError>`. The
-aggregate exists only in the `Ok`. When the aggregate rejects a stored event
-with a `DomainError`, the iteration stops there, and the kit reads no
-further page. The `Err` is a `ReplayRejectedError`: it names the stream and
-the window of the rejected page, and it holds the `DomainError` as `cause`.
-A stored stream that the domain cannot replay is a defect of the data, not
-a request the client can correct. So `ReplayRejectedError` is an
-`InfrastructureError`, and a repository that rethrows `loaded.error` does
-not report a business rejection. Before the first page, the call
-checks that the replay target stands at `read.fromVersion`. A replay that
-ends short of `targetVersion` is rejected after the last page. Both cases
-throw `ReplayTargetMismatchError` with a `reason` that names the check. An
-empty page, and a page that would run past `targetVersion`, throw
-`InvalidEventStreamPageError` before they are folded, as they do in the
-reader. Allocation stays bounded by the page limit: the read keeps the first
-page, and each later page goes through `replayHistory` once.
+aggregate exists only in the `Ok`. The call checks the read at three
+points:
+
+- Before the first page, the replay target must stand at
+  `read.fromVersion`. Else the call throws `ReplayTargetMismatchError`.
+- An empty page, and a page that would run past `targetVersion`, throw
+  `InvalidEventStreamPageError` before any row of them reaches the
+  aggregate, as in `readStreamPages`.
+- After the last page, the aggregate must stand at `targetVersion`. Else
+  the call throws `ReplayTargetMismatchError`. Its `reason` names the
+  check.
+
+When the aggregate rejects a stored event with a `DomainError`, the call
+stops, and the kit reads no further page. The `Err` is a
+`ReplayRejectedError`: it names the stream and the window of the rejected
+page, and it holds the `DomainError` as `cause`. A stored stream that the
+domain cannot replay is a defect of the data, not a request that the client
+can correct. So `ReplayRejectedError` is an `InfrastructureError`, and a
+repository that rethrows `loaded.error` does not report a business
+rejection. Allocation stays bounded by the page limit: the read keeps the
+first page, and each later page goes through `replayHistory` once.
 
 The same recipe in long form, for an adapter that pages on its own, is in
 the [appendix](#appendix-an-adapter-that-pages-on-its-own).
@@ -509,7 +535,7 @@ of the model could have produced (missing fields, wrong types) by throwing
 reconstitution factory does run current rules and throws a `DomainError`,
 `reconstituteAggregateFromSnapshot` surfaces it as `SnapshotCorruptedError`
 too, and the load recipe answers both the same way: discard the snapshot and
-refold from the stream. Rules and structure are different questions, and only
+replay from the stream. Rules and structure are different questions, and only
 the first one is frozen in history.
 
 Only `DomainError` is caught into the `Result`. Programmer errors still throw.
@@ -530,12 +556,13 @@ Version advances additively:
 - a persisted aggregate at version `10` catching up on two newer events ends at
   version `12`
 
-Events carry no stream position, so the aggregate cannot detect a tail that
-overlaps its version: a snapshot at version `10` fed five events of which two
-were already folded ends at version `15`. The caller passes only the events
-after the restored version. `readStreamPages` pins the target on the
-first page, and `reconstituteAggregateFromStreamPages` checks the final
-version against it. On a mismatch it throws `ReplayTargetMismatchError` (code
+Events carry no stream position, so the aggregate cannot detect events that
+overlap its version: a snapshot at version `10` fed five events of which two
+were already replayed ends at version `15`. The caller passes only the
+events after the version the aggregate was reconstituted at.
+`readStreamPages` pins the target version on the first page, and
+`reconstituteAggregateFromStreamPages` checks the final version against it.
+On a mismatch it throws `ReplayTargetMismatchError` (code
 `REPLAY_TARGET_MISMATCH`).
 
 The replay target must be clean. If it carries unflushed `pendingEvents`,
@@ -547,12 +574,12 @@ Use a fresh `Order.reconstitute(id)` target for normal loads.
 
 ### Point-in-time reconstruction
 
-An audit or debugging query can fold only the history that existed at stream
-position `N`. Keep that query outside the normal write repository. It creates a
-historical view, not a live aggregate for updates.
+An audit or debugging query can replay only the history that existed at
+stream position `N`. Keep that query outside the normal write repository. It
+creates a historical view, not a live aggregate for updates.
 
 ```ts
-async function findOrderAsOfVersion(
+async function findOrderAtVersion(
   id: OrderId,
   toVersion: number,
 ): Promise<OrderView | null> {
@@ -574,9 +601,9 @@ async function findOrderAsOfVersion(
 
 A request for version `10` of a stream that ends at version `7` returns
 `reachable: false` with `lastVersion: 7`. It never becomes "latest" by
-accident: the target is `toVersion`, not the head, and the fold must end
-there. What the caller answers on that branch is its own decision. This
-query answers `null`, like an unknown stream. `lastVersion` is on the branch
+accident: the target version is `toVersion`, not the head, and the replay
+must end there. What the caller answers on that branch is its own decision.
+This query answers `null`, like an absent stream. `lastVersion` is on the branch
 for a query that reports the head instead. `readStreamPages` rejects
 `toVersion: 0` with `RangeError` before it reads. Version `0` is the state
 before the first event, and no replay can end there.
@@ -591,16 +618,17 @@ if (!read.reachable) {
     await snapshots.delete(address);
   }
   if (!read.exists || toVersion > read.lastVersion) return null;
-  return refoldFromZeroAt(id, toVersion);
+  return replayFromZeroAt(id, toVersion);
 }
 ```
 
-A snapshot above the head outlived its stream: discard it, then refold from
+A snapshot above the head outlived its stream: discard it, then replay from
 zero up to `toVersion`, never to the head. A `toVersion` above the head is a
-version the stream has not reached: answer not found and keep the snapshot.
-A snapshot above `toVersion` is too new for the request: keep it and refold
-from zero up to `toVersion`. Only the first case discards the snapshot, and
-no case answers the latest state.
+version that the stream has not reached: answer not found and keep the
+snapshot. A snapshot above `toVersion` is too new for the request: keep it
+and replay from zero up to `toVersion`. Only the first case discards the
+snapshot, and no case answers the latest state. `UnreachableStreamPages`
+carries the same table in the API reference.
 
 ## Snapshots
 
@@ -622,66 +650,70 @@ const SNAPSHOT_DISCARD_CODES: ReadonlySet<string> = new Set<KitErrorCode>([
 
 async function findById(id: OrderId): Promise<Order | null> {
   const address = { aggregateType: "Order", aggregateId: id };
-  const discardSnapshotAndRefold = async (): Promise<Order | null> => {
-    const refolded = await replayFromZero(id);
+  const discardSnapshotAndReplay = async (): Promise<Order | null> => {
+    const replayed = await replayFromZero(id);
     await snapshots.delete(address);
-    return refolded;
+    return replayed;
   };
 
   const snapshot = await snapshots.load(address);
   if (snapshot === undefined) return replayFromZero(id);
 
-  const tail = await readStreamPages(eventStore, address, {
+  const read = await readStreamPages(eventStore, address, {
     fromVersion: snapshot.version,
     limit: 256,
   });
-  if (!tail.reachable) return discardSnapshotAndRefold();
+  if (!read.reachable) return discardSnapshotAndReplay();
 
   try {
-    const restored = await reconstituteAggregateFromStreamPages(
+    const reconstituted = await reconstituteAggregateFromStreamPages(
       () => reconstituteAggregateFromSnapshot(orderSnapshots, id, snapshot),
-      tail,
+      read,
     );
-    if (restored.isErr()) return discardSnapshotAndRefold();
-    return restored.value;
+    if (reconstituted.isErr()) return discardSnapshotAndReplay();
+    return reconstituted.value;
   } catch (error) {
     if (
       isInfrastructureErrorLike(error) &&
       SNAPSHOT_DISCARD_CODES.has(error.code)
     ) {
-      return discardSnapshotAndRefold();
+      return discardSnapshotAndReplay();
     }
     throw error;
   }
 }
 ```
 
-Every failure that the derived snapshot can explain discards it and refolds
-from the stream. A missing stream means the snapshot cannot establish
+Every failure that the derived snapshot can explain discards it and replays
+from the stream. An absent stream means that the snapshot cannot establish
 aggregate existence. A snapshot beyond the head outlived its stream: the
-stream was truncated or replaced. `readStreamPages` reports that window as
-`reachable: false`, so the check runs before the fold. A rejected page
-(`Err`) means the tail holds a row the fold cannot map. Two coded
-errors mean the same: `SnapshotSchemaMismatchError` and
-`SnapshotCorruptedError`, both from the reconstitution. None of these paths
-can return the partially restored aggregate. A repository reports each
-discard with its trigger before it refolds: a snapshot that is deleted on
-every load is a signal, not a state. Match on
-the code, not on the class or the message: the code is the contract.
+stream was removed and created again (see
+[Domain deletion versus physical removal](./repository.md#domain-deletion-versus-physical-removal)),
+or a backup restored one store and not the other. `readStreamPages` reports
+that window as `reachable: false`, so the check runs before the replay. A
+`ReplayRejectedError` (`Err`) means that the stream after the snapshot holds
+a row the aggregate cannot replay. Two coded errors mean the same:
+`SnapshotSchemaMismatchError` and `SnapshotCorruptedError`, both from the
+reconstitution. None of these paths can return the partially reconstituted
+aggregate. A repository reports each discard with its trigger before it
+replays from zero: a snapshot that is deleted on every load is a signal,
+not a state. Match on the code, not on the class or the message: the code
+is the contract.
 `isInfrastructureErrorLike` recognizes a kit error from another loaded copy
 of the kit, which a plain `instanceof` misses. The typed `Set` rejects a
 misspelled code at compile time.
 
-`ReplayTargetMismatchError` and `InvalidEventStreamPageError` stay
-outside the discard set on purpose. After the check above, both mean the
-read contradicted its contract: an EventStore adapter its port, for example
-with an inclusive `fromVersion` slice or a continuation that returns
-nothing, or an adapter that pages on its own its own paging. A refold from
-zero cannot see such a defect, because position zero has no off-by-one. A
-discard would hide it behind a snapshot that the recipe deletes and rebuilds
-on every load. Every other error escapes too. `SnapshotVersionNotRestoredError` is a wiring bug in
-the model. A `ForeignEventError` is a wrong stream read. A failure of the
-store itself is not a snapshot problem.
+`ReplayTargetMismatchError` and `InvalidEventStreamPageError` stay outside
+the discard set on purpose. After the check above, both mean that the read
+broke its contract. An EventStore adapter broke the port, for example with
+an inclusive `fromVersion` slice or a continuation that returns nothing. Or
+an adapter that pages on its own broke its paging. A replay from zero
+cannot see such a defect, because position zero has no off-by-one. A
+discard would hide it behind a snapshot that the recipe deletes and
+rebuilds on every load. Every other error escapes too.
+`SnapshotVersionNotRestoredError` is a wiring bug in the model. A
+`ForeignEventError` is a wrong stream read. A failure of the store itself
+is not a snapshot problem.
 
 `replayHistory(...)` keeps its `Result<void, DomainError>` boundary for
 invalid historical facts. Snapshot DTO validation, migration, and
@@ -694,7 +726,7 @@ provides `migrate(stored, storedSchemaVersion)`. A missing schema version means
 schema `1`, which lets v3 adapters migrate snapshots written by earlier
 versions.
 
-Delete snapshots before deleting streams during erasure. The reverse order has a
+During a physical removal, delete the snapshot before the stream. The reverse order has a
 bad crash window: a stale snapshot can survive after the stream is gone and
 resurrect the aggregate. Snapshot-first fails safe; a stream without a snapshot
 just replays from zero.
@@ -907,10 +939,10 @@ snapshot one.
 
 `readStreamPages` and `reconstituteAggregateFromStreamPages` carry the
 recipe. An adapter that pages on its own, for example over a database
-cursor, keeps the fold in the kit. It hands its pages to
+cursor, keeps the replay in the kit. It hands its pages to
 `reconstituteAggregateFromStreamPages` as a `ReplayableStreamPages` value:
-the stream, the window, and the pages. The cursor check, the target check,
-and the `Result` boundary stay the kit's:
+the stream, the window, and the pages. The cursor check, the target version
+check, and the `Result` boundary stay in the kit:
 
 ```ts
 const head = await streamHead(address); // your own query; 0 when absent
@@ -922,7 +954,10 @@ const read: ReplayableStreamPages<OrderEvent> = {
   stream: address,
   fromVersion: 0,
   targetVersion: pinned.targetVersion,
-  pages: cursorPages(address, 0, pinned.targetVersion),
+  pages: {
+    [Symbol.asyncIterator]: () =>
+      cursorPages(address, 0, pinned.targetVersion),
+  },
 };
 const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.reconstitute(id),
@@ -930,33 +965,37 @@ const loaded = await reconstituteAggregateFromStreamPages(
 );
 ```
 
-`cursorPages` is your `AsyncIterable` of event pages after `fromVersion`
-through `targetVersion`, in append order. Every iteration starts again from
-the first page. A store failure inside `pages` throws as is: the fold
-translates nothing, and the edge maps it. A test of the code that consumes
-such a read, a repository or the fold, builds the value from an in-memory
-tail with `createReplayableStreamPages` from `@shirudo/ddd-kit/testing`. It
-stands in for the adapter. The adapter itself runs
-`createReplayableStreamPagesContractTests` from the same entry. The suite
-proves the pages, the target version, the iteration rules, and the
-windows that give no replayable read. Its optional `limit` slices the tail
-into pages, so a repository test can cross a page boundary.
+`cursorPages` is your async generator of event pages after `fromVersion`
+through the target version, in append order. The `pages` object calls it on
+every iteration, so every iteration starts again from the first page. A
+generator object alone iterates once and breaks that rule. A store failure
+inside `pages` throws as is: the replay translates nothing, and the edge
+maps it.
 
-Such an adapter keeps six rules. Decide existence before the fold: a head of
-`0` means absent. Pin the target with `pinTargetVersion`, the decision
-`readStreamPages` makes on its first page: the head, or a requested
-`toVersion` at or below it. A cursor beyond the target, or a target beyond
-the head, is unreachable. Neither an absent stream nor an unreachable window
-is a fold. Pass the target as the upper bound of every later page. Advance
-the cursor by the number of events actually returned. Reject a page that
-makes no progress. Hand the pages to the kit fold. It validates the window,
-checks the start against the cursor, rejects an empty page and a page past
-the target, and checks the end against the target.
+Such an adapter keeps six rules:
+
+1. Decide existence before the replay: a head of `0` means absent.
+2. Pin the target version with `pinTargetVersion`, the decision that
+   `readStreamPages` makes on its first page. An unreachable window, like an
+   absent stream, never reaches the replay.
+3. Pass the target version as the upper bound of every later page.
+4. Advance the cursor by the number of events actually returned.
+5. Reject a page that makes no progress.
+6. Hand the pages to the kit replay. It validates the window, checks the
+   start against the cursor, rejects an empty page and a page past the
+   target version, and checks the end against the target version.
+
+Run `createReplayableStreamPagesContractTests` from
+`@shirudo/ddd-kit/testing` against the adapter. The suite proves the pages,
+the target version, the iteration rules, and the windows that give no
+replayable read. A test of the code that consumes such a read, a repository
+or the replay itself, builds the value from an in-memory tail with
+`createReplayableStreamPages` from the same entry. That value stands in for
+the adapter. Its optional `limit` slices the tail into pages, so a
+repository test can cross a page boundary.
 
 The snapshot catch-up differs in three places. The cursor is
-`snapshot.version`, and a snapshot above the head fails the first rule. The
-replay target comes from `reconstituteAggregateFromSnapshot`. And the
-discard set of the [snapshot recipe](#snapshots) applies: a missing stream,
-an unreachable window, a rejected page, and the two coded snapshot errors
-discard the snapshot and refold from zero, while a target mismatch and a
-page that makes no progress escape.
+`snapshot.version`, and a snapshot above the head makes the window
+unreachable (rule 2). The replay target comes from
+`reconstituteAggregateFromSnapshot`. And the discard set of the
+[snapshot recipe](#snapshots) applies.

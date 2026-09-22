@@ -15,28 +15,27 @@ import {
 export interface ReadStreamPagesOptions
 	extends Pick<ReadStreamOptions, "limit" | "fromVersion" | "signal"> {
 	/**
-	 * The stream position the replay must reach (inclusive, 1-based event
-	 * count): a point-in-time read. Defaults to the stream head of the first
-	 * page. A value beyond that head does not clamp. The read reports the
-	 * window as unreachable instead. So a request for version 10 of a stream
-	 * that ends at 7 never loads the latest state by accident.
-	 * Must be a positive safe integer when present. Version 0 is the state
-	 * before the first event, and no replay can end there.
+	 * The version a point-in-time read asks for (inclusive, 1-based event
+	 * count). Without it, the target version is the head that the first page
+	 * reports. A value beyond the head does not clamp: see
+	 * {@link pinTargetVersion}. Must be a positive safe integer when present.
+	 * Version 0 is the state before the first event, and no replay can end
+	 * there.
 	 */
 	readonly toVersion?: number;
 }
 
 /**
- * A stream read with the target pinned on its first page.
+ * A stream read with the target version pinned on its first page.
  *
- * The first page decides the stream state once, in three branches. An
- * absent stream is `exists: false`. An existing stream whose requested
- * window lies outside it is `reachable: false` and carries the actual
- * head. The remaining branch exposes the pinned target and the pages after
- * the cursor. Both unreachable branches carry `reachable: false`, so one
- * guard narrows to the branch a fold accepts. The caller decides what the
- * first two branches mean before it hands the last branch to
- * {@link reconstituteAggregateFromStreamPages}.
+ * The first page decides the state of the stream once, in three branches.
+ * An absent stream is `exists: false`. An existing stream whose window lies
+ * outside it is `reachable: false` and carries the actual head. The
+ * remaining branch carries the target version and the pages after the
+ * cursor. The other two branches both carry `reachable: false`, so one
+ * guard narrows to the branch that
+ * {@link reconstituteAggregateFromStreamPages} accepts. The caller decides
+ * what the other two branches mean before the replay.
  */
 export type StreamPages<Evt extends AnyDomainEvent> =
 	| AbsentStreamPages
@@ -51,15 +50,16 @@ export interface AbsentStreamPages {
 
 /**
  * The branch of {@link StreamPages} for a window that lies outside an
- * existing stream: the cursor lies beyond the target, or the target lies
- * beyond the head.
+ * existing stream: the cursor lies beyond the target version, or the
+ * target version lies beyond the head ({@link pinTargetVersion}).
  *
  * The caller tells the causes apart from its own inputs. A snapshot
- * version above `lastVersion` means the snapshot outlived its stream:
- * discard it and refold. A `toVersion` above `lastVersion` means the
- * stream has not reached that version: answer not found and keep the
- * snapshot. A snapshot version above `toVersion` means the snapshot is too
- * new for the request: keep it and refold from zero up to `toVersion`.
+ * version above `lastVersion` means that the snapshot outlived its stream:
+ * discard it and replay from zero. A `toVersion` above `lastVersion` means
+ * that the stream has not reached that version: answer not found and keep
+ * the snapshot. A snapshot version above `toVersion` means that the
+ * snapshot is too new for the request: keep it and replay from zero up to
+ * `toVersion`.
  */
 export interface UnreachableStreamPages {
 	readonly exists: true;
@@ -72,7 +72,7 @@ export interface UnreachableStreamPages {
 	readonly lastVersion: number;
 }
 
-/** The branch of {@link StreamPages} that a replay can fold. */
+/** The branch of {@link StreamPages} that the replay accepts. */
 export interface ReachableStreamPages<Evt extends AnyDomainEvent>
 	extends ReplayableStreamPages<Evt> {
 	readonly exists: true;
@@ -144,16 +144,19 @@ export function pinTargetVersion(
 }
 
 /**
- * Reads one stream in bounded pages toward a pinned target.
+ * Reads one stream in bounded pages up to a pinned target version.
  *
- * This call reads the first page. That page decides existence and reports
- * the head. The target is `toVersion` when given, else that head. The
- * read never clamps a window that lies outside the stream. It reports the
- * window as unreachable. Each iteration of `pages` reads the remaining
- * pages lazily. It bounds every continuation page to the target
- * with `toVersion`. It continues by the number of events the previous page
- * returned. Streams are append-only, so that yields one stable prefix even
- * when another writer appends during the replay.
+ * The call reads the first page. That page decides existence and reports
+ * the head. {@link pinTargetVersion} then decides the window: the target
+ * version is `toVersion` when given, else the head, and a window outside
+ * the stream is unreachable.
+ *
+ * The call keeps the first page in memory. Every iteration of `pages`
+ * yields that page again and reads the continuation pages from the store
+ * again, one page at a time. Each continuation read passes the target
+ * version as `toVersion` and starts after the events that the earlier pages
+ * returned. Streams are append-only, so an iteration yields one stable
+ * prefix even when another writer appends during the replay.
  *
  * The call checks every page against the `readStream` contract and throws
  * {@link InvalidEventStreamPageError} for a page that breaks it: an

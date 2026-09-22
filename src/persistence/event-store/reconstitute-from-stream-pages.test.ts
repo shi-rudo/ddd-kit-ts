@@ -124,7 +124,7 @@ function countingPulledPages<Evt extends AnyDomainEvent>(
 }
 
 describe("reconstituteAggregateFromStreamPages", () => {
-	it("folds every page and yields the aggregate at the target version", async () => {
+	it("replays every page and yields the aggregate at the target version", async () => {
 		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(5),
@@ -349,7 +349,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(pulls).toBe(2);
 	});
 
-	it("rejects a page past the target before it folds any row of it", async () => {
+	it("rejects a page past the target before any row of it reaches the aggregate", async () => {
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
 			fromVersion: 0,
@@ -458,7 +458,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 });
 
 describe("readStreamPages with reconstituteAggregateFromStreamPages", () => {
-	it("loads the aggregate as of toVersion below the head", async () => {
+	it("loads a point-in-time aggregate at toVersion below the head", async () => {
 		const store = new InMemoryEventStore<CounterEvent>();
 		await store.append(stream, countedUpTo(5), { expectedVersion: 0 });
 		const read = await readStreamPages(store, stream, {

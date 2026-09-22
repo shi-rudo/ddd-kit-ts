@@ -44,7 +44,7 @@ function assertStreamPosition(
  * `InMemoryCapacityExceededError`; histories are never silently evicted.
  * Implements the full port contract: expectedVersion-guarded appends
  * (throwing `ConcurrencyConflictError` on mismatch), atomic rejected
- * appends, explicit missing/existing stream state with the actual head,
+ * appends, explicit absent/existing stream state with the actual head,
  * append-order reads, mandatory page bounds, and `(fromVersion, toVersion]`
  * slicing. Invalid limits or positions reject with `RangeError`. A read
  * with an aborted `signal` rejects with its `reason`.
@@ -176,7 +176,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 			fromVersion + options.limit,
 		);
 		// Cloned, not sliced: slice() copies the ARRAY but hands out live
-		// references to the stored elements, and a reader mutating one would
+		// references to the stored elements, and a caller mutating one would
 		// silently corrupt every later replay.
 		return {
 			exists: true,

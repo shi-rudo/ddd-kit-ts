@@ -1016,7 +1016,8 @@ function eventStreamPageReasonMessage(
 			return (
 				`readStream reported ${stream} absent after version ` +
 				`${options.fromVersion} while the replay had not reached ${target}. ` +
-				"A stream is append-only; check for a deletion during the read."
+				"A stream is append-only, and only a physical removal deletes it; " +
+				"check for a removal that ran during the read."
 			);
 		case "page_past_target":
 			return (
@@ -1055,9 +1056,13 @@ function eventStreamPageReasonMessage(
  * a head below 1.
  *
  * No case is retryable. Fix the adapter: run `createEventStoreContractTests`
- * against an EventStore adapter, and fix the paging of an adapter that
- * pages on its own. `stream_vanished` and `head_regressed` can also come
- * from a deletion or a truncation of the stream during the read.
+ * against an EventStore adapter, and `createReplayableStreamPagesContractTests`
+ * against an adapter that pages on its own. Two causes lie outside the
+ * adapter. A stream is append-only, and only a physical removal deletes it
+ * (the repository guide, "Domain deletion versus physical removal"), so a
+ * removal that runs during the read gives `stream_vanished`. An upcaster
+ * that splits one stored event into several gives `page_past_target` at
+ * the replay, because the replay counts one version per event.
  */
 export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EVENT_STREAM_PAGE"> {
 	readonly aggregateType: string;
@@ -1123,29 +1128,31 @@ function replayTargetMismatchMessage(
 			return (
 				`Replay of ${stream} ended at version ${options.actualVersion}, short of ` +
 				`the pinned target version ${options.targetVersion}. The read stopped ` +
-				`before the target, or the stream has a gap after version ` +
-				`${options.actualVersion}.`
+				`before the target version, the stream has a gap after version ` +
+				`${options.actualVersion}, or an upcaster merged stored events.`
 			);
 	}
 }
 
 /**
  * Thrown by `reconstituteAggregateFromStreamPages`, or by a load recipe
- * that folds on its own, when the replay target does not line up with the
+ * that replays on its own, when the replay target does not line up with the
  * read. Events carry no stream position, so the aggregate cannot detect a
- * tail that overlaps or misses its restored version. Only the caller, which
- * pinned the target, can compare. A single page that breaks its window is
- * an {@link InvalidEventStreamPageError} instead.
+ * tail that overlaps or misses the version it was reconstituted at. Only
+ * the caller, which pinned the target version, can compare. A single page
+ * that breaks its window is an {@link InvalidEventStreamPageError} instead.
  *
  * The `reason` names the check that failed. `target_not_at_cursor`: the
  * replay target stands at a version other than the `fromVersion` the read
- * used, found before any page is folded; a reconstitution factory reports
+ * used, found before any page is replayed; a reconstitution factory reports
  * the wrong version. `pages_short_of_target`: the pages ended before the
- * target; the read stopped early, or the stream has a gap. For an EventStore adapter, run `createEventStoreContractTests` and
- * `createEsRepositoryContractTests` against it and fix its windowing.
- * None of the cases is retryable. A snapshot beyond its stream does not
- * reach the fold: `readStreamPages` reports that window as unreachable
- * first, and an adapter that pages on its own must do the same.
+ * target version. The read stopped early, the stream has a gap, or an
+ * upcaster merged several stored events into one. For an EventStore
+ * adapter, run `createEventStoreContractTests` and
+ * `createEsRepositoryContractTests` against it and fix its windowing. None
+ * of the cases is retryable. A snapshot beyond its stream does not reach
+ * the replay: `readStreamPages` reports that window as unreachable first,
+ * and an adapter that pages on its own must do the same.
  */
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
 	readonly aggregateType: string;
