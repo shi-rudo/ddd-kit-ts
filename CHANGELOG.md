@@ -29,20 +29,23 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
-### Changed: the fold takes the replayable shape of a stream read
+### Changed: the fold takes a replayable stream read
 
 `reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`
 value: the stream, `fromVersion`, `targetVersion`, and the pages. The
-reachable branch of a kit read extends that shape, so a kit read still
+reachable branch of a kit read extends that type. A kit read therefore
 passes after one guard on `reachable`. A reader that pages on its own
-builds the shape directly and no longer carries the `exists` and
-`reachable` tags, which were the kit reader's decisions, not its own.
-`readStreamPages` asks the store for `readStream` only.
+builds the value directly. It no longer carries the `exists` and
+`reachable` tags, because the kit reader decides those, not the reader.
+The fold rejects an empty page with `NonProgressingEventStreamPageError`,
+so a hand-built iterator that stalls fails instead of hanging.
+`readStreamPages` asks the store for `readStream` only; that role is
+`EventStreamReader`.
 
 `@shirudo/ddd-kit/testing` exports `createInMemoryStreamPages(stream, {
-fromVersion, tail, targetVersion })`. It builds that value from an
-in-memory tail, so a test of a self-paging reader, or of a fold over a
-fixed window, needs no store.
+fromVersion, tail, targetVersion })`. It builds a replayable stream read
+from an in-memory tail. A test of a repository, or of the fold over a
+fixed window, then needs no store.
 
 ### Changed (breaking): ReplayHeadMismatchError is ReplayTargetMismatchError
 
@@ -82,9 +85,10 @@ events throws `NonProgressingEventStreamPageError`.
 target and returns `Result<Aggregate, DomainError>`. It throws
 `ReplayTargetMismatchError` when the replay does not end at the pinned target,
 and `UnreplayableAggregateError` for a dirty target, even on a read
-without pages. It accepts only the existing branch of the read. The caller
-therefore decides what an absent stream means before the fold: not found
-on the normal path, a snapshot to discard on the snapshot path.
+without pages. It takes a replayable stream read; the absent and unreachable
+branches of a kit read carry no pages, so the caller decides what they mean
+before the fold: not found on the normal path, a snapshot to discard on the
+snapshot path.
 
 The read has a third branch. `toVersion` pins a target below the head for a
 point-in-time read. A window that lies outside the stream comes back as
@@ -92,7 +96,7 @@ point-in-time read. A window that lies outside the stream comes back as
 the cursor lies beyond the target or the target lies beyond the head. The
 read never clamps such a request to the latest state. It rejects
 `toVersion: 0` with `RangeError`, because no replay can end before the
-first event. The fold accepts only the reachable branch. The snapshot
+first event. Only the reachable branch reaches the fold. The snapshot
 recipe discards a snapshot beyond the head on that branch, before the fold.
 The point-in-time recipe answers it as not found. A combined read tells the
 two apart by comparing its own inputs with `lastVersion`. A head mismatch

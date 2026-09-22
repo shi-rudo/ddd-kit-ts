@@ -221,3 +221,12 @@ export interface EventStore<Evt extends AnyDomainEvent> {
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>>;
 }
+
+/**
+ * The read half of {@link EventStore}: what `readStreamPages` asks of a
+ * store. A replica reader or a counting wrapper implements this alone.
+ */
+export type EventStreamReader<Evt extends AnyDomainEvent> = Pick<
+	EventStore<Evt>,
+	"readStream"
+>;

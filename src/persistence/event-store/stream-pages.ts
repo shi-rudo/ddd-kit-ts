@@ -9,7 +9,7 @@ import {
 	ReplayTargetMismatchError,
 } from "../../errors/kit-errors";
 import { assertPositiveSafeInteger } from "../../internal/validate";
-import type { EventStore, ReadStreamOptions } from "./event-store";
+import type { EventStreamReader, ReadStreamOptions } from "./event-store";
 
 /** Options for {@link readStreamPages}. */
 export interface ReadStreamPagesOptions
@@ -105,10 +105,9 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/**
 	 * The events after the cursor through the target, in append order, one
 	 * bounded page per iteration. Every iteration starts again from the
-	 * first page, so a second fold over one read sees the same prefix. The
-	 * kit reader yields no empty page. It throws
-	 * {@link NonProgressingEventStreamPageError} for a continuation page
-	 * that makes no progress.
+	 * first page, so a second fold over one read sees the same prefix. A
+	 * page holds at least one event; the fold rejects an empty page with
+	 * {@link NonProgressingEventStreamPageError}.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
@@ -129,8 +128,10 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
  * the window as unreachable. Each iteration of `pages` reads the remaining
  * pages lazily. The reader bounds every continuation page to the target
  * with `toVersion`. It continues by the number of events the previous page
- * returned. Streams are append-only, so that yields one stable prefix even
- * when another writer appends during the replay.
+ * returned. It yields no empty page and throws
+ * {@link NonProgressingEventStreamPageError} for a continuation page that
+ * makes no progress. Streams are append-only, so that yields one stable
+ * prefix even when another writer appends during the replay.
  *
  * A `toVersion` that is not a positive safe integer rejects with
  * `RangeError` before any page is read. The store rejects the other
@@ -138,7 +139,7 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
  * reason before the next page.
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
-	eventStore: Pick<EventStore<Evt>, "readStream">,
+	eventStore: EventStreamReader<Evt>,
 	stream: AggregateAddress,
 	options: ReadStreamPagesOptions,
 ): Promise<StreamPages<Evt>> {
@@ -198,7 +199,7 @@ interface PinnedWindow<Evt extends AnyDomainEvent> {
 }
 
 async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
-	eventStore: Pick<EventStore<Evt>, "readStream">,
+	eventStore: EventStreamReader<Evt>,
 	window: PinnedWindow<Evt>,
 ): AsyncGenerator<ReadonlyArray<Evt>, void, undefined> {
 	if (window.firstPage.length > 0) yield window.firstPage;
@@ -233,17 +234,18 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
  * This is the paged form of `reconstituteAggregateFromHistory`.
  * `createReplayTarget` builds the instance: a fresh one for a full replay,
  * or one restored from a snapshot for a read that started at
- * `snapshot.version`. `read` is the reachable branch of a kit read, or a
- * {@link ReplayableStreamPages} value a reader that pages on its own built;
- * the absent and unreachable branches lack the pages, so a caller decides
- * them before the fold. The target must carry no pending decisions. The fold
+ * `snapshot.version`. `read` is a {@link ReplayableStreamPages}: the
+ * reachable branch of a kit read, or a hand-built value. The target must
+ * carry no pending decisions. The fold
  * primes it with an empty history first, so the aggregate runs its own
  * replay-target guard even when the read holds no page; a dirty target
  * throws `UnreplayableAggregateError` as `replayHistory` does. The target
  * must then stand at the read cursor, `read.fromVersion`; a target at
  * another version throws {@link ReplayTargetMismatchError} before any page
  * is read. Each page goes through `replayHistory` on that instance, so
- * allocation stays bounded by the page limit. `replayHistory` rolls back
+ * allocation stays bounded by the page limit. An empty page cannot make
+ * progress and throws {@link NonProgressingEventStreamPageError}, so a
+ * hand-built iterator that stalls fails instead of hanging. `replayHistory` rolls back
  * one page. On a rejected page the earlier pages stay folded on the
  * instance, and that instance never escapes: the `DomainError` rides the
  * `Result`. Wiring errors and a foreign row throw, as in `replayHistory`.
@@ -275,6 +277,13 @@ export async function reconstituteAggregateFromStreamPages<
 		});
 	}
 	for await (const page of read.pages) {
+		if (page.length === 0) {
+			throw new NonProgressingEventStreamPageError({
+				...read.stream,
+				fromVersion: aggregate.version,
+				targetVersion: read.targetVersion,
+			});
+		}
 		const replayed = aggregate.replayHistory(page);
 		if (replayed.isErr()) return err(replayed.error);
 	}

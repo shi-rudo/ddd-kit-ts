@@ -428,8 +428,8 @@ The caller decides what the two `reachable: false` branches mean before it
 hands the last one over: `null` here, a snapshot to discard in the
 [snapshot path](#snapshots), a version the stream has not reached in a
 [point-in-time read](#point-in-time-reconstruction). One guard on
-`reachable` narrows to the branch the fold accepts, because
-`reconstituteAggregateFromStreamPages` takes only that one.
+`reachable` narrows a kit read to the branch the fold accepts. The other
+two branches carry no pages, so they cannot reach it.
 
 `reconstituteAggregateFromStreamPages(create, read)` builds the replay
 target through your factory, folds every page into it through
@@ -905,9 +905,10 @@ const loaded = await reconstituteAggregateFromStreamPages(
 
 `cursorPages` is your `AsyncIterable` of event pages after `fromVersion`
 through `targetVersion`, in append order. Every iteration starts again from
-the first page. A test of such a reader builds the same value from an
-in-memory tail with `createInMemoryStreamPages` from
-`@shirudo/ddd-kit/testing`.
+the first page. A test of the code that consumes such a read, a repository
+or the fold, builds the value from an in-memory tail with
+`createInMemoryStreamPages` from `@shirudo/ddd-kit/testing`. It stands in
+for the reader; the reader's own rules need their own test.
 
 Such a reader keeps six rules. Decide the window before the fold: a cursor
 beyond the target, or a target beyond the head, is unreachable, never a

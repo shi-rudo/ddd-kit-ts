@@ -428,6 +428,7 @@ export {
 export type {
 	EventStore,
 	EventStoreAppendOptions,
+	EventStreamReader,
 	ReadStreamOptions,
 	StreamReadResult,
 } from "./persistence/event-store/event-store";

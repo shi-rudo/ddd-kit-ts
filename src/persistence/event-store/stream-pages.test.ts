@@ -30,6 +30,7 @@ import type {
 import {
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
+	type ReplayableStreamPages,
 	readStreamPages,
 	reconstituteAggregateFromStreamPages,
 } from "./stream-pages";
@@ -600,6 +601,32 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		if (loaded.isOk())
 			throw new Error("a rejected priming replay must not load");
 		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
+	});
+
+	it("throws NonProgressingEventStreamPageError when a hand-built page is empty", async () => {
+		const read: ReplayableStreamPages<CounterEvent> = {
+			stream,
+			fromVersion: 0,
+			targetVersion: 2,
+			pages: {
+				[Symbol.asyncIterator]: async function* () {
+					yield [];
+					yield [];
+				},
+			},
+		};
+
+		const rejection = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
+		expect(rejection).toMatchObject({
+			...stream,
+			fromVersion: 0,
+			targetVersion: 2,
+		});
 	});
 
 	it("rejects a dirty replay target on a read without pages", async () => {
