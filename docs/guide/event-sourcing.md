@@ -256,13 +256,7 @@ systems, the event store's own stream position is the replay ordering authority.
 The kit defines a small driven port for stream persistence:
 
 ```ts
-interface EventStore<Evt extends AnyDomainEvent> {
-  append(
-    stream: AggregateAddress,
-    events: readonly Evt[],
-    options: { expectedVersion: number },
-  ): Promise<void>;
-
+interface EventStreamReader<Evt extends AnyDomainEvent> {
   readStream(
     stream: AggregateAddress,
     options: {
@@ -273,10 +267,22 @@ interface EventStore<Evt extends AnyDomainEvent> {
   ): Promise<StreamReadResult<Evt>>;
 }
 
+interface EventStore<Evt extends AnyDomainEvent>
+  extends EventStreamReader<Evt> {
+  append(
+    stream: AggregateAddress,
+    events: readonly Evt[],
+    options: { expectedVersion: number },
+  ): Promise<void>;
+}
+
 type StreamReadResult<Evt> =
   | { exists: false; lastVersion: 0; events: readonly [] }
   | { exists: true; lastVersion: number; events: readonly Evt[] };
 ```
+
+`EventStreamReader` is the read half. `readStreamPages` asks for that role
+alone, so a read-only store implements it without `append`.
 
 Use one stream per aggregate. Its key is the tuple `(aggregateType,
 aggregateId)`, not the raw id alone: `SalesOrder 1` and `FulfillmentOrder 1`
@@ -439,14 +445,15 @@ to track, and the iteration stops there: the kit reads no further page. A
 fold's `DomainError` names neither the stream nor the position, so a
 repository that rethrows `loaded.error` attaches `read.stream`,
 `read.fromVersion`, and `read.targetVersion`. Before the first page, the call
-checks that the replay target stands at `read.fromVersion`; when a page runs
-past `targetVersion`, or the replay does not end there, it throws
-`ReplayTargetMismatchError` with a `reason` that names the check. Allocation
-stays bounded by the page limit: the read keeps the first page, and each
-later page goes through `replayHistory` once.
+checks that the replay target stands at `read.fromVersion`. A page that
+would run past `targetVersion` is rejected before it is folded. A replay
+that ends short of `targetVersion` is rejected after the last page. Each
+case throws `ReplayTargetMismatchError` with a `reason` that names the
+check. Allocation stays bounded by the page limit: the read keeps the first
+page, and each later page goes through `replayHistory` once.
 
 The same recipe in long form, for an adapter that pages on its own, is in
-the [appendix](#appendix-a-reader-that-pages-on-its-own).
+the [appendix](#appendix-an-adapter-that-pages-on-its-own).
 
 `reconstituteAggregateFromHistory(create, history)` is the one-page form of
 the same call. It returns `Result<Order, DomainError>` for a history that is
@@ -651,8 +658,9 @@ misspelled code at compile time.
 
 `ReplayTargetMismatchError` and `NonProgressingEventStreamPageError` stay
 outside the discard set on purpose. After the check above, both mean the
-adapter contradicted its port contract, for example with an inclusive
-`fromVersion` slice, or a continuation that returns nothing. A refold from
+read contradicted its contract: an EventStore adapter its port, for example
+with an inclusive `fromVersion` slice or a continuation that returns
+nothing, or an adapter that pages on its own its own paging. A refold from
 zero cannot see such a defect, because position zero has no off-by-one. A
 discard would hide it behind a snapshot that the recipe deletes and rebuilds
 on every load. Every other error escapes too. `SnapshotVersionNotRestoredError` is a wiring bug in
@@ -879,7 +887,7 @@ migration changes stored state and bumps `AggregateSnapshot.schemaVersion`. A
 snapshot never carries the event schema version, and an event never carries the
 snapshot one.
 
-## Appendix: a reader that pages on its own
+## Appendix: an adapter that pages on its own
 
 `readStreamPages` and `reconstituteAggregateFromStreamPages` carry the
 recipe. An adapter that pages on its own, for example over a database
@@ -889,8 +897,8 @@ the stream, the window, and the pages. The cursor check, the target check,
 and the `Result` boundary stay the kit's:
 
 ```ts
-const head = await streamHead(address); // your own query, undefined when absent
-if (head === undefined) return null;
+const head = await streamHead(address); // your own query; undefined or 0 when absent
+if (head === undefined || head === 0) return null;
 
 const read: ReplayableStreamPages<OrderEvent> = {
   stream: address,
@@ -910,16 +918,17 @@ the first page. A store failure inside `pages` throws as is: the fold
 translates nothing, and the edge maps it. A test of the code that consumes
 such a read, a repository or the fold, builds the value from an in-memory
 tail with `createReplayableStreamPages` from `@shirudo/ddd-kit/testing`. It
-stands in for the reader; the reader's own rules need their own test.
+stands in for the adapter; the adapter's own rules need their own test.
 
-Such a reader keeps six rules. Decide the window before the fold: a cursor
-beyond the target, or a target beyond the head, is unreachable, never a
-fold. Pin the target: the head, or a requested `toVersion` at or below it.
-Pass the target as the upper bound of every later page. Advance the cursor
-by the number of events actually returned. Reject a page that makes no
-progress. Hand the pages to the kit fold, which validates the window,
-checks the start against the cursor, rejects an empty page and a page past
-the target, and checks the end against the target.
+Such an adapter keeps six rules. Decide the window before the fold: a head
+of `0` means absent, and a cursor beyond the target, or a target beyond the
+head, is unreachable; none of them is a fold. Pin the target: the head, or
+a requested `toVersion` at or below it. Pass the target as the upper bound
+of every later page. Advance the cursor by the number of events actually
+returned. Reject a page that makes no progress. Hand the pages to the kit
+fold. It validates the window, checks the start against the cursor,
+rejects an empty page and a page past the target, and checks the end
+against the target.
 
 The snapshot catch-up differs in three places. The cursor is
 `snapshot.version`, and a snapshot above the head fails the first rule. The

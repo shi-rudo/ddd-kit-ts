@@ -29,26 +29,32 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
-### Changed: the fold takes a replayable stream read
+### Changed (breaking): the fold takes a replayable stream read
 
 `reconstituteAggregateFromStreamPages` takes a `ReplayableStreamPages`
 value: the stream, `fromVersion`, `targetVersion`, and the pages. The
 reachable branch of a kit read extends that type. A kit read therefore
-passes after one guard on `reachable`. A reader that pages on its own
+passes after one guard on `reachable`. An adapter that pages on its own
 builds the value directly. It no longer carries the `exists` and
-`reachable` tags: every reader decides existence and reachability before
-the fold, and only a kit read reports that verdict on the value.
+`reachable` tags. Every read decides existence and reachability before the
+fold; only a kit read reports that verdict on the value.
 
-The fold guards a hand-built read. It validates the window before it
-builds the replay target: `targetVersion` is a positive safe integer,
-`fromVersion` a non-negative one at or below it; a bad window rejects with
-`RangeError`. It rejects an empty page with
-`NonProgressingEventStreamPageError` and a page past the target with
-`ReplayTargetMismatchError`, so an iterator that yields an empty page or
-overshoots fails instead of looping. `NonProgressingEventStreamPageError`
-carries a `reason`: `continuation_read` for a store page the kit reader
-got, `folded_page` for a page of a hand-built read; the message names the
-site. Constructors of that error pass the reason.
+The fold guards such a value. It validates the window before it builds the
+replay target: `targetVersion` is a positive safe integer, `fromVersion` a
+non-negative one at or below it; a bad window rejects with `RangeError`.
+It rejects an empty page with `NonProgressingEventStreamPageError`. It
+rejects a page that would run past the target with
+`ReplayTargetMismatchError` before it folds that page, and a replay that
+ends short of the target after the last page. An adapter that yields an
+empty page or overshoots therefore fails instead of looping.
+
+`NonProgressingEventStreamPageError` carries a required `reason`:
+`empty_page`, or `stream_vanished` when `readStream` reports the stream
+absent between two pages. The message names the condition, not a store.
+Code that constructs the error, as the rc.10 guides showed, passes the
+reason. `ReplayTargetMismatchError` gains the reason
+`pages_short_of_target`; `pages_outside_window` now names a page that
+would run past the target.
 
 `EventStore` extends `EventStreamReader`, the read half of the store.
 `readStreamPages` asks for that role only.
@@ -70,10 +76,10 @@ than the cursor, found before any page is read, or `pages_outside_window`
 when the fold does not end at the target. Rename the class and the code
 where you match on them. The rc.8 name is gone; no alias remains.
 
-The stream read types follow the same vocabulary. The branch a replay can
-fold is `ReachableStreamPages`, the absent branch is `AbsentStreamPages`,
-and both non-absent branches carry `fromVersion`. Neither name shipped in a
-release.
+The stream read types follow the same vocabulary. The reachable branch of
+a kit read is `ReachableStreamPages`, the absent branch is
+`AbsentStreamPages`, and both non-absent branches carry `fromVersion`.
+Neither name shipped in a release.
 
 ### Added: readStreamPages and reconstituteAggregateFromStreamPages carry the load recipe
 

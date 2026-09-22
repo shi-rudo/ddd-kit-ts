@@ -218,7 +218,7 @@ const concreteCases: ReadonlyArray<{
 			new NonProgressingEventStreamPageError({
 				aggregateType: "Order",
 				aggregateId: "o-1",
-				reason: "continuation_read",
+				reason: "empty_page",
 				fromVersion: 10,
 				targetVersion: 12,
 			}),

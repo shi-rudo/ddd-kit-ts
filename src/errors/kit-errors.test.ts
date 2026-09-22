@@ -24,7 +24,7 @@ describe("NonProgressingEventStreamPageError", () => {
 		const error = new NonProgressingEventStreamPageError({
 			aggregateType: "Order",
 			aggregateId: "order-1",
-			reason: "continuation_read",
+			reason: "empty_page",
 			fromVersion: 256,
 			targetVersion: 300,
 		});
@@ -36,6 +36,7 @@ describe("NonProgressingEventStreamPageError", () => {
 		expect(error.retryable).toBe(false);
 		expect(error.aggregateType).toBe("Order");
 		expect(error.aggregateId).toBe("order-1");
+		expect(error.reason).toBe("empty_page");
 		expect(error.fromVersion).toBe(256);
 		expect(error.targetVersion).toBe(300);
 		expect(error.message).toContain("Order(order-1)");

@@ -85,9 +85,9 @@ export interface UnreachableStreamPages {
 }
 
 /**
- * The shape a replay folds: the stream, the window, and the pages. The kit
- * reader returns it as the reachable branch of {@link StreamPages}; a
- * reader that pages on its own builds it directly.
+ * The shape a replay folds: the stream, the window, and the pages.
+ * `readStreamPages` returns it as the reachable branch of
+ * {@link StreamPages}; an adapter that pages on its own builds it directly.
  */
 export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	/** The qualified stream the pages come from. */
@@ -112,8 +112,9 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	 * first page, so a second fold over one read sees the same prefix. A
 	 * page holds at least one event, and the pages end at the target. The
 	 * fold rejects an empty page with
-	 * {@link NonProgressingEventStreamPageError} and a page past the target
-	 * with {@link ReplayTargetMismatchError}.
+	 * {@link NonProgressingEventStreamPageError}, and a page that would run
+	 * past the target with {@link ReplayTargetMismatchError} before it folds
+	 * that page.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
@@ -130,9 +131,9 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
  *
  * This call reads the first page. That page decides existence and reports
  * the head. The target is `toVersion` when given, else that head. The
- * reader never clamps a window that lies outside the stream. It reports
- * the window as unreachable. Each iteration of `pages` reads the remaining
- * pages lazily. The reader bounds every continuation page to the target
+ * read never clamps a window that lies outside the stream. It reports the
+ * window as unreachable. Each iteration of `pages` reads the remaining
+ * pages lazily. It bounds every continuation page to the target
  * with `toVersion`. It continues by the number of events the previous page
  * returned. It yields no empty page and throws
  * {@link NonProgressingEventStreamPageError} for a continuation page that
@@ -145,7 +146,7 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
  * reason before the next page.
  */
 export async function readStreamPages<Evt extends AnyDomainEvent>(
-	eventStore: EventStreamReader<Evt>,
+	reader: EventStreamReader<Evt>,
 	stream: AggregateAddress,
 	options: ReadStreamPagesOptions,
 ): Promise<StreamPages<Evt>> {
@@ -162,7 +163,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		aggregateType: stream.aggregateType,
 		aggregateId: stream.aggregateId,
 	};
-	const first = await eventStore.readStream(address, {
+	const first = await reader.readStream(address, {
 		fromVersion,
 		limit: options.limit,
 		...(options.toVersion === undefined
@@ -190,7 +191,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		fromVersion,
 		targetVersion,
 		pages: {
-			[Symbol.asyncIterator]: () => continueToPinnedTarget(eventStore, window),
+			[Symbol.asyncIterator]: () => continueToPinnedTarget(reader, window),
 		},
 	};
 }
@@ -205,22 +206,30 @@ interface PinnedWindow<Evt extends AnyDomainEvent> {
 }
 
 async function* continueToPinnedTarget<Evt extends AnyDomainEvent>(
-	eventStore: EventStreamReader<Evt>,
+	reader: EventStreamReader<Evt>,
 	window: PinnedWindow<Evt>,
 ): AsyncGenerator<ReadonlyArray<Evt>, void, undefined> {
 	if (window.firstPage.length > 0) yield window.firstPage;
 	let cursor = window.cursorAfterFirstPage;
 	while (cursor < window.targetVersion) {
 		throwIfAborted(window.signal);
-		const page = await eventStore.readStream(window.stream, {
+		const page = await reader.readStream(window.stream, {
 			fromVersion: cursor,
 			toVersion: window.targetVersion,
 			limit: window.limit,
 		});
-		if (!page.exists || page.events.length === 0) {
+		if (!page.exists) {
 			throw nonProgressingPage(
 				window.stream,
-				"continuation_read",
+				"stream_vanished",
+				cursor,
+				window.targetVersion,
+			);
+		}
+		if (page.events.length === 0) {
+			throw nonProgressingPage(
+				window.stream,
+				"empty_page",
 				cursor,
 				window.targetVersion,
 			);
@@ -256,7 +265,8 @@ function nonProgressingPage(
  * `createReplayTarget` builds the instance: a fresh one for a full replay,
  * or one restored from a snapshot for a read that started at
  * `snapshot.version`. `read` is a {@link ReplayableStreamPages}: the
- * reachable branch of a kit read, or a hand-built value. The target must
+ * reachable branch of a kit read, or the value an adapter that pages on its
+ * own built. The target must
  * carry no pending decisions. The fold
  * primes it with an empty history first, so the aggregate runs its own
  * replay-target guard even when the read holds no page; a dirty target
@@ -265,10 +275,11 @@ function nonProgressingPage(
  * another version throws {@link ReplayTargetMismatchError} before any page
  * is read. Each page goes through `replayHistory` on that instance, so
  * allocation stays bounded by the page limit. An empty page throws
- * {@link NonProgressingEventStreamPageError}, and a page past the target
- * throws {@link ReplayTargetMismatchError} at once. So a hand-built
- * iterator that yields an empty page, or one that overshoots, fails instead
- * of looping. The fold validates the window first: `targetVersion` is a
+ * {@link NonProgressingEventStreamPageError}. A page that would run past
+ * the target throws {@link ReplayTargetMismatchError} before it is folded,
+ * so no row of it reaches the aggregate. An adapter that yields an empty
+ * page, or one that overshoots, therefore fails instead of looping. The
+ * fold validates the window first: `targetVersion` is a
  * positive safe integer, `fromVersion` a non-negative one at or below it; a
  * bad window rejects with `RangeError` before the target is built.
  * `replayHistory` rolls back
@@ -277,10 +288,10 @@ function nonProgressingPage(
  * `Result`. Wiring errors and a foreign row throw, as in `replayHistory`.
  * The creator runs outside the `Result`.
  *
- * Events carry no stream position, so the instance cannot detect a page
- * that lies outside the requested window. The call therefore checks the
- * final version against `read.targetVersion` and throws
- * {@link ReplayTargetMismatchError} on a mismatch.
+ * Events carry no stream position, so the instance cannot detect pages
+ * that end short of the target. The call therefore checks the final
+ * version against `read.targetVersion` and throws
+ * {@link ReplayTargetMismatchError} when the pages ended early.
  */
 export async function reconstituteAggregateFromStreamPages<
 	TAggregate extends ReplayableAggregate<Id<string>, AnyDomainEvent>,
@@ -322,27 +333,27 @@ export async function reconstituteAggregateFromStreamPages<
 		if (page.length === 0) {
 			throw nonProgressingPage(
 				read.stream,
-				"folded_page",
+				"empty_page",
 				aggregate.version,
 				read.targetVersion,
 			);
 		}
-		const replayed = aggregate.replayHistory(page);
-		if (replayed.isErr()) return err(replayed.error);
-		if (aggregate.version > read.targetVersion) {
+		if (aggregate.version + page.length > read.targetVersion) {
 			throw new ReplayTargetMismatchError({
 				...read.stream,
 				reason: "pages_outside_window",
 				fromVersion: read.fromVersion,
 				targetVersion: read.targetVersion,
-				actualVersion: aggregate.version,
+				actualVersion: aggregate.version + page.length,
 			});
 		}
+		const replayed = aggregate.replayHistory(page);
+		if (replayed.isErr()) return err(replayed.error);
 	}
 	if (aggregate.version !== read.targetVersion) {
 		throw new ReplayTargetMismatchError({
 			...read.stream,
-			reason: "pages_outside_window",
+			reason: "pages_short_of_target",
 			fromVersion: read.fromVersion,
 			targetVersion: read.targetVersion,
 			actualVersion: aggregate.version,

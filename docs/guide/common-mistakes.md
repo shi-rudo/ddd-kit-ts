@@ -367,7 +367,8 @@ the first page's `lastVersion` or a requested `toVersion`, and passes it as
 advances `fromVersion` by the number of events actually returned, because
 adapters may return fewer than requested. A zero-length page before the
 pinned target is a violated adapter contract, not end-of-stream.
-`readStreamPages` throws `NonProgressingEventStreamPageError` for it, so the
+`readStreamPages` throws `NonProgressingEventStreamPageError` for it, and so
+does the fold for an empty page of an adapter that pages on its own; the
 stream address and both cursors survive into logs and telemetry.
 `reconstituteAggregateFromStreamPages` yields the aggregate only when the
 replay ends at the pinned target. Add it to the identity map after that, never

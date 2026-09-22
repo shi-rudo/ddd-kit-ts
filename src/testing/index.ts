@@ -9,9 +9,9 @@
  * entry provides the proof harnesses. It also ships
  * `createReplayableStreamPages`, a replayable stream read built from an
  * in-memory tail for a test of the code that consumes a read. Kept out of
- * the core barrel
- * so test-only code never rides into production bundles. Named exports
- * only; a module this file does not export is kit-internal test support.
+ * the core barrel so test-only code never rides into production bundles.
+ * Named exports only; a module this file does not export is kit-internal
+ * test support.
  */
 export {
 	type CommandOutboxContractEnvironment,

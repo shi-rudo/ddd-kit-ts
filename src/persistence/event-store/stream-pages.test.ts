@@ -144,8 +144,8 @@ class StallingEventStore<
 	}
 }
 
-/** Returns at most one event per page: a reader that pages shorter than the limit. */
-class ShortPageEventStore implements EventStreamReader<CounterEvent> {
+/** Returns at most one event per page: a store that pages shorter than the limit. */
+class ShortPageReader implements EventStreamReader<CounterEvent> {
 	constructor(private readonly inner: CountingEventStore<CounterEvent>) {}
 
 	get reads(): number {
@@ -295,7 +295,7 @@ describe("readStreamPages", () => {
 
 	it("advances the cursor by the events a short page returned", async () => {
 		const history = countedUpTo(5);
-		const store = new ShortPageEventStore(await seededStore(history));
+		const store = new ShortPageReader(await seededStore(history));
 
 		const read = await readReachable(store, { limit: 2 });
 		const pages = await collectPages(read.pages);
@@ -414,7 +414,7 @@ describe("readStreamPages", () => {
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
-			reason: "continuation_read",
+			reason: "empty_page",
 			fromVersion: 2,
 			targetVersion: 5,
 		});
@@ -434,7 +434,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({
-			reason: "continuation_read",
+			reason: "stream_vanished",
 			fromVersion: 2,
 			targetVersion: 3,
 		});
@@ -567,7 +567,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(store.reads).toBe(1);
 	});
 
-	it("throws ReplayTargetMismatchError when the pages do not reach the target", async () => {
+	it("throws ReplayTargetMismatchError when the pages end short of the target", async () => {
 		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(3),
@@ -582,7 +582,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
 		expect(rejection).toMatchObject({
 			...stream,
-			reason: "pages_outside_window",
+			reason: "pages_short_of_target",
 			fromVersion: 0,
 			targetVersion: 5,
 			actualVersion: 3,
@@ -614,7 +614,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
 	});
 
-	it("throws NonProgressingEventStreamPageError at the first empty hand-built page", async () => {
+	it("throws NonProgressingEventStreamPageError at the first empty page of an adapter", async () => {
 		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
@@ -640,14 +640,14 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(rejection).toBeInstanceOf(NonProgressingEventStreamPageError);
 		expect(rejection).toMatchObject({
 			...stream,
-			reason: "folded_page",
+			reason: "empty_page",
 			fromVersion: 2,
 			targetVersion: 3,
 		});
 		expect(pulls).toBe(2);
 	});
 
-	it("throws ReplayTargetMismatchError at the first hand-built page past the target", async () => {
+	it("throws ReplayTargetMismatchError at the first page of an adapter past the target", async () => {
 		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
@@ -676,6 +676,31 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			actualVersion: 4,
 		});
 		expect(pulls).toBe(2);
+	});
+
+	it("rejects a page past the target before it folds any row of it", async () => {
+		const read: ReplayableStreamPages<CounterEvent> = {
+			stream,
+			fromVersion: 0,
+			targetVersion: 3,
+			pages: {
+				[Symbol.asyncIterator]: async function* () {
+					yield [counted(1), counted(2)];
+					yield [counted(3), counted(4), poisoned()];
+				},
+			},
+		};
+
+		const rejection = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toMatchObject({
+			reason: "pages_outside_window",
+			actualVersion: 5,
+		});
 	});
 
 	it("rejects a target of version 0 before the replay target is built", async () => {

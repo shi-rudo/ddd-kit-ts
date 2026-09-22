@@ -72,11 +72,9 @@ export type StreamReadResult<Evt extends AnyDomainEvent> =
 	  };
 
 /**
- * The read half of the store: one bounded page of a stream. A read-only
- * repository, a read replica, or a paged replay asks a store for this role
- * alone. A write-side load that reads through a replica still appends to
- * the primary with the pinned target as `expectedVersion`; the primary
- * rejects a stale head, so a lagging replica cannot lose an update.
+ * The read half of the store: one bounded page of a stream at a time. A
+ * store implements both halves; a read-only implementation offers this
+ * role alone.
  */
 export interface EventStreamReader<Evt extends AnyDomainEvent> {
 	/**
@@ -219,6 +217,10 @@ export interface EventStore<Evt extends AnyDomainEvent>
 	 * An empty `events` array is a no-op; implementations resolve without
 	 * touching the store (an ES repository skips `append` for aggregates
 	 * without pending events anyway).
+	 *
+	 * A load that read its pages through a replica still appends here with
+	 * the pinned target as `expectedVersion`. The primary rejects a stale
+	 * head, so a lagging replica cannot lose an update.
 	 *
 	 * Treat `aggregateType` as a stable technical stream category. If two
 	 * bounded contexts share one physical store and reuse a domain name,
