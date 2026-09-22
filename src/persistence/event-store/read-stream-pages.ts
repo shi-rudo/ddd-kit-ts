@@ -87,6 +87,70 @@ export interface ReachableStreamPages<Evt extends AnyDomainEvent>
 	readonly reachable: true;
 }
 
+/** Options for {@link pinTargetVersion}. */
+export interface PinTargetVersionOptions {
+	/** The cursor of the read: the replay starts after this version. */
+	readonly fromVersion: number;
+
+	/** The version a point-in-time read asks for. Defaults to `lastVersion`. */
+	readonly toVersion?: number;
+
+	/** The head of the existing stream: its event count. */
+	readonly lastVersion: number;
+}
+
+/** The verdict of {@link pinTargetVersion}. */
+export type PinnedTargetVersion =
+	| { readonly reachable: true; readonly targetVersion: number }
+	| { readonly reachable: false };
+
+/**
+ * Pins the target version of a replay window on an existing stream, or
+ * reports the window as unreachable.
+ *
+ * The target version is `toVersion` when given, else `lastVersion`. The
+ * window is unreachable when `fromVersion` lies beyond the target version,
+ * or the target version lies beyond `lastVersion`. The call never clamps
+ * such a window to the head, so a request for version 10 of a stream that
+ * ends at 7 never loads the latest state by accident.
+ *
+ * This is the decision `readStreamPages` makes on its first page. An
+ * adapter that pages on its own makes it with this call, then hands its
+ * pages to `reconstituteAggregateFromStreamPages`. Values that are not safe
+ * integers, a negative `fromVersion`, and a `toVersion` or `lastVersion`
+ * below 1 reject with `RangeError`: an existing stream holds at least one
+ * event, and no replay can end at version 0.
+ */
+export function pinTargetVersion(
+	options: PinTargetVersionOptions,
+): PinnedTargetVersion {
+	assertNonNegativeSafeInteger(
+		"pinTargetVersion",
+		"fromVersion",
+		options.fromVersion,
+	);
+	if (options.toVersion !== undefined) {
+		assertPositiveSafeInteger(
+			"pinTargetVersion",
+			"toVersion",
+			options.toVersion,
+		);
+	}
+	assertPositiveSafeInteger(
+		"pinTargetVersion",
+		"lastVersion",
+		options.lastVersion,
+	);
+	const targetVersion = options.toVersion ?? options.lastVersion;
+	if (
+		options.fromVersion > targetVersion ||
+		targetVersion > options.lastVersion
+	) {
+		return { reachable: false };
+	}
+	return { reachable: true, targetVersion };
+}
+
 /**
  * Reads one stream in bounded pages toward a pinned target.
  *
@@ -134,16 +198,24 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 			: { toVersion: options.toVersion }),
 	});
 	if (!first.exists) return { exists: false, reachable: false };
-	const lastVersion = first.lastVersion;
-	const targetVersion = options.toVersion ?? lastVersion;
-	if (fromVersion > targetVersion || targetVersion > lastVersion) {
-		return { exists: true, reachable: false, fromVersion, lastVersion };
+	const pinned = pinTargetVersion({
+		fromVersion,
+		toVersion: options.toVersion,
+		lastVersion: first.lastVersion,
+	});
+	if (!pinned.reachable) {
+		return {
+			exists: true,
+			reachable: false,
+			fromVersion,
+			lastVersion: first.lastVersion,
+		};
 	}
 	const window: PinnedWindow<Evt> = {
 		stream: address,
 		firstPage: first.events,
 		cursorAfterFirstPage: fromVersion + first.events.length,
-		targetVersion,
+		targetVersion: pinned.targetVersion,
 		limit: options.limit,
 		signal: options.signal,
 	};
@@ -152,7 +224,7 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 		reachable: true,
 		stream: address,
 		fromVersion,
-		targetVersion,
+		targetVersion: pinned.targetVersion,
 		pages: {
 			[Symbol.asyncIterator]: () => continueToPinnedTarget(reader, window),
 		},

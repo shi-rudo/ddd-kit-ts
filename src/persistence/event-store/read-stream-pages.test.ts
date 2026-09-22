@@ -16,6 +16,7 @@ import type {
 	StreamReadResult,
 } from "./event-store";
 import {
+	pinTargetVersion,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
 	readStreamPages,
@@ -410,4 +411,51 @@ describe("readStreamPages", () => {
 			expect(store.reads).toBe(0);
 		},
 	);
+});
+
+describe("pinTargetVersion", () => {
+	it.each([
+		[0, undefined, 5, 5],
+		[2, undefined, 5, 5],
+		[5, undefined, 5, 5],
+		[0, 3, 5, 3],
+		[3, 3, 5, 3],
+		[0, 5, 5, 5],
+	])(
+		"pins fromVersion %s, toVersion %s on a stream at %s to target version %s",
+		(fromVersion, toVersion, lastVersion, targetVersion) => {
+			expect(pinTargetVersion({ fromVersion, toVersion, lastVersion })).toEqual(
+				{ reachable: true, targetVersion },
+			);
+		},
+	);
+
+	it.each([
+		[6, undefined, 5],
+		[4, 3, 5],
+		[0, 6, 5],
+		[7, 6, 5],
+	])(
+		"reports fromVersion %s, toVersion %s on a stream at %s as unreachable",
+		(fromVersion, toVersion, lastVersion) => {
+			expect(pinTargetVersion({ fromVersion, toVersion, lastVersion })).toEqual(
+				{ reachable: false },
+			);
+		},
+	);
+
+	it.each([
+		["fromVersion", { fromVersion: -1, lastVersion: 5 }],
+		["fromVersion", { fromVersion: 0.5, lastVersion: 5 }],
+		["toVersion", { fromVersion: 0, toVersion: 0, lastVersion: 5 }],
+		["lastVersion", { fromVersion: 0, lastVersion: 0 }],
+		[
+			"lastVersion",
+			{ fromVersion: 0, lastVersion: Number.MAX_SAFE_INTEGER + 1 },
+		],
+	])("rejects an invalid %s with RangeError", (field, window) => {
+		expect(() => pinTargetVersion(window)).toThrow(
+			new RegExp(`pinTargetVersion: ${field} must be`),
+		);
+	});
 });

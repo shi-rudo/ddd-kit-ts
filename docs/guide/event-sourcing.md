@@ -897,14 +897,16 @@ the stream, the window, and the pages. The cursor check, the target check,
 and the `Result` boundary stay the kit's:
 
 ```ts
-const head = await streamHead(address); // your own query; undefined or 0 when absent
-if (head === undefined || head === 0) return null;
+const head = await streamHead(address); // your own query; 0 when absent
+if (head === 0) return null;
+const pinned = pinTargetVersion({ fromVersion: 0, lastVersion: head });
+if (!pinned.reachable) return null;
 
 const read: ReplayableStreamPages<OrderEvent> = {
   stream: address,
   fromVersion: 0,
-  targetVersion: head,
-  pages: cursorPages(address, 0, head),
+  targetVersion: pinned.targetVersion,
+  pages: cursorPages(address, 0, pinned.targetVersion),
 };
 const loaded = await reconstituteAggregateFromStreamPages(
   () => Order.reconstitute(id),
@@ -920,15 +922,16 @@ such a read, a repository or the fold, builds the value from an in-memory
 tail with `createReplayableStreamPages` from `@shirudo/ddd-kit/testing`. It
 stands in for the adapter; the adapter's own rules need their own test.
 
-Such an adapter keeps six rules. Decide the window before the fold: a head
-of `0` means absent, and a cursor beyond the target, or a target beyond the
-head, is unreachable; none of them is a fold. Pin the target: the head, or
-a requested `toVersion` at or below it. Pass the target as the upper bound
-of every later page. Advance the cursor by the number of events actually
-returned. Reject a page that makes no progress. Hand the pages to the kit
-fold. It validates the window, checks the start against the cursor,
-rejects an empty page and a page past the target, and checks the end
-against the target.
+Such an adapter keeps six rules. Decide existence before the fold: a head of
+`0` means absent. Pin the target with `pinTargetVersion`, the decision
+`readStreamPages` makes on its first page: the head, or a requested
+`toVersion` at or below it. A cursor beyond the target, or a target beyond
+the head, is unreachable. Neither an absent stream nor an unreachable window
+is a fold. Pass the target as the upper bound of every later page. Advance
+the cursor by the number of events actually returned. Reject a page that
+makes no progress. Hand the pages to the kit fold. It validates the window,
+checks the start against the cursor, rejects an empty page and a page past
+the target, and checks the end against the target.
 
 The snapshot catch-up differs in three places. The cursor is
 `snapshot.version`, and a snapshot above the head fails the first rule. The

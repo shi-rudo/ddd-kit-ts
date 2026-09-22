@@ -435,6 +435,9 @@ export type {
 } from "./persistence/event-store/event-store";
 export {
 	type AbsentStreamPages,
+	type PinnedTargetVersion,
+	type PinTargetVersionOptions,
+	pinTargetVersion,
 	type ReachableStreamPages,
 	type ReadStreamPagesOptions,
 	readStreamPages,

@@ -126,6 +126,12 @@ page. `ReplayTargetMismatchError` names the failed check in its `reason`.
 `readStreamPages` accepts the `signal` of the surrounding unit of work and
 stops paging once it is aborted.
 
+`pinTargetVersion({ fromVersion, toVersion, lastVersion })` is the decision
+the read makes on its first page, as a pure function. It returns the
+target version, or `reachable: false` for a window outside the stream. An
+adapter that pages on its own pins its target with it, so it does not
+derive the rule again from prose.
+
 The event-store contract suite gains a proof that walks an adapter through
 `readStreamPages` and stops before an append that lands during the
 iteration. The event-sourcing, repository, and event-upcasting guides and

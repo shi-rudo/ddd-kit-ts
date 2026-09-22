@@ -238,6 +238,7 @@ const INDEX_SURFACE = [
 	"mergeMetadata",
 	"outboxWriterAcceptingEventLoss",
 	"persistenceProjectionDrifted",
+	"pinTargetVersion",
 	"prepareDomainMachineDefinition",
 	"projectionFromHandlers",
 	"readStreamPages",
