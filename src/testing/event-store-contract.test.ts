@@ -31,7 +31,7 @@ describe("event-store adapter contract", () => {
 			createDomainEvent("ContractStepRecorded", { sequence }, stream),
 	});
 
-	it("contains the qualified-stream isolation proof", () => {
+	it("lists every contract test by name", () => {
 		expect(contractTests.map(({ name }) => name)).toEqual([
 			"unknown stream: read reports explicit absence at version zero",
 			"empty append: no version check and no stream creation",

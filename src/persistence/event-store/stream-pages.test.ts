@@ -59,9 +59,17 @@ class Counter extends EventSourcedAggregate<
 		return new Counter(id, { total: 0 });
 	}
 
-	static fromSnapshot(id: CounterId, total: number, version: number): Counter {
-		const counter = new Counter(id, { total }, { trustInitialState: true });
-		counter.markReconstituted(version as Version);
+	static fromSnapshot(snapshot: {
+		id: CounterId;
+		total: number;
+		version: number;
+	}): Counter {
+		const counter = new Counter(
+			snapshot.id,
+			{ total: snapshot.total },
+			{ trustInitialState: true },
+		);
+		counter.markReconstituted(snapshot.version as Version);
 		return counter;
 	}
 
@@ -122,25 +130,23 @@ class CountingEventStore<Evt extends AnyDomainEvent>
 }
 
 /** Answers every continuation read with one fixed page: a broken adapter. */
-class StallingEventStore<
-	Evt extends AnyDomainEvent,
-> extends CountingEventStore<Evt> {
-	constructor(
-		inner: EventStore<Evt>,
-		private readonly continuation: StreamReadResult<Evt>,
-	) {
-		super(inner);
-	}
+class StallingEventReader<Evt extends AnyDomainEvent>
+	implements EventStreamReader<Evt>
+{
+	private firstPageRead = false;
 
-	override async readStream(
+	constructor(
+		private readonly inner: EventStreamReader<Evt>,
+		private readonly continuation: StreamReadResult<Evt>,
+	) {}
+
+	readStream(
 		address: AggregateAddress,
 		options: ReadStreamOptions,
 	): Promise<StreamReadResult<Evt>> {
-		if (this.reads > 0) {
-			this.reads += 1;
-			return this.continuation;
-		}
-		return super.readStream(address, options);
+		if (this.firstPageRead) return Promise.resolve(this.continuation);
+		this.firstPageRead = true;
+		return this.inner.readStream(address, options);
 	}
 }
 
@@ -376,9 +382,10 @@ describe("readStreamPages", () => {
 			limit: 2,
 		});
 
-		expect(read).toMatchObject({
+		expect(read).toEqual({
 			exists: true,
 			reachable: false,
+			fromVersion: 5,
 			lastVersion: 3,
 		});
 	});
@@ -392,20 +399,22 @@ describe("readStreamPages", () => {
 			limit: 2,
 		});
 
-		expect(read).toMatchObject({
+		expect(read).toEqual({
 			exists: true,
 			reachable: false,
+			fromVersion: 4,
 			lastVersion: 5,
 		});
 	});
 
 	it("throws NonProgressingEventStreamPageError when a continuation page returns no events", async () => {
-		const store = new StallingEventStore(
-			new InMemoryEventStore<CounterEvent>(),
-			{ exists: true, lastVersion: 5, events: [] },
-		);
-		await store.append(stream, countedUpTo(5), { expectedVersion: 0 });
-		const read = await readReachable(store, { limit: 2 });
+		const store = await seededStore(countedUpTo(5));
+		const reader = new StallingEventReader(store, {
+			exists: true,
+			lastVersion: 5,
+			events: [],
+		});
+		const read = await readReachable(reader, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -421,12 +430,13 @@ describe("readStreamPages", () => {
 	});
 
 	it("throws NonProgressingEventStreamPageError when a continuation page reports the stream absent", async () => {
-		const store = new StallingEventStore(
-			new InMemoryEventStore<CounterEvent>(),
-			{ exists: false, lastVersion: 0, events: [] },
-		);
-		await store.append(stream, countedUpTo(3), { expectedVersion: 0 });
-		const read = await readReachable(store, { limit: 2 });
+		const store = await seededStore(countedUpTo(3));
+		const reader = new StallingEventReader(store, {
+			exists: false,
+			lastVersion: 0,
+			events: [],
+		});
+		const read = await readReachable(reader, { limit: 2 });
 
 		const rejection = await collectPages(read.pages).catch(
 			(error: unknown) => error,
@@ -458,10 +468,37 @@ describe("readStreamPages", () => {
 	});
 });
 
+/** Counts the pages a consumer pulls, so a test can prove where it stopped. */
+function countingPulledPages<Evt extends AnyDomainEvent>(
+	read: ReplayableStreamPages<Evt>,
+): ReplayableStreamPages<Evt> & { readonly pulled: number } {
+	let pulled = 0;
+	return {
+		stream: read.stream,
+		fromVersion: read.fromVersion,
+		targetVersion: read.targetVersion,
+		get pulled(): number {
+			return pulled;
+		},
+		pages: {
+			async *[Symbol.asyncIterator]() {
+				for await (const page of read.pages) {
+					pulled += 1;
+					yield page;
+				}
+			},
+		},
+	};
+}
+
 describe("reconstituteAggregateFromStreamPages", () => {
-	it("folds every page and yields the aggregate at the pinned head", async () => {
-		const store = await seededStore(countedUpTo(5));
-		const read = await readReachable(store, { limit: 2 });
+	it("folds every page and yields the aggregate at the target version", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: 0,
+			tail: countedUpTo(5),
+			targetVersion: 5,
+			limit: 2,
+		});
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -476,14 +513,15 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("catches a snapshot up on the tail after its version only", async () => {
-		const store = await seededStore(countedUpTo(5));
-		const read = await readReachable(store, {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 2,
+			tail: countedUpTo(5).slice(2),
+			targetVersion: 5,
 			limit: 2,
 		});
 
 		const loaded = await reconstituteAggregateFromStreamPages(
-			() => Counter.fromSnapshot(counterId, 3, 2),
+			() => Counter.fromSnapshot({ id: counterId, total: 3, version: 2 }),
 			read,
 		);
 
@@ -492,32 +530,32 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.value.total).toBe(15);
 	});
 
-	it("loads a snapshot at the head without a page", async () => {
-		const store = await seededStore(countedUpTo(3));
-		const read = await readReachable(store, {
+	it("loads a snapshot at the target version from a read without pages", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 3,
-			limit: 2,
+			tail: [],
+			targetVersion: 3,
 		});
 
 		const loaded = await reconstituteAggregateFromStreamPages(
-			() => Counter.fromSnapshot(counterId, 6, 3),
+			() => Counter.fromSnapshot({ id: counterId, total: 6, version: 3 }),
 			read,
 		);
 
 		if (loaded.isErr()) throw loaded.error;
 		expect(loaded.value.version).toBe(3);
 		expect(loaded.value.total).toBe(6);
-		expect(store.reads).toBe(1);
 	});
 
-	it("returns Err and stops reading when a later page holds a row the fold rejects", async () => {
-		const store = await seededStore([
-			...countedUpTo(3),
-			poisoned(),
-			counted(5),
-			counted(6),
-		]);
-		const read = await readReachable(store, { limit: 2 });
+	it("returns Err and pulls no page after the one with a row the fold rejects", async () => {
+		const read = countingPulledPages(
+			createReplayableStreamPages<CounterEvent>(stream, {
+				fromVersion: 0,
+				tail: [...countedUpTo(3), poisoned(), counted(5), counted(6)],
+				targetVersion: 6,
+				limit: 2,
+			}),
+		);
 
 		const loaded = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -527,29 +565,17 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.isErr()).toBe(true);
 		if (loaded.isOk()) throw new Error("a poisoned row must not load");
 		expect(loaded.error).toBeInstanceOf(PoisonedRowError);
-		expect(store.reads).toBe(2);
-	});
-
-	it("folds a point-in-time read up to toVersion", async () => {
-		const store = await seededStore(countedUpTo(5));
-		const read = await readReachable(store, {
-			toVersion: 3,
-			limit: 2,
-		});
-
-		const loaded = await reconstituteAggregateFromStreamPages(
-			() => Counter.bare(counterId),
-			read,
-		);
-
-		if (loaded.isErr()) throw loaded.error;
-		expect(loaded.value.version).toBe(3);
-		expect(loaded.value.total).toBe(6);
+		expect(read.pulled).toBe(2);
 	});
 
 	it("throws ReplayTargetMismatchError before the first page when the replay target does not stand at the cursor", async () => {
-		const store = await seededStore(countedUpTo(5));
-		const read = await readReachable(store, { fromVersion: 2, limit: 2 });
+		const read = countingPulledPages(
+			createReplayableStreamPages<CounterEvent>(stream, {
+				fromVersion: 2,
+				tail: countedUpTo(5).slice(2),
+				targetVersion: 5,
+			}),
+		);
 
 		const rejection = await reconstituteAggregateFromStreamPages(
 			() => Counter.bare(counterId),
@@ -564,7 +590,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 			targetVersion: 5,
 			actualVersion: 0,
 		});
-		expect(store.reads).toBe(1);
+		expect(read.pulled).toBe(0);
 	});
 
 	it("throws ReplayTargetMismatchError when the pages end short of the target", async () => {
@@ -589,13 +615,13 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		});
 	});
 
-	it("returns Err when the replay target rejects the priming replay", async () => {
+	it("returns Err when a foreign implementation of ReplayableAggregate rejects an empty history", async () => {
 		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 0,
 			tail: countedUpTo(2),
 			targetVersion: 2,
 		});
-		const rejecting: ReplayableAggregate<CounterId, CounterEvent> = {
+		const rejectsEmptyHistory: ReplayableAggregate<CounterId, CounterEvent> = {
 			id: counterId,
 			version: 0 as Version,
 			pendingEvents: [],
@@ -604,7 +630,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		};
 
 		const loaded = await reconstituteAggregateFromStreamPages(
-			() => rejecting,
+			() => rejectsEmptyHistory,
 			read,
 		);
 
@@ -647,7 +673,7 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(pulls).toBe(2);
 	});
 
-	it("throws ReplayTargetMismatchError at the first page of an adapter past the target", async () => {
+	it("rejects the first page that runs past the target and pulls no further page", async () => {
 		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
 			stream,
@@ -749,13 +775,17 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("rejects a dirty replay target on a read without pages", async () => {
-		const store = await seededStore(countedUpTo(3));
-		const read = await readReachable(store, {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
 			fromVersion: 3,
-			limit: 2,
+			tail: [],
+			targetVersion: 3,
 		});
 		const dirtyTarget = (): Counter => {
-			const counter = Counter.fromSnapshot(counterId, 6, 3);
+			const counter = Counter.fromSnapshot({
+				id: counterId,
+				total: 6,
+				version: 3,
+			});
 			counter.count(1);
 			return counter;
 		};
@@ -766,8 +796,11 @@ describe("reconstituteAggregateFromStreamPages", () => {
 	});
 
 	it("lets a foreign row throw past the Result", async () => {
-		const store = await seededStore(countedUpTo(2));
-		const read = await readReachable(store, { limit: 2 });
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: 0,
+			tail: countedUpTo(2),
+			targetVersion: 2,
+		});
 
 		await expect(
 			reconstituteAggregateFromStreamPages(
@@ -775,5 +808,21 @@ describe("reconstituteAggregateFromStreamPages", () => {
 				read,
 			),
 		).rejects.toBeInstanceOf(ForeignEventError);
+	});
+});
+
+describe("readStreamPages with reconstituteAggregateFromStreamPages", () => {
+	it("loads the aggregate as of toVersion below the head", async () => {
+		const store = await seededStore(countedUpTo(5));
+		const read = await readReachable(store, { toVersion: 3, limit: 2 });
+
+		const loaded = await reconstituteAggregateFromStreamPages(
+			() => Counter.bare(counterId),
+			read,
+		);
+
+		if (loaded.isErr()) throw loaded.error;
+		expect(loaded.value.version).toBe(3);
+		expect(loaded.value.total).toBe(6);
 	});
 });
