@@ -75,7 +75,9 @@ const concreteCases: ReadonlyArray<{
 }> = [
 	{
 		error: () =>
-			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
 		code: "AGGREGATE_NOT_FOUND",
 		category: "INFRASTRUCTURE",
 		retryable: false,
@@ -84,8 +86,7 @@ const concreteCases: ReadonlyArray<{
 		error: () =>
 			new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 1,
 				actualVersion: 2,
 			}),
@@ -96,8 +97,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new DuplicateAggregateError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			}),
 		code: "DUPLICATE_AGGREGATE",
 		category: "INFRASTRUCTURE",
@@ -106,8 +106,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new SnapshotSchemaMismatchError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedSchemaVersion: 2,
 				actualSchemaVersion: 1,
 			}),
@@ -118,8 +117,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new SnapshotVersionNotRestoredError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				snapshotVersion: 7,
 				restoredVersion: 0,
 			}),
@@ -177,8 +175,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new PendingEventLimitExceededError({
-				aggregateType: "Order",
-				aggregateId: "order-1",
+				identity: { aggregateType: "Order", aggregateId: "order-1" },
 				limit: 2,
 				pending: 2,
 				added: 1,
@@ -223,8 +220,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new InvalidEventStreamPageError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				reason: "empty_page",
 				fromVersion: 10,
 				targetVersion: 12,
@@ -236,8 +232,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new ReplayTargetMismatchError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				reason: "pages_short_of_target",
 				fromVersion: 10,
 				targetVersion: 12,
@@ -250,8 +245,7 @@ const concreteCases: ReadonlyArray<{
 	{
 		error: () =>
 			new ReplayRejectedError({
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				fromVersion: 10,
 				toVersion: 12,
 				cause: new RowRejectedError(),
@@ -377,8 +371,7 @@ describe("kit errors are StructuredErrors (code = name = the one identifier)", (
 		const status = matchError(
 			new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 1,
 				actualVersion: 2,
 			}),
@@ -479,8 +472,7 @@ describe("the no-base-error consumer path is first-class", () => {
 	it("branches with a plain switch on error.code and plain property reads", () => {
 		const error: unknown = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 1,
 			actualVersion: 2,
 		});
@@ -508,8 +500,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	it("carries the fields of an infrastructure error", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -518,8 +509,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 			code: "CONCURRENCY_CONFLICT",
 			category: "INFRASTRUCTURE",
 			retryable: true,
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -527,8 +517,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 
 	it("carries the fields of a wiring error", () => {
 		const error = new InvalidFlushStatementError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			intent: "update",
 			reason: "no_row_count",
 			received: "1 (bigint)",
@@ -584,8 +573,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 
 	it("leaves the internals of the envelope out", () => {
 		const error = new ConcurrencyConflictError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			reason: "stale_version",
 			actualVersion: 5,
@@ -603,8 +591,7 @@ describe("a serialized kit error keeps the fields it declares", () => {
 	it("does not let a declared field overwrite the envelope", () => {
 		const error = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});

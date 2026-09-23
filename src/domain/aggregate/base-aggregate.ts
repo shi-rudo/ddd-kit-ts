@@ -384,8 +384,10 @@ export abstract class BaseAggregate<
 		const pending = this._pendingEvents.length;
 		if (pending + added <= limit) return;
 		throw new PendingEventLimitExceededError({
-			aggregateType: this.aggregateType,
-			aggregateId: String(this.id),
+			identity: {
+				aggregateType: this.aggregateType,
+				aggregateId: String(this.id),
+			},
 			limit,
 			pending,
 			added,

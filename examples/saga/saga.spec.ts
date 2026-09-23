@@ -55,8 +55,7 @@ function inMemoryStore<
 			const a = store.get(id);
 			if (!a) {
 				throw new AggregateNotFoundError({
-					aggregateType: name,
-					id,
+					identity: { aggregateType: name, aggregateId: id },
 				});
 			}
 			return a;
@@ -68,8 +67,7 @@ function inMemoryStore<
 		async update(agg) {
 			if (!store.has(agg.id)) {
 				throw new AggregateNotFoundError({
-					aggregateType: name,
-					id: agg.id,
+					identity: { aggregateType: name, aggregateId: agg.id },
 				});
 			}
 			store.set(agg.id, agg);

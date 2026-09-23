@@ -25,7 +25,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("is a non-retryable infrastructure error with one code for every reason", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -37,7 +37,7 @@ describe("InvalidEventStreamPageError", () => {
 		expect(error.category).toBe("INFRASTRUCTURE");
 		expect(error.retryable).toBe(false);
 		expect(error).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -46,7 +46,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names an empty page with its cursor and target version", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -59,7 +59,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names a vanished stream with its cursor and target version", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "stream_vanished",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -71,7 +71,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names a page past the target with its size and the room left", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "page_past_target",
 			fromVersion: 298,
 			targetVersion: 300,
@@ -85,7 +85,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names a page over the limit with its size and the limit", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "page_over_limit",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -100,7 +100,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names a regressed head with both heads", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "head_regressed",
 			fromVersion: 256,
 			targetVersion: 300,
@@ -116,7 +116,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names a head below 1 and pins no target version on the first page", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "invalid_head",
 			fromVersion: 0,
 			lastVersion: 0,
@@ -131,7 +131,7 @@ describe("InvalidEventStreamPageError", () => {
 		const head = Object.create(null) as object;
 
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "invalid_head",
 			fromVersion: 0,
 			lastVersion: head,
@@ -143,7 +143,7 @@ describe("InvalidEventStreamPageError", () => {
 
 	it("names the type of a head that is not a number", () => {
 		const error = new InvalidEventStreamPageError({
-			...stream,
+			identity: stream,
 			reason: "invalid_head",
 			fromVersion: 0,
 			lastVersion: "5",
@@ -164,8 +164,7 @@ describe("ReplayRejectedError", () => {
 	it("carries the stream, the window of the rejected page, and the domain error as cause", () => {
 		const cause = new RowRejectedError();
 		const error = new ReplayRejectedError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			fromVersion: 256,
 			toVersion: 300,
 			cause,
@@ -176,8 +175,7 @@ describe("ReplayRejectedError", () => {
 		expect(error).toBeInstanceOf(InfrastructureError);
 		expect(error.retryable).toBe(false);
 		expect(error).toMatchObject({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			fromVersion: 256,
 			toVersion: 300,
 		});
@@ -189,8 +187,7 @@ describe("ReplayRejectedError", () => {
 
 	it("names a rejected empty history when the window is empty", () => {
 		const error = new ReplayRejectedError({
-			aggregateType: "Order",
-			aggregateId: "order-1",
+			identity: { aggregateType: "Order", aggregateId: "order-1" },
 			fromVersion: 4,
 			toVersion: 4,
 			cause: new RowRejectedError(),
@@ -329,16 +326,19 @@ describe("UnreplayableAggregateError", () => {
 
 describe("AggregateNotFoundError", () => {
 	it("carries aggregate type and id in the technical message", () => {
-		const e = new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" });
-		expect(e.aggregateType).toBe("Order");
-		expect(e.id).toBe("o-1");
+		const e = new AggregateNotFoundError({
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
+		});
+		expect(e.identity).toEqual({ aggregateType: "Order", aggregateId: "o-1" });
 		expect(e.message).toContain("Order(o-1)"); // technical
 	});
 
 	it("is NOT retryable: the row isn't there; retry won't help", () => {
 		expect(
 			isRetryable(
-				new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+				new AggregateNotFoundError({
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
+				}),
 			),
 		).toBe(false);
 	});
@@ -346,8 +346,7 @@ describe("AggregateNotFoundError", () => {
 	it("preserves a wrapped driver error via cause", () => {
 		const driverErr = new Error("postgres: no rows in result set");
 		const e = new AggregateNotFoundError({
-			aggregateType: "Order",
-			id: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			cause: driverErr,
 		});
 		expect(getRootCause(e)).toBe(driverErr);
@@ -357,19 +356,16 @@ describe("AggregateNotFoundError", () => {
 describe("DuplicateAggregateError", () => {
 	it("carries aggregate type and id in the technical message", () => {
 		const e = new DuplicateAggregateError({
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 		});
-		expect(e.aggregateType).toBe("Order");
-		expect(e.aggregateId).toBe("o-1");
+		expect(e.identity).toEqual({ aggregateType: "Order", aggregateId: "o-1" });
 		expect(e.name).toBe("DUPLICATE_AGGREGATE");
 		expect(e.message).toContain("Order(o-1)"); // technical
 	});
 
 	it("is an InfrastructureError and NOT retryable: re-running the same INSERT cannot succeed", () => {
 		const e = new DuplicateAggregateError({
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 		});
 		expect(e).toBeInstanceOf(InfrastructureError);
 		expect(isRetryable(e)).toBe(false);
@@ -380,8 +376,7 @@ describe("DuplicateAggregateError", () => {
 			code: "23505",
 		});
 		const e = new DuplicateAggregateError({
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			cause: driverErr,
 		});
 		expect(getRootCause(e)).toBe(driverErr);
@@ -392,13 +387,11 @@ describe("ConcurrencyConflictError", () => {
 	it("carries expected/actual versions for OCC reporting", () => {
 		const e = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
-		expect(e.aggregateType).toBe("Order");
-		expect(e.aggregateId).toBe("o-1");
+		expect(e.identity).toEqual({ aggregateType: "Order", aggregateId: "o-1" });
 		expect(e.expectedVersion).toBe(3);
 		expect(e.actualVersion).toBe(5);
 		expect(e.message).toContain("expected version 3");
@@ -408,8 +401,7 @@ describe("ConcurrencyConflictError", () => {
 	it("marks itself retryable so isRetryable picks it up: the OCC reload-and-retry pattern", () => {
 		const e = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -429,8 +421,7 @@ describe("ConcurrencyConflictError", () => {
 		}
 		const root = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});
@@ -445,8 +436,7 @@ describe("ConcurrencyConflictError", () => {
 	it("serialises to JSON with name, message, and timestamp for structured logging", () => {
 		const e = new ConcurrencyConflictError({
 			reason: "stale_version",
-			aggregateType: "Order",
-			aggregateId: "o-1",
+			identity: { aggregateType: "Order", aggregateId: "o-1" },
 			expectedVersion: 3,
 			actualVersion: 5,
 		});

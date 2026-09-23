@@ -1388,8 +1388,7 @@ describe("maxPendingEvents on the state-stored path", () => {
 		expect(() => aggregate.note(2)).toThrow(
 			expect.objectContaining({
 				code: "PENDING_EVENT_LIMIT_EXCEEDED",
-				aggregateType: "LimitedAggregate",
-				aggregateId: "test-1",
+				identity: { aggregateType: "LimitedAggregate", aggregateId: "test-1" },
 				limit: 2,
 				pending: 1,
 				added: 2,

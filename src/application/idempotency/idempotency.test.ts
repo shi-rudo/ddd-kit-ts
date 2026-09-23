@@ -320,8 +320,7 @@ describe("withIdempotentCommit", () => {
 			if (executions === 1) {
 				throw new ConcurrencyConflictError({
 					reason: "stale_version",
-					aggregateType: "Order",
-					aggregateId: "o-1",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
 					expectedVersion: 1,
 					actualVersion: 2,
 				});

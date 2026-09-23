@@ -548,8 +548,7 @@ flush: async (tx: DrizzleTx, write) => {
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
       throw new DuplicateAggregateError({
-        aggregateType: "Order",
-        aggregateId: write.aggregateId,
+        identity: { aggregateType: "Order", aggregateId: write.aggregateId },
         cause: error,
       });
     }
@@ -567,8 +566,7 @@ flush: async (tx: DrizzleTx, write) => {
   if (matchedRows > 0) return;
 
   throw new ConcurrencyConflictError({
-    aggregateType: "Order",
-    aggregateId: write.aggregateId,
+    identity: { aggregateType: "Order", aggregateId: write.aggregateId },
     expectedVersion,
     ...(await orderConflictReason(tx, write.aggregateId, expectedVersion)),
   });

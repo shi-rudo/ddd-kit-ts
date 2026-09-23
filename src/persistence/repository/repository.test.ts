@@ -92,7 +92,9 @@ describe("Repository contract", () => {
 				}
 
 				async getById(id: OrderId): Promise<Order> {
-					throw new AggregateNotFoundError({ aggregateType: "Order", id });
+					throw new AggregateNotFoundError({
+						identity: { aggregateType: "Order", aggregateId: id },
+					});
 				}
 
 				add(aggregate: Order): void {
@@ -165,7 +167,9 @@ describe("Repository contract", () => {
 				}
 
 				async getById(id: OrderId): Promise<Order> {
-					throw new AggregateNotFoundError({ aggregateType: "Order", id });
+					throw new AggregateNotFoundError({
+						identity: { aggregateType: "Order", aggregateId: id },
+					});
 				}
 
 				add(): void {}
@@ -196,8 +200,7 @@ describe("Repository contract", () => {
 		it("library errors carry timestamp + name from BaseError", () => {
 			const before = Date.now();
 			const e = new AggregateNotFoundError({
-				aggregateType: "Order",
-				id: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			});
 			const after = Date.now();
 
@@ -209,8 +212,7 @@ describe("Repository contract", () => {
 
 		it("AggregateNotFoundError carries the aggregate type and id in its technical message", () => {
 			const e = new AggregateNotFoundError({
-				aggregateType: "Order",
-				id: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			});
 
 			expect(e.message).toContain("Order(o-1)"); // technical
@@ -220,8 +222,7 @@ describe("Repository contract", () => {
 			const { isRetryable } = await import("@shirudo/base-error");
 			const e = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 5,
 			});
@@ -233,8 +234,7 @@ describe("Repository contract", () => {
 		it("AggregateNotFoundError is NOT retryable (the row isn't there; retry won't help)", async () => {
 			const { isRetryable } = await import("@shirudo/base-error");
 			const e = new AggregateNotFoundError({
-				aggregateType: "Order",
-				id: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			});
 
 			expect(isRetryable(e)).toBe(false);
@@ -243,8 +243,7 @@ describe("Repository contract", () => {
 		it("library errors serialise to JSON for structured logging", () => {
 			const e = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 5,
 			});
@@ -272,8 +271,7 @@ describe("Repository contract", () => {
 
 			const root = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 5,
 			});
@@ -292,8 +290,7 @@ describe("Repository contract", () => {
 	describe("Error hierarchy: InfrastructureError vs DomainError", () => {
 		it("AggregateNotFoundError is an InfrastructureError, not a DomainError", () => {
 			const error = new AggregateNotFoundError({
-				aggregateType: "Order",
-				id: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 			});
 			expect(error).toBeInstanceOf(InfrastructureError);
 			expect(isBaseError(error)).toBe(true);
@@ -303,8 +300,7 @@ describe("Repository contract", () => {
 		it("ConcurrencyConflictError is an InfrastructureError, not a DomainError", () => {
 			const error = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 5,
 			});
@@ -333,14 +329,15 @@ describe("Repository contract", () => {
 		it("carries aggregate type, id, expected and actual versions", () => {
 			const error = new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 3,
 				actualVersion: 5,
 			});
 			expect(error).toBeInstanceOf(InfrastructureError);
-			expect(error.aggregateType).toBe("Order");
-			expect(error.aggregateId).toBe("o-1");
+			expect(error.identity).toEqual({
+				aggregateType: "Order",
+				aggregateId: "o-1",
+			});
 			expect(error.expectedVersion).toBe(3);
 			expect(error.actualVersion).toBe(5);
 			expect(error.message).toContain("Order(o-1)");
@@ -352,8 +349,7 @@ describe("Repository contract", () => {
 			const flush = () => {
 				throw new ConcurrencyConflictError({
 					reason: "stale_version",
-					aggregateType: "Order",
-					aggregateId: "o-1",
+					identity: { aggregateType: "Order", aggregateId: "o-1" },
 					expectedVersion: 3,
 					actualVersion: 4,
 				});

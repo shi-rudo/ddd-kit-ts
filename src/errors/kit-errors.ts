@@ -726,8 +726,11 @@ export class MisattributedEventError extends KitWiringError<"MISATTRIBUTED_EVENT
 
 /** Constructor options for {@link SnapshotVersionNotRestoredError}. */
 export interface SnapshotVersionNotRestoredErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The version the snapshot carries. */
 	readonly snapshotVersion: number;
 	/** The version the factory's aggregate reports. */
@@ -743,23 +746,21 @@ export interface SnapshotVersionNotRestoredErrorOptions {
  * channel would mask it as perpetual silent refolding.
  */
 export class SnapshotVersionNotRestoredError extends KitWiringError<"SNAPSHOT_VERSION_NOT_RESTORED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: SnapshotVersionNotRestoredErrorOptions["identity"];
 	readonly snapshotVersion: number;
 	readonly restoredVersion: number;
 
 	constructor(options: SnapshotVersionNotRestoredErrorOptions) {
 		super(
 			"SNAPSHOT_VERSION_NOT_RESTORED",
-			`SnapshotModel.reconstitute for ${options.aggregateType} ` +
-				`${options.aggregateId} returned an aggregate at version ` +
+			`SnapshotModel.reconstitute for ${options.identity.aggregateType} ` +
+				`${options.identity.aggregateId} returned an aggregate at version ` +
 				`${options.restoredVersion} for a snapshot at version ` +
 				`${options.snapshotVersion}. Reconstitution must restore ` +
 				"the persisted version; call markReconstituted(version) inside " +
 				"the aggregate factory.",
 		);
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.snapshotVersion = options.snapshotVersion;
 		this.restoredVersion = options.restoredVersion;
 	}
@@ -862,8 +863,11 @@ export class DuplicateEventIdError extends KitWiringError<"DUPLICATE_EVENT_ID"> 
 
 /** Constructor options for {@link PendingEventLimitExceededError}. */
 export interface PendingEventLimitExceededErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The configured `maxPendingEvents`. */
 	readonly limit: number;
 	/** Events pending before the rejected recording. */
@@ -882,8 +886,7 @@ export interface PendingEventLimitExceededErrorOptions {
  * per decision.
  */
 export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVENT_LIMIT_EXCEEDED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: PendingEventLimitExceededErrorOptions["identity"];
 	readonly limit: number;
 	readonly pending: number;
 	readonly added: number;
@@ -891,14 +894,13 @@ export class PendingEventLimitExceededError extends KitWiringError<"PENDING_EVEN
 	constructor(options: PendingEventLimitExceededErrorOptions) {
 		super(
 			"PENDING_EVENT_LIMIT_EXCEEDED",
-			`Aggregate ${options.aggregateType}(${options.aggregateId}) holds ` +
+			`Aggregate ${options.identity.aggregateType}(${options.identity.aggregateId}) holds ` +
 				`${options.pending} pending event(s) and cannot record ` +
 				`${options.added} more: maxPendingEvents is ${options.limit}. ` +
 				"A decision that emits this many facts points at a missing " +
 				"aggregate boundary.",
 		);
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.limit = options.limit;
 		this.pending = options.pending;
 		this.added = options.added;
@@ -979,8 +981,11 @@ export type EventStreamPageReason =
 
 /** Constructor options for {@link InvalidEventStreamPageError}. */
 export interface InvalidEventStreamPageErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** How the page breaks the contract; see {@link EventStreamPageReason}. */
 	readonly reason: EventStreamPageReason;
 	/** The exclusive cursor the page followed. */
@@ -1095,8 +1100,7 @@ function eventStreamPageReasonMessage(
  * the replay, because the replay counts one version per event.
  */
 export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EVENT_STREAM_PAGE"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: InvalidEventStreamPageErrorOptions["identity"];
 	readonly reason: EventStreamPageReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number | undefined;
@@ -1106,13 +1110,12 @@ export class InvalidEventStreamPageError extends InfrastructureError<"INVALID_EV
 	readonly limit: number | undefined;
 
 	constructor(options: InvalidEventStreamPageErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
 		super({
 			code: "INVALID_EVENT_STREAM_PAGE",
 			message: eventStreamPageReasonMessage(stream, options),
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1130,8 +1133,11 @@ export type ReplayTargetMismatchReason =
 
 /** Constructor options for {@link ReplayTargetMismatchError}. */
 export interface ReplayTargetMismatchErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** The check that failed; see {@link ReplayTargetMismatchReason}. */
 	readonly reason: ReplayTargetMismatchReason;
 	/** The cursor the read started at; the replay target must start here. */
@@ -1187,19 +1193,17 @@ function replayTargetMismatchMessage(
  * and an adapter that pages on its own must do the same.
  */
 export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGET_MISMATCH"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ReplayTargetMismatchErrorOptions["identity"];
 	readonly reason: ReplayTargetMismatchReason;
 	readonly fromVersion: number;
 	readonly targetVersion: number;
 	readonly actualVersion: number;
 
 	constructor(options: ReplayTargetMismatchErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
 		const message = replayTargetMismatchMessage(stream, options);
 		super({ code: "REPLAY_TARGET_MISMATCH", message });
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.reason = options.reason;
 		this.fromVersion = options.fromVersion;
 		this.targetVersion = options.targetVersion;
@@ -1209,8 +1213,11 @@ export class ReplayTargetMismatchError extends InfrastructureError<"REPLAY_TARGE
 
 /** Constructor options for {@link ReplayRejectedError}. */
 export interface ReplayRejectedErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/**
 	 * The version the aggregate held before the rejected page. With
 	 * `toVersion`, it bounds the window `(fromVersion, toVersion]` of the
@@ -1235,14 +1242,13 @@ export interface ReplayRejectedErrorOptions {
  * empty history before the first page.
  */
 export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ReplayRejectedErrorOptions["identity"];
 	readonly fromVersion: number;
 	readonly toVersion: number;
 	declare readonly cause: DomainError;
 
 	constructor(options: ReplayRejectedErrorOptions) {
-		const stream = `${options.aggregateType}(${options.aggregateId})`;
+		const stream = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
 		const rejected = `${options.cause.code}: ${options.cause.message}`;
 		super({
 			code: "REPLAY_REJECTED",
@@ -1254,8 +1260,7 @@ export class ReplayRejectedError extends InfrastructureError<"REPLAY_REJECTED"> 
 						`(${options.fromVersion}, ${options.toVersion}] with ${rejected}`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.fromVersion = options.fromVersion;
 		this.toVersion = options.toVersion;
 	}
@@ -1544,24 +1549,25 @@ export class AggregateDeletedError extends KitWiringError<"AGGREGATE_DELETED"> {
  * Not retryable: retrying won't make the row appear.
  */
 export interface AggregateNotFoundErrorOptions {
-	readonly aggregateType: string;
-	readonly id: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** Optional lower-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
 
 export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_FOUND"> {
-	readonly aggregateType: string;
-	readonly id: string;
+	readonly identity: AggregateNotFoundErrorOptions["identity"];
 
 	constructor(options: AggregateNotFoundErrorOptions) {
 		super({
 			code: "AGGREGATE_NOT_FOUND",
-			message: `Aggregate not found: ${options.aggregateType}(${options.id})`,
+			message: `Aggregate not found: ${options.identity.aggregateType}(${options.identity.aggregateId})`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.id = options.id;
+		this.identity = options.identity;
 	}
 }
 
@@ -1585,24 +1591,25 @@ export class AggregateNotFoundError extends InfrastructureError<"AGGREGATE_NOT_F
  * request as already-applied.
  */
 export interface DuplicateAggregateErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
 }
 
 export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGREGATE"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: DuplicateAggregateErrorOptions["identity"];
 
 	constructor(options: DuplicateAggregateErrorOptions) {
 		super({
 			code: "DUPLICATE_AGGREGATE",
-			message: `Duplicate aggregate: ${options.aggregateType}(${options.aggregateId}) already exists`,
+			message: `Duplicate aggregate: ${options.identity.aggregateType}(${options.identity.aggregateId}) already exists`,
 			cause: options.cause,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 	}
 }
 
@@ -1622,15 +1629,17 @@ export class DuplicateAggregateError extends InfrastructureError<"DUPLICATE_AGGR
  * truth.
  */
 export interface SnapshotSchemaMismatchErrorOptions {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 }
 
 export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_SCHEMA_MISMATCH"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: SnapshotSchemaMismatchErrorOptions["identity"];
 	readonly expectedSchemaVersion: number;
 	readonly actualSchemaVersion: number;
 
@@ -1638,14 +1647,13 @@ export class SnapshotSchemaMismatchError extends InfrastructureError<"SNAPSHOT_S
 		super({
 			code: "SNAPSHOT_SCHEMA_MISMATCH",
 			message:
-				`Snapshot schema mismatch on ${options.aggregateType}(${options.aggregateId}): ` +
+				`Snapshot schema mismatch on ${options.identity.aggregateType}(${options.identity.aggregateId}): ` +
 				`the snapshot model expects schema ${options.expectedSchemaVersion}, ` +
 				`the stored snapshot carries ${options.actualSchemaVersion}. Override ` +
 				`the model's migrate function to upgrade old snapshots, or discard the snapshot ` +
 				`and refold from the full event stream.`,
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.expectedSchemaVersion = options.expectedSchemaVersion;
 		this.actualSchemaVersion = options.actualSchemaVersion;
 	}
@@ -1686,8 +1694,11 @@ export type ConcurrencyConflictReason =
 	| "version_unknown";
 
 export type ConcurrencyConflictErrorOptions = {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	/** The aggregate the error names. */
+	readonly identity: {
+		readonly aggregateType: string;
+		readonly aggregateId: string;
+	};
 	readonly expectedVersion: number;
 	/** Optional driver-level error to preserve in the cause chain. */
 	readonly cause?: unknown;
@@ -1724,8 +1735,7 @@ export type ConcurrencyConflictErrorOptions = {
  * but `version_unchanged`, which names a defect of the adapter.
  */
 export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_CONFLICT"> {
-	readonly aggregateType: string;
-	readonly aggregateId: string;
+	readonly identity: ConcurrencyConflictErrorOptions["identity"];
 	readonly expectedVersion: number;
 	/** The stored version, or `null` when none exists to name. */
 	readonly actualVersion: number | null;
@@ -1743,8 +1753,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 			// repeats it, so that one reason is not retryable.
 			retryable: options.reason !== "version_unchanged",
 		});
-		this.aggregateType = options.aggregateType;
-		this.aggregateId = options.aggregateId;
+		this.identity = options.identity;
 		this.expectedVersion = options.expectedVersion;
 		this.actualVersion = options.actualVersion ?? null;
 		this.reason = options.reason;
@@ -1754,7 +1763,7 @@ export class ConcurrencyConflictError extends InfrastructureError<"CONCURRENCY_C
 function concurrencyConflictMessage(
 	options: ConcurrencyConflictErrorOptions,
 ): string {
-	const site = `${options.aggregateType}(${options.aggregateId})`;
+	const site = `${options.identity.aggregateType}(${options.identity.aggregateId})`;
 	switch (options.reason) {
 		case "stale_version":
 			return (

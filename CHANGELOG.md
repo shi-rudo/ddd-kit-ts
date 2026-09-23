@@ -29,6 +29,35 @@ The sections below explain each change. The
 [v3 migration and coordinated-cutover guide](docs/guide/migrating-to-v3.md)
 gives a before-and-after example for each breaking change.
 
+### Changed (breaking): kit errors carry the aggregate identity as one value
+
+An aggregate id is unique only together with its aggregate type, so the
+pair is one value: `AggregateIdentity`. Ten kit errors split it into two
+fields, and every reader had to put them together again. They now carry
+one `identity` field of the shape `{ aggregateType, aggregateId }`, the same
+field on every error, so a handler, a log query, or an alert finds the
+aggregate under one name.
+
+The errors are `ConcurrencyConflictError`, `DuplicateAggregateError`,
+`AggregateNotFoundError`, `SnapshotSchemaMismatchError`,
+`SnapshotVersionNotRestoredError`, `PendingEventLimitExceededError`,
+`InvalidFlushStatementError`, `InvalidEventStreamPageError`,
+`ReplayTargetMismatchError`, and `ReplayRejectedError`. An adapter that
+throws one of them passes the identity; a catch block that reads the fields
+reads them from `identity`.
+
+| Before | After |
+| --- | --- |
+| `new ConcurrencyConflictError({ aggregateType, aggregateId, expectedVersion, reason, actualVersion })` | `new ConcurrencyConflictError({ identity: { aggregateType, aggregateId }, expectedVersion, reason, actualVersion })` |
+| `new AggregateNotFoundError({ aggregateType, id })` | `new AggregateNotFoundError({ identity: { aggregateType, aggregateId: id } })` |
+| `error.aggregateType`, `error.aggregateId` | `error.identity.aggregateType`, `error.identity.aggregateId` |
+| `error.id` on `AggregateNotFoundError` | `error.identity.aggregateId` |
+
+The other errors change the same way as `ConcurrencyConflictError`. An
+`AggregateIdentity` value passes as it is, for example
+`new DuplicateAggregateError({ identity: stream })`. The log object of a
+serialized error carries the nested `identity`.
+
 ### Changed (breaking): AggregateAddress is AggregateIdentity
 
 The pair of aggregate type and aggregate id is the identity of an

@@ -397,7 +397,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 2,
 			targetVersion: 5,
@@ -418,7 +418,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "stream_vanished",
 			fromVersion: 2,
 			targetVersion: 3,
@@ -457,7 +457,7 @@ describe("readStreamPages", () => {
 
 			expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 			expect(rejection).toMatchObject({
-				...stream,
+				identity: stream,
 				reason: "invalid_head",
 				fromVersion: 0,
 				lastVersion: head,
@@ -486,7 +486,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "invalid_head",
 			fromVersion: 2,
 			targetVersion: 5,
@@ -506,7 +506,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "empty_page",
 			fromVersion: 0,
 			targetVersion: 5,
@@ -526,7 +526,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "page_over_limit",
 			fromVersion: 0,
 			targetVersion: 5,
@@ -569,7 +569,7 @@ describe("readStreamPages", () => {
 
 		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
 		expect(rejection).toMatchObject({
-			...stream,
+			identity: stream,
 			reason: "page_past_target",
 			fromVersion: 0,
 			targetVersion: 3,

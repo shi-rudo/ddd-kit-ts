@@ -9,7 +9,7 @@ export function assertValidHead(
 ): asserts lastVersion is number {
 	if (Number.isSafeInteger(lastVersion) && (lastVersion as number) >= 1) return;
 	throw new InvalidEventStreamPageError({
-		...stream,
+		identity: stream,
 		reason: "invalid_head",
 		fromVersion,
 		targetVersion,
@@ -26,7 +26,7 @@ export function assertHeadNotBehindFirstPage(
 ): void {
 	if (lastVersion >= firstPageLastVersion) return;
 	throw new InvalidEventStreamPageError({
-		...stream,
+		identity: stream,
 		reason: "head_regressed",
 		fromVersion,
 		targetVersion,
@@ -43,7 +43,7 @@ export function assertPageNotEmpty(
 ): void {
 	if (eventCount > 0) return;
 	throw new InvalidEventStreamPageError({
-		...stream,
+		identity: stream,
 		reason: "empty_page",
 		fromVersion,
 		targetVersion,
@@ -58,7 +58,7 @@ export function assertPageWithinWindow(
 ): void {
 	if (eventCount <= targetVersion - fromVersion) return;
 	throw new InvalidEventStreamPageError({
-		...stream,
+		identity: stream,
 		reason: "page_past_target",
 		fromVersion,
 		targetVersion,
@@ -75,7 +75,7 @@ export function assertPageWithinLimit(
 ): void {
 	if (eventCount <= limit) return;
 	throw new InvalidEventStreamPageError({
-		...stream,
+		identity: stream,
 		reason: "page_over_limit",
 		fromVersion,
 		targetVersion,

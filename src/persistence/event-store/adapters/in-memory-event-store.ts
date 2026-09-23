@@ -98,8 +98,7 @@ export class InMemoryEventStore<Evt extends AnyDomainEvent>
 		const existing = this.streams.get(key);
 		if ((existing?.length ?? 0) !== options.expectedVersion) {
 			throw new ConcurrencyConflictError({
-				aggregateType: stream.aggregateType,
-				aggregateId: stream.aggregateId,
+				identity: stream,
 				expectedVersion: options.expectedVersion,
 				// A stream that was never created is at version 0, so the stored
 				// version is always a number on this path.

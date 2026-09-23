@@ -301,7 +301,7 @@ async function* readPinnedPages<Evt extends AnyDomainEvent>(
 		});
 		if (!page.exists) {
 			throw new InvalidEventStreamPageError({
-				...window.stream,
+				identity: window.stream,
 				reason: "stream_vanished",
 				fromVersion: cursor,
 				targetVersion: window.targetVersion,

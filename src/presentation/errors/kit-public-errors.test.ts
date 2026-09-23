@@ -72,8 +72,7 @@ describe("createKitPublicErrors catalog", () => {
 			kitPublicErrors,
 			new ConcurrencyConflictError({
 				reason: "stale_version",
-				aggregateType: "Order",
-				aggregateId: "o-1",
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
 				expectedVersion: 1,
 				actualVersion: 2,
 			}),
@@ -153,7 +152,9 @@ describe("createKitPublicErrors catalog", () => {
 
 	it("kit errors keep their safe views through the default delegation", () => {
 		const view = toPublicErrorView(
-			new AggregateNotFoundError({ aggregateType: "Order", id: "o-1" }),
+			new AggregateNotFoundError({
+				identity: { aggregateType: "Order", aggregateId: "o-1" },
+			}),
 		);
 
 		expect(view.code).toBe("AGGREGATE_NOT_FOUND");

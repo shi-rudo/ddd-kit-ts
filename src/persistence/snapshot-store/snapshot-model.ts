@@ -166,8 +166,10 @@ export function reconstituteAggregateFromSnapshot<
 			);
 		} else {
 			throw new SnapshotSchemaMismatchError({
-				aggregateType: model.aggregateType,
-				aggregateId: String(id),
+				identity: {
+					aggregateType: model.aggregateType,
+					aggregateId: String(id),
+				},
 				expectedSchemaVersion: model.schemaVersion,
 				actualSchemaVersion: storedSchemaVersion,
 			});
@@ -194,8 +196,10 @@ export function reconstituteAggregateFromSnapshot<
 	// perpetual silent refolding, so it surfaces as a wiring error instead.
 	if (aggregate.version !== snapshot.version) {
 		throw new SnapshotVersionNotRestoredError({
-			aggregateType: model.aggregateType,
-			aggregateId: String(id),
+			identity: {
+				aggregateType: model.aggregateType,
+				aggregateId: String(id),
+			},
 			snapshotVersion: snapshot.version,
 			restoredVersion: aggregate.version,
 		});
