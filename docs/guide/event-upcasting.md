@@ -109,7 +109,9 @@ storage formats.
 ## A minimal upcaster
 
 An upcaster preserves the event envelope and changes only the schema fields it
-owns: usually `schemaVersion` and `payload`.
+owns: usually `schemaVersion` and `payload`. It returns a new event and never
+changes the stored one in place: a stored event is a fact, and a later replay
+of the same read must see it unchanged.
 
 Do not call `createDomainEvent(...)` to upcast a stored event. That would create
 a new `eventId`, `occurredAt`, and metadata unless you copied every option

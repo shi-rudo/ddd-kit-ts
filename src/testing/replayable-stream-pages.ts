@@ -1,5 +1,6 @@
 import type { AggregateAddress } from "../domain/aggregate/aggregate-address";
 import type { AnyDomainEvent } from "../domain/event/domain-event";
+import { deepFreeze } from "../domain/value-object/value-object";
 import { assertPositiveSafeInteger } from "../internal/validate";
 import type { ReplayableStreamPages } from "../persistence/event-store/reconstitute-from-stream-pages";
 
@@ -21,9 +22,10 @@ export interface CreateReplayableStreamPagesOptions<Evt extends AnyDomainEvent>
  * Builds a replayable stream read from an in-memory tail, for a test of the
  * code that consumes a read: a repository, or the replay over a fixed window.
  * It stands in for `readStreamPages` or an adapter that pages on its own,
- * and it tests neither. The tail is copied once and comes back in the same
- * pages on every iteration. An empty tail yields no page, as
- * `readStreamPages` does.
+ * and it tests neither. The tail is copied once and frozen deeply, and it
+ * comes back in the same pages on every iteration. So a consumer that
+ * changes an event in place fails at the write in its own test. An empty
+ * tail yields no page, as `readStreamPages` does.
  */
 export function createReplayableStreamPages<Evt extends AnyDomainEvent>(
 	stream: AggregateAddress,
@@ -31,7 +33,8 @@ export function createReplayableStreamPages<Evt extends AnyDomainEvent>(
 ): ReplayableStreamPages<Evt> {
 	const limit = options.limit ?? Math.max(options.tail.length, 1);
 	assertPositiveSafeInteger("createReplayableStreamPages", "limit", limit);
-	const pages = sliceIntoPages(options.tail, limit);
+	const tail = deepFreeze(structuredClone([...options.tail]));
+	const pages = sliceIntoPages(tail, limit);
 	return {
 		stream,
 		fromVersion: options.fromVersion,

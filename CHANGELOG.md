@@ -55,7 +55,9 @@ therefore fails instead of looping.
 fromVersion, tail, targetVersion, limit })`. It builds a replayable stream
 read from an in-memory tail. A test of a repository, or of the replay over
 a fixed window, then needs no store. The optional `limit` slices the tail
-into pages, so such a test can cross a page boundary.
+into pages, so such a test can cross a page boundary. The helper copies the
+tail and freezes it deeply: the events of a page are stored facts, and a
+consumer that changes one in place fails at the write in its own test.
 
 `createReplayableStreamPagesContractTests` from the same entry proves code
 that builds such values: the kit read, or an adapter that pages on its

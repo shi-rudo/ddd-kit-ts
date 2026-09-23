@@ -50,6 +50,11 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
 	 * {@link InvalidEventStreamPageError} before any row of it reaches the
 	 * aggregate. `createReplayableStreamPagesContractTests` proves these
 	 * rules for an adapter.
+	 *
+	 * The events of a page are stored facts: no consumer, upcaster, or fold
+	 * changes one in place. `readStreamPages` reads fresh events on every
+	 * later iteration, and `createReplayableStreamPages` hands out frozen
+	 * ones, so a consumer that breaks this rule fails in its own tests.
 	 */
 	readonly pages: AsyncIterable<ReadonlyArray<Evt>>;
 }
