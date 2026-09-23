@@ -73,7 +73,8 @@ export interface ReplayableStreamPages<Evt extends AnyDomainEvent> {
  * target with pending decisions throws `UnreplayableAggregateError`. The
  * replay target must stand at `read.fromVersion`. A replay target at
  * another version throws {@link ReplayTargetMismatchError} before the
- * first page.
+ * first page, even when it also rejected the empty history: a wiring
+ * defect wins over a rejection that the data cannot explain.
  *
  * Each page goes through `replayHistory` on the replay target, so
  * allocation stays bounded by the page limit. An empty page, and a page
@@ -117,6 +118,15 @@ export async function reconstituteAggregateFromStreamPages<
 	}
 	const aggregate = createReplayTarget();
 	const primed = aggregate.replayHistory([]);
+	if (aggregate.version !== read.fromVersion) {
+		throw new ReplayTargetMismatchError({
+			...read.stream,
+			reason: "target_not_at_cursor",
+			fromVersion: read.fromVersion,
+			targetVersion: read.targetVersion,
+			actualVersion: aggregate.version,
+		});
+	}
 	if (primed.isErr()) {
 		return err(
 			new ReplayRejectedError({
@@ -126,15 +136,6 @@ export async function reconstituteAggregateFromStreamPages<
 				cause: primed.error,
 			}),
 		);
-	}
-	if (aggregate.version !== read.fromVersion) {
-		throw new ReplayTargetMismatchError({
-			...read.stream,
-			reason: "target_not_at_cursor",
-			fromVersion: read.fromVersion,
-			targetVersion: read.targetVersion,
-			actualVersion: aggregate.version,
-		});
 	}
 	for await (const page of read.pages) {
 		assertPageNotEmpty(

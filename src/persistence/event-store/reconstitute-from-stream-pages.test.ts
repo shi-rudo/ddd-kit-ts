@@ -284,6 +284,33 @@ describe("reconstituteAggregateFromStreamPages", () => {
 		expect(loaded.error.cause).toBeInstanceOf(PoisonedRowError);
 	});
 
+	it("throws ReplayTargetMismatchError when a replay target off the cursor also rejects an empty history", async () => {
+		const read = createReplayableStreamPages<CounterEvent>(stream, {
+			fromVersion: 10,
+			tail: [],
+			targetVersion: 10,
+		});
+		const offCursorAndRejecting: ReplayableAggregate<CounterId, CounterEvent> =
+			{
+				id: counterId,
+				version: 7 as Version,
+				pendingEvents: [],
+				replayHistory: () => err(new PoisonedRowError()),
+			};
+
+		const rejection = await reconstituteAggregateFromStreamPages(
+			() => offCursorAndRejecting,
+			read,
+		).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(ReplayTargetMismatchError);
+		expect(rejection).toMatchObject({
+			reason: "target_not_at_cursor",
+			fromVersion: 10,
+			actualVersion: 7,
+		});
+	});
+
 	it("throws InvalidEventStreamPageError at the first empty page of an adapter", async () => {
 		let pulls = 0;
 		const read: ReplayableStreamPages<CounterEvent> = {
