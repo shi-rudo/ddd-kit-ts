@@ -74,6 +74,19 @@ class Order extends StateStoredAggregate<OrderState, OrderId, OrderEvent> {
 - `createEvent(type, payload)` adds the aggregate id and aggregate type while
   reading neither a clock nor an id generator.
 
+An aggregate id is unique only within its type: `SalesOrder 1` and
+`FulfillmentOrder 1` are different aggregates. So the full identity of an
+aggregate is the pair, and every aggregate exposes it as one read-only
+value:
+
+```ts
+order.aggregateIdentity; // { aggregateType: "Order", aggregateId: "o-1" }
+```
+
+The value is frozen and stays the same on every read. Stores, commit
+envelopes, and kit errors name an aggregate by this value, so a repository
+can pass it on as it is, for example `snapshots.delete(order.aggregateIdentity)`.
+
 Calling `createDomainEvent(...)` directly still works, but inside an aggregate
 `createEvent(...)` is the safer default. The application records the pending
 decision with `recordPendingEvents(...)` before persistence.
