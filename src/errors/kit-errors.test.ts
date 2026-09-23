@@ -112,6 +112,20 @@ describe("InvalidEventStreamPageError", () => {
 		expect(error.message).toContain("report a stream without events as absent");
 	});
 
+	it("builds for a head object that cannot convert to a primitive", () => {
+		const head = Object.create(null) as object;
+
+		const error = new InvalidEventStreamPageError({
+			...stream,
+			reason: "invalid_head",
+			fromVersion: 0,
+			lastVersion: head,
+		});
+
+		expect(error.lastVersion).toBe(head);
+		expect(error.message).toContain("head [object Object] of type object");
+	});
+
 	it("names the type of a head that is not a number", () => {
 		const error = new InvalidEventStreamPageError({
 			...stream,

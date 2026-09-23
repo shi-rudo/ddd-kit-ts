@@ -1002,8 +1002,17 @@ export interface InvalidEventStreamPageErrorOptions {
 
 function describeReportedHead(head: unknown): string {
 	if (typeof head === "number" && Number.isFinite(head)) return String(head);
-	const shown = typeof head === "string" ? JSON.stringify(head) : String(head);
-	return `${shown} of type ${typeof head}`;
+	return `${showReportedHead(head)} of type ${typeof head}`;
+}
+
+// Object.prototype.toString never converts its receiver: String() throws for
+// an object without a prototype, and the error must still build.
+function showReportedHead(head: unknown): string {
+	if (typeof head === "string") return JSON.stringify(head);
+	if (typeof head === "object" && head !== null) {
+		return Object.prototype.toString.call(head);
+	}
+	return String(head);
 }
 
 function eventStreamPageReasonMessage(
