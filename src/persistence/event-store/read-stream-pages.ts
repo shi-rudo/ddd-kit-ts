@@ -12,7 +12,7 @@ import {
 	assertPageNotEmpty,
 	assertPageWithinWindow,
 	assertValidHead,
-} from "./event-stream-page";
+} from "./event-stream-page-guards";
 import type { ReplayableStreamPages } from "./reconstitute-from-stream-pages";
 
 /** Options for {@link readStreamPages}. */

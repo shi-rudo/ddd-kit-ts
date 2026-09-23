@@ -15,7 +15,7 @@ import {
 import {
 	assertPageNotEmpty,
 	assertPageWithinWindow,
-} from "./event-stream-page";
+} from "./event-stream-page-guards";
 
 /**
  * The shape the replay reads: the stream, the window, and the pages.
