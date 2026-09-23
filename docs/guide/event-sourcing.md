@@ -456,10 +456,10 @@ target version.
 
 `readStreamPages` checks every page against the `readStream` contract. A
 page that breaks it throws `InvalidEventStreamPageError`, and its `reason`
-names the defect: a head that is not a safe integer of at least 1, a page
-with more events than its window has left, or a continuation page that is
-empty, reports the stream absent, or reports a head below the head of the
-first page.
+names the defect: a head that is not a safe integer of at least 1, an
+empty page while events remain in the window, a page with more events than
+its window has left, or a continuation page that reports the stream absent
+or a head below the head of the first page.
 
 The caller decides what the two `reachable: false` branches mean before the
 replay: `null` here, a snapshot to discard in the

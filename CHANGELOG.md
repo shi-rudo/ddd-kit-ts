@@ -76,7 +76,7 @@ its reason type is `EventStreamPageReason`. The required `reason` names the
 defect:
 
 - `empty_page`: the page holds no event, but events remain before the
-  target version.
+  target version. This covers the first page as well.
 - `stream_vanished`: a continuation page reports the stream absent.
 - `page_past_target`: the page holds more events than its window has left.
   New.

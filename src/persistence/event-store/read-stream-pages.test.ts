@@ -480,6 +480,25 @@ describe("readStreamPages", () => {
 		});
 	});
 
+	it("rejects an empty first page while events remain in the window", async () => {
+		const reader = scriptedReader(
+			{ exists: true, lastVersion: 5, events: [] },
+			{ exists: true, lastVersion: 5, events: countedUpTo(2) },
+		);
+
+		const rejection = await readStreamPages(reader, stream, {
+			limit: 2,
+		}).catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(InvalidEventStreamPageError);
+		expect(rejection).toMatchObject({
+			...stream,
+			reason: "empty_page",
+			fromVersion: 0,
+			targetVersion: 5,
+		});
+	});
+
 	it("rejects a first page that holds more events than the window up to the head", async () => {
 		const reader = scriptedReader({
 			exists: true,

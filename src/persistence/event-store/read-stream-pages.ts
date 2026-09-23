@@ -170,9 +170,10 @@ function decideTargetVersion(
  *
  * The call checks every page against the `readStream` contract and throws
  * {@link InvalidEventStreamPageError} for a page that breaks it: a head
- * that is not a safe integer of at least 1, a page with more events than its
- * window has left, and a continuation page that is empty, reports the
- * stream absent, or reports a head below the head of the first page.
+ * that is not a safe integer of at least 1, an empty page while events
+ * remain in the window, a page with more events than its window has left,
+ * and a continuation page that reports the stream absent or a head below
+ * the head of the first page.
  *
  * Invalid options reject with `RangeError` before any page is read:
  * `limit` and `toVersion` must be positive safe integers, `fromVersion` a
@@ -222,6 +223,14 @@ export async function readStreamPages<Evt extends AnyDomainEvent>(
 			fromVersion,
 			lastVersion: first.lastVersion,
 		};
+	}
+	if (fromVersion < pinned.targetVersion) {
+		assertPageNotEmpty(
+			address,
+			first.events.length,
+			fromVersion,
+			pinned.targetVersion,
+		);
 	}
 	assertPageWithinWindow(
 		address,
